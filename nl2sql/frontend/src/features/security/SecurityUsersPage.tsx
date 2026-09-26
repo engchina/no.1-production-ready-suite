@@ -42,6 +42,7 @@ import { FormActionBar, entityActionToFormAction } from "@/components/FormAction
 import { ErrorState } from "@/components/StateViews";
 import { FieldLabel, FieldLegend } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   mapApiFieldErrors,
   unmappedApiErrorMessage,
@@ -262,6 +263,11 @@ export function SecurityUsersPage() {
     setLoading(true);
     setLoadError("");
     setActionError("");
+    await requestData(sequence, announce);
+  };
+
+  // 読込中・エラー表示の初期化は呼び出し側で行う（初回表示は初期 state が読込中）。
+  const requestData = async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
         const [userRows, roleRows] = await Promise.all([
@@ -295,22 +301,22 @@ export function SecurityUsersPage() {
   };
 
   useEffect(() => {
-    void load();
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
+    void requestData(sequence, false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  useEffect(() => {
-    if (activeView !== "list" || loading) return;
-    setSelection((current) => {
-      const nextId = selectedVisibleKey(filteredUsers, current.id, (user) => user.user_uuid, {
-        preserveSelected: current.manual,
-      });
-      return nextId === current.id ? current : { id: nextId, manual: false };
+  // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
+  if (useValuesChanged([activeView, filteredUsers, loading]) && activeView === "list" && !loading) {
+    const nextId = selectedVisibleKey(filteredUsers, selection.id, (user) => user.user_uuid, {
+      preserveSelected: selection.manual,
     });
-  }, [activeView, filteredUsers, loading]);
+    if (nextId !== selection.id) setSelection({ id: nextId, manual: false });
+  }
 
   const clearFieldError = (field: UserFormField) => {
     setFieldErrors((current) => withoutFieldError(current, field));

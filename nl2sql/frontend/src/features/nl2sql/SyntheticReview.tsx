@@ -9,6 +9,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
 import { ExecutionConfirmationField } from "./components/DbAdminShared";
@@ -28,10 +29,13 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
   const scopeRef = useRef(scope);
   // 最新の scope を commit 時に入れる（render 中に ref を書かない）。
   useLayoutEffect(() => { scopeRef.current = scope; });
-  useEffect(() => {
-    scopeRef.current = scope;
+  // 対象・閲覧済みプレビューが変わったら、確認入力とエラーを render 中に消す。
+  if (useValuesChanged([scope, previews])) {
     setConfirmation("");
     setError("");
+  }
+  useEffect(() => {
+    scopeRef.current = scope;
     return () => { scopeRef.current = ""; };
   }, [scope, previews]);
   useResetExecutionConsent(() => setConfirmation(""), scope);

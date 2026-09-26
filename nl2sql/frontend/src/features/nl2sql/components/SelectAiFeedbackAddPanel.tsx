@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import {
@@ -13,6 +13,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { apiPost } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import type {
@@ -54,10 +55,11 @@ export function SelectAiFeedbackAddPanel({
   // 最新の履歴 ID を commit 時に入れる（render 中に ref を書かない）。
   useLayoutEffect(() => { currentHistoryId.current = historyId; });
 
-  useEffect(() => {
+  // 対象の SQL・履歴が変わったら、入力欄を保存済みのコメントに戻す（render 中に同期する）。
+  if (useValuesChanged([generatedSql, result?.original_question, history?.feedback_comment, history?.id])) {
     setFeedbackContent(history?.feedback_comment ?? "");
     setMessage("");
-  }, [generatedSql, result?.original_question, history?.feedback_comment, history?.id]);
+  }
 
   if (!result) return null;
 

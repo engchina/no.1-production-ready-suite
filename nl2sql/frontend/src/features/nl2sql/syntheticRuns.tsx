@@ -10,6 +10,7 @@ import {
   ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { apiGet } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { useDatabaseStatus } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
@@ -89,9 +90,11 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
   const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; failed: boolean; message: string } | null>(null);
   const scope = `${run?.run_id ?? ""}:${submitting}`;
   const refreshSequence = useRef(0);
+  // 対象の実行が変わったら、前の確認結果を render 中に捨てる。
+  if (useValuesChanged([scope]) && refresh !== null) setRefresh(null);
+  // 実行中の確認の応答は、対象が変わった後は反映しない。
   useEffect(() => {
     refreshSequence.current += 1;
-    setRefresh(null);
     return () => { refreshSequence.current += 1; };
   }, [scope]);
   const feedback = refresh?.scope === scope ? refresh : null;

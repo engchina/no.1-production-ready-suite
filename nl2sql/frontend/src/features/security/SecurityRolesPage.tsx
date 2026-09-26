@@ -41,6 +41,7 @@ import {
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   mapApiFieldErrors,
   unmappedApiErrorMessage,
@@ -316,6 +317,11 @@ export function SecurityRolesPage() {
     setLoadError("");
     setActionError("");
     setProfileAccessLoadWarning("");
+    await requestData(sequence, announce);
+  };
+
+  // 読込中・エラー表示の初期化は呼び出し側で行う（初回表示は初期 state が読込中）。
+  const requestData = async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
         const profileRowsRequest = canManage
@@ -368,22 +374,22 @@ export function SecurityRolesPage() {
   };
 
   useEffect(() => {
-    void load();
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
+    void requestData(sequence, false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  useEffect(() => {
-    if (activeView !== "list" || loading) return;
-    setSelection((current) => {
-      const nextId = selectedVisibleKey(filteredRoles, current.id, (role) => role.role_id, {
-        preserveSelected: current.manual,
-      });
-      return nextId === current.id ? current : { id: nextId, manual: false };
+  // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
+  if (useValuesChanged([activeView, filteredRoles, loading]) && activeView === "list" && !loading) {
+    const nextId = selectedVisibleKey(filteredRoles, selection.id, (role) => role.role_id, {
+      preserveSelected: selection.manual,
     });
-  }, [activeView, filteredRoles, loading]);
+    if (nextId !== selection.id) setSelection({ id: nextId, manual: false });
+  }
 
   const clearFieldError = (field: RoleFormField) => {
     setFieldErrors((current) => withoutFieldError(current, field));

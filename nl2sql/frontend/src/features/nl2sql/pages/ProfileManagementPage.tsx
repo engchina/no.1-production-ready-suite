@@ -37,6 +37,7 @@ import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
@@ -1311,7 +1312,10 @@ export function ProfileManagementPage() {
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
-  const reportedOracleSyncJobId = useRef("");
+  // 完了を通知済みの Oracle 同期 job ID。render 中に比べるため state で持つ。
+  const [reportedOracleSyncJobId, setReportedOracleSyncJobId] = useState("");
+  // 成功を通知する Oracle 同期 job（通知と再取得は effect で行う）。
+  const [succeededOracleSyncJob, setSucceededOracleSyncJob] = useState<{ jobId: string; invalidate: boolean } | null>(null);
   const lastOracleConfirmationRef = useRef("");
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
@@ -1379,11 +1383,11 @@ export function ProfileManagementPage() {
     },
   });
 
-  useEffect(() => {
-    if (!syncJobParam) return;
+  // URL の syncJobId を追跡対象へ render 中に反映する。
+  if (useValuesChanged([selectedProfileId, syncJobParam]) && syncJobParam) {
     setOracleSyncJobId(syncJobParam);
     if (selectedProfileId) setOracleSyncProfileId(selectedProfileId);
-  }, [selectedProfileId, syncJobParam]);
+  }
   const profiles = useMemo(
     () => profilesQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [profilesQuery.data]
@@ -1452,7 +1456,7 @@ export function ProfileManagementPage() {
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     lastOracleConfirmationRef.current = "";
-    reportedOracleSyncJobId.current = "";
+    setReportedOracleSyncJobId("");
     setSearchParams({ profile: profile.id });
   };
 
@@ -1523,12 +1527,21 @@ export function ProfileManagementPage() {
     []
   );
 
+  // job の状態は render 中に state へ反映し、再取得と通知は effect で行う。
+  if (useValuesChanged([dbProfileRefreshJobQuery.data?.status, queryClient]) && dbProfileRefreshJobQuery.data) {
+    const job = dbProfileRefreshJobQuery.data;
+    if (job.status === "done") {
+      setDbProfileRefreshNeedsFull(false);
+      setDbProfileRefreshError("");
+    } else if (job.status === "error") {
+      setDbProfileRefreshError(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
+      setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
+    }
+  }
   useEffect(() => {
     const job = dbProfileRefreshJobQuery.data;
     if (!job) return;
     if (job.status === "done") {
-      setDbProfileRefreshNeedsFull(false);
-      setDbProfileRefreshError("");
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
       toast.success(
         t("profiles.dbProfileRefresh.done", {
@@ -1537,28 +1550,23 @@ export function ProfileManagementPage() {
         })
       );
     } else if (job.status === "error") {
-      const message = dbProfileRefreshRequiredMessage(job.error_code, job.error_message);
-      setDbProfileRefreshError(message);
-      setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
-      toastError(message);
+      toastError(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
     }
   }, [dbProfileRefreshJobQuery.data?.status, queryClient]);
 
-  useEffect(() => {
-    if (!dbProfileRefreshJobQuery.isError) return;
+  if (useValuesChanged([dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]) && dbProfileRefreshJobQuery.isError) {
     const message =
       dbProfileRefreshJobQuery.error instanceof Error
         ? dbProfileRefreshJobQuery.error.message
         : t("profiles.dbProfileRefresh.error");
     setDbProfileRefreshError(message);
     setDbProfileRefreshNeedsFull(true);
-  }, [dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]);
+  }
 
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
   const formInitializationKey = editTargetKey;
-  useEffect(() => {
-    if (!formInitializationKey) return;
+  if (useValuesChanged([formInitializationKey]) && formInitializationKey) {
     setForm(
       selectedProfile
         ? profileToForm(selectedProfile)
@@ -1567,42 +1575,53 @@ export function ProfileManagementPage() {
     setOracleConfirmation("");
     setNameError(null);
     setRequiredErrors({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formInitializationKey]);
+  }
 
-  useEffect(() => {
+  // 終了した Oracle 同期 job を render 中に一度だけ state へ反映し、通知と再取得は effect で行う。
+  if (useValuesChanged([oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal])) {
     const job = oracleSyncJobQuery.data;
-    if (!job || !["succeeded", "failed", "cancelled"].includes(job.status)) return;
-    if (reportedOracleSyncJobId.current === job.job_id) return;
-    reportedOracleSyncJobId.current = job.job_id;
-    if (job.status === "succeeded") {
-      const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
-      if (!trackingRefresh) {
-        void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+    if (
+      job &&
+      ["succeeded", "failed", "cancelled"].includes(job.status) &&
+      reportedOracleSyncJobId !== job.job_id
+    ) {
+      setReportedOracleSyncJobId(job.job_id);
+      if (job.status === "succeeded") {
+        const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
+        setSucceededOracleSyncJob({ jobId: job.job_id, invalidate: !trackingRefresh });
       }
-      toast.success(t("profiles.oracle.sync.succeeded"));
     }
-  }, [oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal]);
-
-
-
+  }
   useEffect(() => {
+    if (!succeededOracleSyncJob) return;
+    if (succeededOracleSyncJob.invalidate) {
+      void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+    }
+    toast.success(t("profiles.oracle.sync.succeeded"));
+  }, [succeededOracleSyncJob, queryClient]);
+
+
+
+  // 一覧・スキーマの読込エラーを render 中にメッセージへ反映する。
+  if (
+    useValuesChanged([
+      profilesQuery.data,
+      profilesQuery.error,
+      schemaHeadQuery.data,
+      schemaHeadQuery.error,
+      tableObjectsQuery.data,
+      tableObjectsQuery.error,
+      viewObjectsQuery.data,
+      viewObjectsQuery.error,
+    ])
+  ) {
     const error =
       (profilesQuery.error && !profilesQuery.data ? profilesQuery.error : null) ??
       (tableObjectsQuery.error && !tableObjectsQuery.data ? tableObjectsQuery.error : null) ??
       (viewObjectsQuery.error && !viewObjectsQuery.data ? viewObjectsQuery.error : null) ??
       (schemaHeadQuery.error && !schemaHeadQuery.data ? schemaHeadQuery.error : null);
     setMessage(error instanceof Error ? error.message : "");
-  }, [
-    profilesQuery.data,
-    profilesQuery.error,
-    schemaHeadQuery.data,
-    schemaHeadQuery.error,
-    tableObjectsQuery.data,
-    tableObjectsQuery.error,
-    viewObjectsQuery.data,
-    viewObjectsQuery.error,
-  ]);
+  }
 
   // legacy hash 導線: 旧 #profile-learning は Select AI 設定へ正規化する
   useEffect(() => {
@@ -1653,7 +1672,7 @@ export function ProfileManagementPage() {
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     lastOracleConfirmationRef.current = "";
-    reportedOracleSyncJobId.current = "";
+    setReportedOracleSyncJobId("");
     setSearchParams({ profile: "new" });
   };
 
@@ -1746,7 +1765,7 @@ export function ProfileManagementPage() {
     setRequiredErrors({});
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
-    reportedOracleSyncJobId.current = "";
+    setReportedOracleSyncJobId("");
     mutationBusyRef.current = true;
     setLoading("save");
     let saved: Nl2SqlProfile;
@@ -1805,7 +1824,7 @@ export function ProfileManagementPage() {
           },
         }
       );
-      reportedOracleSyncJobId.current = "";
+      setReportedOracleSyncJobId("");
       if (editTargetRef.current === target) {
         setOracleSyncJobId(job.job_id);
         setOracleSyncProfileId(job.profile_id);
@@ -1843,7 +1862,7 @@ export function ProfileManagementPage() {
           );
       lastOracleConfirmationRef.current = retryConfirmation;
       setOracleSyncSubmissionError("");
-      reportedOracleSyncJobId.current = "";
+      setReportedOracleSyncJobId("");
       setOracleSyncJobId(job.job_id);
       setOracleSyncProfileId(job.profile_id);
       queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
@@ -1942,7 +1961,7 @@ export function ProfileManagementPage() {
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     lastOracleConfirmationRef.current = "";
-    reportedOracleSyncJobId.current = "";
+    setReportedOracleSyncJobId("");
     if (syncJobParam) {
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete("syncJobId");
