@@ -1,5 +1,6 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus,
   ArrowDown,
   ArrowDownUp,
@@ -684,36 +685,44 @@ export function HistoryPage() {
   const previousFilters = useRef(filterSignature);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const load = async (announce = false) => {
+  // 先頭ページから取り直す。loading / message は呼び出し側で先に設定しておく。
+  // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  const fetchHistory = (announce: boolean) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    return runScopedRequest(async (signal) => {
+      const data = await apiGet<HistoryData>(
+        historyRequestUrl({ search, feedback: feedbackFilter, safety: safetyFilter }),
+        { signal }
+      );
+      if (signal.aborted || sequence !== loadSequence.current) return;
+      setItems(data.items);
+      setLoadedFilters(filterSignature);
+      setNextCursor(data.next_cursor ?? "");
+      setTotal(data.total ?? null);
+      setSelectedId((current) => current || data.items[0]?.id || "");
+    })
+      .then(() => {
+        if (announce && sequence === loadSequence.current) {
+          toast.success(t("common.action.refreshed"));
+        }
+      })
+      .catch((err: unknown) => {
+        if (isAbortError(err) || sequence !== loadSequence.current) {
+          return;
+        }
+        setMessage(err instanceof Error ? err.message : t("history.error.load"));
+      })
+      .finally(() => {
+        if (sequence === loadSequence.current) setLoading(false);
+      });
+  };
+
+  const load = async (announce = false) => {
     setLoading(true);
     setMessage("");
     setLoadingMore(false);
-    try {
-      await runScopedRequest(async (signal) => {
-        const data = await apiGet<HistoryData>(
-          historyRequestUrl({ search, feedback: feedbackFilter, safety: safetyFilter }),
-          { signal }
-        );
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setItems(data.items);
-        setLoadedFilters(filterSignature);
-        setNextCursor(data.next_cursor ?? "");
-        setTotal(data.total ?? null);
-        setSelectedId((current) => current || data.items[0]?.id || "");
-      });
-      if (announce && sequence === loadSequence.current) {
-        toast.success(t("common.action.refreshed"));
-      }
-    } catch (err) {
-      if (isAbortError(err) || sequence !== loadSequence.current) {
-        return;
-      }
-      setMessage(err instanceof Error ? err.message : t("history.error.load"));
-    } finally {
-      if (sequence === loadSequence.current) setLoading(false);
-    }
+    await fetchHistory(announce);
   };
 
   // 続きページを読込済みの末尾へ追加する(再読込は load() で先頭からやり直す)。
@@ -748,13 +757,20 @@ export function HistoryPage() {
     }
   };
 
+  // 絞り込みが変わったレンダーで読み込み中の表示にし（effect で setState しない）、取得は effect で行う。
+  const filtersChanged = useValuesChanged([feedbackFilter, safetyFilter, search]);
+  if (filtersChanged) {
+    setLoading(true);
+    setMessage("");
+    setLoadingMore(false);
+  }
   useEffect(() => {
     if (previousFilters.current !== filterSignature) {
       previousFilters.current = filterSignature;
       setSelectedId("");
       setDetailTab("overview");
     }
-    void load();
+    void fetchHistory(false);
     return () => {
       loadSequence.current += 1;
       abortAll();

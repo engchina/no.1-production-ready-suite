@@ -91,7 +91,7 @@ test("coordinator owns start/track, discovery, terminal notification, and invali
   assert.match(coordinator, /useActiveSchemaRefreshJob\(discoveryEnabled\)/u);
   assert.match(coordinator, /const track = useCallback/u);
   assert.match(coordinator, /const start = useCallback/u);
-  assert.match(coordinator, /reportedTerminal\.current === reportKey/u);
+  assert.match(coordinator, /terminalKey !== reportedTerminal/u);
   assert.match(coordinator, /invalidateQueries\(\{ queryKey: \["schema"\] \}\)/u);
   assert.match(coordinator, /invalidateQueries\(\{ queryKey: \["nl2sql", "db-admin"\] \}\)/u);
   assert.match(coordinator, /activeSchemaRefreshJob[\s\S]{0,120}active_job: null/u);

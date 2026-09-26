@@ -1,5 +1,6 @@
 import { useResetExecutionConsent, useWorkspaceActivation, useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
 import {
@@ -158,7 +159,10 @@ export function SampleDataPage() {
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
-  const completedSchemaRefreshJob = useRef("");
+  // dataset の切り替えで始めた読み込みの回数。取得は effect で行う。
+  const [datasetLoadRequest, setDatasetLoadRequest] = useState(0);
+  // 報告済みの schema refresh の終端（`<job_id>:<status>`）。
+  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
@@ -184,36 +188,54 @@ export function SampleDataPage() {
 
   useResetExecutionConsent(() => setSampleConfirmation(""), JSON.stringify([dataset, activeAction, sampleStep, sampleSqlPreview, expectedConfirmation]));
 
-  const load = async (announce = false) => {
-    if (loading) return;
+  // sample 情報を取り直す。loading / message は呼び出し側で先に設定しておく。
+  // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  const fetchSampleInfo = (announce: boolean) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    setLoading("load");
-    setMessage("");
-    try {
-      await runScopedRequest(async (signal) => {
-        const data = await apiGet<SampleDataInfo>(sampleInfoUrl, { signal });
-        if (!signal.aborted && sequence === loadSequence.current) {
-          setSampleInfo(data);
-          setSampleLoadFailed(false);
+    return runScopedRequest(async (signal) => {
+      const data = await apiGet<SampleDataInfo>(sampleInfoUrl, { signal });
+      if (!signal.aborted && sequence === loadSequence.current) {
+        setSampleInfo(data);
+        setSampleLoadFailed(false);
+      }
+    })
+      .then(() => {
+        if (announce && sequence === loadSequence.current) {
+          toast.success(t("common.action.refreshed"));
         }
+      })
+      .catch((err: unknown) => {
+        if (isAbortError(err)) {
+          return;
+        }
+        setSampleLoadFailed(true);
+        setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+      })
+      .finally(() => {
+        if (sequence === loadSequence.current) setLoading("");
       });
-      if (announce && sequence === loadSequence.current) {
-        toast.success(t("common.action.refreshed"));
-      }
-    } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
-      setSampleLoadFailed(true);
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
-    } finally {
-      if (sequence === loadSequence.current) setLoading("");
-    }
   };
 
+  const load = async (announce = false) => {
+    if (loading) return;
+    setLoading("load");
+    setMessage("");
+    await fetchSampleInfo(announce);
+  };
+
+  // dataset が変わったレンダーで読み込み中の表示にし（effect で setState しない）、取得は effect で行う。
+  // 別の処理の実行中は読み込まない（load() と同じ）。
+  const datasetChanged = useValuesChanged([dataset]);
+  if (datasetChanged && !loading) {
+    setLoading("load");
+    setMessage("");
+    setDatasetLoadRequest((request) => request + 1);
+  }
   useEffect(() => {
-    void load();
+    if (datasetLoadRequest > 0) void fetchSampleInfo(false);
+  }, [datasetLoadRequest]);
+  useEffect(() => {
     return () => {
       loadSequence.current += 1;
       abortAll();
@@ -237,7 +259,7 @@ export function SampleDataPage() {
 
   const refreshSchema = async () => {
     if (loading || schemaRefreshing) return;
-    completedSchemaRefreshJob.current = "";
+    setReportedSchemaRefresh("");
     try {
       const job = await sharedSchemaRefresh.start();
       setSchemaRefreshJobId(job.job_id);
@@ -252,29 +274,37 @@ export function SampleDataPage() {
     }
   };
 
-  useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedSchemaRefreshJob.current = reportKey;
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      void reloadSampleState().catch((err: unknown) => {
-        setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
-      });
-    } else if (job.status === "error") {
-      completedSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setSchemaRefreshNeedsFull(needsFull);
-      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // sample 情報の再取得は、終端を報告した後の effect で行う。
+  const schemaRefreshJob = schemaRefreshJobQuery.data;
+  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
+  if (
+    schemaRefreshJobChanged &&
+    schemaRefreshJob &&
+    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
+  ) {
+    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
+    if (reportedSchemaRefresh !== reportKey) {
+      setReportedSchemaRefresh(reportKey);
+      if (schemaRefreshJob.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+      } else {
+        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
+        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
+      }
     }
-  }, [schemaRefreshJobQuery.data]);
+  }
+  useEffect(() => {
+    if (!reportedSchemaRefresh.endsWith(":done")) return;
+    void reloadSampleState().catch((err: unknown) => {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+    });
+  }, [reportedSchemaRefresh]);
 
   const trackSchemaRefreshResult = (result: SampleDataMutationData) => {
     if (result.schema_refresh_job_id) {
-      completedSchemaRefreshJob.current = "";
+      setReportedSchemaRefresh("");
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(result.schema_refresh_job_id);

@@ -148,7 +148,8 @@ export function QuestionClassifierModelsPage() {
   const [editingExampleId, setEditingExampleId] = useState("");
   const [editingText, setEditingText] = useState("");
   const [editingProfileId, setEditingProfileId] = useState("");
-  const [loading, setLoading] = useState("");
+  // 初回の読み込み（mount 時の effect）の間は "load" から始める。
+  const [loading, setLoading] = useState("load");
   const [message, setMessage] = useState("");
   const [editingBaseline, setEditingBaseline] = useState("");
   const editingDirty = Boolean(editingExampleId &&
@@ -191,48 +192,55 @@ export function QuestionClassifierModelsPage() {
     return `/api/nl2sql/classifier/training-candidates?${params.toString()}`;
   };
 
-  const load = async (announce = false) => {
-    if (loading) return;
+  // 画面の情報をまとめて取り直す。loading / message は呼び出し側で先に設定しておく。
+  // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  const fetchAll = (announce: boolean) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    return runScopedRequest(async (signal) => {
+      const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
+        apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
+          signal,
+        }),
+        apiGet<ClassifierStatusData>("/api/nl2sql/classifier", { signal }),
+        apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data", {
+          signal,
+        }),
+        apiGet<ClassifierTrainingCandidatesData>(
+          candidateUrl(candidateCursor, candidateAppliedFilters),
+          { signal }
+        ),
+      ]);
+      if (signal.aborted || sequence !== loadSequence.current) return;
+      setProfiles(profileData.items);
+      setClassifierStatus(classifierData);
+      setClassifierTrainingData(trainingData);
+      setCandidates(candidateData);
+
+      if (announce) toast.success(t("common.action.refreshed"));
+    })
+      .catch((err: unknown) => {
+        if (isAbortError(err)) {
+          return;
+        }
+        setMessage(err instanceof Error ? err.message : t("qcm.error.load"));
+      })
+      .finally(() => {
+        if (sequence === loadSequence.current) setLoading("");
+      });
+  };
+
+  const load = async (announce = false) => {
+    if (loading) return;
     setLoading("load");
     setMessage("");
     setCandidateError("");
-    try {
-      await runScopedRequest(async (signal) => {
-        const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
-          apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
-            signal,
-          }),
-          apiGet<ClassifierStatusData>("/api/nl2sql/classifier", { signal }),
-          apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data", {
-            signal,
-          }),
-          apiGet<ClassifierTrainingCandidatesData>(
-            candidateUrl(candidateCursor, candidateAppliedFilters),
-            { signal }
-          ),
-        ]);
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setProfiles(profileData.items);
-        setClassifierStatus(classifierData);
-        setClassifierTrainingData(trainingData);
-        setCandidates(candidateData);
-
-        if (announce) toast.success(t("common.action.refreshed"));
-      });
-    } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
-      setMessage(err instanceof Error ? err.message : t("qcm.error.load"));
-    } finally {
-      if (sequence === loadSequence.current) setLoading("");
-    }
+    await fetchAll(announce);
   };
 
+  // 初回の読み込み。loading は初期値の "load"、message / candidateError は初期値の空のまま始める。
   useEffect(() => {
-    void load();
+    void fetchAll(false);
     return () => {
       loadSequence.current += 1;
       abortAll();

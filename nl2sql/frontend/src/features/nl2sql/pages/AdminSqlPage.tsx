@@ -1,5 +1,6 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw, X } from "lucide-react";
 
@@ -207,7 +208,8 @@ export function AdminSqlPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   useResetExecutionConsent(() => { setConfirmation(""); }, JSON.stringify([sqlText, rowLimitInput]));
-  const completedSchemaRefreshJob = useRef("");
+  // 報告済みの schema refresh の終端（`<job_id>:<status>` / `<job_id>:query-error`）。
+  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
@@ -243,7 +245,7 @@ export function AdminSqlPage() {
     schema_refresh_reason_code?: string;
   }) => {
     if (data.schema_refresh_job_id) {
-      completedSchemaRefreshJob.current = "";
+      setReportedSchemaRefresh("");
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(data.schema_refresh_job_id);
@@ -259,7 +261,7 @@ export function AdminSqlPage() {
   };
 
   const refreshSchema = async () => {
-    completedSchemaRefreshJob.current = "";
+    setReportedSchemaRefresh("");
     try {
       const job = await sharedSchemaRefresh.start();
       setSchemaRefreshJobId(job.job_id);
@@ -274,36 +276,51 @@ export function AdminSqlPage() {
     }
   };
 
-  useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedSchemaRefreshJob.current = reportKey;
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      refreshSchemaReadModels();
-    } else if (job.status === "error") {
-      completedSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setSchemaRefreshNeedsFull(needsFull);
-      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+  // job の終端・取得失敗を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // 読み取りモデルの再取得は、終端を報告した後の effect で行う。
+  const schemaRefreshJob = schemaRefreshJobQuery.data;
+  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
+  const schemaRefreshQueryErrorChanged = useValuesChanged([
+    schemaRefreshJobId,
+    schemaRefreshJobQuery.error,
+  ]);
+  let nextReportedSchemaRefresh = reportedSchemaRefresh;
+  if (
+    schemaRefreshJobChanged &&
+    schemaRefreshJob &&
+    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
+  ) {
+    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
+    if (nextReportedSchemaRefresh !== reportKey) {
+      nextReportedSchemaRefresh = reportKey;
+      if (schemaRefreshJob.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+      } else {
+        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
+        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
+      }
     }
-  }, [schemaRefreshJobQuery.data]);
+  }
+  if (schemaRefreshQueryErrorChanged && schemaRefreshJobQuery.error && schemaRefreshJobId) {
+    const reportKey = `${schemaRefreshJobId}:query-error`;
+    if (nextReportedSchemaRefresh !== reportKey) {
+      nextReportedSchemaRefresh = reportKey;
+      setSchemaRefreshError(
+        schemaRefreshJobQuery.error instanceof Error
+          ? schemaRefreshJobQuery.error.message
+          : t("dataMgmt.schemaJob.error"),
+      );
+      setSchemaRefreshNeedsFull(false);
+    }
+  }
+  if (nextReportedSchemaRefresh !== reportedSchemaRefresh) {
+    setReportedSchemaRefresh(nextReportedSchemaRefresh);
+  }
 
   useEffect(() => {
-    if (!schemaRefreshJobQuery.error || !schemaRefreshJobId) return;
-    const reportKey = `${schemaRefreshJobId}:query-error`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    completedSchemaRefreshJob.current = reportKey;
-    const message =
-      schemaRefreshJobQuery.error instanceof Error
-        ? schemaRefreshJobQuery.error.message
-        : t("dataMgmt.schemaJob.error");
-    setSchemaRefreshError(message);
-    setSchemaRefreshNeedsFull(false);
-  }, [schemaRefreshJobId, schemaRefreshJobQuery.error]);
+    if (reportedSchemaRefresh.endsWith(":done")) refreshSchemaReadModels();
+  }, [reportedSchemaRefresh]);
 
   const execute = async () => {
     if (!canExecute) return;
