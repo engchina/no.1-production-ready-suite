@@ -105,6 +105,16 @@ RetrievalStrategy = Literal[
     "reasoning_tree_search",
     "colpali_visual_retrieval",
 ]
+# DocRAG 回答フローの選択肢(docrag.generation.answer_models の ID と一致させる)。
+DocragQueryStrategy = Literal[
+    "auto_routing",
+    "simple_retrieval",
+    "rag_fusion",
+    "query_decomposition",
+    "step_back_prompting",
+    "hyde",
+]
+DocragAnswerFlow = Literal["crag", "standard_rag"]
 PostRetrievalPipeline = Literal[
     "custom",
     "lean",
@@ -675,6 +685,24 @@ class Settings(ModelSecretStateMixin, BaseSettings):
             "チャットで DocRAG 回答エンジンを使うとき、会話履歴から最新の質問を"
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
+    )
+    rag_docrag_query_strategy: DocragQueryStrategy = Field(
+        default="auto_routing",
+        description="DocRAG 回答の質問拡張戦略(rag_poc と同じ)。業務ビューで上書きできる。",
+    )
+    rag_docrag_answer_flow: DocragAnswerFlow = Field(
+        default="crag",
+        description="DocRAG 回答の回答生成フロー。crag は検索結果を評価して必要なら補正検索する。",
+    )
+    rag_docrag_neighbor_child_count: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="DocRAG 回答で、根拠の child の前後から context へ足す近傍 child 数。",
+    )
+    rag_docrag_rerank_enabled: bool = Field(
+        default=True,
+        description="DocRAG 回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
     )
     rag_answer_record_retention_days: int = Field(
         default=90,

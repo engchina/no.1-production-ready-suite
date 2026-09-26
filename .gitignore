@@ -4,3 +4,6 @@ node_modules/
 __pycache__/
 .DS_Store
 .claude/worktrees/
+
+# pr_system_settings が .env の保存時に作る排他用の lock ファイル
+..env.lock

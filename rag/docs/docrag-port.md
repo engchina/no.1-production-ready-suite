@@ -26,7 +26,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | Docling 解析・Vision 図説明 | 文書レシピ | 検索・回答設定 > 文書解析（Docling 選択時の「図・画像を AI で読み取る」）、または文書のレシピ編集 |
 | DocRAG 親子分割 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子分割」、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
-| 回答エンジン / 全文検索の分割方式 | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
+| 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。
 
@@ -40,6 +40,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - Vision の読み取り内容（画面名・ボタン・表の行・操作手順など）と切り出し画像
 4. **業務ビュー**：
    - 回答エンジンを「DocRAG（根拠照合・監査付き）」にする。
+   - 必要なら DocRAG の質問拡張戦略・回答生成フロー・近傍 child 数・Rerank を上書きする（既定は自動ルーティング / CRAG / 3 / ON）。
    - 必要なら全文検索の分割方式を Sudachi にする。
    - 業務ビューの知識に、ドメインキーワード・Approved FAQ・用語・ルールを登録する。
 5. **検索**：
@@ -55,6 +56,10 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_PARSER_DOCLING_VISION_ENABLED` | `false` | Docling 解析で図と画像入りの表を Vision で説明する（文書レシピで上書きできる） |
 | `RAG_ANSWER_ENGINE` | `standard` | 回答エンジンの全体既定。`docrag` で rag_poc の回答フローを使う（業務ビューで上書きできる） |
 | `RAG_TEXT_SEARCH_TOKENIZER` | `builtin` | Oracle Text クエリの分割方式。`sudachi` で rag_poc の Sudachi 分割を使う（検索・回答設定 > 検索方法で変更でき、業務ビューで上書きできる）。業務ビューにドメインキーワードがあれば、`builtin` でも DocRAG の分割でキーワードを 1 語として優先する |
+| `RAG_DOCRAG_QUERY_STRATEGY` | `auto_routing` | DocRAG 回答の質問拡張戦略（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。業務ビューで上書きできる |
+| `RAG_DOCRAG_ANSWER_FLOW` | `crag` | DocRAG 回答の回答生成フロー。`standard_rag` は補正検索をしない。業務ビューで上書きできる |
+| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `3` | DocRAG 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。業務ビューで上書きできる |
+| `RAG_DOCRAG_RERANK_ENABLED` | `true` | DocRAG 回答で検索候補を rerank で並べ替える。業務ビューで上書きできる |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
