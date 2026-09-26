@@ -9,6 +9,9 @@ export default defineConfig({
   // 実行前後で利用者の実環境の設定ファイルが変わっていないことを検査する。
   globalSetup: "./tests/e2e/global-setup.ts",
   timeout: 30_000,
+  // RAG と同じく CI だけ retries 2。遅い runner で 1 件の一時的な遅延が shard 全体を赤にしないため（#175）。
+  // retry で通ったテストは flaky として report に残る。nightly（e2e-nightly.yml）でも拾う。
+  retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 2 : 4,
   expect: {
     timeout: 8_000,

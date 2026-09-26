@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { Send, CheckCircle2, Sparkles, X } from "lucide-react";
 
 import {
@@ -154,9 +155,13 @@ export function GuidedClarificationPanel({
     }
   };
 
-  useEffect(() => {
+  // 質問が変わったレンダーで回答欄を空にする（effect で setState しない）。focus の移動だけ effect で行う。
+  const questionChanged = useValuesChanged([currentQuestion?.id]);
+  if (questionChanged) {
     setSelectedOptionIds([]);
     setFreeText("");
+  }
+  useEffect(() => {
     if (currentQuestion) {
       requestAnimationFrame(() => questionHeadingRef.current?.focus({ preventScroll: true }));
     }

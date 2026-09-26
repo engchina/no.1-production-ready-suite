@@ -5,6 +5,7 @@ import {
   useState,
   type DragEvent,
 } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   FileSpreadsheet,
   FileText,
@@ -104,17 +105,17 @@ export function FileDropzone({
     .filter(Boolean)
     .join(" ");
 
+  // 無効化・reset のレンダーでドラッグ表示と検証エラーを消す（effect で setState しない）。
+  // ドラッグの深さ（ref）は effect で戻す。
+  const disabledChanged = useValuesChanged([interactionDisabled]);
+  const resetRequested = useValuesChanged([resetSignal]);
+  if ((disabledChanged && interactionDisabled) || resetRequested) setIsDragActive(false);
+  if (resetRequested) setValidationError("");
   useEffect(() => {
-    if (interactionDisabled) {
-      dragDepthRef.current = 0;
-      setIsDragActive(false);
-    }
+    if (interactionDisabled) dragDepthRef.current = 0;
   }, [interactionDisabled]);
-
   useEffect(() => {
     dragDepthRef.current = 0;
-    setIsDragActive(false);
-    setValidationError("");
   }, [resetSignal]);
 
   const acceptFiles = (files: FileList | File[]) => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import {
   useSettingsDraftGuard,
   useUnsavedChangesGuard,
@@ -26,7 +26,10 @@ const activeGuards = new Set<{ current: () => Promise<boolean> }>();
 
 function useRegisterLeaveGuard(enabled: boolean, confirmLeave: () => Promise<boolean>) {
   const ref = useRef(confirmLeave);
-  ref.current = confirmLeave;
+  // 最新の確認関数を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => {
+    ref.current = confirmLeave;
+  });
   useEffect(() => {
     if (!enabled) return;
     activeGuards.add(ref);

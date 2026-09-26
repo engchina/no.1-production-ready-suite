@@ -16,6 +16,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { useEffect, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
@@ -97,9 +98,9 @@ export function SystemTablesCard() {
     }
   }, [operationError]);
 
-  useEffect(() => {
-    if (statusQuery.isFetching) setRecreateConfirmation("");
-  }, [statusQuery.isFetching]);
+  // 再取得が始まったレンダーで確認語を消す（effect で setState しない）。
+  const fetchingChanged = useValuesChanged([statusQuery.isFetching]);
+  if (fetchingChanged && statusQuery.isFetching) setRecreateConfirmation("");
 
   const execute = (recreate: boolean) => {
     if (busy || !mayExecute || (recreate && !recreateConfirmed)) return;

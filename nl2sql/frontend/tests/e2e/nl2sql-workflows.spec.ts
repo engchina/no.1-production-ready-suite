@@ -15425,7 +15425,14 @@ for (const outcome of ["unknown", "unavailable"] as const) {
     for (const delay of [5_000, 15_000, 30_000]) {
       const before = reads;
       await page.clock.fastForward(delay);
-      await expect.poll(() => reads).toBe(before + 1);
+      // 遅い環境では、次の再確認の timer が仮想時間の早送りより後に登録されることがある（#175）。
+      // 再取得が起きるまで 1 秒ずつ足す。次の間隔（15 秒 / 30 秒 / 停止）より十分短いので、2 回は取得しない。
+      await expect
+        .poll(async () => {
+          if (reads === before) await page.clock.fastForward(1_000);
+          return reads;
+        }, { timeout: 15_000 })
+        .toBe(before + 1);
       // 応答が query state へ反映されてから次の仮想時間へ進む。
       await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
     }

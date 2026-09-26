@@ -19,7 +19,7 @@ import {
   Save,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -34,6 +34,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import { useHuggingFaceSettings, useUpdateHuggingFaceSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -59,12 +60,12 @@ export function HuggingFaceSettingsClient() {
   const [saved, setSaved] = useState(false);
   const [optimistic, setOptimistic] = useState<HuggingFaceSettingsData | null>(null);
 
-  useEffect(() => {
-    if (query.data) {
-      setForm(formFromSettings(query.data));
-      setOptimistic(null);
-    }
-  }, [query.data]);
+  // server 値が変わったレンダーで、フォームを server 値に戻す。
+  const serverChanged = useValuesChanged([query.data]);
+  if (serverChanged && query.data) {
+    setForm(formFromSettings(query.data));
+    setOptimistic(null);
+  }
 
   function updateForm(update: Partial<HuggingFaceForm>) {
     setForm((current) => ({ ...current, ...update }));

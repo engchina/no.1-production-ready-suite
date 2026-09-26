@@ -1,5 +1,6 @@
 import { DefinitionFields } from "./ontologyResultPresentation";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   Info,
   MessageSquareText,
@@ -724,12 +725,16 @@ export function OntologyQueryPlayground({
   const hasGraph = Boolean(graph && graph.nodes.length > 0);
   const graphRevisionId = graph?.revision?.id ?? graph?.revision_id ?? "";
 
-  useEffect(() => {
+  // revision が変わったレンダーで結果と選択を消す（effect で setState しない）。古い検索応答は effect で捨てる。
+  const revisionChanged = useValuesChanged([graphRevisionId]);
+  if (revisionChanged) {
     setResult(null);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
-    serverSearchSeqRef.current += 1;
     setServerSearch({ status: "idle" });
+  }
+  useEffect(() => {
+    serverSearchSeqRef.current += 1;
   }, [graphRevisionId]);
 
   const resetGroundingState = ({ clearQuestion = false }: { clearQuestion?: boolean } = {}) => {
