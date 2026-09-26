@@ -1,5 +1,5 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus,
   ArrowDown,
@@ -758,6 +758,9 @@ export function HistoryPage() {
   };
 
   // 絞り込みが変わったレンダーで読み込み中の表示にし（effect で setState しない）、取得は effect で行う。
+  // 取得は絞り込みが変わったときだけ行う。取得の関数は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  const fetchHistoryRef = useRef(fetchHistory);
+  useLayoutEffect(() => { fetchHistoryRef.current = fetchHistory; });
   const filtersChanged = useValuesChanged([feedbackFilter, safetyFilter, search]);
   if (filtersChanged) {
     setLoading(true);
@@ -770,12 +773,14 @@ export function HistoryPage() {
       setSelectedId("");
       setDetailTab("overview");
     }
-    void fetchHistory(false);
+    void fetchHistoryRef.current(false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, [feedbackFilter, safetyFilter, search]);
+    // filterSignature は 3 つの絞り込みの JSON なので、元の deps（feedbackFilter / safetyFilter / search）と同じ時に変わる。
+    // abortAll と setter は固定の関数。
+  }, [filterSignature, abortAll, setDetailTab, setSelectedId]);
 
   const sortedItems = useMemo(() => sortHistory(items, sort), [items, sort]);
 

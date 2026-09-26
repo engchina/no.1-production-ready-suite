@@ -21,8 +21,8 @@
       "rules": {
         // eslint-plugin-react-hooks の configs.recommended.rules と同じルール・同じレベル（RAG #167 / Agent #179 と同じ）。
         "react-hooks-compiler/rules-of-hooks": "error",
-        // 段階的に有効にする（#181）：refs（段階 1）と set-state-in-effect（段階 2）は有効化済み。exhaustive-deps は段階 3 の修正の後に有効にする。
-        "react-hooks-compiler/exhaustive-deps": "off",
+        // #181 の段階 1〜3 で違反をすべて直し、recommended の全ルールを有効にした（exhaustive-deps は recommended と同じ warn。--deny-warnings で失敗扱いになる）。
+        "react-hooks-compiler/exhaustive-deps": "warn",
         "react-hooks-compiler/static-components": "error",
         "react-hooks-compiler/use-memo": "error",
         "react-hooks-compiler/preserve-manual-memoization": "error",

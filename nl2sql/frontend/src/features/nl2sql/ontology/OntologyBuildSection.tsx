@@ -949,7 +949,7 @@ export function OntologyBuildSection({
     );
     setActiveMarkdownTab("published");
     return true;
-  }, [applyMarkdownState]);
+  }, [applyMarkdownState, setActiveMarkdownTab]);
 
   const applyBuildJobMarkdownOutput = useCallback((next: OntologyBuildJob) => {
     const markdownOutput = next.markdown_output ?? "";
@@ -1136,7 +1136,7 @@ export function OntologyBuildSection({
       window.clearInterval(timer);
       currentController?.abort();
     };
-  }, [applyBuildJobMarkdownOutput, jobRunning, jobId, profileId, refreshMarkdown, showNotice]);
+  }, [applyBuildJobMarkdownOutput, jobRunning, jobId, profileId, refreshMarkdown, refreshSourceDocuments, showNotice]);
 
   // publish job ポーリング(1s)。build 側と同じく in-flight ガードで GET を重ねず、
   // 依存は publishJobId(文字列)なので毎秒の setPublishJob で interval は再生成されない。

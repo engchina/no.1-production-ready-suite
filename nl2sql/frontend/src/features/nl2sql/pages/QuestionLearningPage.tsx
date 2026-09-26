@@ -21,6 +21,7 @@ import {
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -239,13 +240,16 @@ export function QuestionClassifierModelsPage() {
   };
 
   // 初回の読み込み。loading は初期値の "load"、message / candidateError は初期値の空のまま始める。
+  // mount のときだけ取得する。取得の関数は毎レンダー作り直すので、最新のものを ref から呼ぶ（abortAll は固定の関数）。
+  const fetchAllRef = useRef(fetchAll);
+  useLayoutEffect(() => { fetchAllRef.current = fetchAll; });
   useEffect(() => {
-    void fetchAll(false);
+    void fetchAllRef.current(false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [abortAll]);
 
   const refreshTrainingData = async (announce = false) => {
     if (loading) return;

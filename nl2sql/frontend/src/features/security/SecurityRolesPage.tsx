@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -258,30 +260,40 @@ export function SecurityRolesPage() {
     draftEffectivePermissionCodes.has(PROFILE_MANAGE_PERMISSION);
   const profileAccessReadOnly = inputReadOnly || draftGrantsAllProfileAccess;
 
-  const rolePermissionText = (role: SecurityRole) =>
-    [...effectivePermissionCodes(role.permissions, permissionByCode)]
-      .map((code) => permissionByCode.get(code)?.label ?? code)
-      .join(" ");
+  // 一覧の検索（useMemo）から使うため、権限定義・Profile 一覧が変わったときだけ作り直す。
+  const rolePermissionText = useCallback(
+    (role: SecurityRole) =>
+      [...effectivePermissionCodes(role.permissions, permissionByCode)]
+        .map((code) => permissionByCode.get(code)?.label ?? code)
+        .join(" "),
+    [permissionByCode]
+  );
 
-  const roleProfileAccessText = (role: SecurityRole) =>
-    roleGrantsAllProfileAccess(role, permissionByCode)
-      ? t("security.roles.profileAccessAll")
-      : profileAccessProfiles
-          .filter((profile) => role.allowed_profile_ids.includes(profile.id))
-          .map(profileAccessLabel)
-          .join(" ");
+  const roleProfileAccessText = useCallback(
+    (role: SecurityRole) =>
+      roleGrantsAllProfileAccess(role, permissionByCode)
+        ? t("security.roles.profileAccessAll")
+        : profileAccessProfiles
+            .filter((profile) => role.allowed_profile_ids.includes(profile.id))
+            .map(profileAccessLabel)
+            .join(" "),
+    [permissionByCode, profileAccessProfiles]
+  );
 
-  const roleSearchText = (role: SecurityRole) =>
-    [
-      role.role_code,
-      role.display_name,
-      role.description,
-      roleStatusText(role),
-      rolePermissionText(role),
-      roleProfileAccessText(role),
-    ]
-      .join(" ")
-      .toLowerCase();
+  const roleSearchText = useCallback(
+    (role: SecurityRole) =>
+      [
+        role.role_code,
+        role.display_name,
+        role.description,
+        roleStatusText(role),
+        rolePermissionText(role),
+        roleProfileAccessText(role),
+      ]
+        .join(" ")
+        .toLowerCase(),
+    [rolePermissionText, roleProfileAccessText]
+  );
 
   const filteredRoles = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -299,7 +311,7 @@ export function SecurityRolesPage() {
         // 1 列目はロールコードを主表示するため、コードで並べる。
         return compareText(left.role_code, right.role_code, sort.direction);
       });
-  }, [permissionByCode, profileAccessProfiles, roles, search, sort]);
+  }, [permissionByCode, roleSearchText, roles, search, sort]);
 
   const visibleSelectedId =
     activeView === "list"
@@ -373,15 +385,21 @@ export function SecurityRolesPage() {
     }
   };
 
+  // 初回ロードは mount 時だけ行う。最新の requestData を commit 時に ref へ入れて呼ぶ
+  // （requestData は canManage を読むため、deps に入れると権限の再取得で読み直しになる）。
+  const requestDataRef = useRef(requestData);
+  useLayoutEffect(() => {
+    requestDataRef.current = requestData;
+  });
   useEffect(() => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    void requestData(sequence, false);
+    void requestDataRef.current(sequence, false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [abortAll]);
 
   // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
   if (useValuesChanged([activeView, filteredRoles, loading]) && activeView === "list" && !loading) {

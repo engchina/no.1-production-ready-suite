@@ -5,7 +5,7 @@ import {
   PageHeader,
   PageBody,
 } from "@engchina/production-ready-ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
@@ -74,7 +74,7 @@ export function OntologyBuildPage() {
     return (
       activeProfiles.find((profile) => profile.id === profileParam) ?? null
     );
-  }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
+  }, [activeProfiles, profileParam]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
   // profile が変わったレンダーで、別の profile 向けの表示要求を消す（effect で setState しない）。
   const selectedProfileChanged = useValuesChanged([selectedProfileId]);
@@ -118,6 +118,8 @@ export function OntologyBuildPage() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  // fetchNextPage / refetch は query の observer ごとに固定の関数なので、deps に入れても発火の条件は変わらない。
+  const { fetchNextPage: fetchNextProfilesPage, refetch: refetchProfiles } = profilesQuery;
   useEffect(() => {
     if (
       profileParam &&
@@ -126,9 +128,9 @@ export function OntologyBuildPage() {
       !profilesQuery.isFetchingNextPage &&
       !profilesQuery.isFetchNextPageError
     ) {
-      void profilesQuery.fetchNextPage();
+      void fetchNextProfilesPage();
     }
-  }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage, profilesQuery.isFetchNextPageError]);
+  }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage, profilesQuery.isFetchNextPageError, fetchNextProfilesPage]);
 
   const refreshOntologyView = useCallback(async () => {
     if (!selectedProfileId) return;
@@ -168,10 +170,14 @@ export function OntologyBuildPage() {
       }
     }
   }
+  // 再取得は終端を処理したときだけ行う。refreshOntologyView は profile の切り替えで作り直されるので、
+  // deps に入れず最新のものを ref から呼ぶ（profile を切り替えただけで ontology を取り直さない）。
+  const refreshOntologyViewRef = useRef(refreshOntologyView);
+  useLayoutEffect(() => { refreshOntologyViewRef.current = refreshOntologyView; });
   useEffect(() => {
     if (!handledSchemaRefreshJob.endsWith(":done")) return;
-    void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
-  }, [handledSchemaRefreshJob]);
+    void Promise.all([refetchProfiles(), refreshOntologyViewRef.current()]);
+  }, [handledSchemaRefreshJob, refetchProfiles]);
 
   const selectProfile = (id: string) => {
     setPageError(""); // 前 profile のスキーマ更新エラーを持ち越さない

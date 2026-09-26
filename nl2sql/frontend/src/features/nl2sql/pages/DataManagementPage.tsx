@@ -1,6 +1,6 @@
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -458,7 +458,7 @@ export function DataManagementPage() {
     setPreviewLoadingObject("");
     setPreviewError("");
     setExportError("");
-  }, [previewObject, previewObjectPickerItems]);
+  }, [previewObject, previewObjectPickerItems, setPreviewObject]);
 
   useEffect(() => {
     const nextTable = selectedVisibleStringKey(csvTablePickerItems, csvTable, (item) => item.key, {
@@ -490,12 +490,16 @@ export function DataManagementPage() {
       setSchemaJobError(schemaJobErrorMessage(schemaJob));
     }
   }
+  // refetch は query の observer ごとに固定の関数なので、deps に入れても発火の条件は変わらない。
+  const { refetch: refetchBaseObjects } = baseObjectsQuery;
+  const { refetch: refetchCsvTables } = csvTablesQuery;
+  const { refetch: refetchPreviewObjects } = previewObjectsQuery;
   useEffect(() => {
     if (!reportedSchemaJob.endsWith(":done")) return;
-    void baseObjectsQuery.refetch();
-    void csvTablesQuery.refetch();
-    void previewObjectsQuery.refetch();
-  }, [reportedSchemaJob]);
+    void refetchBaseObjects();
+    void refetchCsvTables();
+    void refetchPreviewObjects();
+  }, [reportedSchemaJob, refetchBaseObjects, refetchCsvTables, refetchPreviewObjects]);
 
   const dbProfileRefreshJobChanged = useValuesChanged([dbProfileRefreshJob]);
   if (
@@ -513,17 +517,18 @@ export function DataManagementPage() {
         : dbProfileRefreshErrorMessage(dbProfileRefreshJob.error_code, dbProfileRefreshJob.error_message),
     );
   }
+  const { refetch: refetchSelectAiProfiles } = selectAiProfilesQuery;
   useEffect(() => {
     if (reportedDbProfileRefreshJob?.status !== "done") return;
     void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
-    void selectAiProfilesQuery.refetch();
+    void refetchSelectAiProfiles();
     toast.success(
       t("profiles.dbProfileRefresh.done", {
         changed: reportedDbProfileRefreshJob.changed_profiles,
         deleted: reportedDbProfileRefreshJob.deleted_profiles,
       })
     );
-  }, [reportedDbProfileRefreshJob]);
+  }, [reportedDbProfileRefreshJob, queryClient, refetchSelectAiProfiles]);
 
   // job の取得に失敗したレンダーで、error 表示を直す（effect で setState しない）。
   const dbProfileRefreshQueryErrorChanged = useValuesChanged([
@@ -956,11 +961,17 @@ export function DataManagementPage() {
     setSyntheticResultTable((current) => selectedRun.targets.some((target) => target.table_name === current) ? current : selectedRun.targets[0]?.table_name ?? "");
   }
 
+  // 自動の結果表示は run・表示の条件が変わったときだけ判定する。読み込みは最新の関数を ref から呼ぶ
+  // （毎レンダー作り直す関数を deps に入れると、条件の変わらないレンダーでも判定し直してしまう）。
+  const loadSyntheticDataResultsRef = useRef(loadSyntheticDataResults);
+  useLayoutEffect(() => { loadSyntheticDataResultsRef.current = loadSyntheticDataResults; });
+  const selectedRunId = selectedRun?.run_id;
+  const selectedRunStatus = selectedRun?.status;
   useEffect(() => {
-    if (!selectedRun || !["completed", "partial"].includes(selectedRun.status) || autoPreviewed.current.has(selectedRun.run_id) || activeView !== "synthetic" || !workspaceActive || resultSelectionEdited.current || !canLoadSyntheticDataResults) return;
-    autoPreviewed.current.add(selectedRun.run_id);
-    void loadSyntheticDataResults();
-  }, [selectedRun?.run_id, selectedRun?.status, canLoadSyntheticDataResults, activeView, workspaceActive]);
+    if (selectedRunId === undefined || selectedRunStatus === undefined || !["completed", "partial"].includes(selectedRunStatus) || autoPreviewed.current.has(selectedRunId) || activeView !== "synthetic" || !workspaceActive || resultSelectionEdited.current || !canLoadSyntheticDataResults) return;
+    autoPreviewed.current.add(selectedRunId);
+    void loadSyntheticDataResultsRef.current();
+  }, [selectedRunId, selectedRunStatus, canLoadSyntheticDataResults, activeView, workspaceActive]);
 
   const previewObjectErrorMessage =
     previewObjectsQuery.error && !previewObjectsQuery.data
