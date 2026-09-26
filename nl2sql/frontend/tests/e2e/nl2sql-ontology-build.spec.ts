@@ -106,7 +106,7 @@ async function loadOntologyBuildWorkspace(page: Page) {
 
 async function confirmPreparedPublish(page: Page) {
   const button = page.getByRole("button", { name: "確認した内容を公開", exact: true });
-  if (await page.getByTestId("ontology-publish-status").isVisible() && !(await button.isVisible())) return;
+  // 公開は必ず準備 → 確認の順。前回の公開状態が表示されていても、確認ボタンが出るまで待つ（瞬間判定で抜けない。#175）。
   await button.click();
   await page.getByRole("alertdialog").getByRole("button", { name: "オントロジーを公開", exact: true }).click();
 }

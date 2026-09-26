@@ -5,6 +5,7 @@ import { CornerDownLeft, Search, X } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import { confirmPendingLeave } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import { cn } from "@/lib/utils";
 import { NAV_SECTIONS, type NavItem } from "./nav-config";
 
@@ -79,16 +80,15 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const listRef = useRef<HTMLUListElement>(null);
   const previouslyFocused = useRef<Element | null>(null);
 
-  const entries = useMemo(buildEntries, []);
+  const entries = useMemo(() => buildEntries(), []);
   const results = useMemo(
     () => (query.trim() ? entries.filter((entry) => matches(entry, query)) : entries),
     [entries, query]
   );
 
-  // クエリ変更で選択位置を先頭に戻す。
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [query]);
+  // クエリ変更で選択位置を先頭に戻す（render 中に調整）。
+  const queryChanged = useValuesChanged([query]);
+  if (queryChanged) setActiveIndex(0);
 
   // 開いたら入力へフォーカス、閉じたらトリガーへ復帰。
   useEffect(() => {

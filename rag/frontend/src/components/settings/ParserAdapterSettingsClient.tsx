@@ -13,7 +13,7 @@ import {
   Skeleton,
   Switch,
 } from "@engchina/production-ready-ui";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -49,6 +49,7 @@ import {
   type ServiceProfile,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   findParserCapability,
@@ -143,11 +144,11 @@ export function ParserAdapterSettingsClient() {
   const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (query.data && !save.isPending) {
-      setForm(formFromSettings(query.data));
-    }
-  }, [query.data, save.isPending]);
+  // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
+  const serverChanged = useValuesChanged([query.data, save.isPending]);
+  if (serverChanged && query.data && !save.isPending) {
+    setForm(formFromSettings(query.data));
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(query.data && form && serializeForm(form) !== serializeForm(formFromSettings(query.data))));

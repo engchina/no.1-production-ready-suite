@@ -1,7 +1,7 @@
 "use client";
 
 import { Eye, EyeOff, LockKeyhole, LogIn } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -22,24 +22,13 @@ export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [username, setUsername] = useState("");
+  // 前回の「ログイン状態を保持」とユーザー名は、初回 render の初期値として読む。
+  const [remembered] = useState(readRememberedUser);
+  const [username, setUsername] = useState(remembered.username);
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(remembered.rememberMe);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    try {
-      const persistedRememberMe = window.localStorage.getItem(REMEMBER_ME_STORAGE_KEY);
-      const shouldRemember = persistedRememberMe !== "false";
-      setRememberMe(shouldRemember);
-      if (shouldRemember) {
-        setUsername(window.localStorage.getItem(REMEMBERED_USERNAME_STORAGE_KEY) ?? "");
-      }
-    } catch {
-      // localStorage が無効でもログイン操作は継続できる。
-    }
-  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -156,6 +145,22 @@ export function LoginPage() {
       </section>
     </main>
   );
+}
+
+function readRememberedUser(): { rememberMe: boolean; username: string } {
+  try {
+    const persistedRememberMe = window.localStorage.getItem(REMEMBER_ME_STORAGE_KEY);
+    const shouldRemember = persistedRememberMe !== "false";
+    return {
+      rememberMe: shouldRemember,
+      username: shouldRemember
+        ? window.localStorage.getItem(REMEMBERED_USERNAME_STORAGE_KEY) ?? ""
+        : "",
+    };
+  } catch {
+    // localStorage が無効でもログイン操作は継続できる。
+    return { rememberMe: true, username: "" };
+  }
 }
 
 function persistRememberedUser(username: string, rememberMe: boolean) {

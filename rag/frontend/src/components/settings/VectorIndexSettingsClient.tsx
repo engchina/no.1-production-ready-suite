@@ -11,7 +11,7 @@ import {
   FormStatus,
   Skeleton,
 } from "@engchina/production-ready-ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Boxes, CheckCircle2, Database, RotateCcw, Save } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -35,13 +35,11 @@ export function VectorIndexSettingsClient() {
   const [profile, setProfile] = useState<VectorIndexProfileName | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    // ponytail: 初回ハイドレーションのみ同期。未保存選択を裏の refetch で上書きしない。
-    // 保存後の再同期は submit/onSuccess・resetForm が担う(外部更新の取り込みは remount 時)。
-    if (query.data && !save.isPending) {
-      setProfile((prev) => (prev === null ? query.data!.profile : prev));
-    }
-  }, [query.data, save.isPending]);
+  // ponytail: 初回ハイドレーションのみ render 中に同期。未保存選択を裏の refetch で上書きしない。
+  // 保存後の再同期は submit/onSuccess・resetForm が担う(外部更新の取り込みは remount 時)。
+  if (query.data && !save.isPending && profile === null) {
+    setProfile(query.data.profile);
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));

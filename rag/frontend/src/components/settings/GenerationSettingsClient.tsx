@@ -14,7 +14,7 @@ import {
   Skeleton,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Archive, RotateCcw, Save, Sparkles } from "lucide-react";
 
@@ -52,13 +52,11 @@ export function GenerationSettingsClient() {
   const [profile, setProfile] = useState<GenerationProfileName | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    // 初回ロード時のみ同期する。保存後の反映は onSuccess が担うため、背景 refetch で
-    // 未保存の選択を上書きしない。
-    if (query.data && profile === null) {
-      setProfile(query.data.profile);
-    }
-  }, [query.data, profile]);
+  // 初回ロード時のみ render 中に同期する。保存後の反映は onSuccess が担うため、背景 refetch で
+  // 未保存の選択を上書きしない。
+  if (query.data && profile === null) {
+    setProfile(query.data.profile);
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
