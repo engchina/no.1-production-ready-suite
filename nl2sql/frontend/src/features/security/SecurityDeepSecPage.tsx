@@ -65,8 +65,11 @@ import {
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
-import { SecurityIdentityLines, SecuritySearchField } from "./SecurityManagementShared";
-import { identitySecondaryName } from "./identity-label";
+import {
+  SecurityIdentityLines,
+  SecuritySearchField,
+  identitySecondaryName,
+} from "@engchina/production-ready-system-settings";
 import { securityApi } from "./api";
 import type {
   DataEntitlement,

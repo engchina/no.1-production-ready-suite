@@ -37,6 +37,7 @@ from .schemas import (
     RoleCreateRequest,
     RoleData,
     RoleDeleteData,
+    RolePermissionsUpdateRequest,
     RoleRestoreRequest,
     RoleUpdateRequest,
     UserCreateData,
@@ -45,6 +46,7 @@ from .schemas import (
     UserDeleteData,
     UserUpdateRequest,
     VersionRequest,
+    user_data,
 )
 from .service import get_security_service
 
@@ -77,7 +79,7 @@ def _roles_by_id() -> dict[str, RoleRecord]:
 
 
 def _user_data(user: UserRecord) -> UserData:
-    return UserData.from_record(user, roles_by_id=_roles_by_id())
+    return user_data(user, roles_by_id=_roles_by_id())
 
 
 def _expected_version(if_match: str | None) -> int:
@@ -195,7 +197,7 @@ def change_password(
 def list_users() -> ApiResponse[list[UserData]]:
     users = get_security_service().list_users()
     roles_by_id = _roles_by_id()
-    return ApiResponse(data=[UserData.from_record(user, roles_by_id=roles_by_id) for user in users])
+    return ApiResponse(data=[user_data(user, roles_by_id=roles_by_id) for user in users])
 
 
 @router.post("/security/users", response_model=ApiResponse[UserCreateData])
@@ -362,20 +364,15 @@ def list_roles(
 
 @router.post("/security/roles", response_model=ApiResponse[RoleData])
 def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[RoleData]:
+    """ロール管理画面の新規作成。権限は権限管理（PUT .../permissions）で付ける（#206）。"""
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     role = get_security_service().create_role(
         role_code=payload.role_code,
         display_name=payload.display_name,
         description=payload.description,
-        permissions=set(payload.permissions),
-        entitlements=[
-            (item.resource_code, item.scope_code, item.capability)
-            for item in payload.data_entitlements
-        ],
-        allowed_profile_ids=(
-            set(payload.allowed_profile_ids) if payload.allowed_profile_ids is not None else None
-        ),
+        permissions=set(),
+        entitlements=[],
         actor=actor,
         request_id=request_id,
         client_ip=client_ip,
@@ -405,6 +402,7 @@ def update_role(
     request: Request,
     response: Response,
 ) -> ApiResponse[RoleData]:
+    """ロール管理画面の基本情報（名称・説明）の更新。権限は変えない（#206）。"""
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     role = get_security_service().update_role(
@@ -412,6 +410,27 @@ def update_role(
         expected_version=payload.version,
         display_name=payload.display_name,
         description=payload.description,
+        actor=actor,
+        request_id=request_id,
+        client_ip=client_ip,
+    )
+    response.headers["ETag"] = f'"{role.version}"'
+    return ApiResponse(data=RoleData.from_record(role))
+
+
+@router.put("/security/roles/{role_id}/permissions", response_model=ApiResponse[RoleData])
+def update_role_permissions(
+    role_id: str,
+    payload: RolePermissionsUpdateRequest,
+    request: Request,
+    response: Response,
+) -> ApiResponse[RoleData]:
+    """権限管理画面の保存。menu 権限と業務プロファイル利用権限だけを更新する（#206）。"""
+    actor = current_principal(request)
+    request_id, client_ip = request_context(request)
+    role = get_security_service().update_role(
+        role_id,
+        expected_version=payload.version,
         permissions=set(payload.permissions),
         allowed_profile_ids=(
             set(payload.allowed_profile_ids) if payload.allowed_profile_ids is not None else None
@@ -431,7 +450,7 @@ def update_role(
 def list_profile_access_profiles(
     include_archived: bool = Query(default=False),
 ) -> ApiResponse[list[ProfileAccessProfileData]]:
-    """ロール管理画面向けに業務 profile の利用権限カタログを返す。"""
+    """権限管理画面向けに業務 profile の利用権限カタログを返す。"""
     from app.features.nl2sql.service import nl2sql_service
 
     profiles = nl2sql_service.list_profiles(include_archived=include_archived)

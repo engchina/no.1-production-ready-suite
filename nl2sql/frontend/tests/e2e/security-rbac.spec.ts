@@ -2797,7 +2797,7 @@ test("ユーザー管理は復元済みロールを通常表示し、割り当�
   await expect(page.getByRole("radio", { name: /データ管理者/ })).toBeVisible();
 });
 
-test("ロール・権限管理はカード型リストではなくテーブル一覧と詳細で表示する", async ({ page }) => {
+test("ロール管理はテーブル一覧と詳細で表示し、権限の選択は権限管理で行う", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const permissionRows = [
     {
@@ -2847,7 +2847,16 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   const grid = page.getByTestId("security-roles-grid");
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
-  await expect(grid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
+  // ロール管理（共通画面）は権限を扱わない。権限は権限管理で設定する（#206）。
+  await expect(grid.getByRole("columnheader", { name: "説明" })).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "機能権限" })).toHaveCount(0);
+  await expect(page.getByTestId("security-roles-permission-summary")).toContainText(
+    "付与している機能権限: 1 件"
+  );
+  await expect(page.getByTestId("security-roles-open-permissions")).toHaveAttribute(
+    "href",
+    "/settings/security/permissions?role=role-viewer"
+  );
   await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "機能権限" })).toHaveCount(0);
@@ -2878,13 +2887,30 @@ test("ロール・権限管理はカード型リストではなくテーブル�
 
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
   expect(await topLevelPanelStyle(page, "create", "security-roles")).toEqual(listStyle);
+  await expect(page.getByLabel("ロールコード")).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+
+  // 権限管理: ロールごとの機能権限を一括選択できる。
+  await page.getByTestId("security-roles-open-permissions").click();
+  await expect(page).toHaveURL(/\/settings\/security\/permissions\?role=role-viewer$/u);
+  const permissionGrid = page.getByTestId("security-permissions-grid");
+  await expect(permissionGrid.getByRole("columnheader", { name: "機能権限" })).toBeVisible();
+  await expect(
+    permissionGrid.locator("tbody tr").filter({ hasText: "アプリ閲覧" })
+  ).toHaveAttribute("data-selected", "true");
+  await page
+    .getByTestId("security-permissions-detail-actions")
+    .getByRole("button", { name: "権限を編集" })
+    .click();
   await expect(page.getByText("ダッシュボード表示", { exact: true })).toHaveCount(0);
   await expect(page.getByText("security.users.view", { exact: true })).toHaveCount(0);
   await expect(page.getByText("security.users.manage", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /外観/ })).toBeVisible();
   const permissionBulkActions = page.getByTestId("security-roles-permission-selection-actions");
   await expect(permissionBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
-  await expect(permissionBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeDisabled();
+  await expect(permissionBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeEnabled();
   await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(page.getByRole("checkbox", { name: /外観/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).toBeChecked();
@@ -2909,8 +2935,13 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
-  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  await expect(page.locator("#security-permissions-panel-list")).toBeVisible();
+  // 組み込みロールの権限は変更できないため、編集操作を出さない。
+  await permissionGrid.locator("tbody tr").filter({ hasText: "システム管理者" }).locator("td").first().click();
+  await expect(page.getByTestId("security-permissions-detail-actions")).toHaveCount(0);
+  await expect(page.getByText("SYSTEM_ADMIN は現在および将来の全機能権限を自動的に持つ組み込みロールです。")).toBeVisible();
 
+  await page.goto("/settings/security/roles");
   const systemRoleRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
   await systemRoleRow.locator("td").first().click();
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
@@ -3024,7 +3055,7 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   expect(submitCount).toBe(3);
 });
 
-test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を設定できる", async ({ page }) => {
+test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設定できる", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
@@ -3087,7 +3118,8 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
     fulfill(route, [systemRole, queryRole])
   );
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
-  await page.route("**/api/security/roles/role-query-default", async (route) => {
+  await page.route("**/api/security/roles/role-query-default/permissions", async (route) => {
+    expect(route.request().method()).toBe("PUT");
     savedPayload = route.request().postDataJSON() as Record<string, unknown>;
     await fulfill(route, {
       ...queryRole,
@@ -3097,16 +3129,16 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
   });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/settings/security/roles");
+  await page.goto("/settings/security/permissions");
   await page
-    .getByTestId("security-roles-grid")
+    .getByTestId("security-permissions-grid")
     .locator("tbody tr")
     .filter({ hasText: "SQL 利用者" })
     .locator("td")
     .first()
     .click();
-  await expect(page.getByText("1 件", { exact: true })).toBeVisible();
-  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByText("1 件", { exact: true }).first()).toBeVisible();
+  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
   const profileSearch = page.getByTestId("security-roles-profile-access-search");
   const profileAccessList = page.getByTestId("security-roles-profile-access-list");
   const readProfileAccessScrollState = () =>
@@ -3197,11 +3229,14 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
       return Math.abs(actionsBox.x - listBox.x);
     })
     .toBeLessThanOrEqual(1);
-  await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
 
   await expect
     .poll(() => (savedPayload?.allowed_profile_ids as string[] | undefined)?.sort())
     .toEqual(["default", "finance"]);
+  const permissionPayload = savedPayload as Record<string, unknown> | null;
+  expect(permissionPayload?.permissions).toEqual(["menu.query"]);
+  expect(permissionPayload).not.toHaveProperty("display_name");
 });
 
 test("業務プロファイル管理権限のロールは全業務プロファイルとして扱う", async ({ page }) => {
@@ -3266,7 +3301,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
     fulfill(route, [systemRole, profileManagerRole])
   );
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
-  await page.route("**/api/security/roles/role-profile-manager", async (route) => {
+  await page.route("**/api/security/roles/role-profile-manager/permissions", async (route) => {
     savedPayload = route.request().postDataJSON() as Record<string, unknown>;
     await fulfill(route, {
       ...profileManagerRole,
@@ -3275,16 +3310,16 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
     });
   });
 
-  await page.goto("/settings/security/roles");
-  const grid = page.getByTestId("security-roles-grid");
+  await page.goto("/settings/security/permissions");
+  const grid = page.getByTestId("security-permissions-grid");
   await grid
     .locator("tbody tr")
     .filter({ hasText: "業務プロファイル管理ロール" })
     .locator("td")
     .first()
     .click();
-  await expect(page.getByText("すべての業務プロファイル", { exact: true })).toBeVisible();
-  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await expect(page.getByText("すべての業務プロファイル", { exact: true }).first()).toBeVisible();
+  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
 
   await expect(
     page.getByText(
@@ -3293,12 +3328,12 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
     )
   ).toBeVisible();
   await expect(page.getByTestId("security-roles-profile-access-list")).toHaveCount(0);
-  await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
   await expect.poll(() => savedPayload?.allowed_profile_ids).toEqual([]);
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ロール・権限管理は業務プロファイル候補の取得失敗でもロール一覧を表示する", async ({ page }) => {
+test("権限管理は業務プロファイル候補の取得失敗でもロール一覧を表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
@@ -3332,18 +3367,18 @@ test("ロール・権限管理は業務プロファイル候補の取得失敗�
     ])
   );
 
-  await page.goto("/settings/security/roles");
+  await page.goto("/settings/security/permissions");
 
   await expect(
     page.getByText("業務プロファイル利用権限の候補を読み込めませんでした。", {
       exact: false,
     })
   ).toBeVisible();
-  await expect(page.getByTestId("security-roles-grid").getByText("SQL 利用者")).toBeVisible();
+  await expect(page.getByTestId("security-permissions-grid").getByText("SQL 利用者")).toBeVisible();
   await expect(page.getByText("対象データはありません。")).toHaveCount(0);
 });
 
-test("ロール・権限管理は詳細で権限名を伏せ、編集では SQL 生成由来の参照権限を継承表示する", async ({ page }) => {
+test("権限管理は詳細で権限名を伏せ、編集では SQL 生成由来の参照権限を継承表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const permissionRows = [
     {
@@ -3382,12 +3417,12 @@ test("ロール・権限管理は詳細で権限名を伏せ、編集では SQL 
   );
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
 
-  await page.goto("/settings/security/roles");
-  await page.getByTestId("security-roles-grid").locator("tbody tr").filter({ hasText: "SQL 利用者" }).locator("td").first().click();
+  await page.goto("/settings/security/permissions");
+  await page.getByTestId("security-permissions-grid").locator("tbody tr").filter({ hasText: "SQL 利用者" }).locator("td").first().click();
 
   await expect(page.getByText("業務プロファイル参照 (SQL 生成により付与)")).toHaveCount(0);
   await expect(page.getByText("スキーマ参照 (SQL 生成により付与)")).toHaveCount(0);
-  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
   await expect(page.getByText("SQL 生成により付与", { exact: true }).first()).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
@@ -3395,7 +3430,8 @@ test("ロール・権限管理は詳細で権限名を伏せ、編集では SQL 
 
 test("ロール編集の下端メニューは viewport 下端では上方向に開く", async ({ page }) => {
   await mockDatabaseGateReady(page);
-  await page.setViewportSize({ width: 1365, height: 720 });
+  // ロール管理のフォームは基本情報だけなので、短い viewport で操作バーを下端に置く（#206）。
+  await page.setViewportSize({ width: 1365, height: 480 });
   const permissionRows = [
     {
       code: "menu.query",
@@ -3479,7 +3515,7 @@ test("ロール管理の compact header menu は短い viewport 内に収まる"
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ロール・権限管理はアーカイブ済みロールの権限が無効であることを明示する", async ({ page }) => {
+test("アーカイブ済みロールは権限が無効であることを明示し、権限管理でも編集できない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
@@ -3557,6 +3593,19 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   });
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
 
+  // 権限管理: アーカイブ済みロールは権限を編集できず、無効であることを示す。
+  await page.goto("/settings/security/permissions");
+  const permissionGrid = page.getByTestId("security-permissions-grid");
+  await permissionGrid.locator("tbody tr").filter({ hasText: "データ管理者" }).locator("td").first().click();
+  await expect(
+    page.getByText(
+      "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  await expect(page.getByTestId("security-permissions-detail-actions")).toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+
   await page.goto("/settings/security/roles");
 
   const grid = page.getByTestId("security-roles-grid");
@@ -3581,40 +3630,10 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   const archivedEditActions = page.getByRole("group", { name: "ロール編集操作" });
   const roleName = page.getByLabel("ロール名");
   const roleDescription = page.getByLabel("説明");
-  const queryPermission = page.getByRole("checkbox", { name: /SQL 生成/u });
-  const directSqlPermission = page.getByRole("checkbox", { name: /SELECT SQL を実行/u });
-  const defaultProfile = page.getByRole("checkbox", { name: /標準プロファイル/u });
-  const financeProfile = page.getByRole("checkbox", { name: /財務プロファイル/u });
-  const profileSearch = page.getByLabel("業務プロファイルを検索");
   await expect(roleName).toBeDisabled();
   await expect(roleDescription).toBeDisabled();
-  await expect(queryPermission).toBeVisible();
-  await expect(queryPermission).toBeChecked();
-  await expect(queryPermission).toBeDisabled();
-  await expect(directSqlPermission).toBeVisible();
-  await expect(directSqlPermission).toBeChecked();
-  await expect(directSqlPermission).toBeDisabled();
-  await expect(defaultProfile).toBeVisible();
-  await expect(defaultProfile).toBeChecked();
-  await expect(defaultProfile).toBeDisabled();
-  await expect(financeProfile).toBeVisible();
-  await expect(financeProfile).not.toBeChecked();
-  await expect(financeProfile).toBeDisabled();
-  await expect(profileSearch).toBeVisible();
-  await expect(profileSearch).toBeDisabled();
-  await expect(
-    page
-      .getByTestId("security-roles-permission-selection-actions")
-      .getByRole("button", { name: "すべて選択" })
-  ).toBeDisabled();
-  await expect(
-    page
-      .getByTestId("security-roles-profile-access-selection-actions")
-      .getByRole("button", { name: "すべて選択" })
-  ).toBeDisabled();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
   await page.getByRole("button", { name: "一覧に戻る" }).focus();
-  await page.keyboard.press("Tab");
-  await expect(page.getByTestId("security-roles-profile-access-list")).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeFocused();
   await archivedEditPanel.locator("form").evaluate((form) =>
@@ -3647,12 +3666,6 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   await expect(roleName).toBeEnabled();
   await expect(roleDescription).toBeEnabled();
-  await expect(queryPermission).toBeEnabled();
-  await expect(queryPermission).toBeChecked();
-  await expect(defaultProfile).toBeEnabled();
-  await expect(defaultProfile).toBeChecked();
-  await expect(financeProfile).toBeEnabled();
-  await expect(profileSearch).toBeEnabled();
   await expect(page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" })).toBeVisible();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expectNoPageHorizontalScroll(page);
@@ -3750,7 +3763,7 @@ test("アーカイブ済みカスタムロールの削除は409を保持し再�
   await expect(deleteDialog).toContainText(
     "「ARCHIVED_DELETE」（ロール名: 削除対象ロール）を完全に削除します。"
   );
-  await expect(deleteDialog).toContainText("機能権限と業務プロファイルの関連は削除され");
+  await expect(deleteDialog).toContainText("ロールに設定した権限も削除され");
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
 
   await expect(page.getByText("削除対象ロール", { exact: true }).first()).toBeVisible();
@@ -5941,16 +5954,13 @@ for (const action of ["archive", "restore"] as const) {
   });
 }
 
-test("ロール管理レビュー: 選択順を除いて未保存変更を保護し保存中は入力を固定する", async ({ page }) => {
+test("ロール管理レビュー: 未保存変更を保護し保存中は入力を固定する", async ({ page }) => {
   const role = await mockReviewedRoles(page);
   let pending: Route | undefined;
   await page.route("**/api/security/roles/review-role", route => { pending = route; });
   await page.goto("/settings/security/roles");
   const edit = () => page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   await edit();
-  const query = page.getByRole("checkbox", { name: /SQL 生成/ });
-  await query.uncheck();
-  await query.check();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.getByTestId("security-roles-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -5962,13 +5972,53 @@ test("ロール管理レビュー: 選択順を除いて未保存変更を保護
   await expect(name).toHaveValue("未保存ロール");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => Boolean(pending)).toBe(true);
+  // ロール管理の保存は基本情報だけを送る（#206）。
+  expect(pending!.request().postDataJSON()).toEqual({
+    version: role.version,
+    display_name: "未保存ロール",
+    description: role.description,
+  });
   await expect(name).toBeDisabled();
-  await expect(query).toBeDisabled();
   await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
   await fulfill(pending!, { ...role, display_name: "未保存ロール", version: role.version + 1 });
   await expect(name).toBeEnabled();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await expect(page.getByTestId("security-roles-grid")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+test("権限管理レビュー: 選択順を除いて未保存変更を保護し保存中は入力を固定する", async ({ page }) => {
+  const role = await mockReviewedRoles(page);
+  let pending: Route | undefined;
+  await page.route("**/api/security/roles/review-role/permissions", route => { pending = route; });
+  await page.goto("/settings/security/permissions");
+  const edit = () => page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集", exact: true }).click();
+  await edit();
+  const query = page.getByRole("checkbox", { name: /SQL 生成/ });
+  await query.uncheck();
+  await query.check();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await edit();
+  await query.uncheck();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(query).not.toBeChecked();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  expect(pending!.request().method()).toBe("PUT");
+  expect(pending!.request().postDataJSON()).toEqual({
+    version: role.version,
+    permissions: ["menu.history"],
+    allowed_profile_ids: [],
+  });
+  await expect(query).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await fulfill(pending!, { ...role, permissions: ["menu.history"], version: role.version + 1 });
+  await expect(query).toBeEnabled();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 

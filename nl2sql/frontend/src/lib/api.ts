@@ -406,6 +406,25 @@ export async function apiPatch<T>(
   return parseJson<T>(response);
 }
 
+export async function apiPut<T>(
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+  options: ApiRequestOptions = {},
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method: "PUT",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
 export async function apiDelete<T>(
   path: string,
   headers: Record<string, string> = {},

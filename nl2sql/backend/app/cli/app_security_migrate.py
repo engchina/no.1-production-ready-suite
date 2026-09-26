@@ -96,6 +96,9 @@ def apply_security_migrations() -> tuple[int, ...]:
     scope_expression_statements = split_ddl(
         (migration_dir / "020_deepsec_scope_expression.sql").read_text(encoding="utf-8")
     )
+    permissions_menu_statements = split_ddl(
+        (migration_dir / "023_security_permissions_menu.sql").read_text(encoding="utf-8")
+    )
 
     with get_oracle_pool_manager().control_connection() as connection:
         _assert_no_namespace_conflicts(connection)
@@ -216,6 +219,13 @@ def apply_security_migrations() -> tuple[int, ...]:
             ignored_error_codes=frozenset({"ORA-01430", "ORA-02443", "ORA-02264"}),
         )
         _with_migration_label("020", scope_expression_results)
+        permissions_menu_results = oracle_statement_executor.execute(
+            connection,
+            permissions_menu_statements,
+            atomic=False,
+            include_sql=False,
+        )
+        _with_migration_label("023", permissions_menu_results)
     errors = [
         result
         for result in (
@@ -231,6 +241,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             *user_uuid_data_results,
             *role_profiles_results,
             *scope_expression_results,
+            *permissions_menu_results,
         )
         if result["status"] == "error"
     ]
@@ -254,6 +265,7 @@ def apply_security_migrations() -> tuple[int, ...]:
         len(user_uuid_statements),
         len(role_profiles_statements),
         len(scope_expression_statements),
+        len(permissions_menu_statements),
     )
 
 
@@ -294,6 +306,9 @@ def main() -> int:
     scope_expression_statements = split_ddl(
         (migration_dir / "020_deepsec_scope_expression.sql").read_text(encoding="utf-8")
     )
+    permissions_menu_statements = split_ddl(
+        (migration_dir / "023_security_permissions_menu.sql").read_text(encoding="utf-8")
+    )
     if not args.apply:
         print(
             f"migration=005 statements={len(namespace_statements)} mode=preview "
@@ -305,7 +320,8 @@ def main() -> int:
             f"migration=013 statements={len(login_user_id_statements)} "
             f"migration=014 statements={len(user_uuid_statements)} "
             f"migration=016 statements={len(role_profiles_statements)} "
-            f"migration=020 statements={len(scope_expression_statements)}"
+            f"migration=020 statements={len(scope_expression_statements)} "
+            f"migration=023 statements={len(permissions_menu_statements)}"
         )
         return 0
 
@@ -326,6 +342,7 @@ def main() -> int:
         f"migration=014 statements={len(user_uuid_statements)} "
         f"migration=016 statements={len(role_profiles_statements)} "
         f"migration=020 statements={len(scope_expression_statements)} "
+        f"migration=023 statements={len(permissions_menu_statements)} "
         f"bootstrap_created={str(bootstrapped).lower()}"
     )
     return 0

@@ -13,7 +13,7 @@ const migratedPages = [
   "../src/features/nl2sql/pages/DataManagementPage.tsx",
   "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
   "../src/features/nl2sql/pages/EvaluationPage.tsx",
-  "../src/features/security/SecurityRolesPage.tsx",
+  "../src/features/security/SecurityPermissionsPage.tsx",
   "../src/features/security/SecurityDeepSecPage.tsx",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 

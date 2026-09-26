@@ -77,6 +77,35 @@ password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PAS
 作成したユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に
 `SYSTEM_ADMIN` が残っている場合も migration では自動撤去せず、管理者が必要に応じて手動で解除する。
 
+## ユーザー管理・ロール管理・権限管理の分担（#206）
+
+| 画面 | URL | menu 権限 | 扱う内容 | 実装 |
+|---|---|---|---|---|
+| ユーザー管理 | `/settings/security/users` | `menu.security_users` | ユーザー、割り当てロール、ロック、一時パスワード | 3製品共通（`@engchina/production-ready-system-settings`） |
+| ロール管理 | `/settings/security/roles` | `menu.security_roles` | ロールコード・名称・説明、アーカイブ・復元・削除 | 3製品共通（同上） |
+| 権限管理 | `/settings/security/permissions` | `menu.security_permissions` | ロールごとの機能権限（`menu.*` / capability）と業務プロファイル利用権限 | NL2SQL 固有 |
+| Deep Data Security | `/settings/security/deepsec` | `menu.security_deepsec` | ロールごとの Data Grant | NL2SQL 固有 |
+
+- サイドナビは、3製品共通の「ユーザーとロール」（ユーザー管理・ロール管理）と、NL2SQL 固有の
+  「NL2SQL セキュリティ」（権限管理・Deep Data Security）に分ける。
+- API も同じ境界で分ける。`POST /api/security/roles` と `PATCH /api/security/roles/{role_id}` は
+  基本情報（`role_code` / `display_name` / `description`）だけを受け取り、権限は変更しない
+  （旧 client が `permissions` を送っても無視する）。権限の更新は
+  `PUT /api/security/roles/{role_id}/permissions`（`version` / `permissions` / `allowed_profile_ids`）で、
+  `menu.security_permissions` を要求する。`GET /api/security/permissions` と
+  `/api/security/profile-access/profiles` も `menu.security_permissions` を要求する。
+- どちらの更新も `SecurityService.update_role` を通り、省略した項目は現在値を保つ。権限昇格の防止
+  （追加する実効権限は actor 自身の実効権限の部分集合）と業務プロファイル変更の `SYSTEM_ADMIN` 限定は
+  権限の更新に対して従来どおり適用する。
+- ロールの一覧・詳細の参照（`GET /api/security/roles*`）は、ユーザー管理・ロール管理・権限管理の
+  いずれかの menu 権限で行える。アーカイブ済みを含む全ロールの参照はロール管理または権限管理を要求する。
+- 旧「ロール・権限管理」（`menu.security_roles`）を持つロールには、`app_security_migrate` の
+  migration 023 が `menu.security_permissions` を追加し、権限の付与を続けられるようにする。
+  旧 action 権限 `security.roles.manage` も両方へ正規化する。
+- ユーザー・ロールの request / response の形とパスワードポリシーは platform の
+  `pr_system_settings.users_roles` を正とし、NL2SQL は `RoleData` に権限・Data Grant・業務プロファイル
+  利用権限を足して返す。
+
 ## ユーザー・ロールの物理削除
 
 削除 API は現在表示中の version を `If-Match: "<version>"` で受け取り、前提条件を同一

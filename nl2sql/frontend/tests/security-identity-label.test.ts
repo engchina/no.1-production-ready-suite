@@ -5,10 +5,16 @@ import test from "node:test";
 import {
   identityInlineLabel,
   identitySecondaryName,
-} from "../src/features/security/identity-label.ts";
+} from "@engchina/production-ready-system-settings";
 
 const source = (path: string) =>
   readFileSync(new URL(`../src/features/security/${path}`, import.meta.url), "utf8");
+// ユーザー管理・ロール管理の画面は platform の共有パッケージにある（#206）。
+const sharedSource = (path: string) =>
+  readFileSync(
+    new URL(`../../../platform/packages/system-settings/src/users-roles/${path}`, import.meta.url),
+    "utf8"
+  );
 
 test("表示名は ID と異なるときだけ補助表示し、空・同一なら重複行を出さない", () => {
   assert.equal(identitySecondaryName("data_user", "データユーザー"), "データユーザー");
@@ -26,8 +32,8 @@ test("併記するときは ID を先に書く", () => {
 });
 
 test("ユーザー / ロール / DeepSec の名前と ID の組は ID 先の共通表示を使い、ID で並べる", () => {
-  const users = source("SecurityUsersPage.tsx");
-  const roles = source("SecurityRolesPage.tsx");
+  const users = sharedSource("UserManagementPage.tsx");
+  const roles = sharedSource("RoleManagementPage.tsx");
   const deepsec = source("SecurityDeepSecPage.tsx");
 
   assert.match(users, /<SecurityIdentityLines id=\{user\.login_user_id\} name=\{user\.display_name\} \/>/u);

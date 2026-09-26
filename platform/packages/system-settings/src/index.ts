@@ -2,8 +2,12 @@
 export {
   SYSTEM_SETTINGS_NAV_ITEMS,
   SYSTEM_SETTINGS_PATHS,
+  USER_ROLE_NAV_ITEMS,
+  USER_ROLE_PATHS,
   type SystemSettingsKey,
   type SystemSettingsNavItem,
+  type UserRoleKey,
+  type UserRoleNavItem,
 } from "./paths";
 
 // 外観（#95）
@@ -102,3 +106,44 @@ export {
   type DatabaseSettingsUpdate,
   type DatabaseWalletDownloadData,
 } from "./database/types";
+
+// ユーザー管理・ロール管理（NL2SQL から移設。#206）
+export { UserManagementPage, type UserManagementPageProps } from "./users-roles/UserManagementPage";
+export {
+  RoleManagementPage,
+  RoleStatusBadges,
+  type RoleManagementPageProps,
+} from "./users-roles/RoleManagementPage";
+export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
+export { FormActionBar, entityActionToFormAction } from "./users-roles/FormActionBar";
+export {
+  SECURITY_LIST_FOCUS_CLASS,
+  SECURITY_LIST_SCROLL_CLASS,
+  SECURITY_TABLE_ROW_CLASS,
+  SECURITY_TABLE_VISIBLE_ROWS,
+  SecurityDetailField,
+  SecurityEmptySelection,
+  SecurityIdentityLines,
+  SecurityManagementPanelShell,
+  SecurityManagementStatusBar,
+  SecurityPanelHeader,
+  SecuritySearchField,
+  identityInlineLabel,
+  identitySecondaryName,
+  securityFilteredCount,
+  type SecurityManagementMetric,
+} from "./users-roles/shared";
+export {
+  SYSTEM_ADMIN_ROLE_CODE,
+  type ApiErrorDetails,
+  type ApiFieldProblem,
+  type AssignedRole,
+  type DescribeApiError,
+  type RoleDraft,
+  type RoleManagementApi,
+  type SecurityRole,
+  type SecurityUser,
+  type UserDraft,
+  type UserManagementApi,
+  type UserWithTemporaryPassword,
+} from "./users-roles/types";

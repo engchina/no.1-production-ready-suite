@@ -12,7 +12,6 @@ import {
   Network,
   ScrollText,
   Shapes,
-  Shield,
   ShieldCheck,
   Sparkles,
   SquareTerminal,
@@ -21,7 +20,7 @@ import {
   Tags,
   ThumbsUp,
   UserCog,
-  Users,
+  LockKeyhole,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,7 +28,9 @@ import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
 import {
   SYSTEM_SETTINGS_NAV_ITEMS,
+  USER_ROLE_NAV_ITEMS,
   type SystemSettingsKey,
+  type UserRoleKey,
 } from "@engchina/production-ready-system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
@@ -58,6 +59,12 @@ const SYSTEM_SETTINGS_MENU_PERMISSIONS = {
   database: MENU_PERMISSIONS.settingsDatabase,
   appearance: MENU_PERMISSIONS.settingsAppearance,
 } satisfies Record<SystemSettingsKey, string>;
+
+/** 共通2項目（ユーザー管理・ロール管理）に付ける NL2SQL の menu 権限（#206）。 */
+const USER_ROLE_MENU_PERMISSIONS = {
+  users: MENU_PERMISSIONS.securityUsers,
+  roles: MENU_PERMISSIONS.securityRoles,
+} satisfies Record<UserRoleKey, string>;
 
 /** NL2SQL コンソールのサイドナビ構成（共有 Sidebar が消費する）。 */
 export const NAV_SECTIONS: NavSection[] = [
@@ -109,11 +116,11 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    // NL2SQL 固有のセキュリティ（ロールへの権限付与と DeepSec。#206）。
     titleKey: "nav.section.security",
     initiallyCollapsed: true,
     items: [
-      { href: APP_ROUTES.securityUsers, labelKey: "nav.securityUsers", icon: Users, permission: MENU_PERMISSIONS.securityUsers },
-      { href: APP_ROUTES.securityRoles, labelKey: "nav.securityRoles", icon: Shield, permission: MENU_PERMISSIONS.securityRoles },
+      { href: APP_ROUTES.securityPermissions, labelKey: "nav.securityPermissions", icon: LockKeyhole, permission: MENU_PERMISSIONS.securityPermissions },
       { href: APP_ROUTES.securityDeepSec, labelKey: "nav.securityDeepSec", icon: ShieldCheck, permission: MENU_PERMISSIONS.securityDeepSec },
     ],
   },
@@ -130,6 +137,15 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.settingsSystemTables,
       },
     ],
+  },
+  {
+    // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
+    titleKey: "nav.section.userRoles",
+    initiallyCollapsed: true,
+    items: USER_ROLE_NAV_ITEMS.map((item) => ({
+      ...item,
+      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+    })),
   },
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。

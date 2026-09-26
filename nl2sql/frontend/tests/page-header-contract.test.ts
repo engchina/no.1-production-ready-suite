@@ -20,8 +20,9 @@ const migratedPages = [
   "../src/features/nl2sql/pages/QuestionLearningPage.tsx",
   "../src/features/nl2sql/pages/SampleDataPage.tsx",
   "../src/features/nl2sql/pages/SqlToQuestionPage.tsx",
-  "../src/features/security/SecurityUsersPage.tsx",
-  "../src/features/security/SecurityRolesPage.tsx",
+  "../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx",
+  "../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx",
+  "../src/features/security/SecurityPermissionsPage.tsx",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 
 const pageHeaderStatusPages = [
