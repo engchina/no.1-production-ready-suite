@@ -1,5 +1,5 @@
 import { Pagination } from "@/components/Pagination";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
 import {
@@ -72,6 +72,11 @@ export function GlobalRulesPage() {
     }
   };
 
+  // 初回ロードは mount 時だけ行う。最新の load を commit 時に ref へ入れて呼ぶ（load は毎レンダーで作り直される）。
+  const loadRef = useRef(load);
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  });
   useEffect(() => {
     if (cleanupTimerRef.current !== null) {
       window.clearTimeout(cleanupTimerRef.current);
@@ -79,7 +84,7 @@ export function GlobalRulesPage() {
     }
     if (!initialLoadStartedRef.current) {
       initialLoadStartedRef.current = true;
-      void load();
+      void loadRef.current();
     }
     return () => {
       cleanupTimerRef.current = window.setTimeout(() => {

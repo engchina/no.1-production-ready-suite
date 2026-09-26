@@ -83,7 +83,7 @@ export function useDbObjectDetailRequest({
     setDdlLoading(false);
     setError("");
     setDdlError("");
-  }, []);
+  }, [setSelectedName]);
 
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
@@ -136,7 +136,7 @@ export function useDbObjectDetailRequest({
         }
       }
     },
-    [collectionPath, loadErrorMessage, timeoutErrorMessage],
+    [collectionPath, loadErrorMessage, setSelectedName, timeoutErrorMessage],
   );
 
   const loadDdl = useCallback(
