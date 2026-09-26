@@ -18,6 +18,7 @@ import {
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -90,8 +91,10 @@ export function SqlToQuestionPage() {
     }
   }, [activePanel, workspaceActive]);
   const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
-  useEffect(() => { setQuestionSql(null); setQuestionSqlError(""); }, [selectedProfileId, sql, reverse]);
-  useEffect(() => { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
+  // Profile・SQL・質問が変わったら、前の SQL 生成結果を render 中に消す。
+  if (useValuesChanged([selectedProfileId, sql, reverse])) { setQuestionSql(null); setQuestionSqlError(""); }
+  // Profile が変わったら、構造の編集状態を render 中に初期化する。
+  if (useValuesChanged([selectedProfileId])) { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
   const reverseInFlight = useRef(false);
@@ -102,12 +105,12 @@ export function SqlToQuestionPage() {
   const detailSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const loadReferenceData = useCallback(async () => {
+  // 読込中・エラー表示の初期化は呼び出し側で行う（effect から呼ぶときは render 中に行う）。
+  const requestReferenceData = useCallback(async () => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    setLoading(true);
-    setLoadError("");
     try {
+      // 失敗の表示は catch の callback で行う（effect から呼んでも同期の setState にしない）。
       await runScopedRequest(async (signal) => {
         const profilePage = await apiGet<ProfileSummaryPage>(
           "/api/nl2sql/profiles/search?limit=100",
@@ -119,23 +122,30 @@ export function SqlToQuestionPage() {
           current || profilePage.items[0]?.id || ""
         );
         setReferenceRefreshVersion((current) => current + 1);
+      }).catch((err: unknown) => {
+        if (isAbortError(err)) {
+          return;
+        }
+        setLoadError(actionableError(err, t("sqlToQuestion.error.load")));
       });
-    } catch (err) {
-      if (isAbortError(err)) {
-        return;
-      }
-      setLoadError(actionableError(err, t("sqlToQuestion.error.load")));
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
   }, [abortAll, runScopedRequest]);
+  const loadReferenceData = useCallback(() => {
+    setLoading(true);
+    setLoadError("");
+    return requestReferenceData();
+  }, [requestReferenceData]);
+
+  // Profile が未選択になったら、詳細を render 中に消す（読込は下の effect で行う）。
+  if (useValuesChanged([referenceRefreshVersion, runScopedRequest, selectedProfileId]) && !selectedProfileId) {
+    setSelectedProfile(null);
+    setSchemaTables([]);
+  }
 
   useEffect(() => {
-    if (!selectedProfileId) {
-      setSelectedProfile(null);
-      setSchemaTables([]);
-      return;
-    }
+    if (!selectedProfileId) return;
     const sequence = detailSequence.current + 1;
     detailSequence.current = sequence;
     void runScopedRequest(async (signal) => {
@@ -189,13 +199,18 @@ export function SqlToQuestionPage() {
     if (referenceVisited.current) void loadReferenceData();
     referenceVisited.current = true;
   });
+  // 初回表示（と依存の変化）で参照データを読み込む。読込中の表示は render 中に立てる。
+  if (useValuesChanged([abortAll, requestReferenceData])) {
+    setLoading(true);
+    setLoadError("");
+  }
   useEffect(() => {
-    void loadReferenceData();
+    void requestReferenceData();
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, [abortAll, loadReferenceData]);
+  }, [abortAll, requestReferenceData]);
 
   const generateQuestion = async () => {
     const trimmedSql = sql.trim();

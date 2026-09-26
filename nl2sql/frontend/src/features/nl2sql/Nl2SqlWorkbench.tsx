@@ -41,6 +41,7 @@ import {
   MENU_PERMISSIONS,
 } from "@/features/security/menu-permissions";
 import { ApiError, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { formatDateTime } from "@/lib/format";
@@ -116,6 +117,8 @@ type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh" | "samp
 type PageError = { source: PageErrorSource; message: string; code?: string } | null;
 
 const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
+// URL で受け取るクエリ画面の初期値（一度だけ適用して URL から消す）。
+const QUERY_PREFILL_KEYS = ["question", "engine", "profile_id"];
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -382,79 +385,76 @@ function ExecutableNl2SqlWorkbench() {
     [profileId, profilesQuery, selectedProfileQuery, schemaHeadQuery, schemaObjectsQuery, schemaRefresh]
   );
 
-  useEffect(() => {
+  // 読込エラーは query の状態から render 中に pageError へ反映する。
+  if (
+    useValuesChanged([
+      profileId,
+      profilesQuery.data,
+      profilesQuery.error,
+      profilesQuery.isError,
+      schemaHeadQuery.data,
+      schemaHeadQuery.error,
+      schemaHeadQuery.isError,
+      schemaObjectsQuery.data,
+      schemaObjectsQuery.error,
+      schemaObjectsQuery.isError,
+      selectedProfileQuery.error,
+      selectedProfileQuery.isError,
+    ])
+  ) {
     if (profilesQuery.isError && !profilesQuery.data) {
       setPageError({
         source: "profile-load",
         message: messageFromError(profilesQuery.error, t("profiles.error.load")),
         code: codeFromError(profilesQuery.error),
       });
-      return;
-    }
-    if (selectedProfileQuery.isError && profileId) {
+    } else if (selectedProfileQuery.isError && profileId) {
       setPageError({
         source: "profile-load",
         message: messageFromError(selectedProfileQuery.error, t("profiles.error.load")),
         code: codeFromError(selectedProfileQuery.error),
       });
-      return;
-    }
-    if (schemaObjectsQuery.isError && !schemaObjectsQuery.data) {
+    } else if (schemaObjectsQuery.isError && !schemaObjectsQuery.data) {
       setPageError({
         source: "schema-load",
         message: messageFromError(schemaObjectsQuery.error, t("nl2sql.error.loadFailed")),
         code: codeFromError(schemaObjectsQuery.error),
       });
-      return;
-    }
-    if (schemaHeadQuery.isError && !schemaHeadQuery.data) {
+    } else if (schemaHeadQuery.isError && !schemaHeadQuery.data) {
       setPageError({
         source: "schema-load",
         message: messageFromError(schemaHeadQuery.error, t("nl2sql.error.loadFailed")),
         code: codeFromError(schemaHeadQuery.error),
       });
     }
-  }, [
-    profileId,
-    profilesQuery.data,
-    profilesQuery.error,
-    profilesQuery.isError,
-    schemaHeadQuery.data,
-    schemaHeadQuery.error,
-    schemaHeadQuery.isError,
-    schemaObjectsQuery.data,
-    schemaObjectsQuery.error,
-    schemaObjectsQuery.isError,
-    selectedProfileQuery.error,
-    selectedProfileQuery.isError,
-  ]);
+  }
 
-  useEffect(() => {
-    if (!pageError) return;
+  // 読込が回復したら、その読込エラーを render 中に消す。
+  if (
+    useValuesChanged([
+      pageError,
+      noProfiles,
+      profileId,
+      profilesQuery.isSuccess,
+      schemaCatalogHasObjects,
+      selectedProfileQuery.isSuccess,
+    ]) &&
+    pageError
+  ) {
     if (
       pageError.source === "profile-load" &&
       profilesQuery.isSuccess &&
       (noProfiles || !profileId || selectedProfileQuery.isSuccess)
     ) {
       setPageError(null);
-      return;
-    }
-    if (pageError.source === "schema-load" && schemaCatalogHasObjects) {
+    } else if (pageError.source === "schema-load" && schemaCatalogHasObjects) {
       setPageError(null);
     }
-  }, [
-    pageError,
-    noProfiles,
-    profileId,
-    profilesQuery.isSuccess,
-    schemaCatalogHasObjects,
-    selectedProfileQuery.isSuccess,
-  ]);
+  }
 
-  useEffect(() => {
-    if (!schemaRefresh.error) return;
+  if (useValuesChanged([schemaRefresh.error]) && schemaRefresh.error) {
     setPageError({ source: "schema-refresh", message: schemaRefresh.error });
-  }, [schemaRefresh.error]);
+  }
 
   const refreshHistory = useCallback(async () => {
     const historyData = await apiGet<HistoryData>("/api/nl2sql/history");
@@ -572,68 +572,79 @@ function ExecutableNl2SqlWorkbench() {
     return names.length > 0 ? names : null;
   }, [selectedProfile]);
 
-  useEffect(() => {
-    const prefillKeys = ["question", "engine", "profile_id"];
-    if (!workspaceActive || !prefillKeys.some((key) => searchParams.has(key))) return;
-    const prefill = prefillFromSearchParams(searchParams);
-    if (prefill.question) {
-      if (prefill.profileId && prefill.profileId !== profileId) {
-        if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
-          setActionError(t("workspace.storageFailed"));
-          return;
-        }
-      } else setQuestion(prefill.question);
+  // URL の初期値（question / engine / profile_id）は render 中に state へ反映し、URL からの削除は effect で行う。
+  // 別 Profile の質問は、その Profile の草稿（sessionStorage）へ先に書いてから Profile を切り替える。
+  const [prefillDraftFailed, setPrefillDraftFailed] = useState(false);
+  if (useValuesChanged([searchParams, workspaceActive])) {
+    let draftFailed = false;
+    if (workspaceActive && QUERY_PREFILL_KEYS.some((key) => searchParams.has(key))) {
+      const prefill = prefillFromSearchParams(searchParams);
+      if (prefill.question) {
+        if (prefill.profileId && prefill.profileId !== profileId) {
+          if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
+            setActionError(t("workspace.storageFailed"));
+            draftFailed = true;
+          }
+        } else setQuestion(prefill.question);
+      }
+      if (!draftFailed) {
+        if (prefill.engine) setEngine(prefill.engine);
+        if (prefill.profileId) setProfileId(prefill.profileId);
+      }
     }
-    if (prefill.engine) setEngine(prefill.engine);
-    if (prefill.profileId) setProfileId(prefill.profileId);
+    if (draftFailed !== prefillDraftFailed) setPrefillDraftFailed(draftFailed);
+  }
+  useEffect(() => {
+    if (prefillDraftFailed) return;
+    if (!workspaceActive || !QUERY_PREFILL_KEYS.some((key) => searchParams.has(key))) return;
     // 初期値は一度だけ適用し、以降の再読込ではユーザーの草稿を復元する。
     const remainingParams = new URLSearchParams(searchParams);
-    prefillKeys.forEach((key) => remainingParams.delete(key));
+    QUERY_PREFILL_KEYS.forEach((key) => remainingParams.delete(key));
     setSearchParams(remainingParams, { replace: true });
-  }, [searchParams, workspaceActive]);
+  }, [prefillDraftFailed, searchParams, workspaceActive]);
 
-  useEffect(() => {
-    if (profilesQuery.isPending) return;
+  // Profile 一覧・選択の変化に合わせて、選択を render 中に直す。
+  if (
+    useValuesChanged([
+      noProfiles,
+      profileId,
+      profiles,
+      profilesQuery.isPending,
+      selectedProfileQuery.isPending,
+      selectedProfileQuery.isSuccess,
+    ]) &&
+    !profilesQuery.isPending
+  ) {
     if (noProfiles) {
-
       setSelection(emptySelection());
       setRecommendation(null);
-      return;
-    }
-    if (!profileId) {
+    } else if (!profileId) {
       const nextProfileId = profiles[0]?.id ?? "";
       if (nextProfileId) setProfileId(nextProfileId);
-      return;
-    }
-    if (
-      profiles.some((profile) => profile.id === profileId) ||
-      selectedProfileQuery.isPending ||
-      selectedProfileQuery.isSuccess
+    } else if (
+      !profiles.some((profile) => profile.id === profileId) &&
+      !selectedProfileQuery.isPending &&
+      !selectedProfileQuery.isSuccess
     ) {
-      return;
+      // 選択済み Profile の失効はエラーとして表示し、別 Profile へ黙って切り替えない。
+      setSelection(emptySelection());
+      setRecommendation(null);
     }
-    // 選択済み Profile の失効はエラーとして表示し、別 Profile へ黙って切り替えない。
-    setSelection(emptySelection());
-    setRecommendation(null);
-  }, [
-    noProfiles,
-    profileId,
-    profiles,
-    profilesQuery.isPending,
-    selectedProfileQuery.isPending,
-    selectedProfileQuery.isSuccess,
-  ]);
+  }
 
   // 実行中かどうかは ref で参照し、effect の再実行トリガーにしない。
   // active を依存に入れると job 完了(active: true → false)のたびに同じ質問で推薦 API が再実行される。
   const activeRef = useRef(active);
   // 最新の active を commit 時に入れる（render 中に ref を書かない）。
   useLayoutEffect(() => { activeRef.current = active; });
+  // 質問・Profile が変わったら、自動判定の注意と（短い質問では）推薦を render 中に消す。
+  if (useValuesChanged([profileId, profiles.length, question])) {
+    setAutoDetectLowConfidence(false);
+    if (question.trim().length < 4 || profiles.length === 0) setRecommendation(null);
+  }
   useEffect(() => {
     const trimmed = question.trim();
-    setAutoDetectLowConfidence(false);
     if (trimmed.length < 4 || profiles.length === 0) {
-      setRecommendation(null);
       suppressedRecommendationSignaturesRef.current.clear();
       return undefined;
     }
@@ -664,23 +675,29 @@ function ExecutableNl2SqlWorkbench() {
     };
   }, [profileId, profiles.length, question]);
 
-  useEffect(() => {
-    const trimmed = question.trim();
-    if (!engineUsesSimilarHistoryFewShot(engine) || trimmed.length < 4 || profiles.length === 0) {
+  // 類似履歴を検索しない条件・実行中は、表示を render 中に直す（検索は下の effect で行う）。
+  const similarHistoryDisabled =
+    !engineUsesSimilarHistoryFewShot(engine) || question.trim().length < 4 || profiles.length === 0;
+  if (useValuesChanged([active, engine, profileId, profiles.length, question])) {
+    if (similarHistoryDisabled) {
       setSimilarHistory([]);
       setSimilarHistorySearchCompleted(false);
       setSimilarHistoryPanelVisible(false);
       setSimilarHistoryLoading(false);
       setSimilarHistoryOpen(false);
       setSimilarHistoryUsedForGeneration(true);
-      return undefined;
-    }
-    if (active) {
+    } else if (active) {
       // 実行開始時は in-flight を abort するため .finally が走らない。
       // 履歴パネル自体は残し、検索中ラベルだけを解除する。
       setSimilarHistoryLoading(false);
+    }
+  }
+  useEffect(() => {
+    const trimmed = question.trim();
+    if (!engineUsesSimilarHistoryFewShot(engine) || trimmed.length < 4 || profiles.length === 0) {
       return undefined;
     }
+    if (active) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSimilarHistoryPanelVisible(true);
@@ -753,14 +770,18 @@ function ExecutableNl2SqlWorkbench() {
     if (schemaDetails[key] || schemaDetailRequests.current.has(key)) return;
     schemaDetailRequests.current.add(key);
     try {
-      const detail = await getSchemaObjectDetail(table.owner, table.table_name, signal);
-      if (signal?.aborted) return;
-      setSchemaDetails((current) => ({ ...current, [key]: detail }));
-      setSchemaDetailError("");
-    } catch (err) {
-      if (!signal?.aborted && !isAbortError(err)) {
-        setSchemaDetailError(messageFromError(err, t("nl2sql.error.loadFailed")));
-      }
+      // 応答・失敗の反映は then / catch の callback で行う（effect から呼んでも同期の setState にしない）。
+      await getSchemaObjectDetail(table.owner, table.table_name, signal)
+        .then((detail) => {
+          if (signal?.aborted) return;
+          setSchemaDetails((current) => ({ ...current, [key]: detail }));
+          setSchemaDetailError("");
+        })
+        .catch((err: unknown) => {
+          if (!signal?.aborted && !isAbortError(err)) {
+            setSchemaDetailError(messageFromError(err, t("nl2sql.error.loadFailed")));
+          }
+        });
     } finally {
       schemaDetailRequests.current.delete(key);
     }

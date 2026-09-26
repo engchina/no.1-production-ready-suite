@@ -46,6 +46,7 @@ import "@xyflow/react/dist/style.css";
 
 import { Button, StatusBadge } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
+import { useValuesChanged } from "@/lib/render-sync";
 
 import { t } from "@/lib/i18n";
 import {
@@ -774,9 +775,8 @@ function OntologyFlow({
         return pa.y - pb.y || pa.x - pb.x;
       });
   }, [searchMatchedNodeIds, effectivePositions]);
-  useEffect(() => {
-    setSearchCursor(0);
-  }, [query]);
+  // 検索語が変わったらジャンプ位置を先頭へ戻す（render 中に同期する）。
+  if (useValuesChanged([query])) setSearchCursor(0);
   const jumpToSearchMatch = (direction: 1 | -1) => {
     if (orderedSearchMatches.length === 0) return;
     const next =

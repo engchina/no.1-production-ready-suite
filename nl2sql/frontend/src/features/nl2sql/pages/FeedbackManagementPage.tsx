@@ -42,6 +42,7 @@ import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
@@ -173,12 +174,13 @@ export function FeedbackManagementPage() {
   const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedReview, setSavedReview] = useState("");
   const reviewDirtyRef = useRef(false);
-  const [loading, setLoading] = useState("");
+  // 初回の読込は mount 時の effect で始まるため、最初から読込中にしておく。
+  const [loading, setLoading] = useState("load");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
   // 初回の読み込みを始めたか（render では ref の連番ではなく state を見る）。
-  const [loadStarted, setLoadStarted] = useState(false);
-  const syncedAppFeedbackId = useRef<string | null>(null);
+  // 編集欄へ反映済みのフィードバック ID。render 中に比べるため state で持つ。
+  const [syncedAppFeedbackId, setSyncedAppFeedbackId] = useState<string | null>(null);
   const adminFeedbackContentRef = useRef<HTMLTextAreaElement | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
@@ -244,7 +246,7 @@ export function FeedbackManagementPage() {
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
   const initialEntriesLoading =
-    feedback === null && (!loadStarted || loading === "load");
+    feedback === null && loading === "load";
 
   const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
@@ -276,9 +278,13 @@ export function FeedbackManagementPage() {
     if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    setLoadStarted(true);
     setLoading("load");
     setMessage("");
+    await requestData(sequence, announce);
+  };
+
+  // 読込中の表示とメッセージの初期化は呼び出し側で行う（初回表示は初期 state が読込中）。
+  const requestData = async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
         const [
@@ -536,7 +542,7 @@ export function FeedbackManagementPage() {
     setMessage("");
     try {
       await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
-      syncedAppFeedbackId.current = null;
+      setSyncedAppFeedbackId(null);
       reviewDirtyRef.current = false;
       setSavedReview(reviewSignature);
       await refreshAppFeedback(feedbackCursor, "current");
@@ -566,49 +572,52 @@ export function FeedbackManagementPage() {
   };
 
   useEffect(() => {
-    void load();
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
+    void requestData(sequence, false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
   }, []);
 
-  useEffect(() => {
-    setActiveView(requestedView);
-  }, [requestedView]);
+  // URL の tab が変わったら表示を合わせる（render 中に同期する）。
+  if (useValuesChanged([requestedView])) setActiveView(requestedView);
 
-  useEffect(() => {
-    if (history.length === 0 && appFeedbackItems.length === 0) return;
-    setSelectedFeedbackId((current) =>
-      selectedVisibleStringKey(appFeedbackItems, current, (item) => item.id)
-    );
-  }, [appFeedbackItems, history.length]);
+  // 一覧が変わったら、見えている行へ選択を render 中に合わせる。
+  if (useValuesChanged([appFeedbackItems, history.length]) && !(history.length === 0 && appFeedbackItems.length === 0)) {
+    const nextFeedbackId = selectedVisibleStringKey(appFeedbackItems, selectedFeedbackId, (item) => item.id);
+    if (nextFeedbackId !== selectedFeedbackId) setSelectedFeedbackId(nextFeedbackId);
+  }
 
-  useEffect(() => {
+  // 選択中のフィードバックが変わったら、編集欄を render 中に合わせる。
+  // 同じフィードバックの更新では、未保存の編集（reviewDirty）を上書きしない。
+  if (useValuesChanged([selectedAppFeedback])) {
     if (!selectedAppFeedback) {
-      syncedAppFeedbackId.current = null;
+      setSyncedAppFeedbackId(null);
       setSavedReview("");
       setAdminFeedbackRating("good");
       setAdminFeedbackContent("");
       setRegisterSelectAiFeedback(false);
       setSelectAiResponse("");
-      return;
+    } else {
+      const switchedFeedback = syncedAppFeedbackId !== selectedAppFeedback.id;
+      if (switchedFeedback || !reviewDirty) {
+        setSyncedAppFeedbackId(selectedAppFeedback.id);
+        setSavedReview(JSON.stringify([selectedAppFeedback.id,
+          selectedAppFeedback.admin_feedback_rating ?? "good",
+          selectedAppFeedback.admin_feedback_content ?? "",
+          switchedFeedback ? false : registerSelectAiFeedback,
+          switchedFeedback ? defaultSelectAiResponse(selectedAppFeedback) : selectAiResponse]));
+        setAdminFeedbackRating(selectedAppFeedback.admin_feedback_rating ?? "good");
+        setAdminFeedbackContent(selectedAppFeedback.admin_feedback_content ?? "");
+        if (switchedFeedback) {
+          setRegisterSelectAiFeedback(false);
+          setSelectAiResponse(defaultSelectAiResponse(selectedAppFeedback));
+        }
+      }
     }
-    const switchedFeedback = syncedAppFeedbackId.current !== selectedAppFeedback.id;
-    if (!switchedFeedback && reviewDirtyRef.current) return;
-    syncedAppFeedbackId.current = selectedAppFeedback.id;
-    setSavedReview(JSON.stringify([selectedAppFeedback.id,
-      selectedAppFeedback.admin_feedback_rating ?? "good",
-      selectedAppFeedback.admin_feedback_content ?? "",
-      switchedFeedback ? false : registerSelectAiFeedback,
-      switchedFeedback ? defaultSelectAiResponse(selectedAppFeedback) : selectAiResponse]));
-    setAdminFeedbackRating(selectedAppFeedback.admin_feedback_rating ?? "good");
-    setAdminFeedbackContent(selectedAppFeedback.admin_feedback_content ?? "");
-    if (switchedFeedback) {
-      setRegisterSelectAiFeedback(false);
-      setSelectAiResponse(defaultSelectAiResponse(selectedAppFeedback));
-    }
-  }, [selectedAppFeedback]);
+  }
 
   const profileSelect = (
     <ProfileSelect

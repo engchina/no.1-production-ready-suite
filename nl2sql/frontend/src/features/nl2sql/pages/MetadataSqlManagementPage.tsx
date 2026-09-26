@@ -28,6 +28,7 @@ import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "@/lib/list-density";
@@ -265,7 +266,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
-  const completedSchemaRefreshJob = useRef("");
+  // 通知済みの job（`${job_id}:${status}`）。render 中に比べるため state で持つ。
+  const [reportedSchemaRefreshJob, setReportedSchemaRefreshJob] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
@@ -294,9 +296,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const currentGenerationSignature = useRef(generationSignature);
   // 最新の生成条件を commit 時に入れる（render 中に ref を書かない）。
   useLayoutEffect(() => { currentGenerationSignature.current = generationSignature; });
+  // 生成条件が変わったら、生成中の表示を render 中に解除し、実行中の生成の応答は effect で捨てる。
+  if (useValuesChanged([generationSignature]) && loading === "generate") setLoading("");
   useEffect(() => {
     generationSequence.current += 1;
-    setLoading((current) => current === "generate" ? "" : current);
   }, [generationSignature]);
   const panels = useMemo(
     () =>
@@ -343,16 +346,20 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       });
   }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch, targetSort]);
 
+  // 応答の反映は then の callback で行う（effect から呼んでも同期の setState にしない）。
+  const reloadObjects = (announce = false) =>
+    objectsQuery.refetch().then((result) => {
+      if (result.error) {
+        setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
+        return;
+      }
+      if (announce) {
+        toast.success(t("common.action.refreshed"));
+      }
+    });
   const refreshObjects = async (announce = false) => {
     setMessage("");
-    const result = await objectsQuery.refetch();
-    if (result.error) {
-      setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
-      return;
-    }
-    if (announce) {
-      toast.success(t("common.action.refreshed"));
-    }
+    await reloadObjects(announce);
   };
 
   const refreshSchema = async () => {
@@ -363,7 +370,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     try {
       const job = await sharedSchemaRefresh.start();
       if (job.job_id) {
-        completedSchemaRefreshJob.current = "";
+        setReportedSchemaRefreshJob("");
         setSchemaRefreshJobId(job.job_id);
       }
     } catch (err) {
@@ -377,28 +384,32 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     }
   };
 
-  useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedSchemaRefreshJob.current = reportKey;
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      void refreshObjects();
-    } else if (job.status === "error") {
-      completedSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setSchemaRefreshNeedsFull(needsFull);
-      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+  // job の完了・失敗を render 中に一度だけ state へ反映し、完了時の再読込は effect で行う。
+  const schemaRefreshJob = schemaRefreshJobQuery.data;
+  if (useValuesChanged([schemaRefreshJob]) && schemaRefreshJob) {
+    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
+    if (reportedSchemaRefreshJob !== reportKey) {
+      if (schemaRefreshJob.status === "done") {
+        setReportedSchemaRefreshJob(reportKey);
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+        setMessage("");
+      } else if (schemaRefreshJob.status === "error") {
+        setReportedSchemaRefreshJob(reportKey);
+        const needsFull = schemaRefreshRequiresFull(schemaRefreshJob);
+        setSchemaRefreshNeedsFull(needsFull);
+        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
+      }
     }
-  }, [schemaRefreshJobQuery.data]);
+  }
+  useEffect(() => {
+    if (reportedSchemaRefreshJob.endsWith(":done")) void reloadObjects();
+  }, [reportedSchemaRefreshJob]);
 
   const reloadAfterMutation = (result: DbAdminExecuteData) => {
     if (result.schema_refresh_job_id) {
       sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      completedSchemaRefreshJob.current = "";
+      setReportedSchemaRefreshJob("");
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(result.schema_refresh_job_id);
