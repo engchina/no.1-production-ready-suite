@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
+from pr_system_settings.auth.router import LoginRequest as LoginRequest
+from pr_system_settings.auth.router import PasswordChangeRequest as PasswordChangeRequest
+from pr_system_settings.auth.router import assigned_role_data as assigned_role_data
+from pr_system_settings.auth.router import user_data as user_data
 from pr_system_settings.users_roles import AssignedRoleData as AssignedRoleData
 from pr_system_settings.users_roles import PasswordResetData as PasswordResetData
 from pr_system_settings.users_roles import PasswordResetRequest as PasswordResetRequest
@@ -35,7 +38,6 @@ from .domain import (
     DataEntitlementScopeFilter,
     Principal,
     RoleRecord,
-    UserRecord,
     scope_expression_scope_code,
     scope_filters_scope_code,
 )
@@ -105,16 +107,6 @@ def _canonical_resource_code(value: str) -> str:
     if not re.fullmatch(r"[A-Z][A-Z0-9_$#.-]{0,260}", normalized):
         raise ValueError("英大文字・数字・アンダースコア等で指定してください。")
     return normalized
-
-
-class LoginRequest(BaseModel):
-    login_user_id: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=256)
-
-
-class PasswordChangeRequest(BaseModel):
-    current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=1, max_length=256)
 
 
 class DataEntitlementScopeFilterInput(BaseModel):
@@ -646,43 +638,6 @@ class DeepSecDataEntitlementApplyData(BaseModel):
     checksum: str
     cleanup_count: int = Field(ge=0)
     applied_count: int = Field(ge=0)
-
-
-def assigned_role_data(role: RoleRecord) -> AssignedRoleData:
-    return AssignedRoleData(
-        role_id=role.role_id,
-        role_code=role.role_code,
-        display_name=role.display_name,
-        is_built_in=role.is_built_in,
-        archived=role.archived,
-    )
-
-
-def user_data(
-    user: UserRecord,
-    *,
-    roles_by_id: Mapping[str, RoleRecord] | None = None,
-) -> UserData:
-    role_lookup = roles_by_id or {}
-    return UserData(
-        user_uuid=user.user_uuid,
-        login_user_id=user.login_user_id,
-        display_name=user.display_name,
-        status=user.status,
-        force_password_change=user.force_password_change,
-        locked_until=user.locked_until,
-        version=user.version,
-        role_ids=user.role_ids,
-        assigned_roles=[
-            (
-                assigned_role_data(role_lookup[role_id])
-                if role_id in role_lookup
-                else AssignedRoleData.unresolved(role_id)
-            )
-            for role_id in user.role_ids
-        ],
-        is_bootstrap_admin=user.is_bootstrap_admin,
-    )
 
 
 class CurrentUserData(BaseModel):

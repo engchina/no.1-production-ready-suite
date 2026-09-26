@@ -1104,13 +1104,13 @@ def test_db_admin_execute_blocks_nl2sql_select_dml_and_plsql_before_oracle() -> 
     )
     grant_result = service.execute_db_admin_sql(
         DbAdminExecuteRequest(
-            sql="GRANT SELECT ON NL2SQL_APP_USERS TO PUBLIC",
+            sql="GRANT SELECT ON PLATFORM_USERS TO PUBLIC",
             confirmation="ADMIN_EXECUTE",
         )
     )
     revoke_result = service.execute_db_admin_sql(
         DbAdminExecuteRequest(
-            sql='REVOKE SELECT ON APP."NL2SQL_AUTH_SESSIONS" FROM PUBLIC',
+            sql='REVOKE SELECT ON APP."PLATFORM_AUTH_SESSIONS" FROM PUBLIC',
             confirmation="ADMIN_EXECUTE",
         )
     )

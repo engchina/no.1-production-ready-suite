@@ -9,10 +9,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_CODE as SYSTEM_ADMIN_ROLE_CODE
+from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_ID as SYSTEM_ADMIN_ROLE_ID
+from pr_system_settings.auth.domain import Principal as PlatformPrincipal
+from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
+from pr_system_settings.auth.domain import SessionRecord as SessionRecord
+from pr_system_settings.auth.domain import UserIdentity as UserIdentity
+from pr_system_settings.auth.domain import UserRecord as UserRecord
+
 from app.features.nl2sql.object_identity import canonical_object_part
 
-SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN"
-SYSTEM_ADMIN_ROLE_ID = "00000000-0000-0000-0000-000000000001"
 SCOPE_FILTER_CODE_PREFIX = "FILTERS:"
 LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE = "APP_USER_ID"
 LOGIN_USER_ID_SCOPE_VALUE_SOURCE = "LOGIN_USER_ID"
@@ -53,77 +59,20 @@ class DataEntitlementRecord:
 
 
 @dataclass(slots=True)
-class RoleRecord:
-    role_id: str
-    role_code: str
-    display_name: str
-    description: str
-    is_built_in: bool
-    archived: bool
-    version: int
+class RoleRecord(PlatformRoleRecord):
+    """共通のロール（platform）に、NL2SQL の権限・Data Grant・業務プロファイル利用権限を足す。"""
+
     permissions: set[str] = field(default_factory=set)
     entitlements: list[DataEntitlementRecord] = field(default_factory=list)
     allowed_profile_ids: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
-class UserIdentity:
-    user_uuid: str
-    login_user_id: str
-    display_name: str
+class Principal(PlatformPrincipal):
+    """共通の利用者（platform）に、NL2SQL の Data Grant と業務プロファイル利用権限を足す。"""
 
-
-@dataclass(slots=True)
-class UserRecord:
-    user_uuid: str
-    login_user_id: str
-    display_name: str
-    password_hash: str
-    status: str
-    force_password_change: bool
-    failed_login_count: int
-    locked_until: datetime | None
-    version: int
-    role_ids: list[str] = field(default_factory=list)
-    is_bootstrap_admin: bool = False
-
-
-@dataclass(slots=True)
-class SessionRecord:
-    session_id: str
-    user_uuid: str
-    token_hash: str
-    csrf_token_hash: str
-    idle_expires_at: datetime
-    absolute_expires_at: datetime
-    last_seen_at: datetime
-    revoked_at: datetime | None = None
-
-
-@dataclass(slots=True)
-class Principal:
-    user_uuid: str
-    login_user_id: str
-    display_name: str
-    status: str
-    force_password_change: bool
-    role_codes: list[str]
-    permissions: set[str]
-    data_entitlements: list[DataEntitlementRecord]
-    allowed_profile_ids: set[str]
-    session_id: str
-    csrf_token_hash: str
-    password_change_allowed: bool = True
-
-    @property
-    def is_system_admin(self) -> bool:
-        return SYSTEM_ADMIN_ROLE_CODE in self.role_codes
-
-    def has_permission(self, permission: str) -> bool:
-        return self.is_system_admin or permission in self.permissions
-
-    def has_any_permission(self, permissions: set[str] | frozenset[str]) -> bool:
-        return self.is_system_admin or bool(self.permissions.intersection(permissions))
+    data_entitlements: list[DataEntitlementRecord] = field(default_factory=list)
+    allowed_profile_ids: set[str] = field(default_factory=set)
 
     def can_use_profile(self, profile_id: str | None) -> bool:
         if self.is_system_admin or "nl2sql.profiles.manage" in self.permissions:
@@ -224,3 +173,17 @@ def scope_expression_from_json(value: object) -> dict[str, Any] | None:
     if parsed is not None and not isinstance(parsed, dict):
         raise ValueError("保存済み条件ツリーが不正です。")
     return parsed
+
+
+def as_role(role: PlatformRoleRecord) -> RoleRecord:
+    """platform の store / service が返すロールを NL2SQL のロールとして扱う。"""
+    if not isinstance(role, RoleRecord):
+        raise TypeError("NL2SQL のロールではありません。")
+    return role
+
+
+def as_principal(principal: PlatformPrincipal) -> Principal:
+    """platform の service が返す利用者を NL2SQL の利用者として扱う。"""
+    if not isinstance(principal, Principal):
+        raise TypeError("NL2SQL の利用者ではありません。")
+    return principal

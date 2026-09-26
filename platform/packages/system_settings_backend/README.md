@@ -5,6 +5,9 @@
 - `pr_system_settings.env_file`：`backend/.env` の排他付き部分更新（`locked_env_file` / `replace_env_file` / `write_env_values`）
 - `pr_system_settings.upload_storage`：アップロード保存先 API（`build_upload_storage_router`）
 - `pr_system_settings.oci`：OCI 認証 API（`build_oci_router`。`~/.oci/config` の読み書き、秘密鍵の配置、接続テスト、Object Storage namespace 取得）。製品側からは `read_oci_config_text` / `parse_oci_config` / `read_runtime_oci_config` / `test_oci_config(verify_with_oci=)` も使える
+- `pr_system_settings.auth`：3製品共通の認証基盤（#212）。ユーザー・ロール・ユーザーとロールの割り当て・セッションは `PLATFORM_*` テーブルで 3 製品が共有する
+  - `store`（`InMemoryAuthStore` / `OracleAuthStore(connection_factory)`）、`service`（`AuthService`：ログイン・ロック・セッション・CSRF・パスワード変更・構成管理者・ユーザー / ロール操作・最後の管理者の保護・製品をまたぐ権限昇格の防止）、`dependencies`（`authorize_request`）、`router`（`build_auth_router`）、`migrations`（`PLATFORM_AUTH_DDL` / `apply_platform_auth_schema`）
+  - 製品は `AuthService` / `OracleAuthStore` を継承し、実効権限の組み立て（`_role_permissions` / `_build_principal`）と、ロールの製品データの読み書き（`_role_details` / `_replace_role_details` / `_before_delete_role`）を実装する。製品ごとの権限コードのテーブル（`NL2SQL_APP_ROLE_PERMISSIONS` / `RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）は `PRODUCT_ROLE_PERMISSION_TABLES` に登録し、SYSTEM_ADMIN 以外のロール割り当てでは他製品の権限も操作者に収まることを確認する
 - `pr_system_settings.users_roles`：ユーザー管理・ロール管理の API 契約（request / response の Pydantic model、`RoleData` の共通部分、パスワードポリシーと一時パスワード生成。#206）。永続化・認証・認可と、ロールに付ける権限（製品ごとに違う）は製品が持ち、製品は `RoleData` を継承して項目を足す
 - `pr_system_settings.oci_connectivity` / `oci_auth`：OCI 接続テストの段階判定と、OCI SDK config の非対話ロード（`oci` extra。SDK は遅延 import）
 

@@ -94,8 +94,9 @@ _DEEPSEC_SCOPE_OPERATORS_BY_TYPE = {
 _DEEPSEC_MAX_SCOPE_FILTERS = 8
 _DEEPSEC_MAX_SCOPE_FILTER_VALUES = 25
 _DEEPSEC_PREDICATE_TABLE_GRANTS = (
-    ("predicate_user_roles_grant", "NL2SQL_APP_USER_ROLES"),
-    ("predicate_roles_grant", "NL2SQL_APP_ROLES"),
+    # ユーザーとロールの割り当ては 3 製品で共有する PLATFORM_* テーブル（#212）。
+    ("predicate_user_roles_grant", "PLATFORM_USER_ROLES"),
+    ("predicate_roles_grant", "PLATFORM_ROLES"),
     ("predicate_data_entitlements_grant", "NL2SQL_APP_DATA_ENTITLEMENTS"),
 )
 _DEEPSEC_APP_USER_CONTEXT_EXPR = "ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER"
@@ -110,6 +111,8 @@ _DEEPSEC_INTERNAL_OBJECT_PREFIXES = (
     "NL2SQL_APP_",
     "NL2SQL_AUTH_",
     "NL2SQL_DEEPSEC_",
+    # 3 製品共通の基盤（ユーザー・ロール・セッションなど。#212）は Data Grant の対象にしない。
+    "PLATFORM_",
 )
 _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT = 5
 _DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
@@ -675,8 +678,8 @@ def build_data_entitlement_statements(
     predicate = (
         "EXISTS (\n"
         "  SELECT 1\n"  # nosec B608
-        f"    FROM {owner}.NL2SQL_APP_USER_ROLES ur\n"
-        f"    JOIN {owner}.NL2SQL_APP_ROLES r ON r.ROLE_ID = ur.ROLE_ID\n"
+        f"    FROM {owner}.PLATFORM_USER_ROLES ur\n"
+        f"    JOIN {owner}.PLATFORM_ROLES r ON r.ROLE_ID = ur.ROLE_ID\n"
         f"    JOIN {owner}.NL2SQL_APP_DATA_ENTITLEMENTS e ON e.ROLE_ID = r.ROLE_ID\n"
         f"   WHERE ur.USER_UUID = {_DEEPSEC_APP_USER_CONTEXT_EXPR}\n"
         "     AND r.ARCHIVED = 0\n"
@@ -848,7 +851,7 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
             v_login_user_id VARCHAR2(64);
           BEGIN
             SELECT LOGIN_USER_ID INTO v_login_user_id
-              FROM {owner}.NL2SQL_APP_USERS
+              FROM {owner}.PLATFORM_USERS
              WHERE USER_UUID = p_user_uuid AND STATUS = 'ACTIVE';
             DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID', v_login_user_id);
             DBMS_SESSION.SET_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID', NULL);

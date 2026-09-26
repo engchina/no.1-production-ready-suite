@@ -223,8 +223,8 @@ recreate confirmation flow. Historical Profile sync jobs are not retried
 automatically after credential creation.
 
 This configured administrator is independent from the database connection user,
-does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables
-to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
+does not read from `PLATFORM_USERS`, and does not require the auth/RBAC tables
+to exist. Application-local users are checked from `PLATFORM_USERS`. The
 configured administrator password can be changed from the application password
 change screen; the backend writes the new value back to `backend/.env`.
 

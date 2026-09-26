@@ -9,7 +9,7 @@
 
 | ディレクトリ | 内容 | 固有ルール |
 |---|---|---|
-| `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/system-settings`（`@engchina/production-ready-system-settings`、共通のシステム設定画面とユーザー管理・ロール管理画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`、共通のシステム設定 API とユーザー・ロールの API 契約）、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
+| `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/system-settings`（`@engchina/production-ready-system-settings`、共通のシステム設定画面とユーザー管理・ロール管理画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`、共通のシステム設定 API と共通認証基盤（ユーザー・ロール・セッション・ログイン））、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
 | `rag/` | Production Ready RAG（ナレッジ構築・業務ビュー・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
@@ -206,4 +206,6 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **各製品の `backend/.env` には、その製品だけが使う変数だけを置き、`RAG_` / `NL2SQL_` / `AGENT_` で始める。** 共通の設定を製品の `.env` に重複して持たない。
 - **3製品共通の仕組み（ユーザー管理・ロール管理など）が使うテーブルは `PLATFORM_` で始める。製品固有の仕組みが使うテーブルは `RAG_` / `NL2SQL_` / `AGENT_` で始める。** index / constraint / sequence / view なども同じ接頭辞にそろえる。例: ユーザー・ロール・セッションは `PLATFORM_`、NL2SQL のロールの機能権限・業務プロファイル利用権限・Data Grant は `NL2SQL_`。
 - 名前を変えるときは旧名との互換を持たない（旧名の環境変数は読まず、テーブルは migration で改名する）。既存環境の更新手順を配備ドキュメントに書く。
-- 既存コードは移行中。`.env` の一元化は [#211](https://github.com/engchina/no.1-production-ready-suite/issues/211)、ユーザー・ロールのテーブル改名は [#212](https://github.com/engchina/no.1-production-ready-suite/issues/212) で行う。新しく追加する変数・テーブルは最初からこの規則に従う。
+- ユーザー・ロール・セッションのテーブルは `PLATFORM_*` へ移した（[#212](https://github.com/engchina/no.1-production-ready-suite/issues/212)）。`.env` の一元化は [#211](https://github.com/engchina/no.1-production-ready-suite/issues/211) で行う。新しく追加する変数・テーブルは最初からこの規則に従う。
+- 3 製品は同じ Oracle schema を共有する前提のため、各製品は他製品の接頭辞（`PLATFORM_` / `RAG_` / `NL2SQL_` / `AGENT_`）のオブジェクトを業務データとして扱わない（例: NL2SQL の業務プロファイルの対象一覧・管理 SQL から除外する）。
+- ユーザーとロールを共有するため、ロールの割り当て・復元では製品をまたぐ権限昇格を防ぐ（`pr_system_settings.auth` の `PRODUCT_ROLE_PERMISSION_TABLES`）。製品が権限テーブルを追加するときは、この登録と `ON DELETE CASCADE` の FK（`PLATFORM_ROLES` への参照）を合わせて用意する。

@@ -109,13 +109,13 @@ def test_or_cannot_escape_role_gate() -> None:
     db.execute("ATTACH DATABASE ':memory:' AS APP")
     db.execute("CREATE TABLE HR.EMPLOYEES(ID TEXT, STATUS TEXT)")
     db.execute("INSERT INTO HR.EMPLOYEES VALUES ('3', 'ACTIVE')")
-    db.execute("CREATE TABLE APP.NL2SQL_APP_USER_ROLES(USER_UUID TEXT, ROLE_ID TEXT)")
-    db.execute("CREATE TABLE APP.NL2SQL_APP_ROLES(ROLE_ID TEXT, ARCHIVED INTEGER)")
+    db.execute("CREATE TABLE APP.PLATFORM_USER_ROLES(USER_UUID TEXT, ROLE_ID TEXT)")
+    db.execute("CREATE TABLE APP.PLATFORM_ROLES(ROLE_ID TEXT, ARCHIVED INTEGER)")
     db.execute(
         "CREATE TABLE APP.NL2SQL_APP_DATA_ENTITLEMENTS(ROLE_ID TEXT, ENTITLEMENT_ID TEXT, "
         "CAPABILITY TEXT, APPLY_STATUS TEXT)"
     )
-    db.execute("INSERT INTO APP.NL2SQL_APP_ROLES VALUES ('r', 0)")
+    db.execute("INSERT INTO APP.PLATFORM_ROLES VALUES ('r', 0)")
     db.execute(
         "INSERT INTO APP.NL2SQL_APP_DATA_ENTITLEMENTS VALUES ('r', 'e', 'SELECT', 'APPLIED')"
     )
@@ -129,11 +129,11 @@ def test_or_cannot_escape_role_gate() -> None:
     )
     query = "SELECT ID FROM HR.EMPLOYEES WHERE " + predicate
     assert list(db.execute(query)) == []
-    db.execute("INSERT INTO APP.NL2SQL_APP_USER_ROLES VALUES ('user', 'r')")
+    db.execute("INSERT INTO APP.PLATFORM_USER_ROLES VALUES ('user', 'r')")
     assert list(db.execute(query)) == [("3",)]
-    db.execute("UPDATE APP.NL2SQL_APP_ROLES SET ARCHIVED = 1")
+    db.execute("UPDATE APP.PLATFORM_ROLES SET ARCHIVED = 1")
     assert list(db.execute(query)) == []
-    db.execute("UPDATE APP.NL2SQL_APP_ROLES SET ARCHIVED = 0")
+    db.execute("UPDATE APP.PLATFORM_ROLES SET ARCHIVED = 0")
     db.execute("UPDATE APP.NL2SQL_APP_DATA_ENTITLEMENTS SET APPLY_STATUS = 'PENDING'")
     assert list(db.execute(query)) == []
 
