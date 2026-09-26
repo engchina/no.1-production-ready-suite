@@ -197,7 +197,11 @@ export function SavedDocragAnswer({
           {record.answer}
         </p>
       ) : null}
-      <DocragAnswerPanel docrag={record.docrag} />
+      <DocragAnswerPanel
+        docrag={record.docrag}
+        traceId={record.evaluation_available ? record.trace_id : null}
+        evaluation={record.evaluation}
+      />
       {record.citations.length > 0 ? (
         <ul className="space-y-2">
           {record.citations.map((chunk, index) => (

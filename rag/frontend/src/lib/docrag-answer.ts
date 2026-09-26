@@ -92,3 +92,81 @@ export function confidenceVariant(
   if (confidence === "low") return "danger";
   return "neutral";
 }
+
+/** 標準回答による評価(rag_poc の 4 軸評価、backend の evaluation)。 */
+export type AnswerEvaluationView = {
+  status: string;
+  message: string;
+  totalScore: number | null;
+  maxScore: number;
+  passThreshold: number;
+  passed: boolean | null;
+  standardAnswer: string;
+  evaluatedAt: string;
+  axes: { key: string; score: number | null; reason: string }[];
+  coverage: { index: number; requirement: string; status: string; quote: string }[];
+  claims: { quote: string; status: string; reason: string }[];
+  externalDataItems: string[];
+};
+
+export const EVALUATION_AXES = [
+  "accuracy",
+  "coverage",
+  "evidence_consistency",
+  "generation_quality",
+] as const;
+
+export function parseAnswerEvaluation(value: unknown): AnswerEvaluationView | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = record(value);
+  const scores = record(raw.scores);
+  const requirements = list(record(raw.standard_answer_scope).requirements).map(
+    (item) => String(record(item).requirement ?? "")
+  );
+  return {
+    status: String(raw.status ?? ""),
+    message: String(raw.message ?? ""),
+    totalScore: num(raw.total_score),
+    maxScore: num(raw.max_score) ?? 20,
+    passThreshold: num(raw.pass_threshold) ?? 16,
+    passed: typeof raw.passed === "boolean" ? raw.passed : null,
+    standardAnswer: String(raw.standard_answer ?? ""),
+    evaluatedAt: String(raw.evaluated_at ?? ""),
+    axes: Object.keys(scores).length
+      ? EVALUATION_AXES.map((key) => ({
+          key,
+          score: num(record(scores[key]).score),
+          reason: String(record(scores[key]).reason ?? ""),
+        }))
+      : [],
+    coverage: list(raw.coverage_checks).map((item) => {
+      const entry = record(item);
+      const index = num(entry.requirement_index) ?? 0;
+      return {
+        index,
+        requirement: requirements[index - 1] ?? "",
+        status: String(entry.status ?? ""),
+        quote: String(entry.answer_quote ?? ""),
+      };
+    }),
+    claims: list(raw.claim_checks).map((item) => {
+      const entry = record(item);
+      return {
+        quote: String(entry.answer_quote ?? ""),
+        status: String(entry.status ?? ""),
+        reason: String(entry.reason ?? ""),
+      };
+    }),
+    externalDataItems: list(raw.external_data_items).map(String).filter(Boolean),
+  };
+}
+
+/** 評価の結果 → StatusBadge の variant とラベルの key。 */
+export function evaluationOutcome(
+  evaluation: AnswerEvaluationView
+): { variant: "success" | "danger" | "warning"; labelKey: "passed" | "failed" | "notCompleted" } {
+  if (evaluation.status !== "completed") return { variant: "warning", labelKey: "notCompleted" };
+  return evaluation.passed
+    ? { variant: "success", labelKey: "passed" }
+    : { variant: "danger", labelKey: "failed" };
+}

@@ -438,6 +438,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_documents",
             sql=_documents_classification_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260926_002_answer_record_evaluation",
+            table_name="rag_answer_records",
+            sql=_answer_record_evaluation_migration_sql(),
+        ),
     ]
 
 
@@ -956,6 +961,29 @@ BEGIN
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
     END IF;
+END;
+/
+""".strip()
+
+
+def _answer_record_evaluation_migration_sql() -> str:
+    """rag_answer_records に標準回答による評価の入力・結果の JSON 列を追加する(冪等)。"""
+    return """
+DECLARE
+    PROCEDURE add_json_column(p_column VARCHAR2) IS
+        v_column_count NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO v_column_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_ANSWER_RECORDS'
+          AND column_name = UPPER(p_column);
+        IF v_column_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_answer_records ADD (' || p_column || ' JSON)';
+        END IF;
+    END;
+BEGIN
+    add_json_column('evaluation_input_json');
+    add_json_column('evaluation_json');
 END;
 /
 """.strip()

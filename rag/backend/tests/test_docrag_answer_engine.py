@@ -572,6 +572,11 @@ async def test_docrag_answer_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     assert first["answer"] == response.answer
     assert first["citations"][0]["chunk_id"] == "doc-1:c1"
     assert first["diagnostics"]["evidence_tree"]
+    # 標準回答での評価に使う入力(根拠の本文を含む)も保存する。
+    evaluation_input = first["evaluation_input"]
+    assert evaluation_input["question"] == "受注の登録方法は？"
+    assert "登録ボタン" in evaluation_input["answer_text"]
+    assert "登録ボタン" in json.dumps(evaluation_input["evidence_items"], ensure_ascii=False)
     assert second["surface"] == "chat"
     assert oracle.purged == [90, 90]  # 既定の保持日数で保存のたびに期限切れを削除する
 
@@ -614,3 +619,97 @@ async def test_docrag_answer_save_failure_still_returns_answer(
     response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
 
     assert "登録ボタン" in response.answer
+
+
+def _fake_evaluation_llm(
+    system: str, prompt: str, settings: Any, schema: type, **options: Any
+) -> Any:
+    from docrag.evaluation.answer_eval import AnswerEvaluationOutput, StandardAnswerScope
+
+    body = "受注番号を入力し、登録ボタンを押します。"
+    if schema is StandardAnswerScope:
+        return StandardAnswerScope.model_validate(
+            {
+                "requirements": [{"standard_answer_quote": body, "requirement": "登録の手順"}],
+                "excluded_case_data": [],
+            }
+        )
+    if schema is AnswerEvaluationOutput:
+        passage = re.search(r'"id": "(P[0-9]+)"', prompt)
+        axis = {"score": 5, "reason": "標準回答と一致"}
+        return AnswerEvaluationOutput.model_validate(
+            {
+                "external_data_required": False,
+                "external_data_items": [],
+                "evaluated_content": ["登録の手順"],
+                "coverage_checks": [
+                    {"requirement_index": 1, "status": "addressed", "answer_quote": body}
+                ],
+                "accuracy": axis,
+                "coverage": axis,
+                "evidence_consistency": axis,
+                "generation_quality": axis,
+                "goal_alignment": "aligned",
+                "claim_checks": [
+                    {
+                        "answer_quote": body,
+                        "answer_passage_id": passage.group(1) if passage else "",
+                        "status": "not_a_claim",
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "手順の説明",
+                    }
+                ],
+                "evidence_summary": "",
+            }
+        )
+    raise AssertionError(f"unexpected schema: {schema.__name__}")
+
+
+async def test_saved_answer_is_evaluated_with_standard_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.docrag_answer import evaluate_answer_record
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    engine = DocragAnswerEngine(
+        Settings(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+    assert outcome.evaluation_input is not None
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_evaluation_llm)
+    evaluation = evaluate_answer_record(
+        outcome.evaluation_input, "受注番号を入力し、登録ボタンを押します。", Settings()
+    )
+
+    assert evaluation["status"] == "completed", evaluation
+    assert evaluation["total_score"] == 20
+    assert evaluation["max_score"] == 20
+    assert set(evaluation["scores"]) == {
+        "accuracy",
+        "coverage",
+        "evidence_consistency",
+        "generation_quality",
+    }
+
+
+def test_evaluation_without_standard_answer_does_not_call_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.docrag_answer import evaluate_answer_record
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("LLM を呼ばない")
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", fail)
+
+    evaluation = evaluate_answer_record({"question": "q", "answer_text": "a"}, " ", Settings())
+
+    assert evaluation["status"] == "no_standard_answer"

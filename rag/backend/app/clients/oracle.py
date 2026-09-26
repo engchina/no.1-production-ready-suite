@@ -2135,6 +2135,7 @@ class OracleClient:
             "answer": record["answer"],
             "citations_json": _json_bind(record.get("citations") or []),
             "diagnostics_json": _json_bind(record.get("diagnostics") or {}),
+            "evaluation_input_json": _json_bind(record.get("evaluation_input")),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -2152,17 +2153,23 @@ class OracleClient:
                     target.rewritten_question = :rewritten_question,
                     target.answer = :answer,
                     target.citations_json = :citations_json,
-                    target.diagnostics_json = :diagnostics_json
+                    target.diagnostics_json = :diagnostics_json,
+                    target.evaluation_input_json = :evaluation_input_json,
+                    target.evaluation_json = NULL
                 WHEN NOT MATCHED THEN INSERT (
                     trace_id, business_view_id, surface, answer_engine, question,
-                    rewritten_question, answer, citations_json, diagnostics_json
+                    rewritten_question, answer, citations_json, diagnostics_json,
+                    evaluation_input_json
                 ) VALUES (
                     :trace_id, :business_view_id, :surface, :answer_engine, :question,
-                    :rewritten_question, :answer, :citations_json, :diagnostics_json
+                    :rewritten_question, :answer, :citations_json, :diagnostics_json,
+                    :evaluation_input_json
                 )
                 """,
                 binds,
-                input_sizes=_json_input_sizes("citations_json", "diagnostics_json"),
+                input_sizes=_json_input_sizes(
+                    "citations_json", "diagnostics_json", "evaluation_input_json"
+                ),
             )
 
         await self._run_transaction(operation)
@@ -2198,7 +2205,8 @@ class OracleClient:
         row = await self._fetch_one(
             """
             SELECT trace_id, business_view_id, surface, answer_engine, question,
-                   rewritten_question, answer, citations_json, diagnostics_json, created_at
+                   rewritten_question, answer, citations_json, diagnostics_json,
+                   evaluation_input_json, evaluation_json, created_at
             FROM rag_answer_records
             WHERE trace_id = :trace_id
             """,
@@ -2206,10 +2214,39 @@ class OracleClient:
         )
         if row is None:
             return None
-        for key in ("citations_json", "diagnostics_json"):
+        for key in (
+            "citations_json",
+            "diagnostics_json",
+            "evaluation_input_json",
+            "evaluation_json",
+        ):
             if isinstance(row.get(key), str):
                 row[key] = json.loads(str(row[key]))
         return row
+
+    async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
+        """保存済み DocRAG 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> bool:
+            if not _fetch_all(
+                connection,
+                "SELECT trace_id FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            ):
+                return False
+            _execute(
+                connection,
+                """
+                UPDATE rag_answer_records
+                SET evaluation_json = :evaluation_json
+                WHERE trace_id = :trace_id
+                """,
+                {"trace_id": trace_id, "evaluation_json": _json_bind(dict(evaluation))},
+                input_sizes=_json_input_sizes("evaluation_json"),
+            )
+            return True
+
+        return await self._run_transaction(operation)
 
     async def delete_answer_record(self, trace_id: str) -> bool:
         """保存済み DocRAG 回答を 1 件削除する。削除した場合 True。"""
@@ -11516,6 +11553,8 @@ CREATE TABLE {table_name} (
     answer              CLOB NOT NULL,
     citations_json      JSON NOT NULL,
     diagnostics_json    JSON NOT NULL,
+    evaluation_input_json JSON,
+    evaluation_json     JSON,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
 );

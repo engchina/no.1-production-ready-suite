@@ -517,6 +517,22 @@ class AnswerRecordDetail(AnswerRecordSummary):
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     docrag: dict[str, JsonValue] = Field(default_factory=dict)
+    # 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。
+    evaluation_available: bool = False
+    evaluation: dict[str, JsonValue] | None = None
+
+
+class AnswerEvaluationRequest(BaseModel):
+    """保存済み DocRAG 回答を評価する標準回答。"""
+
+    standard_answer: str = Field(min_length=1, max_length=20000)
+
+    @field_validator("standard_answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("標準回答を入力してください。")
+        return value
 
 
 class AnswerRecordDeleteResult(BaseModel):
