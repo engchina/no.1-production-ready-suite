@@ -10,12 +10,33 @@
   // アプリ固有のルールは、同じ実装を別名で再公開した lint/app-design-system-plugin.mjs で掛ける（adherence の設定を上書きしない）。
   "jsPlugins": [
     "../../platform/docs/design-system/design-system-plugin.mjs",
-    "./lint/app-design-system-plugin.mjs"
+    "./lint/app-design-system-plugin.mjs",
+    // react-hooks 7（React Compiler 系の set-state-in-effect / refs / purity 等を含む）を JS プラグインとして読み込む（#181）。
+    // oxlint では react-hooks が組み込みプラグイン名として予約されているため、別名で読み込む。
+    { "name": "react-hooks-compiler", "specifier": "eslint-plugin-react-hooks" }
   ],
   "overrides": [
     {
       "files": ["src/**/*.ts", "src/**/*.tsx"],
       "rules": {
+        // eslint-plugin-react-hooks の configs.recommended.rules と同じルール・同じレベル（RAG #167 / Agent #179 と同じ）。
+        "react-hooks-compiler/rules-of-hooks": "error",
+        // 違反の残る 3 ルールは段階的に有効にする（#181：refs 49 件 → set-state-in-effect 66 件 → exhaustive-deps 49 件）。
+        "react-hooks-compiler/exhaustive-deps": "off",
+        "react-hooks-compiler/static-components": "error",
+        "react-hooks-compiler/use-memo": "error",
+        "react-hooks-compiler/preserve-manual-memoization": "error",
+        "react-hooks-compiler/incompatible-library": "warn",
+        "react-hooks-compiler/immutability": "error",
+        "react-hooks-compiler/globals": "error",
+        "react-hooks-compiler/refs": "off",
+        "react-hooks-compiler/set-state-in-effect": "off",
+        "react-hooks-compiler/error-boundaries": "error",
+        "react-hooks-compiler/purity": "error",
+        "react-hooks-compiler/set-state-in-render": "error",
+        "react-hooks-compiler/unsupported-syntax": "warn",
+        "react-hooks-compiler/config": "error",
+        "react-hooks-compiler/gating": "error",
         // 表は共有 DataTable を使う（#530）。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ。
         // RAG / Agent の置き換え後に platform の adherence へ移す。
         "nl2sql-design-system/restricted-syntax": [

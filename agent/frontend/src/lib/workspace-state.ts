@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 /**
  * ページ遷移・再読込のときに残す作業状態（platform UX 契約 workspace-state.md。#87）。
@@ -145,7 +145,10 @@ export function useRestoredSelectionCheck(
 ): { missing: boolean; dismiss: () => void } {
   const pendingRef = useRef(restoredId);
   const onMissingRef = useRef(onMissing);
-  onMissingRef.current = onMissing;
+  // 最新の onMissing を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => {
+    onMissingRef.current = onMissing;
+  });
   const [missing, setMissing] = useState(false);
 
   useEffect(() => {
