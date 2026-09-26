@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { Send, CheckCircle2, Sparkles, X } from "lucide-react";
 
@@ -108,6 +108,11 @@ export function GuidedClarificationPanel({
     setError("");
   };
 
+  // 開始は 1 回だけ。最新の startSession を commit 時に ref へ入れて呼ぶ（startSession は毎レンダーで作り直される）。
+  const startSessionRef = useRef(startSession);
+  useLayoutEffect(() => {
+    startSessionRef.current = startSession;
+  });
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
@@ -124,7 +129,7 @@ export function GuidedClarificationPanel({
           }
           return;
         }
-        await startSession(result, profileId, controller.signal);
+        await startSessionRef.current(result, profileId, controller.signal);
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted && !isAbortError(cause)) {
@@ -161,11 +166,12 @@ export function GuidedClarificationPanel({
     setSelectedOptionIds([]);
     setFreeText("");
   }
+  const currentQuestionId = currentQuestion?.id;
   useEffect(() => {
-    if (currentQuestion) {
+    if (currentQuestionId) {
       requestAnimationFrame(() => questionHeadingRef.current?.focus({ preventScroll: true }));
     }
-  }, [currentQuestion?.id]);
+  }, [currentQuestionId]);
 
   const selectedCount = selectedOptionIds.length;
   const answerReady = selectedCount > 0 || Boolean(freeText.trim());
