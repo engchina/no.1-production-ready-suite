@@ -30,8 +30,9 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
 
   assert.match(securityUsersSource, /selectedVisibleKey/u);
   assert.match(securityUsersSource, /selectedRowKey=\{visibleSelectedId\}/u);
-  assert.match(securityUsersSource, /selectedUserManualSelection\.current = true/u);
-  assert.match(securityUsersSource, /setSelectedId\(user\.user_uuid\)/u);
+  // 利用者が選んだ行は manual として保持し、絞り込み後も選択を残す（render で読むため state で持つ。#181）。
+  assert.match(securityUsersSource, /preserveSelected: selection\.manual/u);
+  assert.match(securityUsersSource, /selectUser\(user\.user_uuid\)/u);
   assert.match(securityUsersSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
   assert.match(securityUsersSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
   assert.match(securityUsersSource, /scrollTestId="security-users-scroll-region"/u);
@@ -39,8 +40,8 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
 
   assert.match(securityRolesSource, /selectedVisibleKey/u);
   assert.match(securityRolesSource, /selectedRowKey=\{visibleSelectedId\}/u);
-  assert.match(securityRolesSource, /selectedRoleManualSelection\.current = true/u);
-  assert.match(securityRolesSource, /setSelectedId\(role\.role_id\)/u);
+  assert.match(securityRolesSource, /preserveSelected: selection\.manual/u);
+  assert.match(securityRolesSource, /selectRole\(role\.role_id\)/u);
   assert.match(securityRolesSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
   assert.match(securityRolesSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
   assert.match(securityRolesSource, /scrollTestId="security-roles-scroll-region"/u);
