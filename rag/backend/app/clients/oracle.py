@@ -10104,8 +10104,7 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
         "<= :filter_as_of"
     )
     clauses.append(
-        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') "
-        "> :filter_as_of"
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') " "> :filter_as_of"
     )
     binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
     return clauses, binds
