@@ -17,6 +17,7 @@ import {
   type EntityAction,
 } from "@engchina/production-ready-ui";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -113,6 +114,12 @@ function compareText(left: string, right: string, direction: DataTableSort["dire
   return direction === "asc" ? result : -result;
 }
 
+function assignedRoleLabel(role: AssignedRole) {
+  return role.archived
+    ? t("security.users.archivedRoleLabel", { role: role.display_name })
+    : role.display_name;
+}
+
 function userStatusLabel(user: SecurityUser) {
   return user.status === "ACTIVE" ? t("security.common.active") : t("security.common.disabled");
 }
@@ -182,7 +189,7 @@ export function SecurityUsersPage() {
     dismissOnOverlay: false,
   }));
   useUnsavedChangesGuard(isDirty || busy || accountActionBusy, confirmLeave);
-  const assignedRoles = (user: SecurityUser): AssignedRole[] => {
+  const assignedRoles = useCallback((user: SecurityUser): AssignedRole[] => {
     if (user.assigned_roles?.length) return user.assigned_roles;
     return user.role_ids.map((id) => {
       const role = roleById.get(id);
@@ -202,16 +209,12 @@ export function SecurityUsersPage() {
             archived: true,
           };
     });
-  };
-  const assignedRoleLabel = (role: AssignedRole) =>
-    role.archived
-      ? t("security.users.archivedRoleLabel", { role: role.display_name })
-      : role.display_name;
-
-  const roleSummary = (user: SecurityUser) => {
+  }, [roleById]);
+  // 一覧の検索・並べ替え（useMemo）から使うため、roleById が変わったときだけ作り直す。
+  const roleSummary = useCallback((user: SecurityUser) => {
     const names = assignedRoles(user).map(assignedRoleLabel);
     return names.length > 0 ? names.join(", ") : t("security.common.none");
-  };
+  }, [assignedRoles]);
   const canAssignSystemAdmin = activeView === "edit" && Boolean(editingUser?.is_bootstrap_admin);
   const isSystemAdminRole = (role: SecurityRole) =>
     role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
@@ -246,7 +249,7 @@ export function SecurityUsersPage() {
         // 1 列目は ID を主表示するため、ID で並べる。
         return compareText(left.login_user_id, right.login_user_id, sort.direction);
       });
-  }, [roleById, search, sort, users]);
+  }, [roleSummary, search, sort, users]);
 
   const visibleSelectedId =
     activeView === "list"
@@ -267,7 +270,8 @@ export function SecurityUsersPage() {
   };
 
   // 読込中・エラー表示の初期化は呼び出し側で行う（初回表示は初期 state が読込中）。
-  const requestData = async (sequence: number, announce: boolean) => {
+  // 初回読込の effect から使うため、安定した参照にする（依存は useRequestScope の安定した run だけ）。
+  const requestData = useCallback(async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
         const [userRows, roleRows] = await Promise.all([
@@ -298,8 +302,9 @@ export function SecurityUsersPage() {
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  };
+  }, [runScopedRequest]);
 
+  // abortAll / requestData は安定した参照なので、この effect はマウント時に 1 回だけ動く。
   useEffect(() => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
@@ -308,7 +313,7 @@ export function SecurityUsersPage() {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [abortAll, requestData]);
 
   // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
   if (useValuesChanged([activeView, filteredUsers, loading]) && activeView === "list" && !loading) {

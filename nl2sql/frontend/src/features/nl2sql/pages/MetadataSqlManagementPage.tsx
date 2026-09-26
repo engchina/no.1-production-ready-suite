@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Database,
   Code2,
   FileText,
@@ -347,8 +347,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch, targetSort]);
 
   // 応答の反映は then の callback で行う（effect から呼んでも同期の setState にしない）。
-  const reloadObjects = (announce = false) =>
-    objectsQuery.refetch().then((result) => {
+  // refetch は TanStack Query の observer に束縛された安定した参照なので、reloadObjects も作り直されない。
+  const { refetch: refetchObjects } = objectsQuery;
+  const reloadObjects = useCallback((announce = false) =>
+    refetchObjects().then((result) => {
       if (result.error) {
         setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
         return;
@@ -356,7 +358,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       if (announce) {
         toast.success(t("common.action.refreshed"));
       }
-    });
+    }), [refetchObjects]);
   const refreshObjects = async (announce = false) => {
     setMessage("");
     await reloadObjects(announce);
@@ -402,9 +404,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       }
     }
   }
+  // reloadObjects は安定した参照なので、完了を記録した job（reportedSchemaRefreshJob）が変わったときだけ動く。
   useEffect(() => {
     if (reportedSchemaRefreshJob.endsWith(":done")) void reloadObjects();
-  }, [reportedSchemaRefreshJob]);
+  }, [reloadObjects, reportedSchemaRefreshJob]);
 
   const reloadAfterMutation = (result: DbAdminExecuteData) => {
     if (result.schema_refresh_job_id) {

@@ -185,7 +185,8 @@ export function FeedbackManagementPage() {
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const profiles = dbProfiles?.profiles ?? [];
-  const selectAiFeedbackItems = feedback?.items ?? [];
+  // feedback が変わったときだけ新しい配列になるよう、空配列の既定値も useMemo で持つ。
+  const selectAiFeedbackItems = useMemo(() => feedback?.items ?? [], [feedback]);
   const selectedSelectAiFeedback = useMemo(
     () => selectAiFeedbackItems[selectedIndex] ?? selectAiFeedbackItems[0] ?? null,
     [selectAiFeedbackItems, selectedIndex]
@@ -571,15 +572,21 @@ export function FeedbackManagementPage() {
     }
   };
 
+  // 初回ロードは mount 時だけ行う。最新の requestData を commit 時に ref へ入れて呼ぶ
+  // （requestData は Profile・カーソル・編集中の状態を読むため、deps に入れると毎レンダーで再取得になる）。
+  const requestDataRef = useRef(requestData);
+  useLayoutEffect(() => {
+    requestDataRef.current = requestData;
+  });
   useEffect(() => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
-    void requestData(sequence, false);
+    void requestDataRef.current(sequence, false);
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [abortAll]);
 
   // URL の tab が変わったら表示を合わせる（render 中に同期する）。
   if (useValuesChanged([requestedView])) setActiveView(requestedView);
