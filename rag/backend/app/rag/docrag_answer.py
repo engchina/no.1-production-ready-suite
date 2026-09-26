@@ -33,6 +33,7 @@ from app.config import (
     enterprise_ai_vision_model_id,
 )
 from app.rag.docrag_chunking import docrag_search_text
+from app.rag.docrag_prompts import prompt_overrides
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
@@ -133,6 +134,11 @@ class DocragAnswerEngine:
     async def run(self, request: SearchRequest) -> DocragAnswerOutcome:
         loop = asyncio.get_running_loop()
         state = _SearchState()
+        try:
+            overrides = await self._oracle.docrag_prompt_overrides()
+        except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
+            logger.warning("docrag prompt overrides load failed", exc_info=True)
+            overrides = {}
         with tempfile.TemporaryDirectory(prefix="docrag-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -147,7 +153,7 @@ class DocragAnswerEngine:
                 self._settings, output_dir=work_dir, runtime_knowledge_path=runtime_path
             )
             result = await asyncio.to_thread(
-                self._answer_sync, request, docrag_settings, loop, state
+                self._answer_sync, request, docrag_settings, loop, state, overrides
             )
         return _outcome_from_result(result, state)
 
@@ -157,6 +163,7 @@ class DocragAnswerEngine:
         docrag_settings: Any,
         loop: asyncio.AbstractEventLoop,
         state: _SearchState,
+        overrides: Mapping[str, str] | None = None,
     ) -> Any:
         from docrag.adapters.oci import parse_multimodal_response, parse_text_response
         from docrag.dependencies import AnswerDependencies, bind_dependencies
@@ -178,7 +185,7 @@ class DocragAnswerEngine:
                 lambda: self._rerank(query, list(documents), top_n)
             ),
         )
-        with bind_dependencies(dependencies):
+        with bind_dependencies(dependencies), prompt_overrides(overrides or {}):
             return answer_question_result(
                 request.query,
                 DOCRAG_SOURCE_RUN_ID,

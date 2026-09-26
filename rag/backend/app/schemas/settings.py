@@ -775,6 +775,38 @@ class AnswerRecordSettingsData(BaseModel):
     config_source: Literal["runtime"] = "runtime"
 
 
+class DocragPromptView(BaseModel):
+    """編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。"""
+
+    key: Literal["vlm_answer", "image_retrieval"]
+    content: str
+    default_content: str
+    customized: bool
+    required_placeholders: list[str]
+    updated_at: datetime | None = None
+
+
+class DocragPromptPart(BaseModel):
+    id: str
+    content: str
+
+
+class DocragPromptStage(BaseModel):
+    """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
+
+    id: str
+    prompts: list[DocragPromptPart]
+
+
+class DocragPromptsData(BaseModel):
+    prompts: list[DocragPromptView]
+    stages: list[DocragPromptStage]
+
+
+class DocragPromptUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=50_000)
+
+
 class AnswerRecordSettingsUpdate(BaseModel):
     """DocRAG 回答記録の保持設定の更新 payload。"""
 

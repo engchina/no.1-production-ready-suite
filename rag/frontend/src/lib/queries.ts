@@ -24,6 +24,7 @@ import {
   type DocumentDetail,
   type DocumentSummary,
   type DocumentClassification,
+  type DocragPromptKey,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
@@ -1086,6 +1087,21 @@ export function useEvaluateDocragAnswer() {
     onSuccess: (detail) => {
       qc.setQueryData(["docrag-answer", detail.trace_id], detail);
     },
+  });
+}
+
+/** 編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプト。 */
+export function useDocragPrompts() {
+  return useQuery({ queryKey: ["settings", "docrag-prompts"], queryFn: api.getDocragPrompts });
+}
+
+/** DocRAG プロンプトの保存(content あり)と既定値への復帰(content なし)。 */
+export function useSaveDocragPrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, content }: { key: DocragPromptKey; content: string | null }) =>
+      content === null ? api.resetDocragPrompt(key) : api.saveDocragPrompt(key, content),
+    onSuccess: (data) => qc.setQueryData(["settings", "docrag-prompts"], data),
   });
 }
 

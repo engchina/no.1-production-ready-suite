@@ -53,6 +53,13 @@ from app.rag.chunking_strategy import (
     chunking_runtime_settings,
     normalize_chunking_strategy,
 )
+from app.rag.docrag_prompts import (
+    EDITABLE_PROMPT_KEYS,
+    readonly_prompt_stages,
+)
+from app.rag.docrag_prompts import default_prompt as default_docrag_prompt
+from app.rag.docrag_prompts import required_placeholders as docrag_required_placeholders
+from app.rag.docrag_prompts import validate_prompt as validate_docrag_prompt
 from app.rag.evaluation_adapter import (
     evaluation_adapter_runtime_settings,
     normalize_evaluation_suite,
@@ -118,6 +125,9 @@ from app.schemas.settings import (
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
+    DocragPromptsData,
+    DocragPromptUpdate,
+    DocragPromptView,
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
@@ -570,6 +580,60 @@ async def update_answer_record_settings(
         except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
             logger.warning("answer record purge failed", extra={"error": str(exc)})
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
+
+
+@router.get("/docrag-prompts", response_model=ApiResponse[DocragPromptsData])
+async def get_docrag_prompts() -> ApiResponse[DocragPromptsData]:
+    """編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプトを返す。"""
+    saved = await OracleClient().list_docrag_prompts()
+    return ApiResponse(data=_docrag_prompts_data(saved))
+
+
+@router.put("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
+async def put_docrag_prompt(
+    key: str, payload: DocragPromptUpdate
+) -> ApiResponse[DocragPromptsData]:
+    """DocRAG プロンプトを保存する(次の回答・次の解析から使う)。"""
+    try:
+        validate_docrag_prompt(key, payload.content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="プロンプトが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    oracle = OracleClient()
+    await oracle.save_docrag_prompt(key, payload.content)
+    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+
+
+@router.delete("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
+async def reset_docrag_prompt(key: str) -> ApiResponse[DocragPromptsData]:
+    """保存した DocRAG プロンプトを消して既定値へ戻す。"""
+    if key not in EDITABLE_PROMPT_KEYS:
+        raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
+    oracle = OracleClient()
+    await oracle.delete_docrag_prompt(key)
+    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+
+
+def _docrag_prompts_data(saved: dict[str, dict[str, object]]) -> DocragPromptsData:
+    prompts = []
+    for key in EDITABLE_PROMPT_KEYS:
+        row = saved.get(key)
+        prompts.append(
+            DocragPromptView.model_validate(
+                {
+                    "key": key,
+                    "content": row["content"] if row else default_docrag_prompt(key),
+                    "default_content": default_docrag_prompt(key),
+                    "customized": row is not None,
+                    "required_placeholders": list(docrag_required_placeholders(key)),
+                    "updated_at": row["updated_at"] if row else None,
+                }
+            )
+        )
+    return DocragPromptsData.model_validate(
+        {"prompts": prompts, "stages": readonly_prompt_stages()}
+    )
 
 
 @router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
