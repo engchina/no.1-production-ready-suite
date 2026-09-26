@@ -443,6 +443,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_answer_records",
             sql=_answer_record_evaluation_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260926_003_feedback_reasons_corrected_answer",
+            table_name="rag_citation_feedback",
+            sql=_feedback_reasons_corrected_answer_migration_sql(),
+        ),
     ]
 
 
@@ -961,6 +966,42 @@ BEGIN
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
     END IF;
+END;
+/
+""".strip()
+
+
+def _feedback_reasons_corrected_answer_migration_sql() -> str:
+    """回答 feedback の理由に rag_poc の分類を足し、修正した回答の列を追加する(冪等)。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_FEEDBACK_DETAILS'
+      AND column_name = 'CORRECTED_ANSWER_TEXT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_feedback_details ADD (corrected_answer_text CLOB)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_CITATION_FEEDBACK'
+      AND constraint_name = 'RAG_CITATION_FEEDBACK_REASON_CK';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_citation_feedback DROP CONSTRAINT rag_citation_feedback_reason_ck';
+    END IF;
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_citation_feedback ADD CONSTRAINT rag_citation_feedback_reason_ck '
+        || 'CHECK ((rating = ''helpful'' AND reason IS NULL) OR '
+        || '(rating = ''not_helpful'' AND ('
+        || '(target_type = ''answer'' AND reason IN ('
+        || '''incorrect'', ''incomplete'', ''not_relevant'', ''answer_untrusted'', '
+        || '''missing_knowledge'', ''outdated_source'', ''ambiguous_question'')) OR '
+        || '(target_type = ''citation'' AND reason IN ('
+        || '''missing_evidence'', ''not_relevant'', ''answer_untrusted'')))))';
 END;
 /
 """.strip()

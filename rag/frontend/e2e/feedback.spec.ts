@@ -180,6 +180,69 @@ test("375pxでは一覧と詳細を縦に積み、カードを選ぶと詳細へ
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-mobile.png"), fullPage: true });
 });
 
+test("回答のフィードバックを詳細から Approved FAQ に登録し、品質評価のケースに追加できる", async ({ page }) => {
+  await mockFeedback(page, []);
+  await page.route("**/api/feedback/feedback-answer", (route) => {
+    const envelope = feedbackDetailEnvelope();
+    return route.fulfill({
+      json: {
+        ...envelope,
+        data: {
+          ...envelope.data,
+          target_type: "answer",
+          document_id: null,
+          chunk_id: null,
+          corrected_answer: "2026年版の経費規程では翌月末です。",
+        },
+      },
+    });
+  });
+  let promoted = false;
+  await page.route("**/api/feedback/feedback-answer/approved-faq", async (route) => {
+    promoted = route.request().method() === "POST";
+    await route.fulfill({
+      json: {
+        data: { business_view_id: "bv-1", question: "最新の経費申請期限を教えて", inserted_count: 1, deleted_count: 0 },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/feedback/feedback-answer/evaluation-case", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: "feedback-feedback-answer",
+          query: "最新の経費申請期限を教えて",
+          relevant_document_ids: [],
+          expected_answer_keywords: ["翌月末"],
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    })
+  );
+
+  await page.goto("/feedback?period=30&feedback=feedback-answer");
+  const detail = page.getByRole("region", { name: "フィードバック詳細" });
+  await expect(detail.getByRole("heading", { name: "修正した回答" })).toBeVisible();
+  const actions = detail.getByTestId("feedback-detail-actions");
+
+  await actions.getByRole("button", { name: "Approved FAQ に登録" }).click();
+  const confirmDialog = page.getByRole("alertdialog", { name: "業務ビューの Approved FAQ に登録しますか？" });
+  await confirmDialog.getByRole("button", { name: "Approved FAQ に登録" }).click();
+  await expect(page.getByText("Approved FAQ に登録しました: 最新の経費申請期限を教えて")).toBeVisible();
+  expect(promoted).toBe(true);
+
+  await actions.getByRole("button", { name: "品質評価のケースに追加" }).click();
+  await expect(page).toHaveURL(/\/evaluation$/);
+  const stored = await page.evaluate(() =>
+    Object.entries(sessionStorage).find(([key]) => key.includes("evaluation.requestJson"))?.[1] ?? null
+  );
+  expect(stored).toContain("feedback-feedback-answer");
+  expect(stored).toContain("翌月末");
+});
+
 for (const width of [1280, 1920]) {
   test(`明細表の値は列の境界を超えず、次の列に重ならない (${width}px)`, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "desktop table contract");

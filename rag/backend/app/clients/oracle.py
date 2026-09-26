@@ -3802,6 +3802,7 @@ class OracleClient:
                         question_text,
                         answer_text,
                         comment_text,
+                        corrected_answer_text,
                         citations_json,
                         search_text
                     ) VALUES (
@@ -3812,6 +3813,7 @@ class OracleClient:
                         :question_text,
                         :answer_text,
                         :comment_text,
+                        :corrected_answer_text,
                         :citations_json,
                         :search_text
                     )
@@ -3868,6 +3870,7 @@ class OracleClient:
                 f.rating,
                 f.reason,
                 fd.comment_text AS "comment",
+                fd.corrected_answer_text AS corrected_answer,
                 f.created_at
             FROM ranked_feedback f
             LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
@@ -4137,6 +4140,7 @@ class OracleClient:
                     fd.question_text AS question,
                     fd.answer_text AS answer,
                     fd.comment_text AS "comment",
+                    fd.corrected_answer_text AS corrected_answer,
                     fd.citations_json,
                     DBMS_LOB.SUBSTR(fd.question_text, 240, 1) AS question_preview,
                     DBMS_LOB.SUBSTR(fd.comment_text, 160, 1) AS comment_preview,
@@ -8994,7 +8998,10 @@ def _feedback_detail_binds(
     question = _audit_optional_str(details, "question_text")
     answer = _audit_optional_str(details, "answer_text")
     comment = _audit_optional_str(details, "comment_text")
-    search_text = "\n".join(value for value in (question, answer, comment) if value) or None
+    corrected_answer = _audit_optional_str(details, "corrected_answer_text")
+    search_text = (
+        "\n".join(value for value in (question, answer, comment, corrected_answer) if value) or None
+    )
     citations = details.get("citations", [])
     if not isinstance(citations, Sequence) or isinstance(citations, str | bytes | bytearray):
         citations = []
@@ -9006,6 +9013,7 @@ def _feedback_detail_binds(
         "question_text": question,
         "answer_text": answer,
         "comment_text": comment,
+        "corrected_answer_text": corrected_answer,
         "citations_json": _json_dumps(citations),
         "search_text": search_text,
     }
@@ -12533,7 +12541,8 @@ CREATE TABLE {table_name} (
                 rating = 'not_helpful'
                 AND (
                     (target_type = 'answer' AND reason IN (
-                        'incorrect', 'incomplete', 'not_relevant', 'answer_untrusted'
+                        'incorrect', 'incomplete', 'not_relevant', 'answer_untrusted',
+                        'missing_knowledge', 'outdated_source', 'ambiguous_question'
                     ))
                     OR (target_type = 'citation' AND reason IN (
                         'missing_evidence', 'not_relevant', 'answer_untrusted'
@@ -12571,6 +12580,7 @@ CREATE TABLE {table_name} (
     question_text     CLOB,
     answer_text       CLOB,
     comment_text      VARCHAR2(1000 CHAR),
+    corrected_answer_text CLOB,
     citations_json    JSON,
     search_text       CLOB,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,

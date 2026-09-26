@@ -25,6 +25,10 @@ class FeedbackReason(StrEnum):
     MISSING_EVIDENCE = "missing_evidence"
     NOT_RELEVANT = "not_relevant"
     ANSWER_UNTRUSTED = "answer_untrusted"
+    # rag_poc の回答 feedback 分類(ナレッジ不足 / 情報が古い / 質問が曖昧)。
+    MISSING_KNOWLEDGE = "missing_knowledge"
+    OUTDATED_SOURCE = "outdated_source"
+    AMBIGUOUS_QUESTION = "ambiguous_question"
 
 
 class FeedbackTargetType(StrEnum):
@@ -60,7 +64,12 @@ ANSWER_REASONS = {
     FeedbackReason.INCOMPLETE,
     FeedbackReason.NOT_RELEVANT,
     FeedbackReason.ANSWER_UNTRUSTED,
+    FeedbackReason.MISSING_KNOWLEDGE,
+    FeedbackReason.OUTDATED_SOURCE,
+    FeedbackReason.AMBIGUOUS_QUESTION,
 }
+# 修正した回答(rag_poc の corrected_answer)の上限。Approved FAQ の回答の上限に合わせる。
+CORRECTED_ANSWER_MAX_CHARS = 20_000
 CITATION_REASONS = {
     FeedbackReason.MISSING_EVIDENCE,
     FeedbackReason.NOT_RELEVANT,
@@ -126,13 +135,14 @@ class FeedbackRequest(BaseModel):
     rating: FeedbackRating
     reason: FeedbackReason | None = None
     comment: str | None = Field(default=None, max_length=1000)
+    corrected_answer: str | None = Field(default=None, max_length=CORRECTED_ANSWER_MAX_CHARS)
 
     @field_validator("trace_id", "business_view_id", "document_id", "chunk_id", "message_id")
     @classmethod
     def validate_identifier(cls, value: str | None) -> str | None:
         return _clean_identifier(value)
 
-    @field_validator("comment")
+    @field_validator("comment", "corrected_answer")
     @classmethod
     def normalize_comment(cls, value: str | None) -> str | None:
         if value is None:
@@ -160,9 +170,12 @@ class FeedbackRequest(BaseModel):
                 raise ValueError("回答フィードバックには文書 ID とチャンク ID を指定できません。")
             allowed_reasons = ANSWER_REASONS
 
+        if self.corrected_answer is not None and self.target_type != FeedbackTargetType.ANSWER:
+            raise ValueError("修正した回答は回答のフィードバックだけに指定できます。")
         if self.rating == FeedbackRating.HELPFUL:
             self.reason = None
             self.comment = None
+            self.corrected_answer = None
         elif self.reason is None:
             raise ValueError("役に立たなかった理由を選択してください。")
         elif self.reason not in allowed_reasons:
@@ -194,6 +207,7 @@ class FeedbackSubmissionResponse(BaseModel):
     rating: FeedbackRating
     reason: FeedbackReason | None = None
     comment: str | None = None
+    corrected_answer: str | None = None
 
 
 class CurrentFeedbackItem(FeedbackSubmissionResponse):
@@ -258,6 +272,15 @@ class FeedbackDetail(FeedbackItem):
     comment: str | None = None
     citations: list[FeedbackCitationSnapshot] = Field(default_factory=list)
     execution: FeedbackExecutionInfo = Field(default_factory=FeedbackExecutionInfo)
+
+
+class FeedbackApprovedFaqPromotion(BaseModel):
+    """フィードバックを業務ビューの Approved FAQ へ登録した結果。"""
+
+    business_view_id: str
+    question: str
+    inserted_count: int = Field(ge=0)
+    deleted_count: int = Field(ge=0)
 
 
 class FeedbackDashboard(BaseModel):

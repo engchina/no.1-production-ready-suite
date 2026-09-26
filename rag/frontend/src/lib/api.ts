@@ -125,7 +125,10 @@ export type CitationFeedbackReason =
   | "incomplete"
   | "missing_evidence"
   | "not_relevant"
-  | "answer_untrusted";
+  | "answer_untrusted"
+  | "missing_knowledge"
+  | "outdated_source"
+  | "ambiguous_question";
 export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
 export type UploadIngestionMode = "manual";
@@ -1178,6 +1181,8 @@ export interface FeedbackRequestBody {
   rating: CitationFeedbackRating;
   reason?: CitationFeedbackReason | null;
   comment?: string | null;
+  /** 修正した回答(回答を「役に立たなかった」と評価したときだけ)。 */
+  corrected_answer?: string | null;
 }
 
 export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
@@ -1256,6 +1261,13 @@ export interface FeedbackDetail extends FeedbackItem {
   comment: string | null;
   citations: FeedbackCitationSnapshot[];
   execution: FeedbackExecutionInfo;
+}
+
+export interface FeedbackApprovedFaqPromotion {
+  business_view_id: string;
+  question: string;
+  inserted_count: number;
+  deleted_count: number;
 }
 
 export interface FeedbackDashboard {
@@ -2964,6 +2976,13 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
+  promoteFeedbackToApprovedFaq: (id: string) =>
+    request<FeedbackApprovedFaqPromotion>(
+      `/api/feedback/${encodeURIComponent(id)}/approved-faq`,
+      { method: "POST" },
+    ),
+  getFeedbackEvaluationCase: (id: string) =>
+    request<EvaluationCase>(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>
