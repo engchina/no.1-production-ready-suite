@@ -60,7 +60,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。どちらも「この回答を削除」で個別に削除できる。
 6. **評価**：DocRAG の回答パネル（RAG 検索・回答履歴・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。
 7. **フィードバック**：回答を「役に立たなかった」と評価するときに、rag_poc の分類（ナレッジ不足・情報が古い・質問が曖昧を含む）と修正した回答を入力できる。管理者はフィードバック画面の詳細から、Approved FAQ への登録と品質評価のケースへの追加ができる。
-8. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
+8. **検証**：`uv run python -m app.rag.docrag_verify_cli`（`answers` / `regression` / `crag-goldset`）で、QA の一括の標準回答評価、rag_poc の問い合わせ回帰、CRAG goldset の評価を実行できる（`docs/evaluation-observability-guardrails.md`）。
+9. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
 
 ## 設定一覧
 
@@ -97,7 +98,8 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索（vector と Oracle Text の RRF）に、rag_poc の「原質問を主軸にした重み付き融合」と Sudachi 分割を組み合わせる。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
-  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト（`run_answer_eval.py` などの一括評価。1 件ずつの標準回答での評価は画面から使える）
+  - Gradio UI、PPT 資料、`verify/` の問題セット（データは移さない。検証 CLI `app.rag.docrag_verify_cli` で rag_poc の `cases.json` / `crag_goldset.json` をそのまま使える）
+  - `evaluate_crag_grader.py`（rag_poc 独自の ADB の保存先から候補を組み立てる設計のため）と、`run_answer_eval.py` の Excel 出力・LLM 呼び出し回数の集計
   - フィードバックから FAQ・評価データセットへの自動昇格（管理者がフィードバック画面の詳細から 1 件ずつ「Approved FAQ に登録」「品質評価のケースに追加」する。変換と除外の規則は rag_poc の `approved_faq_import_row_from_answer_feedback` / `_expected_terms` を使う）
 
 ## 既知の制約
