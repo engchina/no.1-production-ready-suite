@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react";
 
 import { useWorkspaceActive } from "@/components/WorkspaceState";
@@ -58,9 +58,14 @@ export function ExecutionActivityPanel({
   const titleId = useId();
   const pageActive = useWorkspaceActive();
   const [previousRun, setPreviousRun] = useState<unknown>(null);
-  const submitted = useRef({ operationKey, inputSignature });
-  if (submitted.current.operationKey !== operationKey) submitted.current = { operationKey, inputSignature };
-  const inputChanged = inputSignature !== undefined && inputSignature !== submitted.current.inputSignature;
+  // 実行が変わった時点の入力を state で持つ（render 中に ref を読み書きしない）。
+  const [stored, setStored] = useState({ operationKey, inputSignature });
+  let submitted = stored;
+  if (stored.operationKey !== operationKey) {
+    submitted = { operationKey, inputSignature };
+    setStored(submitted);
+  }
+  const inputChanged = inputSignature !== undefined && inputSignature !== submitted.inputSignature;
   useEffect(() => { if (!pageActive) setPreviousRun(operationKey); }, [operationKey, pageActive]);
   const historical = status !== "running" && (previousRun === operationKey || inputChanged);
 

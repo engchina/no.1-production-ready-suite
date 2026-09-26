@@ -1,8 +1,8 @@
 name: E2E Nightly
 
 # RAG / NL2SQL の Playwright E2E を毎晩 main で全件実行する（#133）。
-# PR の CI（ci.yml の rag-e2e / nl2sql-e2e）は変更のあった製品だけを実行するので、
-# 変更の無い製品の回帰や、遅い環境でだけ出る flaky をここで拾う。Agent の E2E は ci.yml の agent-checks が実行する。
+# PR の CI（ci.yml の rag-e2e / nl2sql-e2e）は約 1 分の smoke だけを実行する（#184）ので、
+# 全件の回帰や、遅い環境でだけ出る flaky はここで拾う。Agent の E2E は ci.yml の agent-checks が実行する。
 
 on:
   schedule:

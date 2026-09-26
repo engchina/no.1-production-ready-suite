@@ -1,5 +1,5 @@
 import { conceptKinds, conceptLabel, conceptGraph, nodeConceptKind } from "./unifiedConcepts";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import {
   AlertTriangle,
@@ -804,9 +804,12 @@ function OntologyFlow({
     [highlightNodeIds]
   );
   const layoutPositionsRef = useRef(effectivePositions);
-  layoutPositionsRef.current = effectivePositions;
   const highlightNodeIdsRef = useRef(highlightNodeIds);
-  highlightNodeIdsRef.current = highlightNodeIds;
+  // 最新の配置とハイライトを commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => {
+    layoutPositionsRef.current = effectivePositions;
+    highlightNodeIdsRef.current = highlightNodeIds;
+  });
   useEffect(() => {
     if (!canvasVisible) return;
     // React Flow が新しいノード集合を測り終えるのを待ってからフィットする
