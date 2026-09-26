@@ -21,6 +21,7 @@ from app.clients.oracle import (
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
+    oracle_docrag_prompt_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
@@ -34,6 +35,7 @@ from app.clients.oracle import (
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
     oracle_prompt_version_schema_sql,
+    oracle_query_history_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_index_parameters_sql,
     oracle_text_preferences_sql,
@@ -170,6 +172,16 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="answer_records",
             table_name="rag_answer_records",
             sql=oracle_answer_record_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="docrag_prompts",
+            table_name="rag_docrag_prompts",
+            sql=oracle_docrag_prompt_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="query_history",
+            table_name="rag_query_history",
+            sql=oracle_query_history_schema_sql(),
         ),
         OracleSchemaSection(
             name="business_view_knowledge",
@@ -447,6 +459,16 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260926_003_feedback_reasons_corrected_answer",
             table_name="rag_citation_feedback",
             sql=_feedback_reasons_corrected_answer_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260926_004_docrag_prompts",
+            table_name="rag_docrag_prompts",
+            sql=_docrag_prompts_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260926_005_query_history",
+            table_name="rag_query_history",
+            sql=_query_history_migration_sql(),
         ),
     ]
 
@@ -965,6 +987,56 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _query_history_migration_sql() -> str:
+    """質問履歴の保存表と業務ビュー別の新しい順 index を追加する(冪等)。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_QUERY_HISTORY';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_query_history ('
+            || 'query_id VARCHAR2(64) PRIMARY KEY,'
+            || 'business_view_id VARCHAR2(64) NOT NULL,'
+            || 'surface VARCHAR2(16) NOT NULL,'
+            || 'question VARCHAR2(2000 CHAR) NOT NULL,'
+            || 'normalized_question VARCHAR2(2000 CHAR) NOT NULL,'
+            || 'classification_filter JSON,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_QUERY_HISTORY_VIEW_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_query_history_view_idx '
+            || 'ON rag_query_history (business_view_id, created_at DESC)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _docrag_prompts_migration_sql() -> str:
+    """編集した DocRAG プロンプトの保存表を追加する(冪等)。"""
+    return """
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_DOCRAG_PROMPTS';
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_docrag_prompts ('
+            || 'prompt_key VARCHAR2(64) PRIMARY KEY,'
+            || 'content CLOB NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL)';
     END IF;
 END;
 /

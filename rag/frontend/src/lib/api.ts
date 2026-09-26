@@ -1263,6 +1263,39 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
+/** 質問履歴の設定(rag_poc の QUERY_HISTORY_*)。 */
+export interface QueryHistorySettingsData {
+  enabled: boolean;
+  retention_days: number;
+  min_count: number;
+  suggestion_limit: number;
+  blocklist: string[];
+}
+
+export interface QuerySuggestionsData {
+  business_view_id: string;
+  enabled: boolean;
+  suggestions: { question: string; count: number }[];
+}
+
+export type DocragPromptKey = "vlm_answer" | "image_retrieval";
+
+/** 編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。 */
+export interface DocragPromptView {
+  key: DocragPromptKey;
+  content: string;
+  default_content: string;
+  customized: boolean;
+  required_placeholders: string[];
+  updated_at: string | null;
+}
+
+export interface DocragPromptsData {
+  prompts: DocragPromptView[];
+  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
+  stages: { id: string; prompts: { id: string; content: string }[] }[];
+}
+
 export interface FeedbackApprovedFaqPromotion {
   business_view_id: string;
   question: string;
@@ -2976,6 +3009,29 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
+  getQueryHistorySettings: () => request<QueryHistorySettingsData>("/api/settings/query-history"),
+  updateQueryHistorySettings: (body: QueryHistorySettingsData) =>
+    request<QueryHistorySettingsData>("/api/settings/query-history", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getQuerySuggestions: (businessViewId: string, query: string, filters: Record<string, string>) =>
+    request<QuerySuggestionsData>(
+      `/api/business-views/${encodeURIComponent(businessViewId)}/query-suggestions?${new URLSearchParams({
+        q: query,
+        ...filters,
+      }).toString()}`,
+    ),
+  getDocragPrompts: () => request<DocragPromptsData>("/api/settings/docrag-prompts"),
+  saveDocragPrompt: (key: DocragPromptKey, content: string) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }),
+  resetDocragPrompt: (key: DocragPromptKey) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, { method: "DELETE" }),
   promoteFeedbackToApprovedFaq: (id: string) =>
     request<FeedbackApprovedFaqPromotion>(
       `/api/feedback/${encodeURIComponent(id)}/approved-faq`,

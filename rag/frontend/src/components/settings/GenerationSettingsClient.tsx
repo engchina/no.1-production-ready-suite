@@ -34,6 +34,7 @@ import {
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { QueryHistorySettingsCard } from "./QueryHistorySettingsCard";
 
 const PROFILE_ORDER: GenerationProfileName[] = [
   "grounded_concise",
@@ -257,6 +258,7 @@ export function GenerationSettingsClient() {
         </CardContent>
       </Card>
       <AnswerRecordRetentionCard />
+      <QueryHistorySettingsCard />
     </PageBody>
   );
 }

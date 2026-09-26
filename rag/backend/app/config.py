@@ -712,6 +712,20 @@ class Settings(ModelSecretStateMixin, BaseSettings):
             "DocRAG 回答記録の保持日数。0 は無期限。回答保存時と設定変更時に期限切れを削除する。"
         ),
     )
+    rag_query_history_enabled: bool = Field(
+        default=False,
+        description=(
+            "回答に成功した質問を業務ビュー単位で保存し、よく聞かれる質問を候補に出す"
+            "(rag_poc の QUERY_HISTORY_ENABLED と同じく既定は無効)。"
+        ),
+    )
+    rag_query_history_retention_days: int = Field(default=90, ge=0, le=3650)
+    rag_query_history_min_count: int = Field(default=3, ge=1, le=1000)
+    rag_query_history_suggestion_limit: int = Field(default=5, ge=1, le=20)
+    rag_query_history_blocklist: list[str] = Field(
+        default_factory=list,
+        description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
+    )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
         default="generic",
         description=(

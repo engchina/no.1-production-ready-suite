@@ -61,6 +61,7 @@ async def parse(
             file_name=file_name,
             content_type=effective_content_type,
             vision_enabled=bool(options.get("vision_enabled")),
+            image_retrieval_prompt=str(options.get("image_retrieval_prompt") or "") or None,
         )
     except Exception as exc:  # noqa: BLE001 - 縮退せず原因を上流へ返す
         logger.exception("docling parse failed")

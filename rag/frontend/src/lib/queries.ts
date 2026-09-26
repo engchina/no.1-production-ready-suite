@@ -24,6 +24,8 @@ import {
   type DocumentDetail,
   type DocumentSummary,
   type DocumentClassification,
+  type DocragPromptKey,
+  type QueryHistorySettingsData,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
@@ -1086,6 +1088,52 @@ export function useEvaluateDocragAnswer() {
     onSuccess: (detail) => {
       qc.setQueryData(["docrag-answer", detail.trace_id], detail);
     },
+  });
+}
+
+/** 質問履歴の設定。 */
+export function useQueryHistorySettings() {
+  return useQuery({ queryKey: ["settings", "query-history"], queryFn: api.getQueryHistorySettings });
+}
+
+export function useUpdateQueryHistorySettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: QueryHistorySettingsData) => api.updateQueryHistorySettings(body),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "query-history"], data);
+      qc.invalidateQueries({ queryKey: ["query-suggestions"] });
+    },
+  });
+}
+
+/** 業務ビューでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
+export function useQuerySuggestions(
+  businessViewId: string | null,
+  query: string,
+  filters: Record<string, string>
+) {
+  return useQuery({
+    queryKey: ["query-suggestions", businessViewId, query, filters],
+    queryFn: () => api.getQuerySuggestions(businessViewId as string, query, filters),
+    enabled: Boolean(businessViewId),
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** 編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプト。 */
+export function useDocragPrompts() {
+  return useQuery({ queryKey: ["settings", "docrag-prompts"], queryFn: api.getDocragPrompts });
+}
+
+/** DocRAG プロンプトの保存(content あり)と既定値への復帰(content なし)。 */
+export function useSaveDocragPrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, content }: { key: DocragPromptKey; content: string | null }) =>
+      content === null ? api.resetDocragPrompt(key) : api.saveDocragPrompt(key, content),
+    onSuccess: (data) => qc.setQueryData(["settings", "docrag-prompts"], data),
   });
 }
 

@@ -113,6 +113,35 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 900, collapse: true },
+]) {
+  test(`質問履歴を有効にし、除外する語を保存できる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockGeneration(page);
+    let saved: unknown = null;
+    const initial = { enabled: false, retention_days: 90, min_count: 3, suggestion_limit: 5, blocklist: [] };
+    await page.route("**/api/settings/query-history", async (route) => {
+      if (route.request().method() === "PATCH") saved = route.request().postDataJSON();
+      await route.fulfill({ json: { data: saved ?? initial, error_messages: [], warning_messages: [] } });
+    });
+
+    await page.goto("/settings/generation");
+    const save = page.getByRole("button", { name: "質問履歴の設定を保存" });
+    await expect(save).toBeDisabled();
+    await page.getByRole("switch", { name: "質問を保存して候補に使う" }).click();
+    await page.getByLabel("保存・表示しない語").fill("給与\n\n 住所 ");
+    await save.click();
+
+    await expect(page.getByText("質問履歴の設定を保存しました。")).toBeVisible();
+    expect(saved).toEqual({ ...initial, enabled: true, blocklist: ["給与", "住所"] });
+    await expect(page.getByRole("switch", { name: "質問を保存して候補に使う" })).toBeChecked();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("カスタム回答スタイル選択でプロンプト版管理への導線が出る", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/generation", async (route) => {

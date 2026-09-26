@@ -29,9 +29,15 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
+| 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 回答スタイル「質問履歴」（既定は無効） |
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 
+| DocRAG の回答生成テンプレート（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
+| 図・画像の読み取りプロンプト（`image_retrieval`） | global | 検索・回答設定 > 文書解析（Docling の「図・画像を AI で読み取る」が有効なとき） |
+
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。
+
+編集したプロンプトは `rag_docrag_prompts` に保存する（migration `20260926_004_docrag_prompts`）。回答では docrag の runtime の `prompt_overrides` で渡し、解析では `parser_options.image_retrieval_prompt` で docling サービスへ渡す（Vision の段階だけ有効）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを完全一致で比べる。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
@@ -54,7 +60,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。どちらも「この回答を削除」で個別に削除できる。
 6. **評価**：DocRAG の回答パネル（RAG 検索・回答履歴・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。
 7. **フィードバック**：回答を「役に立たなかった」と評価するときに、rag_poc の分類（ナレッジ不足・情報が古い・質問が曖昧を含む）と修正した回答を入力できる。管理者はフィードバック画面の詳細から、Approved FAQ への登録と品質評価のケースへの追加ができる。
-8. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
+8. **検証**：`uv run python -m app.rag.docrag_verify_cli`（`answers` / `regression` / `crag-goldset`）で、QA の一括の標準回答評価、rag_poc の問い合わせ回帰、CRAG goldset の評価を実行できる（`docs/evaluation-observability-guardrails.md`）。
+9. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
 
 ## 設定一覧
 
@@ -78,6 +85,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 
 ## 保存先
 
+- **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（標準・DocRAG、検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
@@ -90,7 +98,8 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索（vector と Oracle Text の RRF）に、rag_poc の「原質問を主軸にした重み付き融合」と Sudachi 分割を組み合わせる。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
-  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト（`run_answer_eval.py` などの一括評価。1 件ずつの標準回答での評価は画面から使える）、質問履歴
+  - Gradio UI、PPT 資料、`verify/` の問題セット（データは移さない。検証 CLI `app.rag.docrag_verify_cli` で rag_poc の `cases.json` / `crag_goldset.json` をそのまま使える）
+  - `evaluate_crag_grader.py`（rag_poc 独自の ADB の保存先から候補を組み立てる設計のため）と、`run_answer_eval.py` の Excel 出力・LLM 呼び出し回数の集計
   - フィードバックから FAQ・評価データセットへの自動昇格（管理者がフィードバック画面の詳細から 1 件ずつ「Approved FAQ に登録」「品質評価のケースに追加」する。変換と除外の規則は rag_poc の `approved_faq_import_row_from_answer_feedback` / `_expected_terms` を使う）
 
 ## 既知の制約

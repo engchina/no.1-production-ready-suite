@@ -64,6 +64,7 @@ import {
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { DocragPromptCard } from "./DocragPromptEditor";
 
 type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
@@ -266,6 +267,9 @@ export function ParserAdapterSettingsClient() {
         onReset={resetForm}
         onSubmit={submit}
       />
+      {settings.adapter_backend === "docling" && settings.docling_vision_enabled ? (
+        <DocragPromptCard promptKey="image_retrieval" />
+      ) : null}
       <details className="border-t border-border pt-4">
         <summary className="cursor-pointer text-sm font-semibold text-fg">
           {t("settings.parserAdapters.diagnostics.title")}

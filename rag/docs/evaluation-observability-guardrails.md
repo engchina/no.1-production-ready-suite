@@ -109,6 +109,24 @@ real-world staging policy と backend/source-kind matrix も集合内容を比�
 
 staging 用の実データ manifest は任意で `staging_dataset_policy` を持てる。`required_for_promotion=true` の場合、`fixture_kind=real_world` の case 数、required source kinds、required scenarios、`data_sensitivity=non_sensitive`、`reviewed_for_public_ci=true`、既定 `staging/` 配下の fixture 参照を manifest validation で確認する。これにより synthetic fixture をコピーしただけの “real-world gate” や、レビューされていない顧客文書を nightly artifact に流す運用を防ぐ。policy の validation は case id / source kind / scenario / fixture path prefix / status code だけを扱い、OCR 原文や chunk 本文を artifact に出さない。staging promotion では policy が設定されているのに `required_for_promotion=false` の場合を `staging_dataset_policy_not_required`、必須 policy の coverage / review / fixture 隔離が未達の場合を `staging_dataset_policy_failed` として明示的に止める。さらに staging CLI は manifest 上の合規 case だけでなく、本実行の `case_results` に real-world case が含まれ、required source kinds / scenarios を実測したかも `executed_*` evidence として検査する。`rag-file-processing-staging --require-real-world-policy` と nightly workflow の `require_real_world_file_processing_manifest=true` は policy 未設定の synthetic-only manifest を preflight で止めるため、production promotion では宣言なしの staging を通せない。manifest に real-world case を書いただけで実行 plan から漏れた場合も `staging_dataset_policy_failed` になる。promotion blocker には件数と不足 source kind / scenario だけを残し、real-world case id や fixture path を含めない。
 
+### DocRAG の検証 CLI
+
+`python -m app.rag.docrag_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
+
+```bash
+# QA（id / question / standard_answer）を DocRAG の業務ビューで回答し、標準回答で 4 軸評価する（rag_poc の run_answer_eval.py）
+uv run python -m app.rag.docrag_verify_cli answers --qa qa.json --business-view <業務ビュー ID> --out .runs/answers/<label>
+# rag_poc の cases.json（id / question / expect）で回答を文字列の規則で判定する（rag_poc の run_regression.py）
+uv run python -m app.rag.docrag_verify_cli regression --cases cases.json --business-view <業務ビュー ID> --out .runs/regression/<label> --repeat 2
+# CRAG goldset をオフラインで評価する（--llm-judge で backend のモデル設定の LLM に判定させる）
+uv run python -m app.rag.docrag_verify_cli crag-goldset crag_goldset.json
+```
+
+- `answers` は回答エンジンが DocRAG の業務ビューでだけ評価できる（それ以外はその件をエラーとして記録する）。
+- `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（業務ビューの KB が検索範囲になる）。
+- `crag-goldset` の終了コードも rag_poc と同じ（CRAG が通常 RAG より劣れば 1）。
+- rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。
+
 ## 観測性
 
 Prometheus metrics は `/metrics` で公開する。
