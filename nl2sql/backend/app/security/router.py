@@ -15,7 +15,7 @@ from app.settings import get_settings
 
 from .deepsec import get_deepsec_service
 from .dependencies import current_principal, local_debug_principal, request_context
-from .domain import SYSTEM_ADMIN_ROLE_CODE, Principal, RoleRecord
+from .domain import SYSTEM_ADMIN_ROLE_CODE, as_principal, as_role
 from .permissions import PERMISSION_CATALOG, grants_all_profile_access
 from .schemas import (
     CurrentUserData,
@@ -42,13 +42,11 @@ run_in_threadpool = run_sync_io
 
 
 def _current_user_data(principal: PlatformPrincipal, debug_mode: bool) -> CurrentUserData:
-    assert isinstance(principal, Principal)
-    return CurrentUserData.from_principal(principal, debug_mode=debug_mode)
+    return CurrentUserData.from_principal(as_principal(principal), debug_mode=debug_mode)
 
 
 def _role_data(role: PlatformRoleRecord) -> RoleData:
-    assert isinstance(role, RoleRecord)
-    return RoleData.from_record(role)
+    return RoleData.from_record(as_role(role))
 
 
 # 認証 API とユーザー管理・ロール管理（基本情報）は 3 製品共通（platform。#212）。

@@ -33,6 +33,8 @@ from .domain import (
     DataEntitlementRecord,
     Principal,
     RoleRecord,
+    as_principal,
+    as_role,
     scope_expression_canonical_json,
     scope_expression_scope_code,
     scope_filters_canonical_json,
@@ -100,7 +102,7 @@ class SecurityService(AuthService):
     # （#206）。
     role_catalog_permissions = frozenset({"menu.security_roles", "menu.security_permissions"})
     # 既存の構成管理者 token を無効にしないよう、NL2SQL の接頭辞を保つ。
-    configured_admin_token_prefix = "nl2sql-system-admin-v1"
+    configured_admin_token_prefix = "nl2sql-system-admin-v1"  # nosec B105 - token の接頭辞
     admin_login_env_key = _APP_ADMIN_LOGIN_USER_ID_KEY
     admin_password_env_key = _APP_ADMIN_LOGIN_USER_PASSWORD_KEY
     migration_hint = (
@@ -134,7 +136,7 @@ class SecurityService(AuthService):
         entitlements: dict[tuple[str, str, str], DataEntitlementRecord] = {}
         allowed_profile_ids: set[str] = set()
         for role in active_roles:
-            assert isinstance(role, RoleRecord)
+            role = as_role(role)
             allowed_profile_ids.update(role.allowed_profile_ids)
             for entitlement in role.entitlements:
                 key = (
@@ -157,7 +159,7 @@ class SecurityService(AuthService):
     def _assert_actor_can_restore_role(  # type: ignore[override]
         self, actor: Principal, role: PlatformRoleRecord
     ) -> None:
-        assert isinstance(role, RoleRecord)
+        role = as_role(role)
         # アーカイブ中の実効権限は空。復元は全権限の再付与として検証する。
         if not actor.is_system_admin and not expand_permissions(role.permissions).issubset(
             actor.permissions
@@ -184,8 +186,7 @@ class SecurityService(AuthService):
                 raise SecurityApiError(403, "ローカル DEBUG の実行権限は解除されています。")
             return local_debug_principal()
         principal = super().principal_for_worker(user_uuid)
-        assert isinstance(principal, Principal)
-        return principal
+        return as_principal(principal)
 
     def login(
         self,
@@ -198,13 +199,12 @@ class SecurityService(AuthService):
         principal, token, csrf_token = super().login(
             login_user_id, password, request_id=request_id, client_ip=client_ip
         )
-        assert isinstance(principal, Principal)
+        principal = as_principal(principal)
         return principal, token, csrf_token
 
     def authenticate_session(self, token: str) -> Principal:
         principal = super().authenticate_session(token)
-        assert isinstance(principal, Principal)
-        return principal
+        return as_principal(principal)
 
     def archive_role(
         self,
@@ -246,8 +246,7 @@ class SecurityService(AuthService):
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
-        assert role is None or isinstance(role, RoleRecord)
-        return role
+        return None if role is None else as_role(role)
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         roles = super().list_roles(include_archived=include_archived)
@@ -255,8 +254,7 @@ class SecurityService(AuthService):
 
     @staticmethod
     def _nl2sql_role(role: PlatformRoleRecord) -> RoleRecord:
-        assert isinstance(role, RoleRecord)
-        return role
+        return as_role(role)
 
     def _hash_password(self, password: str) -> str:
         return hash_password(password)

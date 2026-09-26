@@ -36,6 +36,7 @@ from app.settings import Settings
 from .domain import (
     DataEntitlementRecord,
     RoleRecord,
+    as_role,
     scope_expression_canonical_json,
     scope_expression_from_json,
     scope_filters_canonical_json,
@@ -111,8 +112,7 @@ class InMemorySecurityStore(InMemoryAuthStore):
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
-        assert role is None or isinstance(role, RoleRecord)
-        return role
+        return None if role is None else as_role(role)
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [
@@ -123,23 +123,19 @@ class InMemorySecurityStore(InMemoryAuthStore):
 
     def create_role(self, role: PlatformRoleRecord) -> RoleRecord:
         created = super().create_role(role)
-        assert isinstance(created, RoleRecord)
-        return created
+        return as_role(created)
 
     def update_role(self, role: PlatformRoleRecord, *, expected_version: int) -> RoleRecord:
         updated = super().update_role(role, expected_version=expected_version)
-        assert isinstance(updated, RoleRecord)
-        return updated
+        return as_role(updated)
 
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
         archived = super().archive_role(role_id, expected_version=expected_version)
-        assert isinstance(archived, RoleRecord)
-        return archived
+        return as_role(archived)
 
     def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
         restored = super().restore_role(role_id, expected_version=expected_version)
-        assert isinstance(restored, RoleRecord)
-        return restored
+        return as_role(restored)
 
     def _role_delete_blocker(self, role: PlatformRoleRecord) -> SecurityConflict | None:
         if isinstance(role, RoleRecord) and role.entitlements:
@@ -227,8 +223,7 @@ class OracleSecurityStore(OracleAuthStore):
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
-        assert role is None or isinstance(role, RoleRecord)
-        return role
+        return None if role is None else as_role(role)
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [
@@ -239,23 +234,19 @@ class OracleSecurityStore(OracleAuthStore):
 
     def create_role(self, role: PlatformRoleRecord) -> RoleRecord:
         created = super().create_role(role)
-        assert isinstance(created, RoleRecord)
-        return created
+        return as_role(created)
 
     def update_role(self, role: PlatformRoleRecord, *, expected_version: int) -> RoleRecord:
         updated = super().update_role(role, expected_version=expected_version)
-        assert isinstance(updated, RoleRecord)
-        return updated
+        return as_role(updated)
 
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
         archived = super().archive_role(role_id, expected_version=expected_version)
-        assert isinstance(archived, RoleRecord)
-        return archived
+        return as_role(archived)
 
     def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord:
         restored = super().restore_role(role_id, expected_version=expected_version)
-        assert isinstance(restored, RoleRecord)
-        return restored
+        return as_role(restored)
 
     def _role_details(self, cursor: Any, role: PlatformRoleRecord) -> RoleRecord:
         role_id = role.role_id
@@ -433,8 +424,7 @@ class OracleSecurityStore(OracleAuthStore):
             conn.commit()
 
     def _replace_role_details(self, cursor: Any, role: PlatformRoleRecord) -> None:
-        assert isinstance(role, RoleRecord)
-        self._replace_role_access(cursor, role)
+        self._replace_role_access(cursor, as_role(role))
 
     @staticmethod
     def _replace_role_access(cursor: Any, role: RoleRecord) -> None:

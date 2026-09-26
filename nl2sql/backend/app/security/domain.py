@@ -173,3 +173,17 @@ def scope_expression_from_json(value: object) -> dict[str, Any] | None:
     if parsed is not None and not isinstance(parsed, dict):
         raise ValueError("保存済み条件ツリーが不正です。")
     return parsed
+
+
+def as_role(role: PlatformRoleRecord) -> RoleRecord:
+    """platform の store / service が返すロールを NL2SQL のロールとして扱う。"""
+    if not isinstance(role, RoleRecord):
+        raise TypeError("NL2SQL のロールではありません。")
+    return role
+
+
+def as_principal(principal: PlatformPrincipal) -> Principal:
+    """platform の service が返す利用者を NL2SQL の利用者として扱う。"""
+    if not isinstance(principal, Principal):
+        raise TypeError("NL2SQL の利用者ではありません。")
+    return principal
