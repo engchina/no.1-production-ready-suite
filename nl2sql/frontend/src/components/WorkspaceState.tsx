@@ -129,7 +129,8 @@ export function WorkspaceResultNotice({ result, inputSignature, finishedAt, rest
     snapshot = { result, inputSignature, at: new Date().toISOString() };
     setStored(snapshot);
   }
-  useEffect(() => { if (!active) setPrevious(result); }, [active, result]);
+  // 非表示の間に来た結果を「前回の結果」として覚える（effect ではなく render 中に同期する）。
+  if (!active && previous !== result) setPrevious(result);
   if (!result) return null;
   const changed = snapshot.inputSignature !== inputSignature;
   if (!restored && previous !== result && !changed) return null;

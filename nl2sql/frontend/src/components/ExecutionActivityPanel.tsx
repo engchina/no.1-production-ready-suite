@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react";
 
 import { useWorkspaceActive } from "@/components/WorkspaceState";
@@ -66,7 +66,8 @@ export function ExecutionActivityPanel({
     setStored(submitted);
   }
   const inputChanged = inputSignature !== undefined && inputSignature !== submitted.inputSignature;
-  useEffect(() => { if (!pageActive) setPreviousRun(operationKey); }, [operationKey, pageActive]);
+  // 非表示の間に来た実行を「前回の結果」として覚える（effect ではなく render 中に同期する）。
+  if (!pageActive && previousRun !== operationKey) setPreviousRun(operationKey);
   const historical = status !== "running" && (previousRun === operationKey || inputChanged);
 
   const active = status === "running";

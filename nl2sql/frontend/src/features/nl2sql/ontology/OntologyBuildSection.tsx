@@ -40,6 +40,7 @@ import {
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { isAbortError } from "@/lib/api";
+import { useValuesChanged } from "@/lib/render-sync";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
@@ -807,23 +808,25 @@ export function OntologyBuildSection({
     onMarkdownStateChange?.(reconciled);
   }, [onMarkdownStateChange, setRetainedDraft, showNotice]);
 
-  const refreshSourceDocuments = useCallback(async (targetProfileId: string) => {
+  // 読込中の表示は呼び出し側で立てる（effect から呼ぶときは render 中に立てる）。
+  const loadSourceDocuments = useCallback(async (targetProfileId: string) => {
     const requestId = sourceDocumentsRequestIdRef.current + 1;
     sourceDocumentsRequestIdRef.current = requestId;
     sourceDocumentsLoadControllerRef.current?.abort();
     const controller = new AbortController();
     sourceDocumentsLoadControllerRef.current = controller;
-    setSavedSourceDocumentsLoading(true);
     try {
-      const documents = await listOntologySourceDocuments(targetProfileId, 20, {
+      // 応答の反映は then の callback で行う（effect から呼んでも同期の setState にしない）。
+      await listOntologySourceDocuments(targetProfileId, 20, {
         signal: controller.signal,
+      }).then((documents) => {
+        if (
+          profileIdRef.current === targetProfileId &&
+          sourceDocumentsRequestIdRef.current === requestId
+        ) {
+          setSavedSourceDocuments(documents);
+        }
       });
-      if (
-        profileIdRef.current === targetProfileId &&
-        sourceDocumentsRequestIdRef.current === requestId
-      ) {
-        setSavedSourceDocuments(documents);
-      }
     } catch (err) {
       if (isAbortError(err)) return;
       if (
@@ -844,8 +847,13 @@ export function OntologyBuildSection({
       }
     }
   }, []);
+  const refreshSourceDocuments = useCallback((targetProfileId: string) => {
+    setSavedSourceDocumentsLoading(true);
+    return loadSourceDocuments(targetProfileId);
+  }, [loadSourceDocuments]);
 
-  const refreshMarkdown = useCallback(async (
+  // 読込中・エラーの表示は呼び出し側で直す（effect から呼ぶときは render 中に直す）。
+  const loadMarkdown = useCallback(async (
     targetProfileId: string,
     options: ApplyMarkdownStateOptions = {}
   ) => {
@@ -854,8 +862,6 @@ export function OntologyBuildSection({
     markdownLoadControllerRef.current?.abort();
     const controller = new AbortController();
     markdownLoadControllerRef.current = controller;
-    setMarkdownLoading(true);
-    setMarkdownError("");
     try {
       const next = await getOntologyMarkdownState(targetProfileId, {
         signal: controller.signal,
@@ -897,6 +903,14 @@ export function OntologyBuildSection({
       }
     }
   }, [applyMarkdownState]);
+  const refreshMarkdown = useCallback((
+    targetProfileId: string,
+    options: ApplyMarkdownStateOptions = {}
+  ) => {
+    setMarkdownLoading(true);
+    setMarkdownError("");
+    return loadMarkdown(targetProfileId, options);
+  }, [loadMarkdown]);
 
   const applyOptimisticPublishedMarkdown = useCallback((
     result: OntologyPublishJob
@@ -966,17 +980,10 @@ export function OntologyBuildSection({
     setDraftDirty(false);
   }, [onMarkdownStateChange]);
 
-  useEffect(() => {
-    profileIdRef.current = profileId;
-    markdownStateRef.current = null;
-    draftMarkdownRef.current = "";
-    draftDirtyRef.current = false;
-    draftRevisionRef.current = null;
-    localSavedDraftRef.current = null;
-    buildMarkdownRefreshSignatureRef.current = "";
+  // プロファイルが変わったら、画面の state を render 中に初期化する（読込中の表示もここで立てる）。
+  if (useValuesChanged([onMarkdownStateChange, profileId, loadMarkdown, loadSourceDocuments])) {
     setJob(null);
     setMarkdownState(null);
-    onMarkdownStateChange?.(null);
     setDraftMarkdown("");
     setDraftDirty(false);
     setDraftRevision(null);
@@ -990,10 +997,21 @@ export function OntologyBuildSection({
     setSourceFilesError("");
     setSavedSourceDocuments([]);
     setSavedSourceDocumentsLoading(Boolean(profileId));
+  }
+  // ref・親への通知・読込は commit 後に行う。
+  useEffect(() => {
+    profileIdRef.current = profileId;
+    markdownStateRef.current = null;
+    draftMarkdownRef.current = "";
+    draftDirtyRef.current = false;
+    draftRevisionRef.current = null;
+    localSavedDraftRef.current = null;
+    buildMarkdownRefreshSignatureRef.current = "";
+    onMarkdownStateChange?.(null);
     const jobsController = new AbortController();
     if (profileId) {
-      void refreshMarkdown(profileId, { reason: "profile-load" });
-      void refreshSourceDocuments(profileId);
+      void loadMarkdown(profileId, { reason: "profile-load" });
+      void loadSourceDocuments(profileId);
       // リロード/プロファイル切替後も直近 job を復元する(実行中なら進捗追跡を再開)
       listOntologyBuildJobs(profileId, 1, { signal: jobsController.signal })
         .then((jobs) => {
@@ -1024,14 +1042,23 @@ export function OntologyBuildSection({
       sourceDocumentsLoadControllerRef.current = null;
       jobsController.abort();
     };
-  }, [onMarkdownStateChange, profileId, refreshMarkdown, refreshSourceDocuments]);
+  }, [onMarkdownStateChange, profileId, loadMarkdown, loadSourceDocuments]);
 
+  // 親から再読込を求められたら、読込中の表示を render 中に立て、読込は effect で行う。
+  const [seenMarkdownRefreshVersion, setSeenMarkdownRefreshVersion] = useState(markdownRefreshVersion);
+  if (seenMarkdownRefreshVersion !== markdownRefreshVersion) {
+    setSeenMarkdownRefreshVersion(markdownRefreshVersion);
+    if (profileId) {
+      setMarkdownLoading(true);
+      setMarkdownError("");
+    }
+  }
   const lastMarkdownRefreshVersion = useRef(markdownRefreshVersion);
   useEffect(() => {
     if (lastMarkdownRefreshVersion.current === markdownRefreshVersion) return;
     lastMarkdownRefreshVersion.current = markdownRefreshVersion;
-    if (profileId) void refreshMarkdown(profileId, { reason: "background" });
-  }, [markdownRefreshVersion, profileId, refreshMarkdown]);
+    if (profileId) void loadMarkdown(profileId, { reason: "background" });
+  }, [markdownRefreshVersion, profileId, loadMarkdown]);
 
   // job ポーリング(1s)。完了で停止し、Markdown 下書きを更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
