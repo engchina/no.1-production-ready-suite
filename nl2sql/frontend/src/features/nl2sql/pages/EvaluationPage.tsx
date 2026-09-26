@@ -179,11 +179,12 @@ export function EvaluationPage() {
     setResultCursorHistory([]);
   }
 
+  const currentJobStatus = currentJob?.status;
   useEffect(() => {
-    if (currentJob && TERMINAL_STATUSES.has(currentJob.status)) {
+    if (currentJobStatus && TERMINAL_STATUSES.has(currentJobStatus)) {
       void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
     }
-  }, [currentJob?.status, currentJob?.job_id, queryClient]);
+  }, [currentJobStatus, currentJobId, queryClient]);
 
   const startMutation = useMutation({
     mutationFn: async () => {

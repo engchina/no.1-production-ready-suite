@@ -25,6 +25,7 @@ import {
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -987,12 +988,17 @@ export function StatementRunnerCard({
   useResetExecutionConsent(() => setConfirmation(""), JSON.stringify([sql, resetSignal, executionBlocked]));
   const [appliedRevision, setAppliedRevision] = useWorkspaceState(`runner-${policy}-${draftScope}-revision`, String(resetSignal ?? ""));
   const previousInitialSql = useRef({ initialSql, resetSignal });
+  // 復元した草稿の revision は比較にだけ使う。変化では実行しない（草稿の key が変わったときに復元した SQL を上書きしない）。
+  const appliedRevisionRef = useRef(appliedRevision);
+  useLayoutEffect(() => {
+    appliedRevisionRef.current = appliedRevision;
+  });
   useEffect(() => {
-    if (appliedRevision === String(resetSignal ?? "") && previousInitialSql.current.initialSql === initialSql && previousInitialSql.current.resetSignal === resetSignal) return;
+    if (appliedRevisionRef.current === String(resetSignal ?? "") && previousInitialSql.current.initialSql === initialSql && previousInitialSql.current.resetSignal === resetSignal) return;
     setAppliedRevision(String(resetSignal ?? ""));
     previousInitialSql.current = { initialSql, resetSignal };
     if (initialSql !== undefined) setSql(initialSql);
-  }, [initialSql, resetSignal]);
+  }, [initialSql, resetSignal, setAppliedRevision, setSql]);
 
   const run = async () => {
     if (!sql.trim() || executionBlocked) return;

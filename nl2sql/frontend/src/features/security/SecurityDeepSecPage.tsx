@@ -907,7 +907,7 @@ export function SecurityDeepSecPage() {
       rows: normalizeEntitlementRows(entitlementDraftRows).map((row, i) => ({ ...row, client_key: entitlementDraftRows[i].client_key })),
       baseline: normalizeEntitlementRows(entitlementBaseline.data_entitlements),
     }));
-  }, [draftSignature, entitlementBaseline, entitlementLoading, setStoredDraft]);
+  }, [draftSignature, entitlementBaseline, entitlementDraftRows, entitlementLoading, setStoredDraft]);
   const draftVersionChanged = Boolean(entitlementDraftChanged && currentEntitlementRole &&
     entitlementBaseline?.role_id === currentEntitlementRole.role_id &&
     entitlementBaseline.version !== currentEntitlementRole.version);
@@ -1166,6 +1166,13 @@ export function SecurityDeepSecPage() {
     }
   };
 
+  const loadTargetObjectsRef = useRef(loadTargetObjects);
+  const loadTargetDetailRef = useRef(loadTargetDetail);
+  useLayoutEffect(() => {
+    loadTargetObjectsRef.current = loadTargetObjects;
+    loadTargetDetailRef.current = loadTargetDetail;
+  });
+
   const load = async (announce = false) => {
     setActionError("");
     const results = await Promise.all([
@@ -1180,8 +1187,13 @@ export function SecurityDeepSecPage() {
     }
   };
 
+  // 初回ロードは mount 時だけ行う。最新の load を commit 時に ref へ入れて呼ぶ（load を deps に入れると毎レンダーで再取得になる）。
+  const loadRef = useRef(load);
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  });
   useEffect(() => {
-    void load();
+    void loadRef.current();
     return () => {
       statusLoadSequence.current += 1;
       planLoadSequence.current += 1;
@@ -1192,7 +1204,7 @@ export function SecurityDeepSecPage() {
       abortEntitlementRequests();
       abortTargetObjectRequests();
     };
-  }, []);
+  }, [abortEntitlementRequests, abortPlanRequests, abortStatusRequests, abortTargetObjectRequests]);
 
   useEffect(() => {
     if (activeView !== "data-permissions" || entitlementLoading) return;
@@ -1207,12 +1219,13 @@ export function SecurityDeepSecPage() {
       return;
     }
     const timeout = window.setTimeout(() => {
-      void loadTargetObjects();
+      void loadTargetObjectsRef.current();
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [targetObjectSearch, targetObjectOwnerPrefix]);
 
-  useEffect(() => {
+  // 選択中の role / version が変わったときだけ草稿を作り直す。他の値は最新を読むが、変化では実行しない。
+  const syncEntitlementRole = () => {
     // 背景再取得は編集中の baseline/version を更新しない。適用時は旧 version で競合を検出する。
     if (entitlementDraftChanged && entitlementBaseline?.role_id === visibleSelectedEntitlementRoleId) return;
     if (selectedEntitlementRole && restoredDraft.current?.roleId === selectedEntitlementRole.role_id) {
@@ -1235,10 +1248,21 @@ export function SecurityDeepSecPage() {
     setEntitlementSqlPreviewOpen(false);
     setEntitlementFormError("");
     setEntitlementApplyConfirmation("");
-  }, [selectedEntitlementRole?.role_id, selectedEntitlementRole?.version]);
-
+  };
+  const syncEntitlementRoleRef = useRef(syncEntitlementRole);
+  useLayoutEffect(() => {
+    syncEntitlementRoleRef.current = syncEntitlementRole;
+  });
+  const syncedEntitlementRoleId = selectedEntitlementRole?.role_id;
+  const syncedEntitlementRoleVersion = selectedEntitlementRole?.version;
   useEffect(() => {
-    for (const key of selectedDraftTargetKeys) {
+    syncEntitlementRoleRef.current();
+  }, [syncedEntitlementRoleId, syncedEntitlementRoleVersion]);
+
+  // 対象の集合（signature）が変わったときに詳細を取る。最新の loadTargetDetail は ref から呼ぶ。
+  const selectedDraftTargetSignature = selectedDraftTargetKeys.join("|");
+  useEffect(() => {
+    for (const key of selectedDraftTargetSignature.split("|").filter(Boolean)) {
       const draft = entitlementDraftRows.find((item) => entitlementTargetKey(item) === key);
       const object =
         targetObjectMap.get(key) ??
@@ -1251,9 +1275,9 @@ export function SecurityDeepSecPage() {
               comment: "",
             }
           : null);
-      if (object) void loadTargetDetail(object);
+      if (object) void loadTargetDetailRef.current(object);
     }
-  }, [selectedDraftTargetKeys.join("|"), targetObjectMap, entitlementDraftRows]);
+  }, [selectedDraftTargetSignature, targetObjectMap, entitlementDraftRows]);
 
   useEffect(() => {
     if (foundationApplyVisible) {
