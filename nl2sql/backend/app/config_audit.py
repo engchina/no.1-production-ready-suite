@@ -1,4 +1,9 @@
-"""`.env` / `.env.example` / model-settings.json の read-only audit。"""
+"""`.env` / `.env.example` / model-settings.json の read-only audit。
+
+3製品共通の設定（`PLATFORM_*`）は platform の共通 `.env`（雛形 `platform/.env.example`）、
+NL2SQL 固有の設定（`NL2SQL_*`）は `backend/.env`（雛形 `backend/.env.example`）に置く（#211）。
+既知の key は Settings の属性から `settings_env_names` で求める。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from pr_backend_core.config import (
+    PLATFORM_SETTING_FIELDS,
+    platform_env_file,
+    platform_env_name,
+    settings_env_names,
+)
 from pr_system_settings.model import MODEL_SETTINGS_DOCUMENT_VERSION
 
 from app.settings import Settings
@@ -19,23 +30,42 @@ ENV_ASSIGNMENT_RE = re.compile(
 )
 EXAMPLE_EMPTY_KEYS = frozenset(
     {
-        "APP_ADMIN_LOGIN_USER_PASSWORD",
-        "APP_AUTH_SECRET",
-        "OCI_COMPARTMENT_ID",
-        "OCI_ENTERPRISE_AI_API_KEY",
-        "OCI_ENTERPRISE_AI_PROJECT_OCID",
-        "OCI_FINGERPRINT",
-        "OCI_KEY_FILE",
-        "OCI_TENANCY_OCID",
-        "OCI_USER_OCID",
-        "ORACLE_ADB_OCID",
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD",
-        "ORACLE_DSN",
-        "ORACLE_PASSWORD",
-        "ORACLE_WALLET_PASSWORD",
+        "PLATFORM_ADMIN_LOGIN_USER_PASSWORD",
+        "PLATFORM_OCI_COMPARTMENT_ID",
+        "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
+        "PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID",
+        "PLATFORM_OCI_FINGERPRINT",
+        "PLATFORM_OCI_KEY_FILE",
+        "PLATFORM_OCI_TENANCY_OCID",
+        "PLATFORM_OCI_USER_OCID",
+        "PLATFORM_ORACLE_ADB_OCID",
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD",
+        "PLATFORM_ORACLE_DSN",
+        "PLATFORM_ORACLE_PASSWORD",
+        "PLATFORM_ORACLE_WALLET_PASSWORD",
     }
 )
 EXAMPLE_PLACEHOLDER_VALUES = frozenset({"TODO"})
+# 共通 `.env` に置いてよい key（3製品共通の全 key。NL2SQL が使わない key も含む）。
+PLATFORM_ENV_KEYS = frozenset(platform_env_name(name) for name in PLATFORM_SETTING_FIELDS)
+
+
+def settings_env_keys() -> tuple[frozenset[str], frozenset[str]]:
+    """NL2SQL の Settings が読む (共通 `.env` の key, 製品 `.env` の key)。"""
+    names = frozenset(settings_env_names(Settings).values())
+    platform_keys = names & PLATFORM_ENV_KEYS
+    return platform_keys, names - platform_keys
+
+
+@dataclass(frozen=True)
+class AuditPaths:
+    """audit の対象ファイル。"""
+
+    example_path: Path
+    env_path: Path
+    platform_example_path: Path
+    platform_env_path: Path
+    model_settings_path: Path
 
 
 @dataclass(frozen=True)
@@ -112,37 +142,43 @@ def parse_env_document(path: Path) -> EnvDocument:
     )
 
 
-def audit_configuration(
-    *,
-    example_path: Path,
-    env_path: Path,
-    model_settings_path: Path,
-) -> ConfigAuditResult:
-    """3 設定ファイルを変更せず、secret value を返さずに検査する。"""
+def audit_configuration(paths: AuditPaths) -> ConfigAuditResult:
+    """設定ファイルを変更せず、secret value を返さずに検査する。"""
     result = ConfigAuditResult(
-        actual_env_present=env_path.is_file(),
-        model_settings_present=model_settings_path.is_file(),
+        actual_env_present=paths.env_path.is_file(),
+        model_settings_present=paths.model_settings_path.is_file(),
     )
-    if not example_path.is_file():
+    if not paths.example_path.is_file():
         result.findings.append(AuditFinding("error", "ENV_EXAMPLE_MISSING"))
         return result
+    if not paths.platform_example_path.is_file():
+        result.findings.append(AuditFinding("error", "PLATFORM_ENV_EXAMPLE_MISSING"))
+        return result
 
-    known_keys = frozenset(name.upper() for name in Settings.model_fields)
-    example = parse_env_document(example_path)
-    _audit_env_document(result, example, known_keys, source="example")
+    platform_keys, product_keys = settings_env_keys()
+    example = parse_env_document(paths.example_path)
+    _audit_env_document(result, example, product_keys, prefix="ENV_EXAMPLE")
+    platform_example = parse_env_document(paths.platform_example_path)
+    _audit_env_document(result, platform_example, PLATFORM_ENV_KEYS, prefix="PLATFORM_ENV_EXAMPLE")
 
-    missing_template_keys = tuple(sorted(known_keys - example.values.keys()))
+    missing_template_keys = tuple(sorted(product_keys - example.values.keys()))
     if missing_template_keys:
         result.findings.append(
             AuditFinding("error", "ENV_EXAMPLE_FIELDS_MISSING", missing_template_keys)
         )
+    missing_platform_keys = tuple(sorted(platform_keys - platform_example.values.keys()))
+    if missing_platform_keys:
+        result.findings.append(
+            AuditFinding("error", "PLATFORM_ENV_EXAMPLE_FIELDS_MISSING", missing_platform_keys)
+        )
+    example_values = {**platform_example.values, **example.values}
     populated_sensitive_keys = tuple(
         sorted(
             key
             for key in EXAMPLE_EMPTY_KEYS
-            if key in example.values
-            and _unquote(example.values[key])
-            and _unquote(example.values[key]) not in EXAMPLE_PLACEHOLDER_VALUES
+            if key in example_values
+            and _unquote(example_values[key])
+            and _unquote(example_values[key]) not in EXAMPLE_PLACEHOLDER_VALUES
         )
     )
     if populated_sensitive_keys:
@@ -154,23 +190,28 @@ def audit_configuration(
             )
         )
 
-    actual = EnvDocument(values={})
-    if env_path.is_file():
+    actual_values: dict[str, str] = {}
+    for env_path, known_keys, prefix in (
+        (paths.platform_env_path, PLATFORM_ENV_KEYS, "PLATFORM_ENV_ACTUAL"),
+        (paths.env_path, product_keys, "ENV_ACTUAL"),
+    ):
+        if not env_path.is_file():
+            continue
         actual = parse_env_document(env_path)
-        _audit_env_document(result, actual, known_keys, source="actual")
-        result.overridden_keys = tuple(
-            sorted(
-                key
-                for key, value in actual.values.items()
-                if key in example.values and value != example.values[key]
-            )
+        _audit_env_document(result, actual, known_keys, prefix=prefix)
+        _audit_env_permissions(result, env_path, code=f"{prefix}_PERMISSIONS_NOT_0600")
+        actual_values.update(actual.values)
+    result.overridden_keys = tuple(
+        sorted(
+            key
+            for key, value in actual_values.items()
+            if key in example_values and value != example_values[key]
         )
-        _audit_env_permissions(result, env_path)
+    )
 
-    effective = dict(example.values)
-    effective.update(actual.values)
+    effective = {**example_values, **actual_values}
     _audit_security_combinations(result, effective)
-    _audit_model_settings(result, model_settings_path)
+    _audit_model_settings(result, paths.model_settings_path)
     return result
 
 
@@ -179,9 +220,8 @@ def _audit_env_document(
     document: EnvDocument,
     known_keys: frozenset[str],
     *,
-    source: Literal["example", "actual"],
+    prefix: str,
 ) -> None:
-    prefix = "ENV_EXAMPLE" if source == "example" else "ENV_ACTUAL"
     if document.duplicates:
         result.findings.append(
             AuditFinding("error", f"{prefix}_DUPLICATE_KEYS", document.duplicates)
@@ -199,20 +239,20 @@ def _audit_security_combinations(
     result: ConfigAuditResult,
     effective: dict[str, str],
 ) -> None:
-    environment = _unquote(effective.get("ENVIRONMENT", "local")).lower()
-    debug = _as_bool(effective.get("DEBUG", "false"))
-    auth_enabled = _as_bool(effective.get("APP_AUTH_ENABLED", "true"))
-    cookie_secure = _as_bool(effective.get("APP_AUTH_COOKIE_SECURE", "false"))
-    deepsec_enabled = _as_bool(effective.get("ORACLE_DEEPSEC_ENABLED", "false"))
-    oracle_driver_mode = _unquote(effective.get("ORACLE_DRIVER_MODE", "thin")).lower()
+    environment = _unquote(effective.get("NL2SQL_ENVIRONMENT", "local")).lower()
+    debug = _as_bool(effective.get("NL2SQL_DEBUG", "false"))
+    auth_enabled = _as_bool(effective.get("NL2SQL_APP_AUTH_ENABLED", "true"))
+    cookie_secure = _as_bool(effective.get("PLATFORM_AUTH_COOKIE_SECURE", "false"))
+    deepsec_enabled = _as_bool(effective.get("NL2SQL_ORACLE_DEEPSEC_ENABLED", "false"))
+    oracle_driver_mode = _unquote(effective.get("PLATFORM_ORACLE_DRIVER_MODE", "thin")).lower()
     if environment != "local" and debug:
-        result.findings.append(AuditFinding("error", "NONLOCAL_DEBUG_ENABLED", ("DEBUG",)))
+        result.findings.append(AuditFinding("error", "NONLOCAL_DEBUG_ENABLED", ("NL2SQL_DEBUG",)))
     if environment != "local" and auth_enabled and not cookie_secure:
         result.findings.append(
             AuditFinding(
                 "error",
                 "NONLOCAL_AUTH_COOKIE_NOT_SECURE",
-                ("APP_AUTH_COOKIE_SECURE",),
+                ("PLATFORM_AUTH_COOKIE_SECURE",),
             )
         )
     if deepsec_enabled and oracle_driver_mode != "thin":
@@ -220,7 +260,7 @@ def _audit_security_combinations(
             AuditFinding(
                 "error",
                 "DEEPSEC_REQUIRES_THIN_DRIVER",
-                ("ORACLE_DEEPSEC_ENABLED", "ORACLE_DRIVER_MODE"),
+                ("NL2SQL_ORACLE_DEEPSEC_ENABLED", "PLATFORM_ORACLE_DRIVER_MODE"),
             )
         )
 
@@ -279,10 +319,13 @@ def stable_audit_json(result: ConfigAuditResult) -> str:
     return json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def default_audit_paths(backend_dir: Path) -> tuple[Path, Path, Path]:
-    """backend root 基準の既定 audit target。"""
-    return (
-        backend_dir / ".env.example",
-        backend_dir / ".env",
-        backend_dir / "model-settings.json",
+def default_audit_paths(backend_dir: Path) -> AuditPaths:
+    """backend root 基準の既定 audit target。共通 `.env` は `PLATFORM_ENV_FILE` で変えられる。"""
+    platform_env_path = platform_env_file(backend_dir)
+    return AuditPaths(
+        example_path=backend_dir / ".env.example",
+        env_path=backend_dir / ".env",
+        platform_example_path=backend_dir.resolve().parents[1] / "platform" / ".env.example",
+        platform_env_path=platform_env_path,
+        model_settings_path=platform_env_path.parent / "model-settings.json",
     )

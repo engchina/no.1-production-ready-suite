@@ -23,7 +23,6 @@ from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import uuid4
 
 import httpx
 from anyio import fail_after
@@ -57,6 +56,7 @@ from pr_system_settings.upload_storage import (
 )
 from pydantic import BaseModel, Field
 
+import app.settings as app_settings
 from app.features.agent.config import runtime_config_store
 from app.features.agent.control_plane import (
     RUNTIME_ADAPTERS,
@@ -145,11 +145,7 @@ from app.settings import MODEL_SETTINGS_STORE, get_settings
 
 router = APIRouter(tags=["agent-runtime"])
 
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
-BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
-ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
-ENV_FILE_MODE = 0o600
 MODEL_TEST_IMAGE_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9s"
     "AAAAASUVORK5CYII="
@@ -409,11 +405,12 @@ async def require_admin(request: Request) -> None:
 
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
-# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+# 保存先は3製品共通の `.env`（app.settings.PLATFORM_ENV_FILE。#211）。
+# テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
 router.include_router(
     build_upload_storage_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         write_dependencies=[Depends(require_admin)],
     ),
     prefix="/settings",
@@ -423,7 +420,7 @@ router.include_router(
 router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         write_dependencies=[Depends(require_admin)],
         action_dependencies=[Depends(require_admin)],
     ),
@@ -434,7 +431,7 @@ router.include_router(
 router.include_router(
     build_database_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: _test_database_connection(candidate),
         write_dependencies=[Depends(require_admin)],
         action_dependencies=[Depends(require_admin)],
@@ -521,75 +518,6 @@ def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
 def _json_pointer_or_empty(value: str) -> str:
     normalized = value.strip()
     return normalized if not normalized or normalized.startswith("/") else ""
-
-
-def _write_env_values(
-    path: Path,
-    values: Mapping[str, str | None],
-    *,
-    section_comment: str,
-    error_detail: str,
-) -> None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        next_lines: list[str] = []
-        written: set[str] = set()
-        for line in lines:
-            key = _env_assignment_key(line)
-            if key is None or key not in values:
-                next_lines.append(line)
-                continue
-            if key in written:
-                continue
-            value = values[key]
-            if value is None:
-                written.add(key)
-                continue
-            next_lines.append(f"{key}={_format_env_value(value)}")
-            written.add(key)
-
-        missing = [key for key, value in values.items() if key not in written and value is not None]
-        if missing:
-            if next_lines and next_lines[-1].strip():
-                next_lines.append("")
-            next_lines.append(section_comment)
-            for key in missing:
-                value = values[key]
-                if value is not None:
-                    next_lines.append(f"{key}={_format_env_value(value)}")
-
-        _replace_env_file(path, "\n".join(next_lines).rstrip() + "\n")
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=error_detail) from exc
-
-
-def _env_assignment_key(line: str) -> str | None:
-    if line.lstrip().startswith("#"):
-        return None
-    match = ENV_ASSIGNMENT_RE.match(line)
-    return match.group(1) if match else None
-
-
-def _format_env_value(value: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        return ""
-    if re.search(r"[\s#\"']", normalized):
-        return '"' + normalized.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return normalized
-
-
-def _replace_env_file(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else ENV_FILE_MODE
-    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-    try:
-        tmp_path.write_text(content, encoding="utf-8")
-        tmp_path.chmod(mode)
-        tmp_path.replace(path)
-        path.chmod(mode)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 async def _run_model_settings_test(
@@ -1429,8 +1357,13 @@ async def invoke_tool(
 
 
 def _binding_token_env_name(binding_id: str) -> str:
+    """Binding 個別の MCP token を置く環境変数名（#211 で `AGENT_` 接頭辞に統一）。
+
+    master secret（`AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET`）と名前が重ならないよう、
+    `AGENT_CONTROL_PLANE_MCP_TOKEN_` ではなく `AGENT_BINDING_MCP_TOKEN_` で始める。
+    """
     safe_id = re.sub(r"[^A-Za-z0-9]", "_", binding_id).upper()
-    return f"CONTROL_PLANE_MCP_TOKEN_{safe_id}"
+    return f"AGENT_BINDING_MCP_TOKEN_{safe_id}"
 
 
 def _binding_mcp_token(binding_id: str) -> str | None:

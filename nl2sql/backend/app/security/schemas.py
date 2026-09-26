@@ -433,7 +433,7 @@ class DeepSecConfigUpdate(BaseModel):
     def validate_data_user_password(cls, value: str) -> str:
         if '"' in value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
             raise ValueError(
-                "ORACLE_DEEPSEC_DATA_USER_PASSWORD は二重引用符と制御文字を"
+                "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD は二重引用符と制御文字を"
                 "含めずに指定してください。"
             )
         return value

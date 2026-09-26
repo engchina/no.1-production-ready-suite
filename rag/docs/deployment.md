@@ -2,7 +2,19 @@
 
 ## ローカル開発
 
+設定は2つの `.env` に分かれる（#211）。
+
+| ファイル | 内容 | 変数名 |
+|---|---|---|
+| `platform/.env`（雛形 `platform/.env.example`） | 3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース）。システム設定画面の保存先。`model-settings.json` も同じディレクトリに置き、3製品で共有する | `PLATFORM_*` |
+| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など） | `RAG_*` |
+
+backend は 環境変数 → `platform/.env` → `backend/.env` の順に読む（環境変数が最優先）。共通 `.env` の場所は
+`PLATFORM_ENV_FILE` で上書きできる（既定はリポジトリの `platform/.env`）。旧名（接頭辞のない名前や `HF_TOKEN` /
+`HF_ENDPOINT`）は読まない。既存環境は「[既存環境の更新手順（#211）](#既存環境の更新手順211-共通-env-への移行)」で移行する。
+
 ```bash
+cp ../platform/.env.example ../platform/.env   # リポジトリ root から見て platform/.env（初回だけ）
 cd backend
 cp .env.example .env
 uv sync   # 外部 parser は services/parsers/<name> の独立サービスで動く(backend には載せない)。
@@ -18,29 +30,35 @@ BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /a
 Docker Compose:
 
 ```bash
+cp ../platform/.env.example ../platform/.env   # 初回だけ
 cp backend/.env.example backend/.env
 docker compose up --build
 ```
 
 backend は OCI / Oracle 接続情報を前提に起動し、`/u01/data/production-ready-rag` を永続ボリュームにする。
+backend / ingestion-worker はリポジトリの `platform/` を `/u01/production-ready-platform` に書き込み可能で mount し、
+`PLATFORM_ENV_FILE=/u01/production-ready-platform/.env` で共通 `.env` を読み書きする（システム設定画面の保存先。
+`model-settings.json` も同じディレクトリ）。共通 `.env` は env_file で注入しない（環境変数が `.env` より優先され、
+画面で保存した値が反映されなくなるため）。コンテナの `appuser` が `platform/` と `platform/.env` に書き込めるようにしておく。
+OCI の parser（`--profile oci`）は `platform/.env` と `backend/.env` を env_file で受け取る。
 
-### ローカル保存ディレクトリ(`LOCAL_STORAGE_DIR`)
+### ローカル保存ディレクトリ(`PLATFORM_LOCAL_STORAGE_DIR`)
 
-`UPLOAD_STORAGE_BACKEND=local` の原本は `LOCAL_STORAGE_DIR/objects/` に保存される。既定値は製品ごとに `/u01/data/<製品名>` で統一している(RAG: `/u01/data/production-ready-rag`、NL2SQL: `/u01/data/production-ready-nl2sql`、Agent: `/u01/data/production-ready-agent`)。
+`PLATFORM_UPLOAD_STORAGE_BACKEND=local` の原本は `PLATFORM_LOCAL_STORAGE_DIR/objects/` に保存される。既定値は製品ごとに `/u01/data/<製品名>` で統一している(RAG: `/u01/data/production-ready-rag`、NL2SQL: `/u01/data/production-ready-nl2sql`、Agent: `/u01/data/production-ready-agent`)。
 
 #### 旧既定値 `/u01/production-ready-rag` からの移行
 
 以前の既定値は `/u01/production-ready-rag` だった。backend は**ファイルを自動で移動しない**。
 
-- `backend/.env` などで `LOCAL_STORAGE_DIR` を明示設定している環境は、そのまま従来のディレクトリを使い続ける。
-- Docker Compose の named volume `backend-local-storage` はマウント先が変わるだけで、中身(原本と `model-settings.json`)は保持される。
-- `LOCAL_STORAGE_DIR` 未設定(既定値)で起動し、旧ディレクトリにデータが残っている場合は、起動時に警告ログ `legacy_local_storage_dir_detected` を出す。旧ディレクトリが新ディレクトリへの symlink になっていれば警告は出ない。
+- 共通 `.env`（`platform/.env`）などで `PLATFORM_LOCAL_STORAGE_DIR` を明示設定している環境は、そのまま従来のディレクトリを使い続ける。
+- Docker Compose の named volume `backend-local-storage` はマウント先が変わるだけで、中身(原本)は保持される(`model-settings.json` は #211 以降 `platform/` に置く)。
+- `PLATFORM_LOCAL_STORAGE_DIR` 未設定(既定値)で起動し、旧ディレクトリにデータが残っている場合は、起動時に警告ログ `legacy_local_storage_dir_detected` を出す。旧ディレクトリが新ディレクトリへの symlink になっていれば警告は出ない。
 
 旧ディレクトリの原本を引き続き参照するには、次のいずれかを行う(NL2SQL の `init_script.sh` と同じく、コピー後に旧ディレクトリを退避して symlink を張る)。
 
 ```bash
 # 1) 旧ディレクトリを使い続ける
-#    backend/.env に LOCAL_STORAGE_DIR=/u01/production-ready-rag を設定して再起動する
+#    platform/.env に PLATFORM_LOCAL_STORAGE_DIR=/u01/production-ready-rag を設定して再起動する
 
 # 2) 新ディレクトリへ移行する(backend を停止してから実行)
 OLD=/u01/production-ready-rag
@@ -53,7 +71,56 @@ ln -s "${NEW}" "${OLD}"
 
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 コンテナ healthcheck は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
-`ENVIRONMENT=production` では `audit_context_salt` も確認し、`AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+`RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#211: 共通 .env への移行）
+
+#211 で、3製品共通の設定は共通 `.env`（`platform/.env`、`PLATFORM_*`）、RAG 固有の設定は `backend/.env`（`RAG_*`）に分けた。
+旧名は読まないため、この版へ更新する環境では次の手順で `.env` を移す。
+
+1. backend と ingestion-worker を停止する（Compute の stack では `sudo systemctl stop production-ready-rag.service`、
+   Docker Compose では `docker compose stop backend ingestion-worker`、ローカルでは uvicorn を止める）。
+2. 移行内容を確認する（書き換えない）。リポジトリ root で実行する。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_env_to_platform.py --product rag
+   ```
+
+   共通の変数（`OCI_*` / `ORACLE_*` / `OBJECT_STORAGE_*` / `UPLOAD_STORAGE_BACKEND` / `LOCAL_STORAGE_DIR` /
+   `MODEL_SETTINGS_FILE` / Enterprise AI・Generative AI のモデル設定）は `PLATFORM_*` に改名して `platform/.env` へ、
+   それ以外は `RAG_*` に改名して `backend/.env` に残る（`HF_TOKEN` / `HF_ENDPOINT` は `RAG_HUGGINGFACE_TOKEN` /
+   `RAG_HUGGINGFACE_ENDPOINT`）。共通 `.env` に別の値が既にある変数は競合として表示されるので、どちらを残すか確認する。
+3. 問題がなければ `--apply` を付けて書き換える（`<file>.bak-211` を作ってから書き換える）。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_env_to_platform.py --product rag --apply
+   ```
+
+4. Docker Compose で動かしている環境では、画面から保存したモデル設定とモデル・parser の API key が named volume
+   `backend-local-storage`（`/u01/data/production-ready-rag/model-settings.json` と同じディレクトリの `.env`）にある。
+   `model-settings.json` を `platform/` へ、`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`（旧 `OCI_ENTERPRISE_AI_API_KEY`）を
+   `platform/.env` へ、`RAG_PARSER_*_API_KEY` を `backend/.env` へ移す（またはシステム設定画面で入力し直す）。
+
+   ```bash
+   docker compose cp backend:/u01/data/production-ready-rag/model-settings.json ../platform/model-settings.json
+   docker compose run --rm --no-deps -T --entrypoint cat backend /u01/data/production-ready-rag/.env   # key を確認して移す
+   ```
+
+5. 再配備または再起動する。Compute の stack では更新した `rag/` を取得したうえで、共通 `.env` を container の
+   `appuser` が読み書きできるようにしてから起動する（`init_script.sh` の `prepare_container_permissions` と同じ）。
+
+   ```bash
+   sudo chown "$(sudo /usr/local/bin/rag-compose run --rm --no-deps -T --entrypoint id backend -u)" \
+       /u01/aipoc/no.1-production-ready-suite/platform /u01/aipoc/no.1-production-ready-suite/platform/.env
+   sudo /usr/local/bin/rag-compose build backend ingestion-worker
+   sudo systemctl restart production-ready-rag.service
+   ```
+
+   Docker Compose では `docker compose up -d --build`、ローカルでは uvicorn を起動し直す。
+6. `/api/ready` がすべて `ok` になること、システム設定画面（OCI 認証・アップロード保存先・モデル・データベース）に
+   移行前の値が表示されることを確認する。確認後に `*.bak-211` を削除する。
 
 ## 本番構成
 
@@ -69,9 +136,9 @@ ADB（Oracle 26ai）と Wallet も stack が用意し、RAG の system schema �
 - DB: Oracle 26ai。RAG チャンクは `VECTOR(1536, FLOAT32)`。
 - LLM/VLM: OCI Enterprise AI。
 - Embedding/Rerank: OCI Generative AI。
-- Observability: Prometheus、OpenTelemetry、Langfuse gateway。`TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、脱機密化済み RAG span event を非同期 HTTP JSON で転送する。
-- Secret: `.env` から環境変数として注入。
-- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。`X-Tenant-ID` / `X-User-ID` は raw 値を保存せず hash 化し、`AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
+- Observability: Prometheus、OpenTelemetry、Langfuse gateway。`RAG_TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、脱機密化済み RAG span event を非同期 HTTP JSON で転送する。
+- Secret: 共通 `.env`（`platform/.env`、`PLATFORM_*`）と `backend/.env`（`RAG_*`）から読み込む。
+- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。`X-Tenant-ID` / `X-User-ID` は raw 値を保存せず hash 化し、`RAG_AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
 
 backend container は production entrypoint として Gunicorn + `uvicorn.workers.UvicornWorker` を使う。worker 数と timeout は `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、listen port は `PORT` で調整する。local 開発だけ `uvicorn app.main:app --reload` を使い、本番では `/api/ready` と golden set gate で昇格判定する。
 
@@ -193,11 +260,11 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_SEARCH_TIMEOUT_SECONDS`: `/api/search` と `/api/search/stream` の pipeline timeout。OCI / Oracle の p95 latency と worker 数に合わせる。
 - `RAG_STREAM_REALTIME_ENABLED`: 廃止予定の互換設定。値にかかわらず回答の完全生成、PII マスク、groundedness、回答検査が終わるまで SSE `delta` は送信しない。次リリースで削除する。
-- `OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
-- `ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
-- `OCI_ENTERPRISE_AI_ENDPOINT` / `OCI_ENTERPRISE_AI_LLM_PATH` / `OCI_ENTERPRISE_AI_VLM_PATH`: OCI Enterprise AI の OpenAI-compatible gateway endpoint と LLM/VLM path。Enterprise AI は `OCI_ENTERPRISE_AI_API_KEY` による Bearer 認証で呼び出し、staging smoke で VLM/LLM 契約を確認する。Enterprise AI の model deployment / gateway response は `prediction(s)`、`output(s)`、`inference_response`、OpenAI 風 `choices`、JSON 文字列 envelope を正規化してから Pydantic schema / text 抽出へ進める。
-- `OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
-- `OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` / `OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS`: OpenAI-compatible Responses payload の `max_output_tokens`。既定値は LLM 1200、VLM/OCR 65536。`status=incomplete` / `reason=max_output_tokens` は取込エラーとして利用者に返す。
+- `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
+- `RAG_ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
+- `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH`: OCI Enterprise AI の OpenAI-compatible gateway endpoint と LLM/VLM path。Enterprise AI は `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` による Bearer 認証で呼び出し、staging smoke で VLM/LLM 契約を確認する。Enterprise AI の model deployment / gateway response は `prediction(s)`、`output(s)`、`inference_response`、OpenAI 風 `choices`、JSON 文字列 envelope を正規化してから Pydantic schema / text 抽出へ進める。
+- `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
+- `PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS`: OpenAI-compatible Responses payload の `max_output_tokens`。既定値は LLM 1200、VLM/OCR 65536。`status=incomplete` / `reason=max_output_tokens` は取込エラーとして利用者に返す。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS`: PDF 取込時に元 PDF を page segment へ分けて VLM へ送る。既定は有効、10 ページ/segment、最大 300 segment。segment が `max_output_tokens` で途切れた場合は単ページに分割して再試行する。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `marker` → `unstructured`、画像は `unstructured` → `marker` → `docling`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `marker` / `unstructured` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle 26ai、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
 - `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_MARKER_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Marker / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、標準 backend image と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `marker-pdf[full]==1.10.2` / `unstructured[all-docs]==0.23.1`)で固定する。`marker-pdf==1.10.2` の `pillow<11.0.0` と `unstructured` の `pi-heif>=1.2.0`(`pillow>=11.1.0`)は共存不可で、これがサービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `GET /api/settings/parser-adapters/contract` で確認し、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
@@ -215,20 +282,20 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `rag-file-processing-staging` の promotion gate は、実測 metrics の合否に加えて中核閾値の弱体化も検査する。`table_qa_accuracy`、`page_hit_accuracy`、`retrieval_recall`、bbox / section / dependency / parser fallback 系の閾値が基準より緩い場合は `promotion_threshold_too_loose` で昇格を止める。
 - `rag-file-processing-staging` の metrics は staging gate の実測値に加えて、local contract で証明済みの `parser_routing_accuracy`、`parser_warning_taxonomy_coverage`、`reading_order_consistency`、`table_structure_fidelity`、`visual_chunk_metadata_completeness` などを同じ artifact に統合する。これにより OCI / Oracle が必要な gate と local parser/chunker で十分検証できる gate を分離しつつ、promotion 判定は 1 つの metrics payload で完結する。
 - file-processing staging の通常実行 payload には `chunk_template_scorecard` も含まれる。manifest の `expected_chunk_template` と staging/golden metrics を使い、`pdf_layout` / `office_slide` / `office_sheet` / `markdown_by_heading` / `html_semantic` / `email_thread` / `table_preserve_rows` / `ocr_page` などの template 健康度を評価する。`chunk_block_integrity`、`chunk_contextual_coherence`、`chunk_size_compliance` などの core 指標が低い場合は `chunk_template_scorecard_blocked` を promotion blocker として返す。さらに template ごとの expected / measured case count、covered / missing source kinds、covered / missing scenarios を artifact に残し、ある template の未測定を別 template の良好な aggregate 指標で隠さない。
-- `INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `INGESTION_QUEUE_WORKER_CONCURRENCY` / `INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にでき、worker は終了時に cancel 済み job を `SUCCEEDED` / `FAILED` で上書きしない。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。
-- `INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一コンテナでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセス/別コンテナへ切り出す場合は `uv run --no-sync python -m app.rag.ingestion_worker` を別途起動する(docker-compose の `ingestion-worker` service)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、`replicas` を増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
-- `OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。
-- `OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。
+- `RAG_INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `RAG_INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` / `RAG_INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にでき、worker は終了時に cancel 済み job を `SUCCEEDED` / `FAILED` で上書きしない。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。
+- `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一コンテナでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセス/別コンテナへ切り出す場合は `uv run --no-sync python -m app.rag.ingestion_worker` を別途起動する(docker-compose の `ingestion-worker` service)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、`replicas` を増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
+- `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。
+- `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。
 - `WEB_CONCURRENCY`: backend container の Gunicorn worker 数。OKE / Container Instances の CPU 割当、OCI / Oracle の p95 latency、同時実行数から決める。
 - `GUNICORN_TIMEOUT` / `GUNICORN_GRACEFUL_TIMEOUT` / `GUNICORN_KEEP_ALIVE`: worker timeout、停止猶予、keep-alive 秒数。`RAG_SEARCH_TIMEOUT_SECONDS` より短くしない。
-- `TRACE_EXPORT_HTTP_ENDPOINT`: 空なら構造化ログ + Prometheus のみ。設定時は `rag.trace_span` event を OpenTelemetry / Langfuse gateway へ非同期 POST する。query 本文、context 本文、OCR 原文、prompt、例外 message は送らない。
-- `TRACE_EXPORT_HTTP_BEARER_TOKEN` / `TRACE_EXPORT_TIMEOUT_SECONDS` / `TRACE_EXPORT_QUEUE_SIZE`: trace export の認証、送信 timeout、queue 上限。queue full や送信失敗は `rag_trace_export_dropped` / `rag_trace_export_failed` として記録し、RAG request は失敗させない。
-- `GUARDRAIL_MAX_QUERY_CHARS`: UI 側の入力制限と合わせる。
-- `RATE_LIMIT_ENABLED`: 高コスト API の app 内 limiter。外部 API Gateway / Ingress limiter と併用できる。
-- `RATE_LIMIT_WINDOW_SECONDS`: fixed-window limiter の窓幅。
-- `RATE_LIMIT_SEARCH_REQUESTS` / `RATE_LIMIT_EVALUATION_RUNS` / `RATE_LIMIT_UPLOADS` / `RATE_LIMIT_INGEST_REQUESTS`: tenant/user hash 単位の窓内上限。OCI / Oracle / LLM の quota と業務ピークに合わせて調整する。
+- `RAG_TRACE_EXPORT_HTTP_ENDPOINT`: 空なら構造化ログ + Prometheus のみ。設定時は `rag.trace_span` event を OpenTelemetry / Langfuse gateway へ非同期 POST する。query 本文、context 本文、OCR 原文、prompt、例外 message は送らない。
+- `RAG_TRACE_EXPORT_HTTP_BEARER_TOKEN` / `RAG_TRACE_EXPORT_TIMEOUT_SECONDS` / `RAG_TRACE_EXPORT_QUEUE_SIZE`: trace export の認証、送信 timeout、queue 上限。queue full や送信失敗は `rag_trace_export_dropped` / `rag_trace_export_failed` として記録し、RAG request は失敗させない。
+- `RAG_GUARDRAIL_MAX_QUERY_CHARS`: UI 側の入力制限と合わせる。
+- `RAG_RATE_LIMIT_ENABLED`: 高コスト API の app 内 limiter。外部 API Gateway / Ingress limiter と併用できる。
+- `RAG_RATE_LIMIT_WINDOW_SECONDS`: fixed-window limiter の窓幅。
+- `RAG_RATE_LIMIT_SEARCH_REQUESTS` / `RAG_RATE_LIMIT_EVALUATION_RUNS` / `RAG_RATE_LIMIT_UPLOADS` / `RAG_RATE_LIMIT_INGEST_REQUESTS`: tenant/user hash 単位の窓内上限。OCI / Oracle / LLM の quota と業務ピークに合わせて調整する。
 - `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: 認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
-- `GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS`: query / answer 内の個人番号、口座番号、電話番号、メールアドレスらしき値を `[機微情報]` にマスクする。外部 DLP と責務分担する場合だけ無効化を検討する。
+- `RAG_GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS`: query / answer 内の個人番号、口座番号、電話番号、メールアドレスらしき値を `[機微情報]` にマスクする。外部 DLP と責務分担する場合だけ無効化を検討する。
 
 安全チェックを含むリリースは、コード展開後に `uv run python -m app.rag.chat_history_sanitization --dry-run --format json` を実行し、Oracle バックアップを取得してから `--apply` する。適用後は `rag_guardrail_findings_total` の `guardrail_backend_unavailable` / `prompt_injection` / `low_groundedness` と阻止率を監視する。CLI は冪等で、原文の別バックアップをアプリ DB 内には作成しない。
 
@@ -241,11 +308,11 @@ uv run python -m app.rag.file_processing_staging_cli \
    `prompt-versions.json` の import 対象を確認し、問題がなければ同コマンドへ `--apply` を付ける。
    apply は version ID 単位で冪等で、Oracle に `GLOBAL` 行が既にある場合はその profile / active
    pointer を上書きしない。旧ファイルは 1 バージョン周期残すが、新 backend は読み書きしない。
-2. `ObjectStorageClient` の OCI Object Storage SDK 実装を有効化する。`OBJECT_STORAGE_REGION` / `OBJECT_STORAGE_NAMESPACE` / `OBJECT_STORAGE_BUCKET` を設定し、保存 URI が `oci://namespace/bucket/key` になり、取得時に namespace / bucket 不一致を拒否することを staging で確認する。取込前に Object Storage から取得した bytes が document table の `file_size_bytes` / `content_sha256` と一致することも確認する。
-3. `OracleClient` の python-oracledb pool、vector search、keyword search、document/chunk persistence、隣接 context 取得を有効化する。`ORACLE_USER` / `ORACLE_DSN` / `ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に配置した wallet を設定する。`INGESTING` / `ERROR` への状態遷移では該当 document の chunk/index 行と古い抽出結果を削除し、検索対象は `INDEXED` に限定する。staging では `VECTOR_DISTANCE`、`FETCH APPROX ... WITH TARGET ACCURACY`、Oracle Text `CONTAINS`、document 別 chunk count、`chunk_index` window による同一 document 前後 chunk 取得、`INDEXED` 文書が hybrid search の citation に含まれることを確認する。
-4. `OciGenAiClient` の embedding / rerank は OCI Generative AI Inference SDK 実装を使う。staging では `OCI_CONFIG_FILE` / profile / region / compartment / model id、Cohere Embed v4 の 1536 次元、Cohere Rerank v4 fast の返却件数・候補 index 範囲・index 重複なし・finite score を確認する。
-5. `OciEnterpriseAiClient` は `OCI_ENTERPRISE_AI_ENDPOINT`、`OCI_ENTERPRISE_AI_API_KEY`、`OCI_ENTERPRISE_AI_LLM_MODEL`、`OCI_ENTERPRISE_AI_VLM_MODEL`、`OCI_ENTERPRISE_AI_LLM_PATH`、`OCI_ENTERPRISE_AI_VLM_PATH` を使って Enterprise AI endpoint を呼び出す。標準 payload で合わない model deployment / gateway は `OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で request shape を差し替え、response envelope が独自の場合は `OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` で候補 node を指定する。staging ではまず `uv run python -m app.rag.enterprise_ai_probe --surface both --dry-run` で URL、template 使用有無、response path 使用有無、payload key / shape、JSON byte 数を確認し、その後 `uv run python -m app.rag.enterprise_ai_probe --surface both` で LLM/VLM を直接呼び出す。probe は回答本文や OCR 本文を出さず、text 文字数・element 件数だけを artifact に残す。ここで Bearer 認証、timeout/retry、VLM の MIME type / 構造化抽出 JSON schema、LLM の citation-grounded 生成 payload、response parsing を実 endpoint で確認する。VLM response は `StructuredExtraction` へ検証し、LLM response は空 text を fail fast する。
-6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `ORACLE_USER` / `ORACLE_DSN` に加えて `ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet が必要。
-7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
+2. `ObjectStorageClient` の OCI Object Storage SDK 実装を有効化する。`PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_NAMESPACE` / `PLATFORM_OBJECT_STORAGE_BUCKET` を設定し、保存 URI が `oci://namespace/bucket/key` になり、取得時に namespace / bucket 不一致を拒否することを staging で確認する。取込前に Object Storage から取得した bytes が document table の `file_size_bytes` / `content_sha256` と一致することも確認する。
+3. `OracleClient` の python-oracledb pool、vector search、keyword search、document/chunk persistence、隣接 context 取得を有効化する。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` / `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin` に配置した wallet を設定する。`INGESTING` / `ERROR` への状態遷移では該当 document の chunk/index 行と古い抽出結果を削除し、検索対象は `INDEXED` に限定する。staging では `VECTOR_DISTANCE`、`FETCH APPROX ... WITH TARGET ACCURACY`、Oracle Text `CONTAINS`、document 別 chunk count、`chunk_index` window による同一 document 前後 chunk 取得、`INDEXED` 文書が hybrid search の citation に含まれることを確認する。
+4. `OciGenAiClient` の embedding / rerank は OCI Generative AI Inference SDK 実装を使う。staging では `PLATFORM_OCI_CONFIG_FILE` / profile / region / compartment / model id、Cohere Embed v4 の 1536 次元、Cohere Rerank v4 fast の返却件数・候補 index 範囲・index 重複なし・finite score を確認する。
+5. `OciEnterpriseAiClient` は `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`、`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、`PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL`、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH` を使って Enterprise AI endpoint を呼び出す。標準 payload で合わない model deployment / gateway は `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で request shape を差し替え、response envelope が独自の場合は `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` で候補 node を指定する。staging ではまず `uv run python -m app.rag.enterprise_ai_probe --surface both --dry-run` で URL、template 使用有無、response path 使用有無、payload key / shape、JSON byte 数を確認し、その後 `uv run python -m app.rag.enterprise_ai_probe --surface both` で LLM/VLM を直接呼び出す。probe は回答本文や OCR 本文を出さず、text 文字数・element 件数だけを artifact に残す。ここで Bearer 認証、timeout/retry、VLM の MIME type / 構造化抽出 JSON schema、LLM の citation-grounded 生成 payload、response parsing を実 endpoint で確認する。VLM response は `StructuredExtraction` へ検証し、LLM response は空 text を fail fast する。
+6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `RAG_ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加えて `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet が必要。
+7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`PLATFORM_UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
 8. preflight が `ok=true` なら `uv run python -m app.rag.staging_smoke` を実行する。Object Storage put/get、Oracle document 作成、Enterprise AI VLM、chunking、embedding、Oracle indexing、hybrid search、Enterprise AI LLM 生成を 1 回通し、作成した smoke document が citation に含まれることを確認する。既定 query は一意な `SMOKE-...` marker の原文引用を要求し、検索は新規 `document_id` に限定される。既定 query では LLM 回答にも marker が含まれない場合に `stage=rag_answer_marker` で失敗する。JSON 出力の `ok`、`marker`、`query`、`answer_contains_marker`、`trace_id`、`chunk_count`、`citation_count`、`cleanup`、`diagnostics.oracle_vector_target_accuracy`、必要に応じて `diagnostics.context_diversified_count` / `diagnostics.context_group_expanded_count` / `diagnostics.context_expanded_count` / `diagnostics.context_compressed_count` / `diagnostics.context_compression_saved_chars` を保存し、staging gate の artifact にする。既定では evidence として作成物を保持し、`cleanup` は `skipped` になる。DB/Object Storage を汚したくない一時確認では `uv run python -m app.rag.staging_smoke --cleanup` を使い、成功・失敗どちらでも作成済み Oracle document/chunk と Object Storage object の削除 status を確認する。失敗時は preflight の `checks` または本実行の `stage` / `cause_type` を見て、Object Storage、Oracle、VLM、embedding、retrieval、context diversity、context group expansion、context expansion、context compression、generation のどこで止まったかを切り分ける。query を変える場合は `--query "確認用キーワード {marker} を要約してください"` のように `{marker}` placeholder を残す。
 9. golden set 評価と負荷試験を通してから production へ昇格する。

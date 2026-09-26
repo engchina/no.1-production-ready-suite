@@ -111,8 +111,11 @@ Pydantic input schema、ToolPolicy、PII/secret masking、audit metadata を再�
 
 認証 token は次の順で解決する。
 
-1. `CONTROL_PLANE_MCP_TOKEN_<NORMALIZED_BINDING_ID>`
+1. `AGENT_BINDING_MCP_TOKEN_<NORMALIZED_BINDING_ID>`（Binding ID の英数字以外を `_` にして大文字化）
 2. `AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET` から HMAC-SHA256 派生
+
+Runtime へ同期する MCP server 定義の `api_key_env` にも 1 の名前を渡す。
+#211 で旧名 `CONTROL_PLANE_MCP_TOKEN_<ID>` は読まなくなった。
 
 token が無い場合は fail closed (`503`)。値を Binding JSON、snapshot、API に保存しない。
 

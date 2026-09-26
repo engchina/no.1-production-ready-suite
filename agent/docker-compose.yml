@@ -1,6 +1,14 @@
 name: production-ready-agent-control-plane
 
+# 設定ファイル（#211）
+# - 3製品共通の設定（PLATFORM_*）は monorepo の `platform/.env`。システム設定画面の保存先でもあるため、
+#   env_file では渡さず（環境変数が `.env` より優先され、画面で保存した値が反映されなくなる）、
+#   `platform/` を書き込み可能でマウントして PLATFORM_ENV_FILE で場所を指定する。
+#   画面から保存する model-settings.json も同じディレクトリに置かれる。
+# - Agent 固有の設定（AGENT_*）は `backend/.env`。画面からは書かないので env_file で渡す。
+# - この compose の `.env`（`.env.runtime.example` から作る）は下の ${...} の補間にだけ使う。
 x-control-plane-environment: &control-plane-environment
+  PLATFORM_ENV_FILE: /app/platform/.env
   AGENT_RUNTIME_REPOSITORY_BACKEND: ${AGENT_RUNTIME_REPOSITORY_BACKEND:-memory}
   AGENT_RUNTIME_DISPATCH_MODE: ${AGENT_RUNTIME_DISPATCH_MODE:-in_process}
   AGENT_RUNTIME_BINDINGS_DIR: /var/lib/control-plane/bindings
@@ -10,9 +18,14 @@ x-control-plane-environment: &control-plane-environment
   AGENT_RUNTIME_ORACLE_DSN: ${AGENT_RUNTIME_ORACLE_DSN:-}
   AGENT_RUNTIME_ORACLE_USER: ${AGENT_RUNTIME_ORACLE_USER:-}
   AGENT_RUNTIME_ORACLE_PASSWORD: ${AGENT_RUNTIME_ORACLE_PASSWORD:-}
-  OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-  HERMES_API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-}
-  DEER_FLOW_INTERNAL_AUTH_TOKEN: ${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+  # Runtime API 認証。Runtime 定義の auth_secret_ref はこの環境変数名を参照する。
+  AGENT_OPENCLAW_GATEWAY_TOKEN: ${AGENT_OPENCLAW_GATEWAY_TOKEN:-}
+  AGENT_HERMES_API_SERVER_KEY: ${AGENT_HERMES_API_SERVER_KEY:-}
+  AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN: ${AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+
+x-control-plane-env-file: &control-plane-env-file
+  - path: ./backend/.env
+    required: false
 
 services:
   control-plane:
@@ -21,11 +34,13 @@ services:
       dockerfile: agent/backend/Dockerfile
     image: production-ready-agent-control-plane:local
     restart: unless-stopped
+    env_file: *control-plane-env-file
     environment: *control-plane-environment
     ports:
       - "${CONTROL_PLANE_PORT:-8000}:8000"
     volumes:
       - control-plane-state:/var/lib/control-plane
+      - ../platform:/app/platform
     networks:
       - control-plane-internal
       - runtime-egress
@@ -47,11 +62,13 @@ services:
     image: production-ready-agent-control-plane:local
     restart: unless-stopped
     command: ["python", "-m", "app.features.agent.runtime_dispatcher"]
+    env_file: *control-plane-env-file
     environment:
       <<: *control-plane-environment
       AGENT_RUNTIME_DISPATCH_MODE: external
     volumes:
       - control-plane-state:/var/lib/control-plane
+      - ../platform:/app/platform
     networks:
       - control-plane-internal
       - runtime-egress
@@ -73,7 +90,8 @@ services:
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      # OpenClaw が期待する名前へ、Agent の AGENT_OPENCLAW_GATEWAY_TOKEN を渡す。
+      OPENCLAW_GATEWAY_TOKEN: ${AGENT_OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "${OPENCLAW_PORT:-18789}:18789"
@@ -105,7 +123,8 @@ services:
     command: ["gateway", "run"]
     environment:
       API_SERVER_HOST: 0.0.0.0
-      API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-}
+      # Hermes が期待する名前へ、Agent の AGENT_HERMES_API_SERVER_KEY を渡す。
+      API_SERVER_KEY: ${AGENT_HERMES_API_SERVER_KEY:-}
     ports:
       - "${HERMES_PORT:-8642}:8642"
     volumes:
@@ -132,7 +151,8 @@ services:
     image: ghcr.io/bytedance/deer-flow@sha256:bd3e961b52095a1cb92762458725c2c49f85a2385b4705b43674d32c9db1fa8a
     restart: unless-stopped
     environment:
-      DEER_FLOW_INTERNAL_AUTH_TOKEN: ${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+      # DeerFlow が期待する名前へ、Agent の AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN を渡す。
+      DEER_FLOW_INTERNAL_AUTH_TOKEN: ${AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
     ports:
       - "${DEERFLOW_PORT:-2026}:2026"
     volumes:

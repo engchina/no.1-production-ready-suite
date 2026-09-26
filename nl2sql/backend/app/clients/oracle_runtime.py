@@ -42,7 +42,9 @@ class OraclePoolManager:
             self.settings.oracle_deepsec_enabled
             and not self.settings.oracle_deepsec_data_user_password
         ):
-            raise OracleAdapterError("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
+            raise OracleAdapterError(
+                "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。"
+            )
 
     def validate_deepsec_control_configuration(self) -> None:
         """DeepSec 管理 DDL 用の control-plane 設定を検証する。"""
@@ -52,7 +54,9 @@ class OraclePoolManager:
         """保存済み DATA USER 認証情報で direct logon できることだけを検証する。"""
         ensure_deepsec_thin_mode(self.settings)
         if not self.settings.oracle_deepsec_data_user_password:
-            raise OracleAdapterError("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
+            raise OracleAdapterError(
+                "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。"
+            )
         connection: Any | None = None
         pool: Any | None = None
         try:

@@ -49,8 +49,9 @@ def _warn_pending_legacy_local_storage_dir(settings: Settings) -> None:
             "legacy_local_storage_dir": legacy_dir,
             "local_storage_dir": settings.local_storage_dir,
             "advice": (
-                "files are not moved automatically; copy legacy files into LOCAL_STORAGE_DIR "
-                "(see docs/deployment.md) or set LOCAL_STORAGE_DIR to the legacy path"
+                "files are not moved automatically; copy legacy files into "
+                "PLATFORM_LOCAL_STORAGE_DIR "
+                "(see docs/deployment.md) or set PLATFORM_LOCAL_STORAGE_DIR to the legacy path"
             ),
         },
     )

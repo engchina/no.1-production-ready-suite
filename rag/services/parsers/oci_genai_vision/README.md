@@ -8,19 +8,19 @@ OCI Generative AI (Vision) を呼ぶ parser マイクロサービス(OCI クラ�
   3 つの `vlm_input_mode` auto/files_api/inline_image)を Vision モデルで呼び、
   `StructuredExtraction`(ParseResponse)で返す。
 - `GET /health` は OCI 設定の充足(endpoint / api_key / vision model)で ok/degraded。
-- **OCI 認証はメインプロジェクト設定を継承**: docker-compose で `backend/.env` と `~/.oci`
-  マウント、`OCI_CONFIG_FILE` を受け取る(個別設定なし)。`--profile oci` で opt-in。
+- **OCI 認証はメインプロジェクト設定を継承**: docker-compose で共通 `platform/.env`・`backend/.env` と `~/.oci`
+  マウント、`PLATFORM_OCI_CONFIG_FILE` を受け取る(個別設定なし)。`--profile oci` で opt-in。
 - OCI Generative AI は **OpenAI 互換の API キー認証(httpx)** のため oci 署名 SDK は不要。
 - 未設定/失敗時は extraction=None を返し、backend 側で既存 in-process VLM(PDF 分割込み)/
   ローカルフローへ安全に縮退する。PDF 分割・checkpoint は backend(DB 結合)側に残る。
 
 ## 環境変数(backend と同じキーを継承)
 
-`OCI_ENTERPRISE_AI_ENDPOINT` / `OCI_ENTERPRISE_AI_API_KEY` / `OCI_ENTERPRISE_AI_PROJECT_OCID` /
-`OCI_COMPARTMENT_ID`、`OCI_ENTERPRISE_AI_VLM_MODEL`(vision model) /
-`OCI_ENTERPRISE_AI_DEFAULT_MODEL`、`OCI_ENTERPRISE_AI_VLM_PATH` / `_VLM_RESPONSE_PATH` /
+`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` / `PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID` /
+`PLATFORM_OCI_COMPARTMENT_ID`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL`(vision model) /
+`PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH` / `_VLM_RESPONSE_PATH` /
 `_VLM_PAYLOAD_TEMPLATE` / `_VLM_INPUT_MODE` / `_VLM_MAX_OUTPUT_TOKENS`、
-`OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` / `_MAX_RETRIES`。
+`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` / `_MAX_RETRIES`。
 
 ## ローカル実行
 

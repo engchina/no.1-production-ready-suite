@@ -65,7 +65,7 @@ class ServiceCatalogData(BaseModel):
         description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
     )
     deployment_mode: DeploymentMode = Field(
-        description="dev は uv プロセス起動、prod は docker compose 制御。ENVIRONMENT 由来。",
+        description="dev は uv プロセス起動、prod は docker compose 制御。RAG_ENVIRONMENT 由来。",
     )
     services: list[ServiceCatalogItemData] = Field(default_factory=list)
 
@@ -77,7 +77,7 @@ class ServiceListData(BaseModel):
         description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
     )
     deployment_mode: DeploymentMode = Field(
-        description="dev は uv プロセス起動、prod は docker compose 制御。ENVIRONMENT 由来。",
+        description="dev は uv プロセス起動、prod は docker compose 制御。RAG_ENVIRONMENT 由来。",
     )
     services: list[ServiceStatusData] = Field(default_factory=list)
 

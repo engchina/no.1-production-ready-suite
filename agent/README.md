@@ -39,7 +39,21 @@ no.1-production-ready-suite/
   agent/
 ```
 
+### 設定ファイル（#211）
+
+| ファイル | 内容 | 雛形 |
+|---|---|---|
+| `../platform/.env` | 3製品共通の設定（`PLATFORM_*`）。OCI 認証・アップロード保存先・モデル・データベース。システム設定画面の保存先 | [`../platform/.env.example`](../platform/.env.example) |
+| `backend/.env` | Agent 固有の設定（`AGENT_*`） | [`backend/.env.example`](backend/.env.example) |
+| `../platform/model-settings.json` | モデル設定（画面から保存。3製品で共有） | — |
+
+backend は共通 `.env` → `backend/.env` の順に読み、環境変数が最優先です。共通 `.env` の場所は
+`PLATFORM_ENV_FILE` で変えられます。接頭辞のない旧名（`ORACLE_DSN` / `LOG_LEVEL` など）は読みません。
+
 ```bash
+cp ../platform/.env.example ../platform/.env   # 共通（RAG / NL2SQL と同じファイル）
+cp backend/.env.example backend/.env
+
 # backend
 cd backend
 uv sync
@@ -66,7 +80,19 @@ scripts/check-all.sh
 
 Runtime は必要な profile だけ起動します。Docker socket は mount されません。
 
+設定は次の 3 つです（#211）。
+
+- `../platform/.env`（3製品共通の `PLATFORM_*`）: `../platform/` を書き込み可能で `/app/platform` にマウントし、
+  `PLATFORM_ENV_FILE=/app/platform/.env` で読みます。システム設定画面の保存先なので env_file では渡しません
+  （環境変数は `.env` より優先されるため、画面で保存した値が反映されなくなります）。
+- `backend/.env`（Agent 固有の `AGENT_*`）: `env_file` で渡します（無くても起動します）。
+- `agent/.env`（`.env.runtime.example` から作る）: compose の `${...}` 補間用です。ここに書いた値は
+  `backend/.env` より優先されます。Runtime API の認証値は `AGENT_OPENCLAW_GATEWAY_TOKEN` /
+  `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` に書き、compose が各 Runtime の
+  期待する名前（`OPENCLAW_GATEWAY_TOKEN` / `API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN`）へ渡します。
+
 ```bash
+cp ../platform/.env.example ../platform/.env
 cp .env.runtime.example .env
 docker compose up -d control-plane
 docker compose --profile openclaw up -d runtime-openclaw
@@ -83,6 +109,41 @@ docker compose --profile dispatcher up -d control-plane runtime-dispatcher
 
 公式 Runtime image は `docker-compose.yml` で `@sha256` 固定しています。更新時は公式 release と
 manifest を検証して digest を明示更新してください。
+
+## 既存環境の更新手順（#211）
+
+#211 で設定を共通 `.env`（`platform/.env`、`PLATFORM_*`）と Agent の `backend/.env`（`AGENT_*`）に分けました。
+旧名は読まないため、既存環境では更新後に 1 回だけ次を行います。
+
+1. backend（systemd の `production-ready-agent-backend` または compose の `control-plane` / `runtime-dispatcher`）を停止する。
+2. 移行内容を確認する（書き換えない）。monorepo root で実行します。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_env_to_platform.py --product agent
+   ```
+
+3. 内容に問題がなければ `--apply` で書き換える（`<file>.bak-211` を作ります）。共通の変数は `platform/.env` へ移り、
+   残りは `AGENT_` 接頭辞になります。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_env_to_platform.py --product agent --apply
+   ```
+
+4. スクリプトが扱わないものを手で直す。
+   - compose の `agent/.env`: `OPENCLAW_GATEWAY_TOKEN` / `HERMES_API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN` を
+     `AGENT_OPENCLAW_GATEWAY_TOKEN` / `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` へ改名する。
+   - Binding 個別の MCP token（`CONTROL_PLANE_MCP_TOKEN_<BINDING_ID>`）を `AGENT_BINDING_MCP_TOKEN_<BINDING_ID>` へ改名する
+     （移行スクリプトは `AGENT_CONTROL_PLANE_MCP_TOKEN_<BINDING_ID>` にするため、その名前からも改名する）。
+     Runtime 側で `api_key_env` を固定で設定している場合は、Binding を再同期する。
+   - 既存の Runtime 定義（snapshot や Oracle に保存済み）の `auth_secret_ref` が旧名（`OPENCLAW_GATEWAY_TOKEN` など）の
+     場合は、Runtime 画面または `PATCH /api/runtimes/{id}` で新名へ変更する。
+5. 再配備または再起動する。
+   - Resource Manager の stack で配備した instance: 手順 1〜4 を instance 上の
+     `/u01/aipoc/no.1-production-ready-suite` で（`git pull` と `agent/backend` の `uv sync --locked --no-dev` の後に）
+     行い、`sudo systemctl restart production-ready-agent-backend` を実行する。新しく配備する stack は最初から新構成で作られる。
+   - Docker Compose: `docker compose up -d control-plane`（dispatcher を使う場合は `--profile dispatcher` も）で作り直す。
 
 ## OCI への配備（Resource Manager）
 

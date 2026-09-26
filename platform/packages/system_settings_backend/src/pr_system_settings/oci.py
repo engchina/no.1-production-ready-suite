@@ -1,7 +1,8 @@
 """OCI 認証の設定 API（3製品共通。NL2SQL の実装を基準に移設。#100）。
 
 - `~/.oci/config` の読込 / 書込（既存の profile と権限を保つ）、秘密鍵 PEM の配置
-- `.env` への保存（`OCI_CONFIG_FILE` / `OCI_CONFIG_PROFILE` / `OCI_REGION`、
+- 共通 `.env` への保存（`PLATFORM_OCI_CONFIG_FILE` / `PLATFORM_OCI_CONFIG_PROFILE` /
+  `PLATFORM_OCI_REGION`、
   Object Storage の region / namespace）
 - 段階的な接続テスト（形式 → 鍵 → リージョン到達 → 認証）と Object Storage namespace の取得
 
@@ -903,38 +904,38 @@ def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) ->
 
 
 def _persist_oci_settings(settings: Any, payload: OciSettingsUpdate, env_file: Path) -> None:
-    """OCI 共通設定を backend/.env へ永続化する。"""
+    """OCI 共通設定を platform/.env へ永続化する。"""
     try:
         write_env_values(
             env_file,
             {
-                "OCI_CONFIG_FILE": _oci_config_file(settings),
-                "OCI_CONFIG_PROFILE": _oci_profile(settings),
-                "OCI_REGION": payload.region.strip() or None,
+                "PLATFORM_OCI_CONFIG_FILE": _oci_config_file(settings),
+                "PLATFORM_OCI_CONFIG_PROFILE": _oci_profile(settings),
+                "PLATFORM_OCI_REGION": payload.region.strip() or None,
             },
             section_comment="# OCI 共通",
         )
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail="OCI 認証設定を backend/.env へ保存できませんでした。"
+            status_code=500, detail="OCI 認証設定を platform/.env へ保存できませんでした。"
         ) from exc
 
 
 def _persist_oci_object_storage_settings(settings: Any, env_file: Path) -> None:
-    """OCI Object Storage 共通設定を backend/.env へ永続化する。"""
+    """OCI Object Storage 共通設定を platform/.env へ永続化する。"""
     try:
         write_env_values(
             env_file,
             {
-                "OBJECT_STORAGE_REGION": settings.object_storage_region,
-                "OBJECT_STORAGE_NAMESPACE": settings.object_storage_namespace,
+                "PLATFORM_OBJECT_STORAGE_REGION": settings.object_storage_region,
+                "PLATFORM_OBJECT_STORAGE_NAMESPACE": settings.object_storage_namespace,
             },
             section_comment="# OCI Object Storage",
         )
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail="OCI Object Storage 設定を backend/.env へ保存できませんでした。",
+            detail="OCI Object Storage 設定を platform/.env へ保存できませんでした。",
         ) from exc
 
 

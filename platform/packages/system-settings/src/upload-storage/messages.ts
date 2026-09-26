@@ -8,7 +8,7 @@ export const UPLOAD_STORAGE_MESSAGES = {
   destinationDescription: "アップロードされた PDF、画像、テキスト原本をどこへ保管するかを設定します。",
   fieldBackend: "アップロード原本の保存先",
   backendLocal: "ローカルディレクトリ",
-  backendLocalDescription: "バックエンドが稼働する環境の LOCAL_STORAGE_DIR 配下へ保存します。",
+  backendLocalDescription: "バックエンドが稼働する環境の PLATFORM_LOCAL_STORAGE_DIR 配下へ保存します。",
   backendOci: "OCI Object Storage",
   backendOciDescription: "OCI 認証設定の namespace と指定 bucket へ保存します。",
   fieldLocalStorageDir: "ローカル保存ディレクトリ",

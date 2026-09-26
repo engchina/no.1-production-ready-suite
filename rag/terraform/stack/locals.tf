@@ -31,42 +31,47 @@ locals {
     var.enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],
   )
 
-  # rag/backend/.env（docker compose の env_file）。compose の env_file は `$` を展開するため、
-  # 入力値は single quote で囲んで文字どおりに渡す（入力の validation で single quote を禁止している）。
-  # ENVIRONMENT / LOCAL_STORAGE_DIR / MODEL_SETTINGS_FILE / OCI_CONFIG_FILE と service URL は
-  # docker-compose.yml の environment が正本のため、ここには書かない。
-  # AUTH_SESSION_SECRET / AUDIT_CONTEXT_HASH_SALT は instance 上で生成する（state に残さない）。
-  # RAG は python-oracledb Thin mode + Wallet(mTLS) で接続する（ORACLE_CLIENT_LIB_DIR は空）。
+  # rag/backend/.env（docker compose の env_file）は RAG 固有の設定（RAG_*）だけを持つ。
+  # 3製品共通の設定（PLATFORM_*）は platform_env（リポジトリの platform/.env）に分ける（#211）。
+  # compose の env_file は `$` を展開するため、入力値は single quote で囲んで文字どおりに渡す
+  # （入力の validation で single quote を禁止している）。python-dotenv も single quote の中を展開しない。
+  # RAG_ENVIRONMENT / PLATFORM_LOCAL_STORAGE_DIR / PLATFORM_OCI_CONFIG_FILE / PLATFORM_ENV_FILE と
+  # service URL は docker-compose.yml の environment が正本のため、ここには書かない。
+  # RAG_AUTH_SESSION_SECRET / RAG_AUDIT_CONTEXT_HASH_SALT は instance 上で生成する（state に残さない）。
   # ADB の DDL は Terraform に持たない。init_script.sh がアプリの system schema CLI で適用する。
   backend_env = <<-EOT
-APP_VERSION=0.1.0
-LOG_LEVEL=INFO
+RAG_APP_VERSION=0.1.0
+RAG_LOG_LEVEL=INFO
 
-AUTH_MODE=production
-AUTH_USERNAME='${var.app_login_user}'
-AUTH_PASSWORD='${var.app_login_password}'
-AUTH_SESSION_SECRET=
-AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
-AUDIT_CONTEXT_HASH_SALT=
-
-OCI_REGION=${var.region}
-OCI_COMPARTMENT_ID=${var.compartment_ocid}
-
-ORACLE_USER='${local.effective_oracle_user}'
-ORACLE_PASSWORD='${local.effective_oracle_password}'
-ORACLE_DSN='${local.effective_oracle_dsn}'
-ORACLE_CLIENT_LIB_DIR=
-ORACLE_WALLET_DIR=${local.wallet_dir_host}
-ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'
-ORACLE_ADB_OCID=${local.effective_adb_ocid}
-ORACLE_ADB_REGION=${var.region}
-
-UPLOAD_STORAGE_BACKEND=local
-OBJECT_STORAGE_REGION=${var.region}
+RAG_AUTH_MODE=production
+RAG_AUTH_USERNAME='${var.app_login_user}'
+RAG_AUTH_PASSWORD='${var.app_login_password}'
+RAG_AUTH_SESSION_SECRET=
+RAG_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}
+RAG_AUDIT_CONTEXT_HASH_SALT=
 
 RAG_PARSER_ADAPTER_BACKEND=unstructured
 RAG_PARSER_UNSTRUCTURED_ENABLED=true
 RAG_SERVICE_CONTROL_ENABLED=false
+EOT
+
+  # platform/.env（3製品共通の設定）。backend / ingestion-worker は PLATFORM_ENV_FILE で読み書きする。
+  # RAG は python-oracledb Thin mode + Wallet(mTLS) で接続する（PLATFORM_ORACLE_CLIENT_LIB_DIR は空）。
+  platform_env = <<-EOT
+PLATFORM_OCI_REGION=${var.region}
+PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}
+
+PLATFORM_ORACLE_USER='${local.effective_oracle_user}'
+PLATFORM_ORACLE_PASSWORD='${local.effective_oracle_password}'
+PLATFORM_ORACLE_DSN='${local.effective_oracle_dsn}'
+PLATFORM_ORACLE_CLIENT_LIB_DIR=
+PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}
+PLATFORM_ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'
+PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}
+PLATFORM_ORACLE_ADB_REGION=${var.region}
+
+PLATFORM_UPLOAD_STORAGE_BACKEND=local
+PLATFORM_OBJECT_STORAGE_REGION=${var.region}
 EOT
 
   cloud_init_rendered = templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
@@ -79,6 +84,7 @@ EOT
     compartment_ocid    = var.compartment_ocid
     compose_services    = join(" ", local.compose_services)
     db_dsn              = local.effective_oracle_dsn
+    platform_env        = base64gzip(local.platform_env)
     region              = var.region
     wallet_content      = data.external.wallet_files.result.wallet_content
     wallet_dir_host     = local.wallet_dir_host

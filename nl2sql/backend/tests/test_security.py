@@ -115,14 +115,15 @@ def _patch_app_admin_env(
     login_user_id: str = "system_admin",
     password: str = "AppAdminPass123",
 ) -> Path:
-    env_file = tmp_path / ".env"
+    """構成管理者の資格情報を置く共通 .env（platform/.env。#211）を差し替える。"""
+    env_file = tmp_path / "platform.env"
     env_file.write_text(
-        f"APP_ADMIN_LOGIN_USER_ID={login_user_id}\n"
-        f"APP_ADMIN_LOGIN_USER_PASSWORD={password}\n"
-        "APP_AUTH_ENABLED=true\n",
+        "PLATFORM_AUTH_COOKIE_SECURE=false\n"
+        f"PLATFORM_ADMIN_LOGIN_USER_ID={login_user_id}\n"
+        f"PLATFORM_ADMIN_LOGIN_USER_PASSWORD={password}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr("app.settings.PLATFORM_ENV_FILE", env_file)
     return env_file
 
 
@@ -601,49 +602,32 @@ def test_configured_system_admin_requires_fixed_login_user_id(
     assert "system_admin" in error.value.public_message
 
 
-def test_configured_system_admin_accepts_legacy_app_admin_password_key(
+def test_configured_system_admin_ignores_legacy_keys_and_product_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """旧キー APP_ADMIN_PASSWORD だけの既存 .env でもログインできる(後方互換)。"""
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "APP_ADMIN_LOGIN_USER_ID=system_admin\n"
-        "APP_ADMIN_PASSWORD=AppAdminPass123\n"
-        "APP_AUTH_ENABLED=true\n",
+    """旧キー（APP_ADMIN_*）と製品の backend/.env は読まない（#211。互換なし）。"""
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text(
+        "APP_ADMIN_LOGIN_USER_ID=system_admin\nAPP_ADMIN_PASSWORD=LegacyAdminPass123\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text(
+        "PLATFORM_ADMIN_LOGIN_USER_ID=system_admin\n"
+        "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=ProductEnvPass123\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.settings.PLATFORM_ENV_FILE", platform_env)
+    monkeypatch.setattr("app.settings.BACKEND_ENV_FILE", backend_env)
     service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
 
+    for password in ("LegacyAdminPass123", "ProductEnvPass123"):
+        with pytest.raises(LoginFailed):
+            service.login("system_admin", password)
+    # どちらにもなければ Settings（環境変数）の値を使う。
     principal, _token, _csrf = service.login("system_admin", "AppAdminPass123")
-
     assert principal.login_user_id == "system_admin"
-
-
-def test_configured_system_admin_password_change_migrates_legacy_key(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """password 変更時に旧キー行は除去され、新キーだけが残る。"""
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "APP_ADMIN_LOGIN_USER_ID=system_admin\n"
-        "APP_ADMIN_PASSWORD=AppAdminPass123\n"
-        "APP_AUTH_ENABLED=true\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("app.security.service._BACKEND_ENV_FILE", env_file)
-    service = SecurityService(cast(SecurityStore, _NoAuthTableStore()), _settings())
-    principal, _token, _csrf = service.login("system_admin", "AppAdminPass123")
-
-    service.change_password(principal, "AppAdminPass123", "UpdatedPass123A")
-
-    env_text = env_file.read_text(encoding="utf-8")
-    assert "APP_ADMIN_LOGIN_USER_PASSWORD=UpdatedPass123A" in env_text
-    assert "APP_ADMIN_PASSWORD=" not in env_text
-    relogged, _, _ = service.login("system_admin", "UpdatedPass123A")
-    assert relogged.login_user_id == "system_admin"
 
 
 def test_configured_system_admin_password_change_updates_env_without_auth_tables(
@@ -659,11 +643,11 @@ def test_configured_system_admin_password_change_updates_env_without_auth_tables
 
     assert changed.user_uuid == principal.user_uuid
     env_text = env_file.read_text(encoding="utf-8")
-    assert "APP_ADMIN_LOGIN_USER_ID=system_admin" in env_text
-    assert "APP_ADMIN_LOGIN_USER_PASSWORD=UpdatedPass123A" in env_text
-    assert env_text.index("APP_ADMIN_LOGIN_USER_ID=system_admin") < env_text.index(
-        "APP_AUTH_ENABLED=true"
-    )
+    assert "PLATFORM_ADMIN_LOGIN_USER_ID=system_admin" in env_text
+    assert "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=UpdatedPass123A" in env_text
+    # 共通 .env の他の値は残す。
+    assert "PLATFORM_AUTH_COOKIE_SECURE=false" in env_text
+    assert "AppAdminPass123" not in env_text
     with pytest.raises(SecurityApiError):
         service.authenticate_session(token)
     with pytest.raises(LoginFailed):
@@ -2766,8 +2750,10 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
     _patch_security_threadpools(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ORACLE_DEEPSEC_END_USER=NL2SQL_APP_END_USER\n"
-        "ORACLE_DEEPSEC_END_USER_PASSWORD=OldSecret123\n",
+        "NL2SQL_LOG_LEVEL=INFO\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=false\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret123\n"
+        "NL2SQL_RUNTIME_MODE=oracle\n",
         encoding="utf-8",
     )
     env_file.chmod(0o600)
@@ -2819,10 +2805,17 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
     assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
     assert closed == [True]
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
-    assert "ORACLE_DEEPSEC_END_USER" not in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=true" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
+    # 既存の DeepSec key の位置で置き換え、他の製品設定は残す（#211）。
+    assert env_text == (
+        "NL2SQL_LOG_LEVEL=INFO\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456\n"
+        "NL2SQL_RUNTIME_MODE=oracle\n"
+    )
 
 
 def test_deepsec_config_sync_password_endpoint_uses_saved_secret_without_payload(
@@ -3048,9 +3041,9 @@ def test_deepsec_config_patch_sync_failure_returns_409_without_secret(
     _patch_security_threadpools(monkeypatch)
     env_file = tmp_path / ".env"
     original_env = (
-        "ORACLE_DEEPSEC_ENABLED=false\n"
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=false\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
     )
     env_file.write_text(original_env, encoding="utf-8")
     env_file.chmod(0o600)

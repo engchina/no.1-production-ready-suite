@@ -4,6 +4,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from pr_backend_core.config import settings_env_names
 from pydantic import ValidationError
 from rag_pipeline_core.chunking import CHUNK_OVERLAP_MAX_CHARS, CHUNK_SIZE_MAX_CHARS
 
@@ -149,26 +150,99 @@ def test_embedding_dimension_is_fixed_to_oracle_vector_width() -> None:
 def test_model_settings_file_defaults_to_relative_env_sibling_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MODEL_SETTINGS_FILE は .env と同じ階層の相対 JSON を既定にする。"""
-    monkeypatch.delenv("MODEL_SETTINGS_FILE", raising=False)
+    """PLATFORM_MODEL_SETTINGS_FILE は .env と同じ階層の相対 JSON を既定にする。"""
+    monkeypatch.delenv("PLATFORM_MODEL_SETTINGS_FILE", raising=False)
 
     settings = Settings(model_settings_file="")
 
     assert settings.model_settings_file == DEFAULT_MODEL_SETTINGS_FILE
 
 
-def test_relative_model_settings_file_resolves_from_backend_root(
+def test_relative_model_settings_file_resolves_from_platform_env_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """相対 MODEL_SETTINGS_FILE は backend/.env と同じ階層を基準にする。"""
-    backend_root = tmp_path / "backend"
-    monkeypatch.setattr(config_module, "BACKEND_ROOT", backend_root)
+    """相対 PLATFORM_MODEL_SETTINGS_FILE は共通 .env と同じ階層を基準にする（#211）。"""
+    platform_dir = tmp_path / "platform"
+    monkeypatch.setattr(config_module, "PLATFORM_ENV_FILE", platform_dir / ".env")
 
     assert (
         resolve_model_settings_file("model-settings.json")
-        == (backend_root / "model-settings.json").resolve()
+        == (platform_dir / "model-settings.json").resolve()
     )
+
+
+def test_settings_read_platform_and_rag_env_names_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """共通の設定は PLATFORM_*、RAG 固有の設定は RAG_* で読み、旧名は読まない（#211）。"""
+    monkeypatch.setenv("PLATFORM_ORACLE_DSN", "platform-dsn")
+    monkeypatch.setenv("RAG_AUTH_MODE", "production")
+    monkeypatch.setenv("RAG_HUGGINGFACE_ENDPOINT", "hf-mirror.com")
+    monkeypatch.setenv("RAG_OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "en")
+    monkeypatch.setenv("HF_TOKEN", "legacy-token")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.oracle_dsn == "platform-dsn"
+    assert settings.auth_mode == "production"
+    assert settings.huggingface_endpoint == "https://hf-mirror.com"
+    assert settings.oci_document_understanding_language == "en"
+    assert settings.huggingface_token == ""
+
+
+def test_settings_do_not_read_legacy_env_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新名がなければ、旧名（属性名と同じ名前）の環境変数と .env の行は反映しない（#211）。"""
+    monkeypatch.delenv("PLATFORM_ORACLE_DSN", raising=False)
+    monkeypatch.delenv("RAG_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.setenv("ORACLE_DSN", "legacy-dsn")
+    monkeypatch.setenv("OCI_DOCUMENT_UNDERSTANDING_NAMESPACE", "legacy-namespace")
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text("LOG_LEVEL=WARN\nORACLE_USER=legacy-user\n", encoding="utf-8")
+
+    settings = Settings(_env_file=backend_env)
+
+    assert settings.oracle_dsn == ""
+    assert settings.oci_document_understanding_namespace == ""
+    assert settings.log_level == "INFO"
+    assert settings.oracle_user == ""
+    # 属性名での生成（テストや設定画面の候補作成）は引き続き使える。
+    assert Settings(_env_file=None, oracle_dsn="attr-dsn").oracle_dsn == "attr-dsn"
+
+
+def test_settings_read_platform_env_then_backend_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """共通 .env と backend/.env の両方を読む（環境変数が最優先）。"""
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_OCI_REGION=ap-osaka-1\n", encoding="utf-8")
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text("RAG_CHUNK_SIZE=900\n", encoding="utf-8")
+    monkeypatch.delenv("PLATFORM_OCI_REGION", raising=False)
+    monkeypatch.delenv("RAG_CHUNK_SIZE", raising=False)
+
+    settings = Settings(_env_file=(platform_env, backend_env))
+
+    assert settings.oci_region == "ap-osaka-1"
+    assert settings.rag_chunk_size == 900
+
+
+def test_backend_env_example_lists_only_rag_settings() -> None:
+    """backend/.env.example は RAG 固有の設定（RAG_*）だけを持つ（#211）。"""
+    names = set(settings_env_names(Settings).values())
+    example = config_module.BACKEND_ROOT / ".env.example"
+    keys = [
+        line.split("=", 1)[0]
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    ]
+
+    assert keys
+    assert [key for key in keys if not key.startswith("RAG_")] == []
+    assert [key for key in keys if key not in names] == []
 
 
 def test_enterprise_ai_max_retries_defaults_to_three_and_is_bounded() -> None:
@@ -263,11 +337,11 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
 ) -> None:
     """ローカル既定でも HTTP リクエスト内で取込を実行しない。"""
     for key in (
-        "INGESTION_QUEUE_DEDICATED_WORKER_ENABLED",
-        "INGESTION_QUEUE_INPROCESS_WORKER_ENABLED",
-        "INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
-        "INGESTION_QUEUE_STALE_RUNNING_SECONDS",
-        "INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS",
+        "RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED",
+        "RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED",
+        "RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
+        "RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS",
+        "RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)

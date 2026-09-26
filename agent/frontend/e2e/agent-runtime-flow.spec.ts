@@ -39,7 +39,7 @@ const runtime = {
   name: "Hermes",
   kind: "hermes",
   base_url: "http://runtime-hermes:8642",
-  auth_secret_ref: "HERMES_API_SERVER_KEY",
+  auth_secret_ref: "AGENT_HERMES_API_SERVER_KEY",
   managed_service_id: "runtime-hermes",
   capabilities: {
     stream_events: true,

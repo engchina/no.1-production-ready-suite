@@ -377,3 +377,37 @@ def test_value_from_process_environment_is_not_written_to_env_file(
     make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
     assert PARSER_KEY_ENV not in dotenv_values(tmp_path / ".env")
     assert settings.parser_api_key == "from-process"
+
+
+def test_shared_document_keeps_other_product_sections_and_product_secret_file(
+    tmp_path: Path,
+) -> None:
+    """model-settings.json は3製品で共有する（#211）。
+
+    他製品の節を消さず、節の secret は製品の .env へ保存する。
+    """
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps({"version": 3, "other_product": {"keep": True}}), encoding="utf-8"
+    )
+    store = ModelSettingsStore(
+        resolve_path=lambda settings: tmp_path / settings.model_settings_file,
+        env_file=lambda settings: tmp_path / "platform.env",
+        sections=(PARSER_SECTION,),
+        section_env_file=lambda settings: tmp_path / "product.env",
+    )
+    settings = FakeSettings(parser_backend="docling", parser_api_key="parser-secret")
+    store.load(settings)
+    settings.parser_api_key = "parser-secret"
+
+    response = make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
+
+    assert response.status_code == 200
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert document["other_product"] == {"keep": True}
+    assert document["parser_adapters"] == {"backend": "docling"}
+    platform_env = (tmp_path / "platform.env").read_text(encoding="utf-8")
+    product_env = (tmp_path / "product.env").read_text(encoding="utf-8")
+    assert f"{ENTERPRISE_AI_API_KEY_ENV}=sk-new" in platform_env
+    assert PARSER_KEY_ENV not in platform_env
+    assert f"{PARSER_KEY_ENV}=parser-secret" in product_env
+    assert ENTERPRISE_AI_API_KEY_ENV not in product_env

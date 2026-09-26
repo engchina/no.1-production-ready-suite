@@ -165,8 +165,10 @@ make_case() {
     "${platform_dir}/packages/ui" \
     "${case_dir}/wallet/nested" \
     "${case_dir}/fake-bin"
-  printf 'ORACLE_WALLET_DIR=%s\n' "${case_dir}/wallet" > "${app_dir}/backend/.env"
-  printf 'ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${case_dir}" >> "${app_dir}/backend/.env"
+  printf 'NL2SQL_APP_AUTH_ENABLED=true\n' > "${app_dir}/backend/.env"
+  # 共通の設定（Wallet の場所を含む）は platform/.env（#211）。
+  printf 'PLATFORM_ORACLE_WALLET_DIR=%s\n' "${case_dir}/wallet" > "${platform_dir}/.env"
+  printf 'PLATFORM_ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${case_dir}" >> "${platform_dir}/.env"
   : > "${app_dir}/backend/pyproject.toml"
   : > "${app_dir}/backend/uv.lock"
   : > "${app_dir}/frontend/package.json"
@@ -186,7 +188,8 @@ make_case() {
     "${case_dir}/wallet/cwallet.sso" \
     "${case_dir}/wallet/nested/tnsnames.ora" \
     "${case_dir}/.wallet.install.lock" \
-    "${app_dir}/backend/.env"
+    "${app_dir}/backend/.env" \
+    "${platform_dir}/.env"
   make_fake_commands "${case_dir}/fake-bin"
   printf '%s\n' "${case_dir}"
 }
@@ -249,9 +252,9 @@ test_wallet_env_parser_does_not_source_secrets() (
   export UPDATE_AFTER_PULL_TEST_MODE=true
   # shellcheck source=/dev/null
   source "${UPDATE_SCRIPT}"
-  BACKEND_ENV_FILE="${case_dir}/backend.env"
-  printf 'ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${case_dir}" > "${BACKEND_ENV_FILE}"
-  printf '%s\n' 'ORACLE_WALLET_DIR="/u01/aipoc/wallet"' >> "${BACKEND_ENV_FILE}"
+  PLATFORM_ENV_FILE="${case_dir}/platform.env"
+  printf 'PLATFORM_ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${case_dir}" > "${PLATFORM_ENV_FILE}"
+  printf '%s\n' 'PLATFORM_ORACLE_WALLET_DIR="/u01/aipoc/wallet"' >> "${PLATFORM_ENV_FILE}"
   test "$(wallet_env_value)" = "/u01/aipoc/wallet"
   test ! -e "${case_dir}/must-not-run"
 )
@@ -509,11 +512,13 @@ grep -Fq 'nl2sql_system_schema --initialize' "${repair_log}"
 grep -Fq 'app_security_migrate --apply --skip-bootstrap' "${repair_log}"
 grep -Fq 'curl|-fsS --max-time 5 http://public.test/api/health' "${repair_log}"
 test -f "$(find "${repair_case}/recovery" -name backend.env -print -quit)"
+test -f "$(find "${repair_case}/recovery" -name platform.env -print -quit)"
 test "$(stat -c %a "${repair_case}")" = 775
 test "$(stat -c %a "${repair_case}/wallet")" = 700
 test "$(stat -c %a "${repair_case}/wallet/cwallet.sso")" = 600
 test "$(stat -c %a "${repair_case}/.wallet.install.lock")" = 600
 test "$(stat -c %a "${repair_case}/no.1-production-ready-suite/nl2sql/backend/.env")" = 600
+test "$(stat -c %a "${repair_case}/no.1-production-ready-suite/platform/.env")" = 600
 test ! -e "${repair_case}/must-not-run"
 
 success_case="$(make_case success)"
@@ -568,11 +573,11 @@ grep -Fq 'systemctl|restart production-ready-nl2sql-schema-refresh-worker.servic
   "${public_health_case}/commands.log"
 
 wallet_override_case="$(make_case wallet-override)"
-printf 'ORACLE_WALLET_DIR=%s/other-wallet\n' "${wallet_override_case}" > \
-  "${wallet_override_case}/no.1-production-ready-suite/nl2sql/backend/.env"
-printf 'ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${wallet_override_case}" >> \
-  "${wallet_override_case}/no.1-production-ready-suite/nl2sql/backend/.env"
-chmod 0600 "${wallet_override_case}/no.1-production-ready-suite/nl2sql/backend/.env"
+printf 'PLATFORM_ORACLE_WALLET_DIR=%s/other-wallet\n' "${wallet_override_case}" > \
+  "${wallet_override_case}/no.1-production-ready-suite/platform/.env"
+printf 'PLATFORM_ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${wallet_override_case}" >> \
+  "${wallet_override_case}/no.1-production-ready-suite/platform/.env"
+chmod 0600 "${wallet_override_case}/no.1-production-ready-suite/platform/.env"
 if run_case "${wallet_override_case}" --check; then
   fail_test "an overridden Wallet path was accepted"
 fi

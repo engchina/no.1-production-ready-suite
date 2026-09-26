@@ -214,7 +214,7 @@ async def test_du_client_analyze_runs_async_job_and_remaps() -> None:
 def test_du_client_uses_region_override_when_building_document_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Document Understanding client は OCI_REGION で endpoint 用 region を上書きする。"""
+    """Document Understanding client は PLATFORM_OCI_REGION で endpoint 用 region を上書きする。"""
     captured: dict[str, object] = {}
     fake_config_module = object()
 
@@ -267,7 +267,7 @@ def test_du_client_uses_region_override_when_building_document_client(
 def test_du_client_uses_du_region_for_object_storage_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DU 入出力 Object Storage は明示 override が無ければ OCI_REGION に揃える。"""
+    """DU 入出力 Object Storage は明示 override が無ければ PLATFORM_OCI_REGION に揃える。"""
     captured: dict[str, object] = {}
     fake_config_module = object()
 

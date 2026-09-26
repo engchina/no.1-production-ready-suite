@@ -24,6 +24,7 @@ from pr_system_settings import oci_connectivity
 from pr_system_settings.model import ModelSettingsStore, save_model_settings
 from pytest import MonkeyPatch
 
+from app import config as app_config
 from app.api.routes import settings as settings_routes
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
@@ -59,12 +60,17 @@ async def _run_inline(operation: Any) -> Any:
 
 
 def _saved_env_value(settings: Settings, name: str) -> str | None:
-    """model-settings.json と同じディレクトリの .env（テストでは tmp）に保存された secret。"""
-    return dotenv_values(MODEL_SETTINGS_STORE.env_file(settings)).get(name)
+    """保存された secret。モデルの API key は共通 .env、parser の key は backend/.env。"""
+    env_file = (
+        MODEL_SETTINGS_STORE.section_env_file(settings)
+        if name.startswith("RAG_")
+        else MODEL_SETTINGS_STORE.env_file(settings)
+    )
+    return dotenv_values(env_file).get(name)
 
 
 def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
-    return _saved_env_value(settings, "OCI_ENTERPRISE_AI_API_KEY")
+    return _saved_env_value(settings, "PLATFORM_OCI_ENTERPRISE_AI_API_KEY")
 
 
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
@@ -496,6 +502,7 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
         resolve_path=lambda current: Path(current.model_settings_file),
         env_file=lambda current: MODEL_SETTINGS_STORE.env_file(current),
         sections=(PARSER_ADAPTERS_SECTION,),
+        section_env_file=lambda current: MODEL_SETTINGS_STORE.section_env_file(current),
     )
     worker_store.load(worker_settings)
 
@@ -518,7 +525,7 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     assert response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert persisted["enterprise_ai"]["endpoint"] == "https://existing.example.com"
-    # API key は JSON ではなく backend/.env に保存する（#103）。
+    # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
     worker_store.reload_if_changed(worker_settings)
@@ -1813,7 +1820,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert persisted["version"] == 3
-    # API key は JSON ではなく backend/.env に保存する（#103）。
+    # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
     assert persisted["enterprise_ai"]["models"] == [
@@ -2291,13 +2298,13 @@ def test_update_oci_settings_creates_config_dir_and_file_with_private_permission
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
     monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
-    env_file = _settings_env_file(
+    env_file = _platform_env_file(
         monkeypatch,
         tmp_path,
         "\n".join(
             [
                 "# 既存設定",
-                "OCI_REGION=us-chicago-1",
+                "PLATFORM_OCI_REGION=us-chicago-1",
                 "",
             ]
         ),
@@ -2333,9 +2340,9 @@ def test_update_oci_settings_creates_config_dir_and_file_with_private_permission
     assert body["key_file_exists"] is False
     persisted = env_file.read_text(encoding="utf-8")
     assert "# 既存設定" in persisted
-    assert "OCI_CONFIG_FILE=~/.oci/config" in persisted
-    assert "OCI_CONFIG_PROFILE=DEFAULT" in persisted
-    assert "OCI_REGION=ap-osaka-1" in persisted
+    assert "PLATFORM_OCI_CONFIG_FILE=~/.oci/config" in persisted
+    assert "PLATFORM_OCI_CONFIG_PROFILE=DEFAULT" in persisted
+    assert "PLATFORM_OCI_REGION=ap-osaka-1" in persisted
 
 
 def test_update_oci_settings_does_not_write_empty_config_defaults(
@@ -2347,7 +2354,7 @@ def test_update_oci_settings_does_not_write_empty_config_defaults(
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
     monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
-    env_file = _settings_env_file(monkeypatch, tmp_path)
+    env_file = _platform_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
         "/api/settings/oci",
@@ -2367,7 +2374,7 @@ def test_update_oci_settings_does_not_write_empty_config_defaults(
     assert "region=" not in content
     assert "key_file=" not in content
     assert settings.oci_region == ""
-    assert "OCI_REGION" not in env_file.read_text(encoding="utf-8")
+    assert "PLATFORM_OCI_REGION" not in env_file.read_text(encoding="utf-8")
 
 
 def test_update_oci_settings_preserves_existing_non_default_profile(
@@ -2426,7 +2433,7 @@ def test_update_oci_settings_does_not_mutate_runtime_when_env_write_fails(
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
     monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
-    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path)
 
     resp = client.patch(
         "/api/settings/oci",
@@ -2449,15 +2456,15 @@ def test_update_oci_object_storage_settings_persists_env_and_mutates_runtime(
     settings = get_settings()
     monkeypatch.setattr(settings, "object_storage_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "object_storage_namespace", "old-namespace")
-    env_file = _settings_env_file(
+    env_file = _platform_env_file(
         monkeypatch,
         tmp_path,
         "\n".join(
             [
                 "# OCI Object Storage",
-                "OBJECT_STORAGE_REGION=ap-osaka-1",
-                "OBJECT_STORAGE_NAMESPACE=old-namespace",
-                "OBJECT_STORAGE_BUCKET=rag-originals",
+                "PLATFORM_OBJECT_STORAGE_REGION=ap-osaka-1",
+                "PLATFORM_OBJECT_STORAGE_NAMESPACE=old-namespace",
+                "PLATFORM_OBJECT_STORAGE_BUCKET=rag-originals",
                 "",
             ]
         ),
@@ -2478,9 +2485,9 @@ def test_update_oci_object_storage_settings_persists_env_and_mutates_runtime(
     assert settings.object_storage_region == "us-chicago-1"
     assert settings.object_storage_namespace == "mytenancynamespace"
     persisted = env_file.read_text(encoding="utf-8")
-    assert "OBJECT_STORAGE_REGION=us-chicago-1" in persisted
-    assert "OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in persisted
-    assert "OBJECT_STORAGE_BUCKET=rag-originals" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_REGION=us-chicago-1" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=rag-originals" in persisted
 
 
 def test_update_oci_object_storage_settings_does_not_mutate_runtime_when_env_write_fails(
@@ -2490,7 +2497,7 @@ def test_update_oci_object_storage_settings_does_not_mutate_runtime_when_env_wri
     settings = get_settings()
     monkeypatch.setattr(settings, "object_storage_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "object_storage_namespace", "old-namespace")
-    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path)
 
     resp = client.patch(
         "/api/settings/oci/object-storage",
@@ -2869,9 +2876,9 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
         "\n".join(
             [
                 "# 既存設定",
-                "ORACLE_USER=old_user",
-                "ORACLE_DSN=old-dsn",
-                "ORACLE_USER=duplicate",
+                "PLATFORM_ORACLE_USER=old_user",
+                "PLATFORM_ORACLE_DSN=old-dsn",
+                "PLATFORM_ORACLE_USER=duplicate",
                 "",
             ]
         ),
@@ -2890,7 +2897,7 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
     assert settings.oracle_user == "rag_app"
     assert settings.oracle_dsn == "adb.example.com/rag"
     # 画面から送られた Wallet 保存先を保存する（NL2SQL と同じ。#108）。
-    # RAG が実際に使う保存先は ORACLE_CLIENT_LIB_DIR/network/admin のまま変わらない。
+    # RAG が実際に使う保存先は PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin のまま変わらない。
     assert settings.oracle_wallet_dir == "/opt/oracle/wallet"
     assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
     assert settings.oracle_password == "old-secret"
@@ -2899,12 +2906,12 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
     assert "old-secret" not in resp.text
     persisted = env_file.read_text(encoding="utf-8")
     assert "# 既存設定" in persisted
-    assert persisted.count("ORACLE_USER=") == 1
-    assert "ORACLE_USER=rag_app" in persisted
-    assert "ORACLE_PASSWORD=old-secret" in persisted
-    assert "ORACLE_DSN=adb.example.com/rag" in persisted
-    assert "ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_23_26" in persisted
-    assert "ORACLE_WALLET_PASSWORD=" in persisted
+    assert persisted.count("PLATFORM_ORACLE_USER=") == 1
+    assert "PLATFORM_ORACLE_USER=rag_app" in persisted
+    assert "PLATFORM_ORACLE_PASSWORD=old-secret" in persisted
+    assert "PLATFORM_ORACLE_DSN=adb.example.com/rag" in persisted
+    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_23_26" in persisted
+    assert "PLATFORM_ORACLE_WALLET_PASSWORD=" in persisted
 
 
 def test_update_database_settings_does_not_mutate_runtime_when_env_write_fails(
@@ -2917,7 +2924,7 @@ def test_update_database_settings_does_not_mutate_runtime_when_env_write_fails(
     monkeypatch.setattr(settings, "oracle_dsn", "old-dsn")
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
     monkeypatch.setattr(settings, "oracle_wallet_password", "old-wallet-secret")
-    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path)
 
     resp = client.patch(
         "/api/settings/database",
@@ -2952,10 +2959,10 @@ def test_update_database_settings_clears_saved_secrets(
         tmp_path,
         "\n".join(
             [
-                "ORACLE_USER=rag_app",
-                "ORACLE_PASSWORD=old-secret",
-                "ORACLE_DSN=ragdb_high",
-                "ORACLE_WALLET_PASSWORD=old-wallet-secret",
+                "PLATFORM_ORACLE_USER=rag_app",
+                "PLATFORM_ORACLE_PASSWORD=old-secret",
+                "PLATFORM_ORACLE_DSN=ragdb_high",
+                "PLATFORM_ORACLE_WALLET_PASSWORD=old-wallet-secret",
                 "",
             ]
         ),
@@ -2979,10 +2986,10 @@ def test_update_database_settings_clears_saved_secrets(
     assert settings.oracle_password == ""
     assert settings.oracle_wallet_password == ""
     persisted = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_PASSWORD=" in persisted
-    assert "ORACLE_PASSWORD=old-secret" not in persisted
-    assert "ORACLE_WALLET_PASSWORD=" in persisted
-    assert "ORACLE_WALLET_PASSWORD=old-wallet-secret" not in persisted
+    assert "PLATFORM_ORACLE_PASSWORD=" in persisted
+    assert "PLATFORM_ORACLE_PASSWORD=old-secret" not in persisted
+    assert "PLATFORM_ORACLE_WALLET_PASSWORD=" in persisted
+    assert "PLATFORM_ORACLE_WALLET_PASSWORD=old-wallet-secret" not in persisted
 
 
 def test_database_connection_test_uses_candidate_without_mutating_runtime(
@@ -3413,8 +3420,8 @@ def test_update_adb_settings_persists_ocid_and_region(
     assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..saved"
     assert settings.oracle_adb_region == "ap-tokyo-1"
     persisted = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in persisted
-    assert "ORACLE_ADB_REGION=ap-tokyo-1" in persisted
+    assert "PLATFORM_ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in persisted
+    assert "PLATFORM_ORACLE_ADB_REGION=ap-tokyo-1" in persisted
 
 
 def test_start_adb_sends_start_when_stopped(monkeypatch: MonkeyPatch) -> None:
@@ -3525,9 +3532,9 @@ def test_update_upload_storage_settings_persists_env_and_mutates_runtime(
         "\n".join(
             [
                 "# 既存設定",
-                "UPLOAD_STORAGE_BACKEND=local",
-                "LOCAL_STORAGE_DIR=/old/uploads",
-                "UPLOAD_STORAGE_BACKEND=duplicate",
+                "PLATFORM_UPLOAD_STORAGE_BACKEND=local",
+                "PLATFORM_LOCAL_STORAGE_DIR=/old/uploads",
+                "PLATFORM_UPLOAD_STORAGE_BACKEND=duplicate",
                 "",
             ]
         ),
@@ -3552,12 +3559,12 @@ def test_update_upload_storage_settings_persists_env_and_mutates_runtime(
     assert settings.object_storage_bucket == "rag-originals"
     persisted = env_file.read_text(encoding="utf-8")
     assert "# 既存設定" in persisted
-    assert persisted.count("UPLOAD_STORAGE_BACKEND=") == 1
-    assert "UPLOAD_STORAGE_BACKEND=oci" in persisted
-    assert "LOCAL_STORAGE_DIR=/u01/data/production-ready-rag" in persisted
-    assert "OBJECT_STORAGE_REGION=us-chicago-1" in persisted
-    assert "OBJECT_STORAGE_NAMESPACE=global-namespace" in persisted
-    assert "OBJECT_STORAGE_BUCKET=rag-originals" in persisted
+    assert persisted.count("PLATFORM_UPLOAD_STORAGE_BACKEND=") == 1
+    assert "PLATFORM_UPLOAD_STORAGE_BACKEND=oci" in persisted
+    assert "PLATFORM_LOCAL_STORAGE_DIR=/u01/data/production-ready-rag" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_REGION=us-chicago-1" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=global-namespace" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=rag-originals" in persisted
 
 
 def test_update_upload_storage_settings_can_apply_namespace_from_oci_settings_draft(
@@ -3583,8 +3590,8 @@ def test_update_upload_storage_settings_can_apply_namespace_from_oci_settings_dr
     assert settings.object_storage_namespace == "oci-page-namespace"
     assert settings.object_storage_bucket == "rag-originals"
     persisted = env_file.read_text(encoding="utf-8")
-    assert "OBJECT_STORAGE_NAMESPACE=oci-page-namespace" in persisted
-    assert "OBJECT_STORAGE_BUCKET=rag-originals" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=oci-page-namespace" in persisted
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=rag-originals" in persisted
 
 
 def test_update_upload_storage_settings_does_not_mutate_runtime_when_env_write_fails(
@@ -3597,7 +3604,7 @@ def test_update_upload_storage_settings_does_not_mutate_runtime_when_env_write_f
     monkeypatch.setattr(settings, "object_storage_namespace", "global-namespace")
     monkeypatch.setattr(settings, "object_storage_bucket", "old-bucket")
     monkeypatch.setattr(settings, "object_storage_region", "us-chicago-1")
-    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path)
 
     resp = client.patch(
         "/api/settings/upload-storage",
@@ -3672,7 +3679,7 @@ def _database_env_file(
     tmp_path: Path,
     content: str = "",
 ) -> Path:
-    return _settings_env_file(monkeypatch, tmp_path, content)
+    return _platform_env_file(monkeypatch, tmp_path, content)
 
 
 def _upload_storage_env_file(
@@ -3680,7 +3687,20 @@ def _upload_storage_env_file(
     tmp_path: Path,
     content: str = "",
 ) -> Path:
-    return _settings_env_file(monkeypatch, tmp_path, content)
+    return _platform_env_file(monkeypatch, tmp_path, content)
+
+
+def _platform_env_file(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    content: str = "",
+) -> Path:
+    """共通 .env（OCI / アップロード保存先 / データベースの保存先。#211）を tmp に置く。"""
+    env_file = tmp_path / "platform.env"
+    if content:
+        env_file.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", env_file)
+    return env_file
 
 
 def _settings_env_file(
@@ -3773,8 +3793,10 @@ def test_update_huggingface_settings_persists_env_and_mutates_runtime(
     assert settings.huggingface_token == "hf_new"
     env_text = env_file.read_text(encoding="utf-8")
     assert "HUGGINGFACE_DOWNLOAD_DIR" not in env_text
-    assert "HF_TOKEN=hf_new" in env_text
-    assert "HF_ENDPOINT=https://hf-mirror.com" in env_text
+    assert "RAG_HUGGINGFACE_TOKEN=hf_new" in env_text
+    assert "RAG_HUGGINGFACE_ENDPOINT=https://hf-mirror.com" in env_text
+    # huggingface_hub の標準名はコンテナへ渡すときだけ使い、.env には書かない（#211）。
+    assert "\nHF_TOKEN=" not in f"\n{env_text}"
 
 
 def test_update_huggingface_settings_keeps_token_when_blank(

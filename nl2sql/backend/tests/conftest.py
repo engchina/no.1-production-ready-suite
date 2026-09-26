@@ -16,15 +16,19 @@ from typing import Any
 
 import pytest
 
-os.environ["ENABLE_METRICS"] = "false"
-os.environ["DEBUG"] = "false"
+os.environ["NL2SQL_ENABLE_METRICS"] = "false"
+os.environ["NL2SQL_DEBUG"] = "false"
+# 開発者の共通 .env（platform/.env）を Settings に読ませない（#211）。
+os.environ["PLATFORM_ENV_FILE"] = os.path.join(
+    os.path.dirname(__file__), "__missing_platform_env__", ".env"
+)
 os.environ["NL2SQL_SYNTHETIC_WORKER_MODE"] = "external"
 os.environ["NL2SQL_RUNTIME_MODE"] = "deterministic"
 os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"
 os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
-os.environ["APP_AUTH_ENABLED"] = "false"
-os.environ["ORACLE_USER"] = "APP"
-os.environ["ORACLE_DEEPSEC_ENABLED"] = "false"
+os.environ["NL2SQL_APP_AUTH_ENABLED"] = "false"
+os.environ["PLATFORM_ORACLE_USER"] = "APP"
+os.environ["NL2SQL_ORACLE_DEEPSEC_ENABLED"] = "false"
 
 
 async def _run_sync_in_test_thread[T](
@@ -76,7 +80,13 @@ _install_test_threadpool_for_asgi_tests()
 
 @pytest.fixture(autouse=True)
 def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """モデル設定の API key の読み書きを、開発者の backend/.env から切り離す（#103）。"""
+    """設定の読み書きを、開発者の backend/.env と共通 .env から切り離す（#103 / #211）。
+
+    共通 .env（API key・システム設定画面の保存先）と model-settings.json は tmp_path に置く。
+    """
+    import app.security.deepsec as deepsec_module
     import app.settings as app_settings
 
-    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", tmp_path / "model-secret.env")
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", tmp_path / "backend.env")
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
+    monkeypatch.setattr(deepsec_module, "_BACKEND_ENV_FILE", tmp_path / "backend.env")

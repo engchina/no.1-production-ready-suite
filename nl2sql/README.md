@@ -37,10 +37,12 @@ NL2SQL は monorepo `/u01/aipoc/no.1-production-ready-suite` の `nl2sql/` に�
 **スクリプト自身は `git pull` を含む Git 操作を行わないため、先に suite repository を更新してください。**
 旧構成（`/u01/aipoc/no.1-production-ready-nl2sql` と `/u01/aipoc/no.1-production-ready-platform` の2つの repository）から
 移行する場合は [docs/monorepo-server-migration.md](docs/monorepo-server-migration.md) の手順に従ってください。
+#211 より前に作った環境（`backend/.env` に `ORACLE_DSN` などの旧名を置いている環境）は、更新前に
+[docs/configuration.md](docs/configuration.md) の「既存環境の更新手順（#211）」で共通 `.env`（`platform/.env`）へ移してください。
 
 **実行前に、Oracle データベースが起動済みで、Compute から接続可能であることを確認してください。**
 OCI Autonomous Database が `Stopped`（停止済み）の場合は起動し、`Starting`（起動処理中）の場合は
-`Available`（利用可能）になるまで待ちます。`backend/.env` で設定した接続アカウントには、
+`Available`（利用可能）になるまで待ちます。共通 `.env`（`platform/.env`）で設定した接続アカウントには、
 ログインとシステムテーブルの migration に必要な権限が必要です。
 DB に接続できず migration が失敗すると、frontend のビルドが成功していても新しい画面は公開されず、
 旧 frontend が維持され、external worker は停止・無効化されます。

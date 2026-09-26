@@ -235,7 +235,7 @@ variables:
     required: false
     visible: true
     title: "既存のAutonomous AI Database"
-    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をbackend/.envへ反映します。"
+    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定を共通のplatform/.envとAgentのbackend/.envへ反映します。"
     dependsOn:
       compartmentId: ${adb_compartment_ocid}
 
@@ -244,7 +244,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB username"
-    description: "Value written to ORACLE_USER in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_USER in platform/.env and AGENT_RUNTIME_ORACLE_USER in backend/.env."
     default: "ADMIN"
 
   existing_oracle_password:
@@ -252,7 +252,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB password"
-    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_PASSWORD in platform/.env and AGENT_RUNTIME_ORACLE_PASSWORD in backend/.env."
     confirmation: true
 
   existing_oracle_dsn:
@@ -260,7 +260,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example AGENTADB -> agentadb_high."
+    description: "Optional. Value written to PLATFORM_ORACLE_DSN in platform/.env and AGENT_RUNTIME_ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example AGENTADB -> agentadb_high."
 
   existing_oracle_wallet_password:
     type: password

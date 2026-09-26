@@ -404,8 +404,15 @@ prepare_filesystem() {
 }
 
 install_runtime_env() {
-  log "Installing backend environment and wallet."
+  log "Installing backend environment, platform environment and wallet."
   install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"
+  # 3製品共通の設定（PLATFORM_*）は platform の共通 .env（#211）。システム設定画面の保存先でもあるため、
+  # 既にあれば上書きしない（画面で保存した値を消さない）。
+  if [ -e "${PLATFORM_REPO_DIR}/.env" ]; then
+    log "Keeping existing shared platform environment: ${PLATFORM_REPO_DIR}/.env"
+  else
+    install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${APP_ROOT}/props/platform.env" "${PLATFORM_REPO_DIR}/.env"
+  fi
 
   rm -rf "${WALLET_DIR}"
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"

@@ -367,8 +367,8 @@ function buildEnvFile(form: HuggingFaceForm, settings: HuggingFaceSettingsData):
         ? t("settings.preview.secret.saved")
         : "";
   const entries: [string, string][] = [
-    ["HF_TOKEN", token],
-    ["HF_ENDPOINT", form.endpoint],
+    ["RAG_HUGGINGFACE_TOKEN", token],
+    ["RAG_HUGGINGFACE_ENDPOINT", form.endpoint],
   ];
   return [
     "# HuggingFace モデルダウンロード",

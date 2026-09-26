@@ -501,7 +501,7 @@ def test_pending_legacy_local_storage_dir_detects_legacy_data_with_default_dir(
         legacy_dir=str(legacy_dir),
         default_dir=str(default_dir),
     ) == str(legacy_dir)
-    # LOCAL_STORAGE_DIR を明示設定した環境では案内しない。
+    # PLATFORM_LOCAL_STORAGE_DIR を明示設定した環境では案内しない。
     assert (
         pending_legacy_local_storage_dir(
             _legacy_storage_settings(tmp_path / "custom"),

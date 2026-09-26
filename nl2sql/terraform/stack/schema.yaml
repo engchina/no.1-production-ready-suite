@@ -214,7 +214,7 @@ variables:
         - oracle_deepsec_enabled
         - true
     title: "DeepSec DATA USER password"
-    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
+    description: "Value written to NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
 
@@ -222,7 +222,7 @@ variables:
     type: boolean
     required: true
     visible: true
-    title: "ORACLE_DEEPSEC_ENABLED"
+    title: "NL2SQL_ORACLE_DEEPSEC_ENABLED"
     description: "Deep Data Securityを有効にする場合はオンにします。オンの場合のみDeepSec DATA USER passwordが必要です。"
     default: true
 
@@ -259,7 +259,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB username"
-    description: "Value written to ORACLE_USER in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_USER in backend/.env."
     default: "ADMIN"
 
   existing_oracle_password:
@@ -267,7 +267,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB password"
-    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_PASSWORD in backend/.env."
     confirmation: true
 
   existing_oracle_dsn:
@@ -275,7 +275,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example NL2SQLADB -> nl2sqladb_high."
+    description: "Optional. Value written to PLATFORM_ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example NL2SQLADB -> nl2sqladb_high."
 
   existing_oracle_wallet_password:
     type: password

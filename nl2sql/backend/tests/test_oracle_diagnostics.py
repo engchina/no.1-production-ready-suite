@@ -20,14 +20,18 @@ from app.settings import Settings
 @pytest.mark.parametrize(
     ("error", "category", "action"),
     [
-        (RuntimeError("DPY-6005: DPY-6001: ORA-12514"), "service_not_registered", "ORACLE_DSN"),
+        (
+            RuntimeError("DPY-6005: DPY-6001: ORA-12514"),
+            "service_not_registered",
+            "PLATFORM_ORACLE_DSN",
+        ),
         (RuntimeError("DPY-6001"), "service_not_registered", "tnsnames.ora"),
-        (RuntimeError("ORA-01017"), "invalid_credentials", "ORACLE_PASSWORD"),
+        (RuntimeError("ORA-01017"), "invalid_credentials", "PLATFORM_ORACLE_PASSWORD"),
         (RuntimeError("ORA-28000"), "account_unavailable", "DB 管理者"),
         (RuntimeError("ORA-28001"), "account_unavailable", "有効期限"),
-        (RuntimeError("DPY-4000"), "dsn_resolution_failed", "ORACLE_WALLET_DIR"),
+        (RuntimeError("DPY-4000"), "dsn_resolution_failed", "PLATFORM_ORACLE_WALLET_DIR"),
         (RuntimeError("ORA-12506"), "network_access_denied", "ACL"),
-        (RuntimeError("DPI-1047"), "client_unavailable", "ORACLE_DRIVER_MODE"),
+        (RuntimeError("DPI-1047"), "client_unavailable", "PLATFORM_ORACLE_DRIVER_MODE"),
         (RuntimeError("DPY-4011"), "connection_closed", "切断"),
         (RuntimeError("DPY-6005: timed out"), "connection_timeout", "TIMEOUT_SECONDS"),
         (OracleConnectionTimeoutError("private detail"), "connection_timeout", "TIMEOUT_SECONDS"),

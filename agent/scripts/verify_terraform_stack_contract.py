@@ -7,6 +7,7 @@ stdlib だけで動かす（CI と release workflow で追加依存なしに実�
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import stat
 import sys
@@ -14,6 +15,17 @@ import zipfile
 from pathlib import Path
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
+# 環境変数名の規則（#211）の正本。stdlib だけで動かすため import せず、ソースから読む。
+PLATFORM_ENV_SOURCE = (
+    AGENT_DIR.parent
+    / "platform"
+    / "packages"
+    / "backend_core"
+    / "src"
+    / "pr_backend_core"
+    / "config"
+    / "env.py"
+)
 PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスのみ"
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
@@ -45,13 +57,16 @@ HIDDEN_VARIABLES = [
     "agent_runtime_repository_backend",
 ]
 
-# backend/.env に必ず書く値（Agent backend の Settings と init_script.sh の前提）。
+# platform/.env（3製品共通。#211）に必ず書く値（Agent backend の Settings と init_script.sh の前提）。
+REQUIRED_PLATFORM_ENV_LINES = [
+    "PLATFORM_ORACLE_CLIENT_LIB_DIR=\n",
+    "PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}",
+    "PLATFORM_ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}",
+    "PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}",
+    "PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}",
+]
+# backend/.env（Agent 固有）に必ず書く値。
 REQUIRED_BACKEND_ENV_LINES = [
-    "ORACLE_CLIENT_LIB_DIR=\n",
-    "ORACLE_WALLET_DIR=${local.wallet_dir_host}",
-    "ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}",
-    "ORACLE_ADB_OCID=${local.effective_adb_ocid}",
-    "OCI_COMPARTMENT_ID=${var.compartment_ocid}",
     "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}",
     "AGENT_RUNTIME_DISPATCH_MODE=in_process",
     "AGENT_RUNTIME_ORACLE_DSN=${local.effective_oracle_dsn}",
@@ -66,6 +81,8 @@ REQUIRED_BACKEND_ENV_LINES = [
 ]
 # pr_backend_core.BaseServiceSettings の共通 field（agent/backend/app/settings.py には無い）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
+AGENT_ENV_PREFIX = "AGENT_"
+PLATFORM_ENV_PREFIX = "PLATFORM_"
 
 
 def _require_all(source: str, expected: list[str], *, context: str) -> None:
@@ -117,10 +134,10 @@ def _schema_groups(schema: str) -> dict[str, list[str]]:
     return groups
 
 
-def _backend_env(locals_source: str) -> str:
-    match = re.search(r"(?ms)backend_env = <<-EOT\n(.*?)^EOT$", locals_source)
+def _heredoc(locals_source: str, name: str) -> str:
+    match = re.search(rf"(?ms){name} = <<-EOT\n(.*?)^EOT$", locals_source)
     if match is None:
-        raise AssertionError("locals.tf backend_env heredoc not found")
+        raise AssertionError(f"locals.tf {name} heredoc not found")
     return match.group(1)
 
 
@@ -128,6 +145,42 @@ def _settings_fields() -> set[str]:
     source = (AGENT_DIR / "backend" / "app" / "settings.py").read_text(encoding="utf-8")
     body = source.split("class Settings(", 1)[1]
     return set(re.findall(r"(?m)^    ([a-z][a-z0-9_]*): ", body)) | BASE_SETTINGS_FIELDS
+
+
+def _platform_setting_fields() -> set[str]:
+    """pr_backend_core.config.env.PLATFORM_SETTING_FIELDS をソースから読む。"""
+    tree = ast.parse(PLATFORM_ENV_SOURCE.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "PLATFORM_SETTING_FIELDS"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+            and node.value.args
+        ):
+            values = ast.literal_eval(node.value.args[0])
+            return {str(value) for value in values}
+    raise AssertionError(f"PLATFORM_SETTING_FIELDS not found in {PLATFORM_ENV_SOURCE}")
+
+
+def _settings_env_names() -> tuple[set[str], set[str]]:
+    """Agent Settings の環境変数名を (共通 .env, backend/.env) に分けて返す。
+
+    pr_backend_core.config.settings_env_name と同じ規則:
+    共通の属性は `PLATFORM_` + 大文字（先頭の `APP_` は落とす）、それ以外は `AGENT_` + 大文字。
+    """
+    platform_fields = _platform_setting_fields()
+    platform_names: set[str] = set()
+    product_names: set[str] = set()
+    for field in _settings_fields():
+        name = field.upper()
+        if field in platform_fields:
+            platform_names.add(PLATFORM_ENV_PREFIX + name.removeprefix("APP_"))
+        else:
+            product_names.add(name if name.startswith(AGENT_ENV_PREFIX) else AGENT_ENV_PREFIX + name)
+    return platform_names, product_names
 
 
 def _verify_package_entries(archive: zipfile.ZipFile) -> None:
@@ -321,7 +374,9 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         context="Compute preconditions",
     )
 
-    backend_env = _backend_env(locals_source)
+    platform_env = _heredoc(locals_source, "platform_env")
+    backend_env = _heredoc(locals_source, "backend_env")
+    _require_all(platform_env, REQUIRED_PLATFORM_ENV_LINES, context="platform/.env")
     _require_all(backend_env, REQUIRED_BACKEND_ENV_LINES, context="backend/.env")
     # terraform fmt が "=" の位置を揃えるため、空白を正規化して比較する。
     _require_all(
@@ -330,16 +385,22 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             f'wallet_dir_host = "{WALLET_DIR}"',
             'app_repo_dir = "no.1-production-ready-suite/agent"',
             "basic_auth_password = base64gzip(var.app_basic_auth_password)",
+            "backend_env = base64gzip(local.backend_env)",
+            "platform_env = base64gzip(local.platform_env)",
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
         ],
         context="cloud-init rendering",
     )
-    settings_fields = _settings_fields()
-    env_keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", backend_env)
-    unknown = sorted(key for key in env_keys if key.lower() not in settings_fields)
-    if unknown:
-        raise AssertionError(f"backend/.env keys are not Agent Settings fields: {unknown}")
+    platform_names, product_names = _settings_env_names()
+    for context, source, allowed in (
+        ("platform/.env", platform_env, platform_names),
+        ("backend/.env", backend_env, product_names),
+    ):
+        env_keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", source)
+        unknown = sorted(key for key in env_keys if key not in allowed)
+        if unknown:
+            raise AssertionError(f"{context} keys are not Agent Settings env names: {unknown}")
 
 
 def _verify_bootstrap_and_init(bootstrap: str, init_source: str) -> None:
@@ -356,6 +417,14 @@ def _verify_bootstrap_and_init(bootstrap: str, init_source: str) -> None:
         ],
         context="direct Compute bootstrap",
     )
+    for props_name, variable in (("backend.env", "backend_env"), ("platform.env", "platform_env")):
+        if not re.search(
+            rf'(?ms)path: "/u01/aipoc/props/{re.escape(props_name)}"\n'
+            r'    permissions: "0600"\n    owner: "root:root"\n    encoding: "gzip\+base64"\n'
+            rf"    content: \|\n      \$\{{{variable}\}}",
+            bootstrap,
+        ):
+            raise AssertionError(f"{props_name} must be written root-only (0600) via gzip+base64")
     if not re.search(
         r'(?ms)path: "/u01/aipoc/props/basic_auth_password"\n'
         r'    permissions: "0600"\n    owner: "root:root"\n    encoding: "gzip\+base64"',
@@ -369,6 +438,10 @@ def _verify_bootstrap_and_init(bootstrap: str, init_source: str) -> None:
             'BACKEND_PORT="8020"',
             'BACKEND_WORKERS="1"',
             'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
+            'install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/platform.env" '
+            '"${PLATFORM_REPO_DIR}/.env"',
+            'install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" '
+            '"${BACKEND_DIR}/.env"',
             'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
             "import app.features.agent.runtime",
             "openssl passwd -6 -stdin",

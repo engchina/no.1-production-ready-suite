@@ -493,9 +493,9 @@ export const ja = {
   "settings.services.mode.dev": "開発 (docker)",
   "settings.services.mode.prod": "本番 (docker)",
   "settings.services.mode.dev.hint":
-    "開発モード(ENVIRONMENT=dev)。Parser は初回起動時にイメージ build が走るため、事前ビルドを推奨します。",
+    "開発モード(RAG_ENVIRONMENT=dev)。Parser は初回起動時にイメージ build が走るため、事前ビルドを推奨します。",
   "settings.services.mode.prod.hint":
-    "本番モード(ENVIRONMENT=prod)です。起動/停止は docker compose を呼びます。",
+    "本番モード(RAG_ENVIRONMENT=prod)です。起動/停止は docker compose を呼びます。",
   "settings.services.commands.title": "実行コマンド",
   "settings.services.commands.description":
     "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
@@ -1082,7 +1082,7 @@ export const ja = {
   "settings.huggingface.env.description": "保存される backend/.env のプレビュー(token はマスク)。",
   "settings.huggingface.ops.description": "保存後の挙動。",
   "settings.huggingface.ops.persist":
-    "値は backend の .env に保存します(キー: HF_TOKEN / HF_ENDPOINT)。",
+    "値は backend の .env に保存します(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)。",
   "settings.huggingface.ops.mount":
     "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。",
   "settings.huggingface.ops.bake": "prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時 DL/認証にのみ使います。",
