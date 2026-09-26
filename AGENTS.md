@@ -178,6 +178,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 - **UI/UX に関する作業（設計・実装・レビュー・改善）は必ず `ui-ux-pro-max` skill を使う。**
 - UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。空/読込/エラー/ブロック状態も必要に応じて確認する。
+- **e2e の量**：ローカルの検証も PR の検証も、変更に関係する spec だけを選び、1 回おおむね 1 分以内で終わる量にする（`-g` や spec のパスで絞る）。Playwright の全件は `.github/workflows/e2e-nightly.yml` が毎晩実行する。PR の CI（`ci.yml` の `rag-e2e` / `nl2sql-e2e`）は約 1 分の smoke だけを実行する（#184）。
 - ライト / ダークの両テーマで確認する。
 - 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
 - キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
