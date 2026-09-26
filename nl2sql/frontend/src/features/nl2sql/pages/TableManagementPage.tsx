@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
@@ -407,6 +407,8 @@ export function TableManagementPage() {
     selectedName: selectedTableName,
     detail,
     setDetail,
+    loading: detailLoading,
+    clear: clearDetail,
   } = detailRequest;
   const selectedTableManualSelection = useRef(false);
 
@@ -452,8 +454,10 @@ export function TableManagementPage() {
 
   // 一覧を取り直し、失敗を message に出す（message は呼び出し側で空にしておく）。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
-  const refetchObjects = (announce = false) =>
-    tableObjectsQuery.refetch().then((result) => {
+  // refetch は query の observer ごとに固定の関数なので、この関数も固定になる（終端の effect の発火の条件は変わらない）。
+  const { refetch: refetchTableObjects } = tableObjectsQuery;
+  const refetchObjects = useCallback((announce = false) =>
+    refetchTableObjects().then((result) => {
       if (result.error) {
         setMessage(result.error instanceof Error ? result.error.message : t("tableMgmt.error.load"));
         return;
@@ -461,7 +465,7 @@ export function TableManagementPage() {
       if (announce) {
         toast.success(t("common.action.refreshed"));
       }
-    });
+    }), [refetchTableObjects]);
 
   const refreshObjects = async (announce = false) => {
     setMessage("");
@@ -533,10 +537,10 @@ export function TableManagementPage() {
   }
   useEffect(() => {
     if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedSchemaRefresh]);
+  }, [reportedSchemaRefresh, refetchObjects]);
   useEffect(() => {
     if (reportedImportSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedImportSchemaRefresh]);
+  }, [reportedImportSchemaRefresh, refetchObjects]);
 
   const trackSchemaRefreshJob = (jobId: string) => {
     sharedSchemaRefresh.track(jobId);
@@ -593,9 +597,12 @@ export function TableManagementPage() {
       });
   }, [tableItems, tableOwnerPrefix, tableSearch, tableSort]);
 
+  // 選択の補正は一覧・選択が変わったときだけ行う。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  const fetchDetailRef = useRef(fetchDetail);
+  useLayoutEffect(() => { fetchDetailRef.current = fetchDetail; });
   useEffect(() => {
     if (activeView !== "list") return;
-    if (tableObjectsQuery.isPending || detailRequest.loading) return;
+    if (tableObjectsQuery.isPending || detailLoading) return;
     if (tableObjectsQuery.error && !tableObjectsQuery.data) return;
     const nextTableName = selectedVisibleStringKey(
       filteredTables,
@@ -605,12 +612,12 @@ export function TableManagementPage() {
     );
     if (!nextTableName) {
       selectedTableManualSelection.current = false;
-      if (selectedTableName) detailRequest.clear();
+      if (selectedTableName) clearDetail();
       return;
     }
     if (nextTableName === selectedTableName) return;
     selectedTableManualSelection.current = false;
-    void fetchDetail(nextTableName);
+    void fetchDetailRef.current(nextTableName);
   }, [
     activeView,
     filteredTables,
@@ -618,8 +625,8 @@ export function TableManagementPage() {
     tableObjectsQuery.error,
     tableObjectsQuery.data,
     selectedTableName,
-    detailRequest.loading,
-    detailRequest.clear,
+    detailLoading,
+    clearDetail,
   ]);
 
   const toggleSort = (key: DbObjectSortKey) => {
