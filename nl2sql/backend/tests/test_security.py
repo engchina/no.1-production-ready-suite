@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -68,7 +68,7 @@ from app.security.schemas import (
     PasswordChangeRequest,
     RoleData,
     UserCreateRequest,
-    UserData,
+    user_data,
 )
 from app.security.service import (
     LoginFailed,
@@ -198,6 +198,31 @@ async def _login_api(
     csrf = client.cookies.get("nl2sql_csrf")
     assert csrf
     return cast(dict[str, object], response.json()["data"]), csrf
+
+
+async def _create_role_api(
+    client: httpx.AsyncClient,
+    csrf: str,
+    *,
+    role_code: str,
+    display_name: str,
+    permissions: list[str],
+) -> str:
+    """ロール管理で作成し、権限管理で権限を付ける（#206 で API を分けた）。"""
+    created = await client.post(
+        "/api/security/roles",
+        headers={"X-CSRF-Token": csrf},
+        json={"role_code": role_code, "display_name": display_name},
+    )
+    assert created.status_code == 200, created.text
+    role = created.json()["data"]
+    granted = await client.put(
+        f"/api/security/roles/{role['role_id']}/permissions",
+        headers={"X-CSRF-Token": csrf},
+        json={"version": role["version"], "permissions": permissions},
+    )
+    assert granted.status_code == 200, granted.text
+    return cast(str, role["role_id"])
 
 
 def _create_active_user(
@@ -1454,7 +1479,7 @@ def test_bootstrap_user_is_marked_in_user_response() -> None:
 
     assert admin is not None
     assert admin.is_bootstrap_admin is True
-    assert UserData.from_record(admin).is_bootstrap_admin is True
+    assert user_data(admin).is_bootstrap_admin is True
 
 
 def test_disabled_user_can_be_deleted_with_sessions_and_login_id_reused() -> None:
@@ -1798,8 +1823,6 @@ def test_security_users_api_accepts_one_character_login_user_id(
                 json={
                     "role_code": "SHORT_LOGIN_USER",
                     "display_name": "短いログインユーザーID",
-                    "permissions": ["menu.query"],
-                    "data_entitlements": [],
                 },
             )
             assert role_response.status_code == 200
@@ -2012,21 +2035,25 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("POST", "/nl2sql/persistence/recover") == frozenset(
         {PERSISTENCE_RECOVER_PERMISSION}
     )
-    assert permission_for_route("GET", "/security/roles") == frozenset(
-        {"menu.security_users", "menu.security_roles"}
-    )
-    assert permission_for_route("GET", "/security/roles/{role_id}") == frozenset(
-        {"menu.security_users", "menu.security_roles"}
-    )
+    role_readers = {"menu.security_users", "menu.security_roles", "menu.security_permissions"}
+    assert permission_for_route("GET", "/security/roles") == frozenset(role_readers)
+    assert permission_for_route("GET", "/security/roles/{role_id}") == frozenset(role_readers)
     assert permission_for_route("POST", "/security/roles") == frozenset({"menu.security_roles"})
+    assert permission_for_route("PATCH", "/security/roles/{role_id}") == frozenset(
+        {"menu.security_roles"}
+    )
     assert permission_for_route("POST", "/security/roles/{role_id}/restore") == frozenset(
         {"menu.security_roles"}
     )
+    # 権限の付与はロール管理から分けた権限管理だけが行う（#206）。
+    assert permission_for_route("PUT", "/security/roles/{role_id}/permissions") == frozenset(
+        {"menu.security_permissions"}
+    )
     assert permission_for_route("GET", "/security/permissions") == frozenset(
-        {"menu.security_roles"}
+        {"menu.security_permissions"}
     )
     assert permission_for_route("GET", "/security/profile-access/profiles") == frozenset(
-        {"menu.security_roles"}
+        {"menu.security_permissions"}
     )
     assert permission_for_route("GET", "/security/deepsec/target-objects") == frozenset(
         {"menu.security_deepsec"}
@@ -2566,6 +2593,7 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert "migration=012" in output
     assert "migration=016" in output
     assert "migration=020" in output
+    assert "migration=023" in output
 
 
 def test_security_migration_user_uuid_rename_ignores_missing_constraint() -> None:
@@ -3032,30 +3060,20 @@ def test_api_enforces_menu_permissions(
             )
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
-            role_response = await client.post(
-                "/api/security/roles",
-                headers={"X-CSRF-Token": csrf},
-                json={
-                    "role_code": "HISTORY_VIEWER",
-                    "display_name": "履歴閲覧",
-                    "permissions": ["menu.history"],
-                    "data_entitlements": [],
-                },
+            role_id = await _create_role_api(
+                client,
+                csrf,
+                role_code="HISTORY_VIEWER",
+                display_name="履歴閲覧",
+                permissions=["menu.history"],
             )
-            assert role_response.status_code == 200
-            role_id = role_response.json()["data"]["role_id"]
-            deepsec_role_response = await client.post(
-                "/api/security/roles",
-                headers={"X-CSRF-Token": csrf},
-                json={
-                    "role_code": "DEEPSEC_MANAGER",
-                    "display_name": "DeepSec 管理",
-                    "permissions": ["menu.security_deepsec"],
-                    "data_entitlements": [],
-                },
+            deepsec_role_id = await _create_role_api(
+                client,
+                csrf,
+                role_code="DEEPSEC_MANAGER",
+                display_name="DeepSec 管理",
+                permissions=["menu.security_deepsec"],
             )
-            assert deepsec_role_response.status_code == 200
-            deepsec_role_id = deepsec_role_response.json()["data"]["role_id"]
             user_response = await client.post(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},
@@ -3138,11 +3156,16 @@ def test_api_enforces_menu_permissions(
                 item["role_code"] == "DEEPSEC_MANAGER"
                 for item in entitlement_response.json()["data"]
             )
+            deepsec_role_version = next(
+                item["version"]
+                for item in entitlement_response.json()["data"]
+                if item["role_id"] == deepsec_role_id
+            )
             patch_response = await client.patch(
                 f"/api/security/deepsec/data-entitlements/{deepsec_role_id}",
                 headers={"X-CSRF-Token": csrf},
                 json={
-                    "version": deepsec_role_response.json()["data"]["version"],
+                    "version": deepsec_role_version,
                     "data_entitlements": [
                         {
                             "resource_code": "HR.EMPLOYEES",
@@ -3242,12 +3265,7 @@ def test_user_manager_can_load_role_options_but_not_manage_roles(
             create_role = await client.post(
                 "/api/security/roles",
                 headers={"X-CSRF-Token": csrf},
-                json={
-                    "role_code": "SHOULD_NOT_CREATE",
-                    "display_name": "作成不可",
-                    "permissions": ["menu.security_users"],
-                    "data_entitlements": [],
-                },
+                json={"role_code": "SHOULD_NOT_CREATE", "display_name": "作成不可"},
             )
             assert create_role.status_code == 403
 
@@ -3430,12 +3448,7 @@ def test_security_conflicts_and_validation_use_problem_contract(
                 "X-CSRF-Token": csrf,
                 "X-Request-ID": "security-problem-contract-test",
             }
-            role_payload = {
-                "role_code": "DATA_USER",
-                "display_name": "データユーザー",
-                "permissions": ["menu.query"],
-                "data_entitlements": [],
-            }
+            role_payload = {"role_code": "DATA_USER", "display_name": "データユーザー"}
             created_role = await client.post(
                 "/api/security/roles",
                 headers=headers,
@@ -3630,19 +3643,22 @@ def test_role_manager_cannot_manage_users(monkeypatch: pytest.MonkeyPatch) -> No
             assert any(
                 item["role_code"] == "ROLE_MANAGER_ONLY" for item in roles_response.json()["data"]
             )
-            assert (await client.get("/api/security/permissions")).status_code == 200
+            # 権限の付与は権限管理（menu.security_permissions）の担当（#206）。
+            assert (await client.get("/api/security/permissions")).status_code == 403
 
             create_role = await client.post(
                 "/api/security/roles",
                 headers={"X-CSRF-Token": csrf},
-                json={
-                    "role_code": "ROLE_MANAGER_CREATED",
-                    "display_name": "作成可",
-                    "permissions": ["menu.history"],
-                    "data_entitlements": [],
-                },
+                json={"role_code": "ROLE_MANAGER_CREATED", "display_name": "作成可"},
             )
             assert create_role.status_code == 200
+            created = create_role.json()["data"]
+            grant = await client.put(
+                f"/api/security/roles/{created['role_id']}/permissions",
+                headers={"X-CSRF-Token": csrf},
+                json={"version": created["version"], "permissions": []},
+            )
+            assert grant.status_code == 403
 
             assert (await client.get("/api/security/users")).status_code == 403
             create_user = await client.post(
@@ -3893,7 +3909,7 @@ def test_role_manager_can_add_profile_manage_to_role_with_explicit_profiles(
         role_code="ROLE_MANAGER_PROFILES",
         display_name="ロール管理 + 業務プロファイル",
         description="",
-        permissions={"menu.security_roles", "menu.profiles"},
+        permissions={"menu.security_roles", "menu.security_permissions", "menu.profiles"},
         entitlements=[],
         actor=admin,
     )
@@ -3923,13 +3939,11 @@ def test_role_manager_can_add_profile_manage_to_role_with_explicit_profiles(
     ) -> httpx.Response:
         current = service.get_role(target.role_id)
         assert current is not None
-        return await client.patch(
-            f"/api/security/roles/{target.role_id}",
+        return await client.put(
+            f"/api/security/roles/{target.role_id}/permissions",
             headers={"X-CSRF-Token": csrf},
             json={
                 "version": current.version,
-                "display_name": current.display_name,
-                "description": current.description,
                 "permissions": permissions,
                 "allowed_profile_ids": allowed_profile_ids,
             },
@@ -3964,7 +3978,7 @@ def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.Monk
         role_code="ROLE_MANAGER_HISTORY",
         display_name="ロール管理 + 実行履歴",
         description="",
-        permissions={"menu.security_roles", "menu.history"},
+        permissions={"menu.security_roles", "menu.security_permissions", "menu.history"},
         entitlements=[],
         actor=admin,
     )
@@ -3990,15 +4004,10 @@ def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.Monk
     ) -> httpx.Response:
         current = service.get_role(role_id)
         assert current is not None
-        return await client.patch(
-            f"/api/security/roles/{role_id}",
+        return await client.put(
+            f"/api/security/roles/{role_id}/permissions",
             headers={"X-CSRF-Token": csrf},
-            json={
-                "version": current.version,
-                "display_name": current.display_name,
-                "description": current.description,
-                "permissions": permissions,
-            },
+            json={"version": current.version, "permissions": permissions},
         )
 
     async def exercise() -> None:
@@ -4012,7 +4021,12 @@ def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.Monk
                 client,
                 csrf,
                 manager_role.role_id,
-                ["menu.security_roles", "menu.history", "menu.security_users"],
+                [
+                    "menu.security_roles",
+                    "menu.security_permissions",
+                    "menu.history",
+                    "menu.security_users",
+                ],
             )
             assert self_escalation.status_code == 403
             assert "自分が持たない権限" in self_escalation.json()["error_messages"][0]
@@ -4036,7 +4050,11 @@ def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.Monk
 
     manager_after = service.get_role(manager_role.role_id)
     assert manager_after is not None
-    assert manager_after.permissions == {"menu.security_roles", "menu.history"}
+    assert manager_after.permissions == {
+        "menu.security_roles",
+        "menu.security_permissions",
+        "menu.history",
+    }
 
 
 def test_archived_role_cannot_be_updated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4088,7 +4106,7 @@ def test_archived_role_cannot_be_updated(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_role_patch_preserves_deepsec_entitlements(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ロール画面の保存(PATCH)は DeepSec の Data Grant 定義を一切変更しない。"""
+    """ロール管理の PATCH と権限管理の PUT は DeepSec の Data Grant 定義を一切変更しない。"""
     service = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
     service.store.set_password(
@@ -4159,19 +4177,35 @@ def test_role_patch_preserves_deepsec_entitlements(monkeypatch: pytest.MonkeyPat
             assert response.status_code == 200, response.text
             data = response.json()["data"]
             assert data["display_name"] == "営業閲覧(改名)"
-            assert data["permissions"] == ["menu.history", "menu.query"]
-            assert len(data["data_entitlements"]) == 1
-            after = data["data_entitlements"][0]
-            assert after["entitlement_id"] == before.entitlement_id
-            assert after["target_owner"] == "SALES"
-            assert after["target_object"] == "ORDERS"
-            assert after["column_names"] == ["ORDER_ID", "REGION"]
-            assert after["scope_mode"] == "FILTERS"
-            assert after["scope_code"] == before.scope_code
-            assert [item["column_name"] for item in after["scope_filters"]] == ["REGION"]
-            assert after["data_grant_name"] == "NL2SQL_DG_TEST"
-            assert after["sql_checksum"] == "checksum-test"
-            assert after["apply_status"] == "APPLIED"
+            # ロール管理の PATCH は基本情報だけを更新し、権限は変えない（#206）。
+            assert data["permissions"] == ["menu.query"]
+            assert_entitlement_preserved(data)
+
+            # 権限管理の PUT も権限だけを更新し、名称と Data Grant を保つ。
+            granted = await client.put(
+                f"/api/security/roles/{role.role_id}/permissions",
+                headers={"X-CSRF-Token": csrf},
+                json={"version": data["version"], "permissions": ["menu.query", "menu.history"]},
+            )
+            assert granted.status_code == 200, granted.text
+            granted_data = granted.json()["data"]
+            assert granted_data["display_name"] == "営業閲覧(改名)"
+            assert granted_data["permissions"] == ["menu.history", "menu.query"]
+            assert_entitlement_preserved(granted_data)
+
+    def assert_entitlement_preserved(data: dict[str, Any]) -> None:
+        assert len(data["data_entitlements"]) == 1
+        after = data["data_entitlements"][0]
+        assert after["entitlement_id"] == before.entitlement_id
+        assert after["target_owner"] == "SALES"
+        assert after["target_object"] == "ORDERS"
+        assert after["column_names"] == ["ORDER_ID", "REGION"]
+        assert after["scope_mode"] == "FILTERS"
+        assert after["scope_code"] == before.scope_code
+        assert [item["column_name"] for item in after["scope_filters"]] == ["REGION"]
+        assert after["data_grant_name"] == "NL2SQL_DG_TEST"
+        assert after["sql_checksum"] == "checksum-test"
+        assert after["apply_status"] == "APPLIED"
 
     try:
         asyncio.run(exercise())
@@ -4604,7 +4638,7 @@ def test_user_data_marks_unresolved_assigned_role_as_inactive() -> None:
         role_ids=["missing-role-id"],
     )
 
-    data = UserData.from_record(user)
+    data = user_data(user)
 
     assert data.role_ids == ["missing-role-id"]
     assert data.assigned_roles[0].role_id == "missing-role-id"
@@ -4665,18 +4699,13 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
             admin_user_id = admin_login.json()["data"]["user_uuid"]
             csrf = client.cookies.get("nl2sql_csrf")
             assert csrf
-            role_response = await client.post(
-                "/api/security/roles",
-                headers={"X-CSRF-Token": csrf},
-                json={
-                    "role_code": "HISTORY_OWNER_VIEWER",
-                    "display_name": "履歴閲覧",
-                    "permissions": ["menu.history"],
-                    "data_entitlements": [],
-                },
+            role_id = await _create_role_api(
+                client,
+                csrf,
+                role_code="HISTORY_OWNER_VIEWER",
+                display_name="履歴閲覧",
+                permissions=["menu.history"],
             )
-            assert role_response.status_code == 200
-            role_id = role_response.json()["data"]["role_id"]
             user_response = await client.post(
                 "/api/security/users",
                 headers={"X-CSRF-Token": csrf},

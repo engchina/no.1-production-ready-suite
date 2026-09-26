@@ -183,6 +183,11 @@ const SecurityRolesPage = lazy(() =>
     default: module.SecurityRolesPage,
   }))
 );
+const SecurityPermissionsPage = lazy(() =>
+  import("@/features/security/SecurityPermissionsPage").then((module) => ({
+    default: module.SecurityPermissionsPage,
+  }))
+);
 const SecurityDeepSecPage = lazy(() =>
   import("@/features/security/SecurityDeepSecPage").then((module) => ({
     default: module.SecurityDeepSecPage,
@@ -343,6 +348,7 @@ function AuthenticatedApplication() {
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+            <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
             <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
             <Route
               path={APP_ROUTES.legacyNl2sqlModelLearning}

@@ -7,11 +7,11 @@ const apiSource = readFileSync(
   "utf8"
 );
 const usersPageSource = readFileSync(
-  new URL("../src/features/security/SecurityUsersPage.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx", import.meta.url),
   "utf8"
 );
 const rolesPageSource = readFileSync(
-  new URL("../src/features/security/SecurityRolesPage.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url),
   "utf8"
 );
 

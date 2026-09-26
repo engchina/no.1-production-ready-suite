@@ -53,8 +53,8 @@ test("handwritten danger surfaces stay limited to structured state and field con
 });
 
 test("security create forms bind server field errors without parsing Japanese strings", () => {
-  const users = readFileSync(new URL("../src/features/security/SecurityUsersPage.tsx", import.meta.url), "utf8");
-  const roles = readFileSync(new URL("../src/features/security/SecurityRolesPage.tsx", import.meta.url), "utf8");
+  const users = readFileSync(new URL("../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx", import.meta.url), "utf8");
+  const roles = readFileSync(new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url), "utf8");
 
   assert.match(users, /"\/login_user_id": "loginUserId"/u);
   assert.match(users, /aria-describedby=\{fieldErrors\.loginUserId/u);

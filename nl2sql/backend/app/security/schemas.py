@@ -7,6 +7,19 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
+from pr_system_settings.users_roles import AssignedRoleData as AssignedRoleData
+from pr_system_settings.users_roles import PasswordResetData as PasswordResetData
+from pr_system_settings.users_roles import PasswordResetRequest as PasswordResetRequest
+from pr_system_settings.users_roles import RoleCreateRequest as RoleCreateRequest
+from pr_system_settings.users_roles import RoleData as SharedRoleData
+from pr_system_settings.users_roles import RoleDeleteData as RoleDeleteData
+from pr_system_settings.users_roles import RoleUpdateRequest as RoleUpdateRequest
+from pr_system_settings.users_roles import UserCreateData as UserCreateData
+from pr_system_settings.users_roles import UserCreateRequest as UserCreateRequest
+from pr_system_settings.users_roles import UserData as UserData
+from pr_system_settings.users_roles import UserDeleteData as UserDeleteData
+from pr_system_settings.users_roles import UserUpdateRequest as UserUpdateRequest
+from pr_system_settings.users_roles import VersionRequest as VersionRequest
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.features.nl2sql.object_identity import (
@@ -53,7 +66,6 @@ _SCOPE_FILTER_OPERATORS = {
 _SCOPE_FILTER_VALUE_TYPES = {"TEXT", "NUMBER", "TEMPORAL"}
 _SCOPE_FILTER_VALUE_SOURCES = {"LITERAL", LOGIN_USER_ID_SCOPE_VALUE_SOURCE}
 _POSITIVE_INTEGER_VALUE_RE = re.compile(r"[1-9]\d*")
-_LOGIN_USER_ID_RE = re.compile(r"(?=.*[A-Za-z0-9])[A-Za-z0-9._-]{1,64}")
 _MAX_SCOPE_FILTERS = 8
 _MAX_SCOPE_FILTER_VALUES = 25
 
@@ -399,78 +411,17 @@ class DataEntitlementInput(BaseModel):
         )
 
 
-class RoleCreateRequest(BaseModel):
-    role_code: str = Field(min_length=2, max_length=64)
-    display_name: str = Field(min_length=1, max_length=256)
-    description: str = Field(default="", max_length=1000)
-    permissions: list[str] = Field(default_factory=list)
-    data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
-    allowed_profile_ids: list[str] = Field(default_factory=list)
+class RolePermissionsUpdateRequest(BaseModel):
+    """権限管理画面の保存。ロールの menu 権限と業務プロファイル利用権限だけを更新する。"""
 
-    @field_validator("role_code")
-    @classmethod
-    def normalize_role_code(cls, value: str) -> str:
-        normalized = value.strip().upper()
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", normalized):
-            raise ValueError("ロールコードは英大文字・数字・アンダースコアで指定してください。")
-        return normalized
-
-
-class RoleUpdateRequest(BaseModel):
     version: int = Field(ge=1)
-    display_name: str = Field(min_length=1, max_length=256)
-    description: str = Field(default="", max_length=1000)
     permissions: list[str] = Field(default_factory=list)
     allowed_profile_ids: list[str] | None = None
 
 
-class RoleArchiveRequest(BaseModel):
-    version: int = Field(ge=1)
-
-
-class RoleRestoreRequest(BaseModel):
-    version: int = Field(ge=1)
-
-
-class UserCreateRequest(BaseModel):
-    login_user_id: str = Field(min_length=1, max_length=64)
-    display_name: str = Field(min_length=1, max_length=256)
-    role_ids: list[str] = Field(default_factory=list)
-    temporary_password: str | None = Field(default=None, max_length=256)
-
-    @field_validator("login_user_id")
-    @classmethod
-    def validate_login_user_id(cls, value: str) -> str:
-        normalized = value.strip()
-        if not _LOGIN_USER_ID_RE.fullmatch(normalized):
-            raise ValueError(
-                "ログインユーザーIDは英数字を1文字以上含め、英数字と . _ - を使い"
-                "1～64 文字で入力してください。"
-            )
-        return normalized
-
-
-class UserUpdateRequest(BaseModel):
-    version: int = Field(ge=1)
-    display_name: str = Field(min_length=1, max_length=256)
-    status: str
-    role_ids: list[str] = Field(default_factory=list)
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, value: str) -> str:
-        normalized = value.strip().upper()
-        if normalized not in {"ACTIVE", "DISABLED"}:
-            raise ValueError("status は ACTIVE または DISABLED です。")
-        return normalized
-
-
-class PasswordResetRequest(BaseModel):
-    temporary_password: str | None = Field(default=None, max_length=256)
-
-
-class VersionRequest(BaseModel):
-    version: int = Field(ge=1)
+# 版だけを送る操作は共通契約の VersionRequest と同じ形。
+RoleArchiveRequest = VersionRequest
+RoleRestoreRequest = VersionRequest
 
 
 class DeepSecApplyRequest(BaseModel):
@@ -565,14 +516,9 @@ class DataEntitlementData(BaseModel):
         )
 
 
-class RoleData(BaseModel):
-    role_id: str
-    role_code: str
-    display_name: str
-    description: str
-    is_built_in: bool
-    archived: bool
-    version: int
+class RoleData(SharedRoleData):
+    """共通のロール項目に、NL2SQL の権限・業務プロファイル・Data Grant を足す。"""
+
     permissions: list[str]
     data_entitlements: list[DataEntitlementData]
     allowed_profile_ids: list[str]
@@ -591,12 +537,6 @@ class RoleData(BaseModel):
             data_entitlements=[DataEntitlementData.from_record(item) for item in role.entitlements],
             allowed_profile_ids=sorted(role.allowed_profile_ids),
         )
-
-
-class RoleDeleteData(BaseModel):
-    deleted: bool = True
-    role_id: str
-    role_code: str
 
 
 class DeepSecTargetObjectData(BaseModel):
@@ -708,89 +648,41 @@ class DeepSecDataEntitlementApplyData(BaseModel):
     applied_count: int = Field(ge=0)
 
 
-class AssignedRoleData(BaseModel):
-    role_id: str
-    role_code: str
-    display_name: str
-    is_built_in: bool
-    archived: bool
-
-    @classmethod
-    def from_record(cls, role: RoleRecord) -> AssignedRoleData:
-        return cls(
-            role_id=role.role_id,
-            role_code=role.role_code,
-            display_name=role.display_name,
-            is_built_in=role.is_built_in,
-            archived=role.archived,
-        )
-
-    @classmethod
-    def unresolved(cls, role_id: str) -> AssignedRoleData:
-        return cls(
-            role_id=role_id,
-            role_code=role_id,
-            display_name=role_id,
-            is_built_in=False,
-            archived=True,
-        )
+def assigned_role_data(role: RoleRecord) -> AssignedRoleData:
+    return AssignedRoleData(
+        role_id=role.role_id,
+        role_code=role.role_code,
+        display_name=role.display_name,
+        is_built_in=role.is_built_in,
+        archived=role.archived,
+    )
 
 
-class UserData(BaseModel):
-    user_uuid: str
-    login_user_id: str
-    display_name: str
-    status: str
-    force_password_change: bool
-    locked_until: datetime | None
-    version: int
-    role_ids: list[str]
-    assigned_roles: list[AssignedRoleData]
-    is_bootstrap_admin: bool
-
-    @classmethod
-    def from_record(
-        cls,
-        user: UserRecord,
-        *,
-        roles_by_id: Mapping[str, RoleRecord] | None = None,
-    ) -> UserData:
-        role_lookup = roles_by_id or {}
-        return cls(
-            user_uuid=user.user_uuid,
-            login_user_id=user.login_user_id,
-            display_name=user.display_name,
-            status=user.status,
-            force_password_change=user.force_password_change,
-            locked_until=user.locked_until,
-            version=user.version,
-            role_ids=user.role_ids,
-            assigned_roles=[
-                (
-                    AssignedRoleData.from_record(role_lookup[role_id])
-                    if role_id in role_lookup
-                    else AssignedRoleData.unresolved(role_id)
-                )
-                for role_id in user.role_ids
-            ],
-            is_bootstrap_admin=user.is_bootstrap_admin,
-        )
-
-
-class UserCreateData(BaseModel):
-    user: UserData
-    temporary_password: str
-
-
-class UserDeleteData(BaseModel):
-    deleted: bool = True
-    user_uuid: str
-    login_user_id: str
-
-
-class PasswordResetData(BaseModel):
-    user: UserData
-    temporary_password: str
+def user_data(
+    user: UserRecord,
+    *,
+    roles_by_id: Mapping[str, RoleRecord] | None = None,
+) -> UserData:
+    role_lookup = roles_by_id or {}
+    return UserData(
+        user_uuid=user.user_uuid,
+        login_user_id=user.login_user_id,
+        display_name=user.display_name,
+        status=user.status,
+        force_password_change=user.force_password_change,
+        locked_until=user.locked_until,
+        version=user.version,
+        role_ids=user.role_ids,
+        assigned_roles=[
+            (
+                assigned_role_data(role_lookup[role_id])
+                if role_id in role_lookup
+                else AssignedRoleData.unresolved(role_id)
+            )
+            for role_id in user.role_ids
+        ],
+        is_bootstrap_admin=user.is_bootstrap_admin,
+    )
 
 
 class CurrentUserData(BaseModel):

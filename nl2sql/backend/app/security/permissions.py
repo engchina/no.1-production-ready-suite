@@ -209,9 +209,11 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "SQL生成評価",
         implies=(PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION),
     ),
-    _menu_permission("menu.security_users", "セキュリティ管理", "ユーザー管理"),
-    _menu_permission("menu.security_roles", "セキュリティ管理", "ロール・権限管理"),
-    _menu_permission("menu.security_deepsec", "セキュリティ管理", "Deep Data Security"),
+    # ユーザー管理・ロール管理は3製品共通の画面（#206）。権限管理と DeepSec は NL2SQL 固有。
+    _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
+    _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
+    _menu_permission("menu.security_permissions", "NL2SQL セキュリティ", "権限管理"),
+    _menu_permission("menu.security_deepsec", "NL2SQL セキュリティ", "Deep Data Security"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
     _menu_permission("menu.settings_upload_storage", "システム設定", "アップロード保存先"),
     _menu_permission("menu.settings_model", "システム設定", "モデル"),
@@ -461,7 +463,7 @@ LEGACY_PERMISSION_ALIASES: dict[str, tuple[str, ...]] = {
     "security.users.view": ("menu.security_users",),
     "security.users.manage": ("menu.security_users",),
     "security.roles.view": ("menu.security_roles",),
-    "security.roles.manage": ("menu.security_roles",),
+    "security.roles.manage": ("menu.security_roles", "menu.security_permissions"),
     "security.deepsec.view": ("menu.security_deepsec",),
     "security.deepsec.apply": ("menu.security_deepsec",),
     "security.deepsec.verify": ("menu.security_deepsec",),
@@ -551,11 +553,13 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return None
     if route_path.startswith("/security/users"):
         return _allowed("menu.security_users")
-    if route_path.startswith("/security/profile-access"):
-        return _allowed("menu.security_roles")
+    if route_path.startswith("/security/profile-access") or route_path == "/security/permissions":
+        return _allowed("menu.security_permissions")
+    if route_path == "/security/roles/{role_id}/permissions":
+        return _allowed("menu.security_permissions")
     if route_path.startswith("/security/roles") and method == "GET":
-        return _allowed("menu.security_users", "menu.security_roles")
-    if route_path.startswith("/security/roles") or route_path == "/security/permissions":
+        return _allowed("menu.security_users", "menu.security_roles", "menu.security_permissions")
+    if route_path.startswith("/security/roles"):
         return _allowed("menu.security_roles")
     if route_path.startswith("/security/deepsec"):
         return _allowed("menu.security_deepsec")

@@ -82,6 +82,10 @@ _SECURITY_CONFLICT_TITLES = {
 }
 
 
+# ロール管理・権限管理のどちらかを持つ actor は、アーカイブ済みを含む全ロールを参照できる（#206）。
+_ROLE_CATALOG_PERMISSIONS = frozenset({"menu.security_roles", "menu.security_permissions"})
+
+
 class SecurityApiError(RuntimeError):
     def __init__(
         self,
@@ -590,7 +594,7 @@ class SecurityService:
     def list_roles_for_actor(
         self, actor: Principal, *, include_archived: bool = False
     ) -> list[RoleRecord]:
-        if actor.has_permission("menu.security_roles"):
+        if actor.has_any_permission(_ROLE_CATALOG_PERMISSIONS):
             return self.list_roles(include_archived=include_archived)
         return [
             role
@@ -602,7 +606,7 @@ class SecurityService:
         role = self.get_role(role_id)
         if role is None:
             return None
-        if actor.has_permission("menu.security_roles"):
+        if actor.has_any_permission(_ROLE_CATALOG_PERMISSIONS):
             return role
         if self._actor_can_assign_role(actor, role):
             return role
@@ -660,14 +664,19 @@ class SecurityService:
         role_id: str,
         *,
         expected_version: int,
-        display_name: str,
-        description: str,
-        permissions: set[str],
+        display_name: str | None = None,
+        description: str | None = None,
+        permissions: set[str] | None = None,
         allowed_profile_ids: set[str] | None = None,
         actor: Principal,
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
+        """ロールを更新する。None の項目は現在値を保つ。
+
+        ロール管理画面は基本情報（名称・説明）だけ、権限管理画面は権限と業務プロファイル利用権限だけを
+        送る（#206）。どちらもこの経路を通るので、権限昇格の防止は常に同じ判定になる。
+        """
         current = self.get_role(role_id)
         if current is None:
             raise SecurityApiError(404, "ロールが見つかりません。")
@@ -683,9 +692,9 @@ class SecurityService:
         role = self._build_role(
             role_id=role_id,
             role_code=current.role_code,
-            display_name=display_name,
-            description=description,
-            permissions=permissions,
+            display_name=current.display_name if display_name is None else display_name,
+            description=current.description if description is None else description,
+            permissions=set(current.permissions) if permissions is None else permissions,
             # Data Grant は DeepSec 画面のみが管理するため、ロール編集では現在値を保持する。
             entitlements=list(current.entitlements),
             allowed_profile_ids=requested_profile_ids,

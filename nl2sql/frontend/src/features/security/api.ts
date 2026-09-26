@@ -1,12 +1,12 @@
 import { normalizeExpression } from "./scope-expression";
 import { formatDbObjectPart } from "@/features/nl2sql/dbObjectIdentity";
-import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
+import type { RoleDraft, UserDraft } from "@engchina/production-ready-system-settings";
 
 import type {
   CurrentUser,
   ScopeProfile,
   ScopeRelationCatalog,
-  DataEntitlement,
   DeepSecDataEntitlementApplyResult,
   DeepSecDataEntitlementPreview,
   DeepSecPlan,
@@ -25,21 +25,13 @@ import type {
   SecurityUserDeleteResult,
 } from "./types";
 
-export interface UserDraft {
-  login_user_id: string;
-  display_name: string;
-  role_ids: string[];
-  temporary_password?: string;
-}
+export type { RoleDraft, UserDraft };
 
-export interface RoleDraft {
-  role_code: string;
-  display_name: string;
-  description: string;
-  permissions: string[];
-  data_entitlements: DataEntitlement[];
-  allowed_profile_ids?: string[];
-}
+/** 権限管理画面が送る、ロールの権限と業務プロファイル利用権限（#206）。 */
+export type RolePermissionsDraft = Pick<
+  SecurityRole,
+  "role_id" | "version" | "permissions" | "allowed_profile_ids"
+>;
 
 function dataEntitlementPayload(role: Pick<DeepSecRoleEntitlements, "data_entitlements">) {
   return role.data_entitlements.map(
@@ -128,11 +120,16 @@ export const securityApi = {
       options
     ),
   createRole: (draft: RoleDraft) => apiPost<SecurityRole>("/api/security/roles", draft),
+  // ロール管理（共通画面）は基本情報だけを送る。権限は updateRolePermissions（権限管理）で送る（#206）。
   updateRole: (role: SecurityRole) =>
     apiPatch<SecurityRole>(`/api/security/roles/${role.role_id}`, {
       version: role.version,
       display_name: role.display_name,
       description: role.description,
+    }),
+  updateRolePermissions: (role: RolePermissionsDraft) =>
+    apiPut<SecurityRole>(`/api/security/roles/${role.role_id}/permissions`, {
+      version: role.version,
       permissions: role.permissions,
       allowed_profile_ids: role.allowed_profile_ids,
     }),
