@@ -64,7 +64,7 @@
 ### 横断
 - 観測性: **Langfuse**(LLM トレース/コスト)+ Prometheus + OpenTelemetry。
 - 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: Docker Compose(開発)→ OKE / Container Instances(本番)、Terraform(OCI Resource Manager)。
+- インフラ: Docker Compose(開発)→ OKE / Container Instances(本番)、Terraform(OCI Resource Manager。monorepo root の統合 stack `terraform/stack/`、#217)。
 
 ## UI/UX 開発ルール
 

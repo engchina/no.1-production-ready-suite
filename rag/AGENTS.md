@@ -59,7 +59,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 - 観測性: Langfuse + Prometheus + OpenTelemetry。
 - 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: Docker Compose(開発)。OCI Resource Manager の Terraform stack(`terraform/stack/`、Compute 1 台 + ADB + Docker Compose、CPU parser のみ)で配備する。OKE / Container Instances は規模が決まってから検討する(#136)。
+- インフラ: Docker Compose(開発)。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB + Docker Compose、CPU parser のみ)で配備する。OKE / Container Instances は規模が決まってから検討する(#136)。
 
 ## UI/UX 開発ルール
 

@@ -9,26 +9,29 @@ Generative AI.
 Click the button below to open OCI Resource Manager with the Osaka region
 (`ap-osaka-1`) selected by default.
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/nl2sql-v0.1.32/production-ready-nl2sql-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/suite-v0.1.0/production-ready-suite-terraform-stack.zip)
 
-The button downloads the nl2sql-v0.1.32 Terraform Resource Manager stack release asset
-from the `no.1-production-ready-suite` monorepo:
+NL2SQL is deployed by the suite-wide stack (`terraform/stack/` at the monorepo
+root, #217). One Autonomous AI Database is shared with RAG and the Agent Control
+Plane, and NL2SQL gets its own Compute instance. Select NL2SQL under
+「配備する製品」 in the Resource Manager form. The button uses the pinned
+`suite-v0.1.0` release asset `production-ready-suite-terraform-stack.zip`; it
+works once that release is published. Always pin a `suite-v*` tag instead of
+`releases/latest`.
 
-`production-ready-nl2sql-terraform-stack.zip`
-
-Latest release:
-[nl2sql-v0.1.32](https://github.com/engchina/no.1-production-ready-suite/releases/tag/nl2sql-v0.1.32).
-The monorepo publishes releases for several products, so always pin the
-`nl2sql-v*` tag instead of `releases/latest`. Releases up to v0.1.31 remain in the
+The per-product release
+[nl2sql-v0.1.32](https://github.com/engchina/no.1-production-ready-suite/releases/tag/nl2sql-v0.1.32)
+remains available but is no longer updated. Releases up to v0.1.31 remain in the
 archived `no.1-production-ready-nl2sql` repository, but they clone the old
 two-repository layout and must not be used for new deployments.
 
 The Compute deployment serves the frontend through Nginx on HTTP port `80` and
 proxies API calls through the same origin at `/api/...`.
 
-At least one GitHub Release must publish that asset before the one-click deploy
-URL can create a stack. For manual packaging, upload steps, required variables,
-and troubleshooting, see [terraform/README.md](terraform/README.md).
+For the stack inputs, packaging, and releases, see
+[terraform/README.md](../terraform/README.md). For what runs on the NL2SQL
+Compute instance, updates, and troubleshooting, see
+[docs/compute-operations.md](docs/compute-operations.md).
 
 ## OCI Compute のソース更新後の再デプロイ
 
@@ -79,7 +82,7 @@ database migration、サービス再起動、health check も含まれます。
 
 `--repair-only` は依存同期とビルド・frontend 公開を省略するため、共有コンポーネントの更新を
 反映するときは **引数なし** で実行してください。`--check` は読み取り専用の確認です。
-詳細な前提条件と運用手順は [terraform/README.md](terraform/README.md) を参照してください。
+詳細な前提条件と運用手順は [docs/compute-operations.md](docs/compute-operations.md) を参照してください。
 
 ## Stack Boundaries
 

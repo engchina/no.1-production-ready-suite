@@ -86,8 +86,9 @@ manifest を検証して digest を明示更新してください。
 
 ## OCI への配備（Resource Manager）
 
-Compute 1 台 + Autonomous AI Database を OCI Resource Manager で配備する Terraform stack を
-`terraform/stack/` に置いています。入力・instance 上の構成・制約は [terraform/README.md](terraform/README.md) を参照してください。
+3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database は RAG / NL2SQL と共有し、
+Agent Control Plane は専用の Compute 1 台に配備します。「配備する製品」で Agent Control Plane を選び、入力・instance 上の構成・制約は
+[terraform/README.md](../terraform/README.md) を参照してください。
 
 ## 主要 API
 

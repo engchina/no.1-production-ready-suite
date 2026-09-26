@@ -167,6 +167,7 @@ cd "${OLD_APP}" && sudo ./scripts/update-after-pull.sh --repair-only
 
 既存の Compute は cloud-init を作成時にしか実行しないため、**稼働中の Compute に対してこの節の作業は不要**。
 stack を新しい zip（`nl2sql-v0.1.32` 以降）へ更新して Compute を作り直す場合だけ、次に注意する。
+（2026-09 以降は3製品共通の統合 stack（`suite-v*`、[terraform/README.md](../../terraform/README.md)）に移行した。新しく作る場合は統合 stack を使い、製品ごとの stack からの移行は同 README の「製品ごとの stack からの移行」を参照する。）
 
 - 新しい stack には `platform_git_url` / `platform_git_ref` 変数がない（suite を1回 clone するため）。
 - stack に保存済みの `application_git_url` が旧 URL（`https://github.com/engchina/no.1-production-ready-nl2sql.git`）のままだと、

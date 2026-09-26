@@ -27,6 +27,7 @@ jobs:
       rag: ${{ steps.filter.outputs.rag }}
       nl2sql: ${{ steps.filter.outputs.nl2sql }}
       agent: ${{ steps.filter.outputs.agent }}
+      terraform: ${{ steps.filter.outputs.terraform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -45,6 +46,8 @@ jobs:
               - "nl2sql/**"
             agent:
               - "agent/**"
+            terraform:
+              - "terraform/**"
 
   secret-scan:
     name: Secret scan (gitleaks)
@@ -377,8 +380,9 @@ jobs:
       - name: Validate compose config
         run: docker compose config --quiet
 
-  rag-terraform:
-    name: RAG / Terraform
+  # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ RAG の init_script.sh を検証する（#217）。
+  rag-init-script:
+    name: RAG / Compute init script
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
@@ -394,38 +398,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.5.7"
-
       # docker compose で生成した override も検証する（ubuntu-latest には docker compose がある）。
       - name: Test Compute init script
         run: |
-          bash -n init_script.sh terraform/stack/extract_wallet.sh scripts/tests/init-script-deployment.test.sh
+          bash -n init_script.sh scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/init-script-deployment.test.sh
-
-      - name: Format check
-        run: terraform fmt -check -recursive terraform/stack
-
-      - name: Initialize Terraform
-        working-directory: rag/terraform/stack
-        run: terraform init -backend=false
-
-      - name: Validate Terraform
-        working-directory: rag/terraform/stack
-        run: terraform validate
-
-      - name: Package stack
-        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-rag-terraform-stack.zip
-
-      - name: Verify stack contract
-        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-rag-terraform-stack.zip
 
   # ---------------------------------------------------------------- nl2sql
 
-  nl2sql-terraform:
-    name: NL2SQL / Terraform
+  nl2sql-deploy-scripts:
+    name: NL2SQL / Deployment scripts
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
@@ -441,11 +423,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.5.7"
-
       - name: Test deployment update and recovery scripts
         run: |
           bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh scripts/start-frontend.sh ../rag/scripts/start-frontend.sh ../agent/scripts/start-frontend.sh
@@ -456,153 +433,6 @@ jobs:
           bash scripts/tests/start-frontend.test.sh
           bash scripts/tests/start-frontend.test.sh ../rag/scripts/start-frontend.sh
           bash scripts/tests/start-frontend.test.sh ../agent/scripts/start-frontend.sh
-
-      - name: Format check
-        run: terraform fmt -check -recursive terraform/stack
-
-      - name: Initialize Terraform
-        working-directory: nl2sql/terraform/stack
-        run: terraform init -backend=false
-
-      - name: Validate Terraform
-        working-directory: nl2sql/terraform/stack
-        run: terraform validate
-
-      - name: Package stack
-        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-nl2sql-terraform-stack.zip
-
-      - name: Verify ADB stack contract
-        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-nl2sql-terraform-stack.zip
-
-      - name: Verify package contents
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          import stat
-          import zipfile
-
-          package = Path("/tmp/production-ready-nl2sql-terraform-stack.zip")
-          required = {
-              "schema.yaml",
-              "adb.tf",
-              "compute.tf",
-              "datasources.tf",
-              "locals.tf",
-              "output.tf",
-              "provider.tf",
-              "variables.tf",
-              "versions.tf",
-              "extract_wallet.sh",
-              "cloud_init/bootstrap.template.yaml",
-          }
-          forbidden_names = {
-              ".terraform.lock.hcl",
-              "wallet_full.zip",
-              "wallet_small.zip",
-          }
-          with zipfile.ZipFile(package) as archive:
-              names = set(archive.namelist())
-              missing = required - names
-              forbidden = {
-                  name
-                  for name in names
-                  if name in forbidden_names
-                  or name.startswith(".terraform/")
-                  or name.endswith(".tfstate")
-                  or ".tfstate." in name
-                  or name.endswith(".tfvars")
-                  or name.endswith(".tfvars.json")
-                  or (name.startswith("wallet") and name.endswith(".zip"))
-              }
-              mode = archive.getinfo("extract_wallet.sh").external_attr >> 16
-              locals_tf = archive.read("locals.tf").decode()
-              schema_yaml = archive.read("schema.yaml").decode()
-              variables_tf = archive.read("variables.tf").decode()
-          if missing:
-              raise SystemExit(f"missing package entries: {sorted(missing)}")
-          if forbidden:
-              raise SystemExit(f"forbidden package entries: {sorted(forbidden)}")
-          if not mode & stat.S_IXUSR:
-              raise SystemExit("extract_wallet.sh is not executable in package")
-          if (
-              "APP_ADMIN_LOGIN_USER_ID=" not in locals_tf
-              or "APP_ADMIN_LOGIN_USER_PASSWORD=" not in locals_tf
-          ):
-              raise SystemExit("APP_ADMIN credentials are missing from backend.env")
-          deepsec_schema_group = re.search(
-              r"- title: Deep Data Security\s+visible: true\s+variables:\s+"
-              r"- oracle_deepsec_enabled\s+"
-              r"- oracle_deepsec_data_user_password",
-              schema_yaml,
-          )
-          if not deepsec_schema_group:
-              raise SystemExit("DeepSec toggle/password are missing from the visible Resource Manager group")
-          deepsec_enabled_schema_block = re.search(
-              r"(?ms)^  oracle_deepsec_enabled:\n(?:(?:    .*)\n)+",
-              schema_yaml,
-          )
-          deepsec_enabled_schema_checks = [
-              "type: boolean",
-              "required: true",
-              "visible: true",
-              "default: true",
-          ]
-          if not deepsec_enabled_schema_block or any(
-              check not in deepsec_enabled_schema_block.group(0)
-              for check in deepsec_enabled_schema_checks
-          ):
-              raise SystemExit("DeepSec enabled Resource Manager form field is incomplete")
-          deepsec_schema_block = re.search(
-              r"(?ms)^  oracle_deepsec_data_user_password:\n(?:(?:    .*)\n)+",
-              schema_yaml,
-          )
-          deepsec_schema_checks = [
-              "type: password",
-              "required: false",
-              "- oracle_deepsec_enabled",
-              "- true",
-              "ORACLE_DEEPSEC_DATA_USER_PASSWORD",
-              "confirmation: true",
-              "pattern: '^[^\"\\r\\n]{12,256}$'",
-          ]
-          if not deepsec_schema_block or any(
-              check not in deepsec_schema_block.group(0)
-              for check in deepsec_schema_checks
-          ):
-              raise SystemExit("DeepSec password Resource Manager form field is incomplete")
-          deepsec_variable_block = re.search(
-              r'(?ms)^variable "oracle_deepsec_data_user_password" \{.*?^}',
-              variables_tf,
-          )
-          deepsec_variable_checks = [
-              "type        = string",
-              "sensitive   = true",
-              "default     = \"\"",
-              "trimspace(var.oracle_deepsec_data_user_password) == \"\"",
-              "length(var.oracle_deepsec_data_user_password) >= 12",
-              "length(var.oracle_deepsec_data_user_password) <= 256",
-              "!can(regex(\"[\\r\\n]\", var.oracle_deepsec_data_user_password))",
-              "!can(regex(\"\\\"\", var.oracle_deepsec_data_user_password))",
-          ]
-          if (
-              not deepsec_variable_block
-              or any(
-                  check not in deepsec_variable_block.group(0)
-                  for check in deepsec_variable_checks
-              )
-          ):
-              raise SystemExit("DeepSec password Terraform variable validation is incomplete")
-          if (
-              "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" not in locals_tf
-              or "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
-              "var.oracle_deepsec_data_user_password : \"\"}" not in locals_tf
-          ):
-              raise SystemExit("DeepSec toggle/password are missing from backend.env")
-          if "first SYSTEM_ADMIN web login" in schema_yaml:
-              raise SystemExit("ADB password is still described as a web login password")
-          print("Terraform package contents verified.")
-          PY
 
   nl2sql-frontend:
     name: NL2SQL / Frontend
@@ -799,9 +629,9 @@ jobs:
         env:
           UV_SYNC_ARGS: "--locked --dev"
 
-  # OCI Resource Manager 用 Terraform stack（#136）。実テナンシーへの配備確認は手動で行う。
-  agent-terraform:
-    name: Agent / Terraform
+  # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ Agent の init_script.sh を検証する（#217）。
+  agent-init-script:
+    name: Agent / Compute init script
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
@@ -817,32 +647,59 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Test Compute init script
+        run: |
+          bash -n init_script.sh scripts/tests/init-script-deployment.test.sh
+          bash scripts/tests/init-script-deployment.test.sh
+
+  # ---------------------------------------------------------------- terraform
+
+  # OCI Resource Manager の統合 stack（#217）。ADB 1つ＋選んだ製品ごとの Compute。
+  # 契約検証は各製品の init_script.sh・Settings・docker-compose.yml も読むため、どの製品の変更でも実行する。
+  # 実テナンシーへの配備確認は手動で行う。
+  suite-terraform:
+    name: Suite / Terraform
+    needs: changes
+    if: >-
+      needs.changes.outputs.terraform == 'true' || needs.changes.outputs.platform == 'true'
+      || needs.changes.outputs.rag == 'true' || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.5.7"
 
-      - name: Test Compute init script
-        run: |
-          bash -n init_script.sh terraform/stack/extract_wallet.sh scripts/tests/init-script-deployment.test.sh
-          bash scripts/tests/init-script-deployment.test.sh
+      - name: Check shell scripts
+        run: bash -n stack/extract_wallet.sh
 
       - name: Format check
-        run: terraform fmt -check -recursive terraform/stack
+        run: terraform fmt -check -recursive stack
 
       - name: Initialize Terraform
-        working-directory: agent/terraform/stack
+        working-directory: terraform/stack
         run: terraform init -backend=false
 
       - name: Validate Terraform
-        working-directory: agent/terraform/stack
+        working-directory: terraform/stack
         run: terraform validate
 
       - name: Package stack
-        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-agent-terraform-stack.zip
+        run: python scripts/package_stack.py --output /tmp/production-ready-suite-terraform-stack.zip
 
       - name: Verify stack contract
-        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-agent-terraform-stack.zip
+        run: python scripts/verify_stack_contract.py /tmp/production-ready-suite-terraform-stack.zip
 
   # ---------------------------------------------------------------- 集約
 
@@ -860,13 +717,14 @@ jobs:
       - rag-frontend
       - rag-e2e
       - rag-compose
-      - rag-terraform
-      - nl2sql-terraform
+      - rag-init-script
+      - nl2sql-deploy-scripts
       - nl2sql-frontend
       - nl2sql-e2e
       - nl2sql-backend
       - agent-checks
-      - agent-terraform
+      - agent-init-script
+      - suite-terraform
     runs-on: ubuntu-latest
     steps:
       # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。

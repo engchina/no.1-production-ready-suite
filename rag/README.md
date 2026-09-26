@@ -80,9 +80,9 @@ Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提�
 
 ## OCI への配備（Resource Manager）
 
-Compute 1 台 + Autonomous AI Database 26ai を OCI Resource Manager で配備する Terraform stack を
-`terraform/stack/` に置いています（`docker-compose.yml` を Compute 上で動かし、CPU の parser だけを配備する）。
-入力・配備方式・instance 上の構成・制約は [terraform/README.md](./terraform/README.md) を参照してください。
+3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database 26ai は NL2SQL / Agent と共有し、
+RAG は専用の Compute 1 台で `docker-compose.yml` を動かします（CPU の parser だけを配備する）。
+「配備する製品」で RAG を選び、入力・配備方式・instance 上の構成・制約は [terraform/README.md](../terraform/README.md) を参照してください。
 
 ## ドキュメント
 

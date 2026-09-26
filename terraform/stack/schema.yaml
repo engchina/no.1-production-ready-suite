@@ -1,5 +1,5 @@
-title: "Deploy Production Ready Agent Control Plane on Oracle Cloud Infrastructure"
-stackDescription: "Deploy the Production Ready Agent Control Plane on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx (HTTP Basic authentication), and systemd. Agent Runtimes (OpenClaw / Hermes / DeerFlow) are not installed by this stack; register them after startup."
+title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
+stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database 26ai (new or existing) is shared by every product, and each selected product gets its own Compute instance. Configure AI runtime settings after startup from each application's System Settings."
 schemaVersion: 1.1.0
 version: "20260926.1"
 locale: "en"
@@ -13,6 +13,9 @@ variableGroups:
       - application_git_ref
       - existing_oracle_wallet_password
       - adb_is_mtls_connection_required
+      - nl2sql_app_environment
+      - nl2sql_app_auth_cookie_secure
+      - nl2sql_app_admin_login_user_id
       - agent_runtime_repository_backend
 
   - title: Required Configuration
@@ -23,22 +26,17 @@ variableGroups:
       - availability_domain
       - vcn_ai_vcn_id
 
+  - title: "配備する製品"
+    visible: true
+    variables:
+      - deploy_rag
+      - deploy_nl2sql
+      - deploy_agent
+
   - title: Application Source
     visible: true
     variables:
       - application_port
-
-  - title: Application Access
-    visible: true
-    variables:
-      - app_basic_auth_user
-      - app_basic_auth_password
-
-  - title: Agent Runtime Integration
-    visible: true
-    variables:
-      - agent_control_plane_public_base_url
-      - agent_control_plane_mcp_token_secret
 
   - title: Autonomous AI Database
     visible: true
@@ -96,15 +94,52 @@ variableGroups:
       - adb_acl_subnet_id
       - adb_acl_cidr_blocks
 
+  - title: RAG
+    visible: deploy_rag
+    variables:
+      - rag_app_login_user
+      - rag_app_login_password
+      - rag_app_auth_cookie_secure
+      - rag_enable_parser_docling
+      - rag_enable_parser_marker
+      - rag_enable_oci_cloud_parsers
+      - rag_instance_display_name
+      - rag_instance_flex_shape_ocpus
+      - rag_instance_flex_shape_memory
+      - rag_instance_boot_volume_size
+
+  - title: NL2SQL
+    visible: deploy_nl2sql
+    variables:
+      - nl2sql_app_admin_login_user_password
+      - nl2sql_instance_display_name
+      - nl2sql_instance_flex_shape_ocpus
+      - nl2sql_instance_flex_shape_memory
+      - nl2sql_instance_boot_volume_size
+
+  - title: "NL2SQL Deep Data Security"
+    visible: deploy_nl2sql
+    variables:
+      - nl2sql_oracle_deepsec_enabled
+      - nl2sql_oracle_deepsec_data_user_password
+
+  - title: Agent Control Plane
+    visible: deploy_agent
+    variables:
+      - agent_app_basic_auth_user
+      - agent_app_basic_auth_password
+      - agent_control_plane_public_base_url
+      - agent_control_plane_mcp_token_secret
+      - agent_instance_display_name
+      - agent_instance_flex_shape_ocpus
+      - agent_instance_flex_shape_memory
+      - agent_instance_boot_volume_size
+
   - title: Compute
     visible: true
     variables:
-      - instance_display_name
       - instance_image_source_id
       - instance_shape
-      - instance_flex_shape_ocpus
-      - instance_flex_shape_memory
-      - instance_boot_volume_size
       - instance_boot_volume_vpus
       - subnet_ai_subnet_id
       - ssh_authorized_keys
@@ -146,7 +181,7 @@ variables:
     required: true
     visible: false
     title: "Application Git URL"
-    description: "Production Ready suite monorepo (agent/ and platform/)."
+    description: "Production Ready suite monorepo (rag/, nl2sql/, agent/, and platform/)."
     default: "https://github.com/engchina/no.1-production-ready-suite.git"
 
   application_git_ref:
@@ -163,53 +198,8 @@ variables:
     required: true
     visible: true
     title: "Application port"
-    description: "TCP port exposed by host Nginx and the instance firewall."
+    description: "TCP port exposed by host Nginx and the instance firewall of every Compute instance."
     default: 80
-
-  app_basic_auth_user:
-    type: string
-    required: true
-    visible: true
-    title: "Basic authentication user"
-    description: "Nginx requires HTTP Basic authentication for the Agent Control Plane UI and API because the application has no built-in login. /health and the Binding MCP endpoint (/api/mcp/) use their own checks."
-    default: "agent_admin"
-    pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
-
-  app_basic_auth_password:
-    type: password
-    required: true
-    visible: true
-    title: "Basic authentication password"
-    description: "12-64 characters with uppercase, lowercase, and digits. Quotes, colons, and line breaks are not allowed. The instance stores only a SHA-512 crypt hash in the Nginx password file."
-    confirmation: true
-    pattern: '^[^"'':\r\n]{12,64}$'
-
-  agent_control_plane_public_base_url:
-    type: string
-    required: false
-    visible: true
-    title: "Control Plane public API base URL"
-    description: "Optional. Written to AGENT_CONTROL_PLANE_PUBLIC_BASE_URL and advertised to Runtimes for Binding MCP callbacks. Leave blank to use http://<Compute private IP>[:application port]/api."
-
-  agent_control_plane_mcp_token_secret:
-    type: password
-    required: false
-    visible: true
-    title: "Binding MCP token master secret"
-    description: "Optional. Written to AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET (32 characters or more). Leave blank to keep the Binding MCP endpoint fail-closed (503) until you configure it."
-    confirmation: true
-    pattern: '^$|^[^"\r\n]{32,}$'
-
-  agent_runtime_repository_backend:
-    type: enum
-    required: true
-    visible: false
-    title: "Agent Runtime repository"
-    description: "Oracle repository for Agent Runtime state. The application creates its own tables at startup."
-    enum:
-      - "oracle_checkpoint"
-      - "oracle_normalized"
-    default: "oracle_checkpoint"
 
   adb_compartment_ocid:
     type: oci:identity:compartment:id
@@ -244,7 +234,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB username"
-    description: "Value written to ORACLE_USER in backend/.env."
+    description: "Value written to ORACLE_USER in backend/.env of every product. Single quotes are not allowed."
     default: "ADMIN"
 
   existing_oracle_password:
@@ -252,7 +242,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB password"
-    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    description: "Value written to ORACLE_PASSWORD in backend/.env of every product. Single quotes are not allowed."
     confirmation: true
 
   existing_oracle_dsn:
@@ -260,7 +250,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example AGENTADB -> agentadb_high."
+    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example SUITEADB -> suiteadb_high."
 
   existing_oracle_wallet_password:
     type: password
@@ -282,8 +272,8 @@ variables:
     required: true
     visible: true
     title: "Database name"
-    description: "ADB database name. Default is AGENTADB."
-    default: "AGENTADB"
+    description: "ADB database name. Default is SUITEADB. Every deployed product uses this database."
+    default: "SUITEADB"
     pattern: "^[A-Za-z][A-Za-z0-9]{0,13}$"
 
   adb_workload:
@@ -396,9 +386,9 @@ variables:
     required: false
     visible: true
     title: "Database ADMIN password"
-    description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password."
+    description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password of every product. Single quotes are not allowed."
     confirmation: true
-    pattern: '^$|^[^"\r\n]{12,30}$'
+    pattern: '^$|^[^"''\r\n]{12,30}$'
 
   adb_network_access_type:
     type: enum
@@ -558,19 +548,12 @@ variables:
     description: "既定では有効です。Thinモードは生成したWalletでmTLS接続します。Walletを使用しない一方向TLSのADBだけ無効にしてください。"
     default: true
 
-  instance_display_name:
-    type: string
-    required: true
-    visible: true
-    title: "Compute instance name"
-    default: "AGENT_INSTANCE"
-
   instance_image_source_id:
     type: enum
     required: true
     visible: true
     title: "Compute image"
-    description: "Choose the Ubuntu image according to your region."
+    description: "Ubuntu image of every Compute instance. Choose it according to your region."
     enum:
       - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
       - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
@@ -581,31 +564,11 @@ variables:
     required: true
     visible: true
     title: "Compute shape"
+    description: "Shape of every Compute instance. OCPUs, memory, and boot volume size are set per product."
     enum:
       - "VM.Standard.E4.Flex"
       - "VM.Standard.E5.Flex"
     default: "VM.Standard.E5.Flex"
-
-  instance_flex_shape_ocpus:
-    type: number
-    required: true
-    visible: true
-    title: "Compute OCPUs"
-    default: 2
-
-  instance_flex_shape_memory:
-    type: number
-    required: true
-    visible: true
-    title: "Compute memory (GB)"
-    default: 16
-
-  instance_boot_volume_size:
-    type: number
-    required: true
-    visible: true
-    title: "Boot volume size (GB)"
-    default: 100
 
   instance_boot_volume_vpus:
     type: number
@@ -619,7 +582,7 @@ variables:
     required: true
     visible: true
     title: "Compute subnet"
-    description: "Select a public or private subnet. Public IP assignment is detected automatically from the selected subnet."
+    description: "Subnet of every Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Put the ADB network access rules in line with this subnet."
     dependsOn:
       compartmentId: ${compartment_ocid}
       vcnId: ${vcn_ai_vcn_id}
@@ -630,6 +593,272 @@ variables:
     visible: true
     title: "SSHキーの追加"
     description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、ubuntuユーザーのSSH接続に使用します。"
+
+  deploy_rag:
+    type: boolean
+    required: true
+    visible: true
+    title: "RAG"
+    description: "Production Ready RAG（ナレッジ構築・業務ビュー・検索・回答）を専用の Compute に配備します。少なくとも1つの製品を選択してください。"
+    default: true
+
+  deploy_nl2sql:
+    type: boolean
+    required: true
+    visible: true
+    title: "NL2SQL"
+    description: "Production Ready NL2SQL（SQL 専用の自然言語問い合わせ）を専用の Compute に配備します。"
+    default: true
+
+  deploy_agent:
+    type: boolean
+    required: true
+    visible: true
+    title: "Agent Control Plane"
+    description: "Production Control Plane for AI Agents を専用の Compute に配備します。"
+    default: true
+
+  rag_app_login_user:
+    type: string
+    required: true
+    visible: deploy_rag
+    title: "RAG login user"
+    description: "Written to AUTH_USERNAME. The RAG backend requires a Cookie session login (AUTH_MODE=production) for the UI and API."
+    default: "rag_admin"
+    pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
+
+  rag_app_login_password:
+    type: password
+    required: false
+    visible: deploy_rag
+    title: "RAG login password"
+    description: "Required when RAG is deployed. Written to AUTH_PASSWORD. 12-64 characters with uppercase, lowercase, and digits. Quotes, backslashes, and line breaks are not allowed."
+    confirmation: true
+    pattern: '^$|^[^"''\\\r\n]{12,64}$'
+
+  rag_app_auth_cookie_secure:
+    type: boolean
+    required: true
+    visible: deploy_rag
+    title: "RAG secure session cookie (HTTPS only)"
+    description: "Written to AUTH_COOKIE_SECURE. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
+    default: false
+
+  rag_enable_parser_docling:
+    type: boolean
+    required: true
+    visible: deploy_rag
+    title: "Docling parser (CPU)"
+    description: "Build and start parser-docling. The Unstructured parser (parser-unstructured) is always started because it is the default document parser."
+    default: true
+
+  rag_enable_parser_marker:
+    type: boolean
+    required: true
+    visible: deploy_rag
+    title: "Marker parser (CPU)"
+    description: "Build and start parser-marker. It needs more CPU and memory than the other CPU parsers."
+    default: false
+
+  rag_enable_oci_cloud_parsers:
+    type: boolean
+    required: true
+    visible: deploy_rag
+    title: "OCI cloud parsers"
+    description: "Build and start parser-oci-genai-vision and parser-oci-document-understanding. They call OCI services and need no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
+    default: false
+
+  rag_instance_display_name:
+    type: string
+    required: true
+    visible: deploy_rag
+    title: "RAG Compute instance name"
+    default: "RAG_INSTANCE"
+
+  rag_instance_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: deploy_rag
+    title: "RAG Compute OCPUs"
+    default: 4
+
+  rag_instance_flex_shape_memory:
+    type: number
+    required: true
+    visible: deploy_rag
+    title: "RAG Compute memory (GB)"
+    description: "The CPU document parsers (Docling / Marker) load ML models. 32 GB or more is recommended."
+    default: 32
+
+  rag_instance_boot_volume_size:
+    type: number
+    required: true
+    visible: deploy_rag
+    title: "RAG boot volume size (GB)"
+    description: "Docker images of the parsers are large. 200 GB or more is recommended."
+    default: 200
+
+  nl2sql_app_environment:
+    type: enum
+    required: true
+    visible: false
+    title: "NL2SQL application environment"
+    description: "Use local for direct HTTP access. Use production only behind HTTPS and set Secure cookies."
+    enum:
+      - "local"
+      - "staging"
+      - "production"
+    default: "local"
+
+  nl2sql_app_auth_cookie_secure:
+    type: boolean
+    required: true
+    visible: false
+    title: "NL2SQL secure auth cookies"
+    description: "Set true when NL2SQL is served through HTTPS."
+    default: false
+
+  nl2sql_app_admin_login_user_id:
+    type: enum
+    required: true
+    visible: false
+    title: "NL2SQL administrator login user ID"
+    description: "Fixed login user ID for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
+    enum:
+      - "system_admin"
+    default: "system_admin"
+
+  nl2sql_app_admin_login_user_password:
+    type: password
+    required: false
+    visible: deploy_nl2sql
+    title: "NL2SQL administrator password"
+    description: "Required when NL2SQL is deployed. Login password for the built-in SYSTEM_ADMIN (login user ID: system_admin). 12-30 characters with uppercase, lowercase, and digits; must not include admin, double quotes, or line breaks."
+    confirmation: true
+    pattern: '^$|^[^"\r\n]{12,30}$'
+
+  nl2sql_instance_display_name:
+    type: string
+    required: true
+    visible: deploy_nl2sql
+    title: "NL2SQL Compute instance name"
+    default: "NL2SQL_INSTANCE"
+
+  nl2sql_instance_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: deploy_nl2sql
+    title: "NL2SQL Compute OCPUs"
+    default: 2
+
+  nl2sql_instance_flex_shape_memory:
+    type: number
+    required: true
+    visible: deploy_nl2sql
+    title: "NL2SQL Compute memory (GB)"
+    default: 16
+
+  nl2sql_instance_boot_volume_size:
+    type: number
+    required: true
+    visible: deploy_nl2sql
+    title: "NL2SQL boot volume size (GB)"
+    default: 100
+
+  nl2sql_oracle_deepsec_enabled:
+    type: boolean
+    required: true
+    visible: deploy_nl2sql
+    title: "ORACLE_DEEPSEC_ENABLED"
+    description: "Deep Data Securityを有効にする場合はオンにします。オンの場合のみDeepSec DATA USER passwordが必要です。"
+    default: true
+
+  nl2sql_oracle_deepsec_data_user_password:
+    type: password
+    required: false
+    visible:
+      and:
+        - deploy_nl2sql
+        - eq:
+            - nl2sql_oracle_deepsec_enabled
+            - true
+    title: "DeepSec DATA USER password"
+    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
+    confirmation: true
+    pattern: '^[^"\r\n]{12,256}$'
+
+  agent_app_basic_auth_user:
+    type: string
+    required: true
+    visible: deploy_agent
+    title: "Agent Basic authentication user"
+    description: "Nginx requires HTTP Basic authentication for the Agent Control Plane UI and API because the application has no built-in login. /health and the Binding MCP endpoint (/api/mcp/) use their own checks."
+    default: "agent_admin"
+    pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
+
+  agent_app_basic_auth_password:
+    type: password
+    required: false
+    visible: deploy_agent
+    title: "Agent Basic authentication password"
+    description: "Required when the Agent Control Plane is deployed. 12-64 characters with uppercase, lowercase, and digits. Quotes, colons, and line breaks are not allowed. The instance stores only a SHA-512 crypt hash in the Nginx password file."
+    confirmation: true
+    pattern: '^$|^[^"'':\r\n]{12,64}$'
+
+  agent_control_plane_public_base_url:
+    type: string
+    required: false
+    visible: deploy_agent
+    title: "Control Plane public API base URL"
+    description: "Optional. Written to AGENT_CONTROL_PLANE_PUBLIC_BASE_URL and advertised to Runtimes for Binding MCP callbacks. Leave blank to use http://<Compute private IP>[:application port]/api."
+
+  agent_control_plane_mcp_token_secret:
+    type: password
+    required: false
+    visible: deploy_agent
+    title: "Binding MCP token master secret"
+    description: "Optional. Written to AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET (32 characters or more). Leave blank to keep the Binding MCP endpoint fail-closed (503) until you configure it."
+    confirmation: true
+    pattern: '^$|^[^"\r\n]{32,}$'
+
+  agent_runtime_repository_backend:
+    type: enum
+    required: true
+    visible: false
+    title: "Agent Runtime repository"
+    description: "Oracle repository for Agent Runtime state. The application creates its own tables at startup."
+    enum:
+      - "oracle_checkpoint"
+      - "oracle_normalized"
+    default: "oracle_checkpoint"
+
+  agent_instance_display_name:
+    type: string
+    required: true
+    visible: deploy_agent
+    title: "Agent Compute instance name"
+    default: "AGENT_INSTANCE"
+
+  agent_instance_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: deploy_agent
+    title: "Agent Compute OCPUs"
+    default: 2
+
+  agent_instance_flex_shape_memory:
+    type: number
+    required: true
+    visible: deploy_agent
+    title: "Agent Compute memory (GB)"
+    default: 16
+
+  agent_instance_boot_volume_size:
+    type: number
+    required: true
+    visible: deploy_agent
+    title: "Agent boot volume size (GB)"
+    default: 100
 
 outputs:
   autonomous_database_ocid:
@@ -644,20 +873,56 @@ outputs:
     type: copyableString
     visible: true
 
-  ssh_to_instance:
-    title: "SSH command"
-    displayText: "SSH command"
+  rag_application_url:
+    title: "RAG URL"
+    displayText: "RAG URL"
     type: copyableString
-    visible: true
+    visible: deploy_rag
 
-  application_url:
-    title: "Application URL"
-    displayText: "Application URL"
+  rag_ssh_to_instance:
+    title: "RAG SSH command"
+    displayText: "RAG SSH command"
     type: copyableString
-    visible: true
+    visible: deploy_rag
 
-  basic_auth_user:
-    title: "Basic authentication user"
-    displayText: "Basic authentication user"
+  rag_app_login_user:
+    title: "RAG login user"
+    displayText: "RAG login user"
     type: copyableString
-    visible: true
+    visible: deploy_rag
+
+  rag_compose_services:
+    title: "RAG Docker Compose services"
+    displayText: "RAG Docker Compose services"
+    type: copyableString
+    visible: deploy_rag
+
+  nl2sql_application_url:
+    title: "NL2SQL URL"
+    displayText: "NL2SQL URL"
+    type: copyableString
+    visible: deploy_nl2sql
+
+  nl2sql_ssh_to_instance:
+    title: "NL2SQL SSH command"
+    displayText: "NL2SQL SSH command"
+    type: copyableString
+    visible: deploy_nl2sql
+
+  agent_application_url:
+    title: "Agent Control Plane URL"
+    displayText: "Agent Control Plane URL"
+    type: copyableString
+    visible: deploy_agent
+
+  agent_ssh_to_instance:
+    title: "Agent SSH command"
+    displayText: "Agent SSH command"
+    type: copyableString
+    visible: deploy_agent
+
+  agent_basic_auth_user:
+    title: "Agent Basic authentication user"
+    displayText: "Agent Basic authentication user"
+    type: copyableString
+    visible: deploy_agent
