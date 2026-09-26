@@ -211,6 +211,100 @@ def test_business_view_overrides_text_search_tokenizer() -> None:
     assert settings.rag_text_search_tokenizer == "sudachi"
 
 
+def test_business_view_overrides_docrag_answer_options() -> None:
+    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(
+            docrag_query_strategy="hyde",
+            docrag_answer_flow="standard_rag",
+            docrag_neighbor_child_count=0,
+            docrag_rerank_enabled=False,
+        ),
+    )
+
+    settings, _ = resolve_business_view_settings(Settings(), config)
+
+    assert settings.rag_docrag_query_strategy == "hyde"
+    assert settings.rag_docrag_answer_flow == "standard_rag"
+    assert settings.rag_docrag_neighbor_child_count == 0
+    assert settings.rag_docrag_rerank_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        # 既定値は移植前(answer_question_result の既定)と同じ。
+        (Settings(), ("auto_routing", "crag", 3, True)),
+        (
+            Settings(
+                rag_docrag_query_strategy="rag_fusion",
+                rag_docrag_answer_flow="standard_rag",
+                rag_docrag_neighbor_child_count=7,
+                rag_docrag_rerank_enabled=False,
+            ),
+            ("rag_fusion", "standard_rag", 7, False),
+        ),
+    ],
+)
+async def test_docrag_engine_passes_answer_options(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, expected: tuple[object, ...]
+) -> None:
+    import docrag.generation.answering as answering
+
+    captured: dict[str, Any] = {}
+
+    def fake_answer(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(answering, "answer_question_result", fake_answer)
+    engine = DocragAnswerEngine(
+        settings,
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="stop"):
+        await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert (
+        captured["query_strategy"],
+        captured["answer_flow"],
+        captured["chunk_neighbor_count"],
+        captured["rerank_enabled"],
+    ) == expected
+
+
+async def test_docrag_standard_flow_without_rerank_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    class NoRerankGenAi(FakeGenAi):
+        async def rerank(
+            self, query: str, documents: list[str], top_n: int
+        ) -> list[tuple[int, float]]:
+            raise AssertionError("rerank は無効")
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    engine = DocragAnswerEngine(
+        Settings(
+            rag_docrag_query_strategy="simple_retrieval",
+            rag_docrag_answer_flow="standard_rag",
+            rag_docrag_rerank_enabled=False,
+        ),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=NoRerankGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in outcome.answer
+
+
 def _pdf_with_figure() -> bytes:
     import fitz  # type: ignore[import-untyped]
 

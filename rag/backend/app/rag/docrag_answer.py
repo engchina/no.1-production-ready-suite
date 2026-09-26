@@ -166,6 +166,10 @@ class DocragAnswerEngine:
                 ["docling"],
                 docrag_settings,
                 chunk_top_k=max(1, int(request.top_k)),
+                chunk_neighbor_count=self._settings.rag_docrag_neighbor_child_count,
+                query_strategy=self._settings.rag_docrag_query_strategy,
+                answer_flow=self._settings.rag_docrag_answer_flow,
+                rerank_enabled=self._settings.rag_docrag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
             )
 

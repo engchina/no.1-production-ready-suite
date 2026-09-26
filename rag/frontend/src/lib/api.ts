@@ -770,7 +770,22 @@ export interface KnowledgeBaseQueryConfig {
   answer_engine?: AnswerEngineName | null;
   /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
   text_search_tokenizer?: TextSearchTokenizerName | null;
+  /** DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。null / 未指定はグローバル継承。 */
+  docrag_query_strategy?: DocragQueryStrategyName | null;
+  docrag_answer_flow?: DocragAnswerFlowName | null;
+  docrag_neighbor_child_count?: number | null;
+  docrag_rerank_enabled?: boolean | null;
 }
+
+export type DocragQueryStrategyName =
+  | "auto_routing"
+  | "simple_retrieval"
+  | "rag_fusion"
+  | "query_decomposition"
+  | "step_back_prompting"
+  | "hyde";
+
+export type DocragAnswerFlowName = "crag" | "standard_rag";
 
 export type TextSearchTokenizerName = "builtin" | "sudachi";
 
