@@ -1,6 +1,7 @@
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
@@ -100,6 +101,7 @@ import type {
   SchemaRefreshJob,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
+  SelectAiDbProfileRefreshJobData,
   SelectAiDbProfilesData,
   SyntheticDataOperationData,
   SyntheticDataResultsData,
@@ -220,8 +222,10 @@ export function DataManagementPage() {
   const [schemaJobNeedsFull, setSchemaJobNeedsFull] = useState(false);
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
-  const completedSchemaJob = useRef("");
-  const completedDbProfileRefreshJob = useRef("");
+  // 報告済みの job の終端（`<job_id>:<status>`）。DB profile 更新は Toast の件数に使うため job ごと持つ。
+  const [reportedSchemaJob, setReportedSchemaJob] = useState("");
+  const [reportedDbProfileRefreshJob, setReportedDbProfileRefreshJob] =
+    useState<SelectAiDbProfileRefreshJobData | null>(null);
   const previewRequestSequence = useRef(0);
   const previewObjectManualSelection = useRef(false);
   const csvTableManualSelection = useRef(false);
@@ -430,15 +434,16 @@ export function DataManagementPage() {
     clearSyntheticProfileTargets();
   };
 
-  useEffect(() => {
-    const profiles = selectAiProfilesQuery.data;
-    if (!profiles) return;
-    const nextName = resolveBusinessSelectAiProfileName(syntheticProfileName, profiles.profiles);
-    setSyntheticProfileName(nextName);
+  // profile 一覧が変わったレンダーで、選択中の profile 名を直す（effect で setState しない）。
+  const selectAiProfiles = selectAiProfilesQuery.data;
+  const selectAiProfilesChanged = useValuesChanged([selectAiProfiles]);
+  if (selectAiProfilesChanged && selectAiProfiles) {
+    const nextName = resolveBusinessSelectAiProfileName(syntheticProfileName, selectAiProfiles.profiles);
+    if (nextName !== syntheticProfileName) setSyntheticProfileName(nextName);
     if (syntheticProfileName && syntheticProfileName !== nextName) {
       clearSyntheticProfileTargets();
     }
-  }, [selectAiProfilesQuery.data]);
+  }
 
   useEffect(() => {
     const nextObject = selectedVisibleStringKey(previewObjectPickerItems, previewObject, (item) => item.key, {
@@ -466,52 +471,72 @@ export function DataManagementPage() {
     setCsvStep("file");
   }, [csvTable, csvTablePickerItems]);
 
-  useEffect(() => {
-    const job = schemaJobQuery.data;
-    if (!job || completedSchemaJob.current === `${job.job_id}:${job.status}`) return;
-    if (job.status === "done") {
-      completedSchemaJob.current = `${job.job_id}:${job.status}`;
+  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // 再取得・Toast は、終端を報告した後の effect で行う。
+  const schemaJob = schemaJobQuery.data;
+  const schemaJobChanged = useValuesChanged([schemaJob]);
+  if (
+    schemaJobChanged &&
+    schemaJob &&
+    (schemaJob.status === "done" || schemaJob.status === "error") &&
+    reportedSchemaJob !== `${schemaJob.job_id}:${schemaJob.status}`
+  ) {
+    setReportedSchemaJob(`${schemaJob.job_id}:${schemaJob.status}`);
+    if (schemaJob.status === "done") {
       setSchemaJobError("");
       setSchemaJobNeedsFull(false);
-      void baseObjectsQuery.refetch();
-      void csvTablesQuery.refetch();
-      void previewObjectsQuery.refetch();
-    } else if (job.status === "error") {
-      completedSchemaJob.current = `${job.job_id}:${job.status}`;
-      const needsFull = schemaJobRequiresFull(job);
-      setSchemaJobNeedsFull(needsFull);
-      setSchemaJobError(schemaJobErrorMessage(job));
+    } else {
+      setSchemaJobNeedsFull(schemaJobRequiresFull(schemaJob));
+      setSchemaJobError(schemaJobErrorMessage(schemaJob));
     }
-  }, [schemaJobQuery.data]);
-
+  }
   useEffect(() => {
-    const job = dbProfileRefreshJobQuery.data;
-    if (!job || completedDbProfileRefreshJob.current === `${job.job_id}:${job.status}`) return;
-    if (job.status === "done") {
-      completedDbProfileRefreshJob.current = `${job.job_id}:${job.status}`;
-      setDbProfileRefreshError("");
-      void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
-      void selectAiProfilesQuery.refetch();
-      toast.success(
-        t("profiles.dbProfileRefresh.done", {
-          changed: job.changed_profiles,
-          deleted: job.deleted_profiles,
-        })
-      );
-    } else if (job.status === "error") {
-      completedDbProfileRefreshJob.current = `${job.job_id}:${job.status}`;
-      setDbProfileRefreshError(dbProfileRefreshErrorMessage(job.error_code, job.error_message));
-    }
-  }, [dbProfileRefreshJobQuery.data, queryClient, selectAiProfilesQuery]);
+    if (!reportedSchemaJob.endsWith(":done")) return;
+    void baseObjectsQuery.refetch();
+    void csvTablesQuery.refetch();
+    void previewObjectsQuery.refetch();
+  }, [reportedSchemaJob]);
 
+  const dbProfileRefreshJobChanged = useValuesChanged([dbProfileRefreshJob]);
+  if (
+    dbProfileRefreshJobChanged &&
+    dbProfileRefreshJob &&
+    (dbProfileRefreshJob.status === "done" || dbProfileRefreshJob.status === "error") &&
+    (!reportedDbProfileRefreshJob ||
+      `${reportedDbProfileRefreshJob.job_id}:${reportedDbProfileRefreshJob.status}` !==
+        `${dbProfileRefreshJob.job_id}:${dbProfileRefreshJob.status}`)
+  ) {
+    setReportedDbProfileRefreshJob(dbProfileRefreshJob);
+    setDbProfileRefreshError(
+      dbProfileRefreshJob.status === "done"
+        ? ""
+        : dbProfileRefreshErrorMessage(dbProfileRefreshJob.error_code, dbProfileRefreshJob.error_message),
+    );
+  }
   useEffect(() => {
-    if (!dbProfileRefreshJobQuery.isError) return;
-    const message =
+    if (reportedDbProfileRefreshJob?.status !== "done") return;
+    void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
+    void selectAiProfilesQuery.refetch();
+    toast.success(
+      t("profiles.dbProfileRefresh.done", {
+        changed: reportedDbProfileRefreshJob.changed_profiles,
+        deleted: reportedDbProfileRefreshJob.deleted_profiles,
+      })
+    );
+  }, [reportedDbProfileRefreshJob]);
+
+  // job の取得に失敗したレンダーで、error 表示を直す（effect で setState しない）。
+  const dbProfileRefreshQueryErrorChanged = useValuesChanged([
+    dbProfileRefreshJobQuery.error,
+    dbProfileRefreshJobQuery.isError,
+  ]);
+  if (dbProfileRefreshQueryErrorChanged && dbProfileRefreshJobQuery.isError) {
+    setDbProfileRefreshError(
       dbProfileRefreshJobQuery.error instanceof Error
         ? dbProfileRefreshJobQuery.error.message
-        : t("profiles.dbProfileRefresh.error");
-    setDbProfileRefreshError(message);
-  }, [dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]);
+        : t("profiles.dbProfileRefresh.error"),
+    );
+  }
 
   const refreshObjects = async (announce = false) => {
     setSchemaJobError("");
@@ -530,7 +555,7 @@ export function DataManagementPage() {
     if (dbProfileRefreshing || startDbProfileRefresh.isPending) return;
     try {
       const job = await startDbProfileRefresh.mutateAsync();
-      completedDbProfileRefreshJob.current = "";
+      setReportedDbProfileRefreshJob(null);
       setDbProfileRefreshError("");
       setDbProfileRefreshJobId(job.job_id);
       queryClient.setQueryData(nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(job.job_id), job);
@@ -544,7 +569,7 @@ export function DataManagementPage() {
   const submitSchemaRefresh = async () => {
     setSchemaJobError("");
     setSchemaJobNeedsFull(false);
-    completedSchemaJob.current = "";
+    setReportedSchemaJob("");
     try {
       const job = await sharedSchemaRefresh.start();
       setSchemaJobId(job.job_id);
@@ -573,7 +598,7 @@ export function DataManagementPage() {
     schema_refresh_reason_code?: string;
   }) => {
     if (result.schema_refresh_job_id) {
-      completedSchemaJob.current = "";
+      setReportedSchemaJob("");
       setSchemaJobError("");
       setSchemaJobNeedsFull(false);
       setSchemaJobId(result.schema_refresh_job_id);
@@ -909,23 +934,27 @@ export function DataManagementPage() {
     }
   };
 
-  useEffect(() => {
-    resultRequest.current += 1;
+  // 選択中の run が変わったレンダーで、結果・確認済みの preview・run の表示を直す（effect で setState しない）。
+  // 古い結果の応答は effect で捨てる。
+  const selectedRunIdChanged = useValuesChanged([selectedRun?.run_id]);
+  if (selectedRunIdChanged) {
     setSyntheticDataResults(null);
     setSyntheticLoading((value) => value === "results" ? "" : value);
+  }
+  useEffect(() => {
+    resultRequest.current += 1;
   }, [selectedRun?.run_id]);
 
-  useEffect(() => {
-    setViewedPreviews({});
-  }, [selectedRun?.run_id, workspaceActive]);
+  const viewedPreviewsStale = useValuesChanged([selectedRun?.run_id, workspaceActive]);
+  if (viewedPreviewsStale) setViewedPreviews({});
 
-  useEffect(() => {
-    if (!selectedRun) return;
+  const selectedRunChanged = useValuesChanged([selectedRun?.run_id, selectedRun?.status]);
+  if (selectedRunChanged && selectedRun) {
     if (searchParams.has("synthetic_run")) setActiveView("synthetic");
     setSyntheticRunId(selectedRun.run_id);
     setSyntheticData({ table_name: selectedRun.targets[0]?.table_name ?? "", object_list: selectedRun.targets.map((target) => target.table_name), row_count: 0, status: selectedRun.status, executed: selectedRun.status === "completed", runtime: "oracle", message: selectedRun.message, warnings: [], engine_meta: {}, timing: { created_at: selectedRun.created_at, stage_timings: [] } });
     setSyntheticResultTable((current) => selectedRun.targets.some((target) => target.table_name === current) ? current : selectedRun.targets[0]?.table_name ?? "");
-  }, [selectedRun?.run_id, selectedRun?.status]);
+  }
 
   useEffect(() => {
     if (!selectedRun || !["completed", "partial"].includes(selectedRun.status) || autoPreviewed.current.has(selectedRun.run_id) || activeView !== "synthetic" || !workspaceActive || resultSelectionEdited.current || !canLoadSyntheticDataResults) return;

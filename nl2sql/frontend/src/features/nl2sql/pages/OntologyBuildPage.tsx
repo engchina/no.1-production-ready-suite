@@ -5,7 +5,8 @@ import {
   PageHeader,
   PageBody,
 } from "@engchina/production-ready-ui";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -54,7 +55,8 @@ export function OntologyBuildPage() {
   }>({ profileId: "", revisionId: "" });
   const [ontologyViewRequestedProfileId, setOntologyViewRequestedProfileId] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const handledSchemaRefreshJob = useRef("");
+  // 処理済みの schema refresh の終端（`<job_id>:<status>`）。
+  const [handledSchemaRefreshJob, setHandledSchemaRefreshJob] = useState("");
 
   const profilesQuery = useProfileSummaries("");
   const activeProfiles = useMemo(
@@ -74,6 +76,15 @@ export function OntologyBuildPage() {
     );
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
+  // profile が変わったレンダーで、別の profile 向けの表示要求を消す（effect で setState しない）。
+  const selectedProfileChanged = useValuesChanged([selectedProfileId]);
+  if (
+    selectedProfileChanged &&
+    ontologyViewRequestedProfileId &&
+    ontologyViewRequestedProfileId !== selectedProfileId
+  ) {
+    setOntologyViewRequestedProfileId("");
+  }
   const workspaceRequested =
     Boolean(selectedProfileId) && ontologyViewRequestedProfileId === selectedProfileId;
   const profileDetailQuery = useProfileDetail(workspaceRequested ? selectedProfileId : "");
@@ -119,12 +130,6 @@ export function OntologyBuildPage() {
     }
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage, profilesQuery.isFetchNextPageError]);
 
-  useEffect(() => {
-    setOntologyViewRequestedProfileId((current) =>
-      current === selectedProfileId ? current : ""
-    );
-  }, [selectedProfileId]);
-
   const refreshOntologyView = useCallback(async () => {
     if (!selectedProfileId) return;
     if (!workspaceRequested) return;
@@ -151,18 +156,22 @@ export function OntologyBuildPage() {
     }
   };
 
-  useEffect(() => {
-    const job = sharedSchemaRefresh.completedJob;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (handledSchemaRefreshJob.current === reportKey) return;
-    handledSchemaRefreshJob.current = reportKey;
-    if (job.status === "done") {
-      void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
-    } else if (job.status === "error") {
-      setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
+  // schema refresh の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // 一覧と ontology の再取得は、終端を処理した後の effect で行う。
+  const completedSchemaRefreshJob = sharedSchemaRefresh.completedJob;
+  if (completedSchemaRefreshJob) {
+    const reportKey = `${completedSchemaRefreshJob.job_id}:${completedSchemaRefreshJob.status}`;
+    if (handledSchemaRefreshJob !== reportKey) {
+      setHandledSchemaRefreshJob(reportKey);
+      if (completedSchemaRefreshJob.status === "error") {
+        setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
+      }
     }
-  }, [profilesQuery, refreshOntologyView, sharedSchemaRefresh.completedJob, sharedSchemaRefresh.error]);
+  }
+  useEffect(() => {
+    if (!handledSchemaRefreshJob.endsWith(":done")) return;
+    void Promise.all([profilesQuery.refetch(), refreshOntologyView()]);
+  }, [handledSchemaRefreshJob]);
 
   const selectProfile = (id: string) => {
     setPageError(""); // 前 profile のスキーマ更新エラーを持ち越さない
