@@ -52,6 +52,7 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
+from app.rag.query_history import record_query_history
 from app.rag.query_transform import (
     expand_retrieval_queries,
     expand_retrieval_queries_with_llm,
@@ -1072,6 +1073,10 @@ class RagPipeline:
                 elapsed_ms=elapsed,
                 diagnostics=diagnostics,
             )
+            if outcome == "success":
+                await self._record_query_history(
+                    request, query_guardrail.sanitized_text, chat=history is not None
+                )
             return SearchResponse(
                 answer=final_answer,
                 citations=context_citations,
@@ -1604,6 +1609,10 @@ class RagPipeline:
             surface="search" if history is None else "chat",
             evaluation_input=outcome.evaluation_input,
         )
+        if outcome_label == "success":
+            await self._record_query_history(
+                request, query_guardrail.sanitized_text, chat=history is not None
+            )
         return SearchResponse(
             answer=final_answer,
             citations=outcome.citations,
@@ -1612,6 +1621,23 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
             answer_replaced=final_answer != outcome.answer,
+        )
+
+    async def _record_query_history(
+        self, request: SearchRequest, question: str, *, chat: bool
+    ) -> None:
+        """回答に成功した質問を質問履歴へ記録する(設定が有効なときだけ。マスク後の質問を使う)。"""
+        await record_query_history(
+            self._oracle,
+            self._settings,
+            business_view_id=(
+                request.business_view_ids[0]
+                if request.business_view_ids
+                else request.business_view_id
+            ),
+            question=question,
+            surface="chat" if chat else "search",
+            filters=request.filters,
         )
 
     async def _save_docrag_answer(

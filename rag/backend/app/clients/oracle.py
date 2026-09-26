@@ -2224,6 +2224,72 @@ class OracleClient:
                 row[key] = json.loads(str(row[key]))
         return row
 
+    async def append_query_history(self, record: Mapping[str, object]) -> None:
+        """質問履歴を 1 件追記する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_query_history (
+                    query_id, business_view_id, surface, question, normalized_question,
+                    classification_filter
+                ) VALUES (
+                    :query_id, :business_view_id, :surface, :question, :normalized_question,
+                    :classification_filter
+                )
+                """,
+                {
+                    "query_id": uuid4().hex,
+                    "business_view_id": record["business_view_id"],
+                    "surface": record["surface"],
+                    "question": record["question"],
+                    "normalized_question": record["normalized_question"],
+                    "classification_filter": _json_bind(record.get("classification_filter") or {}),
+                },
+                input_sizes=_json_input_sizes("classification_filter"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_query_history(
+        self, business_view_id: str, *, retention_days: int, limit: int = 5000
+    ) -> list[dict[str, object]]:
+        """業務ビューの保持期間内の質問履歴を新しい順に返す(0 日は無期限)。"""
+        where = "WHERE business_view_id = :business_view_id"
+        binds: dict[str, object] = {"business_view_id": business_view_id, "limit": limit}
+        if retention_days > 0:
+            where += " AND created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')"
+            binds["days"] = retention_days
+        rows = await self._fetch_all(
+            f"""
+            SELECT query_id, question, normalized_question, classification_filter, created_at
+            FROM rag_query_history
+            {where}
+            ORDER BY created_at DESC
+            FETCH FIRST :limit ROWS ONLY
+            """,
+            binds,
+        )
+        for row in rows:
+            if isinstance(row.get("classification_filter"), str):
+                row["classification_filter"] = json.loads(str(row["classification_filter"]))
+        return rows
+
+    async def purge_query_history(self, retention_days: int) -> int:
+        """保持期間を過ぎた質問履歴を削除し、削除件数を返す。"""
+
+        # ponytail: created_at 単独 index なしの全走査。履歴が大量になったら index を足す。
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_query_history "
+                "WHERE created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')",
+                {"days": retention_days},
+            )
+
+        return await self._run_transaction(operation)
+
     async def list_docrag_prompts(self) -> dict[str, dict[str, object]]:
         """編集した DocRAG プロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
         rows = await self._fetch_all(
@@ -11621,6 +11687,24 @@ CREATE TABLE {table_name} (
 
 CREATE INDEX {table_name}_view_idx
     ON {table_name} (business_view_id, created_at DESC);
+""".strip()
+
+
+def oracle_query_history_schema_sql(table_name: str = "rag_query_history") -> str:
+    """質問履歴の table DDL(rag_poc の query_history/queries.jsonl に相当)。"""
+    return f"""
+CREATE TABLE {table_name} (
+    query_id              VARCHAR2(64) PRIMARY KEY,
+    business_view_id      VARCHAR2(64) NOT NULL,
+    surface               VARCHAR2(16) NOT NULL,
+    question              VARCHAR2(2000 CHAR) NOT NULL,
+    normalized_question   VARCHAR2(2000 CHAR) NOT NULL,
+    classification_filter JSON,
+    created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX {table_name}_view_idx
+    ON {table_name} (business_view_id, created_at DESC)
 """.strip()
 
 

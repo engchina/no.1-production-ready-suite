@@ -281,7 +281,7 @@ class FakePromotionClient:
 @pytest.mark.usefixtures("oracle_db")
 async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> None:
     """実 Oracle 26ai で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
-    from app.clients.oracle import OracleClient
+    from app.clients.oracle import OracleClient, _execute_count
 
     oracle = OracleClient()
     request = FeedbackRequest.model_validate(
@@ -312,6 +312,14 @@ async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> No
     )
 
     row = await oracle.get_feedback_detail(feedback_id)
+    # テスト用 DB の後始末は文書と KB だけなので、作った行を消す(詳細は ON DELETE CASCADE)。
+    await oracle._run_transaction(  # noqa: SLF001
+        lambda connection: _execute_count(
+            connection,
+            "DELETE FROM rag_citation_feedback WHERE trace_id = :trace_id",
+            {"trace_id": "pytest-feedback-promotion"},
+        )
+    )
 
     assert row is not None
     assert row["reason"] == "missing_knowledge"

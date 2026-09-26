@@ -29,6 +29,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
+| 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 回答スタイル「質問履歴」（既定は無効） |
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 
 | DocRAG の回答生成テンプレート（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
@@ -83,6 +84,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 
 ## 保存先
 
+- **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（標準・DocRAG、検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
@@ -95,7 +97,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索（vector と Oracle Text の RRF）に、rag_poc の「原質問を主軸にした重み付き融合」と Sudachi 分割を組み合わせる。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
-  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト（`run_answer_eval.py` などの一括評価。1 件ずつの標準回答での評価は画面から使える）、質問履歴
+  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト（`run_answer_eval.py` などの一括評価。1 件ずつの標準回答での評価は画面から使える）
   - フィードバックから FAQ・評価データセットへの自動昇格（管理者がフィードバック画面の詳細から 1 件ずつ「Approved FAQ に登録」「品質評価のケースに追加」する。変換と除外の規則は rag_poc の `approved_faq_import_row_from_answer_feedback` / `_expected_terms` を使う）
 
 ## 既知の制約
