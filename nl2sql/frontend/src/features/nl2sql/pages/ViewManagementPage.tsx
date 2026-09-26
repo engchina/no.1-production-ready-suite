@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
@@ -363,6 +363,11 @@ export function ViewManagementPage() {
   const {
     selectedName: selectedViewName,
     detail,
+    loading: detailLoading,
+    ddlLoading: detailDdlLoading,
+    ddlError: detailDdlError,
+    loadDdl: loadDetailDdl,
+    clear: clearDetail,
   } = detailRequest;
   const selectedViewManualSelection = useRef(false);
 
@@ -390,8 +395,10 @@ export function ViewManagementPage() {
 
   // 一覧を取り直し、失敗を message に出す（message は呼び出し側で空にしておく）。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
-  const refetchObjects = (announce = false) =>
-    viewObjectsQuery.refetch().then((result) => {
+  // refetch は query の observer ごとに固定の関数なので、この関数も固定になる（終端の effect の発火の条件は変わらない）。
+  const { refetch: refetchViewObjects } = viewObjectsQuery;
+  const refetchObjects = useCallback((announce = false) =>
+    refetchViewObjects().then((result) => {
       if (result.error) {
         setMessage(result.error instanceof Error ? result.error.message : t("viewMgmt.error.load"));
         return;
@@ -399,7 +406,7 @@ export function ViewManagementPage() {
       if (announce) {
         toast.success(t("common.action.refreshed"));
       }
-    });
+    }), [refetchViewObjects]);
 
   const refreshObjects = async (announce = false) => {
     setMessage("");
@@ -454,28 +461,29 @@ export function ViewManagementPage() {
   }
   useEffect(() => {
     if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedSchemaRefresh]);
+  }, [reportedSchemaRefresh, refetchObjects]);
 
+  // loadDdl は detail を deps に持つ useCallback なので、detail が変わるたびに作り直される。
+  // deps を detail?.name / detail?.ddl から detail に広げても、発火の条件は元と同じ。
   useEffect(() => {
     if (
       activeView !== "joinWhere" ||
       !detail ||
       detail.ddl ||
-      detailRequest.ddlLoading ||
-      detailRequest.ddlError ||
+      detailDdlLoading ||
+      detailDdlError ||
       autoJoinWhereDdlName.current === formatDbObjectName(detail)
     ) {
       return;
     }
     autoJoinWhereDdlName.current = formatDbObjectName(detail);
-    void detailRequest.loadDdl(formatDbObjectName(detail));
+    void loadDetailDdl(formatDbObjectName(detail));
   }, [
     activeView,
-    detail?.name,
-    detail?.ddl,
-    detailRequest.ddlLoading,
-    detailRequest.ddlError,
-    detailRequest.loadDdl,
+    detail,
+    detailDdlLoading,
+    detailDdlError,
+    loadDetailDdl,
   ]);
 
   const reloadAfterMutation = (result: {
@@ -516,9 +524,12 @@ export function ViewManagementPage() {
       });
   }, [viewItems, viewOwnerPrefix, viewSearch, viewSort]);
 
+  // 選択の補正は一覧・選択が変わったときだけ行う。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  const fetchDetailRef = useRef(fetchDetail);
+  useLayoutEffect(() => { fetchDetailRef.current = fetchDetail; });
   useEffect(() => {
     if (activeView !== "list") return;
-    if (viewObjectsQuery.isPending || detailRequest.loading) return;
+    if (viewObjectsQuery.isPending || detailLoading) return;
     if (viewObjectsQuery.error && !viewObjectsQuery.data) return;
     const nextViewName = selectedVisibleStringKey(
       filteredViews,
@@ -528,12 +539,12 @@ export function ViewManagementPage() {
     );
     if (!nextViewName) {
       selectedViewManualSelection.current = false;
-      if (selectedViewName) detailRequest.clear();
+      if (selectedViewName) clearDetail();
       return;
     }
     if (nextViewName === selectedViewName) return;
     selectedViewManualSelection.current = false;
-    void fetchDetail(nextViewName);
+    void fetchDetailRef.current(nextViewName);
   }, [
     activeView,
     filteredViews,
@@ -541,8 +552,8 @@ export function ViewManagementPage() {
     viewObjectsQuery.error,
     viewObjectsQuery.data,
     selectedViewName,
-    detailRequest.loading,
-    detailRequest.clear,
+    detailLoading,
+    clearDetail,
   ]);
 
   const toggleSort = (key: DbObjectSortKey) => {

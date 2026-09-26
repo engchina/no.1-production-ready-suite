@@ -1,5 +1,5 @@
 import { useResetExecutionConsent, useWorkspaceActivation, useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
@@ -232,15 +232,19 @@ export function SampleDataPage() {
     setMessage("");
     setDatasetLoadRequest((request) => request + 1);
   }
+  // 取得は読み込みの要求が増えたときだけ行う。取得の関数は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  const fetchSampleInfoRef = useRef(fetchSampleInfo);
+  useLayoutEffect(() => { fetchSampleInfoRef.current = fetchSampleInfo; });
   useEffect(() => {
-    if (datasetLoadRequest > 0) void fetchSampleInfo(false);
+    if (datasetLoadRequest > 0) void fetchSampleInfoRef.current(false);
   }, [datasetLoadRequest]);
+  // abortAll は固定の関数なので、dataset が変わったときだけ前の読み込みを捨てる条件は変わらない。
   useEffect(() => {
     return () => {
       loadSequence.current += 1;
       abortAll();
     };
-  }, [dataset]);
+  }, [dataset, abortAll]);
 
   // 初回取得は上の effect が担い、keep-alive からの復帰時は状態だけ再検証する。
   const visited = useRef(false);
@@ -295,9 +299,12 @@ export function SampleDataPage() {
       }
     }
   }
+  // 再取得は終端を報告したときだけ行う。sampleInfoUrl（dataset）が変わっても再取得しないよう、最新の関数を ref から呼ぶ。
+  const reloadSampleStateRef = useRef(reloadSampleState);
+  useLayoutEffect(() => { reloadSampleStateRef.current = reloadSampleState; });
   useEffect(() => {
     if (!reportedSchemaRefresh.endsWith(":done")) return;
-    void reloadSampleState().catch((err: unknown) => {
+    void reloadSampleStateRef.current().catch((err: unknown) => {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     });
   }, [reportedSchemaRefresh]);

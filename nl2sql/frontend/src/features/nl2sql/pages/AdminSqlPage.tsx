@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw, X } from "lucide-react";
@@ -233,11 +233,12 @@ export function AdminSqlPage() {
     sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || result || executionRun
   );
 
-  const refreshSchemaReadModels = () => {
+  // queryClient だけに依存する固定の関数にする（終端の effect の deps に入れても発火の条件は変わらない）。
+  const refreshSchemaReadModels = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
     void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
     void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
-  };
+  }, [queryClient]);
 
   const trackSchemaRefreshResult = (data: {
     schema_refresh_job_id?: string;
@@ -320,7 +321,7 @@ export function AdminSqlPage() {
 
   useEffect(() => {
     if (reportedSchemaRefresh.endsWith(":done")) refreshSchemaReadModels();
-  }, [reportedSchemaRefresh]);
+  }, [reportedSchemaRefresh, refreshSchemaReadModels]);
 
   const execute = async () => {
     if (!canExecute) return;
