@@ -125,6 +125,22 @@ def test_agentic_profile_defaults_to_off() -> None:
     assert Settings(_env_file=None).rag_agentic_profile == "off"
 
 
+def test_oracle_defaults_to_thin_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """既定は Thin mode で、Wallet は ORACLE_WALLET_DIR（NL2SQL / terraform と同じ path）。"""
+    monkeypatch.delenv("ORACLE_CLIENT_LIB_DIR", raising=False)
+    monkeypatch.delenv("ORACLE_WALLET_DIR", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.oracle_driver_mode == "thin"
+    assert settings.resolved_oracle_wallet_dir == "/u01/aipoc/wallet"
+
+
+def test_oracle_client_lib_dir_switches_to_thick_mode() -> None:
+    """ORACLE_CLIENT_LIB_DIR を指定したときだけ Thick mode と <lib_dir>/network/admin。"""
+    settings = Settings(_env_file=None, oracle_client_lib_dir="/opt/oracle/instantclient_23_26")
+    assert settings.oracle_driver_mode == "thick"
+    assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
+
+
 def test_unknown_agentic_profile_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_agentic_profile="react_agent")

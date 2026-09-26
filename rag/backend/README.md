@@ -96,7 +96,7 @@ Object Storage は `OBJECT_STORAGE_REGION` / `OBJECT_STORAGE_NAMESPACE` / `OBJEC
 
 `GET /api/ready` は外部 API へ ping せず、デプロイ時に注入される設定を依存グループ単位で検証します。
 
-checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `ORACLE_USER` / `ORACLE_DSN` に加え、`ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
+checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `ORACLE_USER` / `ORACLE_DSN` に加え、`ORACLE_PASSWORD` または `ORACLE_WALLET_DIR`（Thick mode では `ORACLE_CLIENT_LIB_DIR/network/admin`） に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
 
 ## ダッシュボード
 

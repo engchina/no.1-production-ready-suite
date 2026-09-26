@@ -46,7 +46,6 @@ services:
       <<: *parser-service-urls
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
       ENVIRONMENT: prod
-      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
       MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -74,7 +73,7 @@ services:
     #   - ./docker-compose.yml:/app/docker-compose.yml:ro
     # OCI 設定は権限調整済みの named volume に一度だけ seed して使う。
     volumes:
-      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - /u01/aipoc/wallet:/u01/aipoc/wallet
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
     healthcheck:
@@ -100,7 +99,6 @@ services:
     environment:
       <<: *parser-service-urls
       ENVIRONMENT: prod
-      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
       MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -119,7 +117,7 @@ services:
     healthcheck:
       disable: true
     volumes:
-      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - /u01/aipoc/wallet:/u01/aipoc/wallet
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
 

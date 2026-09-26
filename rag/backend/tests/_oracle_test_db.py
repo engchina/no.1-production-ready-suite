@@ -42,8 +42,9 @@ def apply_real_oracle_settings(settings: Settings) -> None:
 
 def _connect() -> Any:
     oracledb = importlib.import_module("oracledb")
-    # 実 DB は thick client(instant client)を使う。thin 接続を先に作るとアプリ側の
-    # thick 初期化が DPY-2019 で失敗するため、connect 前に thick を初期化する(冪等)。
+    # ORACLE_CLIENT_LIB_DIR を指定した実 DB は thick client を使う。thin 接続を先に作ると
+    # アプリ側の thick 初期化が DPY-2019 で失敗するため、connect 前に初期化する
+    # (冪等。既定の thin では何もしない)。
     _init_oracle_client(oracledb, _REAL_SETTINGS)
     return oracledb.connect(**real_oracle_connection_kwargs())
 
