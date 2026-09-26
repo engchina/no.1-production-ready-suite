@@ -30,6 +30,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   Code2,
   Copy,
@@ -875,10 +876,14 @@ export function SqlFileInput({
   useEffect(() => { if (disabled) readSequence.current += 1; }, [disabled]);
   const [errorText, setErrorText] = useState("");
 
-  useEffect(() => {
-    readSequence.current += 1;
+  // reset のレンダーで表示を消し（effect で setState しない）、読み込み中の結果は effect で捨てる。
+  const resetRequested = useValuesChanged([resetSignal]);
+  if (resetRequested) {
     setFilename("");
     setErrorText("");
+  }
+  useEffect(() => {
+    readSequence.current += 1;
   }, [resetSignal]);
 
   return (

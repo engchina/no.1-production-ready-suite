@@ -16,6 +16,7 @@ import {
   RowActionMenu,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -167,15 +168,16 @@ export function EvaluationPage() {
     enabled: Boolean(currentJob && TERMINAL_STATUSES.has(currentJob.status)),
   });
 
-  useEffect(() => {
-    const profiles = profilesQuery.data?.items ?? [];
-    if (!profileId && profiles.length > 0) setProfileId(profiles[0].id);
-  }, [profileId, profilesQuery.data]);
+  // 未選択のまま profile の一覧が届いたレンダーで先頭を選ぶ（effect で setState しない）。
+  const firstProfileId = profilesQuery.data?.items[0]?.id;
+  if (!profileId && firstProfileId) setProfileId(firstProfileId);
 
-  useEffect(() => {
+  // job が変わったレンダーで結果のページ位置を先頭に戻す。
+  const jobChanged = useValuesChanged([currentJobId]);
+  if (jobChanged) {
     setResultCursor(null);
     setResultCursorHistory([]);
-  }, [currentJobId]);
+  }
 
   useEffect(() => {
     if (currentJob && TERMINAL_STATUSES.has(currentJob.status)) {

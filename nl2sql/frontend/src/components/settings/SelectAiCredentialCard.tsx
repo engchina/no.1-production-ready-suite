@@ -1,5 +1,6 @@
 import { KeyRound, RefreshCw, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   Button,
   StatusBadge,
@@ -54,18 +55,16 @@ export function SelectAiCredentialCard() {
     status.isFetching || status.isError || changeCredential.isPending;
   const confirmed = confirmation.trim() === SELECT_AI_CREDENTIAL_CONFIRMATION;
 
-  useEffect(() => {
-    if (data?.region) setRegion(data.region);
-  }, [data?.region]);
-
-  useEffect(() => {
-    setConfirmation("");
-  }, [
+  // server 値・取得状態が変わったレンダーで、region と確認語を直す（effect で setState しない）。
+  const regionChanged = useValuesChanged([data?.region]);
+  if (regionChanged && data?.region) setRegion(data.region);
+  const confirmationStale = useValuesChanged([
     status.isFetching,
     data?.schema_name,
     data?.exists,
     data?.oci_auth_ready,
   ]);
+  if (confirmationStale) setConfirmation("");
 
   const refresh = () => {
     setConfirmation("");

@@ -83,35 +83,16 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
       window.removeEventListener(DATABASE_UNAVAILABLE_EVENT, handleDatabaseUnavailable);
   }, [queryClient]);
 
-  useEffect(() => {
-    if (reportedFailure === null) {
-      return;
-    }
-    if (
-      (isGateExemptRoute || systemTablesRouteReady) &&
-      database.dataUpdatedAt > reportedFailure.at
-    ) {
-      setReportedFailure(null);
-      return;
-    }
-    if (
-      databaseStatus !== "ok" ||
-      database.dataUpdatedAt <= reportedFailure.at ||
-      !persistence.data?.ready ||
-      persistence.dataUpdatedAt <= reportedFailure.at
-    ) {
-      return;
-    }
-    setReportedFailure(null);
-  }, [
-    databaseStatus,
-    database.dataUpdatedAt,
-    isGateExemptRoute,
-    persistence.data?.ready,
-    persistence.dataUpdatedAt,
-    reportedFailure,
-    systemTablesRouteReady,
-  ]);
+  // 通知された障害より新しい取得で回復を確認できたレンダーで、障害の表示を消す（effect で setState しない）。
+  const reportedFailureRecovered =
+    reportedFailure !== null &&
+    (((isGateExemptRoute || systemTablesRouteReady) &&
+      database.dataUpdatedAt > reportedFailure.at) ||
+      (databaseStatus === "ok" &&
+        database.dataUpdatedAt > reportedFailure.at &&
+        Boolean(persistence.data?.ready) &&
+        persistence.dataUpdatedAt > reportedFailure.at));
+  if (reportedFailureRecovered) setReportedFailure(null);
 
   useEffect(() => {
     if (
