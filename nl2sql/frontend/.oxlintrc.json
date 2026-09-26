@@ -21,7 +21,7 @@
       "rules": {
         // eslint-plugin-react-hooks の configs.recommended.rules と同じルール・同じレベル（RAG #167 / Agent #179 と同じ）。
         "react-hooks-compiler/rules-of-hooks": "error",
-        // 違反の残る 2 ルールは段階的に有効にする（#181：refs は段階 1 で有効化済み → set-state-in-effect 68 件 → exhaustive-deps 49 件）。
+        // 段階的に有効にする（#181）：refs（段階 1）と set-state-in-effect（段階 2）は有効化済み。exhaustive-deps は段階 3 の修正の後に有効にする。
         "react-hooks-compiler/exhaustive-deps": "off",
         "react-hooks-compiler/static-components": "error",
         "react-hooks-compiler/use-memo": "error",
@@ -30,7 +30,7 @@
         "react-hooks-compiler/immutability": "error",
         "react-hooks-compiler/globals": "error",
         "react-hooks-compiler/refs": "error",
-        "react-hooks-compiler/set-state-in-effect": "off",
+        "react-hooks-compiler/set-state-in-effect": "error",
         "react-hooks-compiler/error-boundaries": "error",
         "react-hooks-compiler/purity": "error",
         "react-hooks-compiler/set-state-in-render": "error",
