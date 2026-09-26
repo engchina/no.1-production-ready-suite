@@ -6,6 +6,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from pr_system_settings.auth.migrations import PLATFORM_AUTH_DDL, PLATFORM_AUTH_DDL_IGNORED_ERRORS
+
 from app.clients.oracle_runtime import get_oracle_pool_manager
 from app.clients.oracle_statement_executor import oracle_statement_executor
 
@@ -18,6 +20,14 @@ LEGACY_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
     ("RAG_APP_DATA_ENTITLEMENTS", "NL2SQL_APP_DATA_ENTITLEMENTS"),
     ("RAG_AUTH_SESSIONS", "NL2SQL_AUTH_SESSIONS"),
     ("RAG_DEEPSEC_MIGRATIONS", "NL2SQL_DEEPSEC_MIGRATIONS"),
+)
+
+# 3 製品で共有するユーザー・ロール・割り当て・セッションは PLATFORM_* へ移した（#212）。
+PLATFORM_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
+    ("NL2SQL_APP_USERS", "PLATFORM_USERS"),
+    ("NL2SQL_APP_ROLES", "PLATFORM_ROLES"),
+    ("NL2SQL_APP_USER_ROLES", "PLATFORM_USER_ROLES"),
+    ("NL2SQL_AUTH_SESSIONS", "PLATFORM_AUTH_SESSIONS"),
 )
 
 
@@ -52,6 +62,17 @@ def _assert_no_namespace_conflicts(connection: Any) -> None:
         raise RuntimeError(
             "旧 RAG security table と NL2SQL security table が同時に存在します: "
             + ", ".join(conflicts)
+        )
+    platform_conflicts = [
+        f"{source}/{target}"
+        for source, target in PLATFORM_TABLE_RENAMES
+        if source in tables and target in tables
+    ]
+    if platform_conflicts:
+        raise RuntimeError(
+            "旧 NL2SQL の認証 table と PLATFORM_ の認証 table が同時に存在します"
+            "（どちらのデータを残すかを確認してから片方を削除してください）: "
+            + ", ".join(platform_conflicts)
         )
 
 
@@ -99,6 +120,12 @@ def apply_security_migrations() -> tuple[int, ...]:
     permissions_menu_statements = split_ddl(
         (migration_dir / "023_security_permissions_menu.sql").read_text(encoding="utf-8")
     )
+    platform_rename_statements = split_ddl(
+        (migration_dir / "024_platform_auth_tables.sql").read_text(encoding="utf-8")
+    )
+    role_access_cascade_statements = split_ddl(
+        (migration_dir / "025_role_access_cascade.sql").read_text(encoding="utf-8")
+    )
 
     with get_oracle_pool_manager().control_connection() as connection:
         _assert_no_namespace_conflicts(connection)
@@ -138,6 +165,23 @@ def apply_security_migrations() -> tuple[int, ...]:
             ),
         )
         _with_migration_label("014-rename", user_uuid_rename_results)
+        # 旧 NL2SQL_APP_* を PLATFORM_* へ改名し（無ければ読み飛ばす）、無い環境では新規に作る。
+        platform_rename_results = oracle_statement_executor.execute(
+            connection,
+            platform_rename_statements,
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=frozenset({"ORA-00942", "ORA-01418", "ORA-04043", "ORA-23292"}),
+        )
+        _with_migration_label("024", platform_rename_results)
+        platform_ddl_results = oracle_statement_executor.execute(
+            connection,
+            list(PLATFORM_AUTH_DDL),
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=PLATFORM_AUTH_DDL_IGNORED_ERRORS,
+        )
+        _with_migration_label("platform-auth", platform_ddl_results)
         results = oracle_statement_executor.execute(
             connection,
             statements,
@@ -226,12 +270,22 @@ def apply_security_migrations() -> tuple[int, ...]:
             include_sql=False,
         )
         _with_migration_label("023", permissions_menu_results)
+        role_access_cascade_results = oracle_statement_executor.execute(
+            connection,
+            role_access_cascade_statements,
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=frozenset({"ORA-02443"}),
+        )
+        _with_migration_label("025", role_access_cascade_results)
     errors = [
         result
         for result in (
             *namespace_results,
             *login_user_id_rename_results,
             *user_uuid_rename_results,
+            *platform_rename_results,
+            *platform_ddl_results,
             *results,
             *cleanup_results,
             *deepsec_entitlements_results,
@@ -242,6 +296,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             *role_profiles_results,
             *scope_expression_results,
             *permissions_menu_results,
+            *role_access_cascade_results,
         )
         if result["status"] == "error"
     ]
@@ -266,6 +321,9 @@ def apply_security_migrations() -> tuple[int, ...]:
         len(role_profiles_statements),
         len(scope_expression_statements),
         len(permissions_menu_statements),
+        len(platform_rename_statements),
+        len(PLATFORM_AUTH_DDL),
+        len(role_access_cascade_statements),
     )
 
 
@@ -309,6 +367,12 @@ def main() -> int:
     permissions_menu_statements = split_ddl(
         (migration_dir / "023_security_permissions_menu.sql").read_text(encoding="utf-8")
     )
+    platform_rename_statements = split_ddl(
+        (migration_dir / "024_platform_auth_tables.sql").read_text(encoding="utf-8")
+    )
+    role_access_cascade_statements = split_ddl(
+        (migration_dir / "025_role_access_cascade.sql").read_text(encoding="utf-8")
+    )
     if not args.apply:
         print(
             f"migration=005 statements={len(namespace_statements)} mode=preview "
@@ -321,7 +385,10 @@ def main() -> int:
             f"migration=014 statements={len(user_uuid_statements)} "
             f"migration=016 statements={len(role_profiles_statements)} "
             f"migration=020 statements={len(scope_expression_statements)} "
-            f"migration=023 statements={len(permissions_menu_statements)}"
+            f"migration=023 statements={len(permissions_menu_statements)} "
+            f"migration=024 statements={len(platform_rename_statements)} "
+            f"migration=platform-auth statements={len(PLATFORM_AUTH_DDL)} "
+            f"migration=025 statements={len(role_access_cascade_statements)}"
         )
         return 0
 
@@ -343,6 +410,9 @@ def main() -> int:
         f"migration=016 statements={len(role_profiles_statements)} "
         f"migration=020 statements={len(scope_expression_statements)} "
         f"migration=023 statements={len(permissions_menu_statements)} "
+        f"migration=024 statements={len(platform_rename_statements)} "
+        f"migration=platform-auth statements={len(PLATFORM_AUTH_DDL)} "
+        f"migration=025 statements={len(role_access_cascade_statements)} "
         f"bootstrap_created={str(bootstrapped).lower()}"
     )
     return 0

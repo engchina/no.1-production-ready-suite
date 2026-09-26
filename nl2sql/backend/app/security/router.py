@@ -1,18 +1,21 @@
-"""認証、ユーザー、ロール、DeepSec API。"""
+"""認証・ユーザー・ロール（platform の共通 router）と、NL2SQL の権限・DeepSec API。"""
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from pr_backend_core import ApiResponse
+from pr_system_settings.auth.domain import Principal as PlatformPrincipal
+from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
+from pr_system_settings.auth.router import build_auth_router
 
 from app.api.concurrency import run_sync_io
 from app.settings import get_settings
 
 from .deepsec import get_deepsec_service
 from .dependencies import current_principal, local_debug_principal, request_context
-from .domain import SYSTEM_ADMIN_ROLE_CODE, Principal, RoleRecord, UserRecord
+from .domain import SYSTEM_ADMIN_ROLE_CODE, Principal, RoleRecord
 from .permissions import PERMISSION_CATALOG, grants_all_profile_access
 from .schemas import (
     CurrentUserData,
@@ -27,26 +30,10 @@ from .schemas import (
     DeepSecRoleEntitlementsData,
     DeepSecTargetObjectDetailData,
     DeepSecTargetObjectPageData,
-    LoginRequest,
-    PasswordChangeRequest,
-    PasswordResetData,
-    PasswordResetRequest,
     PermissionData,
     ProfileAccessProfileData,
-    RoleArchiveRequest,
-    RoleCreateRequest,
     RoleData,
-    RoleDeleteData,
     RolePermissionsUpdateRequest,
-    RoleRestoreRequest,
-    RoleUpdateRequest,
-    UserCreateData,
-    UserCreateRequest,
-    UserData,
-    UserDeleteData,
-    UserUpdateRequest,
-    VersionRequest,
-    user_data,
 )
 from .service import get_security_service
 
@@ -54,368 +41,29 @@ router = APIRouter(tags=["security"])
 run_in_threadpool = run_sync_io
 
 
-def _set_auth_cookie(
-    response: Response,
-    *,
-    name: str,
-    value: str,
-    httponly: bool,
-) -> None:
-    settings = get_settings()
-    response.set_cookie(
-        name,
-        value,
-        httponly=httponly,
-        secure=settings.app_auth_cookie_secure,
-        samesite="lax",
-        path="/",
-        max_age=settings.app_auth_absolute_timeout_hours * 3600,
-    )
+def _current_user_data(principal: PlatformPrincipal, debug_mode: bool) -> CurrentUserData:
+    assert isinstance(principal, Principal)
+    return CurrentUserData.from_principal(principal, debug_mode=debug_mode)
 
 
-def _roles_by_id() -> dict[str, RoleRecord]:
-    service = get_security_service()
-    return {role.role_id: role for role in service.list_roles(include_archived=True)}
+def _role_data(role: PlatformRoleRecord) -> RoleData:
+    assert isinstance(role, RoleRecord)
+    return RoleData.from_record(role)
 
 
-def _user_data(user: UserRecord) -> UserData:
-    return user_data(user, roles_by_id=_roles_by_id())
-
-
-def _expected_version(if_match: str | None) -> int:
-    from .service import SecurityApiError
-
-    if if_match is None or not if_match.strip():
-        raise SecurityApiError(
-            428,
-            "削除には If-Match header で現在のバージョンを指定してください。"
-            "表示を更新して再試行してください。",
-            code="SECURITY_VERSION_REQUIRED",
-        )
-    normalized = if_match.strip()
-    if normalized.startswith("W/"):
-        raise SecurityApiError(
-            400,
-            "If-Match header には weak ETag ではなく現在の数値バージョンを指定してください。",
-            code="SECURITY_VERSION_INVALID",
-        )
-    if normalized.startswith('"') and normalized.endswith('"'):
-        normalized = normalized[1:-1]
-    if not normalized.isdecimal() or int(normalized) < 1:
-        raise SecurityApiError(
-            400,
-            "If-Match header には現在の数値バージョンを指定してください。",
-            code="SECURITY_VERSION_INVALID",
-        )
-    return int(normalized)
-
-
-@router.post("/auth/login", response_model=ApiResponse[CurrentUserData])
-def login(
-    payload: LoginRequest, request: Request, response: Response
-) -> ApiResponse[CurrentUserData]:
-    if get_settings().local_debug_enabled:
-        return ApiResponse(
-            data=CurrentUserData.from_principal(local_debug_principal(), debug_mode=True)
-        )
-    request_id, client_ip = request_context(request)
-    principal, session_token, csrf_token = get_security_service().login(
-        payload.login_user_id,
-        payload.password,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    settings = get_settings()
-    _set_auth_cookie(
-        response,
-        name=settings.app_auth_session_cookie_name,
-        value=session_token,
-        httponly=True,
-    )
-    _set_auth_cookie(
-        response,
-        name=settings.app_auth_csrf_cookie_name,
-        value=csrf_token,
-        httponly=False,
-    )
-    return ApiResponse(data=CurrentUserData.from_principal(principal))
-
-
-@router.get("/auth/me", response_model=ApiResponse[CurrentUserData])
-def me(request: Request) -> ApiResponse[CurrentUserData]:
-    settings = get_settings()
-    return ApiResponse(
-        data=CurrentUserData.from_principal(
-            current_principal(request), debug_mode=settings.local_debug_enabled
-        )
-    )
-
-
-@router.post("/auth/logout", response_model=ApiResponse[dict[str, bool]])
-def logout(request: Request, response: Response) -> ApiResponse[dict[str, bool]]:
-    if get_settings().local_debug_enabled:
-        return ApiResponse(data={"logged_out": False})
-    principal = current_principal(request)
-    request_id, client_ip = request_context(request)
-    get_security_service().logout(
-        principal,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    settings = get_settings()
-    response.delete_cookie(settings.app_auth_session_cookie_name, path="/")
-    response.delete_cookie(settings.app_auth_csrf_cookie_name, path="/")
-    return ApiResponse(data={"logged_out": True})
-
-
-@router.post("/auth/password/change", response_model=ApiResponse[dict[str, bool]])
-def change_password(
-    payload: PasswordChangeRequest,
-    request: Request,
-    response: Response,
-) -> ApiResponse[dict[str, bool]]:
-    if get_settings().local_debug_enabled:
-        from .service import SecurityApiError
-
-        raise SecurityApiError(409, "ローカル DEBUG モードではパスワードを変更できません。")
-    principal = current_principal(request)
-    request_id, client_ip = request_context(request)
-    get_security_service().change_password(
-        principal,
-        payload.current_password,
-        payload.new_password,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    settings = get_settings()
-    response.delete_cookie(settings.app_auth_session_cookie_name, path="/")
-    response.delete_cookie(settings.app_auth_csrf_cookie_name, path="/")
-    return ApiResponse(data={"changed": True})
-
-
-@router.get("/security/users", response_model=ApiResponse[list[UserData]])
-def list_users() -> ApiResponse[list[UserData]]:
-    users = get_security_service().list_users()
-    roles_by_id = _roles_by_id()
-    return ApiResponse(data=[user_data(user, roles_by_id=roles_by_id) for user in users])
-
-
-@router.post("/security/users", response_model=ApiResponse[UserCreateData])
-def create_user(payload: UserCreateRequest, request: Request) -> ApiResponse[UserCreateData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    user, password = get_security_service().create_user(
-        login_user_id=payload.login_user_id,
-        display_name=payload.display_name,
-        role_ids=payload.role_ids,
-        temporary_password=payload.temporary_password,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=UserCreateData(user=_user_data(user), temporary_password=password))
-
-
-@router.get("/security/users/{user_uuid}", response_model=ApiResponse[UserData])
-def get_user(user_uuid: str) -> ApiResponse[UserData]:
-    user = get_security_service().store.get_user(user_uuid)
-    if user is None:
-        from .service import SecurityApiError
-
-        raise SecurityApiError(404, "ユーザーが見つかりません。")
-    return ApiResponse(data=_user_data(user))
-
-
-@router.patch("/security/users/{user_uuid}", response_model=ApiResponse[UserData])
-def update_user(
-    user_uuid: str,
-    payload: UserUpdateRequest,
-    request: Request,
-    response: Response,
-) -> ApiResponse[UserData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    user = get_security_service().update_user(
-        user_uuid,
-        expected_version=payload.version,
-        display_name=payload.display_name,
-        status=payload.status,
-        role_ids=payload.role_ids,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    response.headers["ETag"] = f'"{user.version}"'
-    return ApiResponse(data=_user_data(user))
-
-
-@router.delete("/security/users/{user_uuid}", response_model=ApiResponse[UserDeleteData])
-def delete_user(
-    user_uuid: str,
-    request: Request,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-) -> ApiResponse[UserDeleteData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    deleted = get_security_service().delete_user(
-        user_uuid,
-        expected_version=_expected_version(if_match),
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(
-        data=UserDeleteData(
-            user_uuid=deleted.user_uuid,
-            login_user_id=deleted.login_user_id,
-        )
-    )
-
-
-@router.post(
-    "/security/users/{user_uuid}/reset-password", response_model=ApiResponse[PasswordResetData]
+# 認証 API とユーザー管理・ロール管理（基本情報）は 3 製品共通（platform。#212）。
+auth_router = build_auth_router(
+    get_service=lambda: get_security_service(),
+    get_settings=lambda: get_settings(),
+    current_principal=current_principal,
+    request_context=request_context,
+    local_debug_principal=local_debug_principal,
+    current_user_model=CurrentUserData,
+    current_user_data=_current_user_data,
+    role_model=RoleData,
+    role_data=_role_data,
 )
-def reset_password(
-    user_uuid: str,
-    payload: PasswordResetRequest,
-    request: Request,
-) -> ApiResponse[PasswordResetData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    user, password = get_security_service().reset_password(
-        user_uuid,
-        payload.temporary_password,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=PasswordResetData(user=_user_data(user), temporary_password=password))
-
-
-@router.post("/security/users/{user_uuid}/unlock", response_model=ApiResponse[UserData])
-def unlock_user(user_uuid: str, request: Request) -> ApiResponse[UserData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    user = get_security_service().unlock_user(
-        user_uuid,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=_user_data(user))
-
-
-def _change_user_status(
-    user_uuid: str,
-    payload: VersionRequest,
-    request: Request,
-    status: str,
-) -> ApiResponse[UserData]:
-    service = get_security_service()
-    current = service.store.get_user(user_uuid)
-    if current is None:
-        from .service import SecurityApiError
-
-        raise SecurityApiError(404, "ユーザーが見つかりません。")
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    updated = service.update_user(
-        user_uuid,
-        expected_version=payload.version,
-        display_name=current.display_name,
-        status=status,
-        role_ids=current.role_ids,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=_user_data(updated))
-
-
-@router.post("/security/users/{user_uuid}/enable", response_model=ApiResponse[UserData])
-def enable_user(user_uuid: str, payload: VersionRequest, request: Request) -> ApiResponse[UserData]:
-    return _change_user_status(user_uuid, payload, request, "ACTIVE")
-
-
-@router.post("/security/users/{user_uuid}/disable", response_model=ApiResponse[UserData])
-def disable_user(
-    user_uuid: str,
-    payload: VersionRequest,
-    request: Request,
-) -> ApiResponse[UserData]:
-    return _change_user_status(user_uuid, payload, request, "DISABLED")
-
-
-@router.get("/security/roles", response_model=ApiResponse[list[RoleData]])
-def list_roles(
-    request: Request, include_archived: bool = Query(default=False)
-) -> ApiResponse[list[RoleData]]:
-    service = get_security_service()
-    principal = getattr(request.state, "principal", None)
-    if isinstance(principal, Principal):
-        roles = service.list_roles_for_actor(
-            principal,
-            include_archived=include_archived,
-        )
-    else:
-        roles = service.list_roles(include_archived=include_archived)
-    return ApiResponse(data=[RoleData.from_record(role) for role in roles])
-
-
-@router.post("/security/roles", response_model=ApiResponse[RoleData])
-def create_role(payload: RoleCreateRequest, request: Request) -> ApiResponse[RoleData]:
-    """ロール管理画面の新規作成。権限は権限管理（PUT .../permissions）で付ける（#206）。"""
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    role = get_security_service().create_role(
-        role_code=payload.role_code,
-        display_name=payload.display_name,
-        description=payload.description,
-        permissions=set(),
-        entitlements=[],
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=RoleData.from_record(role))
-
-
-@router.get("/security/roles/{role_id}", response_model=ApiResponse[RoleData])
-def get_role(role_id: str, request: Request) -> ApiResponse[RoleData]:
-    service = get_security_service()
-    principal = getattr(request.state, "principal", None)
-    if isinstance(principal, Principal):
-        role = service.get_role_for_actor(role_id, principal)
-    else:
-        role = service.store.get_role(role_id)
-    if role is None:
-        from .service import SecurityApiError
-
-        raise SecurityApiError(404, "ロールが見つかりません。")
-    return ApiResponse(data=RoleData.from_record(role))
-
-
-@router.patch("/security/roles/{role_id}", response_model=ApiResponse[RoleData])
-def update_role(
-    role_id: str,
-    payload: RoleUpdateRequest,
-    request: Request,
-    response: Response,
-) -> ApiResponse[RoleData]:
-    """ロール管理画面の基本情報（名称・説明）の更新。権限は変えない（#206）。"""
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    role = get_security_service().update_role(
-        role_id,
-        expected_version=payload.version,
-        display_name=payload.display_name,
-        description=payload.description,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    response.headers["ETag"] = f'"{role.version}"'
-    return ApiResponse(data=RoleData.from_record(role))
+router.include_router(auth_router)
 
 
 @router.put("/security/roles/{role_id}/permissions", response_model=ApiResponse[RoleData])
@@ -479,65 +127,6 @@ def list_profile_access_profiles(
             )
             for profile in profiles
         ]
-    )
-
-
-@router.post("/security/roles/{role_id}/archive", response_model=ApiResponse[RoleData])
-def archive_role(
-    role_id: str,
-    payload: RoleArchiveRequest,
-    request: Request,
-) -> ApiResponse[RoleData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    role = get_security_service().archive_role(
-        role_id,
-        expected_version=payload.version,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=RoleData.from_record(role))
-
-
-@router.post("/security/roles/{role_id}/restore", response_model=ApiResponse[RoleData])
-def restore_role(
-    role_id: str,
-    payload: RoleRestoreRequest,
-    request: Request,
-) -> ApiResponse[RoleData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    role = get_security_service().restore_role(
-        role_id,
-        expected_version=payload.version,
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(data=RoleData.from_record(role))
-
-
-@router.delete("/security/roles/{role_id}", response_model=ApiResponse[RoleDeleteData])
-def delete_role(
-    role_id: str,
-    request: Request,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-) -> ApiResponse[RoleDeleteData]:
-    actor = current_principal(request)
-    request_id, client_ip = request_context(request)
-    deleted = get_security_service().delete_role(
-        role_id,
-        expected_version=_expected_version(if_match),
-        actor=actor,
-        request_id=request_id,
-        client_ip=client_ip,
-    )
-    return ApiResponse(
-        data=RoleDeleteData(
-            role_id=deleted.role_id,
-            role_code=deleted.role_code,
-        )
     )
 
 

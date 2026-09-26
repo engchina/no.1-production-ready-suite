@@ -310,8 +310,8 @@ def test_v001_plan_contains_foundation_only_without_probe_flow() -> None:
     assert "NL2SQL_DEEPSEC_PROBE" not in preview
     assert "CREATE TABLE" not in preview
     assert "CREATE DATA ROLE IF NOT EXISTS NL2SQL_APP_DATA_ROLE" in preview
-    assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
-    assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_ROLES TO NL2SQL_APP_DB_ROLE" in preview
+    assert "GRANT SELECT ON APP_OWNER.PLATFORM_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
+    assert "GRANT SELECT ON APP_OWNER.PLATFORM_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS TO NL2SQL_APP_DB_ROLE" in preview
     assert "CREATE END USER" not in preview
     assert "ALTER END USER" not in preview
@@ -369,7 +369,7 @@ def test_target_objects_exclude_system_objects_and_allowlist_owners() -> None:
         object_rows=[
             ("SYS", "DUAL", "TABLE", None, "Oracle maintained"),
             ("MDSYS", "SPATIAL_TABLE", "TABLE", None, "Oracle maintained"),
-            ("APP_OWNER", "NL2SQL_APP_USERS", "TABLE", 3, "internal table"),
+            ("APP_OWNER", "PLATFORM_USERS", "TABLE", 3, "internal table"),
             ("APP_OWNER", "BUSINESS_VIEW", "VIEW", None, "business view"),
             ("OTHER", "CUSTOMERS", "TABLE", 4, "not allowlisted"),
             ("SALES", "ORDERS", "TABLE", 7, "orders"),
@@ -454,7 +454,7 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
             if "DBA_TAB_PRIVS" not in self.sql:
                 return (1,)
             table_name = str(self.params.get("table_name") or "")
-            return (0,) if table_name == "NL2SQL_APP_USER_ROLES" else (1,)
+            return (0,) if table_name == "PLATFORM_USER_ROLES" else (1,)
 
         def fetchall(self) -> list[tuple[object, ...]]:
             return []
@@ -488,7 +488,7 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
         item for item in result["checks"] if item["key"] == "predicate_table_grants"  # type: ignore[attr-defined]
     )
     assert predicate_check["passed"] is False
-    assert "NL2SQL_APP_USER_ROLES" in predicate_check["detail"]
+    assert "PLATFORM_USER_ROLES" in predicate_check["detail"]
 
 
 @pytest.mark.parametrize(
@@ -697,7 +697,7 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     assert "TO DEEPSEC_DATA_USER" not in sql
     assert "ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER" in sql
     assert "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID')" not in sql
-    assert "APP_OWNER.NL2SQL_APP_USER_ROLES" in sql
+    assert "APP_OWNER.PLATFORM_USER_ROLES" in sql
     assert "APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS" in sql
     assert "e.ENTITLEMENT_ID = 'entitlement-sales'" in sql
     assert "e.ROLE_ID = 'role-sales'" in sql
@@ -1165,7 +1165,7 @@ def test_data_entitlement_apply_rejects_predicate_over_4000_before_oracle(
             long_role_id,
             expected_version=1,
             confirmation=DEEPSEC_APPLY_CONFIRMATION,
-            entitlements=store.roles[long_role_id].entitlements,
+            entitlements=cast(RoleRecord, store.roles[long_role_id]).entitlements,
             actor=_principal(),
         )
 

@@ -57,11 +57,7 @@ from app.security.permissions import (
     UNCLASSIFIED_PERMISSION,
     permission_for_route,
 )
-from app.security.router import (
-    change_password,
-    logout,
-    me,
-)
+from app.security.router import auth_router as security_router
 from app.security.schemas import (
     CurrentUserData,
     DataEntitlementInput,
@@ -84,6 +80,14 @@ from app.security.store import (
     SecurityStore,
 )
 from app.settings import Settings, get_settings
+
+
+def _security_endpoint(path: str, method: str) -> Any:
+    """共通 router（platform の build_auth_router）の endpoint を path と method で引く。"""
+    for route in security_router.routes:
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+            return cast(Any, route).endpoint
+    raise AssertionError(f"{method} {path} is not registered")
 
 
 def _settings() -> Settings:
@@ -258,10 +262,10 @@ class _NoAuthTableStore:
 
 class _MissingSecuritySchemaStore:
     def get_user_by_login_user_id(self, _normalized_login_user_id: str) -> UserRecord | None:
-        raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
+        raise RuntimeError('ORA-00942: table or view "ADMIN"."PLATFORM_USERS" does not exist')
 
     def list_users(self) -> list[UserRecord]:
-        raise RuntimeError('ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist')
+        raise RuntimeError('ORA-00942: table or view "ADMIN"."PLATFORM_USERS" does not exist')
 
 
 class _MissingRoleProfilesStore(InMemorySecurityStore):
@@ -318,9 +322,9 @@ def test_oracle_store_maps_bare_ora_00942_to_operation_security_object(
     store = OracleSecurityStore(_settings())
     monkeypatch.setattr(store, "_adapter", _BareMissingTableAdapter())
     operations = [
-        (store.list_users, "NL2SQL_APP_USERS"),
-        (store.list_roles, "NL2SQL_APP_ROLES"),
-        (lambda: store.get_session_by_token_hash("missing"), "NL2SQL_AUTH_SESSIONS"),
+        (store.list_users, "PLATFORM_USERS"),
+        (store.list_roles, "PLATFORM_ROLES"),
+        (lambda: store.get_session_by_token_hash("missing"), "PLATFORM_AUTH_SESSIONS"),
         (store.get_deepsec_states, "NL2SQL_DEEPSEC_MIGRATIONS"),
     ]
 
@@ -366,6 +370,9 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
         )
         authorization = cast(AsyncGenerator[None, None], authorize_api_request(request))
         await anext(authorization)
+        me = _security_endpoint("/auth/me", "GET")
+        logout = _security_endpoint("/auth/logout", "POST")
+        change_password = _security_endpoint("/auth/password/change", "POST")
         current = me(request)
         assert current.data is not None
         assert current.data.model_dump() == {
@@ -474,7 +481,7 @@ def test_login_session_uses_sixty_minute_default_idle_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime(2026, 8, 20, 9, 0, tzinfo=UTC)
-    monkeypatch.setattr("app.security.service._now", lambda: now)
+    monkeypatch.setattr("pr_system_settings.auth.service._now", lambda: now)
     service = _service()
 
     principal, token, _csrf = _login(service)
@@ -492,7 +499,7 @@ def test_session_activity_refreshes_idle_timeout_without_exceeding_absolute(
 ) -> None:
     login_at = datetime(2026, 8, 20, 9, 0, tzinfo=UTC)
     current_time = {"value": login_at}
-    monkeypatch.setattr("app.security.service._now", lambda: current_time["value"])
+    monkeypatch.setattr("pr_system_settings.auth.service._now", lambda: current_time["value"])
     service = _service()
     _principal, token, _csrf = _login(service)
     store = cast(InMemorySecurityStore, service.store)
@@ -515,7 +522,7 @@ def test_expired_session_is_revoked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime(2026, 8, 20, 9, 0, tzinfo=UTC)
-    monkeypatch.setattr("app.security.service._now", lambda: now)
+    monkeypatch.setattr("pr_system_settings.auth.service._now", lambda: now)
     service = _service()
     _principal, token, _csrf = _login(service)
     store = cast(InMemorySecurityStore, service.store)
@@ -694,7 +701,7 @@ def test_list_users_reports_security_migration_required() -> None:
 
     assert error.value.status_code == 409
     assert error.value.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
-    assert "NL2SQL_APP_USERS" not in error.value.public_message
+    assert "PLATFORM_USERS" not in error.value.public_message
 
 
 def test_missing_role_profiles_table_reports_security_migration_required() -> None:
@@ -2594,6 +2601,97 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert "migration=016" in output
     assert "migration=020" in output
     assert "migration=023" in output
+    assert "migration=024" in output
+    assert "migration=platform-auth" in output
+    assert "migration=025" in output
+
+
+class _MigrationCursor:
+    def __init__(self, tables: set[str]) -> None:
+        self.tables = tables
+
+    def __enter__(self) -> _MigrationCursor:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, statement: str, *_: object) -> None:
+        self.statement = statement
+
+    def fetchall(self) -> list[tuple[str]]:
+        if "USER_OBJECTS" in self.statement:
+            return [(name,) for name in sorted(self.tables)]
+        return []
+
+
+class _MigrationConnection:
+    def __init__(self, tables: set[str]) -> None:
+        self.tables = tables
+
+    def cursor(self) -> _MigrationCursor:
+        return _MigrationCursor(self.tables)
+
+
+def _patch_security_migration(monkeypatch: pytest.MonkeyPatch, tables: set[str]) -> list[list[str]]:
+    import contextlib
+
+    import app.cli.app_security_migrate as migrate
+
+    batches: list[list[str]] = []
+
+    class _Manager:
+        @contextlib.contextmanager
+        def control_connection(self) -> Any:
+            yield _MigrationConnection(tables)
+
+    class _Executor:
+        def execute(self, connection: object, statements: list[str], **_: object) -> Any:
+            batches.append(list(statements))
+            return [{"status": "ok", "index": index} for index, _ in enumerate(statements, 1)]
+
+    monkeypatch.setattr(migrate, "get_oracle_pool_manager", lambda: _Manager())
+    monkeypatch.setattr(migrate, "oracle_statement_executor", _Executor())
+    return batches
+
+
+def test_security_migration_moves_auth_tables_to_platform_before_nl2sql_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """改名（024）→ PLATFORM_* の作成 → NL2SQL 固有の DDL（004）→ … → CASCADE 化（025）（#212）。"""
+    import app.cli.app_security_migrate as migrate
+
+    batches = _patch_security_migration(monkeypatch, {"NL2SQL_APP_USERS", "NL2SQL_APP_ROLES"})
+    migrate.apply_security_migrations()
+
+    def position(marker: str) -> int:
+        return next(
+            index
+            for index, batch in enumerate(batches)
+            if any(marker in statement for statement in batch)
+        )
+
+    rename = position("ALTER TABLE NL2SQL_APP_USERS RENAME TO PLATFORM_USERS")
+    platform_ddl = position("CREATE TABLE PLATFORM_USERS (")
+    nl2sql_ddl = position("CREATE TABLE NL2SQL_APP_ROLE_PERMISSIONS (")
+    cascade = position("REFERENCES PLATFORM_ROLES (ROLE_ID) ON DELETE CASCADE")
+    assert rename < platform_ddl < nl2sql_ddl < cascade == len(batches) - 1
+    # NL2SQL 固有のテーブルだけが残り、共通テーブルの作成は platform の DDL に一本化した。
+    nl2sql_statements = "\n".join(batches[nl2sql_ddl])
+    assert "CREATE TABLE NL2SQL_APP_USERS" not in nl2sql_statements
+    assert "CREATE TABLE NL2SQL_AUTH_SESSIONS" not in nl2sql_statements
+    assert "REFERENCES PLATFORM_ROLES" in nl2sql_statements
+
+
+def test_security_migration_stops_when_old_and_platform_tables_both_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.cli.app_security_migrate as migrate
+
+    batches = _patch_security_migration(monkeypatch, {"NL2SQL_APP_USERS", "PLATFORM_USERS"})
+    with pytest.raises(RuntimeError, match="NL2SQL_APP_USERS/PLATFORM_USERS"):
+        migrate.apply_security_migrations()
+    assert batches == []
 
 
 def test_security_migration_user_uuid_rename_ignores_missing_constraint() -> None:
@@ -3552,7 +3650,7 @@ def test_missing_users_table_uses_409_problem_contract_without_oracle_detail(
 
             def missing_users() -> list[UserRecord]:
                 raise RuntimeError(
-                    'ORA-00942: table or view "ADMIN"."NL2SQL_APP_USERS" does not exist'
+                    'ORA-00942: table or view "ADMIN"."PLATFORM_USERS" does not exist'
                 )
 
             monkeypatch.setattr(service.store, "list_users", missing_users)
@@ -3569,7 +3667,7 @@ def test_missing_users_table_uses_409_problem_contract_without_oracle_detail(
         assert body["problem"]["retryable"] is False
         assert "app_security_migrate" in body["problem"]["detail"]
         assert "ORA-00942" not in response.text
-        assert "NL2SQL_APP_USERS" not in response.text
+        assert "PLATFORM_USERS" not in response.text
 
     try:
         asyncio.run(exercise())
@@ -5125,6 +5223,10 @@ def test_role_restore_validates_access_before_store_write(
     )
     store = service.store if store_kind == "memory" else OracleSecurityStore(_settings())
     monkeypatch.setattr(store, "get_role", lambda _id: target)
+    # 他製品の権限テーブル（製品をまたぐ権限昇格の確認。#212）は空として扱う。
+    monkeypatch.setattr(
+        store, "role_permission_codes", lambda role_ids, *, tables: {t: {} for t in tables}
+    )
     writes: list[str] = []
 
     def restore(role_id: str, *, expected_version: int) -> RoleRecord:

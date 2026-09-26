@@ -60,13 +60,13 @@ REPORT_FILE = Path("/tmp/nl2sql-deepsec-integration-report.json")
 _IDENTIFIER_RE = re.compile(r"[A-Z][A-Z0-9_$#]{0,127}")
 _REQUIRED_SECURITY_TABLES = frozenset(
     {
-        "NL2SQL_APP_USERS",
-        "NL2SQL_APP_ROLES",
-        "NL2SQL_APP_USER_ROLES",
+        "PLATFORM_USERS",
+        "PLATFORM_ROLES",
+        "PLATFORM_USER_ROLES",
         "NL2SQL_APP_ROLE_PERMISSIONS",
         "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
-        "NL2SQL_AUTH_SESSIONS",
+        "PLATFORM_AUTH_SESSIONS",
         "NL2SQL_DEEPSEC_MIGRATIONS",
     }
 )
@@ -214,12 +214,12 @@ def _preflight(real_service: Any, report: IterationReport) -> None:
                 """
                 SELECT TABLE_NAME FROM USER_TABLES
                  WHERE TABLE_NAME IN (
-                   'NL2SQL_APP_USERS',
-                   'NL2SQL_APP_ROLES',
-                   'NL2SQL_APP_USER_ROLES',
+                   'PLATFORM_USERS',
+                   'PLATFORM_ROLES',
+                   'PLATFORM_USER_ROLES',
                    'NL2SQL_APP_ROLE_PERMISSIONS',
                    'NL2SQL_APP_DATA_ENTITLEMENTS',
-                   'NL2SQL_AUTH_SESSIONS',
+                   'PLATFORM_AUTH_SESSIONS',
                    'NL2SQL_DEEPSEC_MIGRATIONS'
                  )
                 """,
@@ -730,7 +730,7 @@ def _cleanup_test_data(real_service: Any, prefix: str, report: IterationReport) 
             """
             SELECT DATA_GRANT_NAME
               FROM NL2SQL_APP_DATA_ENTITLEMENTS e
-              JOIN NL2SQL_APP_ROLES r ON r.ROLE_ID = e.ROLE_ID
+              JOIN PLATFORM_ROLES r ON r.ROLE_ID = e.ROLE_ID
              WHERE r.ROLE_CODE LIKE :role_pattern
                AND DATA_GRANT_NAME IS NOT NULL
             """,
@@ -743,31 +743,31 @@ def _cleanup_test_data(real_service: Any, prefix: str, report: IterationReport) 
         _drop_test_objects(cursor, owner, object_names)
         cursor.execute(
             """
-            DELETE FROM NL2SQL_AUTH_SESSIONS
+            DELETE FROM PLATFORM_AUTH_SESSIONS
              WHERE USER_UUID IN (
-               SELECT USER_UUID FROM NL2SQL_APP_USERS WHERE LOGIN_USER_ID LIKE :login_pattern
+               SELECT USER_UUID FROM PLATFORM_USERS WHERE LOGIN_USER_ID LIKE :login_pattern
              )
             """,
             {"login_pattern": login_pattern},
         )
         cursor.execute(
             """
-            DELETE FROM NL2SQL_APP_USER_ROLES
+            DELETE FROM PLATFORM_USER_ROLES
              WHERE USER_UUID IN (
-               SELECT USER_UUID FROM NL2SQL_APP_USERS WHERE LOGIN_USER_ID LIKE :login_pattern
+               SELECT USER_UUID FROM PLATFORM_USERS WHERE LOGIN_USER_ID LIKE :login_pattern
              )
             """,
             {"login_pattern": login_pattern},
         )
         cursor.execute(
-            "DELETE FROM NL2SQL_APP_USERS WHERE LOGIN_USER_ID LIKE :login_pattern",
+            "DELETE FROM PLATFORM_USERS WHERE LOGIN_USER_ID LIKE :login_pattern",
             {"login_pattern": login_pattern},
         )
         cursor.execute(
             """
             DELETE FROM NL2SQL_APP_ROLE_PERMISSIONS
              WHERE ROLE_ID IN (
-               SELECT ROLE_ID FROM NL2SQL_APP_ROLES WHERE ROLE_CODE LIKE :role_pattern
+               SELECT ROLE_ID FROM PLATFORM_ROLES WHERE ROLE_CODE LIKE :role_pattern
              )
             """,
             {"role_pattern": role_pattern},
@@ -776,13 +776,13 @@ def _cleanup_test_data(real_service: Any, prefix: str, report: IterationReport) 
             """
             DELETE FROM NL2SQL_APP_DATA_ENTITLEMENTS
              WHERE ROLE_ID IN (
-               SELECT ROLE_ID FROM NL2SQL_APP_ROLES WHERE ROLE_CODE LIKE :role_pattern
+               SELECT ROLE_ID FROM PLATFORM_ROLES WHERE ROLE_CODE LIKE :role_pattern
              )
             """,
             {"role_pattern": role_pattern},
         )
         cursor.execute(
-            "DELETE FROM NL2SQL_APP_ROLES WHERE ROLE_CODE LIKE :role_pattern",
+            "DELETE FROM PLATFORM_ROLES WHERE ROLE_CODE LIKE :role_pattern",
             {"role_pattern": role_pattern},
         )
         conn.commit()

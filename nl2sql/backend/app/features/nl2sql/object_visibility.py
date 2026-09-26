@@ -5,7 +5,9 @@ from __future__ import annotations
 from .models import SchemaCatalog, SchemaObjectPage
 
 _SYSTEM_OBJECT_NAME_MARKERS = frozenset({"$", "#"})
-_SYSTEM_OBJECT_NAME_PREFIXES = ("NL2SQL_",)
+# 3 製品は同じ schema を共有する（#212）。共通基盤（PLATFORM_: 認証テーブルなど）と他製品の
+# テーブル（RAG_ / AGENT_）も業務データではないため、業務ユーザーの対象一覧に出さない。
+_SYSTEM_OBJECT_NAME_PREFIXES = ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_")
 
 
 def _split_identifier_parts(value: str) -> list[str]:

@@ -11,6 +11,8 @@ dependencies = [
   "python-multipart>=0.0.20",
   "cryptography>=50.0.0",
   "python-dotenv>=1.0",
+  # 共通認証のパスワード hash（Argon2id。#212）
+  "pwdlib[argon2]>=0.3,<1.0",
   "production-ready-backend-core",
 ]
 

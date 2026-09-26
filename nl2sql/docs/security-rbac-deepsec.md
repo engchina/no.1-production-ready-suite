@@ -55,8 +55,8 @@ V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、De
 ## 初期 migration と構成管理者
 
 `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
-アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` /
-`NL2SQL_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
+アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `PLATFORM_USERS` /
+`PLATFORM_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
 使う場合は、DB 接続後に次を一度実行する。
 処理は幂等であり、再実行できる。
 
@@ -66,7 +66,7 @@ uv sync
 uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 ```
 
-通常の application user は `NL2SQL_APP_USERS` から照合される。構成管理者の password は application
+通常の application user は `PLATFORM_USERS` から照合される。構成管理者の password は application
 password 変更画面から変更でき、変更結果は `backend/.env` の `APP_ADMIN_LOGIN_USER_PASSWORD` に書き戻される。
 旧キー `APP_ADMIN_PASSWORD` だけを持つ既存 `.env` は読み取り時に fallback として受理されるが、
 password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PASSWORD` へ移行する。
@@ -76,6 +76,48 @@ password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PAS
 `SYSTEM_ADMIN` role は構成管理者と旧 bootstrap user 専用とする。ユーザー管理 API/UI は、後続で
 作成したユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に
 `SYSTEM_ADMIN` が残っている場合も migration では自動撤去せず、管理者が必要に応じて手動で解除する。
+
+## 共通認証テーブルへの移行（#212）
+
+ユーザー・ロール・ユーザーとロールの割り当て・セッションは、3 製品（RAG / NL2SQL / Agent）で共有する
+`PLATFORM_*` テーブルに置く。ログイン・セッション・CSRF・構成管理者・ユーザー / ロール操作の実装も
+platform の `pr_system_settings.auth` にあり、NL2SQL はその上に NL2SQL 固有の権限・業務プロファイル
+利用権限・Data Grant を足している。
+
+| 旧（NL2SQL） | 新（共通） |
+|---|---|
+| `NL2SQL_APP_USERS` | `PLATFORM_USERS` |
+| `NL2SQL_APP_ROLES` | `PLATFORM_ROLES` |
+| `NL2SQL_APP_USER_ROLES` | `PLATFORM_USER_ROLES` |
+| `NL2SQL_AUTH_SESSIONS` | `PLATFORM_AUTH_SESSIONS` |
+
+NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `NL2SQL_APP_DATA_ENTITLEMENTS` /
+`NL2SQL_DEEPSEC_MIGRATIONS` は名前を変えない。旧名との互換は持たない（旧名のテーブルは読まない）。
+
+### 既存環境の更新手順
+
+DeepSec を使っていない環境は、手順 1〜2 だけでよい。DeepSec を有効にしている環境では、手順 3 が終わるまで
+DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないため、メンテナンス時間に行う。
+
+1. 新しい backend を配備する前に、旧 backend を止める（旧 backend は旧テーブル名を読む）。
+2. `uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` を実行する。
+   - migration 024 が 4 テーブルと index / constraint を `PLATFORM_*` へ改名する（データは保つ）。
+     旧名と新名のテーブルが両方ある場合は、どちらのデータを残すかを確認するよう求めて停止する。
+   - platform の DDL が `PLATFORM_*` を冪等に作る（新規環境ではここで作られる）。
+   - migration 025 が `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` の FK を
+     `ON DELETE CASCADE` に張り直す。他の製品からロールを削除したとき、NL2SQL の権限も消えるようにするため。
+     `NL2SQL_APP_DATA_ENTITLEMENTS` の FK は削除制限のままにする（Data Grant の後始末を DeepSec で行う）。
+3. DeepSec を有効にしている場合は、`Deep Data Security` 画面で次を行う。
+   - `基盤構成` で V001 の step 1・2 を再適用する。条件式・`NL2SQL_DEEPSEC_CTX_PKG`・GRANT が
+     `PLATFORM_*` を参照するよう変わり、checksum が変わるため、自動的に「未適用」になっている。
+   - `データ権限` で各ロールの Data Grant をプレビューし、再適用する。migrate は Data Grant の状態を
+     PENDING に戻している（旧テーブル名を参照する Data Grant の条件式は、改名後は使えない）。
+   - `検証` で基盤構成と Data Grant を確認する。
+4. 新しい backend を起動する。
+
+なお、NL2SQL の業務プロファイルの対象一覧・管理 SQL は、`NL2SQL_` に加えて `PLATFORM_` / `RAG_` / `AGENT_`
+で始まるオブジェクトをシステムオブジェクトとして扱い、表示・操作の対象にしない（3 製品が同じ schema を
+共有するため）。DeepSec の Data Grant の対象からも `PLATFORM_` を外す。
 
 ## ユーザー管理・ロール管理・権限管理の分担（#206）
 
@@ -105,6 +147,9 @@ password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PAS
 - ユーザー・ロールの request / response の形とパスワードポリシーは platform の
   `pr_system_settings.users_roles` を正とし、NL2SQL は `RoleData` に権限・Data Grant・業務プロファイル
   利用権限を足して返す。
+- ユーザーとロールは 3 製品で共有する（#212）。SYSTEM_ADMIN 以外がロールを割り当てる・復元するときは、
+  そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
+  操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
 ## ユーザー・ロールの物理削除
 
@@ -141,7 +186,7 @@ deployment 固有の `.env` で `APP_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示し
 timeout に拡張できる。これは production 既定値ではない。
 
 `system_admin` 構成管理者は認証 table 未作成時の bootstrap / 運用復旧用 identity であり、
-`NL2SQL_AUTH_SESSIONS` を使わない署名 token として絶対有効期限のみを持つ。通常運用は DB に
+`PLATFORM_AUTH_SESSIONS` を使わない署名 token として絶対有効期限のみを持つ。通常運用は DB に
 永続化した application user を使い、`system_admin` は初期設定と復旧用途に限定する。
 
 ## DeepSec V001 の前提
@@ -205,7 +250,7 @@ Data Grant SQL は backend が固定生成する。`NL2SQL_DEEPSEC_CTX_PKG.SET_A
 内部 application user UUID を検証し、DDS policy evaluator から参照できる `CLIENT_IDENTIFIER` へ設定する。
 同時に、ユーザー管理で登録したログインユーザーIDを `NL2SQL_APP_USER_CTX.LOGIN_USER_ID` へ設定する。predicate は
 `ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER` で現在の内部 application user UUID を取得し、
-`NL2SQL_APP_USER_ROLES` / `NL2SQL_APP_ROLES` /
+`PLATFORM_USER_ROLES` / `PLATFORM_ROLES` /
 `NL2SQL_APP_DATA_ENTITLEMENTS` から、その user に割り当てられた active role の policy を解決する。
 権限設定そのものは user id 単位ではなく `ROLE_ID` 単位であり、複数 role の policy は加法的に合成される。
 行 scope で値ソース「ログインユーザーID」を選んだ場合は、
