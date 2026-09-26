@@ -2219,6 +2219,18 @@ export const ja = {
   "documents.knowledgeBases.saved": "所属知識ベースを保存しました。",
   "documents.knowledgeBases.saveError":
     "所属知識ベースの保存に失敗しました。状態を確認して再試行してください。",
+  "documents.classification.title": "文書の分類と有効期間",
+  "documents.classification.description":
+    "RAG 検索の「文書の分類」で絞り込むときに使います。有効期間外の文書は、基準日（未指定なら今日）の検索に出ません。",
+  "documents.classification.large_category": "大分類",
+  "documents.classification.middle_category": "中分類",
+  "documents.classification.small_category": "小分類",
+  "documents.classification.effective_from": "有効期間の開始日",
+  "documents.classification.effective_to": "有効期間の終了日",
+  "documents.classification.effectiveToHelper": "この日から期間外になります。",
+  "documents.classification.save": "分類を保存",
+  "documents.classification.saved": "分類と有効期間を保存しました。",
+  "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
   "documents.knowledgeBases.loadWarning": "現在の所属知識ベースを取得できませんでした。",
   "documents.knowledgeBases.loadWarningHint":
     "文書詳細に含まれる所属情報を表示しています。保存前に接続状態を確認してください。",
@@ -2304,6 +2316,14 @@ export const ja = {
   "search.filters.sectionGroup": "見出しで絞り込む",
   "search.filters.sectionHelper":
     "見出し名や階層が分かる場合だけ使います。「経費申請」や「料金表」のように一部だけでも絞り込めます。",
+  "search.filters.classificationGroup": "文書の分類で絞り込む",
+  "search.filters.classificationHelper":
+    "文書詳細で設定した分類と完全に一致する文書だけを検索します。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
+  "search.filters.large_category": "大分類",
+  "search.filters.middle_category": "中分類",
+  "search.filters.small_category": "小分類",
+  "search.filters.as_of": "基準日",
+  "search.filters.appliedClassification": "{label}: {value}",
   "search.filters.applied": "適用中の詳細条件",
   "search.filters.appliedContentKind": "内容種別: {value}",
   "search.filters.appliedSectionTitle": "見出し名: {value}",

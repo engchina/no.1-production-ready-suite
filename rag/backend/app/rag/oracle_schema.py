@@ -433,6 +433,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_answer_records",
             sql=_answer_records_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260926_001_documents_classification",
+            table_name="rag_documents",
+            sql=_documents_classification_migration_sql(),
+        ),
     ]
 
 
@@ -950,6 +955,25 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _documents_classification_migration_sql() -> str:
+    """rag_documents に文書の分類・有効期間の JSON 列を追加する(冪等)。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND column_name = 'CLASSIFICATION';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (classification JSON)';
     END IF;
 END;
 /

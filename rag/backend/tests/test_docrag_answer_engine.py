@@ -278,6 +278,37 @@ async def test_docrag_engine_passes_answer_options(
     ) == expected
 
 
+async def test_docrag_engine_passes_classification_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    import docrag.generation.answering as answering
+
+    captured: dict[str, Any] = {}
+
+    def fake_answer(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(answering, "answer_question_result", fake_answer)
+    engine = DocragAnswerEngine(
+        Settings(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    request = SearchRequest(
+        query="受注の登録方法は？",
+        filters={"large_category": "受注", "small_category": "登録", "as_of": "2026-04-01"},
+    )
+
+    with pytest.raises(RuntimeError, match="stop"):
+        await engine.run(request)
+
+    classification = captured["classification_filter"]
+    assert classification.active
+    assert classification.large_category == "受注"
+    assert classification.middle_category == ""
+    assert classification.small_category == "登録"
+    assert classification.as_of == "2026-04-01"
+
+
 async def test_docrag_standard_flow_without_rerank_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -23,6 +23,7 @@ import {
   type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
+  type DocumentClassification,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
@@ -762,6 +763,17 @@ export function useUpdateDocumentIngestionConfig() {
 }
 
 /** 文書のナレッジベース所属を置き換える。 */
+export function useSaveDocumentClassification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentClassification }) =>
+      api.saveDocumentClassification(id, payload),
+    onSuccess: (detail) => {
+      qc.setQueryData(queryKeys.document(detail.id), detail);
+    },
+  });
+}
+
 export function useReplaceDocumentKnowledgeBases() {
   const qc = useQueryClient();
   return useMutation({

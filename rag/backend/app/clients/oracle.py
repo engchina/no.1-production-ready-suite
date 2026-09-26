@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
@@ -55,6 +55,7 @@ from app.schemas.business_view import (
 from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
+    DocumentClassification,
     DocumentDetail,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
@@ -249,6 +250,7 @@ class StoredDocument:
     indexed_at: datetime | None = None
     extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
+    classification: dict[str, object] | None = None
 
 
 @dataclass
@@ -3346,6 +3348,52 @@ class OracleClient:
             status=status,
             error_message=error_message,
         )
+
+    async def save_document_classification(
+        self,
+        document_id: str,
+        classification: DocumentClassification,
+    ) -> DocumentDetail:
+        """文書の分類と有効期間を保存する(空なら列を NULL に戻す)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET classification = :classification
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "classification": (
+                            None
+                            if classification.is_empty()
+                            else _json_dumps(
+                                classification.model_dump(mode="json", exclude_none=True)
+                            )
+                        ),
+                    }
+                ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
 
     async def save_preprocess_artifact(
         self,
@@ -7084,6 +7132,7 @@ class OracleClient:
                 content_sha256,
                 duplicate_of_document_id,
                 extraction,
+                classification,
                 error_message,
                 uploaded_at,
                 indexed_at
@@ -9284,6 +9333,7 @@ def _select_document(
             content_sha256,
             duplicate_of_document_id,
             extraction,
+            classification,
             error_message,
             uploaded_at,
             indexed_at
@@ -10023,9 +10073,42 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 )
                 clauses.append(predicate)
                 binds.update(kind_binds)
+        elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
+            continue  # 分類と有効期間は _classification_where でまとめて付ける。
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
+    classification_clauses, classification_binds = _classification_where(filters)
+    clauses.extend(classification_clauses)
+    binds.update(classification_binds)
     return " AND ".join(clauses), binds
+
+
+_CLASSIFICATION_FILTER_KEYS = ("large_category", "middle_category", "small_category")
+
+
+def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
+    """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
+
+    - 分類は指定した項目だけを完全一致で絞る。
+    - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
+      ISO 日付の文字列比較は時系列順と一致する。
+    """
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for key in _CLASSIFICATION_FILTER_KEYS:
+        if value := (filters.get(key) or "").strip():
+            clauses.append(f"JSON_VALUE(d.classification, '$.{key}') = :filter_{key}")
+            binds[f"filter_{key}"] = value
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) "
+        "<= :filter_as_of"
+    )
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') "
+        "> :filter_as_of"
+    )
+    binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
+    return clauses, binds
 
 
 def _context_anchor_retrieval_where(
@@ -10547,6 +10630,7 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         indexed_at=_optional_datetime(row.get("indexed_at")),
         extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
+        classification=_json_loads(row.get("classification")) or None,
     )
 
 
@@ -12053,6 +12137,7 @@ CREATE TABLE {table_name} (
     object_storage_path      VARCHAR2(1024),
     preprocess_artifact      JSON,
     processing_config        JSON,
+    classification           JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
@@ -12950,6 +13035,11 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         ),
         extraction=document.extraction,
         error_message=document.error_message,
+        classification=(
+            DocumentClassification.model_validate(document.classification)
+            if document.classification
+            else None
+        ),
         source_profile=build_source_profile(
             original_file_name=document.file_name,
             sanitized_file_name=document.file_name,
