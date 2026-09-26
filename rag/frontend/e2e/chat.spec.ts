@@ -457,7 +457,8 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
 
   const notHelpful = page.getByRole("button", { name: "この回答は役に立たなかった" });
   await notHelpful.click();
-  await page.getByRole("button", { name: "内容が正しくない" }).click();
+  await page.getByRole("button", { name: /ナレッジ不足/ }).click();
+  await page.getByLabel("修正した回答（任意）").fill("  窓口へ問い合わせてください。  ");
   await page.getByRole("button", { name: "フィードバックを保存" }).click();
 
   await expect.poll(() => feedbackPayload).toEqual({
@@ -470,8 +471,9 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
     message_id: "a1",
     content_snapshot: null,
     rating: "not_helpful",
-    reason: "incorrect",
+    reason: "missing_knowledge",
     comment: null,
+    corrected_answer: "窓口へ問い合わせてください。",
   });
   await expect(notHelpful).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("保存済み・変更できます")).toBeVisible();

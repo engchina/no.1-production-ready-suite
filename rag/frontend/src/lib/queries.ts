@@ -1089,6 +1089,24 @@ export function useEvaluateDocragAnswer() {
   });
 }
 
+/** 回答 feedback を業務ビューの Approved FAQ へ登録する(同じ質問は置き換える)。 */
+export function usePromoteFeedbackToApprovedFaq() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (feedbackId: string) => api.promoteFeedbackToApprovedFaq(feedbackId),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["business-views", result.business_view_id, "approved-faq"] });
+    },
+  });
+}
+
+/** 回答 feedback から品質評価のケースを作る。 */
+export function useFeedbackEvaluationCase() {
+  return useMutation({
+    mutationFn: (feedbackId: string) => api.getFeedbackEvaluationCase(feedbackId),
+  });
+}
+
 /** 保存済み DocRAG 回答の削除。一覧・詳細のキャッシュを捨てる。 */
 export function useDeleteDocragAnswer() {
   const qc = useQueryClient();

@@ -10,10 +10,15 @@ describe("feedback submission payload", () => {
       target_type: "answer",
       source_surface: "search",
       rating: "not_helpful",
-      reason: "incorrect",
+      reason: "outdated_source",
       comment: "  古い回答です。  ",
+      corrected_answer: "  2026年版では部長承認です。  ",
     });
-    expect(payload).toMatchObject({ reason: "incorrect", comment: "古い回答です。" });
+    expect(payload).toMatchObject({
+      reason: "outdated_source",
+      comment: "古い回答です。",
+      corrected_answer: "2026年版では部長承認です。",
+    });
   });
 
   it("removes low-rating fields from a helpful vote", () => {
@@ -25,9 +30,11 @@ describe("feedback submission payload", () => {
       rating: "helpful",
       reason: "incorrect",
       comment: "コメント",
+      corrected_answer: "修正",
     });
     expect(payload.reason).toBeNull();
     expect(payload.comment).toBeNull();
+    expect(payload.corrected_answer).toBeNull();
   });
 
   it("maps the visible search result into a bounded snapshot", () => {

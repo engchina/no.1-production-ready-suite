@@ -6,10 +6,13 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.clients.oracle import OracleClient
+from app.rag.business_view_knowledge import import_approved_faq
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse, Page
+from app.schemas.evaluation import EvaluationCase
 from app.schemas.feedback import (
     CurrentFeedbackItem,
+    FeedbackApprovedFaqPromotion,
     FeedbackCitationSnapshot,
     FeedbackContentSource,
     FeedbackDashboard,
@@ -42,7 +45,7 @@ async def submit_feedback(
     details = await _resolve_feedback_details(oracle, request)
     payload = request.model_dump(
         mode="json",
-        exclude={"message_id", "content_snapshot", "comment"},
+        exclude={"message_id", "content_snapshot", "comment", "corrected_answer"},
     )
     payload["comment_hash"] = request.comment_hash
     payload["comment_chars"] = request.comment_chars
@@ -60,6 +63,7 @@ async def submit_feedback(
             rating=request.rating,
             reason=request.reason,
             comment=request.comment,
+            corrected_answer=request.corrected_answer,
         )
     )
 
@@ -133,6 +137,119 @@ async def get_feedback_detail(
     return ApiResponse(data=FeedbackDetail.model_validate(row))
 
 
+@router.post(
+    "/{feedback_id}/approved-faq", response_model=ApiResponse[FeedbackApprovedFaqPromotion]
+)
+async def promote_feedback_to_approved_faq(
+    http_request: Request,
+    feedback_id: str,
+) -> ApiResponse[FeedbackApprovedFaqPromotion]:
+    """回答 feedback を業務ビューの Approved FAQ へ登録する(rag_poc の FAQ 昇格)。
+
+    「役に立った」は保存した回答、それ以外は修正した回答を登録する。同じ質問の FAQ は置き換える。
+    """
+    from docrag.knowledge.approved_faq import (
+        APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT,
+        approved_faq_feedback_skip_reason,
+        approved_faq_import_row_from_answer_feedback,
+    )
+
+    _require_feedback_admin(http_request)
+    oracle = OracleClient()
+    detail = await _promotable_feedback(oracle, feedback_id)
+    record = await _docrag_feedback_record(oracle, detail)
+    row = approved_faq_import_row_from_answer_feedback(record)
+    if row is None:
+        raise HTTPException(status_code=409, detail=approved_faq_feedback_skip_reason(record))
+    business_view_id = str(detail.business_view_id)
+    if await oracle.get_business_view(business_view_id) is None:
+        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
+    result = await import_approved_faq(
+        oracle, business_view_id, [row], mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT
+    )
+    return ApiResponse(
+        data=FeedbackApprovedFaqPromotion(
+            business_view_id=business_view_id,
+            question=row.question,
+            inserted_count=result.inserted_count,
+            deleted_count=result.deleted_count,
+        )
+    )
+
+
+@router.get("/{feedback_id}/evaluation-case", response_model=ApiResponse[EvaluationCase])
+async def feedback_evaluation_case(
+    http_request: Request,
+    feedback_id: str,
+) -> ApiResponse[EvaluationCase]:
+    """回答 feedback から品質評価のケースを作る(rag_poc の feedback → eval case 昇格)。
+
+    期待語は修正した回答(「役に立った」は保存した回答)から作る。「役に立った」は引用の文書を
+    正解の文書にする。
+    """
+    from docrag.knowledge.feedback_promotion import _expected_terms
+
+    _require_feedback_admin(http_request)
+    detail = await _promotable_feedback(OracleClient(), feedback_id)
+    helpful = detail.rating == FeedbackRating.HELPFUL
+    expected_answer = (detail.answer if helpful else detail.corrected_answer) or ""
+    if not detail.question or not expected_answer.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="評価ケースにする回答がありません。修正した回答があるフィードバックを選んでください。",
+        )
+    relevant_document_ids = (
+        list(dict.fromkeys(citation.document_id for citation in detail.citations))
+        if helpful
+        else []
+    )
+    return ApiResponse(
+        data=EvaluationCase(
+            id=f"feedback-{detail.feedback_id}",
+            query=detail.question,
+            relevant_document_ids=relevant_document_ids,
+            expected_answer_keywords=_expected_terms(expected_answer),
+        )
+    )
+
+
+async def _promotable_feedback(oracle: OracleClient, feedback_id: str) -> FeedbackDetail:
+    cleaned_id = feedback_id.strip()
+    row = await oracle.get_feedback_detail(cleaned_id) if 0 < len(cleaned_id) <= 64 else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
+    detail = FeedbackDetail.model_validate(row)
+    if detail.target_type != FeedbackTargetType.ANSWER:
+        raise HTTPException(status_code=409, detail="回答のフィードバックだけを昇格できます。")
+    return detail
+
+
+async def _docrag_feedback_record(
+    oracle: OracleClient, detail: FeedbackDetail
+) -> dict[str, object]:
+    """rag_poc の回答 feedback record の形へ写す(FAQ 昇格の変換・除外規則をそのまま使うため)。"""
+    answer_trace: dict[str, object] = {
+        "question": detail.question or "",
+        "answer_text": detail.answer or "",
+        "retrieval_scope": "knowledge_base",
+    }
+    # DocRAG の回答なら、除外規則(根拠不足かつ信頼度 low)に使う値を回答記録から補う。
+    answer_record = await oracle.get_answer_record(detail.trace_id)
+    diagnostics = answer_record.get("diagnostics_json") if answer_record else None
+    if isinstance(diagnostics, Mapping):
+        answer_trace["confidence"] = diagnostics.get("confidence") or ""
+        answer_trace["insufficient_reason"] = diagnostics.get("insufficient_reason") or ""
+    helpful = detail.rating == FeedbackRating.HELPFUL
+    return {
+        "feedback_id": detail.feedback_id,
+        "feedback_type": "correct" if helpful else str(detail.reason or ""),
+        "question": detail.question or "",
+        "corrected_answer": "" if helpful else (detail.corrected_answer or ""),
+        "comment": detail.comment or "",
+        "answer_trace": answer_trace,
+    }
+
+
 async def _resolve_feedback_details(
     oracle: OracleClient,
     request: FeedbackRequest,
@@ -156,7 +273,7 @@ async def _resolve_feedback_details(
                 citation.model_dump(mode="json") for citation in request.content_snapshot.citations
             ],
         }
-    elif request.comment is not None:
+    elif request.comment is not None or request.corrected_answer is not None:
         details = {
             "message_id": None,
             "content_source": (
@@ -171,6 +288,7 @@ async def _resolve_feedback_details(
 
     if details is not None:
         details["comment_text"] = request.comment
+        details["corrected_answer_text"] = request.corrected_answer
     return details
 
 

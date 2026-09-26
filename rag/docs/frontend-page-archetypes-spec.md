@@ -36,6 +36,7 @@
 | 業務ビュー（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
 | 業務ビュー（用語・ルール） | 用語 / ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
 | 回答プロンプト | 版 | 有効化（有効な版は理由付きで無効） | — | `PromptVersionsClient.tsx` の `versionActions` |
+| フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースに追加（品質評価の要求 JSON に追記して品質評価へ移る）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
 | RAG 検索 / チャット | 保存された回答 | — | この回答を削除（danger。確認ダイアログを通す。危険な操作だけなので「その他の操作」に入る） | `DocragAnswerHistory.tsx` の `SavedDocragAnswer` |
 | サービス管理 | サービス（`deployable` の行） | ログを表示 / 閉じる、起動（一部異常のときだけ）、ビルド、削除（danger。確認ダイアログを通す）。行には別に状態に応じた起動 / 停止を 1 つだけ出す（§3.1） | — | `ServicesManagementClient.tsx` の `ServiceRow`（`servicePrimaryAction`） |
 | 文書詳細（処理レシピ） | 選択中のレシピ | —（レシピのカードは選択専用） | 処理を開始 / 再開 / 再試行 / 再処理、レシピを削除（danger。最後の 1 件と処理中は無効） | `DocumentRecipeManager.tsx` の `recipeActions` |

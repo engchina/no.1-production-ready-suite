@@ -6,14 +6,20 @@ import {
   Card,
   CardContent,
   DataTable,
+  type EntityAction,
+  FormStatus,
+  ObjectActionBar,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
   ToggleChip,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import {
+  BookmarkPlus,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   ExternalLink,
   FileText,
   FilterX,
@@ -24,16 +30,16 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { RagSplitPane, RowTitleButton } from "@/components/layout/EntityLayout";
-import type {
-  CitationFeedbackRating,
-  CitationFeedbackReason,
-  FeedbackDetail,
-  FeedbackItem,
-  FeedbackSummary,
+import {
+  ApiError,
+  type CitationFeedbackRating,
+  type FeedbackDetail,
+  type FeedbackItem,
+  type FeedbackSummary,
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -41,7 +47,11 @@ import {
   useBusinessViews,
   useFeedbackDashboard,
   useFeedbackDetail,
+  useFeedbackEvaluationCase,
+  usePromoteFeedbackToApprovedFaq,
 } from "@/lib/queries";
+import { toast } from "@/lib/toast";
+import { readWorkspace, writeWorkspace } from "@/lib/workspace-state";
 import { useValuesChanged } from "@/lib/render-sync";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -49,25 +59,14 @@ import { cn } from "@/lib/utils";
 import {
   FEEDBACK_PAGE_SIZES,
   FEEDBACK_PERIODS,
+  FEEDBACK_REASON_LABEL_KEYS,
+  FEEDBACK_REASONS,
+  appendEvaluationCase,
   feedbackListParams,
   pageWindow,
   parseFeedbackUrl,
 } from "./FeedbackClient.logic";
 
-const REASONS: CitationFeedbackReason[] = [
-  "incorrect",
-  "incomplete",
-  "missing_evidence",
-  "not_relevant",
-  "answer_untrusted",
-];
-const REASON_LABEL_KEYS: Record<CitationFeedbackReason, I18nKey> = {
-  incorrect: "feedback.reason.incorrect",
-  incomplete: "feedback.reason.incomplete",
-  missing_evidence: "feedback.reason.missing_evidence",
-  not_relevant: "feedback.reason.not_relevant",
-  answer_untrusted: "feedback.reason.answer_untrusted",
-};
 type DetailTab = "content" | "evidence" | "execution";
 
 export function FeedbackClient() {
@@ -166,7 +165,7 @@ export function FeedbackClient() {
   ];
   const reasonOptions: SelectFieldOption[] = [
     { value: "", label: t("feedback.filters.allReasons") },
-    ...REASONS.map((value) => ({ value, label: t(REASON_LABEL_KEYS[value]) })),
+    ...FEEDBACK_REASONS.map((value) => ({ value, label: t(FEEDBACK_REASON_LABEL_KEYS[value]) })),
   ];
   const sortOptions: SelectFieldOption[] = [
     { value: "newest", label: t("feedback.filters.newest") },
@@ -398,7 +397,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
                 const ratio = summary.not_helpful_count ? item.count / summary.not_helpful_count : 0;
                 return (
                   <div key={item.reason} className="grid grid-cols-[minmax(8rem,1fr)_minmax(5rem,1fr)_auto] items-center gap-2 text-xs">
-                    <span className="truncate text-fg" title={t(REASON_LABEL_KEYS[item.reason])}>{t(REASON_LABEL_KEYS[item.reason])}</span>
+                    <span className="truncate text-fg" title={t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}>{t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}</span>
                     <span className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
                       <span className="block h-full rounded-full bg-danger-emphasis" style={{ width: `${Math.round(ratio * 100)}%` }} />
                     </span>
@@ -471,7 +470,7 @@ function FeedbackTable({
           header: t("feedback.filters.reason"),
           headerClassName: "min-w-24",
           className: CELL_PAD,
-          render: (item) => <span className="line-clamp-2 max-w-40">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span>,
+          render: (item) => <span className="line-clamp-2 max-w-40">{item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : "—"}</span>,
         },
         {
           key: "targetSource",
@@ -534,7 +533,7 @@ function FeedbackCards({
               />
             </div>
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-              <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"} />
+              <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : "—"} />
               <Metadata label={t("feedback.filters.businessView")} value={item.business_view_name ?? t("feedback.list.unknownBusinessView")} />
               <Metadata label={t("feedback.table.targetSource")} value={targetSource(item)} />
               <Metadata label={t("feedback.list.model")} value={item.model ?? "—"} />
@@ -612,6 +611,7 @@ function FeedbackDetailPanel({
           </div>
           <Button type="button" variant="ghost" size="md" iconOnly aria-label={t("feedback.detail.close")} onClick={onClose} icon={X} />
         </header>
+        {query.data ? <FeedbackPromotionActions detail={query.data} /> : null}
         <div className="px-4 sm:px-5">
           <Tabs
             idPrefix="feedback"
@@ -638,6 +638,92 @@ function FeedbackDetailPanel({
   );
 }
 
+/**
+ * 回答 feedback の還流（rag_poc の FAQ 昇格・eval case 昇格）。対象の操作なので ObjectActionBar に置く。
+ * 結果は toast、失敗は操作の近くの FormStatus で知らせる。
+ */
+function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
+  const promote = usePromoteFeedbackToApprovedFaq();
+  const evaluationCase = useFeedbackEvaluationCase();
+  const confirm = useConfirm();
+  const navigate = useNavigate();
+  const [error, setError] = useState("");
+  if (detail.target_type !== "answer") return null;
+
+  async function handlePromote() {
+    setError("");
+    const confirmed = await confirm({
+      title: t("feedback.promote.faqConfirmTitle"),
+      description: t("feedback.promote.faqConfirmDescription"),
+      confirmLabel: t("feedback.promote.faq"),
+    });
+    if (!confirmed) return;
+    promote.mutate(detail.feedback_id, {
+      onSuccess: (result) =>
+        toast.success(t("feedback.promote.faqDone", { question: result.question })),
+      onError: (caught) =>
+        setError(caught instanceof ApiError ? caught.message : t("feedback.promote.error")),
+    });
+  }
+
+  function handleEvaluationCase() {
+    setError("");
+    evaluationCase.mutate(detail.feedback_id, {
+      onSuccess: (created) => {
+        const appended = appendEvaluationCase(
+          readWorkspace<string | null>("evaluation.requestJson", null, isStringOrNull),
+          created
+        );
+        if (!appended.ok) {
+          setError(t("feedback.promote.evaluationInvalidRequest"));
+          return;
+        }
+        writeWorkspace("evaluation.requestJson", appended.json);
+        toast.success(t("feedback.promote.evaluationDone"));
+        navigate(APP_ROUTES.evaluation);
+      },
+      onError: (caught) =>
+        setError(caught instanceof ApiError ? caught.message : t("feedback.promote.error")),
+    });
+  }
+
+  const actions: EntityAction[] = [
+    {
+      id: "approved-faq",
+      label: t("feedback.promote.faq"),
+      icon: BookmarkPlus,
+      disabled: promote.isPending,
+      loading: promote.isPending,
+      testId: "feedback-promote-faq",
+      onSelect: () => void handlePromote(),
+    },
+    {
+      id: "evaluation-case",
+      label: t("feedback.promote.evaluation"),
+      icon: ClipboardList,
+      disabled: evaluationCase.isPending,
+      loading: evaluationCase.isPending,
+      testId: "feedback-promote-evaluation",
+      onSelect: handleEvaluationCase,
+    },
+  ];
+  return (
+    <div className="space-y-1 border-b border-border px-4 py-2 sm:px-5">
+      <ObjectActionBar
+        actions={actions}
+        ariaLabel={t("common.objectActions.aria", { name: t("feedback.detail.title") })}
+        moreLabel={t("common.objectActions.more")}
+        testId="feedback-detail-actions"
+      />
+      {error ? <FormStatus tone="danger" message={error} /> : null}
+    </div>
+  );
+}
+
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function DetailPanel({ detail, tab }: { detail: FeedbackDetail; tab: DetailTab }) {
   if (tab === "content") return <ContentTab detail={detail} />;
   if (tab === "evidence") return <EvidenceTab detail={detail} />;
@@ -654,9 +740,16 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
       <TextSection title={t("feedback.detail.answer")} value={detail.answer} />
       <section>
         <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.reason")}</h3>
-        <p className="mt-1 text-sm text-fg">{detail.reason ? t(REASON_LABEL_KEYS[detail.reason]) : "—"}</p>
+        <p className="mt-1 text-sm text-fg">{detail.reason ? t(FEEDBACK_REASON_LABEL_KEYS[detail.reason]) : "—"}</p>
       </section>
       <TextSection title={t("feedback.detail.comment")} value={detail.comment} empty={t("feedback.detail.noComment")} />
+      {detail.target_type === "answer" ? (
+        <TextSection
+          title={t("feedback.detail.correctedAnswer")}
+          value={detail.corrected_answer ?? null}
+          empty={t("feedback.detail.noCorrectedAnswer")}
+        />
+      ) : null}
     </div>
   );
 }
