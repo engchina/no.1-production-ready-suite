@@ -48,20 +48,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<CurrentUser | null>(null);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const current = await securityApi.me({ signal });
-      if (signal?.aborted) return;
-      applyIdentity(current);
-      setUser(current);
-      setStatus("authenticated");
-    } catch (cause) {
-      if (isAbortError(cause)) return;
-      applyIdentity(null);
-      setUser(null);
-      setStatus("unauthenticated");
-    }
-  }, [applyIdentity]);
+  // state は応答の callback の中だけで更新する（effect から同期的に setState しない）。
+  const refresh = useCallback(
+    (signal?: AbortSignal): Promise<void> =>
+      securityApi.me({ signal }).then(
+        (current) => {
+          if (signal?.aborted) return;
+          applyIdentity(current);
+          setUser(current);
+          setStatus("authenticated");
+        },
+        (cause: unknown) => {
+          if (isAbortError(cause)) return;
+          applyIdentity(null);
+          setUser(null);
+          setStatus("unauthenticated");
+        },
+      ),
+    [applyIdentity],
+  );
 
   useEffect(() => {
     const controller = new AbortController();

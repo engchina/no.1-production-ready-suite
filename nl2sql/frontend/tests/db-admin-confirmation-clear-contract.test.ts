@@ -136,8 +136,10 @@ test("business profile clear action resets only the Oracle execution gate and jo
 test("file dropzone reset signal clears local validation errors for external clear actions", () => {
   assert.match(fileDropzone, /resetSignal\?: string \| number/u);
   assert.match(fileDropzone, /resetSignal = 0/u);
+  // reset のレンダーで表示を消し（effect で setState しない。#181）、ドラッグの深さは effect で戻す。
   assert.match(
     fileDropzone,
-    /useEffect\(\(\) => \{[\s\S]*dragDepthRef\.current = 0;[\s\S]*setIsDragActive\(false\);[\s\S]*setValidationError\(""\);[\s\S]*\}, \[resetSignal\]\);/u,
+    /const resetRequested = useValuesChanged\(\[resetSignal\]\);[\s\S]*resetRequested\) setIsDragActive\(false\);[\s\S]*if \(resetRequested\) setValidationError\(""\);/u,
   );
+  assert.match(fileDropzone, /useEffect\(\(\) => \{\s*dragDepthRef\.current = 0;\s*\}, \[resetSignal\]\);/u);
 });
