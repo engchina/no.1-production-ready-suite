@@ -1,5 +1,6 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
@@ -371,8 +372,9 @@ export function TableManagementPage() {
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));
-  const completedSchemaRefreshJob = useRef("");
-  const completedImportSchemaRefreshJob = useRef("");
+  // 報告済みの schema refresh の終端（`<job_id>:<status>`）。一覧用と取込用。
+  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
+  const [reportedImportSchemaRefresh, setReportedImportSchemaRefresh] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const debouncedTableSearch = useDebouncedValue(tableSearch, 250);
   const debouncedTableOwnerPrefix = useDebouncedValue(tableOwnerPrefix, 250);
@@ -448,16 +450,22 @@ export function TableManagementPage() {
     }
   };
 
+  // 一覧を取り直し、失敗を message に出す（message は呼び出し側で空にしておく）。
+  // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  const refetchObjects = (announce = false) =>
+    tableObjectsQuery.refetch().then((result) => {
+      if (result.error) {
+        setMessage(result.error instanceof Error ? result.error.message : t("tableMgmt.error.load"));
+        return;
+      }
+      if (announce) {
+        toast.success(t("common.action.refreshed"));
+      }
+    });
+
   const refreshObjects = async (announce = false) => {
     setMessage("");
-    const result = await tableObjectsQuery.refetch();
-    if (result.error) {
-      setMessage(result.error instanceof Error ? result.error.message : t("tableMgmt.error.load"));
-      return;
-    }
-    if (announce) {
-      toast.success(t("common.action.refreshed"));
-    }
+    await refetchObjects(announce);
   };
 
   const refreshSchema = async () => {
@@ -481,52 +489,65 @@ export function TableManagementPage() {
     }
   };
 
-  useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedSchemaRefreshJob.current = reportKey;
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      void refreshObjects();
-    } else if (job.status === "error") {
-      completedSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setSchemaRefreshNeedsFull(needsFull);
-      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // 一覧の再取得は、終端を報告した後の effect で行う。
+  const schemaRefreshJob = schemaRefreshJobQuery.data;
+  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
+  if (
+    schemaRefreshJobChanged &&
+    schemaRefreshJob &&
+    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
+  ) {
+    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
+    if (reportedSchemaRefresh !== reportKey) {
+      setReportedSchemaRefresh(reportKey);
+      if (schemaRefreshJob.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+        setMessage("");
+      } else {
+        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
+        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
+      }
     }
-  }, [schemaRefreshJobQuery.data]);
-
-  useEffect(() => {
-    const job = importSchemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedImportSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedImportSchemaRefreshJob.current = reportKey;
-      setImportSchemaRefreshError("");
-      setImportSchemaRefreshNeedsFull(false);
-      void refreshObjects();
-    } else if (job.status === "error") {
-      completedImportSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setImportSchemaRefreshNeedsFull(needsFull);
-      setImportSchemaRefreshError(schemaRefreshErrorMessage(job));
+  }
+  const importSchemaRefreshJob = importSchemaRefreshJobQuery.data;
+  const importSchemaRefreshJobChanged = useValuesChanged([importSchemaRefreshJob]);
+  if (
+    importSchemaRefreshJobChanged &&
+    importSchemaRefreshJob &&
+    (importSchemaRefreshJob.status === "done" || importSchemaRefreshJob.status === "error")
+  ) {
+    const reportKey = `${importSchemaRefreshJob.job_id}:${importSchemaRefreshJob.status}`;
+    if (reportedImportSchemaRefresh !== reportKey) {
+      setReportedImportSchemaRefresh(reportKey);
+      if (importSchemaRefreshJob.status === "done") {
+        setImportSchemaRefreshError("");
+        setImportSchemaRefreshNeedsFull(false);
+        setMessage("");
+      } else {
+        setImportSchemaRefreshNeedsFull(schemaRefreshRequiresFull(importSchemaRefreshJob));
+        setImportSchemaRefreshError(schemaRefreshErrorMessage(importSchemaRefreshJob));
+      }
     }
-  }, [importSchemaRefreshJobQuery.data]);
+  }
+  useEffect(() => {
+    if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
+  }, [reportedSchemaRefresh]);
+  useEffect(() => {
+    if (reportedImportSchemaRefresh.endsWith(":done")) void refetchObjects();
+  }, [reportedImportSchemaRefresh]);
 
   const trackSchemaRefreshJob = (jobId: string) => {
     sharedSchemaRefresh.track(jobId);
     if (activeView === "import") {
-      completedImportSchemaRefreshJob.current = "";
+      setReportedImportSchemaRefresh("");
       setImportSchemaRefreshError("");
       setImportSchemaRefreshNeedsFull(false);
       setImportSchemaRefreshJobId(jobId);
       return;
     }
-    completedSchemaRefreshJob.current = "";
+    setReportedSchemaRefresh("");
     setSchemaRefreshError("");
     setSchemaRefreshNeedsFull(false);
     setSchemaRefreshJobId(jobId);
@@ -624,7 +645,7 @@ export function TableManagementPage() {
     setImportSchemaRefreshJobId("");
     setImportSchemaRefreshError("");
     setImportSchemaRefreshNeedsFull(false);
-    completedImportSchemaRefreshJob.current = "";
+    setReportedImportSchemaRefresh("");
     setImportStep("file");
     try {
       const content = await fileToBase64(file);
@@ -644,7 +665,7 @@ export function TableManagementPage() {
     setImportSchemaRefreshJobId("");
     setImportSchemaRefreshError("");
     setImportSchemaRefreshNeedsFull(false);
-    completedImportSchemaRefreshJob.current = "";
+    setReportedImportSchemaRefresh("");
     setImportStep("file");
     setImportFileResetSignal((value) => value + 1);
   };
@@ -681,7 +702,7 @@ export function TableManagementPage() {
     setImportResult(null);
     setImportSchemaRefreshJobId("");
     setImportSchemaRefreshError("");
-    completedImportSchemaRefreshJob.current = "";
+    setReportedImportSchemaRefresh("");
     try {
       const result = await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
         table_name: importTable,
@@ -815,7 +836,7 @@ export function TableManagementPage() {
           setImportSchemaRefreshJobId("");
           setImportSchemaRefreshError("");
           setImportSchemaRefreshNeedsFull(false);
-          completedImportSchemaRefreshJob.current = "";
+          setReportedImportSchemaRefresh("");
           setImportStep("file");
         }}
         onSheetChange={(value) => {
@@ -825,7 +846,7 @@ export function TableManagementPage() {
           setImportSchemaRefreshJobId("");
           setImportSchemaRefreshError("");
           setImportSchemaRefreshNeedsFull(false);
-          completedImportSchemaRefreshJob.current = "";
+          setReportedImportSchemaRefresh("");
           setImportStep("file");
         }}
         onFilePick={(file) => void pickImportFile(file)}

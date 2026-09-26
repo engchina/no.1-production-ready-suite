@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspaceIdentity } from "@/components/WorkspaceState";
 import { apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useValuesChanged } from "@/lib/render-sync";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
   clearActiveJobSnapshot,
@@ -52,6 +53,15 @@ function syntheticInFlightJob(jobId: string, startedAtMs: number): JobData {
     timing: null,
     steps: [],
   };
+}
+
+/** 旧形式(localStorage)の実行中 job の保存が残っているか。読めなければ false。 */
+function readLegacyJobSnapshotIgnored(): boolean {
+  try {
+    return hasLegacyActiveJobSnapshot(window.localStorage, Date.now());
+  } catch {
+    return false;
+  }
 }
 
 export function useNl2SqlJobPolling({
@@ -136,11 +146,17 @@ export function useNl2SqlJobPolling({
 
   // 再訪時の復元は合成 in-flight job を置くだけにし、実際の取得・失敗処理は
   // 下の interval effect に一本化する(失効 job への失敗リクエスト連発を防ぐ)。
-  useEffect(() => {
-    trackedJobIdRef.current = null;
+  // owner / context が変わったレンダーで追跡中の表示を消し（effect で setState しない）、
+  // 保存からの復元は effect の中の保存読み出しの callback で行う。
+  const storageScopeChanged = useValuesChanged([withStorage]);
+  if (storageScopeChanged) {
     setJob(null);
     setJobStartedAt(null);
     setJobStorageUnavailable(false);
+    setLegacyJobSnapshotIgnored(readLegacyJobSnapshotIgnored());
+  }
+  useEffect(() => {
+    trackedJobIdRef.current = null;
     consecutiveFailuresRef.current = 0;
     withStorage((storage) => {
       const snapshot = readActiveJobSnapshot(storage, Date.now());
@@ -149,9 +165,6 @@ export function useNl2SqlJobPolling({
       setJobStartedAt(snapshot.startedAtMs);
       setJob(syntheticInFlightJob(snapshot.jobId, snapshot.startedAtMs));
     });
-    try {
-      setLegacyJobSnapshotIgnored(hasLegacyActiveJobSnapshot(window.localStorage, Date.now()));
-    } catch { setLegacyJobSnapshotIgnored(false); }
   }, [withStorage]);
 
   // job オブジェクトではなく「in-flight な job_id」へ依存させる。

@@ -1,5 +1,6 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useValuesChanged } from "@/lib/render-sync";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import {
@@ -330,7 +331,8 @@ export function ViewManagementPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
-  const completedSchemaRefreshJob = useRef("");
+  // 報告済みの schema refresh の終端（`<job_id>:<status>`）。
+  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const autoJoinWhereDdlName = useRef("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const debouncedViewSearch = useDebouncedValue(viewSearch, 250);
@@ -386,16 +388,22 @@ export function ViewManagementPage() {
     setDetailTab("columns");
   };
 
+  // 一覧を取り直し、失敗を message に出す（message は呼び出し側で空にしておく）。
+  // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  const refetchObjects = (announce = false) =>
+    viewObjectsQuery.refetch().then((result) => {
+      if (result.error) {
+        setMessage(result.error instanceof Error ? result.error.message : t("viewMgmt.error.load"));
+        return;
+      }
+      if (announce) {
+        toast.success(t("common.action.refreshed"));
+      }
+    });
+
   const refreshObjects = async (announce = false) => {
     setMessage("");
-    const result = await viewObjectsQuery.refetch();
-    if (result.error) {
-      setMessage(result.error instanceof Error ? result.error.message : t("viewMgmt.error.load"));
-      return;
-    }
-    if (announce) {
-      toast.success(t("common.action.refreshed"));
-    }
+    await refetchObjects(announce);
   };
 
   const refreshSchema = async () => {
@@ -408,7 +416,7 @@ export function ViewManagementPage() {
       // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
       const job = await sharedSchemaRefresh.start();
       if (job.job_id) {
-        completedSchemaRefreshJob.current = "";
+        setReportedSchemaRefresh("");
         setSchemaRefreshJobId(job.job_id);
       }
     } catch (err) {
@@ -422,23 +430,31 @@ export function ViewManagementPage() {
     }
   };
 
-  useEffect(() => {
-    const job = schemaRefreshJobQuery.data;
-    if (!job) return;
-    const reportKey = `${job.job_id}:${job.status}`;
-    if (completedSchemaRefreshJob.current === reportKey) return;
-    if (job.status === "done") {
-      completedSchemaRefreshJob.current = reportKey;
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      void refreshObjects();
-    } else if (job.status === "error") {
-      completedSchemaRefreshJob.current = reportKey;
-      const needsFull = schemaRefreshRequiresFull(job);
-      setSchemaRefreshNeedsFull(needsFull);
-      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
+  // 一覧の再取得は、終端を報告した後の effect で行う。
+  const schemaRefreshJob = schemaRefreshJobQuery.data;
+  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
+  if (
+    schemaRefreshJobChanged &&
+    schemaRefreshJob &&
+    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
+  ) {
+    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
+    if (reportedSchemaRefresh !== reportKey) {
+      setReportedSchemaRefresh(reportKey);
+      if (schemaRefreshJob.status === "done") {
+        setSchemaRefreshError("");
+        setSchemaRefreshNeedsFull(false);
+        setMessage("");
+      } else {
+        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
+        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
+      }
     }
-  }, [schemaRefreshJobQuery.data]);
+  }
+  useEffect(() => {
+    if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
+  }, [reportedSchemaRefresh]);
 
   useEffect(() => {
     if (
@@ -469,7 +485,7 @@ export function ViewManagementPage() {
   }) => {
     if (result.schema_refresh_job_id) {
       sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      completedSchemaRefreshJob.current = "";
+      setReportedSchemaRefresh("");
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
       setSchemaRefreshJobId(result.schema_refresh_job_id);
