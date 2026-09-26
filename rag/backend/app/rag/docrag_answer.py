@@ -143,6 +143,7 @@ class DocragAnswerEngine:
         from docrag.adapters.oci import parse_multimodal_response, parse_text_response
         from docrag.dependencies import AnswerDependencies, bind_dependencies
         from docrag.generation.answering import answer_question_result
+        from docrag.knowledge.classification import classification_filter_from_values
         from docrag.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
@@ -171,6 +172,14 @@ class DocragAnswerEngine:
                 answer_flow=self._settings.rag_docrag_answer_flow,
                 rerank_enabled=self._settings.rag_docrag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+                # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
+                # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
+                classification_filter=classification_filter_from_values(
+                    large_category=request.filters.get("large_category", ""),
+                    middle_category=request.filters.get("middle_category", ""),
+                    small_category=request.filters.get("small_category", ""),
+                    as_of=request.filters.get("as_of", ""),
+                ),
             )
 
     async def _search(

@@ -526,6 +526,17 @@ export interface DocumentDetail extends DocumentSummary {
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
+  /** 文書の分類と有効期間(検索の分類フィルタと基準日に使う)。未設定は null。 */
+  classification?: DocumentClassification | null;
+}
+
+/** 文書の分類と有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
+export interface DocumentClassification {
+  large_category: string | null;
+  middle_category: string | null;
+  small_category: string | null;
+  effective_from: string | null;
+  effective_to: string | null;
 }
 
 export interface DocumentDeleteResult {
@@ -2481,6 +2492,12 @@ export const api = {
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
     ),
+  saveDocumentClassification: (id: string, body: DocumentClassification) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   replaceDocumentKnowledgeBases: (
     id: string,
     body: DocumentKnowledgeBaseReplaceRequest,
