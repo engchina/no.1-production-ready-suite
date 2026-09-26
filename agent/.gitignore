@@ -43,13 +43,3 @@ backend/validation-chain.*.md
 # --- local agent worktrees ---
 .claude/worktrees/
 .learnings/
-
-# --- terraform stack（OCI Resource Manager） ---
-/dist/
-terraform/stack/.terraform/
-terraform/stack/.terraform.lock.hcl
-terraform/stack/*.tfstate
-terraform/stack/*.tfstate.*
-terraform/stack/*.tfvars
-terraform/stack/wallet*.zip
-terraform/stack/wallet_extracted/

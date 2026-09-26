@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OCI Resource Manager stack（agent/terraform/stack）の cloud-init から呼ばれる Compute 初期化スクリプト。
+# OCI Resource Manager の統合 stack（terraform/stack、#217）の cloud-init から呼ばれる agent の Compute 初期化スクリプト。
 # Agent Control Plane を Docker なしで Nginx + systemd に直接配備する。
 # ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成する。
 set -euo pipefail

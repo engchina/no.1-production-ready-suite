@@ -11,7 +11,7 @@ variable "availability_domain" {
 }
 
 variable "compartment_ocid" {
-  description = "OCI compartment OCID for the Production Ready RAG deployment."
+  description = "OCI compartment OCID for the Compute instances of the selected products."
   type        = string
   default     = ""
 }
@@ -123,7 +123,7 @@ variable "adb_display_name" {
 variable "adb_name" {
   description = "Autonomous AI Database database name."
   type        = string
-  default     = "RAGADB"
+  default     = "SUITEADB"
 
   validation {
     condition     = can(regex("^[A-Za-z][A-Za-z0-9]{0,13}$", var.adb_name))
@@ -144,7 +144,7 @@ variable "adb_password" {
 }
 
 variable "adb_workload" {
-  description = "Autonomous AI Database workload type. RAG writes ingestion jobs, chunks, and vectors continuously, so OLTP is the default."
+  description = "Autonomous AI Database workload type. RAG ingestion and Agent Runtime checkpoints write continuously, so OLTP is the default."
   type        = string
   default     = "OLTP"
 
@@ -346,14 +346,8 @@ variable "adb_is_mtls_connection_required" {
   default     = true
 }
 
-variable "instance_display_name" {
-  description = "Compute instance display name."
-  type        = string
-  default     = "RAG_INSTANCE"
-}
-
 variable "instance_shape" {
-  description = "Compute instance shape."
+  description = "Shape of every Compute instance."
   type        = string
   default     = "VM.Standard.E5.Flex"
 
@@ -363,41 +357,8 @@ variable "instance_shape" {
   }
 }
 
-variable "instance_flex_shape_ocpus" {
-  description = "Compute instance OCPUs."
-  type        = number
-  default     = 4
-
-  validation {
-    condition     = var.instance_flex_shape_ocpus > 0
-    error_message = "instance_flex_shape_ocpus must be greater than 0."
-  }
-}
-
-variable "instance_flex_shape_memory" {
-  description = "Compute instance memory in GB."
-  type        = number
-  default     = 32
-
-  validation {
-    condition     = var.instance_flex_shape_memory > 0
-    error_message = "instance_flex_shape_memory must be greater than 0."
-  }
-}
-
-variable "instance_boot_volume_size" {
-  description = "Compute boot volume size in GB."
-  type        = number
-  default     = 200
-
-  validation {
-    condition     = var.instance_boot_volume_size >= 50 && var.instance_boot_volume_size <= 32768
-    error_message = "instance_boot_volume_size must be between 50 and 32768 GB."
-  }
-}
-
 variable "instance_boot_volume_vpus" {
-  description = "Compute boot volume VPUs/GB."
+  description = "Boot volume VPUs/GB of every Compute instance."
   type        = number
   default     = 10
 
@@ -408,13 +369,13 @@ variable "instance_boot_volume_vpus" {
 }
 
 variable "instance_image_source_id" {
-  description = "Ubuntu image OCID for the Compute instance."
+  description = "Ubuntu image OCID of every Compute instance."
   type        = string
   default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
 }
 
 variable "subnet_ai_subnet_id" {
-  description = "Subnet OCID for the Compute instance."
+  description = "Subnet OCID of every Compute instance."
   type        = string
   default     = ""
 }
@@ -426,7 +387,7 @@ variable "ssh_authorized_keys" {
 }
 
 variable "application_port" {
-  description = "TCP port exposed by host Nginx and the instance firewall. The backend container is bound to 127.0.0.1 only."
+  description = "TCP port exposed by host Nginx and the instance firewall of every Compute instance."
   type        = number
   default     = 80
 
@@ -437,7 +398,7 @@ variable "application_port" {
 }
 
 variable "application_git_url" {
-  description = "Git repository URL for the Production Ready suite monorepo (contains rag/ and platform/)."
+  description = "Git repository URL for the Production Ready suite monorepo (rag/, nl2sql/, agent/, and platform/)."
   type        = string
   default     = "https://github.com/engchina/no.1-production-ready-suite.git"
 
@@ -448,7 +409,7 @@ variable "application_git_url" {
 }
 
 variable "application_git_ref" {
-  description = "Git branch or tag of the Production Ready suite used to deploy Production Ready RAG."
+  description = "Git branch or tag of the Production Ready suite deployed to every Compute instance."
   type        = string
   default     = "main"
 
@@ -458,66 +419,364 @@ variable "application_git_ref" {
   }
 }
 
+# ---------------------------------------------------------------- 配備する製品
+# 製品ごとに Compute を1台ずつ作る。最低1つは選ぶ（compute.tf の locals と adb.tf の precondition で検証する）。
+# ADB と Wallet は1つだけ作り、選んだ製品すべての Compute で共有する。
 
-variable "app_login_user" {
+variable "deploy_rag" {
+  description = "Deploy Production Ready RAG on its own Compute instance."
+  type        = bool
+  default     = true
+}
+
+variable "deploy_nl2sql" {
+  description = "Deploy Production Ready NL2SQL on its own Compute instance."
+  type        = bool
+  default     = true
+}
+
+variable "deploy_agent" {
+  description = "Deploy the Production Ready Agent Control Plane on its own Compute instance."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------- RAG
+
+variable "rag_instance_display_name" {
+  description = "Display name of the RAG Compute instance."
+  type        = string
+  default     = "RAG_INSTANCE"
+}
+
+variable "rag_instance_flex_shape_ocpus" {
+  description = "OCPUs of the RAG Compute instance. The CPU document parsers need more CPU than the other products."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.rag_instance_flex_shape_ocpus > 0
+    error_message = "rag_instance_flex_shape_ocpus must be greater than 0."
+  }
+}
+
+variable "rag_instance_flex_shape_memory" {
+  description = "Memory in GB of the RAG Compute instance."
+  type        = number
+  default     = 32
+
+  validation {
+    condition     = var.rag_instance_flex_shape_memory > 0
+    error_message = "rag_instance_flex_shape_memory must be greater than 0."
+  }
+}
+
+variable "rag_instance_boot_volume_size" {
+  description = "Boot volume size in GB of the RAG Compute instance. The parser Docker images are large."
+  type        = number
+  default     = 200
+
+  validation {
+    condition     = var.rag_instance_boot_volume_size >= 50 && var.rag_instance_boot_volume_size <= 32768
+    error_message = "rag_instance_boot_volume_size must be between 50 and 32768 GB."
+  }
+}
+
+variable "rag_app_login_user" {
   description = "Login user name for the RAG application (AUTH_USERNAME). The backend requires a Cookie session login (AUTH_MODE=production)."
   type        = string
   default     = "rag_admin"
 
   validation {
-    condition     = can(regex("^[A-Za-z][A-Za-z0-9_.-]{2,31}$", var.app_login_user))
-    error_message = "app_login_user must start with a letter and contain 3-32 letters, digits, underscores, dots, or hyphens."
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9_.-]{2,31}$", var.rag_app_login_user))
+    error_message = "rag_app_login_user must start with a letter and contain 3-32 letters, digits, underscores, dots, or hyphens."
   }
 }
 
-variable "app_login_password" {
-  description = "Login password for the RAG application (AUTH_PASSWORD)."
+variable "rag_app_login_password" {
+  description = "Login password for the RAG application (AUTH_PASSWORD). Required when deploy_rag is true."
   type        = string
   sensitive   = true
   default     = ""
 
   validation {
     condition = (
-      var.app_login_password == ""
+      var.rag_app_login_password == ""
       || (
-        length(var.app_login_password) >= 12
-        && length(var.app_login_password) <= 64
-        && !can(regex("[\r\n\"'\\\\]", var.app_login_password))
-        && can(regex("[0-9]", var.app_login_password))
-        && can(regex("[a-z]", var.app_login_password))
-        && can(regex("[A-Z]", var.app_login_password))
+        length(var.rag_app_login_password) >= 12
+        && length(var.rag_app_login_password) <= 64
+        && !can(regex("[\r\n\"'\\\\]", var.rag_app_login_password))
+        && can(regex("[0-9]", var.rag_app_login_password))
+        && can(regex("[a-z]", var.rag_app_login_password))
+        && can(regex("[A-Z]", var.rag_app_login_password))
       )
     )
-    error_message = "app_login_password must be 12-64 characters, include uppercase, lowercase, and digits, and not contain quotes, backslashes, or line breaks."
+    error_message = "rag_app_login_password must be 12-64 characters, include uppercase, lowercase, and digits, and not contain quotes, backslashes, or line breaks."
   }
 }
 
-variable "app_auth_cookie_secure" {
-  description = "Send the login session cookie only over HTTPS (AUTH_COOKIE_SECURE). Keep false while the application is served over plain HTTP."
+variable "rag_app_auth_cookie_secure" {
+  description = "Send the RAG login session cookie only over HTTPS (AUTH_COOKIE_SECURE). Keep false while the application is served over plain HTTP."
   type        = bool
   default     = false
 }
 
 # 文書解析（parser）は CPU のマイクロサービスだけを配備する。parser-unstructured は既定の解析方式
 # （RAG_PARSER_ADAPTER_BACKEND=unstructured）のため常に起動し、ここでは任意の parser だけを選ぶ。
-variable "enable_parser_docling" {
+variable "rag_enable_parser_docling" {
   description = "Build and start the Docling parser microservice (CPU, parser-docling)."
   type        = bool
   default     = true
 }
 
-variable "enable_parser_marker" {
+variable "rag_enable_parser_marker" {
   description = "Build and start the Marker parser microservice (CPU, parser-marker). Heavy on CPU and memory."
   type        = bool
   default     = false
 }
 
-variable "enable_oci_cloud_parsers" {
+variable "rag_enable_oci_cloud_parsers" {
   description = "Build and start the OCI cloud parser proxies (parser-oci-genai-vision / parser-oci-document-understanding). They call OCI services and need no GPU."
   type        = bool
   default     = false
 }
 
 # GPU の parser（MinerU / Dots.OCR / GLM-OCR / Unlimited-OCR）はこの stack に含めない。
-# RAG はこれらを外部 API として「文書解析」設定の API host で指定する。将来、GPU shape の Compute を
-# 任意で追加する場合は、別の変数（例: gpu_parser_compute_enabled）と compute リソースをここに足す。
+# RAG はこれらを外部 API として「文書解析」設定の API host で指定する。
+
+# ---------------------------------------------------------------- NL2SQL
+
+variable "nl2sql_instance_display_name" {
+  description = "Display name of the NL2SQL Compute instance."
+  type        = string
+  default     = "NL2SQL_INSTANCE"
+}
+
+variable "nl2sql_instance_flex_shape_ocpus" {
+  description = "OCPUs of the NL2SQL Compute instance."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.nl2sql_instance_flex_shape_ocpus > 0
+    error_message = "nl2sql_instance_flex_shape_ocpus must be greater than 0."
+  }
+}
+
+variable "nl2sql_instance_flex_shape_memory" {
+  description = "Memory in GB of the NL2SQL Compute instance."
+  type        = number
+  default     = 16
+
+  validation {
+    condition     = var.nl2sql_instance_flex_shape_memory > 0
+    error_message = "nl2sql_instance_flex_shape_memory must be greater than 0."
+  }
+}
+
+variable "nl2sql_instance_boot_volume_size" {
+  description = "Boot volume size in GB of the NL2SQL Compute instance."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.nl2sql_instance_boot_volume_size >= 50 && var.nl2sql_instance_boot_volume_size <= 32768
+    error_message = "nl2sql_instance_boot_volume_size must be between 50 and 32768 GB."
+  }
+}
+
+variable "nl2sql_app_environment" {
+  description = "NL2SQL application ENVIRONMENT. Direct HTTP deployments use local with DEBUG=false; production requires nl2sql_app_auth_cookie_secure=true."
+  type        = string
+  default     = "local"
+
+  validation {
+    condition     = contains(["local", "staging", "production"], var.nl2sql_app_environment)
+    error_message = "nl2sql_app_environment must be local, staging, or production."
+  }
+}
+
+variable "nl2sql_app_auth_cookie_secure" {
+  description = "Set true when NL2SQL is served through HTTPS."
+  type        = bool
+  default     = false
+}
+
+variable "nl2sql_app_admin_login_user_id" {
+  description = "Fixed login user ID for the built-in NL2SQL SYSTEM_ADMIN configuration administrator."
+  type        = string
+  default     = "system_admin"
+
+  validation {
+    condition     = var.nl2sql_app_admin_login_user_id == "system_admin"
+    error_message = "nl2sql_app_admin_login_user_id is fixed and must be exactly system_admin."
+  }
+}
+
+variable "nl2sql_app_admin_login_user_password" {
+  description = "Login password for the built-in NL2SQL SYSTEM_ADMIN configuration administrator. Required when deploy_nl2sql is true."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      var.nl2sql_app_admin_login_user_password == ""
+      || (
+        length(var.nl2sql_app_admin_login_user_password) >= 12
+        && length(var.nl2sql_app_admin_login_user_password) <= 30
+        && !can(regex("[\r\n]", var.nl2sql_app_admin_login_user_password))
+        && !can(regex("\"", var.nl2sql_app_admin_login_user_password))
+        && !can(regex("admin", var.nl2sql_app_admin_login_user_password))
+        && can(regex("[0-9]", var.nl2sql_app_admin_login_user_password))
+        && can(regex("[a-z]", var.nl2sql_app_admin_login_user_password))
+        && can(regex("[A-Z]", var.nl2sql_app_admin_login_user_password))
+      )
+    )
+    error_message = "nl2sql_app_admin_login_user_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
+  }
+}
+
+variable "nl2sql_oracle_deepsec_enabled" {
+  description = "Enable Deep Data Security in the NL2SQL backend/.env."
+  type        = bool
+  default     = true
+}
+
+variable "nl2sql_oracle_deepsec_data_user_password" {
+  description = "Password for the shared DEEPSEC_DATA_USER Deep Data Security DATA USER."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.nl2sql_oracle_deepsec_data_user_password) == ""
+      || (
+        length(var.nl2sql_oracle_deepsec_data_user_password) >= 12
+        && length(var.nl2sql_oracle_deepsec_data_user_password) <= 256
+        && !can(regex("[\r\n]", var.nl2sql_oracle_deepsec_data_user_password))
+        && !can(regex("\"", var.nl2sql_oracle_deepsec_data_user_password))
+      )
+    )
+    error_message = "nl2sql_oracle_deepsec_data_user_password must be empty or 12-256 characters without double quotes or line breaks."
+  }
+}
+
+# ---------------------------------------------------------------- Agent
+
+variable "agent_instance_display_name" {
+  description = "Display name of the Agent Control Plane Compute instance."
+  type        = string
+  default     = "AGENT_INSTANCE"
+}
+
+variable "agent_instance_flex_shape_ocpus" {
+  description = "OCPUs of the Agent Control Plane Compute instance."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.agent_instance_flex_shape_ocpus > 0
+    error_message = "agent_instance_flex_shape_ocpus must be greater than 0."
+  }
+}
+
+variable "agent_instance_flex_shape_memory" {
+  description = "Memory in GB of the Agent Control Plane Compute instance."
+  type        = number
+  default     = 16
+
+  validation {
+    condition     = var.agent_instance_flex_shape_memory > 0
+    error_message = "agent_instance_flex_shape_memory must be greater than 0."
+  }
+}
+
+variable "agent_instance_boot_volume_size" {
+  description = "Boot volume size in GB of the Agent Control Plane Compute instance."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.agent_instance_boot_volume_size >= 50 && var.agent_instance_boot_volume_size <= 32768
+    error_message = "agent_instance_boot_volume_size must be between 50 and 32768 GB."
+  }
+}
+
+variable "agent_app_basic_auth_user" {
+  description = "HTTP Basic authentication user name that Nginx requires in front of the Agent Control Plane UI and API."
+  type        = string
+  default     = "agent_admin"
+
+  validation {
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9_.-]{2,31}$", var.agent_app_basic_auth_user))
+    error_message = "agent_app_basic_auth_user must start with a letter and contain 3-32 letters, digits, underscores, dots, or hyphens."
+  }
+}
+
+variable "agent_app_basic_auth_password" {
+  description = "HTTP Basic authentication password that Nginx requires in front of the Agent Control Plane UI and API. Required when deploy_agent is true."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      var.agent_app_basic_auth_password == ""
+      || (
+        length(var.agent_app_basic_auth_password) >= 12
+        && length(var.agent_app_basic_auth_password) <= 64
+        && !can(regex("[\r\n]", var.agent_app_basic_auth_password))
+        && !can(regex("[\"':]", var.agent_app_basic_auth_password))
+        && can(regex("[0-9]", var.agent_app_basic_auth_password))
+        && can(regex("[a-z]", var.agent_app_basic_auth_password))
+        && can(regex("[A-Z]", var.agent_app_basic_auth_password))
+      )
+    )
+    error_message = "agent_app_basic_auth_password must be 12-64 characters, include uppercase, lowercase, and digits, and not contain quotes, colons, or line breaks."
+  }
+}
+
+variable "agent_control_plane_mcp_token_secret" {
+  description = "Optional master secret for deriving Binding MCP tokens (AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET). Leave blank to keep the Binding MCP endpoint fail-closed (503)."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      var.agent_control_plane_mcp_token_secret == ""
+      || (
+        length(var.agent_control_plane_mcp_token_secret) >= 32
+        && !can(regex("[\r\n\"]", var.agent_control_plane_mcp_token_secret))
+      )
+    )
+    error_message = "agent_control_plane_mcp_token_secret must be empty or at least 32 characters without double quotes or line breaks."
+  }
+}
+
+variable "agent_control_plane_public_base_url" {
+  description = "Optional Control Plane API base URL advertised to Runtimes for Binding MCP callbacks. Leave blank to use http://<Compute private IP>[:application_port]/api."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.agent_control_plane_public_base_url == ""
+      || can(regex("^https?://[^\\s\"]+$", var.agent_control_plane_public_base_url))
+    )
+    error_message = "agent_control_plane_public_base_url must be empty or an http(s) URL without spaces or quotes."
+  }
+}
+
+variable "agent_runtime_repository_backend" {
+  description = "Oracle repository used for Agent Runtime state (AGENT_RUNTIME_REPOSITORY_BACKEND). The application creates its own tables at startup."
+  type        = string
+  default     = "oracle_checkpoint"
+
+  validation {
+    condition     = contains(["oracle_checkpoint", "oracle_normalized"], var.agent_runtime_repository_backend)
+    error_message = "agent_runtime_repository_backend must be oracle_checkpoint or oracle_normalized."
+  }
+}

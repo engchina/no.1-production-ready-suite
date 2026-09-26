@@ -102,11 +102,11 @@ def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> 
 
 def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    locals_tf = (repo_root.parent / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
     init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
 
-    assert "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" in locals_tf
+    assert "ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}" in locals_tf
     assert "ORACLE_DRIVER_MODE=thin" in locals_tf
     assert "ORACLE_CLIENT_LIB_DIR=" in locals_tf
     assert "instantclient" not in init_script
@@ -114,11 +114,11 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
 
 
 def _terraform_backend_env_body() -> str:
-    """locals.tf の backend_env heredoc 本文だけを取り出す。"""
+    """統合 stack（#217）の locals.tf から NL2SQL の backend_env heredoc 本文だけを取り出す。"""
     repo_root = Path(__file__).resolve().parents[2]
-    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
-    _, _, after = locals_tf.partition("backend_env = <<-EOT\n")
-    assert after, "locals.tf に backend_env heredoc が見つかりません。"
+    locals_tf = (repo_root.parent / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    _, _, after = locals_tf.partition("  nl2sql_backend_env = <<-EOT\n")
+    assert after, "locals.tf に nl2sql_backend_env heredoc が見つかりません。"
     body, _, _ = after.partition("\nEOT")
     return body
 

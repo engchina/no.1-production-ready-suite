@@ -24,6 +24,24 @@ write_files:
     encoding: "base64"
     content: |
       ${wallet_content}
+%{ if product == "rag" ~}
+  - path: "/u01/aipoc/props/compose_services.txt"
+    permissions: "0644"
+    content: |
+      ${compose_services}
+%{ endif ~}
+%{ if product == "agent" ~}
+  - path: "/u01/aipoc/props/basic_auth_password"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${basic_auth_password}
+  - path: "/u01/aipoc/props/basic_auth_user.txt"
+    permissions: "0644"
+    content: |
+      ${basic_auth_user}
+%{ endif ~}
   - path: "/u01/aipoc/props/adb_name.txt"
     permissions: "0644"
     content: |
@@ -48,7 +66,7 @@ write_files:
     permissions: "0644"
     content: |
       ${application_port}
-  - path: "/u01/aipoc/bootstrap-nl2sql.sh"
+  - path: "/u01/aipoc/bootstrap-${product}.sh"
     permissions: "0755"
     owner: "root:root"
     content: |
@@ -58,13 +76,13 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
 
       APP_ROOT="/u01/aipoc"
-      # NL2SQL と共有 platform は monorepo の nl2sql/ と platform/ にあるため、clone は1回だけ行う。
+      # 製品（${product}/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
       SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"
-      APP_REPO_DIR="$${SUITE_REPO_DIR}/nl2sql"
+      APP_REPO_DIR="$${SUITE_REPO_DIR}/${product}"
       APPLICATION_PORT="${application_port}"
 
       log() {
-        printf '[nl2sql-bootstrap] %s\n' "$*"
+        printf '[${product}-bootstrap] %s\n' "$*"
       }
 
       trap 'status=$?; log "Bootstrap failed at line $${LINENO} with status $${status}: $${BASH_COMMAND}"; exit "$${status}"' ERR
@@ -99,6 +117,7 @@ write_files:
         fi
       }
 
+      # Docker を入れる前に保存する（Docker が追加する iptables の規則を永続化しないため）。
       configure_firewall() {
         if command -v iptables >/dev/null 2>&1; then
           iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$${APPLICATION_PORT}" -j ACCEPT || true
@@ -114,7 +133,7 @@ write_files:
         fi
         dos2unix "$${init_script}" || true
         chmod +x "$${init_script}"
-        log "Starting direct Compute initialization via $${init_script}."
+        log "Starting Compute initialization via $${init_script}."
         APPLICATION_PORT="$${APPLICATION_PORT}" APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
       }
 
@@ -123,4 +142,4 @@ write_files:
       run_application_init
       log "Deployment finished. Nginx listens on TCP port $${APPLICATION_PORT}."
 runcmd:
-  - "nohup bash /u01/aipoc/bootstrap-nl2sql.sh >> /var/log/cloud-init-custom.log 2>&1 &"
+  - "nohup bash /u01/aipoc/bootstrap-${product}.sh >> /var/log/cloud-init-custom.log 2>&1 &"

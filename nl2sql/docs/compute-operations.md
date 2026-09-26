@@ -1,161 +1,14 @@
-# Production Ready NL2SQL Terraform Stack
+# NL2SQL on OCI Compute — runtime and operations
 
-This directory contains the OCI Resource Manager stack for Production Ready
-NL2SQL. The stack provisions:
+The Compute instance for NL2SQL is created by the suite-wide OCI Resource
+Manager stack. For the stack itself (product selection, the shared Autonomous
+AI Database, form inputs, packaging, and releases), see
+[`terraform/README.md`](../../terraform/README.md) (#217).
 
-- Oracle Autonomous AI Database 26ai, or connection settings for an existing ADB
-- A generated ADB wallet for the selected/new ADB
-- One OCI Compute instance
-- A cloud-init bootstrap that clones the suite monorepo and runs the application
-  directly on Compute with Nginx and systemd
-
-The default application source is:
-
-- `https://github.com/engchina/no.1-production-ready-suite.git`, ref `main`
-  (NL2SQL is `nl2sql/` and the shared packages are `platform/` in the same clone)
-
-## Deploy
-
-### One-click Deploy
-
-Click the button below to open OCI Resource Manager with the Osaka region
-(`ap-osaka-1`) selected by default.
-
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/nl2sql-v0.1.32/production-ready-nl2sql-terraform-stack.zip)
-
-The button uses the nl2sql-v0.1.32 GitHub Release asset (in `no.1-production-ready-suite`) named
-`production-ready-nl2sql-terraform-stack.zip`. Publish that release with the
-asset before using the one-click deploy URL.
-
-### Manual Package and Upload
-
-From the repository root, build the OCI Resource Manager zip package:
-
-```bash
-python scripts/package_terraform_stack.py
-```
-
-The default output is
-`dist/production-ready-nl2sql-terraform-stack.zip`. Upload that zip to OCI
-Resource Manager and create a stack. Provide the required form values:
-
-- OCI deployment/Compute compartment, region, availability domain, VCN, and
-  subnets. The ADB compartment defaults to the current deployment compartment
-  and remains independently selectable in the Autonomous AI Database section.
-- Application administrator password. The username is fixed to `system_admin`
-  and is case-sensitive.
-- Deep Data Security setting. `ORACLE_DEEPSEC_ENABLED` defaults to `true`; when
-  enabled, provide the DATA USER password. The stack keeps
-  `ORACLE_DEEPSEC_DATA_USER` fixed as `DEEPSEC_DATA_USER` and writes the
-  password to `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`. When
-  disabled, the form hides the password input and writes an empty password.
-- Oracle driver mode is intentionally fixed to Thin:
-  `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The Resource Manager
-  form keeps ADB mTLS required by default and hides that control. The cloud-init
-  script does not install Oracle Instant Client because Deep Data Security is
-  supported only by python-oracledb Thin mode in this stack.
-- Autonomous AI Database mode: `ADBのコンパートメント` is initially populated
-  from Resource Manager's current `Create in compartment` selection and can be
-  changed before choosing `ADBの利用方法`. The ADB compartment controls only the
-  new ADB destination or the existing ADB picker; it does not change the Compute
-  compartment or runtime `OCI_COMPARTMENT_ID`.
-  - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
-    license, and password fields. The default workload is `LH`; the form
-    exposes `OLTP`, `AJD`, `APEX`, and `LH` only. Network access defaults to
-    `プライベート・エンドポイント・アクセスのみ`; the VCN and subnet compartment
-    pickers default to the current Resource Manager `Create in compartment`
-    value. The selected subnet must be reachable from the application Compute
-    subnet through the configured VCN routing and security rules.
-    The other access types match the Autonomous AI Database creation screen:
-    `すべての場所からのセキュア・アクセス` creates a public endpoint without
-    an ADB access-control list, while
-    `許可されたIPおよびVCN限定のセキュア・アクセス` configures the
-    serverless ADB access-control list through `whitelisted_ips` and requires
-    either a VCN or comma-separated IP/CIDR entries. Selecting a VCN without a
-    subnet allows the entire VCN; selecting a subnet writes
-    `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
-    New ADBs default to Thin-compatible Wallet mTLS
-    (`相互TLS (mTLS)認証が必要=true`). The Resource Manager form hides this
-    advanced control. Direct Terraform callers can set it to `false`; in that
-    case the bootstrap writes `ORACLE_CONNECTION_SECURITY=walletless_tls`. Use
-    that only with an ADB connection string that supports one-way TLS and an ACL
-    that permits the application host.
-    For public endpoint ACL deployments, ensure the Compute subnet has a valid
-    OCI private path to ADB; otherwise enter the Compute/NAT public egress IP or
-    CIDR.
-  - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
-    values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
-    left blank; the stack uses the selected ADB `db_name` with `_high`, for
-    example `NL2SQLADB` becomes `nl2sqladb_high`. The Resource Manager form
-    hides the wallet password input; wallet generation reuses
-    `existing_oracle_password`. This stack reads the selected ADB and generates
-    a wallet, but does not modify its network access, mTLS, or access-control
-    list settings.
-- Compute image, shape, subnet, and SSH public key. The Compute image selector
-  exposes the Tokyo and Osaka Ubuntu image OCIDs. The SSH key input uses the
-  Resource Manager native SSH key control, so operators can generate a key pair
-  and download the private/public keys, upload a `.pub` file, or paste an
-  existing public key.
-
-The network access input contract intentionally uses the Japanese labels shown
-above. Legacy values `PUBLIC_ENDPOINT`,
-`SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS`, `PRIVATE_ENDPOINT_ONLY`,
-`CIDR_BLOCK`, and the legacy `adb_use_private_subnet` variable are not accepted.
-Update existing `.tfvars` before planning this stack version.
-Resource Manager initializes `adb_compartment_ocid` from `compartment_ocid`, but
-the two inputs remain independent after initialization. Direct Terraform callers
-must continue to set `adb_compartment_ocid` explicitly; the Terraform variable
-does not fall back to `compartment_ocid`. Existing ADB OCIDs must belong to the
-selected ADB compartment.
-
-[Resource Manager automatically prepopulates the reserved `compartment_ocid`
-variable](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/terraformconfigresourcemanager.htm)
-on the Console pages used to create and edit a stack.
-
-### Optional Resource Manager Form Browser Check
-
-The Resource Manager UI is rendered by OCI and cannot be reproduced by the
-local frontend. To verify the generated form without creating an ADB, upload the
-package to a dedicated test tenancy, save an authenticated Playwright storage
-state, and stop at the Create stack form:
-
-```bash
-cd frontend
-OCI_RESOURCE_MANAGER_ADB_FORM_URL="https://cloud.oracle.com/resourcemanager/stacks/create?..." \
-OCI_RESOURCE_MANAGER_STORAGE_STATE="/absolute/path/to/oci-storage-state.json" \
-npm run test:e2e:oci-resource-manager
-```
-
-The opt-in test runs at desktop and 375px widths and verifies that the ADB
-compartment precedes the create/existing selection, plus the `LH` workload
-default without `DW`, private endpoint access default, Japanese access labels,
-SSH key generation/download controls, keyboard selection, hidden mTLS and wallet
-password controls, and progressive disclosure. It does not submit the form or
-run an Apply job.
-
-After apply completes, use the `application_url` output. The default application
-port is `80`. The public entrypoint is `http://<compute-ip>/`; browser API
-requests use the same origin under `/api/...`.
-
-AI runtime settings are intentionally not collected by the Resource Manager
-stack. After the application starts, configure OCI authentication, OCI
-Enterprise AI, OCI Generative AI, and Select AI from the application System
-Settings pages.
-
-This stack renders deployment secrets into Compute cloud-init so the instance
-can create `backend/.env`. Treat the Resource Manager stack, job history, and
-state as sensitive operational material.
-
-## Release Asset
-
-The release workflow publishes:
-
-- `production-ready-nl2sql-terraform-stack.zip`
-- `production-ready-nl2sql-terraform-stack.zip.sha256`
-
-The README deploy button pins an `nl2sql-v*` release tag. The suite monorepo
-publishes releases for several products, so `releases/latest` may not point to an
-NL2SQL release.
+This page covers what runs on the NL2SQL Compute instance and how to operate it.
+The Resource Manager inputs for NL2SQL are prefixed with `nl2sql_`
+(for example `nl2sql_app_admin_login_user_password` and
+`nl2sql_oracle_deepsec_enabled`).
 
 ## Runtime Notes
 
@@ -197,7 +50,7 @@ values supplied in Resource Manager:
 - `APP_ADMIN_LOGIN_USER_PASSWORD`
 
 Deep Data Security is enabled by default in Terraform deployments. If
-`oracle_deepsec_enabled=false`, `ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
+`nl2sql_oracle_deepsec_enabled=false`, `ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
 password is written empty:
 
 - `ORACLE_DEEPSEC_ENABLED` (`true` by default)
@@ -245,9 +98,9 @@ database values into `backend/.env`:
 
 The Resource Manager form hides the application environment and auth cookie
 security inputs. Direct HTTP deployments keep the internal defaults
-`app_environment=local`, `DEBUG=false`, and `app_auth_cookie_secure=false`.
+`nl2sql_app_environment=local`, `DEBUG=false`, and `nl2sql_app_auth_cookie_secure=false`.
 If you override these Terraform variables outside the form for HTTPS, use
-`app_environment=production` with `app_auth_cookie_secure=true`.
+`nl2sql_app_environment=production` with `nl2sql_app_auth_cookie_secure=true`.
 
 ## Updating an Existing Compute Deployment
 
@@ -383,7 +236,7 @@ when it contains local documents or settings.
 The cloud-init bootstrap:
 
 1. Installs Nginx, Node.js 24, uv, and build dependencies.
-2. Clones the NL2SQL and shared platform repositories.
+2. Clones the suite monorepo (NL2SQL and the shared platform) once.
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
 4. Writes the runtime `backend/.env`.
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
@@ -426,14 +279,3 @@ sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 The security migration creates `NL2SQL_DEEPSEC_MIGRATIONS`, allowing the Deep
 Data Security page to show the pending V001 foundation plan. The bootstrap does
 not apply those administrator-confirmed DeepSec foundation steps automatically.
-
-## Stack Boundaries
-
-This stack preserves the project architecture:
-
-- LLM/VLM: OCI Enterprise AI
-- Embedding/rerank: OCI Generative AI
-- Vector search and application state: Oracle 26ai
-
-Do not replace these with another LLM provider, external rerank provider, or
-external vector database in this stack.

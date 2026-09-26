@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent の OCI Resource Manager Terraform stack を release 用 zip にまとめる。"""
+"""統合 OCI Resource Manager Terraform stack（terraform/stack）を release 用 zip にまとめる。"""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ import zipfile
 from pathlib import Path
 
 
-PACKAGE_NAME = "production-ready-agent-terraform-stack.zip"
+PACKAGE_NAME = "production-ready-suite-terraform-stack.zip"
 
 
-def _repo_root() -> Path:
+def _terraform_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
@@ -75,19 +75,19 @@ def build_package(stack_dir: Path, output_path: Path) -> list[str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    root = _repo_root()
+    root = _terraform_root()
     parser = argparse.ArgumentParser(
         description="Package terraform/stack for OCI Resource Manager release assets.",
     )
     parser.add_argument(
         "--stack-dir",
-        default="terraform/stack",
-        help="Terraform stack directory relative to the repository root.",
+        default="stack",
+        help="Terraform stack directory relative to terraform/.",
     )
     parser.add_argument(
         "--output",
         default=f"dist/{PACKAGE_NAME}",
-        help="Output zip path relative to the repository root.",
+        help="Output zip path relative to terraform/.",
     )
     parser.set_defaults(repo_root=root)
     return parser.parse_args(argv)

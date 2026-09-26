@@ -70,7 +70,8 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     expect(compartmentBox!.y).toBeLessThan(deploymentModeBox!.y);
 
     const networkSection = page.getByText("ネットワーク・アクセス", { exact: true });
-    const deepsecSection = page.getByText("Deep Data Security", { exact: true });
+    // 統合 stack（#217）では NL2SQL の入力グループは NL2SQL を配備するときだけ表示される（既定は配備する）。
+    const deepsecSection = page.getByText("NL2SQL Deep Data Security", { exact: true });
     const computeSection = page.getByText("Compute", { exact: true });
     await expect(networkSection).toBeVisible();
     await expect(deepsecSection).toBeVisible();
@@ -91,8 +92,9 @@ test.describe("OCI Resource Manager ADB作成フォーム", () => {
     expect(networkSectionBox!.y).toBeLessThan(deepsecSectionBox!.y);
     expect(deepsecSectionBox!.y).toBeLessThan(computeSectionBox!.y);
 
+    // ADB は3製品で共有するため、既定の workload は OLTP。
     const workload = page.getByLabel("Workload type", { exact: true });
-    await expect(workload).toHaveValue("LH");
+    await expect(workload).toHaveValue("OLTP");
     await expect(workload.locator("option")).toHaveText(["OLTP", "AJD", "APEX", "LH"]);
 
     const accessType = page.getByLabel("アクセス・タイプ", { exact: true });

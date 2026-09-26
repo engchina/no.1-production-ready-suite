@@ -57,9 +57,9 @@ ln -s "${NEW}" "${OLD}"
 
 ## 本番構成
 
-OCI Resource Manager の Terraform stack（[`terraform/stack/`](../terraform/README.md)）は、Compute 1 台で `docker-compose.yml`
+OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台で `docker-compose.yml`
 （backend / ingestion-worker / 前処理 / CPU parser）を動かし、host の Nginx が frontend を配信する構成を作る。
-ADB（Oracle 26ai）と Wallet も stack が用意し、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
+ADB（Oracle 26ai）と Wallet も stack が用意し（NL2SQL / Agent と共有する）、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
 
 規模が大きくなった場合の推奨:
 
