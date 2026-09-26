@@ -128,7 +128,10 @@ export function SecurityUsersPage() {
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<UserFieldErrors>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 選択中の利用者と、利用者が自分で選んだか（manual）を 1 つの state で持つ（render で manual を読むため ref にしない）。
+  const [selection, setSelection] = useState<{ id: string | null; manual: boolean }>({ id: null, manual: false });
+  const selectedId = selection.id;
+  const selectUser = (id: string | null, manual = true) => setSelection({ id, manual });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<UserPanelView>("list");
   const [search, setSearch] = useState("");
@@ -147,7 +150,6 @@ export function SecurityUsersPage() {
   const displayNameRef = useRef<HTMLInputElement | null>(null);
   const temporaryPasswordRef = useRef<HTMLInputElement | null>(null);
   const roleGroupRef = useRef<HTMLDivElement | null>(null);
-  const selectedUserManualSelection = useRef(false);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const roleById = useMemo(
@@ -248,7 +250,7 @@ export function SecurityUsersPage() {
   const visibleSelectedId =
     activeView === "list"
       ? selectedVisibleKey(filteredUsers, selectedId, (user) => user.user_uuid, {
-          preserveSelected: selectedUserManualSelection.current,
+          preserveSelected: selection.manual,
         })
       : selectedId;
   const selectedUser = users.find((user) => user.user_uuid === visibleSelectedId) ?? null;
@@ -269,10 +271,10 @@ export function SecurityUsersPage() {
         if (signal.aborted || sequence !== loadSequence.current) return;
         setUsers(userRows);
         setRoles(roleRows.filter((role) => !role.archived));
-        setSelectedId((current) =>
-          current && userRows.some((user) => user.user_uuid === current)
+        setSelection((current) =>
+          !current.id || userRows.some((user) => user.user_uuid === current.id)
             ? current
-            : null
+            : { ...current, id: null }
         );
       });
       if (announce && sequence === loadSequence.current) {
@@ -302,12 +304,11 @@ export function SecurityUsersPage() {
 
   useEffect(() => {
     if (activeView !== "list" || loading) return;
-    setSelectedId((current) => {
-      const nextId = selectedVisibleKey(filteredUsers, current, (user) => user.user_uuid, {
-        preserveSelected: selectedUserManualSelection.current,
+    setSelection((current) => {
+      const nextId = selectedVisibleKey(filteredUsers, current.id, (user) => user.user_uuid, {
+        preserveSelected: current.manual,
       });
-      if (nextId !== current) selectedUserManualSelection.current = false;
-      return nextId;
+      return nextId === current.id ? current : { id: nextId, manual: false };
     });
   }, [activeView, filteredUsers, loading]);
 
@@ -362,8 +363,7 @@ export function SecurityUsersPage() {
   };
 
   const startEdit = (user: SecurityUser, temporaryPassword = "") => {
-    selectedUserManualSelection.current = true;
-    setSelectedId(user.user_uuid);
+    selectUser(user.user_uuid);
     setEditingId(user.user_uuid);
     setActiveView("edit");
     const nextDraft = {
@@ -417,8 +417,7 @@ export function SecurityUsersPage() {
           role_ids: selectedRoleIds,
         });
         setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-        selectedUserManualSelection.current = true;
-        setSelectedId(updated.user_uuid);
+        selectUser(updated.user_uuid);
         setBaseline((current) => ({
           ...current,
           displayName: updated.display_name,
@@ -482,8 +481,7 @@ export function SecurityUsersPage() {
     try {
       const updated = await securityApi.setUserEnabled(user, enabling);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-      selectedUserManualSelection.current = true;
-      setSelectedId(updated.user_uuid);
+      selectUser(updated.user_uuid);
       toast.success(
         t(enabling ? "security.users.enableSuccess" : "security.users.disableSuccess")
       );
@@ -505,8 +503,7 @@ export function SecurityUsersPage() {
     ) {
       return;
     }
-    selectedUserManualSelection.current = true;
-    setSelectedId(user.user_uuid);
+    selectUser(user.user_uuid);
     setActionError("");
     setCopyPasswordError("");
     setResetPasswordError(null);
@@ -543,8 +540,7 @@ export function SecurityUsersPage() {
     try {
       const updated = await securityApi.unlockUser(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-      selectedUserManualSelection.current = true;
-      setSelectedId(updated.user_uuid);
+      selectUser(updated.user_uuid);
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
@@ -560,8 +556,7 @@ export function SecurityUsersPage() {
 
   const handleDelete = async (user: SecurityUser) => {
     if (operationBusy || !canDeleteUser(user)) return;
-    selectedUserManualSelection.current = true;
-    setSelectedId(user.user_uuid);
+    selectUser(user.user_uuid);
     if (
       !(await confirm({
         title: t("security.users.delete"),
@@ -586,8 +581,7 @@ export function SecurityUsersPage() {
       const nextUser =
         filteredUsers[deletedIndex + 1] ?? filteredUsers[deletedIndex - 1] ?? null;
       setUsers((rows) => rows.filter((row) => row.user_uuid !== user.user_uuid));
-      selectedUserManualSelection.current = Boolean(nextUser);
-      setSelectedId(nextUser?.user_uuid ?? null);
+      selectUser(nextUser?.user_uuid ?? null, Boolean(nextUser));
       setEditingId(null);
       setActiveView("list");
       setFormError("");
@@ -692,8 +686,7 @@ export function SecurityUsersPage() {
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
-              selectedUserManualSelection.current = true;
-              setSelectedId(user.user_uuid);
+              selectUser(user.user_uuid);
             }}
           >
             <SecurityIdentityLines id={user.login_user_id} name={user.display_name} />
@@ -807,8 +800,7 @@ export function SecurityUsersPage() {
                   selectedRowKey={visibleSelectedId}
                   onRowClick={(user) => {
                     if (operationBusy) return;
-                    selectedUserManualSelection.current = true;
-                    setSelectedId(user.user_uuid);
+                    selectUser(user.user_uuid);
                   }}
                   getRowKey={(user) => user.user_uuid}
                   rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.login_user_id }) })}

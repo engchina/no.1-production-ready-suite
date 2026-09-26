@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Database,
   Code2,
   FileText,
@@ -253,7 +253,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const validationSequence = useRef(0);
   const selectionSignature = JSON.stringify([...selectedKeys].sort());
   const currentSelection = useRef(selectionSignature);
-  currentSelection.current = selectionSignature;
+  // 最新の選択を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { currentSelection.current = selectionSignature; });
   // unmount 時に sequence を進める cleanup は置かない。開発モードの StrictMode は mount → 疑似 unmount → 再 mount で
   // effect を二重実行するため、cleanup で sequence が進むと再活性化時の唯一の応答が「古い」と判定されて破棄され、
   // loading が解除されない(#675)。画面は keep-alive で実 unmount はアプリ終了時だけなので不要。
@@ -291,7 +292,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     mode === "domain" ? [domainOperation, domainInventory?.domain_text ?? ""] : null,
   ]);
   const currentGenerationSignature = useRef(generationSignature);
-  currentGenerationSignature.current = generationSignature;
+  // 最新の生成条件を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { currentGenerationSignature.current = generationSignature; });
   useEffect(() => {
     generationSequence.current += 1;
     setLoading((current) => current === "generate" ? "" : current);

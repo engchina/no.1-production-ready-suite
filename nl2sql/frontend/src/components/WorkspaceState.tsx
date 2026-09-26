@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
@@ -37,7 +37,8 @@ export function useWorkspaceIdentity() {
 export function useResetExecutionConsent(reset: () => void, signature: string) {
   const active = useWorkspaceActive();
   const latest = useRef(reset);
-  latest.current = reset;
+  // 最新の reset を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { latest.current = reset; });
   useEffect(() => { latest.current(); }, [active, signature]);
 }
 
@@ -51,9 +52,10 @@ export function useWorkspaceState<T>(field: string, initial: T): [T, Dispatch<Se
   const mark = useDraftFailures((state) => state.mark);
   const read = () => { try { return readDraft(window.sessionStorage, key, initial); } catch { return initial; } };
   const [value, setValue] = useState<T>(read);
-  const previousKey = useRef(key);
-  if (previousKey.current !== key) {
-    previousKey.current = key;
+  // key が変わった render で、その key の草稿を読み直す（前回の key は state で持ち、render 中に ref を読まない）。
+  const [previousKey, setPreviousKey] = useState(key);
+  if (previousKey !== key) {
+    setPreviousKey(key);
     setValue(read());
   }
   useEffect(() => {
@@ -97,7 +99,8 @@ export function useWorkspaceActivation(onActivate: () => void) {
   const active = useWorkspaceActive();
   const wasActive = useRef(false);
   const callback = useRef(onActivate);
-  callback.current = onActivate;
+  // 最新の onActivate を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { callback.current = onActivate; });
   useEffect(() => {
     if (active && !wasActive.current) callback.current();
     wasActive.current = active;
@@ -118,15 +121,20 @@ export function useWorkspaceDraftWriter() {
 
 export function WorkspaceResultNotice({ result, inputSignature, finishedAt, restored = false }: { result: object | null; inputSignature: string; finishedAt?: string | number | null; restored?: boolean }) {
   const active = useWorkspaceActive();
-  const snapshot = useRef({ result, inputSignature, at: new Date().toISOString() });
+  // 結果が変わった時点の入力と時刻を state で持つ（render 中に ref を読み書きしない）。
+  const [stored, setStored] = useState(() => ({ result, inputSignature, at: new Date().toISOString() }));
   const [previous, setPrevious] = useState<object | null>(null);
-  if (snapshot.current.result !== result) snapshot.current = { result, inputSignature, at: new Date().toISOString() };
+  let snapshot = stored;
+  if (stored.result !== result) {
+    snapshot = { result, inputSignature, at: new Date().toISOString() };
+    setStored(snapshot);
+  }
   useEffect(() => { if (!active) setPrevious(result); }, [active, result]);
   if (!result) return null;
-  const changed = snapshot.current.inputSignature !== inputSignature;
+  const changed = snapshot.inputSignature !== inputSignature;
   if (!restored && previous !== result && !changed) return null;
   return <Banner severity="info" title={t("workspace.previousResult")}>
-    {t("workspace.executedAt", { date: new Date(finishedAt || snapshot.current.at).toLocaleString("ja-JP") })}
+    {t("workspace.executedAt", { date: new Date(finishedAt || snapshot.at).toLocaleString("ja-JP") })}
     {changed ? ` — ${t("workspace.inputChanged")}` : ""}
   </Banner>;
 }

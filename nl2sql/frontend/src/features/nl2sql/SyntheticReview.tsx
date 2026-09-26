@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Trash2 } from "lucide-react";
 import {
   Banner,
@@ -26,7 +26,8 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
   const active = useWorkspaceActive();
   const scope = `${run.run_id}:${run.review_status}:${active}`;
   const scopeRef = useRef(scope);
-  scopeRef.current = scope;
+  // 最新の scope を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { scopeRef.current = scope; });
   useEffect(() => {
     scopeRef.current = scope;
     setConfirmation("");

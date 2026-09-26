@@ -1,6 +1,7 @@
 import { Pagination } from "@/components/Pagination";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -175,6 +176,8 @@ export function FeedbackManagementPage() {
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
+  // 初回の読み込みを始めたか（render では ref の連番ではなく state を見る）。
+  const [loadStarted, setLoadStarted] = useState(false);
   const syncedAppFeedbackId = useRef<string | null>(null);
   const adminFeedbackContentRef = useRef<HTMLTextAreaElement | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
@@ -213,7 +216,8 @@ export function FeedbackManagementPage() {
   const reviewSignature = JSON.stringify([selectedAppFeedback?.id, adminFeedbackRating,
     adminFeedbackContent, registerSelectAiFeedback, selectAiResponse]);
   const reviewDirty = Boolean(selectedAppFeedback && savedReview && reviewSignature !== savedReview);
-  reviewDirtyRef.current = reviewDirty;
+  // 最新の未保存状態を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { reviewDirtyRef.current = reviewDirty; });
   const confirmDiscard = () => confirm({
     title: t("feedbackManagement.discard.title"),
     description: t("feedbackManagement.discard.description"),
@@ -240,7 +244,7 @@ export function FeedbackManagementPage() {
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
   const initialEntriesLoading =
-    feedback === null && (loadSequence.current === 0 || loading === "load");
+    feedback === null && (!loadStarted || loading === "load");
 
   const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
@@ -272,6 +276,7 @@ export function FeedbackManagementPage() {
     if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    setLoadStarted(true);
     setLoading("load");
     setMessage("");
     try {
