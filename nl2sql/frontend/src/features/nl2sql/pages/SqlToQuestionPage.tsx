@@ -131,7 +131,7 @@ export function SqlToQuestionPage() {
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [abortAll, runScopedRequest]);
+  }, [runScopedRequest, setSelectedProfileId]);
   const loadReferenceData = useCallback(() => {
     setLoading(true);
     setLoadError("");

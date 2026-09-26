@@ -601,7 +601,7 @@ function ExecutableNl2SqlWorkbench() {
     const remainingParams = new URLSearchParams(searchParams);
     QUERY_PREFILL_KEYS.forEach((key) => remainingParams.delete(key));
     setSearchParams(remainingParams, { replace: true });
-  }, [prefillDraftFailed, searchParams, workspaceActive]);
+  }, [prefillDraftFailed, searchParams, setSearchParams, workspaceActive]);
 
   // Profile 一覧・選択の変化に合わせて、選択を render 中に直す。
   if (
@@ -883,7 +883,7 @@ function ExecutableNl2SqlWorkbench() {
     } finally {
       setDetecting(false);
     }
-  }, [active, profileId, profileSelectionReady, question]);
+  }, [active, profileId, profileSelectionReady, question, setProfileId, writeDraft]);
 
   // schema catalog が空（サンプル未投入）のとき、エラーからワンクリックで投入して解消する。
   const importSampleData = useCallback(async () => {

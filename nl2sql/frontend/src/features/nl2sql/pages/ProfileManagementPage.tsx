@@ -1538,8 +1538,15 @@ export function ProfileManagementPage() {
       setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
     }
   }
+  // 通知は job の status が変わったときだけ出す（ポーリングで data が作り直されても重ねない）。
+  // 最新の job は commit 時に ref へ入れ、effect ではその ref を読む。
+  const dbProfileRefreshJobRef = useRef(dbProfileRefreshJobQuery.data);
+  useLayoutEffect(() => {
+    dbProfileRefreshJobRef.current = dbProfileRefreshJobQuery.data;
+  });
+  const dbProfileRefreshJobStatus = dbProfileRefreshJobQuery.data?.status;
   useEffect(() => {
-    const job = dbProfileRefreshJobQuery.data;
+    const job = dbProfileRefreshJobRef.current;
     if (!job) return;
     if (job.status === "done") {
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
@@ -1552,7 +1559,7 @@ export function ProfileManagementPage() {
     } else if (job.status === "error") {
       toastError(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
     }
-  }, [dbProfileRefreshJobQuery.data?.status, queryClient]);
+  }, [dbProfileRefreshJobStatus, queryClient]);
 
   if (useValuesChanged([dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]) && dbProfileRefreshJobQuery.isError) {
     const message =
