@@ -539,6 +539,11 @@ def grants_all_profile_access(codes: Iterable[str]) -> bool:
 
 PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
+# サービストークン（Authorization: Bearer）で認証する path と audience（#230 / #231）。
+# MCP は認証済みなら通し、ツールごとの権限はツール側（app.features.mcp.tools）で判定する。
+MCP_API_PATH = "/mcp"
+SERVICE_TOKEN_API_PATHS = frozenset({MCP_API_PATH})
+MCP_AUDIENCE = "nl2sql"
 
 
 def _allowed(*codes: str) -> frozenset[str]:
@@ -550,6 +555,8 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
 
     method = method.upper()
     if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
+        return None
+    if route_path == MCP_API_PATH:
         return None
     if route_path.startswith("/security/users"):
         return _allowed("menu.security_users")

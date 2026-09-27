@@ -209,6 +209,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     app_auth_argon2_time_cost: int = 3
     app_auth_argon2_memory_kib: int = 65536
     app_auth_argon2_parallelism: int = 4
+    # Agent が MCP（/api/mcp）を Run の利用者として呼ぶサービストークンの署名鍵（#230 / #231）。
+    # 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET。空なら MCP は 503 になる。
+    app_service_token_secret: str = ""
 
     @model_validator(mode="after")
     def validate_security_boundaries(self) -> Settings:

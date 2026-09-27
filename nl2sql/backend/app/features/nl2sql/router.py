@@ -160,7 +160,11 @@ from .models import (
     validate_profile_identifier,
 )
 from .oracle_adapter import OracleAdapterError, TabularImportValidationError
-from .profile_access import assert_profile_access, profile_access_denied
+from .profile_access import (
+    allowed_profile_ids_for_request,
+    assert_profile_access,
+    profile_access_denied,
+)
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
     QualityEvaluationJobPage,
@@ -333,12 +337,7 @@ def _profile_access_denied() -> HTTPException:
 
 
 def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
-    principal = _principal_from_request(request)
-    if principal is None or principal.is_system_admin:
-        return None
-    if principal.has_permission(PROFILE_MANAGE_PERMISSION):
-        return {profile.id for profile in nl2sql_service.list_profiles(include_archived=False)}
-    return set(principal.allowed_profile_ids)
+    return allowed_profile_ids_for_request(request, nl2sql_service)
 
 
 def _profile_access_digest(request: Request) -> str:

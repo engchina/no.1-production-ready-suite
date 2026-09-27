@@ -7258,6 +7258,7 @@ class Nl2SqlService:
                 job_id=job.job_id,
                 business_release_id=job.business_release_id,
                 status=job.status,
+                profile_id=job.request.profile_id or "default",
                 created_at=job.created_at,
                 started_at=job.started_at,
                 finished_at=job.finished_at,
