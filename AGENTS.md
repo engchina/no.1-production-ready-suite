@@ -16,6 +16,7 @@
 | `terraform/` | 3製品を OCI Resource Manager で配備する統合 stack（ADB 1つ＋選んだ製品ごとの Compute） | [terraform/README.md](./terraform/README.md) |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存しない。製品間の連携（例: Agent が RAG / NL2SQL を呼ぶ）は HTTP API 経由にする。
+  - Agent → RAG / NL2SQL は、呼び先の `POST /api/mcp`（MCP）を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）で呼ぶ。画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する。詳細は [platform/docs/backend-standard.md](./platform/docs/backend-standard.md) の「製品間の連携（MCP とサービストークン）」（#230〜#233）。
 - 製品は `platform/` を相対パスで参照する（frontend: `file:../../platform/packages/ui` / `file:../../platform/packages/system-settings`、backend: `path = "../../platform/packages/backend_core"`、lint: `../../platform/docs/design-system/…`）。パッケージの publish や version pin は行わない。
 - 各製品の backend / frontend / Docker image / 配備は独立している。まとめているのはソースと CI だけ。
 - 2026-09-25 に旧4 repo（`no.1-production-ready-{platform,rag,nl2sql,agent}`）を統合した（#71）。旧 repo は archive 済みで、commit message 内の `engchina/no.1-production-ready-<製品>#N` は旧 repo の Issue / PR を指す。
