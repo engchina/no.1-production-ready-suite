@@ -323,6 +323,7 @@ def build_mcp_server(request: Request) -> McpServer:
             description="利用者が使える業務プロファイル（SQL を生成する対象の範囲）を一覧します。",
             input_model=ListProfilesInput,
             handler=list_profiles,
+            output_model=ListProfilesOutput,
             permissions=(frozenset({PROFILE_READ_PERMISSION}),),
         ),
         McpTool(
@@ -330,6 +331,7 @@ def build_mcp_server(request: Request) -> McpServer:
             description="質問に合う業務プロファイルを推薦します。推薦できないときは null です。",
             input_model=RecommendProfileInput,
             handler=recommend_profile,
+            output_model=RecommendProfileOutput,
             permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
         ),
         McpTool(
@@ -341,6 +343,7 @@ def build_mcp_server(request: Request) -> McpServer:
             ),
             input_model=QueryInput,
             handler=query,
+            output_model=Nl2SqlJobResult,
             permissions=(
                 frozenset({QUERY_GENERATE_PERMISSION}),
                 frozenset({SQL_EXECUTE_PERMISSION}),
@@ -352,6 +355,7 @@ def build_mcp_server(request: Request) -> McpServer:
             description="nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。",
             input_model=GetJobInput,
             handler=get_job,
+            output_model=Nl2SqlJobResult,
             permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
         ),
     ]

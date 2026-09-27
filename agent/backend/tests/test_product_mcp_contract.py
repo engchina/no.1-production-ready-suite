@@ -19,8 +19,12 @@ from app.features.agent.tools import (
     ExternalNl2SqlGetJobInput,
     ExternalNl2SqlInput,
     ExternalRagChatInput,
+    ExternalRagChatOutput,
     ExternalRagListBusinessViewsInput,
+    ExternalRagListBusinessViewsOutput,
     ExternalRagSearchInput,
+    ExternalRagSearchOutput,
+    Nl2SqlJobResult,
 )
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
@@ -57,3 +61,63 @@ def test_agent_arguments_fit_product_mcp_contract(
     always_sent = {"row_limit"} if tool_name == "nl2sql_query" else set()
     missing = set(schema.get("required", [])) - agent_required - always_sent
     assert not missing, f"契約の必須の引数を必ずは送りません: {sorted(missing)}"
+
+
+# Agent が受け取る出力の model（呼び先の structuredContent を検証する。extra は無視）。
+OUTPUTS: list[tuple[str, str, type[BaseModel]]] = [
+    ("rag", "rag_search", ExternalRagSearchOutput),
+    ("rag", "rag_chat_send_message", ExternalRagChatOutput),
+    ("rag", "rag_list_business_views", ExternalRagListBusinessViewsOutput),
+    ("nl2sql", "nl2sql_query", Nl2SqlJobResult),
+    ("nl2sql", "nl2sql_get_job", Nl2SqlJobResult),
+]
+
+
+def _resolve(node: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
+    """`$ref` と「X または null」を解いた schema。"""
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        return _resolve(defs[ref.rsplit("/", 1)[-1]], defs)
+    options = [item for item in node.get("anyOf", []) if item.get("type") != "null"]
+    if len(options) == 1:
+        return _resolve(options[0], defs)
+    return node
+
+
+def _missing_output_fields(
+    agent: dict[str, Any],
+    product: dict[str, Any],
+    agent_defs: dict[str, Any],
+    product_defs: dict[str, Any],
+    path: str = "",
+) -> list[str]:
+    """Agent が読む項目のうち、呼び先の出力にないもの（入れ子の object・配列の要素もたどる）。"""
+    agent, product = _resolve(agent, agent_defs), _resolve(product, product_defs)
+    missing: list[str] = []
+    if "properties" in agent and "properties" in product:
+        for name, child in agent["properties"].items():
+            if name not in product["properties"]:
+                missing.append(f"{path}{name}")
+                continue
+            missing += _missing_output_fields(
+                child, product["properties"][name], agent_defs, product_defs, f"{path}{name}."
+            )
+    elif "items" in agent and "items" in product:
+        missing += _missing_output_fields(
+            agent["items"], product["items"], agent_defs, product_defs, f"{path}[]."
+        )
+    return missing
+
+
+@pytest.mark.parametrize(("product", "tool_name", "model"), OUTPUTS)
+def test_agent_output_models_fit_product_mcp_contract(
+    product: str, tool_name: str, model: type[BaseModel]
+) -> None:
+    """呼び先の出力の項目名が変わると、Agent は既定値のまま気づけないため契約で確かめる（#250）。"""
+    output_schema = _contract_tool(product, tool_name).get("outputSchema")
+    assert output_schema is not None, f"{tool_name} の契約に outputSchema がありません"
+    agent_schema = model.model_json_schema()
+    missing = _missing_output_fields(
+        agent_schema, output_schema, agent_schema.get("$defs", {}), output_schema.get("$defs", {})
+    )
+    assert not missing, f"呼び先の出力にない項目を読みます: {missing}"

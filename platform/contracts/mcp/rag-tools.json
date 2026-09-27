@@ -30,6 +30,80 @@
       },
       "annotations": {
         "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ConversationMessageItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "role": {
+                "title": "Role",
+                "type": "string"
+              },
+              "content": {
+                "title": "Content",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "content",
+              "created_at"
+            ],
+            "title": "ConversationMessageItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "business_view_id": {
+            "title": "Business View Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/ConversationMessageItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "business_view_id",
+          "status",
+          "messages"
+        ],
+        "title": "ConversationOutput",
+        "type": "object"
       }
     },
     {
@@ -96,6 +170,100 @@
       },
       "annotations": {
         "readOnlyHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "RagCitation": {
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "text": {
+                "description": "根拠の本文（先頭 1000 文字）。",
+                "title": "Text",
+                "type": "string"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "text"
+            ],
+            "title": "RagCitation",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/RagCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer",
+          "trace_id",
+          "guardrail_warnings",
+          "citations",
+          "conversation_id",
+          "message_id"
+        ],
+        "title": "ChatSendMessageOutput",
+        "type": "object"
       }
     },
     {
@@ -132,6 +300,64 @@
       },
       "annotations": {
         "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "BusinessViewItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "status": {
+                "title": "Status",
+                "type": "string"
+              },
+              "knowledge_base_count": {
+                "title": "Knowledge Base Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status",
+              "knowledge_base_count"
+            ],
+            "title": "BusinessViewItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "business_views": {
+            "items": {
+              "$ref": "#/$defs/BusinessViewItem"
+            },
+            "title": "Business Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "business_views"
+        ],
+        "title": "ListBusinessViewsOutput",
+        "type": "object"
       }
     },
     {
@@ -202,6 +428,90 @@
       },
       "annotations": {
         "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "RagCitation": {
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "text": {
+                "description": "根拠の本文（先頭 1000 文字）。",
+                "title": "Text",
+                "type": "string"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "text"
+            ],
+            "title": "RagCitation",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/RagCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answer",
+          "trace_id",
+          "guardrail_warnings",
+          "citations"
+        ],
+        "title": "SearchOutput",
+        "type": "object"
       }
     }
   ]

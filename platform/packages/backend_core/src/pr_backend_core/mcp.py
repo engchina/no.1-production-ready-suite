@@ -61,6 +61,8 @@ class McpTool:
       同期関数は threadpool で実行する（FastAPI の同期 route と同じ）。
     - `permissions`: すべてのグループを満たすこと（グループ内はどれか 1 つ）。
       例: `(frozenset({"a"}), frozenset({"b"}))` は a と b の両方が必要。
+    - `output_model`: 指定すると `tools/list` に `outputSchema` を出す（#250）。handler はこの形の
+      `structuredContent` を返すこと（呼び出し側と契約で出力の形を確かめられる）。
     """
 
     name: str
@@ -69,17 +71,21 @@ class McpTool:
     handler: Callable[[Any], Any]
     permissions: tuple[frozenset[str], ...] = ()
     read_only: bool = True
+    output_model: type[BaseModel] | None = None
 
     def allowed(self, has_any_permission: HasAnyPermission) -> bool:
         return all(has_any_permission(group) for group in self.permissions)
 
     def descriptor(self) -> dict[str, Any]:
-        return {
+        descriptor: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "inputSchema": self.input_model.model_json_schema(),
             "annotations": {"readOnlyHint": self.read_only},
         }
+        if self.output_model is not None:
+            descriptor["outputSchema"] = self.output_model.model_json_schema(mode="serialization")
+        return descriptor
 
 
 class McpServer:
