@@ -21,10 +21,15 @@ from fastapi import (
     UploadFile,
 )
 from pr_backend_core import ApiResponse
+from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
-from app.security.permissions import FEEDBACK_MANAGE_PERMISSION, PROFILE_MANAGE_PERMISSION
+from app.security.permissions import (
+    FEEDBACK_MANAGE_PERMISSION,
+    PROFILE_MANAGE_PERMISSION,
+    SQL_EXECUTE_PERMISSION,
+)
 from app.security.service import get_security_service
 from app.settings import get_settings
 
@@ -473,9 +478,14 @@ def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL 検索 job を開始する。"""
+    principal = getattr(request.state, "principal", None)
+    # job は生成に加えて SQL を実行する。manifest（生成）に加えて実行の権限も要求する（#242）。
+    if isinstance(principal, Principal) and not principal.has_permission(SQL_EXECUTE_PERMISSION):
+        raise SecurityApiError(
+            403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
+        )
     _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
-        principal = getattr(request.state, "principal", None)
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
         return ApiResponse(
             data=nl2sql_service.start_job(
