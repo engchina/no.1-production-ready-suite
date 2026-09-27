@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,7 @@ from pr_system_settings.auth.migrations import (
     apply_platform_auth_schema,
 )
 from pr_system_settings.auth.service import AuthService
+from pr_system_settings.auth.service_token import issue_service_token, verify_service_token
 from pr_system_settings.auth.store import (
     PRODUCT_ROLE_PERMISSION_TABLES,
     InMemoryAuthStore,
@@ -42,6 +44,7 @@ from pr_system_settings.auth.store import (
 
 ADMIN_PASSWORD = "BootstrapPass!123"
 CONFIGURED_PASSWORD = "Configured123A"  # nosec B105
+SERVICE_SECRET = "x" * 40  # nosec B105 - テスト用の署名鍵
 
 
 @dataclass
@@ -59,6 +62,7 @@ class _Settings:
     app_auth_argon2_time_cost: int = 1
     app_auth_argon2_memory_kib: int = 8
     app_auth_argon2_parallelism: int = 1
+    app_service_token_secret: str = SERVICE_SECRET
 
 
 class _ProductService(AuthService):
@@ -345,7 +349,12 @@ def test_role_permission_codes_rejects_unregistered_tables_and_skips_missing() -
         store.role_permission_codes(["r1"], tables=["PLATFORM_USERS"])
 
 
-def _authorize_app(service: AuthService, *, permissions: frozenset[str] | None) -> Any:
+def _authorize_app(
+    service: AuthService,
+    *,
+    permissions: frozenset[str] | None,
+    service_token_paths: tuple[str, ...] = (),
+) -> Any:
     settings = SimpleNamespace(
         local_debug_enabled=False,
         app_auth_enabled=True,
@@ -369,6 +378,8 @@ def _authorize_app(service: AuthService, *, permissions: frozenset[str] | None) 
             enter_actor=lambda principal: nullcontext(),
             exit_actor=lambda token: None,
             unclassified_permission="__unclassified__",
+            service_token_paths=service_token_paths,
+            service_token_audience="rag",
         ):
             yield
 
@@ -381,6 +392,13 @@ def _authorize_app(service: AuthService, *, permissions: frozenset[str] | None) 
     @app.get("/probe", dependencies=[Depends(dependency)])
     def probe() -> dict[str, bool]:
         return {"ok": True}
+
+    @app.post("/probe", dependencies=[Depends(dependency)])
+    def probe_post(request: Request) -> dict[str, Any]:
+        return {
+            "user_uuid": request.state.principal.user_uuid,
+            "run_id": request.state.service_token_claims.get("run_id"),
+        }
 
     return TestClient(app)
 
@@ -420,3 +438,94 @@ def test_authorize_request_keeps_route_error_codes() -> None:
     assert response.status_code == 401
     assert response.json()["error_code"] == "SECURITY_AUTHENTICATION_REQUIRED"
     assert {ROUTE_FORBIDDEN_CODE, ROUTE_UNCLASSIFIED_CODE} == ROUTE_FORBIDDEN_CODES
+
+
+def test_service_token_round_trip_and_rejections() -> None:
+    """サービストークンは署名・aud・有効期限を確かめる（#230）。"""
+    token = issue_service_token(
+        SERVICE_SECRET, subject="u1", audience="rag", issuer="agent", claims={"run_id": "r1"}
+    )
+    claims = verify_service_token(SERVICE_SECRET, token, audience="rag")
+    assert (claims["sub"], claims["iss"], claims["run_id"]) == ("u1", "agent", "r1")
+
+    def rejected(value: str, *, audience: str = "rag", now: float | None = None) -> int:
+        with pytest.raises(SecurityApiError) as exc:
+            verify_service_token(SERVICE_SECRET, value, audience=audience, now=now)
+        return exc.value.status_code
+
+    assert rejected(token, audience="nl2sql") == 401
+    assert rejected(token + "x") == 401
+    assert rejected("a.b") == 401
+    other = issue_service_token("y" * 40, subject="u1", audience="rag", issuer="agent")
+    assert rejected(other) == 401
+    assert rejected(token, now=time.time() + 120) == 401  # 期限切れ（60 秒 + 許容 30 秒）
+    long_lived = issue_service_token(
+        SERVICE_SECRET, subject="u1", audience="rag", issuer="agent", ttl_seconds=600
+    )
+    assert verify_service_token(SERVICE_SECRET, long_lived, audience="rag")["sub"] == "u1"
+    with pytest.raises(ValueError):
+        issue_service_token(
+            SERVICE_SECRET, subject="u1", audience="rag", issuer="agent", ttl_seconds=601
+        )
+    # 鍵が短い（未設定）なら 503。
+    with pytest.raises(SecurityApiError) as exc:
+        verify_service_token("", token, audience="rag")
+    assert exc.value.status_code == 503
+
+
+def test_authenticate_service_token_uses_current_user_permissions() -> None:
+    service, store = _service()
+    admin = _admin(service)
+    role = service.create_role(role_code="SEARCH", display_name="検索", description="", actor=admin)
+    _grant(store, "rag", role.role_id, "menu.search")
+    user, _ = service.create_user(
+        login_user_id="searcher",
+        display_name="検索者",
+        role_ids=[role.role_id],
+        temporary_password="Kq7#Lomber!Vt29",
+        actor=admin,
+    )
+
+    def token_for(user_uuid: str) -> str:
+        return issue_service_token(
+            SERVICE_SECRET, subject=user_uuid, audience="rag", issuer="agent"
+        )
+
+    # 初回パスワード変更が済んでいない利用者は使えない。
+    with pytest.raises(SecurityApiError) as exc:
+        service.authenticate_service_token(token_for(user.user_uuid), audience="rag")
+    assert exc.value.status_code == 403
+    store.set_password(
+        user.user_uuid, service._hash_password("Kq7#Lomber!Vt29"), force_change=False
+    )
+    principal, claims = service.authenticate_service_token(
+        token_for(user.user_uuid), audience="rag"
+    )
+    assert (principal.user_uuid, principal.permissions) == (user.user_uuid, {"menu.search"})
+    assert claims["iss"] == "agent"
+    with pytest.raises(SecurityApiError) as exc:
+        service.authenticate_service_token(token_for("unknown"), audience="rag")
+    assert exc.value.status_code == 403
+
+
+def test_authorize_request_accepts_service_token_only_on_service_paths() -> None:
+    service, _ = _service()
+    admin = _admin(service)
+    token = issue_service_token(
+        SERVICE_SECRET,
+        subject=admin.user_uuid,
+        audience="rag",
+        issuer="agent",
+        claims={"run_id": "run-1"},
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    client = _authorize_app(service, permissions=None, service_token_paths=("/probe",))
+    # Cookie も CSRF もなしで、token の利用者として通る。
+    response = client.post("/probe", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"user_uuid": admin.user_uuid, "run_id": "run-1"}
+    assert client.post("/probe").status_code == 401
+    assert client.post("/probe", headers={"Authorization": "Bearer bad"}).status_code == 401
+    # サービス用の path でなければ token は使えない（Cookie が必要）。
+    cookie_only = _authorize_app(service, permissions=None)
+    assert cookie_only.post("/probe", headers=headers).status_code == 401

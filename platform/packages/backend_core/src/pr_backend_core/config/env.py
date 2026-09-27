@@ -96,6 +96,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "app_auth_argon2_time_cost",
         "app_auth_argon2_memory_kib",
         "app_auth_argon2_parallelism",
+        # サービス間の token の署名鍵（Agent → RAG / NL2SQL の MCP。#230）
+        "app_service_token_secret",
     }
 )
 
