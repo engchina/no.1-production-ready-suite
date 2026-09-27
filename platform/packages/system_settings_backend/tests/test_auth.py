@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -145,6 +146,27 @@ def test_configured_system_admin_uses_signed_token_without_tables() -> None:
     other = token.replace(service.configured_admin_token_prefix, "other-prefix", 1)
     with pytest.raises(SecurityApiError):
         service.authenticate_session(other)
+
+
+def test_configured_system_admin_reads_and_writes_platform_env_file(tmp_path: Path) -> None:
+    """構成管理者は共通 .env の PLATFORM_ADMIN_* を毎回読み、パスワード変更も書き戻す（#211）。"""
+    env_file = tmp_path / "platform.env"
+    env_file.write_text(
+        "PLATFORM_ADMIN_LOGIN_USER_ID=system_admin\n"
+        f"PLATFORM_ADMIN_LOGIN_USER_PASSWORD={CONFIGURED_PASSWORD}\n",
+        encoding="utf-8",
+    )
+    store = InMemoryAuthStore()
+    service = _ProductService(store, _Settings(app_admin_login_user_password="Unused1234AB"))
+    service._platform_env_file = lambda: env_file  # type: ignore[method-assign]
+
+    principal, _, _ = service.login("system_admin", CONFIGURED_PASSWORD)
+    service.change_password(principal, CONFIGURED_PASSWORD, "Changed1234AB")
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=Changed1234AB" in content
+    assert CONFIGURED_PASSWORD not in content
+    service.login("system_admin", "Changed1234AB")
 
 
 def test_last_system_admin_cannot_be_disabled() -> None:

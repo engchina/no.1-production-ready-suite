@@ -151,12 +151,12 @@ def test_compose_env_injects_oci_enterprise_ai_settings() -> None:
         }
     )
     env = _compose_env(settings)
-    assert env["OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
-    assert env["OCI_ENTERPRISE_AI_API_KEY"] == "sk-secret"
-    assert env["OCI_ENTERPRISE_AI_PROJECT_OCID"] == "ocid1.generativeaiproject.oc1..x"
-    assert env["OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
-    assert env["OCI_ENTERPRISE_AI_DEFAULT_MODEL"] == "xai.grok-4.3"
-    assert env["OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_API_KEY"] == "sk-secret"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"] == "ocid1.generativeaiproject.oc1..x"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"] == "xai.grok-4.3"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
 
 
 def test_compose_env_oci_vlm_model_empty_when_unconfigured() -> None:
@@ -169,15 +169,15 @@ def test_compose_env_oci_vlm_model_empty_when_unconfigured() -> None:
         }
     )
     env = _compose_env(settings)
-    assert env["OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
 
 
 def test_compose_passes_oci_enterprise_ai_env_to_vision_parser() -> None:
     """compose は parser-oci-genai-vision へ ${OCI_ENTERPRISE_AI_*} を渡す。"""
     compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     text = compose.read_text(encoding="utf-8")
-    assert "OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}" in text
-    assert "OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}" in text
+    assert "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL:-}" in text
+    assert "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT: ${PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT:-}" in text
 
 
 def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> None:

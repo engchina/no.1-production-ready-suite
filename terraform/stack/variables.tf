@@ -483,7 +483,7 @@ variable "rag_instance_boot_volume_size" {
 }
 
 variable "rag_app_login_user" {
-  description = "Login user name for the RAG application (AUTH_USERNAME). The backend requires a Cookie session login (AUTH_MODE=production)."
+  description = "Login user name for the RAG application (RAG_AUTH_USERNAME). The backend requires a Cookie session login (RAG_AUTH_MODE=production)."
   type        = string
   default     = "rag_admin"
 
@@ -494,7 +494,7 @@ variable "rag_app_login_user" {
 }
 
 variable "rag_app_login_password" {
-  description = "Login password for the RAG application (AUTH_PASSWORD). Required when deploy_rag is true."
+  description = "Login password for the RAG application (RAG_AUTH_PASSWORD). Required when deploy_rag is true."
   type        = string
   sensitive   = true
   default     = ""
@@ -516,7 +516,7 @@ variable "rag_app_login_password" {
 }
 
 variable "rag_app_auth_cookie_secure" {
-  description = "Send the RAG login session cookie only over HTTPS (AUTH_COOKIE_SECURE). Keep false while the application is served over plain HTTP."
+  description = "Send the RAG login session cookie only over HTTPS (RAG_AUTH_COOKIE_SECURE). Keep false while the application is served over plain HTTP."
   type        = bool
   default     = false
 }
@@ -586,7 +586,7 @@ variable "nl2sql_instance_boot_volume_size" {
 }
 
 variable "nl2sql_app_environment" {
-  description = "NL2SQL application ENVIRONMENT. Direct HTTP deployments use local with DEBUG=false; production requires nl2sql_app_auth_cookie_secure=true."
+  description = "NL2SQL application environment (NL2SQL_ENVIRONMENT). Direct HTTP deployments use local with NL2SQL_DEBUG=false; production requires nl2sql_app_auth_cookie_secure=true (PLATFORM_AUTH_COOKIE_SECURE)."
   type        = string
   default     = "local"
 

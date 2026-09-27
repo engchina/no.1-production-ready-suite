@@ -743,7 +743,7 @@ function AdbManagementCard({
   const start = useStartAdb(api, onDatabaseChanged);
   const stop = useStopAdb(api);
 
-  // ADB OCID は backend/.env を正本とする読み取り専用値。
+  // ADB OCID は platform/.env を正本とする読み取り専用値。
   const ocid = settings.adb_ocid;
   const [region, setRegion] = useState(settings.region || ADB_DEFAULT_REGION);
   const [log, setLog] = useState<AdbOperationLogEntry[]>([]);

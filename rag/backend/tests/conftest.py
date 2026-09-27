@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from app import config as app_config
+from app.api.routes import settings as settings_routes
 from app.clients.oracle import reset_local_store
 from app.config import (
     DEFAULT_MODEL_SETTINGS_FILE,
@@ -38,9 +40,13 @@ def _oracle_db_session() -> None:
 @pytest.fixture(autouse=True)
 def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """各テストで保存先とテスト補助 store を分離する。"""
-    monkeypatch.setenv("MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
-    # モデル設定の API key は JSON と同じ tmp ディレクトリの .env に保存される（#103）。
-    monkeypatch.delenv("OCI_ENTERPRISE_AI_API_KEY", raising=False)
+    monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
+    # 共通 .env（モデルの API key・OCI / DB / 保存先の画面保存先）と RAG の backend/.env
+    # （parser の API key・RAG 固有の画面保存先）は tmp へ分離する（#211）。
+    monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
+    monkeypatch.setattr(app_config, "BACKEND_ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path / ".env")
+    monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_API_KEY", raising=False)
     reset_local_store()
     reset_rate_limiter()
     reset_guardrail_static_cache()

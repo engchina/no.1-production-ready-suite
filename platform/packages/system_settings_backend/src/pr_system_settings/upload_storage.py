@@ -146,19 +146,19 @@ def validate_upload_storage(settings: Any) -> None:
 def persist_upload_storage(settings: Any, env_file: Path) -> None:
     """アップロード保存先を `.env` へ保存する。失敗は 500 に変換する。"""
     values: dict[str, str | None] = {
-        "UPLOAD_STORAGE_BACKEND": settings.upload_storage_backend,
-        "LOCAL_STORAGE_DIR": settings.local_storage_dir,
+        "PLATFORM_UPLOAD_STORAGE_BACKEND": settings.upload_storage_backend,
+        "PLATFORM_LOCAL_STORAGE_DIR": settings.local_storage_dir,
     }
     if settings.upload_storage_backend == "oci":
-        values["OBJECT_STORAGE_REGION"] = settings.object_storage_region
-        values["OBJECT_STORAGE_NAMESPACE"] = settings.object_storage_namespace
-        values["OBJECT_STORAGE_BUCKET"] = settings.object_storage_bucket
+        values["PLATFORM_OBJECT_STORAGE_REGION"] = settings.object_storage_region
+        values["PLATFORM_OBJECT_STORAGE_NAMESPACE"] = settings.object_storage_namespace
+        values["PLATFORM_OBJECT_STORAGE_BUCKET"] = settings.object_storage_bucket
     try:
         write_env_values(env_file, values, section_comment=ENV_SECTION_COMMENT)
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
+            detail="アップロード保存先設定を platform/.env へ保存できませんでした。",
         ) from exc
 
 
@@ -183,7 +183,8 @@ def build_upload_storage_router(
     """`GET/PATCH /upload-storage` の router を作る。製品側で `/settings` 配下に include する。
 
     - `get_settings`：製品の runtime Settings（キャッシュされた同じインスタンス）を返す関数
-    - `env_file`：保存先の `backend/.env` を返す関数（テストで差し替えられるよう呼出時に解決する）
+    - `env_file`：保存先の共通 `.env`（`platform/.env`）を返す関数
+      （テストで差し替えられるよう呼出時に解決する）
     - `write_dependencies`：PATCH にだけ付ける依存関係（例: 管理者権限の確認）
     """
     router = APIRouter()

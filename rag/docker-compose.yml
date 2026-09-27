@@ -31,6 +31,14 @@ x-hf-env: &hf-env
   HF_TOKEN: ${HF_TOKEN:-}
   HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
 
+# 3製品共通の設定（`PLATFORM_*`）は共通 `.env`（リポジトリの platform/.env。#211）に置く。
+# backend / ingestion-worker は platform/ を書き込み可能で mount し、PLATFORM_ENV_FILE で場所を渡す
+# （システム設定画面の保存先。model-settings.json も同じディレクトリに置き、3製品で共有する）。
+# env_file で注入すると環境変数が .env より優先され、画面で保存した値が反映されないため注入しない。
+# lock と一時ファイルを同じディレクトリに作るため、file 単位ではなくディレクトリを mount する。
+x-platform-env: &platform-env
+  PLATFORM_ENV_FILE: /u01/production-ready-platform/.env
+
 services:
   backend:
     build:
@@ -43,20 +51,19 @@ services:
       - path: ./backend/.env
         required: false
     environment:
-      <<: *parser-service-urls
+      <<: [*parser-service-urls, *platform-env]
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
-      ENVIRONMENT: prod
+      RAG_ENVIRONMENT: prod
       LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
-      LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
-      MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
-      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      PLATFORM_LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
+      PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
       RAG_PARSER_SERVICE_TIMEOUT_SECONDS: ${RAG_PARSER_SERVICE_TIMEOUT_SECONDS:-1230}
       # 取込は専用ワーカーへ切り出す。API プロセスはキュー投入のみ行い、
       # event loop を取込処理で塞がない。
-      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
-      INGESTION_QUEUE_INPROCESS_WORKER_ENABLED: "false"
+      RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED: "false"
       # readiness 画面は parser サービスの /health で導入状況・version を表示する。
       RAG_PARSER_READINESS_PROBE_ENABLED: "true"
       # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
@@ -77,6 +84,7 @@ services:
       - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
+      - ../platform:/u01/production-ready-platform
     healthcheck:
       test:
         - CMD
@@ -98,15 +106,14 @@ services:
       - path: ./backend/.env
         required: false
     environment:
-      <<: *parser-service-urls
-      ENVIRONMENT: prod
+      <<: [*parser-service-urls, *platform-env]
+      RAG_ENVIRONMENT: prod
       LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
-      LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
-      MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
-      OCI_CONFIG_FILE: /home/appuser/.oci/config
-      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
-      INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
-      INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED: "false"
+      PLATFORM_LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
+      PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
+      RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      RAG_INGESTION_QUEUE_WORKER_CONCURRENCY: ${RAG_INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
+      RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED: "false"
       RAG_PARSER_SERVICE_TIMEOUT_SECONDS: ${RAG_PARSER_SERVICE_TIMEOUT_SECONDS:-1230}
       # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
       RAG_PREPROCESS_ENABLED: "true"
@@ -122,6 +129,7 @@ services:
       - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
+      - ../platform:/u01/production-ready-platform
 
   # ---- 前処理マイクロサービス(CPU・既定起動、1 変換 = 1 独立サービス)----
   # parse の前に原本を変換する。未達時は backend が passthrough へ安全に縮退する。
@@ -176,11 +184,13 @@ services:
     environment:
       <<: *hf-env
       # DocRAG の Vision 図説明(レシピで有効化時のみ)は openai SDK で OCI Enterprise AI を呼ぶ。
-      OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}
-      OCI_ENTERPRISE_AI_API_KEY: ${OCI_ENTERPRISE_AI_API_KEY:-}
-      OCI_ENTERPRISE_AI_PROJECT_OCID: ${OCI_ENTERPRISE_AI_PROJECT_OCID:-}
-      OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}
-      OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
+      # コンテナ内の変数名は docrag の名前(OCI_ENTERPRISE_AI_*)のまま、値は backend の
+      # _compose_env が渡す共通設定(PLATFORM_OCI_ENTERPRISE_AI_*)から取る。
+      OCI_ENTERPRISE_AI_ENDPOINT: ${PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT:-}
+      OCI_ENTERPRISE_AI_API_KEY: ${PLATFORM_OCI_ENTERPRISE_AI_API_KEY:-}
+      OCI_ENTERPRISE_AI_PROJECT_OCID: ${PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID:-}
+      OCI_ENTERPRISE_AI_VLM_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL:-}
+      OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
     restart: unless-stopped
 
   parser-marker:
@@ -215,8 +225,8 @@ services:
               capabilities: ["gpu"]
 
   # ---- parser マイクロサービス(OCI クラウド・`--profile oci` で opt-in)----
-  # OCI を呼ぶ薄いプロキシ(GPU 不要)。OCI 認証はメイン backend と同じ backend/.env と
-  # ~/.oci マウントを継承する(個別設定なし)。
+  # OCI を呼ぶ薄いプロキシ(GPU 不要)。OCI 認証はメイン backend と同じ共通 .env(platform/.env)・
+  # backend/.env と ~/.oci マウントを継承する(個別設定なし)。
   parser-oci-genai-vision:
     profiles: ["oci"]
     build:
@@ -224,20 +234,22 @@ services:
       dockerfile: services/parsers/oci_genai_vision/Dockerfile
     restart: unless-stopped
     env_file:
+      - path: ../platform/.env
+        required: false
       - path: ./backend/.env
         required: false
     environment:
-      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
       # backend の _compose_env が起動時に注入する実効モデル設定(model-settings.json 由来を含む)。
       # environment は env_file より優先され、これが正本になる。
-      OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}
-      OCI_ENTERPRISE_AI_API_KEY: ${OCI_ENTERPRISE_AI_API_KEY:-}
-      OCI_ENTERPRISE_AI_PROJECT_OCID: ${OCI_ENTERPRISE_AI_PROJECT_OCID:-}
-      OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}
-      OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
-      OCI_ENTERPRISE_AI_VLM_PATH: ${OCI_ENTERPRISE_AI_VLM_PATH:-/responses}
-      OCI_ENTERPRISE_AI_LLM_PATH: ${OCI_ENTERPRISE_AI_LLM_PATH:-/responses}
-      OCI_ENTERPRISE_AI_VLM_INPUT_MODE: ${OCI_ENTERPRISE_AI_VLM_INPUT_MODE:-files_api}
+      PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT: ${PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT:-}
+      PLATFORM_OCI_ENTERPRISE_AI_API_KEY: ${PLATFORM_OCI_ENTERPRISE_AI_API_KEY:-}
+      PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID: ${PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID:-}
+      PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL:-}
+      PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
+      PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH:-/responses}
+      PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH: ${PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH:-/responses}
+      PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE:-files_api}
     volumes:
       - oci-config:/home/appuser/.oci
 
@@ -248,10 +260,12 @@ services:
       dockerfile: services/parsers/oci_document_understanding/Dockerfile
     restart: unless-stopped
     env_file:
+      - path: ../platform/.env
+        required: false
       - path: ./backend/.env
         required: false
     environment:
-      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
     volumes:
       - oci-config:/home/appuser/.oci
 

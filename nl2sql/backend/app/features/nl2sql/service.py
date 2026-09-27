@@ -34,13 +34,14 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
+from app import settings as app_settings
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.security.request_actor import (
     actor_scope,
     current_actor_context,
     current_actor_is_system_admin,
 )
-from app.settings import BACKEND_ENV_FILE, get_settings
+from app.settings import get_settings
 
 from .embedding_client import (
     EmbeddingClientError,
@@ -13080,7 +13081,8 @@ class Nl2SqlService:
         )
 
     def diagnostics(self) -> DiagnosticsData:
-        env = dotenv_values(BACKEND_ENV_FILE)
+        # 接続先は3製品共通の設定なので共通 .env を見る（#211）。
+        env = dotenv_values(app_settings.PLATFORM_ENV_FILE)
 
         def check_present(name: str, label: str) -> DiagnosticCheck:
             value = str(env.get(name) or "").strip()
@@ -13116,13 +13118,13 @@ class Nl2SqlService:
             oracle_live_ok, oracle_live_message = self._oracle_adapter.test_connection()
         persistence_ready, persistence_message = self._store.check()
         checks = [
-            check_present("ORACLE_DSN", "Oracle DSN"),
-            check_present("ORACLE_USER", "Oracle user"),
-            check_present("ORACLE_ADB_OCID", "ADB OCID"),
-            check_present("OCI_REGION", "OCI region"),
-            check_present("OCI_COMPARTMENT_ID", "OCI compartment"),
+            check_present("PLATFORM_ORACLE_DSN", "Oracle DSN"),
+            check_present("PLATFORM_ORACLE_USER", "Oracle user"),
+            check_present("PLATFORM_ORACLE_ADB_OCID", "ADB OCID"),
+            check_present("PLATFORM_OCI_REGION", "OCI region"),
+            check_present("PLATFORM_OCI_COMPARTMENT_ID", "OCI compartment"),
             DiagnosticCheck(
-                name="OCI_ENTERPRISE_AI_ENDPOINT",
+                name="PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
                 status="ok" if settings.oci_enterprise_ai_endpoint.strip() else "warning",
                 message=(
                     "OCI Enterprise AI endpoint は設定済みです。"
@@ -13131,7 +13133,7 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="OCI_ENTERPRISE_AI_API_KEY",
+                name="PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
                 status="ok" if settings.oci_enterprise_ai_api_key.strip() else "warning",
                 message=(
                     "OCI Enterprise AI API key は設定済みです。"
@@ -13140,7 +13142,7 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="OCI_ENTERPRISE_AI_LLM_MODEL",
+                name="PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL",
                 status="ok" if self._enterprise_ai_client.model_id() else "warning",
                 message=(
                     f"OCI Enterprise AI LLM model は {self._enterprise_ai_client.model_id()} です。"
@@ -13270,7 +13272,7 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="OCI_GENAI_ENDPOINT",
+                name="PLATFORM_OCI_GENAI_ENDPOINT",
                 status=(
                     "ok"
                     if settings.oci_genai_endpoint.strip()
@@ -13288,7 +13290,7 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="OCI_GENAI_EMBED_MODEL_ID",
+                name="PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
                 status="ok" if settings.oci_genai_embed_model_id.strip() else "warning",
                 message=(
                     f"OCI GenAI embedding model は {settings.oci_genai_embed_model_id} です。"
@@ -13523,9 +13525,9 @@ class Nl2SqlService:
             )
 
         enterprise_model_name = (
-            "OCI_ENTERPRISE_AI_DEFAULT_MODEL"
+            "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"
             if settings.oci_enterprise_ai_default_model.strip()
-            else "OCI_ENTERPRISE_AI_LLM_MODEL"
+            else "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"
         )
 
         return [
@@ -13542,23 +13544,23 @@ class Nl2SqlService:
                     "OCI Enterprise AI endpoint / API key / model を設定してください。",
                 ),
                 required_env_vars=[
-                    env_var("OCI_ENTERPRISE_AI_ENDPOINT"),
-                    env_var("OCI_ENTERPRISE_AI_API_KEY"),
-                    env_var("OCI_ENTERPRISE_AI_LLM_MODEL"),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_API_KEY"),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"),
                 ],
                 optional_env_vars=[
-                    env_var("OCI_ENTERPRISE_AI_PROJECT_OCID", required=False),
-                    env_var("OCI_ENTERPRISE_AI_DEFAULT_MODEL", required=False),
-                    env_var("OCI_ENTERPRISE_AI_LLM_PATH", required=False),
-                    env_var("OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE", required=False),
-                    env_var("OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH", required=False),
                 ],
                 env_template=(
                     "NL2SQL_ENTERPRISE_AI_DIRECT_ENABLED=true\n"
-                    "OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>\n"
-                    "OCI_ENTERPRISE_AI_API_KEY=<enterprise-ai-api-key>\n"
+                    "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>\n"
+                    "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=<enterprise-ai-api-key>\n"
                     f"{enterprise_model_name}=<enterprise-ai-model>\n"
-                    "OCI_ENTERPRISE_AI_LLM_PATH=/responses"
+                    "PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH=/responses"
                 ),
                 smoke_command=(
                     "uv run python scripts/nl2sql_manual_integration.py "
@@ -13582,10 +13584,10 @@ class Nl2SqlService:
                 ),
                 required_env_vars=[
                     env_var("NL2SQL_FEEDBACK_EMBEDDING_ENABLED"),
-                    env_var("OCI_REGION"),
-                    env_var("OCI_COMPARTMENT_ID"),
-                    env_var("OCI_GENAI_ENDPOINT"),
-                    env_var("OCI_GENAI_EMBED_MODEL_ID"),
+                    env_var("PLATFORM_OCI_REGION"),
+                    env_var("PLATFORM_OCI_COMPARTMENT_ID"),
+                    env_var("PLATFORM_OCI_GENAI_ENDPOINT"),
+                    env_var("PLATFORM_OCI_GENAI_EMBED_MODEL_ID"),
                 ],
                 optional_env_vars=[
                     env_var("NL2SQL_FEEDBACK_VECTOR_TABLE", required=False),
@@ -13593,10 +13595,10 @@ class Nl2SqlService:
                 ],
                 env_template=(
                     "NL2SQL_FEEDBACK_EMBEDDING_ENABLED=true\n"
-                    "OCI_REGION=<oci-region>\n"
-                    "OCI_COMPARTMENT_ID=<compartment-ocid>\n"
-                    "OCI_GENAI_ENDPOINT=<oci-genai-endpoint>\n"
-                    "OCI_GENAI_EMBED_MODEL_ID=cohere.embed-v4.0\n"
+                    "PLATFORM_OCI_REGION=<oci-region>\n"
+                    "PLATFORM_OCI_COMPARTMENT_ID=<compartment-ocid>\n"
+                    "PLATFORM_OCI_GENAI_ENDPOINT=<oci-genai-endpoint>\n"
+                    "PLATFORM_OCI_GENAI_EMBED_MODEL_ID=cohere.embed-v4.0\n"
                     "NL2SQL_FEEDBACK_VECTOR_TABLE=NL2SQL_FEEDBACK_VECTORS\n"
                     "NL2SQL_FEEDBACK_VECTOR_INDEX=NL2SQL_FEEDBACK_VEC_IDX"
                 ),
@@ -13626,8 +13628,8 @@ class Nl2SqlService:
                     "release gate を実行してください。"
                 ),
                 required_env_vars=[
-                    env_var("ORACLE_USER"),
-                    env_var("ORACLE_DSN"),
+                    env_var("PLATFORM_ORACLE_USER"),
+                    env_var("PLATFORM_ORACLE_DSN"),
                     env_var("NL2SQL_RUNTIME_MODE"),
                     env_var("NL2SQL_PERSISTENCE_MODE"),
                     env_var("NL2SQL_SELECT_AI_CREDENTIAL_NAME"),
@@ -13763,15 +13765,16 @@ class Nl2SqlService:
                     ""
                     if oracle_ready
                     else (
-                        "NL2SQL_RUNTIME_MODE=oracle と ORACLE_DSN / ORACLE_USER / "
+                        "NL2SQL_RUNTIME_MODE=oracle と "
+                        "PLATFORM_ORACLE_DSN / PLATFORM_ORACLE_USER / "
                         "Wallet 設定を確認してください。"
                     )
                 ),
                 related_checks=[
                     "NL2SQL_RUNTIME_MODE",
-                    "ORACLE_DSN",
-                    "ORACLE_USER",
-                    "ORACLE_ADB_OCID",
+                    "PLATFORM_ORACLE_DSN",
+                    "PLATFORM_ORACLE_USER",
+                    "PLATFORM_ORACLE_ADB_OCID",
                     "PYTHON_ORACLEDB",
                     "ORACLE_RUNTIME_READY",
                 ],
@@ -13834,14 +13837,15 @@ class Nl2SqlService:
                     ""
                     if direct_ready
                     else (
-                        "OCI_ENTERPRISE_AI_ENDPOINT / OCI_ENTERPRISE_AI_API_KEY / "
-                        "OCI_ENTERPRISE_AI_LLM_MODEL を設定してください。"
+                        "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT / "
+                        "PLATFORM_OCI_ENTERPRISE_AI_API_KEY / "
+                        "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL を設定してください。"
                     )
                 ),
                 related_checks=[
-                    "OCI_ENTERPRISE_AI_ENDPOINT",
-                    "OCI_ENTERPRISE_AI_API_KEY",
-                    "OCI_ENTERPRISE_AI_LLM_MODEL",
+                    "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
+                    "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
+                    "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL",
                 ],
             ),
             DiagnosticReadiness(

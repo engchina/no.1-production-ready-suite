@@ -359,12 +359,12 @@ def _render_payload_template(template: str, values: Mapping[str, Any]) -> Mappin
         parsed = json.loads(template)
     except ValueError as exc:
         raise EnterpriseAiDirectError(
-            "OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object で指定してください。"
+            "PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object で指定してください。"
         ) from exc
     rendered = _render_template_value(parsed, values)
     if not isinstance(rendered, Mapping):
         raise EnterpriseAiDirectError(
-            "OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object を返す必要があります。"
+            "PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object を返す必要があります。"
         )
     return rendered
 
@@ -452,7 +452,7 @@ def _select_response_path(payload: object, path: str) -> object:
         return payload
     if not cleaned.startswith("/"):
         raise EnterpriseAiDirectError(
-            "OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH は / で始まる JSON Pointer 形式です。"
+            "PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH は / で始まる JSON Pointer 形式です。"
         )
     current = payload
     for raw_segment in cleaned.split("/")[1:]:

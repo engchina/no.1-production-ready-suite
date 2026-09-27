@@ -98,11 +98,11 @@ def select_ai_object_list_entry(identity: OracleObjectIdentity) -> dict[str, str
 
 WALLET_PASSWORD_REQUIRED_ERROR = (
     "Oracle Wallet がパスワードを必要としています。"  # nosec B105
-    "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
+    "PLATFORM_ORACLE_WALLET_PASSWORD または PLATFORM_ORACLE_PASSWORD を設定してください。"
 )
 DEEPSEC_THIN_ONLY_ERROR = (
     "Oracle Deep Data Security は python-oracledb Thin mode のみ対応です。"
-    "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin にしてください。"
+    "NL2SQL_ORACLE_DEEPSEC_ENABLED=true の場合は PLATFORM_ORACLE_DRIVER_MODE=thin にしてください。"
 )
 THIN_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "ewallet.pem"})
 THICK_WALLET_MTLS_REQUIRED_FILES = frozenset({"tnsnames.ora", "sqlnet.ora", "cwallet.sso"})
@@ -534,7 +534,8 @@ def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
     wallet_dir = settings.resolved_oracle_wallet_dir.strip()
     if not wallet_dir:
         raise OracleAdapterError(
-            "ORACLE_CONNECTION_SECURITY=wallet_mtls では ORACLE_WALLET_DIR が必要です。"
+            "PLATFORM_ORACLE_CONNECTION_SECURITY=wallet_mtls では "
+            "PLATFORM_ORACLE_WALLET_DIR が必要です。"
         )
 
     wallet_path = Path(wallet_dir).expanduser()

@@ -16,6 +16,10 @@
 変わらないもの: `/u01/aipoc/wallet`、`/u01/aipoc/props`、`/u01/aipoc/recovery`、`/u01/data/production-ready-nl2sql`、
 systemd unit 名、Nginx の site 名、DB スキーマ、`backend/.env` の中身。
 
+> #211 以降の版では、3製品共通の設定（`PLATFORM_*`）を `platform/.env` に置き、旧名は読まない。
+> この手順で `backend/.env` を持ち越したあと、[configuration.md](./configuration.md) の
+> 「既存環境の更新手順（#211）」で `platform/.env` へ移してから `update-after-pull.sh` を実行する。
+
 **切替後は旧構成のまま `git-pull.sh` / `update-after-pull.sh` を使わないこと。** 旧 NL2SQL repository は archive 済みで更新されない。
 さらに旧 platform の URL は suite へ redirect され、suite は platform の履歴を引き継いでいるため、旧 `git-pull.sh` は
 旧 platform の checkout に suite 全体（`platform/` `rag/` `nl2sql/` `agent/`）を fast-forward で取り込んでしまう。

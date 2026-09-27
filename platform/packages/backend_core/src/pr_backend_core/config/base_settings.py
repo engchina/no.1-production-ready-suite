@@ -3,8 +3,10 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .env import PlatformEnvSourcesMixin
 
-class BaseServiceSettings(BaseSettings):
+
+class BaseServiceSettings(PlatformEnvSourcesMixin, BaseSettings):
     """3 サービス共通の最小設定。
 
     各サービスはこれを継承し、自分のドメイン設定（OCI/Oracle 接続等）を追加する。

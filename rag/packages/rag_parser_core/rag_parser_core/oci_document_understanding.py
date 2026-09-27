@@ -97,13 +97,17 @@ class OciDocumentUnderstandingConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OciDocumentUnderstandingConfig:
-        """環境変数(backend と同じ OCI_* / OBJECT_STORAGE_* キー)から構築する。"""
+        """環境変数から構築する。
+
+        共通の値は backend と同じ PLATFORM_OCI_* / PLATFORM_OBJECT_STORAGE_*、Document Understanding
+        固有の値は RAG_OCI_DOCUMENT_UNDERSTANDING_* を読む(#211)。
+        """
         src = os.environ if env is None else env
 
         def _get(name: str, default: str = "") -> str:
             return str(src.get(name, default) or default)
 
-        features_raw = _get("OCI_DOCUMENT_UNDERSTANDING_FEATURES").strip()
+        features_raw = _get("RAG_OCI_DOCUMENT_UNDERSTANDING_FEATURES").strip()
         features: Sequence[str]
         if features_raw:
             try:
@@ -117,31 +121,31 @@ class OciDocumentUnderstandingConfig:
             features = list(_DEFAULT_FEATURES)
 
         return cls(
-            compartment_id=_get("OCI_DOCUMENT_UNDERSTANDING_COMPARTMENT_ID"),
-            fallback_compartment_id=_get("OCI_COMPARTMENT_ID"),
-            namespace=_get("OCI_DOCUMENT_UNDERSTANDING_NAMESPACE"),
-            fallback_namespace=_get("OBJECT_STORAGE_NAMESPACE"),
-            input_bucket=_get("OCI_DOCUMENT_UNDERSTANDING_INPUT_BUCKET"),
-            fallback_input_bucket=_get("OBJECT_STORAGE_BUCKET"),
-            output_bucket=_get("OCI_DOCUMENT_UNDERSTANDING_OUTPUT_BUCKET"),
+            compartment_id=_get("RAG_OCI_DOCUMENT_UNDERSTANDING_COMPARTMENT_ID"),
+            fallback_compartment_id=_get("PLATFORM_OCI_COMPARTMENT_ID"),
+            namespace=_get("RAG_OCI_DOCUMENT_UNDERSTANDING_NAMESPACE"),
+            fallback_namespace=_get("PLATFORM_OBJECT_STORAGE_NAMESPACE"),
+            input_bucket=_get("RAG_OCI_DOCUMENT_UNDERSTANDING_INPUT_BUCKET"),
+            fallback_input_bucket=_get("PLATFORM_OBJECT_STORAGE_BUCKET"),
+            output_bucket=_get("RAG_OCI_DOCUMENT_UNDERSTANDING_OUTPUT_BUCKET"),
             input_prefix=_get(
-                "OCI_DOCUMENT_UNDERSTANDING_INPUT_PREFIX", "document-understanding/input"
+                "RAG_OCI_DOCUMENT_UNDERSTANDING_INPUT_PREFIX", "document-understanding/input"
             ),
             output_prefix=_get(
-                "OCI_DOCUMENT_UNDERSTANDING_OUTPUT_PREFIX", "document-understanding/output"
+                "RAG_OCI_DOCUMENT_UNDERSTANDING_OUTPUT_PREFIX", "document-understanding/output"
             ),
-            language=_get("OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "ja"),
+            language=_get("RAG_OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "ja"),
             features=features,
             poll_interval_seconds=_float(
-                _get("OCI_DOCUMENT_UNDERSTANDING_POLL_INTERVAL_SECONDS"), 5.0
+                _get("RAG_OCI_DOCUMENT_UNDERSTANDING_POLL_INTERVAL_SECONDS"), 5.0
             ),
-            timeout_seconds=_float(_get("OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS"), 600.0),
-            oci_config_file=_get("OCI_CONFIG_FILE", "~/.oci/config"),
-            oci_config_profile=_get("OCI_CONFIG_PROFILE", "DEFAULT"),
-            oci_region=_get("OCI_REGION"),
+            timeout_seconds=_float(_get("RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS"), 600.0),
+            oci_config_file=_get("PLATFORM_OCI_CONFIG_FILE", "~/.oci/config"),
+            oci_config_profile=_get("PLATFORM_OCI_CONFIG_PROFILE", "DEFAULT"),
+            oci_region=_get("PLATFORM_OCI_REGION"),
             object_storage_region=_get(
-                "OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION",
-                _get("OCI_REGION") or _get("OBJECT_STORAGE_REGION"),
+                "RAG_OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION",
+                _get("PLATFORM_OCI_REGION") or _get("PLATFORM_OBJECT_STORAGE_REGION"),
             ),
         )
 

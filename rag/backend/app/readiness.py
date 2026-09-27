@@ -59,7 +59,7 @@ def pending_legacy_local_storage_dir(
 ) -> str | None:
     """既定保存先で起動し、旧既定ディレクトリにデータが残っていればそのパスを返す。
 
-    LOCAL_STORAGE_DIR を明示設定している環境、旧ディレクトリが新ディレクトリへの
+    PLATFORM_LOCAL_STORAGE_DIR を明示設定している環境、旧ディレクトリが新ディレクトリへの
     symlink 済み・空・存在しない環境では None を返す。ファイルの移動は行わない。
     """
     try:
@@ -179,5 +179,5 @@ def _is_present(value: str) -> bool:
 
 
 def _is_production(settings: Settings) -> bool:
-    """ENVIRONMENT=production を production 判定に使う。"""
+    """RAG_ENVIRONMENT=production を production 判定に使う。"""
     return settings.environment.strip().lower() == "production"

@@ -18,9 +18,13 @@ import secrets
 import threading
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from dotenv import dotenv_values
+
+from ..env_file import write_env_values
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
 from .domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
@@ -836,12 +840,28 @@ class AuthService:
         self._validate_configured_system_admin_password(password)
         return login_user_id, password
 
+    def _platform_env_file(self) -> Path | None:
+        """構成管理者の資格情報を置く共通 `.env`（#211）。
+
+        製品が返す。None なら Settings（環境変数）だけを使う。
+        """
+        return None
+
     def _configured_system_admin_credentials(self) -> tuple[str, str]:
-        """構成管理者の (login_user_id, password)。製品は `.env` から読むよう上書きできる。"""
-        return (
-            self.settings.app_admin_login_user_id.strip(),
-            self.settings.app_admin_login_user_password,
-        )
+        """構成管理者の (login_user_id, password)。
+
+        画面で変更したパスワードを再起動なしで反映するため、共通 `.env` の値を毎回読む。
+        `.env` になければ Settings（環境変数）の値を使う。
+        """
+        env_file = self._platform_env_file()
+        values = dotenv_values(env_file) if env_file is not None and env_file.is_file() else {}
+        login_user_id = values.get(self.admin_login_env_key)
+        password = values.get(self.admin_password_env_key)
+        if login_user_id is None:
+            login_user_id = self.settings.app_admin_login_user_id
+        if password is None:
+            password = self.settings.app_admin_login_user_password
+        return login_user_id.strip(), password
 
     def _validate_configured_system_admin_password(self, password: str) -> None:
         if (
@@ -871,8 +891,18 @@ class AuthService:
             )
 
     def _write_configured_system_admin_password(self, password: str) -> None:
-        """構成管理者のパスワードを `.env` へ書き戻す。製品が上書きする。"""
-        raise SecurityApiError(409, "構成管理者のパスワードは .env で変更してください。")
+        """構成管理者のパスワードを共通 `.env` へ書き戻す。"""
+        env_file = self._platform_env_file()
+        if env_file is None:
+            raise SecurityApiError(409, "構成管理者のパスワードは .env で変更してください。")
+        write_env_values(
+            env_file,
+            {
+                self.admin_login_env_key: FIXED_ADMIN_LOGIN_USER_ID,
+                self.admin_password_env_key: password,
+            },
+            section_comment="# 構成管理者（共通認証）",
+        )
 
     def _configured_system_admin_principal(
         self,

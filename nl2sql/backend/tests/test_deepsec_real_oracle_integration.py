@@ -56,6 +56,9 @@ pytestmark = pytest.mark.skipif(
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 BACKEND_ENV_FILE = BACKEND_DIR / ".env"
+# 接続設定は3製品共通の設定（PLATFORM_*）なので共通 .env から読む（#211）。
+# conftest が PLATFORM_ENV_FILE を差し替えるため、実環境の既定の場所を直接見る。
+PLATFORM_ENV_FILE = BACKEND_DIR.parents[1] / "platform" / ".env"
 REPORT_FILE = Path("/tmp/nl2sql-deepsec-integration-report.json")
 _IDENTIFIER_RE = re.compile(r"[A-Z][A-Z0-9_$#]{0,127}")
 _REQUIRED_SECURITY_TABLES = frozenset(
@@ -130,12 +133,13 @@ class IterationReport:
 
 
 def _reload_real_backend_env() -> None:
-    if not BACKEND_ENV_FILE.exists():
-        pytest.fail(f"backend/.env が見つかりません: {BACKEND_ENV_FILE}")
-    values = dotenv_values(BACKEND_ENV_FILE)
-    for key, value in values.items():
-        if value is not None:
-            os.environ[str(key)] = str(value)
+    for env_file in (PLATFORM_ENV_FILE, BACKEND_ENV_FILE):
+        if not env_file.exists():
+            pytest.fail(f".env が見つかりません: {env_file}")
+        values = dotenv_values(env_file)
+        for key, value in values.items():
+            if value is not None:
+                os.environ[str(key)] = str(value)
     reset_settings_cache()
     reset_security_service()
     close_oracle_pools()
@@ -194,11 +198,13 @@ def _fetch_dicts(
 def _preflight(real_service: Any, report: IterationReport) -> None:
     settings = get_settings()
     if settings.oracle_driver_mode.strip().lower() != "thin":
-        pytest.fail("ORACLE_DRIVER_MODE=thin が必要です。DeepSec は Thin mode のみ対応です。")
+        pytest.fail(
+            "PLATFORM_ORACLE_DRIVER_MODE=thin が必要です。DeepSec は Thin mode のみ対応です。"
+        )
     if not settings.oracle_deepsec_enabled:
-        pytest.fail("ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+        pytest.fail("NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
     if not settings.oracle_deepsec_data_user_password:
-        pytest.fail("ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
+        pytest.fail("NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD を設定してください。")
     if settings.nl2sql_persistence_mode.strip().lower() != "oracle":
         pytest.fail("NL2SQL_PERSISTENCE_MODE=oracle が必要です。")
 
@@ -407,9 +413,9 @@ def _exercise_config_update_without_real_env_write(
     result = real_service.update_config(password)
     assert result["data_user"] == get_settings().oracle_deepsec_data_user
     env_text = temp_env.read_text(encoding="utf-8")
-    assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER=" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=true" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER=" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=" in env_text
     assert BACKEND_ENV_FILE.read_text(encoding="utf-8") != ""
     report.check("update_config temp env only", str(temp_env))
 

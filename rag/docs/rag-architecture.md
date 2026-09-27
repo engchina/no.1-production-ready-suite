@@ -8,8 +8,8 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 
 1. ドキュメントアップロード
    - API: `POST /api/documents/upload`
-   - 原本は Object Storage 境界へ保存する。`UPLOAD_STORAGE_BACKEND=local` では `local://...` として `LOCAL_STORAGE_DIR` 配下に保存し、`UPLOAD_STORAGE_BACKEND=oci` では Object Storage SDK で `oci://namespace/bucket/key` として保存する。
-   - `MAX_UPLOAD_BYTES` と `ALLOWED_UPLOAD_CONTENT_TYPES` でサイズ・MIME type を制限する。
+   - 原本は Object Storage 境界へ保存する。`PLATFORM_UPLOAD_STORAGE_BACKEND=local` では `local://...` として `PLATFORM_LOCAL_STORAGE_DIR` 配下に保存し、`PLATFORM_UPLOAD_STORAGE_BACKEND=oci` では Object Storage SDK で `oci://namespace/bucket/key` として保存する。
+   - `RAG_MAX_UPLOAD_BYTES` と `RAG_ALLOWED_UPLOAD_CONTENT_TYPES` でサイズ・MIME type を制限する。
    - 原本 bytes から SHA-256 とサイズを計算し、`content_sha256` / `file_size_bytes` として文書行へ保存する。
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
    - upload レスポンスには `source_profile` を含める。`source_profile` は原本ファイル名、正規化後ファイル名、拡張子、保存 MIME type、拡張子から推定した MIME type、サイズ、SHA-256、重複元、原本 modality、推奨 parser profile、テキスト charset、品質警告を返す。
@@ -25,7 +25,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - VLM 出力は `StructuredExtraction` で Pydantic 検証してから保存する。`raw_text` に加えて `elements`（`title` / `text` / `list` / `table` / `figure` / `header` / `footer` 等）を持ち、page number、bbox、section path、confidence、parser metadata を保存できる。
    - `elements` が欠落した旧形式の抽出結果は `raw_text` から軽量推定し、`raw_text` が欠落した構造化結果は検索可能 element から本文を合成する。
    - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と軽量な raw text element 推定に再実装する。
-   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
+   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - `python -m app.rag.enterprise_ai_probe` で LLM/VLM endpoint の request preview と実 response parsing を Oracle / Object Storage から切り離して確認できる。probe 出力には raw prompt、context、OCR 本文、回答本文を含めず、payload shape と parse summary だけを残す。
    - `GET /api/documents/{document_id}/extraction-export?format=json|markdown|html|chunks` で保存済み `StructuredExtraction` を JSON / Markdown / escaped HTML / 非 embedding chunk view として監査できる。DocumentPreviewWorkspace では抽出本文 panel 内の「抽出エクスポート」で同じ 4 形式を切り替えて確認できる。HTML は `tables[].cells` を safe `<table>` として再構成し、row / col / bbox lineage を保持する。Marker / Docling 的な多形式出力はここで本プロジェクト schema へ再マップし、再解析や外部 LLM / vector DB 呼び出しは行わない。
    - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
@@ -53,8 +53,8 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - 実装: `backend/app/clients/oracle.py`
    - 本番は Oracle 26ai AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
    - スキーマ成果物は HNSW 索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)を作成する。
-   - ベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
-   - 検索精度は **Vector Index アダプター(`rag_vector_index_profile`)** で手動選択する。`app/rag/vector_index_adapter.py` が profile を解決し、`balanced`(既定・`ORACLE_VECTOR_TARGET_ACCURACY` をそのまま使用)/ `accurate`(98)/ `fast`(85)で検索時 target accuracy を runtime 即時に切り替える([oracle.py](backend/app/clients/oracle.py) の vector fetch clause へ反映)。推奨 HNSW ビルドパラメータ(neighbors/efconstruction/distance)は `GET/PATCH /api/settings/vector-index` と専用設定画面に参考表示し、適用には索引再作成(`requires_reprovision`)が必要。版管理された schema DDL artifact は自動変更しない。`SearchDiagnostics.vector_index_profile` に残す。
+   - ベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `RAG_ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
+   - 検索精度は **Vector Index アダプター(`rag_vector_index_profile`)** で手動選択する。`app/rag/vector_index_adapter.py` が profile を解決し、`balanced`(既定・`RAG_ORACLE_VECTOR_TARGET_ACCURACY` をそのまま使用)/ `accurate`(98)/ `fast`(85)で検索時 target accuracy を runtime 即時に切り替える([oracle.py](backend/app/clients/oracle.py) の vector fetch clause へ反映)。推奨 HNSW ビルドパラメータ(neighbors/efconstruction/distance)は `GET/PATCH /api/settings/vector-index` と専用設定画面に参考表示し、適用には索引再作成(`requires_reprovision`)が必要。版管理された schema DDL artifact は自動変更しない。`SearchDiagnostics.vector_index_profile` に残す。
    - python-oracledb の共有 pool を遅延初期化し、document/chunk の永続化、集計、状態更新を Oracle table に対して実行する。
    - chunk 保存と vector search の入口でも embedding 幅を再検証する。
    - 検索対象の chunk は `INDEXED` の文書に限定する。
@@ -107,7 +107,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 10. 回答生成
    - LLM は **OCI Enterprise AI**。検索根拠だけを context として渡す。
    - 回答スタイルは **Generation アダプター(`rag_generation_profile`)** で手動選択する。`app/rag/generation_adapter.py` が profile を system prompt 変種へ決定論で解決し、`grounded_concise`(既定・現行 system prompt)/ `detailed_cited`(出典 ID 明示)/ `strict_extractive`(抽出のみ・推測禁止)/ `structured_json`(JSON 構造化出力)/ `bilingual_ja_en`(日英)を `app/clients/oci_enterprise_ai.py` の `generate` / `generate_stream` へ渡す。追加 LLM 呼び出しや別 provider は導入しない。`GET/PATCH /api/settings/generation` と専用設定画面で切替。`SearchDiagnostics.generation_profile` に残す。
-   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
+   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - retrieval / rerank 後に citation が 0 件の場合は LLM を呼ばず、固定の no-results 回答と warning を返す。
    - generation context は rerank 後の上位 chunk を `RAG_CONTEXT_WINDOW_CHARS` に収めて作り、レスポンスと監査ログの `citations` には実際に context へ入った chunk だけを含める。
@@ -277,4 +277,4 @@ document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-
 
 ## Trace export
 
-`record_trace_span()` は構造化ログへ `rag_trace_span` を出し、`TRACE_EXPORT_HTTP_ENDPOINT` が設定されている場合は同じ脱機密化済み event を非同期 HTTP JSON で OpenTelemetry / Langfuse gateway へ送信する。export 対象は `trace_id`、stage 名、outcome、duration、低 cardinality attributes、`error_type` のみで、query 本文、context 本文、OCR 原文、prompt、例外 message は含めない。export queue が満杯または送信失敗しても RAG pipeline は継続し、失敗は `app.trace` logger の `rag_trace_export_*` イベントで確認する。
+`record_trace_span()` は構造化ログへ `rag_trace_span` を出し、`RAG_TRACE_EXPORT_HTTP_ENDPOINT` が設定されている場合は同じ脱機密化済み event を非同期 HTTP JSON で OpenTelemetry / Langfuse gateway へ送信する。export 対象は `trace_id`、stage 名、outcome、duration、低 cardinality attributes、`error_type` のみで、query 本文、context 本文、OCR 原文、prompt、例外 message は含めない。export queue が満杯または送信失敗しても RAG pipeline は継続し、失敗は `app.trace` logger の `rag_trace_export_*` イベントで確認する。

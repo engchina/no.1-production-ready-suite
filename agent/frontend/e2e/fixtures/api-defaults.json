@@ -31,7 +31,7 @@
       "name": "OpenClaw",
       "kind": "openclaw",
       "base_url": "http://runtime-openclaw:18789",
-      "auth_secret_ref": "OPENCLAW_GATEWAY_TOKEN",
+      "auth_secret_ref": "AGENT_OPENCLAW_GATEWAY_TOKEN",
       "managed_service_id": "runtime-openclaw",
       "capabilities": {
         "stream_events": true,
@@ -51,7 +51,7 @@
       "name": "Hermes",
       "kind": "hermes",
       "base_url": "http://runtime-hermes:8642",
-      "auth_secret_ref": "HERMES_API_SERVER_KEY",
+      "auth_secret_ref": "AGENT_HERMES_API_SERVER_KEY",
       "managed_service_id": "runtime-hermes",
       "capabilities": {
         "stream_events": true,
@@ -71,7 +71,7 @@
       "name": "DeerFlow",
       "kind": "deerflow",
       "base_url": "http://runtime-deerflow:2026",
-      "auth_secret_ref": "DEER_FLOW_INTERNAL_AUTH_TOKEN",
+      "auth_secret_ref": "AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN",
       "managed_service_id": "runtime-deerflow",
       "capabilities": {
         "stream_events": true,

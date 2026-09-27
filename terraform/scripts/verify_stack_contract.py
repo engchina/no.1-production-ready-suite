@@ -9,6 +9,7 @@ stdlib だけで動かす（CI と release workflow で追加依存なしに実�
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import stat
 import sys
@@ -95,53 +96,35 @@ RAG_OPTIONAL_COMPOSE_SERVICES = [
     "parser-oci-genai-vision",
     "parser-oci-document-understanding",
 ]
-# docker-compose.yml の environment が正本の key。RAG の env_file に書くと compose の値に隠れて誤解を招く。
-RAG_COMPOSE_OWNED_ENV_KEYS = {"ENVIRONMENT", "LOCAL_STORAGE_DIR", "MODEL_SETTINGS_FILE", "OCI_CONFIG_FILE"}
+# docker-compose.yml の environment が正本の key。RAG の .env に書くと compose の値に隠れて誤解を招く。
+RAG_COMPOSE_OWNED_ENV_KEYS = {
+    "RAG_ENVIRONMENT",
+    "PLATFORM_LOCAL_STORAGE_DIR",
+    "PLATFORM_MODEL_SETTINGS_FILE",
+    "PLATFORM_OCI_CONFIG_FILE",
+}
 
-# 製品ごとの backend/.env に必ず書く値。
+# 製品ごとの backend/.env（製品接頭辞。#211）に必ず書く値。
 REQUIRED_BACKEND_ENV_LINES = {
     # RAG の env_file は compose が `$` を展開するため、入力由来の値を single quote で囲む。
     "rag": [
-        "AUTH_MODE=production\n",
-        "AUTH_USERNAME='${var.rag_app_login_user}'\n",
-        "AUTH_PASSWORD='${var.rag_app_login_password}'\n",
-        "AUTH_SESSION_SECRET=\n",
-        "AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n",
-        "AUDIT_CONTEXT_HASH_SALT=\n",
-        "OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
-        "ORACLE_USER='${local.effective_oracle_user}'\n",
-        "ORACLE_PASSWORD='${local.effective_oracle_password}'\n",
-        "ORACLE_DSN='${local.effective_oracle_dsn}'\n",
-        "ORACLE_CLIENT_LIB_DIR=\n",
-        "ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
-        "ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'\n",
-        "ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
+        "RAG_AUTH_MODE=production\n",
+        "RAG_AUTH_USERNAME='${var.rag_app_login_user}'\n",
+        "RAG_AUTH_PASSWORD='${var.rag_app_login_password}'\n",
+        "RAG_AUTH_SESSION_SECRET=\n",
+        "RAG_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n",
+        "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
         "RAG_PARSER_ADAPTER_BACKEND=unstructured\n",
         "RAG_SERVICE_CONTROL_ENABLED=false\n",
     ],
     "nl2sql": [
-        "APP_ADMIN_LOGIN_USER_ID=${var.nl2sql_app_admin_login_user_id}\n",
-        "APP_ADMIN_LOGIN_USER_PASSWORD=${var.nl2sql_app_admin_login_user_password}\n",
-        "APP_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n",
-        "OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
-        "ORACLE_DRIVER_MODE=thin\n",
-        "ORACLE_CONNECTION_SECURITY=${local.nl2sql_oracle_connection_security}\n",
-        "ORACLE_CLIENT_LIB_DIR=\n",
-        "ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
-        "ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}\n",
-        "ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}\n",
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n",
-        'ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.nl2sql_oracle_deepsec_enabled ? '
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}\n",
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n",
+        'NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.nl2sql_oracle_deepsec_enabled ? '
         'var.nl2sql_oracle_deepsec_data_user_password : ""}\n',
-        "ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
         "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED\n",
     ],
     "agent": [
-        "ORACLE_CLIENT_LIB_DIR=\n",
-        "ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
-        "ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}\n",
-        "ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
-        "OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
         "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}\n",
         "AGENT_RUNTIME_DISPATCH_MODE=in_process\n",
         "AGENT_RUNTIME_ORACLE_DSN=${local.effective_oracle_dsn}\n",
@@ -155,6 +138,35 @@ REQUIRED_BACKEND_ENV_LINES = {
         "AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET=${var.agent_control_plane_mcp_token_secret}\n",
     ],
 }
+# 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
+# python-dotenv の展開を避けるため、DB の入力由来の値は single quote で囲む。
+REQUIRED_PLATFORM_ENV_LINES = [
+    "PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
+    "PLATFORM_ORACLE_USER='${local.effective_oracle_user}'\n",
+    "PLATFORM_ORACLE_PASSWORD='${local.effective_oracle_password}'\n",
+    "PLATFORM_ORACLE_DSN='${local.effective_oracle_dsn}'\n",
+    "PLATFORM_ORACLE_DRIVER_MODE=thin\n",
+    "PLATFORM_ORACLE_CONNECTION_SECURITY=${local.nl2sql_oracle_connection_security}\n",
+    "PLATFORM_ORACLE_CLIENT_LIB_DIR=\n",
+    "PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
+    "PLATFORM_ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'\n",
+    "PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
+]
+# 製品ごとの共通 .env の差分に必ず書く値（NL2SQL は構成管理者と認証ポリシー）。
+REQUIRED_PLATFORM_ENV_PRODUCT_LINES = {
+    "rag": [],
+    "nl2sql": [
+        "PLATFORM_ADMIN_LOGIN_USER_ID=${var.nl2sql_app_admin_login_user_id}\n",
+        "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.nl2sql_app_admin_login_user_password}\n",
+        "PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n",
+    ],
+    "agent": [],
+}
+PRODUCT_ENV_PREFIXES = {"rag": "RAG_", "nl2sql": "NL2SQL_", "agent": "AGENT_"}
+# 共通の属性名の正本（pr_backend_core.config.env.PLATFORM_SETTING_FIELDS）。stdlib だけで読むため AST で取り出す。
+PLATFORM_ENV_MODULE = (
+    REPO_ROOT / "platform" / "packages" / "backend_core" / "src" / "pr_backend_core" / "config" / "env.py"
+)
 SETTINGS_FILES = {
     "rag": REPO_ROOT / "rag" / "backend" / "app" / "config.py",
     "nl2sql": REPO_ROOT / "nl2sql" / "backend" / "app" / "settings.py",
@@ -182,6 +194,7 @@ INIT_SCRIPT_CONTRACTS = {
         "proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
         "proxy_buffering off;",
         "/api/health",
+        '"${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"',
     ],
     "nl2sql": [
         'WALLET_DIR="${APP_ROOT}/wallet"',
@@ -195,6 +208,7 @@ INIT_SCRIPT_CONTRACTS = {
         "production-ready-nl2sql-schema-refresh-worker.service",
         "production-ready-nl2sql-quality-evaluation-worker.service",
         "production-ready-nl2sql-ontology-worker.service",
+        '"${APP_ROOT}/props/platform.env" "${PLATFORM_REPO_DIR}/.env"',
     ],
     "agent": [
         'WALLET_DIR="${APP_ROOT}/wallet"',
@@ -210,6 +224,7 @@ INIT_SCRIPT_CONTRACTS = {
         "uv sync --locked --no-dev --python 3.12",
         '"${PROPS_DIR}/basic_auth_user.txt"',
         '"${PROPS_DIR}/basic_auth_password"',
+        '"${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"',
     ],
 }
 INIT_SCRIPT_ORDER = {
@@ -307,6 +322,48 @@ def _settings_fields(product: str) -> set[str]:
     source = SETTINGS_FILES[product].read_text(encoding="utf-8")
     body = source.split("\nclass Settings(", 1)[1]
     return set(re.findall(r"(?m)^    ([a-z][a-z0-9_]*): ", body)) | BASE_SETTINGS_FIELDS
+
+
+def _platform_setting_fields() -> frozenset[str]:
+    tree = ast.parse(PLATFORM_ENV_MODULE.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "PLATFORM_SETTING_FIELDS" for target in node.targets
+        ):
+            return frozenset(ast.literal_eval(node.value.args[0]))  # type: ignore[attr-defined]
+    raise AssertionError("PLATFORM_SETTING_FIELDS not found in pr_backend_core/config/env.py")
+
+
+def _settings_env_names(product: str) -> tuple[set[str], set[str]]:
+    """製品の Settings の (製品 .env の名前, 共通 .env の名前)。pr_backend_core の規則と同じ。"""
+    platform_fields = _platform_setting_fields()
+    prefix = PRODUCT_ENV_PREFIXES[product]
+    product_names: set[str] = set()
+    platform_names: set[str] = set()
+    for field in _settings_fields(product):
+        name = field.upper()
+        if field in platform_fields:
+            platform_names.add("PLATFORM_" + name.removeprefix("APP_"))
+        else:
+            product_names.add(name if name.startswith(prefix) else prefix + name)
+    return product_names, platform_names
+
+
+def _env_keys(env: str) -> list[str]:
+    return re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", env)
+
+
+def _platform_env_product(locals_source: str, product: str) -> str:
+    match = re.search(r"(?ms)^  platform_env_product = \{\n(.*?)^  \}$", locals_source)
+    if match is None:
+        raise AssertionError("locals.tf platform_env_product not found")
+    block = match.group(1)
+    if re.search(rf'(?m)^    {product}\s+= ""$', block):
+        return ""
+    heredoc = re.search(rf"(?ms)^    {product}\s+= <<-EOT\n(.*?)^EOT$", block)
+    if heredoc is None:
+        raise AssertionError(f"locals.tf platform_env_product.{product} not found")
+    return heredoc.group(1)
 
 
 def _verify_package_entries(archive: zipfile.ZipFile) -> None:
@@ -577,6 +634,8 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "for product in local.selected_products : product =>",
             "product = product",
             "backend_env = base64gzip(local.backend_envs[product])",
+            "platform_env = base64gzip(local.platform_envs[product])",
+            'for product, extra in local.platform_env_product : product => "${local.platform_env}${extra}"',
             'compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""',
             'basic_auth_password = product == "agent" ? base64gzip(var.agent_app_basic_auth_password) : ""',
             "application_git_ref = var.application_git_ref",
@@ -587,30 +646,56 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
     for product in PRODUCTS:
         _require_all(outputs, [f'output "{product}_application_url"'], context="outputs")
 
+    platform_common = _heredoc(locals_source, "platform_env")
+    _require_all(platform_common, REQUIRED_PLATFORM_ENV_LINES, context="platform/.env (common)")
+    all_platform_names: set[str] = set()
     for product in PRODUCTS:
+        all_platform_names |= _settings_env_names(product)[1]
+    unknown = sorted(key for key in _env_keys(platform_common) if key not in all_platform_names)
+    if unknown:
+        raise AssertionError(f"platform/.env keys are not PLATFORM_ Settings names of any product: {unknown}")
+    if re.search(r"var\.(?:rag|nl2sql|agent)_", platform_common):
+        raise AssertionError("the common platform/.env must not use product inputs")
+
+    for product in PRODUCTS:
+        product_names, platform_names = _settings_env_names(product)
         env = _heredoc(locals_source, f"{product}_backend_env")
         _require_all(env, REQUIRED_BACKEND_ENV_LINES[product], context=f"{product} backend/.env")
-        keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", env)
-        fields = _settings_fields(product)
-        unknown = sorted(key for key in keys if key.lower() not in fields)
+        keys = _env_keys(env)
+        unknown = sorted(key for key in keys if key not in product_names)
         if unknown:
-            raise AssertionError(f"{product} backend/.env keys are not Settings fields: {unknown}")
+            raise AssertionError(f"{product} backend/.env keys are not {product} Settings names: {unknown}")
         duplicated = sorted({key for key in keys if keys.count(key) > 1})
         if duplicated:
             raise AssertionError(f"{product} backend/.env keys are duplicated: {duplicated}")
+        extra = _platform_env_product(locals_source, product)
+        _require_all(extra, REQUIRED_PLATFORM_ENV_PRODUCT_LINES[product], context=f"{product} platform/.env")
+        platform_keys = _env_keys(platform_common) + _env_keys(extra)
+        unknown = sorted(key for key in _env_keys(extra) if key not in platform_names)
+        if unknown:
+            raise AssertionError(f"{product} platform/.env keys are not {product} Settings names: {unknown}")
+        duplicated = sorted({key for key in platform_keys if platform_keys.count(key) > 1})
+        if duplicated:
+            raise AssertionError(f"{product} platform/.env keys are duplicated: {duplicated}")
         # 他製品の入力が紛れ込んでいないこと。
-        foreign = re.findall(rf"var\.((?!{product}_)(?:rag|nl2sql|agent)_[a-z0-9_]+)", env)
+        foreign = re.findall(rf"var\.((?!{product}_)(?:rag|nl2sql|agent)_[a-z0-9_]+)", env + extra)
         if foreign:
-            raise AssertionError(f"{product} backend/.env uses another product's inputs: {sorted(set(foreign))}")
+            raise AssertionError(f"{product} .env uses another product's inputs: {sorted(set(foreign))}")
+
+    for line in platform_common.splitlines():
+        key, _, value = line.partition("=")
+        if re.search(r"\$\{local\.effective_oracle_(user|password|dsn|wallet)", value):
+            if not (value.startswith("'") and value.endswith("'")):
+                raise AssertionError(f"platform/.env value must be single-quoted: {key}")
 
     rag_env = _heredoc(locals_source, "rag_backend_env")
-    keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", rag_env)
-    compose_owned = sorted(set(keys) & RAG_COMPOSE_OWNED_ENV_KEYS)
+    rag_keys = _env_keys(rag_env) + _env_keys(platform_common) + _env_keys(_platform_env_product(locals_source, "rag"))
+    compose_owned = sorted(set(rag_keys) & RAG_COMPOSE_OWNED_ENV_KEYS)
     if compose_owned:
-        raise AssertionError(f"RAG backend/.env must not set keys owned by docker-compose.yml: {compose_owned}")
+        raise AssertionError(f"RAG .env must not set keys owned by docker-compose.yml: {compose_owned}")
     for line in rag_env.splitlines():
         key, _, value = line.partition("=")
-        if re.search(r"\$\{(var\.rag_app_login_|local\.effective_oracle_(user|password|dsn|wallet))", value):
+        if re.search(r"\$\{var\.rag_app_login_", value):
             if not (value.startswith("'") and value.endswith("'")):
                 raise AssertionError(f"RAG backend/.env value must be single-quoted: {key}")
 
@@ -669,7 +754,11 @@ def _verify_bootstrap(bootstrap: str) -> None:
         ],
         context="Compute bootstrap",
     )
-    for secret_path in ("/u01/aipoc/props/backend.env", "/u01/aipoc/props/wallet.zip"):
+    for secret_path in (
+        "/u01/aipoc/props/backend.env",
+        "/u01/aipoc/props/platform.env",
+        "/u01/aipoc/props/wallet.zip",
+    ):
         if not re.search(
             rf'(?ms)path: "{re.escape(secret_path)}"\n    permissions: "0600"\n    owner: "root:root"\n',
             bootstrap,

@@ -13,6 +13,7 @@ The Resource Manager inputs for NL2SQL are prefixed with `nl2sql_`
 ## Runtime Notes
 
 The bootstrap script writes `/u01/aipoc/no.1-production-ready-suite/nl2sql/backend/.env`
+and `/u01/aipoc/no.1-production-ready-suite/platform/.env` (both `0600`)
 on the instance and starts in the background from cloud-init, matching the
 proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
 `/var/log/cloud-init-custom.log` and `/var/log/nl2sql-init.log` until the
@@ -44,18 +45,18 @@ sudo systemctl enable --now production-ready-nl2sql-ontology-worker
 ```
 
 The configured `SYSTEM_ADMIN` login comes from the application administrator
-values supplied in Resource Manager:
+values supplied in Resource Manager, written to `platform/.env`:
 
-- `APP_ADMIN_LOGIN_USER_ID=system_admin`
-- `APP_ADMIN_LOGIN_USER_PASSWORD`
+- `PLATFORM_ADMIN_LOGIN_USER_ID=system_admin`
+- `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`
 
 Deep Data Security is enabled by default in Terraform deployments. If
-`nl2sql_oracle_deepsec_enabled=false`, `ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
+`nl2sql_oracle_deepsec_enabled=false`, `NL2SQL_ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
 password is written empty:
 
-- `ORACLE_DEEPSEC_ENABLED` (`true` by default)
-- `ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER`
-- `ORACLE_DEEPSEC_DATA_USER_PASSWORD`
+- `NL2SQL_ORACLE_DEEPSEC_ENABLED` (`true` by default)
+- `NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER`
+- `NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD`
 
 After deployment, open `システム設定 > Deep Data Security`, apply the V001 steps in
 order, then run the Data Grant verification.
@@ -79,30 +80,51 @@ This configured administrator is independent from the database connection user,
 does not read from `PLATFORM_USERS`, and does not require the auth/RBAC tables
 to exist. Application-local users are checked from `PLATFORM_USERS`. The
 configured administrator password can be changed from the application password
-change screen; the backend writes the new value back to `backend/.env`.
+change screen; the backend writes the new value back to `platform/.env`.
 
 When `adb_deployment_mode` selects an existing ADB (`既存の Autonomous AI
 Database を選択`, or legacy `USE_EXISTING`), the stack does not create any ADB
 resource. It generates a wallet from the selected existing ADB OCID and writes the
-database values into `backend/.env`:
+database values into `platform/.env`:
 
-- `ORACLE_USER`
-- `ORACLE_PASSWORD`
-- `ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
+- `PLATFORM_ORACLE_USER`
+- `PLATFORM_ORACLE_PASSWORD`
+- `PLATFORM_ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
   when left blank)
-- `ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
+- `PLATFORM_ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
   otherwise `walletless_tls`)
-- `ORACLE_WALLET_PASSWORD` (reuses `existing_oracle_password`)
-- `ORACLE_ADB_OCID`
-- `ORACLE_ADB_REGION`
+- `PLATFORM_ORACLE_WALLET_PASSWORD` (reuses `existing_oracle_password`)
+- `PLATFORM_ORACLE_ADB_OCID`
+- `PLATFORM_ORACLE_ADB_REGION`
 
 The Resource Manager form hides the application environment and auth cookie
 security inputs. Direct HTTP deployments keep the internal defaults
-`nl2sql_app_environment=local`, `DEBUG=false`, and `nl2sql_app_auth_cookie_secure=false`.
+`nl2sql_app_environment=local` (`NL2SQL_ENVIRONMENT`), `NL2SQL_DEBUG=false`, and `nl2sql_app_auth_cookie_secure=false` (`PLATFORM_AUTH_COOKIE_SECURE`).
 If you override these Terraform variables outside the form for HTTPS, use
 `nl2sql_app_environment=production` with `nl2sql_app_auth_cookie_secure=true`.
 
 ## Updating an Existing Compute Deployment
+
+### Moving to the shared `platform/.env` (#211)
+
+Deployments created before #211 keep every setting in `backend/.env` with the
+old unprefixed names (`ORACLE_DSN`, `OCI_REGION`, `APP_ADMIN_*`, ...). The
+backend no longer reads those names. Before running `update-after-pull.sh` on
+such an instance, stop the backend and workers, pull the source, and move the
+settings once:
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite
+uv run --project platform/packages/backend_core \
+  python platform/scripts/migrate_env_to_platform.py --product nl2sql          # review
+uv run --project platform/packages/backend_core \
+  python platform/scripts/migrate_env_to_platform.py --product nl2sql --apply  # rewrite
+sudo chown ubuntu:ubuntu platform/.env && sudo chmod 0600 platform/.env
+```
+
+Then run `./scripts/update-after-pull.sh` as below. See
+[docs/configuration.md](../docs/configuration.md) (「既存環境の更新手順（#211）」)
+for details.
 
 After manually pulling the required repositories, run the post-pull update
 script as the `ubuntu` user when passwordless sudo is available. The script uses
@@ -112,7 +134,7 @@ existing root-capable path with `sudo ./scripts/update-after-pull.sh`. In root
 mode, dependency synchronization, frontend builds, and database CLIs are still
 executed as `ubuntu`; only systemd, snapshots, logging, and permission repair
 retain root privileges. The script does not run Git commands and does not
-rewrite `backend/.env`, the Wallet contents, systemd units, or the Nginx
+rewrite `backend/.env`, `platform/.env`, the Wallet contents, systemd units, or the Nginx
 configuration.
 
 ```bash
@@ -143,8 +165,9 @@ Only after those steps succeed does it enter the maintenance window.
 Before stopping services, mutating modes create a root-only snapshot below
 `/u01/aipoc/recovery`. They then enforce `/u01/aipoc` as `root:ubuntu 0775`,
 `/u01/aipoc/wallet` as `ubuntu:ubuntu 0700`, and Wallet files, the install lock,
-and `backend/.env` as `0600`. `ORACLE_WALLET_DIR` remains fixed at
-`/u01/aipoc/wallet`; the `.env` file is parsed without sourcing secret values.
+`backend/.env`, and `platform/.env` as `0600`. `PLATFORM_ORACLE_WALLET_DIR` in
+`platform/.env` remains fixed at `/u01/aipoc/wallet`; the `.env` file is parsed
+without sourcing secret values.
 System and security migrations are idempotent. The script never deletes
 `.wallet.tmp-*` or `.wallet.backup-*`, never recreates the schema, and never
 applies the administrator-confirmed DeepSec foundation plan.
@@ -238,7 +261,7 @@ The cloud-init bootstrap:
 1. Installs Nginx, Node.js 24, uv, and build dependencies.
 2. Clones the suite monorepo (NL2SQL and the shared platform) once.
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
-4. Writes the runtime `backend/.env`.
+4. Writes the runtime `backend/.env` and the shared `platform/.env`.
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
 6. Keeps `/u01/aipoc/wallet` at `ubuntu:ubuntu 0700` with files at `0600`, and
    sets `/u01/aipoc` to `root:ubuntu 0775` for Wallet install locks and atomic

@@ -35,28 +35,39 @@ Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql`
 - `adb_deployment_mode` で「新規 Autonomous AI Database の作成」か「既存の Autonomous AI Database を選択」を選びます。
   - 新規: 既定の DB 名は `SUITEADB`、workload は `OLTP`（RAG の取込・Agent の Runtime checkpoint が継続して書き込むため）、ECPU は `2`。
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。
-  - 既存: ADB の OCID と、全製品の `ORACLE_USER` / `ORACLE_PASSWORD` に書く値を入力します。`ORACLE_DSN` は空なら `<db_name>_high` です。
+  - 既存: ADB の OCID と、全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値を入力します。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
     stack は既存 ADB から Wallet を生成するだけで、ネットワーク・アクセス・mTLS・ACL は変更しません。
-- 新規 ADB の場合、全製品が `ADMIN` で接続します。製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_` の接頭辞で分かれているため、同じスキーマでも衝突しません。
+- 新規 ADB の場合、全製品が `ADMIN` で接続します。製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_`、3製品で共有するユーザー・ロール・セッションのテーブルは `PLATFORM_` の接頭辞で分かれているため、同じスキーマでも衝突しません（#212）。
 - ネットワーク・アクセス（既定はプライベート・エンドポイント）の画面構成は Autonomous AI Database の作成画面に合わせています。
   **Compute は全製品で同じ subnet に置きます。** ACL（許可された IP および VCN）を使う場合は、その subnet（または VCN）を許可してください。
   プライベート・エンドポイントの場合は、Compute の subnet から ADB へ TCP `1522` で到達できる必要があります。
-- DB の password / user / DSN に single quote は使えません（RAG の `backend/.env` は値を single quote で囲むため、全製品で同じ規則にしています）。
+- DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
 - ADB の DDL は Terraform にも cloud-init にも持ちません。各製品の `init_script.sh` がアプリの CLI（冪等）で作成・更新します。
 
 ## 製品ごとの入力と instance 上の構成
 
 AI の設定（OCI 認証、OCI Enterprise AI、埋め込み / リランクなど）は stack では受け取りません。起動後に各アプリのシステム設定で行います。
-stack は secret を cloud-init に埋め込んで `backend/.env` を作るため、Resource Manager の stack・job 履歴・state は機密として扱ってください。
+stack は secret を cloud-init に埋め込んで `backend/.env` と共通 `platform/.env` を作るため、Resource Manager の stack・job 履歴・state は機密として扱ってください。
+
+### 設定ファイル（#211）
+
+各 Compute には2つの `.env` を置きます。どちらも cloud-init が `/u01/aipoc/props/` に書き、各製品の `init_script.sh` がリポジトリへ配置します（0600）。
+
+| ファイル | 内容 | 接頭辞 |
+|---|---|---|
+| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・モデル設定の場所、NL2SQL では構成管理者と認証ポリシー）。システム設定画面の保存先でもあるため、既にあれば上書きしない | `PLATFORM_` |
+| `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
+
+変数名の規則と既存環境の移行は [AGENTS.md](../AGENTS.md) の「設定（`.env`）とデータベース object の命名」と各製品の配備ドキュメントを参照してください。
 
 ### RAG（`deploy_rag`）
 
 RAG は文書の前処理と解析を独立したマイクロサービスで動かすため（parser ごとに依存が大きく異なり、同じ Python 環境に同居できないものもある）、
 Compute に直接インストールせず [`rag/docker-compose.yml`](../rag/docker-compose.yml) を使います。
 
-- ログイン: backend の Cookie session login（`AUTH_MODE=production`）。`rag_app_login_user`（既定 `rag_admin`）→ `AUTH_USERNAME`、
-  `rag_app_login_password`（12〜64 文字、英大文字・小文字・数字を含む）→ `AUTH_PASSWORD`。
-  `rag_app_auth_cookie_secure` は HTTPS の終端を前に置いたら `true` にします。`AUTH_SESSION_SECRET` と `AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
+- ログイン: backend の Cookie session login（`RAG_AUTH_MODE=production`）。`rag_app_login_user`（既定 `rag_admin`）→ `RAG_AUTH_USERNAME`、
+  `rag_app_login_password`（12〜64 文字、英大文字・小文字・数字を含む）→ `RAG_AUTH_PASSWORD`。
+  `rag_app_auth_cookie_secure` は HTTPS の終端を前に置いたら `true` にします。`RAG_AUTH_SESSION_SECRET` と `RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
 - 文書解析は CPU の parser だけを配備します。GPU の parser（MinerU / Dots.OCR / GLM-OCR / Unlimited-OCR）は含めず、
   起動後に「検索・回答設定 > 文書解析」で外部 API として指定します。
 

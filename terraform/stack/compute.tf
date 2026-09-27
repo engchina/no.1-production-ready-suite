@@ -50,7 +50,7 @@ resource "oci_core_instance" "product" {
   lifecycle {
     precondition {
       condition     = each.key != "rag" || trimspace(var.rag_app_login_password) != ""
-      error_message = "rag_app_login_password must be configured when deploy_rag is true. The RAG backend requires a login (AUTH_MODE=production) for the UI and API."
+      error_message = "rag_app_login_password must be configured when deploy_rag is true. The RAG backend requires a login (RAG_AUTH_MODE=production) for the UI and API."
     }
     precondition {
       condition     = each.key != "nl2sql" || trimspace(var.nl2sql_app_admin_login_user_password) != ""

@@ -22,6 +22,7 @@ from pr_system_settings.upload_storage import (
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
+from app import config as app_config
 from app.auth import AuthSession
 from app.clients.external_parser import (
     ENGINE_SPECS,
@@ -187,21 +188,23 @@ from app.schemas.settings import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 OCI_DIRECTORY_MODE = 0o700
+# RAG 固有の設定（`RAG_*`）の保存先。3製品共通の設定（`PLATFORM_*`）は共通 `.env`
+# （app.config.PLATFORM_ENV_FILE）へ保存する（#211）。
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
-# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+# テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
 router.include_router(
     build_upload_storage_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
     )
 )
 # OCI 認証も3製品共通の実装（pr_system_settings.oci。#100）。
 router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
     )
 )
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
@@ -218,7 +221,7 @@ router.include_router(
 router.include_router(
     build_database_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
     )
@@ -948,12 +951,15 @@ def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
 
 
 def _persist_huggingface_settings(settings: Settings) -> None:
-    """HuggingFace 設定を backend/.env へ永続化する(env キーは標準名)。"""
+    """HuggingFace 設定を backend/.env へ永続化する。
+
+    parser コンテナの huggingface_hub へは、サービス管理が HF_TOKEN / HF_ENDPOINT として渡す。
+    """
     _write_env_values(
         BACKEND_ENV_FILE,
         {
-            "HF_TOKEN": settings.huggingface_token,
-            "HF_ENDPOINT": settings.huggingface_endpoint,
+            "RAG_HUGGINGFACE_TOKEN": settings.huggingface_token,
+            "RAG_HUGGINGFACE_ENDPOINT": settings.huggingface_endpoint,
         },
         section_comment="# HuggingFace モデルダウンロード",
         error_detail="HuggingFace 設定を backend/.env へ保存できませんでした。",

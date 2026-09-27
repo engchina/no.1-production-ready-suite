@@ -17,7 +17,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
-os.environ["CORS_ORIGINS"] = '["http://localhost:3002"]'
+os.environ["AGENT_CORS_ORIGINS"] = '["http://localhost:3002"]'
 
 import anyio
 import httpx
@@ -116,7 +116,6 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
         "oci_tenancy_ocid": "",
         "oci_compartment_id": "",
         "model_settings_file": "model-settings.json",
-        "enterprise_ai_api_key": "",
         "oci_enterprise_ai_api_key": "",
         "oracle_user": "",
         "oracle_password": "",
@@ -126,8 +125,6 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
         "oracle_wallet_password": "",
         "oracle_adb_ocid": "",
         "oracle_adb_region": "",
-        "adb_ocid": "",
-        "oracle_region": "",
         "oracle_tcp_connect_timeout_seconds": 10.0,
         "oracle_db_test_timeout_seconds": 15.0,
         "agent_runtime_oracle_password": "",
@@ -985,7 +982,7 @@ def test_oci_settings_save_writes_config_and_env_like_rag(
     config_file = tmp_path / ".oci" / "config"
     env_file = tmp_path / ".env"
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     monkeypatch.setattr(
         agent_router,
@@ -1010,9 +1007,9 @@ def test_oci_settings_save_writes_config_and_env_like_rag(
     assert "user=ocid1.user.oc1..aaaaaaaa" in config_text
     assert "key_file=" + str(key_file) in config_text
     env_text = env_file.read_text(encoding="utf-8")
-    assert "OCI_CONFIG_FILE=" + str(config_file) in env_text
-    assert "OCI_CONFIG_PROFILE=DEFAULT" in env_text
-    assert "OCI_REGION=us-chicago-1" in env_text
+    assert "PLATFORM_OCI_CONFIG_FILE=" + str(config_file) in env_text
+    assert "PLATFORM_OCI_CONFIG_PROFILE=DEFAULT" in env_text
+    assert "PLATFORM_OCI_REGION=us-chicago-1" in env_text
     data = resp.json()["data"]
     assert data["user"] == "ocid1.user.oc1..aaaaaaaa"
     assert data["region"] == "us-chicago-1"
@@ -1026,7 +1023,7 @@ def test_oci_settings_save_does_not_write_empty_defaults_like_rag(
     config_file = tmp_path / ".oci" / "config"
     env_file = tmp_path / ".env"
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     settings = _settings_fixture(oci_config_file=str(config_file), oci_region="us-chicago-1")
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
@@ -1044,7 +1041,7 @@ def test_oci_settings_save_does_not_write_empty_defaults_like_rag(
     assert "region=" not in config_text
     assert "key_file=" not in config_text
     assert settings.oci_region == ""
-    assert "OCI_REGION" not in env_file.read_text(encoding="utf-8")
+    assert "PLATFORM_OCI_REGION" not in env_file.read_text(encoding="utf-8")
 
 
 def test_upload_oci_private_key_writes_pem_like_rag(
@@ -1141,7 +1138,7 @@ def test_upload_database_wallet_extracts_zip_like_rag(
 ) -> None:
     wallet_dir = tmp_path / "wallet"
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     settings = Settings(_env_file=None, oracle_client_lib_dir="", oracle_wallet_dir=str(wallet_dir))
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
     archive = io.BytesIO()
@@ -1178,7 +1175,7 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
     # Agent は Thin mode なので tnsnames.ora と ewallet.pem が必要（NL2SQL と同じ判定。#108）。
     (wallet_dir / "ewallet.pem").write_text(TEST_WALLET_PEM, encoding="utf-8")
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     settings = Settings(
         _env_file=None,
         oracle_user="OLD",
@@ -1204,11 +1201,11 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
 
     assert resp.status_code == 200
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_USER=ADMIN" in env_text
-    assert "ORACLE_PASSWORD=old-password" in env_text
-    assert "ORACLE_DSN=mydb_high" in env_text
-    assert "ORACLE_CLIENT_LIB_DIR=" in env_text
-    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_text
+    assert "PLATFORM_ORACLE_USER=ADMIN" in env_text
+    assert "PLATFORM_ORACLE_PASSWORD=old-password" in env_text
+    assert "PLATFORM_ORACLE_DSN=mydb_high" in env_text
+    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in env_text
+    assert f"PLATFORM_ORACLE_WALLET_DIR={wallet_dir}" in env_text
     assert settings.oracle_wallet_dir == str(wallet_dir)
     data = resp.json()["data"]
     assert data["wallet_dir"] == str(wallet_dir)
@@ -1221,7 +1218,7 @@ def test_adb_settings_save_writes_dedicated_region_env(
 ) -> None:
     env_file = tmp_path / ".env"
     settings = Settings(_env_file=None)
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
 
     class FakeOciDatabaseClient:
@@ -1254,9 +1251,9 @@ def test_adb_settings_save_writes_dedicated_region_env(
     assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..agent"
     assert settings.oracle_adb_region == "ap-tokyo-1"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..agent" in env_text
-    assert "ORACLE_ADB_REGION=ap-tokyo-1" in env_text
-    assert "OCI_REGION=ap-tokyo-1" not in env_text
+    assert "PLATFORM_ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..agent" in env_text
+    assert "PLATFORM_ORACLE_ADB_REGION=ap-tokyo-1" in env_text
+    assert "PLATFORM_OCI_REGION=ap-tokyo-1" not in env_text
 
 
 def test_database_connection_test_uses_oracledb_like_rag(
@@ -1340,7 +1337,7 @@ def test_upload_storage_save_writes_env_like_rag(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     settings = _settings_fixture()
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
 
@@ -1357,11 +1354,11 @@ def test_upload_storage_save_writes_env_like_rag(
 
     assert resp.status_code == 200
     env_text = env_file.read_text(encoding="utf-8")
-    assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
-    assert "OBJECT_STORAGE_REGION=us-chicago-1" in env_text
-    assert "LOCAL_STORAGE_DIR=/var/uploads" in env_text
-    assert "OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in env_text
-    assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
+    assert "PLATFORM_UPLOAD_STORAGE_BACKEND=oci" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_REGION=us-chicago-1" in env_text
+    assert "PLATFORM_LOCAL_STORAGE_DIR=/var/uploads" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
     assert settings.upload_storage_backend == "oci"
     assert settings.object_storage_bucket == "rag-uploads"
 
@@ -1372,7 +1369,7 @@ def test_upload_storage_save_failure_keeps_previous_values(
 ) -> None:
     """保存に失敗したら runtime も GET も保存前の値のまま（#97 の回帰テスト）。"""
     monkeypatch.setattr(
-        agent_router, "BACKEND_ENV_FILE", tmp_path
+        app_settings, "PLATFORM_ENV_FILE", tmp_path
     )  # directory なので書込みに失敗する
     settings = _settings_fixture()
     before = settings.local_storage_dir
@@ -1395,8 +1392,8 @@ def test_model_settings_save_persists_json_and_env_secret(
 ) -> None:
     settings_file = tmp_path / "model-settings.json"
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
-    monkeypatch.delenv("OCI_ENTERPRISE_AI_API_KEY", raising=False)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
+    monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_API_KEY", raising=False)
     settings = Settings(_env_file=None, model_settings_file=str(settings_file))
     app_settings.MODEL_SETTINGS_STORE.load(settings)
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
@@ -1437,9 +1434,11 @@ def test_model_settings_save_persists_json_and_env_secret(
 
     assert resp.status_code == 200
     saved = json.loads(settings_file.read_text(encoding="utf-8"))
-    # API key は JSON ではなく backend/.env に保存する（NL2SQL と同じ。#103）。
+    # API key は JSON ではなく共通 .env（platform/.env）に保存する（#103 / #211）。
     assert "api_key" not in saved["enterprise_ai"]
-    assert "OCI_ENTERPRISE_AI_API_KEY=enterprise-secret" in env_file.read_text(encoding="utf-8")
+    assert "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=enterprise-secret" in env_file.read_text(
+        encoding="utf-8"
+    )
     assert settings.oci_enterprise_ai_models[0].model_id == "enterprise-model"
     assert saved["enterprise_ai"]["default_model_id"] == "enterprise-model"
     assert saved["generative_ai"]["embedding_dim"] == 1536

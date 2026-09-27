@@ -126,7 +126,7 @@ RAG の主な失敗は、検索が少し遅いことよりも、重要な根拠�
 
 | profile | 検索時 target accuracy | 推奨 HNSW ビルド(参考表示) | 索引再作成 |
 |---|---|---|---|
-| `balanced`(既定) | `ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(現行) | 不要 |
+| `balanced`(既定) | `RAG_ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(現行) | 不要 |
 | `accurate` | 98 | NEIGHBORS 48 / EFCONSTRUCTION 800 / COSINE | 要 |
 | `fast` | 85 | NEIGHBORS 16 / EFCONSTRUCTION 300 / COSINE | 要 |
 

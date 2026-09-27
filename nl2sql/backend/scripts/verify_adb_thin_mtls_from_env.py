@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""backend/.env の値だけで ADB Thin + mTLS 接続を検証する単体スクリプト。"""
+"""共通 .env（platform/.env）の値だけで ADB Thin + mTLS 接続を検証する単体スクリプト。
+
+Oracle 26ai の接続設定は3製品共通の設定（PLATFORM_ORACLE_*）なので共通 .env から読む（#211）。
+"""
 
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from dotenv import dotenv_values
+from pr_backend_core.config import platform_env_file
 
 MASKED = "<present>"
 EMPTY = "<empty>"
@@ -32,14 +36,14 @@ PUBLIC_IP_ENDPOINTS = (
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "backend/.env から Oracle ADB Thin + mTLS の接続条件を読み、"
+            "共通 .env（platform/.env）から Oracle ADB Thin + mTLS の接続条件を読み、"
             "socket 到達性と python-oracledb 接続を単体検証します。"
         )
     )
     parser.add_argument(
         "--env-file",
-        default=str(Path(__file__).resolve().parents[1] / ".env"),
-        help="読み込む .env ファイル。既定は backend/.env",
+        default=str(platform_env_file(Path(__file__).resolve().parents[1])),
+        help="読み込む .env ファイル。既定は共通 .env（PLATFORM_ENV_FILE または platform/.env）",
     )
     parser.add_argument(
         "--timeout",
@@ -56,8 +60,8 @@ def main() -> int:
         "--refresh-wallet-from-oci",
         action="store_true",
         help=(
-            "OCI Database API で ADB Wallet を再生成し、ORACLE_WALLET_DIR に設置して "
-            "ORACLE_WALLET_PASSWORD を backend/.env へ保存してから検証します。"
+            "OCI Database API で ADB Wallet を再生成し、PLATFORM_ORACLE_WALLET_DIR に設置して "
+            "PLATFORM_ORACLE_WALLET_PASSWORD を共通 .env へ保存してから検証します。"
         ),
     )
     args = parser.parse_args()
@@ -72,34 +76,34 @@ def main() -> int:
 
     print_header("Environment")
     print(f"env_file={env_file}")
-    print_setting(env, "ORACLE_USER")
-    print_setting(env, "ORACLE_PASSWORD", secret=True)
-    print_setting(env, "ORACLE_DSN")
-    print_setting(env, "ORACLE_DRIVER_MODE")
-    print_setting(env, "ORACLE_CONNECTION_SECURITY")
-    print_setting(env, "ORACLE_CLIENT_LIB_DIR")
-    print_setting(env, "ORACLE_WALLET_DIR")
-    print_setting(env, "ORACLE_WALLET_PASSWORD", secret=True)
-    print_setting(env, "ORACLE_ADB_OCID", secret=True)
-    print_setting(env, "ORACLE_ADB_REGION")
+    print_setting(env, "PLATFORM_ORACLE_USER")
+    print_setting(env, "PLATFORM_ORACLE_PASSWORD", secret=True)
+    print_setting(env, "PLATFORM_ORACLE_DSN")
+    print_setting(env, "PLATFORM_ORACLE_DRIVER_MODE")
+    print_setting(env, "PLATFORM_ORACLE_CONNECTION_SECURITY")
+    print_setting(env, "PLATFORM_ORACLE_CLIENT_LIB_DIR")
+    print_setting(env, "PLATFORM_ORACLE_WALLET_DIR")
+    print_setting(env, "PLATFORM_ORACLE_WALLET_PASSWORD", secret=True)
+    print_setting(env, "PLATFORM_ORACLE_ADB_OCID", secret=True)
+    print_setting(env, "PLATFORM_ORACLE_ADB_REGION")
 
-    driver_mode = normalized(env, "ORACLE_DRIVER_MODE", "thin")
-    connection_security = normalized(env, "ORACLE_CONNECTION_SECURITY", "wallet_mtls")
+    driver_mode = normalized(env, "PLATFORM_ORACLE_DRIVER_MODE", "thin")
+    connection_security = normalized(env, "PLATFORM_ORACLE_CONNECTION_SECURITY", "wallet_mtls")
     if driver_mode != "thin":
-        print(f"ERROR: この検証は Thin 専用です。ORACLE_DRIVER_MODE={driver_mode}")
+        print(f"ERROR: この検証は Thin 専用です。PLATFORM_ORACLE_DRIVER_MODE={driver_mode}")
         return 2
     if connection_security != "wallet_mtls":
         print(
             "ERROR: この検証は wallet_mtls 専用です。"
-            f"ORACLE_CONNECTION_SECURITY={connection_security}"
+            f"PLATFORM_ORACLE_CONNECTION_SECURITY={connection_security}"
         )
         return 2
 
-    wallet_dir = Path(value(env, "ORACLE_WALLET_DIR")).expanduser()
-    dsn = value(env, "ORACLE_DSN")
-    user = value(env, "ORACLE_USER")
-    password = value(env, "ORACLE_PASSWORD")
-    wallet_password = value(env, "ORACLE_WALLET_PASSWORD") or password
+    wallet_dir = Path(value(env, "PLATFORM_ORACLE_WALLET_DIR")).expanduser()
+    dsn = value(env, "PLATFORM_ORACLE_DSN")
+    user = value(env, "PLATFORM_ORACLE_USER")
+    password = value(env, "PLATFORM_ORACLE_PASSWORD")
+    wallet_password = value(env, "PLATFORM_ORACLE_WALLET_PASSWORD") or password
     timeout = max(args.timeout, 1.0)
 
     print_header("Wallet")
@@ -181,7 +185,7 @@ def refresh_wallet_from_oci() -> bool:
         from pr_system_settings.oci_database import OciDatabaseClient
 
         from app.clients.oracle import close_oracle_pool
-        from app.settings import BACKEND_ENV_FILE, get_settings
+        from app.settings import PLATFORM_ENV_FILE, get_settings
     except Exception as exc:
         print(f"refresh_wallet_error=import_failed ({type(exc).__name__}: {exc})")
         return False
@@ -211,7 +215,7 @@ def refresh_wallet_from_oci() -> bool:
                 settings,
                 wallet_zip,
                 password,
-                env_file=BACKEND_ENV_FILE,
+                env_file=PLATFORM_ENV_FILE,
                 on_saved=lambda _settings: close_oracle_pool(),
             )
         except Exception as exc:

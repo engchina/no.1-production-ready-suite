@@ -16,8 +16,8 @@ import httpx
 import pytest
 from fastapi import HTTPException, Response
 
+from app import settings as app_settings_module
 from app.features.nl2sql import router as nl2sql_router
-from app.features.nl2sql import service as nl2sql_service_module
 from app.features.nl2sql.models import (
     AdminFeedbackReviewRequest,
     AgentTeamRunRequest,
@@ -3067,11 +3067,11 @@ async def test_reverse_comments_and_diagnostics() -> None:
             "NL2SQL_PERSISTENCE_READY",
             "PYTHON_ORACLEDB",
             "ORACLE_RUNTIME_READY",
-            "OCI_ENTERPRISE_AI_ENDPOINT",
-            "OCI_ENTERPRISE_AI_API_KEY",
-            "OCI_ENTERPRISE_AI_LLM_MODEL",
-            "OCI_GENAI_ENDPOINT",
-            "OCI_GENAI_EMBED_MODEL_ID",
+            "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
+            "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
+            "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL",
+            "PLATFORM_OCI_GENAI_ENDPOINT",
+            "PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
             "NL2SQL_SELECT_AI_PROFILE_REFRESHED",
             "NL2SQL_SELECT_AI_AGENT_ASSETS_REFRESHED",
         } <= check_names
@@ -3112,42 +3112,43 @@ async def test_reverse_comments_and_diagnostics() -> None:
             item for item in config_guides if item["id"] == "enterprise_ai_direct"
         )
         assert (
-            "OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>"
+            "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>"
             in enterprise_guide["env_template"]
         )
-        assert "ORACLE_PASSWORD" not in enterprise_guide["env_template"]
+        assert "PLATFORM_ORACLE_PASSWORD" not in enterprise_guide["env_template"]
         feedback_guide = next(item for item in config_guides if item["id"] == "feedback_embedding")
         required_feedback_env = {item["name"] for item in feedback_guide["required_env_vars"]}
         assert {
             "NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
-            "OCI_GENAI_ENDPOINT",
-            "OCI_GENAI_EMBED_MODEL_ID",
+            "PLATFORM_OCI_GENAI_ENDPOINT",
+            "PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
         } <= required_feedback_env
 
 
-async def test_diagnostics_reads_backend_env_file_not_current_working_directory(
+async def test_diagnostics_reads_platform_env_file_not_current_working_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    backend_env = tmp_path / "backend.env"
-    backend_env.write_text("ORACLE_USER=BACKEND_USER\n", encoding="utf-8")
+    """接続先は3製品共通の設定なので、診断は共通 .env（platform/.env）を見る（#211）。"""
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_ORACLE_USER=SHARED_USER\n", encoding="utf-8")
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / ".env").write_text(
-        "ORACLE_DSN=cwd_dsn\nOCI_REGION=us-chicago-1\n",
+        "PLATFORM_ORACLE_DSN=cwd_dsn\nPLATFORM_OCI_REGION=us-chicago-1\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(run_dir)
-    monkeypatch.setattr(nl2sql_service_module, "BACKEND_ENV_FILE", backend_env)
+    monkeypatch.setattr(app_settings_module, "PLATFORM_ENV_FILE", platform_env)
 
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         diagnostics_resp = await client.get("/api/nl2sql/diagnostics")
 
     assert diagnostics_resp.status_code == 200
     checks = {check["name"]: check for check in diagnostics_resp.json()["data"]["checks"]}
-    assert checks["ORACLE_USER"]["status"] == "ok"
-    assert checks["ORACLE_DSN"]["status"] == "warning"
-    assert checks["OCI_REGION"]["status"] == "warning"
+    assert checks["PLATFORM_ORACLE_USER"]["status"] == "ok"
+    assert checks["PLATFORM_ORACLE_DSN"]["status"] == "warning"
+    assert checks["PLATFORM_OCI_REGION"]["status"] == "warning"
 
 
 async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> None:
