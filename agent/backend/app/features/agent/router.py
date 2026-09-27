@@ -125,6 +125,7 @@ from app.features.agent.tools import (
     ToolDefinitionsData,
     ToolInvocationContext,
     ToolPolicy,
+    ToolPolicyDecision,
     ToolResult,
     ToolsData,
     list_external_mcp_tools,
@@ -1453,7 +1454,15 @@ def _binding_mcp_tool_names(binding: RuntimeBinding) -> set[str]:
         for requirement in skill.mcp_requirements:
             if requirement.server_id == "control-plane":
                 names.update(requirement.tool_names)
-    return names
+    # Binding の MCP は Run と結びつかず承認の記録を作れないため、policy で承認なしに実行できる
+    # ツールだけを公開する（承認が必要・拒否のツールは tools/list に出さず、呼んでも拒否。#244）。
+    policy = _configured_tool_policy()
+    return {
+        name
+        for name in names
+        if (definition := tool_registry.get(name)) is not None
+        and policy.decide(definition) == ToolPolicyDecision.ALLOW
+    }
 
 
 def _json_rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
@@ -1525,7 +1534,11 @@ async def control_plane_mcp(
             return _json_rpc_error(request_id, -32602, "params must be an object")
         name = str(params.get("name", ""))
         if name not in allowed_names:
-            return _json_rpc_error(request_id, -32601, "tool is not allowed by Binding Skills")
+            return _json_rpc_error(
+                request_id,
+                -32601,
+                "tool is not allowed by Binding Skills or requires approval",
+            )
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
             return _json_rpc_error(request_id, -32602, "arguments must be an object")
