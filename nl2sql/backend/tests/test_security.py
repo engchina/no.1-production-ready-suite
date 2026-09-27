@@ -2403,6 +2403,15 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
         allowed_profile_ids={"default"},
         actor=admin,
     )
+    # SQL 生成評価は生成の権限を含み、実行の権限を含まない（#242）。
+    evaluation_role = service.create_role(
+        role_code="EVALUATION_ONLY",
+        display_name="SQL 生成評価のみ",
+        description="",
+        permissions={"menu.evaluation"},
+        entitlements=[],
+        actor=admin,
+    )
     data_role = service.create_role(
         role_code="DATA_MANAGER",
         display_name="データ管理",
@@ -2426,6 +2435,14 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
         display_name="SELECT SQL 実行ユーザー",
         role_ids=[direct_role.role_id],
         password="DirectOnlyPass!123",
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="evaluation.only",
+        display_name="SQL 生成評価ユーザー",
+        role_ids=[evaluation_role.role_id],
+        password="EvaluationOnlyPass!123",
     )
     _create_active_user(
         service,
@@ -2537,6 +2554,16 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                     json={"question": "社員一覧", "profile_id": "default"},
                 )
             ).status_code == 403
+
+            # 生成の権限だけでは、SQL を実行する job を作れない（#242）。
+            _, csrf = await _login_api(client, "evaluation.only", "EvaluationOnlyPass!123")
+            evaluation_job = await client.post(
+                "/api/nl2sql/jobs",
+                headers={"X-CSRF-Token": csrf},
+                json={"question": "社員一覧", "profile_id": "default"},
+            )
+            assert evaluation_job.status_code == 403
+            assert evaluation_job.json()["error_code"] == "SECURITY_ROUTE_FORBIDDEN"
 
             _, csrf = await _login_api(
                 client,
