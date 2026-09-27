@@ -12,7 +12,6 @@ export const ja = {
   "common.dismiss": "閉じる",
   "common.notifications": "通知",
   "common.pageActions": "ページ操作",
-  "common.actions.more": "その他の操作",
   "common.action.refresh": "表示を更新",
   "common.action.schemaRefresh": "DB 構造を再取得",
   "common.schemaRefreshedAt": "DB 構造の最終取得: {date}",

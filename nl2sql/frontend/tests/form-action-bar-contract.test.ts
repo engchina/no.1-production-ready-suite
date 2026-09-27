@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(
-  new URL("../src/components/FormActionBar.tsx", import.meta.url),
+  // 共通部品（packages/ui）へ移した（#226）。
+  new URL("../../../platform/packages/ui/src/components/ui/form-action-bar.tsx", import.meta.url),
   "utf8"
 );
 const floatingSource = readFileSync(
@@ -29,7 +30,7 @@ test("FormActionBar は danger を通常の赤ボタンとして直置きしな�
   assert.match(source, /data-form-action-tone="danger"/u);
   assert.match(source, /tone=/u);
   assert.match(source, /border-t border-border pt-1/u);
-  assert.match(source, /t\("common\.actions\.more"\)/u);
+  assert.match(source, /moreLabel = "その他の操作"/u);
 });
 
 test("FormActionBar の danger menu は ARIA とキーボード契約を持つ", () => {

@@ -1,4 +1,11 @@
-// NL2SQL の components/FormActionBar.tsx を移設（#206）。共有 UI（packages/ui）へ入れるまでの内部部品。
+/**
+ * フォームの操作行（#226。NL2SQL の components/FormActionBar.tsx → system-settings を経て packages/ui へ移設）。
+ *
+ * - primary（保存など）と secondary（キャンセルなど）は直置きし、danger（削除など）は
+ *   「その他の操作」メニューへまとめる（赤いボタンを主操作の隣に直置きしない）。
+ * - `status` は操作行の左側に出す状態（`FormStatus` など）。
+ * - 一覧・詳細の `EntityAction` は `entityActionToFormAction` でそのまま渡せる。
+ */
 import {
   useEffect,
   useId,
@@ -10,16 +17,12 @@ import {
 } from "react";
 import { type LucideIcon } from "lucide-react";
 
-import {
-  Button,
-  buttonVariants,
-  FloatingActionMenu,
-  DisclosureChevron,
-  restoreMenuTriggerFocus,
-  cn,
-  type EntityAction,
-} from "@engchina/production-ready-ui";
-import { t } from "./messages";
+import type { EntityAction } from "../data/object-actions-core";
+import { restoreMenuTriggerFocus } from "../../lib/menu-focus";
+import { cn } from "../../lib/utils";
+import { Button, buttonVariants } from "./button";
+import { DisclosureChevron } from "./disclosure-chevron";
+import { FloatingActionMenu } from "./floating-menu";
 
 
 export interface FormActionDescriptor {
@@ -41,6 +44,8 @@ export interface FormActionBarProps {
   status?: ReactNode;
   ariaLabel: string;
   testId?: string;
+  /** 破壊的操作をまとめるメニューの見出し（既定は「その他の操作」）。 */
+  moreLabel?: string;
 }
 
 /** 一覧・詳細と同じ EntityAction をフォーム操作へ投影する。 */
@@ -185,7 +190,13 @@ function DangerMenuItem({
   );
 }
 
-function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor[] }) {
+function DangerActionsMenu({
+  actions,
+  moreLabel,
+}: {
+  actions: readonly FormActionDescriptor[];
+  moreLabel: string;
+}) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -261,7 +272,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
         data-testid="form-actions-more"
         onClick={() => setOpen((current) => !current)}
       >
-        <span>{t("common.actions.more")}</span>
+        <span>{moreLabel}</span>
         <DisclosureChevron expanded={open} size={16} />
       </Button>
       {open ? (
@@ -296,6 +307,7 @@ export function FormActionBar({
   secondaryActions = [],
   status,
   testId,
+  moreLabel = "その他の操作",
 }: FormActionBarProps) {
   return (
     <div
@@ -312,7 +324,7 @@ export function FormActionBar({
           <VisibleAction key={action.id} action={action} variant="secondary" />
         ))}
         {status ? <div className="min-w-0 sm:flex-1">{status}</div> : null}
-        <DangerActionsMenu actions={dangerActions} />
+        <DangerActionsMenu actions={dangerActions} moreLabel={moreLabel} />
       </div>
     </div>
   );

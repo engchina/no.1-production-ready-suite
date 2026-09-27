@@ -46,7 +46,7 @@
 ## 4. 配置
 
 工程 / フォームの主操作は入力内容の末尾に置く。補助操作を同じ高さで並べ、破壊的操作は離す。
-ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar` に置く。
+ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar`、フォームの確定・取消・破壊的操作は `FormActionBar` に置く。
 
 ---
 
@@ -114,6 +114,15 @@
 - **構造**：`ContentActionBar` は `aria-label` 必須。複雑な左側の状態は `leading`、単純な情報は `title` / `description` / `meta` を使う。
 - **レスポンシブ**：375px では折り返してよい。ただし操作はコンテンツの上に残し、本文やコードの開始位置を押し下げすぎない。ページの横スクロールを出さない。
 - **境界**：ページ全体・選択オブジェクト全体に作用する操作は `PageHeader` / `ObjectActionBar` に置き、`ContentActionBar` に混ぜない。
+
+## 5.2.1 フォームの操作行
+
+編集フォーム・作成フォームの末尾の操作は `FormActionBar`（`packages/ui`。#226）にまとめる。手書きのボタン列を組まない。
+
+- **並び**：`primaryActions`（保存・作成など）→ `secondaryActions`（キャンセルなど）の順に直置きし、`status`（`FormStatus` など）はその右に置く。
+- **破壊的操作**：`dangerActions`（削除など）は赤いボタンとして直置きせず、右端の「その他の操作」メニューへまとめる（`moreLabel` で製品の i18n から差し替える。既定は日本語）。メニューは WAI-ARIA の Menu Button（`aria-haspopup="menu"`、`Escape` / 矢印 / `Home` / `End`、閉じたら起点へフォーカスを戻す）。
+- **一覧・詳細との共有**：同じ対象の操作は `EntityAction` で 1 回だけ定義し、フォームへは `entityActionToFormAction` で渡す（[§5.1](#51-オブジェクト操作一覧行--詳細)）。
+- **構造**：`aria-label` 必須（例: `ロール編集操作`）。上に区切り線を引き、375px では縦に積む。
 
 ## 5.3 一括選択バー
 

@@ -115,7 +115,6 @@ export {
   type RoleManagementPageProps,
 } from "./users-roles/RoleManagementPage";
 export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
-export { FormActionBar, entityActionToFormAction } from "./users-roles/FormActionBar";
 export {
   SECURITY_LIST_FOCUS_CLASS,
   SECURITY_LIST_SCROLL_CLASS,
