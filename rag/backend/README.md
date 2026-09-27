@@ -91,9 +91,15 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 ## 認証
 
-`RAG_AUTH_MODE=local` ではログインを要求せず、UI もログイン画面とログアウト導線を表示しません。開発・CI の既定値です。
+`RAG_AUTH_MODE=local` ではログインを要求しません。全権限・対象範囲の制限なしのローカル利用者として動き、UI もログイン画面とログアウト導線を表示しません。開発・CI の既定値です。
 
-`RAG_AUTH_MODE=production` では `/api/auth/login` で signed cookie セッションを発行し、`/api/auth/logout` で削除します。保護 API は有効なセッション Cookie がない場合 401 を返します。`RAG_AUTH_USERNAME`、`RAG_AUTH_PASSWORD`、`RAG_AUTH_SESSION_SECRET` を `.env` から注入してください。`RAG_AUTH_COOKIE_SECURE=true` は HTTPS 配信時に有効化します。
+`RAG_AUTH_MODE=production` では、3製品共通の認証（`pr_system_settings.auth`。#212 / #214）でログインします。
+
+- 利用者: 構成管理者 `system_admin`（共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_ID` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`）と、「ユーザーとロール」で作る DB ユーザー（`PLATFORM_USERS` などを NL2SQL / Agent と共有）。
+- セッション: Cookie `rag_session`（HttpOnly）と `rag_csrf`（名前は `RAG_APP_AUTH_SESSION_COOKIE_NAME` / `RAG_APP_AUTH_CSRF_COOKIE_NAME`）。更新系の API は `X-CSRF-Token` header に `rag_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
+- 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
+- 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.business_views.manage`（全業務ビュー・業務ビューの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_BUSINESS_VIEWS` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
+- 対象範囲: 業務ビュー・ナレッジベースを割り当てたロールの利用者は、その業務ビュー・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の業務ビューは 404、業務ビューの KB を 1 つも許可されていない検索・チャットは 403 です。業務ビューで検索させるには、その業務ビューのナレッジベースも許可してください。
 
 ## Readiness
 
@@ -155,7 +161,7 @@ chunking は `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御し、通常方式�
 
 HTTP header `X-Tenant-ID` がある場合、アップロード時に tenant id を hash 化して document に保存し、文書一覧、詳細、重複判定、検索 retrieval は同じ `tenant_id_hash` のデータだけを対象にします。raw tenant id は DB / レスポンス / 監査ログへ保存しません。tenant header がないローカル開発・CI では全体を参照できます。
 
-認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合、文書一覧、詳細、chunk count、検索 retrieval はその document/category scope にも閉じます。header が存在するが有効値が 0 件の場合は deny-all、未指定の場合だけ制限なしです。これらの raw scope 値は監査ログへ出しません。
+`RAG_AUTH_MODE=local` で、認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合、文書一覧、詳細、chunk count、検索 retrieval はその document/category scope にも閉じます。header が存在するが有効値が 0 件の場合は deny-all、未指定の場合だけ制限なしです。これらの raw scope 値は監査ログへ出しません。`production` では client の範囲 header（`X-User-ID` / `X-RAG-Allowed-*`）を使わず、ログインした利用者の権限から範囲を決めます。
 
 `POST /api/search` の `filters` は Oracle retrieval に適用されます。対応 key は `document_id`、`file_name`、`category_name`、`status`、`content_kind`、`section_title`、`section_path` です。`content_kind=table` で表 chunk だけ、`content_kind=figure` で図・画像説明 chunk だけ、`section_path` で特定章節だけを候補にできます。未対応 key、未対応 status、未対応 `content_kind` は 422 を返します。
 `rerank_top_n` は retrieval で取得した候補数を超えられないため、`top_k` 以下に制限します。

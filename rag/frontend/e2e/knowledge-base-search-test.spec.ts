@@ -3,13 +3,8 @@ import {
   expectMainScrollEndsAtContent,
   expectNoPageOverflow,
   mockDatabaseReady,
+  mockLocalAuth,
 } from "./_helpers";
-
-const authStatus = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
 
 function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
@@ -111,7 +106,7 @@ async function mockKbPage(page: Page, indexedDocumentCount: number): Promise<voi
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
 });
 
 test("KB 詳細の検索テストで業務ビュー無しに回答と引用を確認できる", async ({ page }) => {

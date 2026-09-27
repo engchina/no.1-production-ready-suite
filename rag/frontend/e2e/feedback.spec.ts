@@ -1,22 +1,16 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-import { expectNoPageOverflow, measureTableCellOverflow, mockDatabaseReady } from "./_helpers";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import {
+  expectNoPageOverflow,
+  measureTableCellOverflow,
+  mockAuthUser,
+  mockDatabaseReady,
+  mockLocalAuth,
+} from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   await page.route("**/api/business-views**", (route) =>
     route.fulfill({
       json: {
@@ -241,6 +235,27 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
   );
   expect(stored).toContain("feedback-feedback-answer");
   expect(stored).toContain("翌月末");
+});
+
+test("承認 FAQ への反映の権限が無い利用者には Approved FAQ への登録を出さない", async ({ page }) => {
+  await mockFeedback(page, []);
+  // フィードバックの閲覧だけを持つ DB ユーザー（rag.feedback.manage なし。#214）。
+  await mockAuthUser(page, {
+    permissions: ["menu.feedback", "menu.evaluation"],
+    allowed_business_view_ids: ["bv-1"],
+  });
+  await page.route("**/api/feedback/feedback-answer", (route) => {
+    const envelope = feedbackDetailEnvelope();
+    return route.fulfill({
+      json: { ...envelope, data: { ...envelope.data, target_type: "answer", document_id: null, chunk_id: null } },
+    });
+  });
+
+  await page.goto("/feedback?period=30&feedback=feedback-answer");
+  const detail = page.getByRole("region", { name: "フィードバック詳細" });
+  const actions = detail.getByTestId("feedback-detail-actions");
+  await expect(actions.getByRole("button", { name: "品質評価のケースに追加" })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "Approved FAQ に登録" })).toHaveCount(0);
 });
 
 for (const width of [1280, 1920]) {

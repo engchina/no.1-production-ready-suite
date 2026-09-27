@@ -34,6 +34,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { RagSplitPane, RowTitleButton } from "@/components/layout/EntityLayout";
+import { useAuth } from "@/components/security/AuthProvider";
 import {
   ApiError,
   type CitationFeedbackRating,
@@ -43,6 +44,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   useBusinessViews,
   useFeedbackDashboard,
@@ -643,6 +645,8 @@ function FeedbackDetailPanel({
  * 結果は toast、失敗は操作の近くの FormStatus で知らせる。
  */
 function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
+  // 承認済み FAQ への反映は rag.feedback.manage を持つ利用者だけ（評価ケースの作成はフィードバックの閲覧権限で使える。#214）。
+  const canPromoteFaq = useAuth().hasPermission(CAPABILITY_PERMISSIONS.feedbackManage);
   const promote = usePromoteFeedbackToApprovedFaq();
   const evaluationCase = useFeedbackEvaluationCase();
   const confirm = useConfirm();
@@ -692,6 +696,7 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
       id: "approved-faq",
       label: t("feedback.promote.faq"),
       icon: BookmarkPlus,
+      visible: canPromoteFaq,
       disabled: promote.isPending,
       loading: promote.isPending,
       testId: "feedback-promote-faq",

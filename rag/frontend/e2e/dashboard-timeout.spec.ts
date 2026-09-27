@@ -1,16 +1,5 @@
 import { expect, test } from "@playwright/test";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import { mockLocalAuth } from "./_helpers";
 
 const degradedDashboardSummary = {
   data: {
@@ -53,9 +42,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __RAG_API_TIMEOUT_MS__?: number }).__RAG_API_TIMEOUT_MS__ = 250;
   });
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
   // DB ゲートは通過させ、Dashboard 自身の縮退/タイムアウト挙動を検証する。
   await page.route("**/api/ready/database", async (route) => {
     await route.fulfill({

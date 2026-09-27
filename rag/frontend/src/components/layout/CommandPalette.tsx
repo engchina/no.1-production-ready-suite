@@ -2,17 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { CornerDownLeft, Search, X } from "lucide-react";
+import type { HasPermission } from "@engchina/production-ready-system-settings";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
 import { cn } from "@/lib/utils";
-import { NAV_SECTIONS, type NavItem } from "./nav-config";
+import { visibleNavSections, type NavItem } from "./nav-config";
 
 /**
  * Cmd/Ctrl+K で開くページ移動コマンドパレット。
  * nav-heavy なサイドナビの skip-link 代替 + 高速移動手段。
  * サイドナビの構成（NAV_SECTIONS）をそのまま単一の source of truth として列挙する。
+ * 権限のない画面はサイドナビと同じ判定で出さない（#214）。
  * 外部依存（cmdk 等）は導入せず、confirm-dialog と同じ portal/focus-trap パターンで実装。
  */
 
@@ -26,8 +29,8 @@ interface CommandEntry {
   sectionTitle: string;
 }
 
-function buildEntries(): CommandEntry[] {
-  return NAV_SECTIONS.flatMap((section) => {
+export function buildCommandEntries(hasPermission: HasPermission): CommandEntry[] {
+  return visibleNavSections(hasPermission).flatMap((section) => {
     const sectionTitle = t(section.titleKey);
     return section.items.map((item) => {
       const fullLabel = t(item.labelKey);
@@ -80,7 +83,8 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const listRef = useRef<HTMLUListElement>(null);
   const previouslyFocused = useRef<Element | null>(null);
 
-  const entries = useMemo(() => buildEntries(), []);
+  const { hasPermission } = useAuth();
+  const entries = useMemo(() => buildCommandEntries(hasPermission), [hasPermission]);
   const results = useMemo(
     () => (query.trim() ? entries.filter((entry) => matches(entry, query)) : entries),
     [entries, query]

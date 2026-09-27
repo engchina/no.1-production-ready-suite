@@ -1,19 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mockLocalAuth } from "./_helpers";
 
 // platform/docs/ux-contracts/messaging.md §3.5 ConfirmDialog の振る舞いを検証する。
 // モデル設定のモデル削除（破壊的操作）に確認ゲートが入っていることを確認する。
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 function createModelSettings() {
   return {
@@ -57,9 +46,7 @@ async function mockModelSettings(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
   await mockModelSettings(page);
 });
 

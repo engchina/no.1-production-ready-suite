@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { useSidebarAccount } from "@engchina/production-ready-system-settings";
 
 import {
   Sidebar as UiSidebar,
@@ -8,23 +9,27 @@ import {
   type SidebarLabels,
 } from "@engchina/production-ready-ui";
 
-import { useAuth } from "@/lib/auth";
+import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { APP_ROUTES } from "@/lib/routes";
 import { useUiStore } from "@/lib/ui-store";
-import { NAV_SECTIONS } from "./nav-config";
+import { visibleNavSections } from "./nav-config";
 import { OPEN_COMMAND_PALETTE_EVENT } from "./CommandPalette";
 
 /**
  * RAG コンソールのサイドナビ。
  * 構造・挙動は共有 UI パッケージの <Sidebar> に集約し、ここでは RAG 固有の
- * i18n / router(Link, useLocation) / auth / 状態ストア / nav 構成を注入する。
+ * i18n / router(Link, useLocation) / 権限 / 状態ストア / nav 構成を注入する。
+ * 権限のない項目と、項目が 0 件になったセクションは出さない（#214）。
  */
 export function Sidebar() {
   const { pathname } = useLocation();
-  const navigate = useNavigate();
-  const auth = useAuth();
+  const { hasPermission } = useAuth();
+  // 表示名・ロール・パスワード変更・ログアウトは共通の helper が作る（#220）。
+  const account = useSidebarAccount({
+    routes: { login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange },
+  });
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const collapsedSections = useUiStore((state) => state.collapsedSections);
@@ -35,7 +40,7 @@ export function Sidebar() {
   // セクションキーは従来どおり titleKey を使い、永続化済みの折りたたみ状態と整合させる。
   const sections = useMemo<UiNavSection[]>(
     () =>
-      NAV_SECTIONS.map((section) => ({
+      visibleNavSections(hasPermission).map((section) => ({
         key: section.titleKey,
         title: t(section.titleKey),
         collapsible: section.collapsible,
@@ -46,7 +51,7 @@ export function Sidebar() {
           icon: item.icon,
         })),
       })),
-    []
+    [hasPermission]
   );
 
   const labels: SidebarLabels = {
@@ -59,29 +64,28 @@ export function Sidebar() {
     sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
   };
 
-  async function handleLogout() {
-    // ログアウトは画面を離れる操作。未保存の編集があれば先に確認する。
-    if (!(await confirmPendingLeave())) return;
-    await auth.logout();
-    navigate(APP_ROUTES.login, { replace: true });
-  }
-
-  const footer = auth.authRequired ? (
-    <SidebarAccountFooter
-      name={auth.user?.name ?? t("auth.user.unknown")}
-      roles={auth.user?.role ?? t("auth.user.role")}
-      collapsed={collapsed}
-      theme="light"
-      onLogout={() => {
-        if (!auth.isLoggingOut) void handleLogout();
-      }}
-      labels={{
-        logout: t("auth.logout"),
-        switchToLight: t("theme.switchToLight"),
-        switchToDark: t("theme.switchToDark"),
-      }}
-    />
-  ) : undefined;
+  // ローカル DEBUG（ログイン省略）はログインしていないため、今までどおりアカウント欄を出さない。
+  const logout = account?.onLogout;
+  const footer =
+    account && !account.debugMode ? (
+      <SidebarAccountFooter
+        name={account.name}
+        roles={account.roles}
+        collapsed={collapsed}
+        labels={account.labels}
+        actions={account.actions}
+        onLogout={
+          logout
+            ? () => {
+                // ログアウトは画面を離れる操作。未保存の編集があれば先に確認する。
+                void confirmPendingLeave().then((confirmed) => {
+                  if (confirmed) logout();
+                });
+              }
+            : undefined
+        }
+      />
+    ) : undefined;
 
   return (
     <UiSidebar

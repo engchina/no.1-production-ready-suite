@@ -1,17 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { expectMainScrollEndsAtContent, expectNoPageOverflow } from "./_helpers";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectMainScrollEndsAtContent, expectNoPageOverflow, LOCAL_AUTH_ME } from "./_helpers";
 
 type OciStageStatus = "success" | "failed" | "skipped";
 const OCI_STAGE_KEYS = ["config_format", "key_file", "region", "authentication"] as const;
@@ -92,7 +80,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     const url = new URL(route.request().url());
     const method = route.request().method();
     if (url.pathname === "/api/auth/me") {
-      await route.fulfill({ json: authStatus });
+      await route.fulfill({ json: LOCAL_AUTH_ME });
       return;
     }
 

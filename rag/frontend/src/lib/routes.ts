@@ -1,9 +1,12 @@
-import { SYSTEM_SETTINGS_PATHS } from "@engchina/production-ready-system-settings";
+import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@engchina/production-ready-system-settings";
 
 /** RAG コンソールの画面ルート定義。 */
 export const APP_ROUTES = {
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
+  // 認証画面（NL2SQL と同じ URL。#214）
   login: "/login",
+  passwordChange: "/password/change",
+  forbidden: "/forbidden",
   dashboard: "/dashboard",
   upload: "/upload",
   fileList: "/file-list",
@@ -33,4 +36,8 @@ export const APP_ROUTES = {
   settingsHuggingface: "/settings/huggingface",
   settingsServices: "/settings/services",
   settingsPrompts: "/settings/prompts",
+  // ユーザー管理・ロール管理は3製品共通の画面（#206）。権限管理は RAG 固有（#214）。
+  securityUsers: USER_ROLE_PATHS.users,
+  securityRoles: USER_ROLE_PATHS.roles,
+  securityPermissions: "/settings/security/permissions",
 } as const;

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+import { SYSTEM_TABLES_STATUS_OK, mockLocalAuth } from "./_helpers";
 
 /**
  * カード単位 error boundary の隔離検証(#67)。
@@ -24,18 +24,6 @@ const databaseSettings = {
   adb_ocid: "ocid1.autonomousdatabase.oc1..rag",
   region: "ap-osaka-1",
   config_source: "runtime" as const,
-};
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
 };
 
 const adbInfo = {
@@ -77,7 +65,7 @@ test("system table カードが throw しても ADB 管理カードは表示さ�
   // 描画例外による console.error は想定内。テスト失敗の材料にしない。
   page.on("pageerror", () => {});
 
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   await page.route("**/api/settings/database**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/settings/database/system-tables") {

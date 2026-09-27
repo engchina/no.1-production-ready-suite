@@ -1,16 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-
-const authStatus = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
+import { LOCAL_AUTH_ME } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/auth/me") {
-      await route.fulfill({ json: authStatus });
+      await route.fulfill({ json: LOCAL_AUTH_ME });
       return;
     }
     await route.fulfill({ json: { data: null, error_messages: [], warning_messages: [] } });
@@ -44,15 +39,27 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // セクションは「… → 検索・回答設定 → 運用設定 → システム設定」の順に並ぶ（#80）。
+  // セクションは NL2SQL と同じ並び方で「… → 検索・回答設定 → RAG セキュリティ → 運用設定 →
+  // ユーザーとロール → システム設定」の順に並ぶ（#80 / #214）。
   const sectionIds = await sidebar
     .locator('[id^="nav-section-nav-section-"]')
     .evaluateAll((elements) => elements.map((element) => element.id));
-  expect(sectionIds.slice(-3)).toEqual([
+  expect(sectionIds.slice(-5)).toEqual([
     "nav-section-nav-section-pipeline",
+    "nav-section-nav-section-security",
     "nav-section-nav-section-operations",
+    "nav-section-nav-section-userRoles",
     "nav-section-nav-section-settings",
   ]);
+
+  // RAG セキュリティは権限管理だけ、ユーザーとロールは3製品共通の2項目を持つ。
+  await expect(sidebar.getByText("RAG セキュリティ", { exact: true })).toBeVisible();
+  await expect(sidebar.locator("#nav-section-nav-section-security").getByRole("link")).toHaveCount(1);
+  const userRolesSection = sidebar.locator("#nav-section-nav-section-userRoles");
+  await expect(userRolesSection.getByRole("link")).toHaveCount(2);
+  for (const label of ["ユーザー管理", "ロール管理"]) {
+    await expect(userRolesSection.getByText(label, { exact: true })).toBeVisible();
+  }
 
   // 運用設定は RAG 固有の項目だけを持つ。
   const operationsSection = sidebar.locator("#nav-section-nav-section-operations");

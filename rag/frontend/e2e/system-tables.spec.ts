@@ -1,18 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mockAuthUser, mockLocalAuth } from "./_helpers";
 
 type SchemaStatus = "missing" | "partial" | "outdated" | "ready";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 const databaseSettings = {
   user: "rag_app",
@@ -86,9 +75,7 @@ async function mockSettings(
   let initializeCalls = 0;
   let recreatePayload: Record<string, unknown> | null = null;
 
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({ json: authStatus })
-  );
+  await mockLocalAuth(page);
   await page.route("**/api/settings/database**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -206,6 +193,26 @@ test("作成・更新で missing から ready になる", async ({ page }) => {
   await card.getByRole("button", { name: "作成・更新" }).click();
   await expect(card.getByText("準備完了", { exact: true })).toBeVisible();
   expect(mock.initializeCalls()).toBe(1);
+});
+
+test("システムテーブル管理の権限が無い利用者は状態だけを確認でき、作成・再作成を出さない", async ({
+  page,
+}) => {
+  const mock = await mockSettings(page, { initialStatus: "missing" });
+  // データベース設定の画面権限だけを持つ DB ユーザー（rag.system_tables.manage なし。#214）。
+  await mockAuthUser(page, { permissions: ["menu.settings_database"] });
+  await page.goto("/settings/database#system-tables");
+  const card = page.locator("#system-tables");
+  await expect(card.getByText("未作成", { exact: true }).first()).toBeVisible();
+  await expect(
+    card.getByText("システムテーブルの作成・更新と全再作成には「システムテーブル管理」の権限が必要です。", {
+      exact: false,
+    })
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: "作成・更新" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "すべて再作成" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "状態を再取得" })).toBeVisible();
+  expect(mock.initializeCalls()).toBe(0);
 });
 
 test("全再作成は確認語と ConfirmDialog の二段階で保護する", async ({

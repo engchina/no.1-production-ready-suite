@@ -69,25 +69,58 @@ export const ja = {
   "settings.preview.secret.saved": "<保存済み secret>",
   "settings.preview.secret.entered": "<入力済み secret>",
 
-  "auth.status.checking": "認証状態を確認中…",
-  "auth.status.error": "認証状態の確認に失敗しました。",
-  "auth.login.title": "ログイン",
-  "auth.login.subtitle": "Production Ready RAG コンソールにサインインします。",
-  "auth.login.username": "ユーザー名",
-  "auth.login.usernamePlaceholder": "ユーザー名を入力",
-  "auth.login.password": "パスワード",
-  "auth.login.passwordPlaceholder": "パスワードを入力",
-  "auth.login.rememberMe": "ログイン状態を保持する",
-  "auth.login.showPassword": "パスワードを表示",
-  "auth.login.hidePassword": "パスワードを隠す",
-  "auth.login.signIn": "ログイン",
-  "auth.login.signingIn": "ログイン中…",
-  "auth.login.error.failed": "ログイン処理に失敗しました。",
-  "auth.logout": "ログアウト",
-  "theme.switchToLight": "ライトテーマに切り替え",
-  "theme.switchToDark": "ダークテーマに切り替え",
-  "auth.user.unknown": "ログインユーザー",
-  "auth.user.role": "USER",
+  // ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品（AUTH_MESSAGES）が持つ（#214）。
+
+  // RAG セキュリティ（権限管理）とユーザーとロール（#214）
+  "nav.section.security": "RAG セキュリティ",
+  "nav.section.userRoles": "ユーザーとロール",
+  "nav.securityUsers": "ユーザー管理",
+  "nav.securityRoles": "ロール管理",
+  "nav.securityPermissions": "権限管理",
+  "security.roles.permissionSummary": "付与している機能権限: {count} 件",
+  "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
+  "security.roles.openPermissions": "権限管理で設定",
+  "security.permissions.subtitle":
+    "ロールごとに、使える画面（機能権限）と利用できる業務ビュー・ナレッジベースを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
+  "security.permissions.listHint":
+    "ロールを選ぶと、付与している機能権限の件数と利用できる業務ビュー・ナレッジベースを確認できます。",
+  "security.permissions.searchPlaceholder":
+    "ロールコード・ロール名・機能権限・業務ビュー・ナレッジベースで絞り込み",
+  "security.permissions.formHint":
+    "機能権限と、利用できる業務ビュー・ナレッジベースを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
+  "security.permissions.permissionsHint":
+    "メニュー権限は画面表示を許可します。管理権限は、関連する画面のメニュー権限を自動的に付与します。",
+  "security.permissions.targetArchived": "アーカイブ済み",
+  "security.permissions.businessViews": "利用できる業務ビュー",
+  "security.permissions.businessViewsHint":
+    "このロールの利用者が検索・チャット・品質評価・フィードバックで使える業務ビューを選択します。何も選ばない場合、このロールでは業務ビューを利用できません。",
+  "security.permissions.businessViewsAll": "すべての業務ビュー",
+  "security.permissions.businessViewsSearch": "業務ビューを検索",
+  "security.permissions.businessViewsSearchPlaceholder": "業務ビュー名・説明で絞り込み",
+  "security.permissions.businessViewsEmpty":
+    "利用範囲を設定できる業務ビューがありません。先に業務ビューを作成してください。",
+  "security.permissions.businessViewsNoResults": "条件に一致する業務ビューがありません。",
+  "security.permissions.businessViewsLoadWarning":
+    "業務ビューの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
+  "security.permissions.businessViewsManagedAll":
+    "業務ビュー管理の権限により、すべての業務ビューを利用できます。個別選択は不要です。",
+  "security.permissions.businessViewsSystemAdmin":
+    "SYSTEM_ADMIN はすべての業務ビューを自動的に利用できます。個別設定は不要です。",
+  "security.permissions.knowledgeBases": "利用できるナレッジベース",
+  "security.permissions.knowledgeBasesHint":
+    "このロールの利用者が文書の登録・検索・回答で使えるナレッジベースを選択します。何も選ばない場合、このロールではナレッジベースを利用できません。",
+  "security.permissions.knowledgeBasesAll": "すべてのナレッジベース",
+  "security.permissions.knowledgeBasesSearch": "ナレッジベースを検索",
+  "security.permissions.knowledgeBasesSearchPlaceholder": "ナレッジベース名・説明で絞り込み",
+  "security.permissions.knowledgeBasesEmpty":
+    "利用範囲を設定できるナレッジベースがありません。先にナレッジベースを作成してください。",
+  "security.permissions.knowledgeBasesNoResults": "条件に一致するナレッジベースがありません。",
+  "security.permissions.knowledgeBasesLoadWarning":
+    "ナレッジベースの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
+  "security.permissions.knowledgeBasesManagedAll":
+    "ナレッジベース管理の権限により、すべてのナレッジベースを利用できます。個別選択は不要です。",
+  "security.permissions.knowledgeBasesSystemAdmin":
+    "SYSTEM_ADMIN はすべてのナレッジベースを自動的に利用できます。個別設定は不要です。",
 
   "nav.section.ingestion": "ナレッジ構築",
   "nav.section.rag": "業務ビュー",
@@ -1101,6 +1134,8 @@ export const ja = {
   "settings.database.readiness.walletNotFound": "Wallet 未検出",
   "settings.database.readiness.error": "エラー",
   "settings.database.systemTables.title": "RAG システムテーブル",
+  "settings.database.systemTables.permissionRequired":
+    "システムテーブルの作成・更新と全再作成には「システムテーブル管理」の権限が必要です。状態の確認と再取得はできます。",
   "settings.database.systemTables.description":
     "RAG が使用する Oracle テーブル、ベクトル索引、Oracle Text 索引、migration の状態を確認し、管理者の明示操作で準備します。",
   "settings.database.systemTables.loading": "システムテーブルの状態を確認しています。",
@@ -1253,7 +1288,7 @@ export const ja = {
   "fileList.col.uploadedAt": "アップロード日時",
   "fileList.col.actions": "操作",
   "fileList.knowledgeBaseFilter.label": "知識ベース",
-  "fileList.knowledgeBaseFilter.all": "すべての知識ベース",
+  "fileList.knowledgeBaseFilter.all": "利用できるすべての知識ベース",
   "fileList.selected": "{count} 件選択中",
   "fileList.bulkIngest": "一括取込",
   "fileList.bulkQueue": "一括投入",
@@ -1453,6 +1488,8 @@ export const ja = {
   "businessViews.status.ARCHIVED": "アーカイブ済み",
   "businessViews.empty.title": "業務ビューがありません",
   "businessViews.empty.description": "知識ベースを束ねた業務ビューを作成しましょう。",
+  "businessViews.empty.restrictedDescription":
+    "利用できる業務ビューがありません。必要な場合は管理者に利用権限を依頼してください。",
   "businessViews.error.title": "業務ビューを読み込めません",
   "businessViews.nameRequired": "名前を入力してください。",
   "businessViews.nameReserved": "DEFAULT は予約名のため使用できません。",
@@ -1553,6 +1590,8 @@ export const ja = {
   "knowledgeBases.variant.addAction": "別の知識ベースに追加",
   "knowledgeBases.empty.title": "知識ベースがありません。",
   "knowledgeBases.empty.hint": "名前を入力して、最初の知識ベースを作成してください。",
+  "knowledgeBases.empty.restrictedHint":
+    "利用できる知識ベースがありません。必要な場合は管理者に利用権限を依頼してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",
   "knowledgeBases.validation.nameReserved": "DEFAULT は予約名のため使用できません。",
   "knowledgeBases.default.archiveDisabled": "DEFAULT はアーカイブできません",
@@ -1660,15 +1699,15 @@ export const ja = {
   "ingestionDrift.toast.queued": "再取込を開始しました。",
   "ingestionDrift.error": "再取込の開始に失敗しました。状態を確認して再試行してください。",
   "knowledgeBaseScope.label": "知識ベース",
-  "knowledgeBaseScope.helper": "未選択の場合は、アクセス可能なすべての知識ベースを対象にします。",
+  "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべての知識ベースを対象にします。",
   "knowledgeBaseScope.clear": "クリア",
   "knowledgeBaseScope.loading": "知識ベースを読み込んでいます。",
   "knowledgeBaseScope.loadWarning": "知識ベース一覧を取得できませんでした。",
   "knowledgeBaseScope.loadWarningHint":
-    "未選択のまま実行すると、アクセス可能なすべての知識ベースを対象にします。",
+    "未選択のまま実行すると、利用できるすべての知識ベースを対象にします。",
   "knowledgeBaseScope.documentCount": "{count} 文書",
   "knowledgeBaseScope.selected": "{count} 件選択中",
-  "knowledgeBaseScope.all": "すべての知識ベースを対象にします。",
+  "knowledgeBaseScope.all": "利用できるすべての知識ベースを対象にします。",
   "knowledgeBaseScope.empty": "有効な知識ベースがありません。",
   "knowledgeBasePicker.filterPlaceholder": "知識ベース名で絞り込み",
   "knowledgeBasePicker.filterAria": "知識ベースを名前で絞り込む",
@@ -1740,6 +1779,13 @@ export const ja = {
   "upload.knowledgeBases.manage": "知識ベース管理",
   "upload.knowledgeBases.selected": "{count} 件の知識ベースへ登録します。",
   "upload.knowledgeBases.defaultHint": "未選択の場合は DEFAULT へ登録します。",
+  "upload.knowledgeBases.requiredHint": "登録先の知識ベースを 1 件以上選択してください。",
+  "upload.knowledgeBases.requiredError":
+    "アップロードする前に、登録先の知識ベースを 1 件以上選択してください。",
+  "upload.knowledgeBases.emptyRestrictedHint":
+    "登録先にできる知識ベースがありません。管理者に知識ベースの利用権限を依頼してください。",
+  "upload.knowledgeBases.loadWarningRequiredHint":
+    "登録先の知識ベースを選択できないため、アップロードできません。再読み込みしてください。",
 
   "sourceProfile.title": "原本の処理情報",
   "sourceProfile.documentWorkspaceTitle": "原本情報",
@@ -2530,7 +2576,7 @@ export const ja = {
   "feedback.filters.days": "{count}日",
   "feedback.filters.all": "全期間",
   "feedback.filters.businessView": "業務ビュー",
-  "feedback.filters.allBusinessViews": "すべての業務ビュー",
+  "feedback.filters.allBusinessViews": "利用できるすべての業務ビュー",
   "feedback.filters.target": "評価対象",
   "feedback.filters.allTargets": "回答・引用のすべて",
   "feedback.filters.rating": "評価",

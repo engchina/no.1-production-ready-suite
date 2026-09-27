@@ -1,16 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import { mockLocalAuth } from "./_helpers";
 
 type ServiceStatus = "running" | "degraded" | "stopped" | "unconfigured";
 
@@ -214,9 +203,7 @@ async function mockServices(
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 for (const viewport of [

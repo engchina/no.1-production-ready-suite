@@ -9,6 +9,8 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  FieldError,
+  RequiredBadge,
 } from "@engchina/production-ready-ui";
 import {
   AlertTriangle,
@@ -27,12 +29,13 @@ import {
   Settings,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Dropzone } from "./Dropzone";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
+import { useAuth } from "@/components/security/AuthProvider";
 import { ErrorState } from "@/components/StateViews";
 import {
   ApiError,
@@ -52,6 +55,7 @@ import {
   useUploadStorageSettings,
 } from "@/lib/queries";
 import { t, type I18nKey } from "@/lib/i18n";
+import { canSubmitUpload, uploadKnowledgeBaseRequired } from "@/lib/upload-scope";
 import { APP_ROUTES } from "@/lib/routes";
 import {
   parserProfileKey,
@@ -68,6 +72,9 @@ export function UploadWorkspace() {
   const [batchItems, setBatchItems] = useState<UploadResult[]>([]);
   const [batchFailedItems, setBatchFailedItems] = useState<BatchUploadFailedItem[]>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  // KB が制限された利用者は、登録先の KB を選ばないとアップロードできない（#214）。
+  const knowledgeBaseRequired = uploadKnowledgeBaseRequired(useAuth().user);
+  const [knowledgeBaseMissing, setKnowledgeBaseMissing] = useState(false);
   const upload = useUploadDocument();
   const batchUpload = useBatchUploadDocuments();
   const isBusy = upload.isPending || batchUpload.isPending;
@@ -81,8 +88,20 @@ export function UploadWorkspace() {
     batchUpload.reset();
   };
 
+  const handleKnowledgeBaseChange = (ids: string[]) => {
+    setKnowledgeBaseIds(ids);
+    if (ids.length > 0) setKnowledgeBaseMissing(false);
+  };
+
   const handleFiles = (files: File[]) => {
     if (files.length === 0) return;
+    if (!canSubmitUpload(knowledgeBaseRequired, knowledgeBaseIds)) {
+      // 送信前に案内し、選択欄へ移動する（backend の 400 を待たない）。
+      setKnowledgeBaseMissing(true);
+      document.getElementById(UPLOAD_KNOWLEDGE_BASE_PICKER_ID)?.scrollIntoView({ block: "center" });
+      return;
+    }
+    setKnowledgeBaseMissing(false);
     setUploaded(null);
     setBatchItems([]);
     setBatchFailedItems([]);
@@ -122,8 +141,10 @@ export function UploadWorkspace() {
             <UploadStorageNotice />
             <UploadKnowledgeBasePicker
               selectedIds={knowledgeBaseIds}
-              onChange={setKnowledgeBaseIds}
+              onChange={handleKnowledgeBaseChange}
               disabled={isBusy}
+              required={knowledgeBaseRequired}
+              missing={knowledgeBaseMissing}
             />
             <Dropzone onFiles={handleFiles} disabled={isBusy} />
             {isBusy ? (
@@ -530,30 +551,46 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
   }
 }
 
+const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";
+
 function UploadKnowledgeBasePicker({
   selectedIds,
   onChange,
   disabled,
+  required,
+  missing,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   disabled: boolean;
+  /** 登録先の KB の選択が必須か（KB が制限された利用者。#214）。 */
+  required: boolean;
+  /** 必須なのに未選択のままファイルを選んだ。 */
+  missing: boolean;
 }) {
   const query = useKnowledgeBases({ status: "ACTIVE", limit: 50, offset: 0 });
   const items = query.data?.items ?? [];
+  const errorId = useId();
 
   if (query.isError) {
     return (
       <Banner severity="warning" title={t("upload.knowledgeBases.loadWarning")}>
-        <p>{t("upload.knowledgeBases.loadWarningHint")}</p>
+        <p>
+          {required
+            ? t("upload.knowledgeBases.loadWarningRequiredHint")
+            : t("upload.knowledgeBases.loadWarningHint")}
+        </p>
       </Banner>
     );
   }
 
   return (
-    <Card>
+    <Card id={UPLOAD_KNOWLEDGE_BASE_PICKER_ID} data-testid="upload-knowledge-base-picker">
       <CardHeader>
-        <CardTitle>{t("upload.knowledgeBases.title")}</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          {t("upload.knowledgeBases.title")}
+          {required ? <RequiredBadge label={t("common.required")} /> : null}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
@@ -561,13 +598,19 @@ function UploadKnowledgeBasePicker({
             {t("upload.knowledgeBases.loading")}
           </p>
         ) : items.length > 0 ? (
-          <KnowledgeBasePickerGrid
-            items={items}
-            selectedIds={selectedIds}
-            onChange={onChange}
-            disabled={disabled}
-            ariaLabel={t("upload.knowledgeBases.aria")}
-          />
+          <div aria-describedby={missing ? errorId : undefined}>
+            <KnowledgeBasePickerGrid
+              items={items}
+              selectedIds={selectedIds}
+              onChange={onChange}
+              disabled={disabled}
+              ariaLabel={t("upload.knowledgeBases.aria")}
+            />
+          </div>
+        ) : required ? (
+          <p className="rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted">
+            {t("upload.knowledgeBases.emptyRestrictedHint")}
+          </p>
         ) : (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted sm:flex-row sm:items-center sm:justify-between">
             <span>{t("upload.knowledgeBases.emptyHint")}</span>
@@ -584,8 +627,17 @@ function UploadKnowledgeBasePicker({
           <p className="mt-3 text-xs text-fg-muted">
             {selectedIds.length > 0
               ? t("upload.knowledgeBases.selected", { count: selectedIds.length })
-              : t("upload.knowledgeBases.defaultHint")}
+              : required
+                ? t("upload.knowledgeBases.requiredHint")
+                : t("upload.knowledgeBases.defaultHint")}
           </p>
+        ) : null}
+        {missing ? (
+          <FieldError
+            id={errorId}
+            className="mt-2"
+            message={t("upload.knowledgeBases.requiredError")}
+          />
         ) : null}
       </CardContent>
     </Card>

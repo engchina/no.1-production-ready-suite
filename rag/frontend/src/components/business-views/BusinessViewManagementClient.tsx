@@ -32,6 +32,7 @@ import {
   MissingEditorTarget,
   RowTitleButton,
 } from "@/components/layout/EntityLayout";
+import { useAuth } from "@/components/security/AuthProvider";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -56,6 +57,7 @@ import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useCustomLeaveGuard } from "@/lib/leave-guard";
+import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   useArchiveBusinessView,
   useBusinessView,
@@ -270,9 +272,16 @@ function emptyConfig(): BusinessViewConfig {
 export function BusinessViewManagementClient() {
   const editor = useEditorRoute();
   const { target } = editor;
+  const canManage = useCanManageBusinessViews();
 
-  if (target.kind === "list") {
-    return <BusinessViewList onOpen={(id) => editor.openItem(id)} onCreate={editor.openNew} />;
+  // 作成は業務ビュー管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。#214）。
+  if (target.kind === "list" || (target.kind === "new" && !canManage)) {
+    return (
+      <BusinessViewList
+        onOpen={(id) => editor.openItem(id)}
+        onCreate={canManage ? editor.openNew : undefined}
+      />
+    );
   }
   if (target.kind === "new") {
     return (
@@ -298,9 +307,15 @@ export function BusinessViewManagementClient() {
  * 業務ビュー 1 件の操作。一覧の行（RowActionMenu）とエディタ（ObjectActionBar）で同じ定義を使う
  * （buttons.md §5.1）。編集は選択の導線なので、名前のボタンと行のクリックに置く。
  */
+/** 業務ビューの作成・アーカイブは `rag.business_views.manage` を持つ利用者だけ（#214）。 */
+function useCanManageBusinessViews(): boolean {
+  return useAuth().hasPermission(CAPABILITY_PERMISSIONS.businessViewsManage);
+}
+
 function useBusinessViewActions(onArchived?: (id: string) => void) {
   const confirm = useConfirm();
   const archive = useArchiveBusinessView();
+  const canManage = useCanManageBusinessViews();
 
   const handleArchive = async (view: BusinessViewSummary) => {
     const ok = await confirm({
@@ -330,7 +345,7 @@ function useBusinessViewActions(onArchived?: (id: string) => void) {
         ariaLabel: isDefault ? t("businessViews.default.archiveDisabled") : undefined,
         icon: Archive,
         tone: "danger",
-        visible: target.status !== "ARCHIVED",
+        visible: canManage && target.status !== "ARCHIVED",
         disabled: isDefault || archive.isPending,
         loading: archive.isPending && archive.variables === target.id,
         testId: `business-view-archive-${target.id}`,
@@ -345,7 +360,8 @@ function BusinessViewList({
   onCreate,
 }: {
   onOpen: (id: string) => void;
-  onCreate: () => void;
+  /** 作成できない利用者（業務ビュー管理の権限なし）では undefined。 */
+  onCreate?: () => void;
 }) {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
@@ -370,15 +386,19 @@ function BusinessViewList({
         wide
         title={t("nav.businessViews")}
         subtitle={t("businessViews.subtitle")}
-        actions={[
-          {
-            id: "create",
-            kind: "primary",
-            label: t("businessViews.actions.newView"),
-            icon: Plus,
-            onClick: onCreate,
-          },
-        ]}
+        actions={
+          onCreate
+            ? [
+                {
+                  id: "create",
+                  kind: "primary",
+                  label: t("businessViews.actions.newView"),
+                  icon: Plus,
+                  onClick: onCreate,
+                },
+              ]
+            : []
+        }
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
         <DegradedBanner
@@ -387,7 +407,7 @@ function BusinessViewList({
           isRetrying={query.isFetching}
         />
 
-        {newDraft ? (
+        {newDraft && onCreate ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-sunken p-3">
             <FormStatus tone="info" message={t("businessViews.draftPending")} />
             <Button size="sm" variant="secondary" icon={FilePen} onClick={onCreate}>
@@ -445,7 +465,11 @@ function BusinessViewList({
           <Card>
             <EmptyState
               title={t("businessViews.empty.title")}
-              hint={t("businessViews.empty.description")}
+              hint={
+                onCreate
+                  ? t("businessViews.empty.description")
+                  : t("businessViews.empty.restrictedDescription")
+              }
             />
           </Card>
         ) : (

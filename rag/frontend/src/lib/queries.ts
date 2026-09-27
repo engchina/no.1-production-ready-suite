@@ -85,7 +85,6 @@ import {
 } from "./api";
 
 export const queryKeys = {
-  authStatus: ["auth", "me"] as const,
   databaseStatus: ["system", "database-status"] as const,
   dashboardSummary: ["dashboard", "summary"] as const,
   documents: (params: {

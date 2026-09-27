@@ -8,6 +8,9 @@
 
 import {
   ApiError,
+  apiErrorFromEnvelope,
+  notifyResponseAuthStatus,
+  withCsrfHeaders,
   type ChatMessage,
   type ChatMessageRequestBody,
   type RetrievedChunk,
@@ -54,25 +57,36 @@ export async function streamChatMessage(
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      // Cookie セッションの CSRF（#214）。
+      headers: withCsrfHeaders("POST", {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      }),
+      credentials: "same-origin",
       body: JSON.stringify(body),
       signal,
     }
   );
 
   if (!res.ok || !res.body) {
-    let messages = [`APIエラー (${res.status})`];
+    // 401 はログインへ。403 は業務ビューの KB を利用できない理由をチャット内で見せるため、
+    // 権限なしの画面へは移さない（#214）。
+    notifyResponseAuthStatus(res, { inlineForbidden: true });
+    let envelope: unknown = null;
     try {
-      const envelope = await res.json();
-      if (Array.isArray(envelope?.error_messages) && envelope.error_messages.length) {
-        messages = envelope.error_messages;
-      } else if (typeof envelope?.detail === "string") {
-        messages = [envelope.detail];
-      }
+      envelope = await res.json();
     } catch {
       // SSE エラー時に JSON でない場合は既定メッセージを使う
     }
-    throw new ApiError(res.status, messages);
+    const detail = (envelope as { detail?: unknown } | null)?.detail;
+    const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
+    if (error.messages[0] === `APIエラー (${res.status})` && typeof detail === "string") {
+      throw new ApiError(res.status, [detail], {
+        errorCode: error.errorCode,
+        requestId: error.requestId,
+      });
+    }
+    throw error;
   }
 
   const reader = res.body.getReader();

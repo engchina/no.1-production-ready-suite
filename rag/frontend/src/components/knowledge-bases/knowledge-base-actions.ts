@@ -1,9 +1,11 @@
 import type { EntityAction } from "@engchina/production-ready-ui";
 import { Archive } from "lucide-react";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, DEFAULT_KNOWLEDGE_BASE_NAME, type KnowledgeBaseSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import { useArchiveKnowledgeBase } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
@@ -12,10 +14,12 @@ type KnowledgeBaseTarget = Pick<KnowledgeBaseSummary, "id" | "name" | "status">;
 /**
  * ナレッジベース 1 件に対する操作（buttons.md §5.1）。一覧の行（RowActionMenu）と
  * 詳細（ObjectActionBar）で同じ定義を使う。アーカイブは danger の項目として確認を通す。
+ * アーカイブはナレッジベース管理（`rag.knowledge_bases.manage`）の権限がある利用者だけに出す（#214）。
  */
 export function useKnowledgeBaseActions() {
   const confirm = useConfirm();
   const archive = useArchiveKnowledgeBase();
+  const canManage = useAuth().hasPermission(CAPABILITY_PERMISSIONS.knowledgeBasesManage);
 
   const handleArchive = async (knowledgeBase: KnowledgeBaseTarget) => {
     const ok = await confirm({
@@ -45,7 +49,7 @@ export function useKnowledgeBaseActions() {
         ariaLabel: isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined,
         icon: Archive,
         tone: "danger",
-        visible: knowledgeBase.status !== "ARCHIVED",
+        visible: canManage && knowledgeBase.status !== "ARCHIVED",
         disabled: isDefault,
         loading: archive.isPending && archive.variables === knowledgeBase.id,
         testId: `knowledge-base-archive-${knowledgeBase.id}`,

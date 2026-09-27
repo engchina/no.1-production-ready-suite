@@ -1,6 +1,141 @@
 import { expect, type Page } from "@playwright/test";
 
 /**
+ * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
+ * 権限コードは backend `app/security/permissions.py` の権限カタログと同じ（unit テストで一致を確かめる）。
+ */
+export const MENU_PERMISSION_CODES = [
+  "menu.search",
+  "menu.chat",
+  "menu.business_views",
+  "menu.evaluation",
+  "menu.feedback",
+  "menu.dashboard",
+  "menu.upload",
+  "menu.file_list",
+  "menu.knowledge_bases",
+  "menu.settings_pipeline",
+  "menu.settings_preprocess",
+  "menu.settings_parser_adapters",
+  "menu.settings_chunking",
+  "menu.settings_vector_index",
+  "menu.settings_retrieval",
+  "menu.settings_grounding",
+  "menu.settings_generation",
+  "menu.settings_prompts",
+  "menu.settings_guardrail",
+  "menu.settings_evaluation",
+  "menu.settings_graph",
+  "menu.settings_agentic",
+  "menu.settings_huggingface",
+  "menu.settings_services",
+  "menu.security_users",
+  "menu.security_roles",
+  "menu.security_permissions",
+  "menu.settings_oci",
+  "menu.settings_upload_storage",
+  "menu.settings_model",
+  "menu.settings_database",
+  "menu.settings_appearance",
+] as const;
+
+export const CAPABILITY_PERMISSION_CODES = [
+  "rag.business_views.manage",
+  "rag.knowledge_bases.manage",
+  "rag.feedback.manage",
+  "rag.system_tables.manage",
+] as const;
+
+export const ALL_PERMISSION_CODES: string[] = [
+  ...MENU_PERMISSION_CODES,
+  ...CAPABILITY_PERMISSION_CODES,
+];
+
+export interface CurrentUserPayload {
+  user_uuid: string;
+  login_user_id: string;
+  display_name: string;
+  status: string;
+  force_password_change: boolean;
+  role_codes: string[];
+  is_system_admin: boolean;
+  permissions: string[];
+  allowed_business_view_ids: string[] | null;
+  allowed_knowledge_base_ids: string[] | null;
+  debug_mode: boolean;
+  password_change_allowed: boolean;
+}
+
+/** ローカル DEBUG（`auth_mode=local`）の利用者。ログインなしで全画面を使える（backend の local_debug_principal と同じ）。 */
+export const LOCAL_CURRENT_USER: CurrentUserPayload = {
+  user_uuid: "00000000-0000-0000-0000-000000000000",
+  login_user_id: "local",
+  display_name: "ローカル利用者",
+  status: "ACTIVE",
+  force_password_change: false,
+  role_codes: ["SYSTEM_ADMIN"],
+  is_system_admin: true,
+  permissions: ALL_PERMISSION_CODES,
+  allowed_business_view_ids: null,
+  allowed_knowledge_base_ids: null,
+  debug_mode: true,
+  password_change_allowed: false,
+};
+
+export function apiEnvelope<T>(data: T) {
+  return { data, error_messages: [] as string[], warning_messages: [] as string[] };
+}
+
+/** `GET /api/auth/me` のローカル DEBUG の応答。 */
+export const LOCAL_AUTH_ME = apiEnvelope(LOCAL_CURRENT_USER);
+
+/** `/api/auth/me` をローカル DEBUG の利用者（全権限・範囲の制限なし）にする。 */
+export async function mockLocalAuth(page: Page): Promise<void> {
+  await page.route("**/api/auth/me", (route) => route.fulfill({ json: LOCAL_AUTH_ME }));
+}
+
+/** DB ユーザー（ログイン済み）の CurrentUser。既定は権限なし・範囲なし。 */
+export function dbUser(overrides: Partial<CurrentUserPayload> = {}): CurrentUserPayload {
+  return {
+    user_uuid: "11111111-1111-1111-1111-111111111111",
+    login_user_id: "user01",
+    display_name: "利用者 一郎",
+    status: "ACTIVE",
+    force_password_change: false,
+    role_codes: ["RAG_USER"],
+    is_system_admin: false,
+    permissions: [],
+    allowed_business_view_ids: [],
+    allowed_knowledge_base_ids: [],
+    debug_mode: false,
+    password_change_allowed: true,
+    ...overrides,
+  };
+}
+
+/**
+ * `/api/auth/me` を、任意の権限・対象範囲を持つログイン済みの DB ユーザーにする。
+ * 返した関数で利用者を差し替えられる（null で 401 = 未ログイン）。
+ */
+export async function mockAuthUser(
+  page: Page,
+  overrides: Partial<CurrentUserPayload> = {}
+): Promise<(next: CurrentUserPayload | null) => void> {
+  let current: CurrentUserPayload | null = dbUser(overrides);
+  await page.route("**/api/auth/me", (route) =>
+    current
+      ? route.fulfill({ json: apiEnvelope(current) })
+      : route.fulfill({
+          status: 401,
+          json: { data: null, error_messages: ["ログインが必要です。"], warning_messages: [] },
+        })
+  );
+  return (next) => {
+    current = next;
+  };
+}
+
+/**
  * DB ゲート用の共通モック。
  * 設定ページ以外を開く前に呼ばれる `/api/ready/database` を「利用可能」にして、
  * ゲートに塞がれず本来のページを描画させる。

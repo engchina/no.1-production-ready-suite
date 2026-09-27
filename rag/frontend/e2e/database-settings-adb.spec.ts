@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+import { SYSTEM_TABLES_STATUS_OK, mockLocalAuth } from "./_helpers";
 
 type AdbStatus =
   | "success"
@@ -43,18 +43,6 @@ const databaseSettings = {
   config_source: "runtime" as const,
 };
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 function adbInfo(overrides: Partial<AdbInfoData> = {}): AdbInfoData {
   return {
     status: "success",
@@ -71,9 +59,7 @@ function adbInfo(overrides: Partial<AdbInfoData> = {}): AdbInfoData {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 interface AdbMockHandlers {

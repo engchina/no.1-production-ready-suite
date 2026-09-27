@@ -20,6 +20,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   useInitializeSystemTables,
   useSystemTablesStatus,
@@ -73,6 +75,8 @@ const OPERATION_KEYS: Record<SystemTablesOperationData["operation"], I18nKey> = 
 export function SystemTablesCard() {
   const statusQuery = useSystemTablesStatus();
   const operation = useInitializeSystemTables();
+  // 初期化・全再作成はシステムテーブル管理の権限がある利用者だけ。状態の確認は誰でもできる（#214）。
+  const canManage = useAuth().hasPermission(CAPABILITY_PERMISSIONS.systemTablesManage);
   const confirm = useConfirm();
   const [operationError, setOperationError] = useState("");
   const [recreateConfirmation, setRecreateConfirmation] = useState("");
@@ -259,16 +263,24 @@ export function SystemTablesCard() {
               </Banner>
             ) : null}
 
+            {!canManage ? (
+              <Banner severity="info">
+                {t("settings.database.systemTables.permissionRequired")}
+              </Banner>
+            ) : null}
+
             <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-              <Button
-                type="button"
-                size="lg"
-                className="min-h-[44px]"
-                loading={operation.isPending && operation.variables?.recreate === false}
-                disabled={busy}
-                onClick={() => execute(false)} icon={DatabaseZap}>
-                {t("settings.database.systemTables.action.initialize")}
-              </Button>
+              {canManage ? (
+                <Button
+                  type="button"
+                  size="lg"
+                  className="min-h-[44px]"
+                  loading={operation.isPending && operation.variables?.recreate === false}
+                  disabled={busy}
+                  onClick={() => execute(false)} icon={DatabaseZap}>
+                  {t("settings.database.systemTables.action.initialize")}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 size="lg"
@@ -283,6 +295,7 @@ export function SystemTablesCard() {
 
             <SystemTablesDetails data={data} />
 
+            {canManage ? (
             <section
               className="space-y-4 border-t border-danger-border pt-5"
               aria-labelledby="recreate-system-tables-title"
@@ -345,6 +358,7 @@ export function SystemTablesCard() {
                 {t("settings.database.systemTables.action.recreate")}
               </Button>
             </section>
+            ) : null}
           </>
         ) : null}
       </CardContent>

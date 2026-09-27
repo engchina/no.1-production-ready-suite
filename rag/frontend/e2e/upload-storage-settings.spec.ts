@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 interface UploadStorageSettingsData {
   backend: "local" | "oci";
@@ -25,21 +25,7 @@ const localStorageSettings: UploadStorageSettingsData = {
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          mode: "local",
-          auth_required: false,
-          authenticated: true,
-          user: null,
-          expires_at: null,
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
+  await mockLocalAuth(page);
 });
 
 // 画面は platform の共有パッケージ（NL2SQL と同じ画面。#97）。右側の状態パネル / .env プレビューは持たない。

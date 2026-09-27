@@ -7,6 +7,9 @@
  */
 
 import { t } from "./i18n";
+// Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
+import { csrfHeader, notifyAuthStatus } from "@engchina/production-ready-system-settings";
+import type { BaseCurrentUser } from "@engchina/production-ready-system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
@@ -230,27 +233,53 @@ export interface Page<T> {
   has_next: boolean;
 }
 
-// --- 認証 ---
-export interface AuthUser {
+// --- 認証（platform の共通認証。#214） ---
+/** CSRF の double submit に使う Cookie 名（backend の `RAG_APP_AUTH_CSRF_COOKIE_NAME` の既定値）。 */
+export const CSRF_COOKIE_NAME = "rag_csrf";
+
+/**
+ * `GET /api/auth/me` などが返すログイン中の利用者。`permissions` は implies を展開済み。
+ * `allowed_*_ids` が null なら制限なし（SYSTEM_ADMIN・`rag.*.manage`・ローカル DEBUG）。
+ */
+export interface CurrentUser extends BaseCurrentUser {
+  allowed_business_view_ids: string[] | null;
+  allowed_knowledge_base_ids: string[] | null;
+}
+
+/** ロール（共通のロール項目に RAG の権限と対象範囲を足したもの）。 */
+export interface SecurityRole {
+  role_id: string;
+  role_code: string;
+  display_name: string;
+  description: string;
+  is_built_in: boolean;
+  archived: boolean;
+  version: number;
+  permissions: string[];
+  business_view_ids: string[];
+  knowledge_base_ids: string[];
+}
+
+/** 権限管理で選べる対象（業務ビュー・ナレッジベース）。 */
+export interface AccessTarget {
   id: string;
   name: string;
-  role: string;
+  status: string;
+  description: string | null;
 }
 
-export interface AuthStatus {
-  mode: "local" | "production" | string;
-  auth_required: boolean;
-  authenticated: boolean;
-  user: AuthUser | null;
-  expires_at: number | null;
-  /** チャット(会話)機能が有効か(運用キルスイッチ)。 */
-  chat_enabled: boolean;
+export interface AccessTargetsData {
+  business_views: AccessTarget[];
+  knowledge_bases: AccessTarget[];
 }
 
-export interface LoginRequestBody {
-  username: string;
-  password: string;
-  remember_me: boolean;
+/** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */
+export interface RoleAccessUpdate {
+  role_id: string;
+  version: number;
+  permissions: string[];
+  business_view_ids: string[];
+  knowledge_base_ids: string[];
 }
 
 // --- ダッシュボード ---
@@ -2239,16 +2268,91 @@ export interface AgenticSettingsUpdate {
 // --- 設定: OCI config ---
 
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
+/** 入力項目に結び付く API の問題（JSON Pointer と表示文言）。 */
+export interface ApiFieldError {
+  pointer: string;
+  message: string;
+}
+
+export interface ApiErrorDetails {
+  /** 機械判定用のエラーコード（共通認証・ユーザー / ロール操作の `error_code`）。 */
+  errorCode?: string;
+  fieldErrors?: ApiFieldError[];
+  requestId?: string;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly messages: string[];
+  readonly errorCode?: string;
+  readonly fieldErrors: ApiFieldError[];
+  readonly requestId?: string;
 
-  constructor(status: number, messages: string[]) {
+  constructor(status: number, messages: string[], details: ApiErrorDetails = {}) {
     super(messages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    this.errorCode = details.errorCode;
+    this.fieldErrors = details.fieldErrors ?? [];
+    this.requestId = details.requestId;
   }
+}
+
+interface ErrorEnvelope {
+  error_messages?: unknown;
+  error_code?: unknown;
+  problem?: { field_errors?: unknown; request_id?: unknown } | null;
+}
+
+function fieldErrorsOf(value: unknown): ApiFieldError[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { pointer, message } = item as { pointer?: unknown; message?: unknown };
+    return typeof message === "string"
+      ? [{ pointer: typeof pointer === "string" ? pointer : "", message }]
+      : [];
+  });
+}
+
+/** エラー応答（ApiResponse envelope）から ApiError を作る。stream の直接 fetch も使う。 */
+export function apiErrorFromEnvelope(
+  status: number,
+  envelope: unknown,
+  requestId?: string | null,
+): ApiError {
+  const body = (envelope && typeof envelope === "object" ? envelope : {}) as ErrorEnvelope;
+  const messages = Array.isArray(body.error_messages)
+    ? body.error_messages.filter((item): item is string => typeof item === "string")
+    : [];
+  const problemRequestId =
+    typeof body.problem?.request_id === "string" ? body.problem.request_id : undefined;
+  return new ApiError(status, messages.length > 0 ? messages : [`APIエラー (${status})`], {
+    errorCode: typeof body.error_code === "string" ? body.error_code : undefined,
+    fieldErrors: fieldErrorsOf(body.problem?.field_errors),
+    requestId: requestId || problemRequestId,
+  });
+}
+
+export interface AuthHeaderOptions {
+  /** 403 を権限なしの画面へ移すイベントにしない（業務ビュー / KB の範囲外など、理由をその場で見せる API）。 */
+  inlineForbidden?: boolean;
+}
+
+/** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
+export function withCsrfHeaders(method: string | undefined, headers?: HeadersInit): Headers {
+  const merged = new Headers(headers);
+  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method ?? "GET"))) {
+    merged.set(name, value);
+  }
+  return merged;
+}
+
+/** 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。 */
+export function notifyResponseAuthStatus(res: Response, options: AuthHeaderOptions = {}): void {
+  if (res.status === 403 && options.inlineForbidden) return;
+  notifyAuthStatus(res.status, res.headers.get("X-Request-ID") || undefined);
 }
 
 function resolveTimeoutMs(value: unknown, fallbackMs: number): number {
@@ -2277,11 +2381,19 @@ async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   }
 }
 
-/** ApiResponse エンベロープを取得し、エラー時は ApiError を投げる。 */
+interface RequestOptions extends AuthHeaderOptions {
+  allowStatus?: number[];
+  timeoutMs?: number;
+}
+
+/**
+ * ApiResponse エンベロープを取得し、エラー時は ApiError を投げる。
+ * Cookie セッションの CSRF header の付与と、401 / 403 の認証イベントの通知もここで行う（#214）。
+ */
 async function requestEnvelope<T>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {},
+  options: RequestOptions = {},
 ): Promise<ApiResponse<T>> {
   const timeoutMs =
     runtimeApiTimeoutOverrideMs() ??
@@ -2308,22 +2420,20 @@ async function requestEnvelope<T>(
     }, timeoutMs);
   }
 
+  const headers = withCsrfHeaders(init?.method, init?.headers);
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
+
   try {
     const res = await fetch(path, {
       ...init,
       credentials: "same-origin",
       signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        ...(init?.headers ?? {}),
-      },
+      headers,
     });
     const envelope = await parseEnvelope<T>(res);
     if (!res.ok && !options.allowStatus?.includes(res.status)) {
-      const messages = envelope.error_messages?.length
-        ? envelope.error_messages
-        : [`APIエラー (${res.status})`];
-      throw new ApiError(res.status, messages);
+      notifyResponseAuthStatus(res, options);
+      throw apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
     }
     return envelope;
   } catch (error) {
@@ -2338,10 +2448,10 @@ async function requestEnvelope<T>(
 }
 
 /** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
-async function request<T>(
+export async function request<T>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {},
+  options: RequestOptions = {},
 ): Promise<T> {
   const envelope = await requestEnvelope<T>(path, init, options);
   return envelope.data as T;
@@ -2355,7 +2465,7 @@ async function request<T>(
 async function requestDegradable<T extends object>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {},
+  options: RequestOptions = {},
 ): Promise<Degradable<T>> {
   const envelope = await requestEnvelope<T>(path, init, options);
   return {
@@ -2380,11 +2490,7 @@ function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
 }
 
 export const api = {
-  // 認証
-  getAuthStatus: () => request<AuthStatus>("/api/auth/me"),
-  login: (body: LoginRequestBody) =>
-    request<AuthStatus>("/api/auth/login", jsonBody(body)),
-  logout: () => request<AuthStatus>("/api/auth/logout", { method: "POST" }),
+  // 認証・ユーザー / ロール・権限管理は securityApi（lib/security-api.ts。#214）。
 
   // ヘルスチェック
   getReadiness: () =>
@@ -2976,8 +3082,9 @@ export const api = {
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
 
   // 検索
+  // 業務ビュー / KB の範囲外の 403 は理由をその場で見せる（権限なしの画面へ移さない。#214）。
   search: (body: SearchRequestBody) =>
-    request<SearchResponse>("/api/search", jsonBody(body)),
+    request<SearchResponse>("/api/search", jsonBody(body), { inlineForbidden: true }),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>(
       "/api/search/citation-feedback",

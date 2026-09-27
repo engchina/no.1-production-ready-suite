@@ -5,6 +5,7 @@ import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 
 import {
   api,
+  notifyResponseAuthStatus,
   type DocumentPreprocessArtifact,
   type SourcePreviewKind,
   type SourceProfile,
@@ -424,9 +425,13 @@ function TextPreview({ url }: { url: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(url, { signal: controller.signal })
+    fetch(url, { signal: controller.signal, credentials: "same-origin" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
+        if (!res.ok) {
+          // セッション切れはログインへ。範囲外の 403 はプレビュー内の失敗表示にとどめる（#214）。
+          notifyResponseAuthStatus(res, { inlineForbidden: true });
+          throw new Error(String(res.status));
+        }
         const charset = charsetFromContentType(res.headers.get("Content-Type"));
         return decodeText(await res.arrayBuffer(), charset);
       })

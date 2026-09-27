@@ -1,14 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { expectNoPageOverflow } from "./_helpers";
-
-const authStatus = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
 });
 
 test("検索・回答設定の概要ハブが工程をフェーズ別カードで俯瞰し各設定へ導線を出す", async ({ page }) => {

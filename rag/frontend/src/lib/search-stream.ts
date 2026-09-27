@@ -3,7 +3,14 @@
  * バックエンドは stage(複数) / metadata / delta(複数) / citations / done のイベントを送る。
  */
 
-import { ApiError, type RetrievedChunk, type SearchDiagnostics, type SearchRequestBody } from "./api";
+import {
+  apiErrorFromEnvelope,
+  notifyResponseAuthStatus,
+  withCsrfHeaders,
+  type RetrievedChunk,
+  type SearchDiagnostics,
+  type SearchRequestBody,
+} from "./api";
 
 export interface SearchStageEvent {
   trace_id: string;
@@ -36,22 +43,27 @@ export async function streamSearch(
 ): Promise<void> {
   const res = await fetch("/api/search/stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    // Cookie セッションの CSRF（#214）。
+    headers: withCsrfHeaders("POST", {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    }),
+    credentials: "same-origin",
     body: JSON.stringify(body),
     signal,
   });
 
   if (!res.ok || !res.body) {
-    let messages = [`APIエラー (${res.status})`];
+    // 401 はログインへ。403 は業務ビュー / KB を利用できない理由を検索結果の位置で見せるため、
+    // 権限なしの画面へは移さない（#214）。
+    notifyResponseAuthStatus(res, { inlineForbidden: true });
+    let envelope: unknown = null;
     try {
-      const envelope = await res.json();
-      if (Array.isArray(envelope?.error_messages) && envelope.error_messages.length) {
-        messages = envelope.error_messages;
-      }
+      envelope = await res.json();
     } catch {
       // SSE エラー時に JSON でない場合は既定メッセージを使う
     }
-    throw new ApiError(res.status, messages);
+    throw apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
   }
 
   const reader = res.body.getReader();
