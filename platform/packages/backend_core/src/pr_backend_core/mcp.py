@@ -46,10 +46,18 @@ HasAnyPermission = Callable[[frozenset[str]], bool]
 class McpToolError(Exception):
     """ツールが利用者に返す業務エラー（`isError: true`）。"""
 
-    def __init__(self, code: str, message: str, *, details: Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status: int | None = None,
+        details: Mapping[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.status = status
         self.details = dict(details or {})
 
 
@@ -168,7 +176,10 @@ class McpServer:
         try:
             output = await _invoke(tool.handler, validated)
         except McpToolError as exc:
-            return _result(request_id, tool_error(exc.code, exc.message, details=exc.details))
+            return _result(
+                request_id,
+                tool_error(exc.code, exc.message, status=exc.status, details=exc.details),
+            )
         except Exception as exc:  # noqa: BLE001 - 業務エラーを isError にし、それ以外は隠す
             converted = _http_error(exc)
             if converted is None:
@@ -187,8 +198,14 @@ async def _invoke(handler: Callable[[Any], Any], argument: BaseModel) -> Any:
     return result
 
 
-def _http_error(exc: Exception) -> dict[str, Any] | None:
-    """`HTTPException` と、`status_code` を持つ製品の例外（`SecurityApiError` など）を変換する。"""
+def mcp_error_from_exception(
+    exc: Exception, *, details: Mapping[str, Any] | None = None
+) -> McpToolError | None:
+    """`HTTPException` と、`status_code` を持つ製品の例外（`SecurityApiError` など）を
+    ツールのエラーにする。500 系の内部エラー（502 / 503 / 504 以外）は None（内容を隠す）。
+
+    ツールが失敗に詳細（例: 作成済みの ID）を添えたいときに、`details` を足して raise する（#252）。
+    """
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int) or status >= 500 and status not in {502, 503, 504}:
         return None
@@ -199,9 +216,19 @@ def _http_error(exc: Exception) -> dict[str, Any] | None:
     if isinstance(detail, dict):
         code = code or detail.get("code") or detail.get("error_code")
         detail = detail.get("message") or detail.get("detail") or json.dumps(detail)
-    return tool_error(
-        str(code or f"HTTP_{status}"), str(detail or "処理できませんでした。"), status=status
+    return McpToolError(
+        str(code or f"HTTP_{status}"),
+        str(detail or "処理できませんでした。"),
+        status=status,
+        details=details,
     )
+
+
+def _http_error(exc: Exception) -> dict[str, Any] | None:
+    converted = mcp_error_from_exception(exc)
+    if converted is None:
+        return None
+    return tool_error(converted.code, converted.message, status=converted.status)
 
 
 def tool_result(output: Any) -> dict[str, Any]:
