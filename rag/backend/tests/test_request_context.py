@@ -191,3 +191,19 @@ def test_audit_request_context_is_scoped_to_current_context() -> None:
         reset_audit_request_context(token)
 
     assert current_audit_request_context() == AuditRequestContext()
+
+
+def test_production_context_ignores_tenant_header() -> None:
+    """production（利用者から範囲を決める経路）は X-Tenant-ID を使わない（#225）。"""
+    from app.rag.request_context import audit_request_context_for_principal
+
+    context = audit_request_context_for_principal(
+        {"x-tenant-id": "other-tenant", "x-user-id": "spoofed"},
+        request_id="req-1",
+        user_uuid="user-1",
+        allowed_business_view_ids=None,
+        allowed_knowledge_base_ids=None,
+    )
+    assert context.tenant_id_hash is None
+    local = audit_request_context_from_headers({"x-tenant-id": "other-tenant"}, request_id="req-2")
+    assert local.tenant_id_hash is not None
