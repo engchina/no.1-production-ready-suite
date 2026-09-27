@@ -684,6 +684,8 @@ export interface BusinessViewAccessTarget {
 export interface AccessTargetsData {
   agents: AgentAccessTarget[];
   business_views: BusinessViewAccessTarget[];
+  /** RAG の業務ビューを読めなかった理由（#240）。 */
+  business_view_warnings?: string[];
 }
 
 /** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */

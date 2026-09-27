@@ -149,6 +149,7 @@ async def list_access_targets(request: Request) -> ApiResponse[AccessTargetsData
                 for view_id in sorted(view_ids)
                 if principal.can_use_business_view(view_id)
             ],
+            business_view_warnings=warnings,
         ),
         warning_messages=warnings,
     )

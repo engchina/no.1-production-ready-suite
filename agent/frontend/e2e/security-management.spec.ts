@@ -151,5 +151,21 @@ for (const viewport of VIEWPORTS) {
       const views = page.getByTestId("security-roles-business-view-access-list");
       await expect(views.getByRole("checkbox", { name: /legacy-view/ })).toBeChecked();
     });
+
+    test("RAG の業務ビューを読めなかったときは、候補を出したまま理由を警告で表示する（#240）", async ({
+      page,
+      mockApi,
+    }) => {
+      const warning = "RAG の業務ビューを取得できませんでした（RAG の MCP の URL が設定されていません）。";
+      mockApi.state.security.accessTargets.business_view_warnings = [warning];
+
+      await page.goto("/settings/security/permissions?role=role-operator");
+      await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
+      // 色だけに頼らない警告（Banner はアイコン付き）と、読めた候補の一覧を両方出す。
+      await expect(page.getByText(warning)).toBeVisible();
+      await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+      await expect(page.getByTestId("security-roles-business-view-access-list").getByRole("checkbox").first()).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
   });
 }

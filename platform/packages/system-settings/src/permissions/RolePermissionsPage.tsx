@@ -59,6 +59,7 @@ import type {
   PermissionRole,
   RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
+  RolePermissionTargetLoadResult,
   RolePermissionTargetSection,
   RolePermissionsApi,
   RolePermissionsDraft,
@@ -92,6 +93,18 @@ export function targetItemLabel(item: RolePermissionTargetItem) {
  * 候補にない ID（直接入力した ID や、候補の取得元に現れなくなった保存済みの ID）を候補の末尾に足す。
  * 名前は ID のまま、`customStatus` があれば状態として添える（#215）。
  */
+/**
+ * 対象の `load` の結果を、候補と警告にそろえる（#240）。配列は全件読めた結果、
+ * `{ items, warning }` は一部だけ読めた結果（読めた候補を出し、警告を表示する）。
+ */
+export function targetLoadRows(result: RolePermissionTargetItem[] | RolePermissionTargetLoadResult): {
+  rows: RolePermissionTargetItem[];
+  warning: string;
+} {
+  if (Array.isArray(result)) return { rows: result, warning: "" };
+  return { rows: result.items, warning: result.warning?.trim() ?? "" };
+}
+
 export function targetItemsWithCustomIds(
   items: readonly RolePermissionTargetItem[],
   ids: readonly string[],
@@ -352,7 +365,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         const targetRequests = targets.map((target) =>
           target
             .load({ signal })
-            .then((rows) => ({ key: target.key, rows, warning: "" }))
+            .then((result) => ({ key: target.key, ...targetLoadRows(result) }))
             .catch((cause: unknown) => {
               if (isAbortError(cause)) throw cause;
               const message =

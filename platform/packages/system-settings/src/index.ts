@@ -209,6 +209,7 @@ export {
   permissionInheritanceSources,
   targetItemLabel,
   targetItemsWithCustomIds,
+  targetLoadRows,
   type RolePermissionsPageProps,
 } from "./permissions/RolePermissionsPage";
 export {
@@ -221,6 +222,7 @@ export type {
   PermissionRole,
   RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
+  RolePermissionTargetLoadResult,
   RolePermissionTargetSection,
   RolePermissionsApi,
   RolePermissionsDraft,
