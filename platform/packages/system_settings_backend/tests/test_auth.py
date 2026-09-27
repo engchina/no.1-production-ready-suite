@@ -2,20 +2,32 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 
 from pr_system_settings.auth import service as auth_service
+from pr_system_settings.auth.dependencies import authorize_request
 from pr_system_settings.auth.domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
     SYSTEM_ADMIN_ROLE_ID,
     Principal,
     RoleRecord,
 )
-from pr_system_settings.auth.errors import SecurityApiError
+from pr_system_settings.auth.errors import (
+    ROUTE_FORBIDDEN_CODE,
+    ROUTE_FORBIDDEN_CODES,
+    ROUTE_UNCLASSIFIED_CODE,
+    SecurityApiError,
+)
 from pr_system_settings.auth.migrations import (
     PLATFORM_AUTH_DDL,
     PLATFORM_AUTH_DDL_IGNORED_ERRORS,
@@ -331,3 +343,80 @@ def test_role_permission_codes_rejects_unregistered_tables_and_skips_missing() -
     assert result == {"RAG_ROLE_PERMISSIONS": {}}
     with pytest.raises(Exception, match="未登録"):
         store.role_permission_codes(["r1"], tables=["PLATFORM_USERS"])
+
+
+def _authorize_app(service: AuthService, *, permissions: frozenset[str] | None) -> Any:
+    settings = SimpleNamespace(
+        local_debug_enabled=False,
+        app_auth_enabled=True,
+        app_auth_session_cookie_name="s",
+        app_auth_csrf_cookie_name="c",
+    )
+
+    async def run_sync(func: Any, *args: Any) -> Any:
+        return func(*args)
+
+    async def dependency(request: Request) -> Any:
+        async with authorize_request(
+            request,
+            settings=settings,
+            service=service,
+            run_sync=run_sync,
+            permission_for_route=lambda method, path: permissions,
+            public_paths=(),
+            authenticated_without_permission=(),
+            local_debug_principal=lambda: None,  # type: ignore[arg-type,return-value]
+            enter_actor=lambda principal: nullcontext(),
+            exit_actor=lambda token: None,
+            unclassified_permission="__unclassified__",
+        ):
+            yield
+
+    app = FastAPI()
+
+    @app.exception_handler(SecurityApiError)
+    async def handler(request: Request, exc: SecurityApiError) -> JSONResponse:
+        return JSONResponse({"error_code": exc.code}, status_code=exc.status_code)
+
+    @app.get("/probe", dependencies=[Depends(dependency)])
+    def probe() -> dict[str, bool]:
+        return {"ok": True}
+
+    return TestClient(app)
+
+
+def test_authorize_request_keeps_route_error_codes() -> None:
+    """経路の権限拒否・未登録の API は専用の error_code で返す（#224）。"""
+    service, _ = _service()
+    _, token, _ = service.login("ADMIN", ADMIN_PASSWORD)
+    # SYSTEM_ADMIN 以外にするため、権限のないユーザーでも確かめる。
+    admin = _admin(service)
+    viewer_role = service.create_role(
+        role_code="VIEWER", display_name="閲覧", description="", actor=admin
+    )
+    user, _ = service.create_user(
+        login_user_id="viewer",
+        display_name="閲覧者",
+        role_ids=[viewer_role.role_id],
+        temporary_password="Kq7#Lomber!Vt29",
+        actor=admin,
+    )
+    _, store = service, service.store
+    assert isinstance(store, InMemoryAuthStore)
+    store.set_password(
+        user.user_uuid, service._hash_password("Kq7#Lomber!Vt29"), force_change=False
+    )
+    _, viewer_token, _ = service.login("viewer", "Kq7#Lomber!Vt29")
+
+    denied = _authorize_app(service, permissions=frozenset({"menu.search"}))
+    response = denied.get("/probe", cookies={"s": viewer_token})
+    assert (response.status_code, response.json()["error_code"]) == (403, ROUTE_FORBIDDEN_CODE)
+
+    unclassified = _authorize_app(service, permissions=frozenset({"__unclassified__"}))
+    response = unclassified.get("/probe", cookies={"s": token})
+    assert (response.status_code, response.json()["error_code"]) == (403, ROUTE_UNCLASSIFIED_CODE)
+
+    response = denied.get("/probe")
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "SECURITY_AUTHENTICATION_REQUIRED"
+    assert {ROUTE_FORBIDDEN_CODE, ROUTE_UNCLASSIFIED_CODE} == ROUTE_FORBIDDEN_CODES

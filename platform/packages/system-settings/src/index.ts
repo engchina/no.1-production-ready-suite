@@ -178,6 +178,10 @@ export {
   AUTH_FORBIDDEN_EVENT,
   AUTH_UNAUTHORIZED_EVENT,
   notifyAuthStatus,
+  notifyAuthResponse,
+  responseErrorCode,
+  isRouteForbidden,
+  ROUTE_FORBIDDEN_ERROR_CODES,
   useForbiddenRedirect,
   type AuthForbiddenDetail,
 } from "./auth/events";

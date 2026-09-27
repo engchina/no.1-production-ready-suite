@@ -38,6 +38,7 @@ from .domain import (
     UserRecord,
 )
 from .errors import (
+    CSRF_INVALID_CODE,
     LoginFailed,
     SecurityApiError,
     SecurityConflict,
@@ -249,11 +250,15 @@ class AuthService:
             or not hmac.compare_digest(cookie_token, header_token)
         ):
             raise SecurityApiError(
-                403, "リクエストの安全性を確認できません。画面を再読込してください。"
+                403,
+                "リクエストの安全性を確認できません。画面を再読込してください。",
+                code=CSRF_INVALID_CODE,
             )
         if not hmac.compare_digest(hash_token(header_token), principal.csrf_token_hash):
             raise SecurityApiError(
-                403, "リクエストの安全性を確認できません。画面を再読込してください。"
+                403,
+                "リクエストの安全性を確認できません。画面を再読込してください。",
+                code=CSRF_INVALID_CODE,
             )
 
     def logout(self, principal: Principal, *, request_id: str = "", client_ip: str = "") -> None:

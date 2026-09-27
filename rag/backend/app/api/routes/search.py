@@ -9,6 +9,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
 from app.config import Settings, get_settings
@@ -37,6 +38,7 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
+from app.security.permissions import SCOPE_FORBIDDEN_CODE
 
 router = APIRouter()
 SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
@@ -210,7 +212,9 @@ def ensure_business_view_knowledge_bases_permitted(knowledge_base_ids: Sequence[
     """業務ビューの参照 KB が 1 つも利用できないなら 403（黙って 0 件にしない。#214）。"""
     permitted = permitted_knowledge_base_ids(knowledge_base_ids)
     if knowledge_base_ids and permitted is not None and not permitted:
-        raise HTTPException(status_code=403, detail=BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE)
+        raise SecurityApiError(
+            403, BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE, code=SCOPE_FORBIDDEN_CODE
+        )
 
 
 def _scope_request_knowledge_bases(
@@ -229,13 +233,14 @@ def _scope_request_knowledge_bases(
     if permitted is None or permitted == list(request.knowledge_base_ids):
         return request
     if not permitted:
-        raise HTTPException(
-            status_code=403,
-            detail=(
+        raise SecurityApiError(
+            403,
+            (
                 BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
                 if from_business_view
                 else REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
             ),
+            code=SCOPE_FORBIDDEN_CODE,
         )
     return _with_knowledge_base_ids(request, permitted)
 

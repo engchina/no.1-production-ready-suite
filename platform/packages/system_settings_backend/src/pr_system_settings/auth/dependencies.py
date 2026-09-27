@@ -14,7 +14,12 @@ from typing import Any, Protocol
 from fastapi import HTTPException, Request
 
 from .domain import Principal
-from .errors import SecurityApiError
+from .errors import (
+    PASSWORD_CHANGE_REQUIRED_CODE,
+    ROUTE_FORBIDDEN_CODE,
+    ROUTE_UNCLASSIFIED_CODE,
+    SecurityApiError,
+)
 from .service import AuthService
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -98,16 +103,21 @@ async def authorize_request(
             header_csrf = request.headers.get("X-CSRF-Token", "")
             await run_sync(service.verify_csrf, principal, cookie_csrf, header_csrf)
         if principal.force_password_change and route_path not in authenticated_without_permission:
-            raise SecurityApiError(403, "初回パスワード変更を完了してください。")
+            raise SecurityApiError(
+                403, "初回パスワード変更を完了してください。", code=PASSWORD_CHANGE_REQUIRED_CODE
+            )
         permissions = permission_for_route(request.method, route_path)
         if permissions and unclassified_permission in permissions:
-            raise SecurityApiError(403, "この API は権限一覧に登録されていません。")
+            raise SecurityApiError(
+                403, "この API は権限一覧に登録されていません。", code=ROUTE_UNCLASSIFIED_CODE
+            )
         if permissions is not None and not principal.has_any_permission(set(permissions)):
-            raise SecurityApiError(403, "この機能を利用する権限がありません。")
-    except SecurityApiError as exc:
-        if exc.code == "SECURITY_SCHEMA_MIGRATION_REQUIRED":
-            raise
-        raise HTTPException(status_code=exc.status_code, detail=exc.public_message) from exc
+            raise SecurityApiError(
+                403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
+            )
+    except SecurityApiError:
+        # error_code を落とさないよう、製品の SecurityApiError の handler で返す（#224）。
+        raise
     token = enter_actor(principal)
     try:
         yield

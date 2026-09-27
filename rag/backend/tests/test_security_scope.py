@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
-from fastapi import HTTPException
+from pr_system_settings.auth.errors import SecurityApiError
 from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
@@ -34,6 +34,7 @@ from app.rag.system_schema import (
 )
 from app.schemas.business_view import BusinessViewDetail
 from app.schemas.search import SearchRequest
+from app.security.permissions import SCOPE_FORBIDDEN_CODE
 from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_oracle_adapter import FakeOraclePool, _oracle_knowledge_base_row, _run_inline
@@ -400,6 +401,8 @@ def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
         )
         assert denied.status_code == 403, path
         assert denied.json()["error_messages"] == message
+        # 範囲外は経路の権限拒否と区別できる error_code で返す（#224）。
+        assert denied.json()["error_code"] == SCOPE_FORBIDDEN_CODE, path
     assert RecordingPipeline.captured_request is None
 
     # 複数の業務ビューで一部だけ許可されていれば、その積集合で検索を続ける。
@@ -466,9 +469,9 @@ def test_ensure_business_view_knowledge_bases_permitted() -> None:
         search_route.ensure_business_view_knowledge_bases_permitted(["kb-1", "kb-9"])
         # 参照 KB のない業務ビューは Oracle の条件が範囲へ絞る（ここでは拒否しない）。
         search_route.ensure_business_view_knowledge_bases_permitted([])
-        with pytest.raises(HTTPException) as denied:
+        with pytest.raises(SecurityApiError) as denied:
             search_route.ensure_business_view_knowledge_bases_permitted(["kb-9"])
-    assert denied.value.status_code == 403
+    assert (denied.value.status_code, denied.value.code) == (403, SCOPE_FORBIDDEN_CODE)
 
 
 def test_scope_request_knowledge_bases_keeps_request_when_unrestricted() -> None:
@@ -482,9 +485,9 @@ def test_scope_request_knowledge_bases_keeps_request_when_unrestricted() -> None
         # KB を指定しない検索は Oracle の条件が範囲へ絞る（ここでは変えない）。
         plain = SearchRequest(query="q")
         assert search_route._scope_request_knowledge_bases(plain) is plain
-    with _scope(knowledge_base_ids=set()), pytest.raises(HTTPException) as denied:
+    with _scope(knowledge_base_ids=set()), pytest.raises(SecurityApiError) as denied:
         search_route._scope_request_knowledge_bases(request)
-    assert denied.value.status_code == 403
+    assert (denied.value.status_code, denied.value.code) == (403, SCOPE_FORBIDDEN_CODE)
 
 
 # ---------------------------------------------------------------------------

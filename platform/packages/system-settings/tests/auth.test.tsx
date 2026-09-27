@@ -20,7 +20,10 @@ import {
   defaultIdentityKey,
   expandPermissions,
   firstAllowedRoute,
+  isRouteForbidden,
+  notifyAuthResponse,
   notifyAuthStatus,
+  responseErrorCode,
   routePermissionMap,
   type AuthApi,
   type BaseCurrentUser,
@@ -129,6 +132,34 @@ describe("CSRF と認証イベント", () => {
       { type: "app-auth-unauthorized", detail: null },
       { type: "app-auth-forbidden", detail: { requestId: "req-1" } },
     ]);
+  });
+
+  it("403 は経路の権限拒否（または error_code なし）のときだけ権限なしの画面へ移す", async () => {
+    const target = new EventTarget();
+    vi.stubGlobal("window", target);
+    const received: string[] = [];
+    target.addEventListener(AUTH_FORBIDDEN_EVENT, (event) =>
+      received.push(String((event as CustomEvent).detail?.requestId)),
+    );
+    const response = (status: number, body: unknown, requestId: string) =>
+      new Response(JSON.stringify(body), { status, headers: { "X-Request-ID": requestId } });
+
+    await notifyAuthResponse(response(403, { error_code: "SECURITY_ROUTE_FORBIDDEN" }, "route"));
+    await notifyAuthResponse(response(403, { problem: { code: "SECURITY_ROUTE_UNCLASSIFIED" } }, "unclassified"));
+    await notifyAuthResponse(response(403, { error_messages: ["従来の 403"] }, "legacy"));
+    await notifyAuthResponse(response(403, { error_code: "RAG_SCOPE_FORBIDDEN" }, "scope"));
+    await notifyAuthResponse(response(403, { error_code: "SECURITY_PERMISSION_DENIED" }, "grant"));
+    await notifyAuthResponse(response(403, { error_code: "SECURITY_CSRF_INVALID" }, "csrf"));
+    await notifyAuthResponse(response(200, { error_code: "SECURITY_ROUTE_FORBIDDEN" }, "ok"));
+
+    expect(received).toEqual(["route", "unclassified", "legacy"]);
+    expect(isRouteForbidden(undefined)).toBe(true);
+    expect(isRouteForbidden("RAG_SCOPE_FORBIDDEN")).toBe(false);
+    // 本文は消費しない（呼び出し側が続けて読める）。
+    const body = response(403, { error_code: "RAG_SCOPE_FORBIDDEN" }, "keep");
+    await notifyAuthResponse(body);
+    expect(await responseErrorCode(body)).toBe("RAG_SCOPE_FORBIDDEN");
+    expect(await body.json()).toEqual({ error_code: "RAG_SCOPE_FORBIDDEN" });
   });
 });
 

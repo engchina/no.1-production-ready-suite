@@ -8,7 +8,7 @@
 
 import { t } from "./i18n";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
-import { csrfHeader, notifyAuthStatus } from "@engchina/production-ready-system-settings";
+import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@engchina/production-ready-system-settings";
 import type { BaseCurrentUser } from "@engchina/production-ready-system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
@@ -2335,11 +2335,6 @@ export function apiErrorFromEnvelope(
   });
 }
 
-export interface AuthHeaderOptions {
-  /** 403 を権限なしの画面へ移すイベントにしない（業務ビュー / KB の範囲外など、理由をその場で見せる API）。 */
-  inlineForbidden?: boolean;
-}
-
 /** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
 export function withCsrfHeaders(method: string | undefined, headers?: HeadersInit): Headers {
   const merged = new Headers(headers);
@@ -2349,10 +2344,14 @@ export function withCsrfHeaders(method: string | undefined, headers?: HeadersIni
   return merged;
 }
 
-/** 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。 */
-export function notifyResponseAuthStatus(res: Response, options: AuthHeaderOptions = {}): void {
-  if (res.status === 403 && options.inlineForbidden) return;
-  notifyAuthStatus(res.status, res.headers.get("X-Request-ID") || undefined);
+/**
+ * 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。
+ * 403 は error_code が経路の権限拒否のときだけ権限なしの画面へ移し、業務ビュー / KB の範囲外
+ * （`RAG_SCOPE_FORBIDDEN`）や権限の付与の制限などは呼び出した画面がその場で表示する（#224）。
+ * 本文を読む前に呼ぶ（本文は消費しない）。
+ */
+export function notifyResponseAuthStatus(res: Response): void {
+  void notifyAuthResponse(res);
 }
 
 function resolveTimeoutMs(value: unknown, fallbackMs: number): number {
@@ -2381,7 +2380,7 @@ async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   }
 }
 
-interface RequestOptions extends AuthHeaderOptions {
+interface RequestOptions {
   allowStatus?: number[];
   timeoutMs?: number;
 }
@@ -2432,8 +2431,10 @@ async function requestEnvelope<T>(
     });
     const envelope = await parseEnvelope<T>(res);
     if (!res.ok && !options.allowStatus?.includes(res.status)) {
-      notifyResponseAuthStatus(res, options);
-      throw apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
+      const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
+      // 本文は読み終えているので、読み取った error_code で通知する（#224）。
+      notifyAuthStatus(res.status, error.requestId, error.errorCode);
+      throw error;
     }
     return envelope;
   } catch (error) {
@@ -3082,9 +3083,8 @@ export const api = {
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
 
   // 検索
-  // 業務ビュー / KB の範囲外の 403 は理由をその場で見せる（権限なしの画面へ移さない。#214）。
-  search: (body: SearchRequestBody) =>
-    request<SearchResponse>("/api/search", jsonBody(body), { inlineForbidden: true }),
+  // 業務ビュー / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。
+  search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>(
       "/api/search/citation-feedback",
