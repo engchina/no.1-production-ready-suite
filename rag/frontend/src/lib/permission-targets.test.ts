@@ -1,3 +1,4 @@
+import { targetLoadRows } from "@engchina/production-ready-system-settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AccessTargetsData, SecurityRole } from "./api";
@@ -52,7 +53,7 @@ describe("権限管理の対象（業務ビュー・KB）", () => {
       { id: "bv-1", name: "人事 FAQ", description: "人事規程", status: undefined },
       { id: "bv-2", name: "旧経理", description: undefined, status: "アーカイブ済み" },
     ]);
-    expect(baseItems.map((item) => item.id)).toEqual(["kb-1"]);
+    expect(targetLoadRows(baseItems).rows.map((item) => item.id)).toEqual(["kb-1"]);
 
     await views.load({ signal: new AbortController().signal });
     expect(fetchTargets).toHaveBeenCalledTimes(2);

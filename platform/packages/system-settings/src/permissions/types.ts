@@ -48,6 +48,15 @@ export interface RolePermissionCustomIdOptions {
 }
 
 /**
+ * 候補の一部だけを読めたときの読み込み結果（#240）。読めた候補を表示したまま、
+ * `warning`（利用者向けの文言そのまま）を画面上部の warning の Banner に出す。
+ */
+export interface RolePermissionTargetLoadResult {
+  items: RolePermissionTargetItem[];
+  warning?: string;
+}
+
+/**
  * ロールに付ける「利用できる対象」の 1 種類。製品固有の対象はこの形で権限管理画面へ差し込む。
  * 例: NL2SQL の業務プロファイル、RAG の業務ビュー・ナレッジベース、Agent のエージェント・業務ビュー。
  */
@@ -56,7 +65,9 @@ export interface RolePermissionTargetSection<R extends PermissionRole = Permissi
   key: string;
   messages: RolePermissionTargetMessages;
   /** 候補を読み込む。失敗しても画面は警告を出してロール一覧を表示し続ける。 */
-  load: (options: RequestOptions & { signal: AbortSignal }) => Promise<RolePermissionTargetItem[]>;
+  load: (
+    options: RequestOptions & { signal: AbortSignal },
+  ) => Promise<RolePermissionTargetItem[] | RolePermissionTargetLoadResult>;
   /** ロールに保存済みの対象 ID。 */
   selectedIds: (role: R) => string[];
   /**
