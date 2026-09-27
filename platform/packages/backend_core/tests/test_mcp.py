@@ -19,6 +19,7 @@ from pr_backend_core.mcp import (
     McpServer,
     McpTool,
     McpToolError,
+    mcp_error_from_exception,
     mcp_http_response,
 )
 
@@ -193,3 +194,19 @@ def test_tools_call_errors() -> None:
     assert internal["isError"] is True
     assert internal["structuredContent"]["error_code"] == TOOL_INTERNAL_ERROR_CODE
     assert "secret" not in internal["content"][0]["text"]
+
+
+def test_mcp_error_from_exception_keeps_code_and_adds_details() -> None:
+    """例外からツールのエラーを作り、詳細を添えられる。内部エラーは None（#252）。"""
+    converted = mcp_error_from_exception(_CodedError(), details={"conversation_id": "c1"})
+    assert converted is not None
+    assert (converted.code, converted.message, converted.status, converted.details) == (
+        "RAG_SCOPE_FORBIDDEN",
+        "範囲外です。",
+        403,
+        {"conversation_id": "c1"},
+    )
+    timeout = mcp_error_from_exception(HTTPException(status_code=504, detail="タイムアウト"))
+    assert timeout is not None and (timeout.code, timeout.status) == ("HTTP_504", 504)
+    assert mcp_error_from_exception(HTTPException(status_code=500, detail="x")) is None
+    assert mcp_error_from_exception(RuntimeError("x")) is None
