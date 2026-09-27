@@ -18,10 +18,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from time import monotonic, perf_counter
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
+from pr_system_settings.auth.errors import SecurityApiError
+from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.features.agent.config import CommandPolicyRuntimeConfig, runtime_config_store
@@ -94,66 +96,104 @@ class ToolResult(BaseModel):
     audit_metadata: JsonObject = Field(default_factory=dict)
 
 
-class ExternalRagSearchInput(BaseModel):
-    query: str
+class _ProductMcpInput(BaseModel):
+    """RAG / NL2SQL の MCP ツールへ渡す入力（契約は #230〜#233）。
+
+    未知の項目（planner が付ける `trace_id` など）は受け取って捨て、MCP には契約の項目だけを送る。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ExternalRagSearchInput(_ProductMcpInput):
+    query: str = Field(min_length=1)
     business_view_id: str | None = None
-    filters: JsonObject = Field(default_factory=dict)
+    knowledge_base_ids: list[str] | None = None
     top_k: int | None = Field(default=None, ge=1, le=100)
-    trace_id: str | None = None
-
-
-class RagContext(BaseModel):
-    id: str | None = None
-    title: str | None = None
-    content: str
-    score: float | None = None
-    metadata: JsonObject = Field(default_factory=dict)
+    filters: dict[str, str] | None = None
 
 
 class RagCitation(BaseModel):
-    source_id: str | None = None
-    title: str | None = None
-    url: str | None = None
-    page: int | None = None
-    chunk_id: str | None = None
-    metadata: JsonObject = Field(default_factory=dict)
+    document_id: str
+    chunk_id: str
+    file_name: str | None = None
+    text: str = ""
+    score: float | None = None
 
 
 class ExternalRagSearchOutput(BaseModel):
-    answer: str | None = None
-    contexts: list[RagContext] = Field(default_factory=list)
-    citations: list[RagCitation] = Field(default_factory=list)
-    metadata: JsonObject = Field(default_factory=dict)
-
-
-class ExternalNl2SqlInput(BaseModel):
-    question: str
-    data_domain_id: str | None = None
-    business_view_id: str | None = None
-    filters: JsonObject = Field(default_factory=dict)
-    limit: int | None = Field(default=None, ge=1, le=10_000)
-    mode: ExternalToolMode = ExternalToolMode.EXECUTE
-    include_sql: bool = True
+    answer: str
     trace_id: str | None = None
+    guardrail_warnings: list[str] = Field(default_factory=list)
+    citations: list[RagCitation] = Field(default_factory=list)
 
 
-class StructuredColumn(BaseModel):
+class ExternalRagChatInput(_ProductMcpInput):
+    content: str = Field(min_length=1, max_length=8000)
+    conversation_id: str | None = None
+    business_view_id: str | None = None
+    title: str | None = None
+
+
+class ExternalRagChatOutput(BaseModel):
+    conversation_id: str
+    message_id: str
+    answer: str
+    trace_id: str | None = None
+    guardrail_warnings: list[str] = Field(default_factory=list)
+    citations: list[RagCitation] = Field(default_factory=list)
+
+
+class ExternalRagListBusinessViewsInput(_ProductMcpInput):
+    query: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class RagBusinessView(BaseModel):
+    id: str
     name: str
-    type: str
-    label: str | None = None
-    unit: str | None = None
+    description: str | None = None
+    status: str | None = None
+    knowledge_base_count: int = 0
 
 
-class ExternalNl2SqlOutput(BaseModel):
-    sql: str | None = None
-    columns: list[StructuredColumn] = Field(default_factory=list)
+class ExternalRagListBusinessViewsOutput(BaseModel):
+    business_views: list[RagBusinessView] = Field(default_factory=list)
+
+
+class ExternalNl2SqlInput(_ProductMcpInput):
+    question: str = Field(min_length=1, max_length=4000)
+    profile_id: str | None = None
+    # 未指定なら外部 NL2SQL 設定の既定取得件数（`default_limit`）を渡す（全件取得をさせない）。
+    row_limit: int | None = Field(default=None, ge=1, le=1000)
+    wait_seconds: int = Field(default=40, ge=0, le=45)
+
+
+class ExternalNl2SqlGetJobInput(_ProductMcpInput):
+    job_id: str = Field(min_length=1)
+    wait_seconds: int = Field(default=0, ge=0, le=45)
+
+
+class Nl2SqlJobResult(BaseModel):
+    """NL2SQL のジョブの結果。待ち時間内に終わらなければ pending / running のまま返る。"""
+
+    job_id: str
+    status: Literal["pending", "running", "done", "error"]
+    profile_id: str | None = None
+    generated_sql: str | None = None
+    executable_sql: str | None = None
+    explanation: str | None = None
+    is_safe: bool | None = None
+    safety_issues: list[str] | None = None
+    columns: list[str] = Field(default_factory=list)
     rows: list[JsonObject] = Field(default_factory=list)
-    row_count: int = 0
+    returned_count: int = 0
+    total: int | None = None
+    has_more: bool = False
     truncated: bool = False
-    execution_time_ms: int | None = None
-    lineage: JsonObject | None = None
-    warnings: list[str] = Field(default_factory=list)
-    metadata: JsonObject = Field(default_factory=dict)
+    history_id: str | int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class ExternalMcpCallInput(BaseModel):
@@ -222,6 +262,11 @@ class ToolInvocationContext(BaseModel):
     approval_id: str | None = None
     trace_id: str | None = None
     agent_id: str | None = None
+    # Run の ID と、Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP は
+    # この利用者の token で呼ぶ。利用者がいない呼び出し（Binding 経由の MCP など）は
+    # サービス利用者で呼ぶ。
+    run_id: str | None = None
+    user_uuid: str | None = None
     command_allowed_prefixes: list[str] = Field(default_factory=list)
 
 
@@ -433,80 +478,131 @@ class ToolRegistry:
         )
 
 
-class ExternalRagClient:
+MCP_PROTOCOL_VERSION = "2025-06-18"
+_MCP_ACCEPT = "application/json, text/event-stream"
+_MCP_METHOD_NOT_FOUND = -32601
+# 再試行してよい HTTP status。LLM を使う呼び出し・書き込み（idempotent=False）は、受け付ける前に
+# 断られた 429 / 503 と接続できなかったときだけ再試行する（502 / 504・timeout は処理が進んでいる
+# かもしれず、再試行すると LLM の呼び出しや会話の書き込みが重複する）。
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_NON_IDEMPOTENT_RETRY_STATUSES = frozenset({429, 503})
+
+
+class McpSession:
+    """1 回のツール呼び出しの間だけ使う MCP（Streamable HTTP の JSON 応答）の client。
+
+    最初に `initialize` → `notifications/initialized` を送り、応答の `Mcp-Session-Id` を以降の
+    request に付ける。固定の session id を設定した従来の gateway には `initialize` を送らない。
+
+    ponytail: セッションはツール呼び出しをまたいで再利用しない（呼び出しごとに initialize する）。
+    SSE の応答は最後の JSON だけを読み（途中経過の通知は捨てる）、`nextCursor` の paging はしない。
+    """
+
     def __init__(
         self,
-        base_url: str,
-        api_key: str | None,
+        *,
+        url: str,
+        headers: dict[str, str],
         timeout_seconds: float,
         max_retries: int,
+        service_code: str,
+        service_label: str,
+        session_id: str | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key
+        self._url = url
+        self._headers = dict(headers)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max(0, max_retries)
+        self._service_code = service_code
+        self._service_label = service_label
+        self._session_id = session_id
+        self._protocol_version = MCP_PROTOCOL_VERSION
+        self._initialized = session_id is not None
 
-    def search(self, request: ExternalRagSearchInput) -> ExternalRagSearchOutput:
-        headers = _auth_headers(self._api_key)
-        payload = request.model_dump(exclude_none=True)
-        response_payload = _post_external_json(
-            service_code="external_rag",
-            service_label="external RAG",
-            url=f"{self._base_url}/search",
-            payload=payload,
-            headers=headers,
-            timeout_seconds=self._timeout_seconds,
-            max_retries=self._max_retries,
-        )
-        try:
-            return ExternalRagSearchOutput.model_validate(response_payload)
-        except ValidationError as exc:
-            raise ExternalToolError(
-                "external_rag.invalid_response",
-                "external RAG response schema is invalid",
-                {"errors": _validation_errors(exc)},
-            ) from exc
-
-
-class ExternalNl2SqlClient:
-    def __init__(
+    def request(
         self,
-        base_url: str,
-        api_key: str | None,
-        timeout_seconds: float,
-        default_limit: int,
-        max_retries: int,
-    ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key
-        self._timeout_seconds = timeout_seconds
-        self._default_limit = default_limit
-        self._max_retries = max(0, max_retries)
+        method: str,
+        params: JsonObject | None,
+        *,
+        request_id: str,
+        idempotent: bool = True,
+    ) -> JsonRpcResponse:
+        if not self._initialized:
+            self._initialize()
+        payload: JsonObject = {"jsonrpc": "2.0", "id": request_id, "method": method}
+        if params is not None:
+            payload["params"] = params
+        data, _headers = self._post(payload, idempotent=idempotent)
+        if data is None:
+            raise ExternalToolError(
+                f"{self._service_code}.missing_result",
+                f"{self._service_label} returned an empty response",
+                {"method": method},
+            )
+        return _mcp_jsonrpc_response(data)
 
-    def query(self, request: ExternalNl2SqlInput) -> ExternalNl2SqlOutput:
-        headers = _auth_headers(self._api_key)
-        payload = request.model_dump(exclude_none=True)
-        payload["limit"] = request.limit or self._default_limit
-        response_payload = _post_external_json(
-            service_code="external_nl2sql",
-            service_label="external NL2SQL",
-            url=f"{self._base_url}/query",
+    def _initialize(self) -> None:
+        self._initialized = True
+        data, headers = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": f"init_{uuid4().hex}",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "production-ready-agent",
+                        "version": get_settings().app_version,
+                    },
+                },
+            },
+            idempotent=True,
+        )
+        response = _mcp_jsonrpc_response(data or {})
+        if response.error is not None:
+            # initialize を持たない従来の JSON-RPC gateway は、そのまま tools/* を呼ぶ。
+            if response.error.get("code") == _MCP_METHOD_NOT_FOUND:
+                return
+            raise ExternalToolError(
+                f"{self._service_code}.initialize_failed",
+                f"{self._service_label} rejected MCP initialize",
+                {"error": response.error},
+            )
+        session_id = headers.get("mcp-session-id")
+        if session_id:
+            self._session_id = session_id
+        version = (response.result or {}).get("protocolVersion")
+        if isinstance(version, str) and version:
+            self._protocol_version = version
+        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, idempotent=True)
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = {
+            **self._headers,
+            "Accept": _MCP_ACCEPT,
+            "MCP-Protocol-Version": self._protocol_version,
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        return headers
+
+    def _post(self, payload: JsonObject, *, idempotent: bool) -> tuple[JsonObject | None, Any]:
+        return _post_mcp_message(
+            service_code=self._service_code,
+            service_label=self._service_label,
+            url=self._url,
             payload=payload,
-            headers=headers,
+            headers=self._request_headers(),
             timeout_seconds=self._timeout_seconds,
             max_retries=self._max_retries,
+            idempotent=idempotent,
         )
-        try:
-            return ExternalNl2SqlOutput.model_validate(response_payload)
-        except ValidationError as exc:
-            raise ExternalToolError(
-                "external_nl2sql.invalid_response",
-                "external NL2SQL response schema is invalid",
-                {"errors": _validation_errors(exc)},
-            ) from exc
 
 
 class ExternalMcpClient:
+    """外部 MCP gateway（`AGENT_EXTERNAL_MCP_*` / `AGENT_EXTERNAL_MCP_SERVERS_JSON`）の client。"""
+
     def __init__(
         self,
         base_url: str,
@@ -531,23 +627,8 @@ class ExternalMcpClient:
 
     def list_tools(self, request: ExternalMcpListToolsInput) -> ExternalMcpToolsData:
         request_id = request.trace_id or f"mcp_{uuid4().hex}"
-        payload: JsonObject = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "tools/list",
-        }
-        if request.server_id:
-            payload["params"] = {"server_id": request.server_id}
-        response_payload = _post_external_json(
-            service_code="external_mcp",
-            service_label="external MCP gateway",
-            url=self._endpoint_url,
-            payload=payload,
-            headers=self._headers(),
-            timeout_seconds=self._timeout_seconds,
-            max_retries=self._max_retries,
-        )
-        response = _mcp_jsonrpc_response(response_payload)
+        params = {"server_id": request.server_id} if request.server_id else None
+        response = self._session().request("tools/list", params, request_id=request_id)
         if response.error is not None:
             raise ExternalToolError(
                 "external_mcp.rpc_error",
@@ -575,22 +656,7 @@ class ExternalMcpClient:
         }
         if request.server_id:
             params["server_id"] = request.server_id
-        payload: JsonObject = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "tools/call",
-            "params": params,
-        }
-        response_payload = _post_external_json(
-            service_code="external_mcp",
-            service_label="external MCP gateway",
-            url=self._endpoint_url,
-            payload=payload,
-            headers=self._headers(),
-            timeout_seconds=self._timeout_seconds,
-            max_retries=self._max_retries,
-        )
-        response = _mcp_jsonrpc_response(response_payload)
+        response = self._session().request("tools/call", params, request_id=request_id)
         if response.error is not None:
             raise ExternalToolError(
                 "external_mcp.rpc_error",
@@ -610,7 +676,7 @@ class ExternalMcpClient:
             )
         return _mcp_output_from_result(request, response)
 
-    def _headers(self) -> dict[str, str]:
+    def _session(self) -> McpSession:
         oauth_token = _mcp_oauth_bearer_token(
             token_url=self._oauth_token_url,
             client_id=self._oauth_client_id,
@@ -618,14 +684,18 @@ class ExternalMcpClient:
             scope=self._oauth_scope,
             timeout_seconds=self._timeout_seconds,
         )
-        return _mcp_headers(
-            api_key=self._api_key,
+        return McpSession(
+            url=self._endpoint_url,
+            headers=_mcp_headers(api_key=self._api_key, session_id=None, oauth_token=oauth_token),
+            timeout_seconds=self._timeout_seconds,
+            max_retries=self._max_retries,
+            service_code="external_mcp",
+            service_label="external MCP gateway",
             session_id=self._session_id,
-            oauth_token=oauth_token,
         )
 
 
-def _post_external_json(
+def _post_mcp_message(
     *,
     service_code: str,
     service_label: str,
@@ -634,34 +704,34 @@ def _post_external_json(
     headers: dict[str, str],
     timeout_seconds: float,
     max_retries: int,
-) -> JsonObject:
+    idempotent: bool = True,
+) -> tuple[JsonObject | None, Any]:
+    """JSON-RPC の 1 メッセージを POST する。本文のない応答（通知への 202）は None。"""
     attempts = max_retries + 1
+    retry_statuses = _RETRY_STATUSES if idempotent else _NON_IDEMPOTENT_RETRY_STATUSES
     last_error: ExternalToolError | None = None
     for attempt in range(1, attempts + 1):
         try:
             with httpx.Client(timeout=timeout_seconds) as client:
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
+                response_headers = response.headers
+                if response.status_code == 202 or not response.content:
+                    return None, response_headers
                 data = _response_json_object(
                     response,
                     service_code=service_code,
                     service_label=service_label,
                     attempt=attempt,
                 )
-            if not isinstance(data, dict):
-                raise ExternalToolError(
-                    f"{service_code}.invalid_json",
-                    f"{service_label} response body must be a JSON object",
-                    {"attempt": attempt},
-                )
-            return data
+            return data, response_headers
         except httpx.TimeoutException as exc:
             last_error = ExternalToolError(
                 f"{service_code}.timeout",
                 f"{service_label} request timed out",
                 {"attempt": attempt, "max_retries": max_retries},
             )
-            if attempt >= attempts:
+            if attempt >= attempts or not idempotent:
                 raise last_error from exc
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
@@ -675,7 +745,7 @@ def _post_external_json(
                     "body": _response_text(exc.response),
                 },
             )
-            if attempt >= attempts or status_code not in {429, 500, 502, 503, 504}:
+            if attempt >= attempts or status_code not in retry_statuses:
                 raise last_error from exc
         except httpx.RequestError as exc:
             last_error = ExternalToolError(
@@ -687,7 +757,8 @@ def _post_external_json(
                     "reason": str(exc),
                 },
             )
-            if attempt >= attempts:
+            # 送信前の失敗（接続できない）だけは、LLM を使う呼び出しでも再試行してよい。
+            if attempt >= attempts or not (idempotent or isinstance(exc, httpx.ConnectError)):
                 raise last_error from exc
         except ExternalToolError:
             raise
@@ -1078,10 +1149,9 @@ def _guard_tool_output(
 ) -> tuple[JsonObject, list[str]]:
     warnings: set[str] = set()
     guarded = _sanitize_value(output, warnings)
-    if (
-        definition.name == "external_nl2sql_query"
-        and isinstance(guarded.get("sql"), str)
-        and _NON_READONLY_SQL_PATTERN.search(guarded["sql"])
+    if definition.name in {"external_nl2sql_query", "external_nl2sql_get_job"} and any(
+        isinstance(guarded.get(key), str) and _NON_READONLY_SQL_PATTERN.search(guarded[key])
+        for key in ("generated_sql", "executable_sql")
     ):
         warnings.add("nl2sql.non_readonly_sql_returned_as_audit_only")
 
@@ -1173,59 +1243,237 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _external_rag_search(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
-    config = runtime_config_store.get_rag()
-    if not config.base_url:
+ProductMcp = Literal["rag", "nl2sql"]
+_PRODUCT_MCP_LABELS: dict[str, str] = {"rag": "外部 RAG", "nl2sql": "外部 NL2SQL"}
+# サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）の login ID → user_uuid。
+_service_user_uuid_cache: dict[str, str] = {}
+
+
+def call_product_mcp_tool(
+    product: ProductMcp,
+    tool_name: str,
+    arguments: JsonObject,
+    *,
+    context: ToolInvocationContext,
+    idempotent: bool,
+) -> JsonObject:
+    """RAG / NL2SQL の MCP のツールを、Run の利用者（なければサービス利用者）として呼ぶ（#233）。
+
+    token は呼び出しごとに作る短命のサービストークン（`sub` = 利用者、`aud` = 製品）。
+    呼び先は `sub` の利用者の現在の権限・対象範囲でツールを実行する。結果は `structuredContent`。
+    """
+    code = f"external_{product}"
+    label = _PRODUCT_MCP_LABELS[product]
+    config = (
+        runtime_config_store.get_rag() if product == "rag" else runtime_config_store.get_nl2sql()
+    )
+    if not config.mcp_url:
         raise ExternalToolError(
-            "external_rag.not_configured",
-            "external RAG service is not configured",
+            f"{code}.not_configured",
+            f"{label} の MCP の URL が設定されていません。",
         )
+    settings = get_settings()
+    subject = _mcp_subject(context, code=code)
+    claims = {"run_id": context.run_id, "agent_id": context.agent_id}
     try:
-        request = ExternalRagSearchInput.model_validate(arguments)
+        token = issue_service_token(
+            settings.app_service_token_secret,
+            subject=subject,
+            audience=product,
+            issuer="agent",
+            claims={key: value for key, value in claims.items() if value},
+        )
+    except SecurityApiError as exc:
+        raise ExternalToolError(f"{code}.service_token_not_configured", exc.public_message) from exc
+    max_retries = (
+        settings.agent_external_rag_max_retries
+        if product == "rag"
+        else settings.agent_external_nl2sql_max_retries
+    )
+    session = McpSession(
+        url=config.mcp_url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout_seconds=config.timeout_seconds,
+        max_retries=max_retries,
+        service_code=code,
+        service_label=f"external {product.upper()} MCP",
+    )
+    response = session.request(
+        "tools/call",
+        {"name": tool_name, "arguments": arguments},
+        request_id=context.trace_id or f"mcp_{uuid4().hex}",
+        idempotent=idempotent,
+    )
+    if response.error is not None:
+        raise ExternalToolError(
+            f"{code}.rpc_error",
+            f"{label} の MCP が JSON-RPC のエラーを返しました。",
+            {"error": response.error, "tool_name": tool_name},
+        )
+    result = response.result or {}
+    structured = result.get("structuredContent")
+    if result.get("isError") is True:
+        body = structured if isinstance(structured, dict) else {}
+        message = body.get("message")
+        if not isinstance(message, str) or not message:
+            message = f"{label} のツールが失敗しました。"
+        raise ExternalToolError(
+            f"{code}.tool_error",
+            message,
+            {
+                "tool_name": tool_name,
+                "error_code": body.get("error_code"),
+                "status": body.get("status"),
+                "details": body.get("details"),
+            },
+        )
+    if not isinstance(structured, dict):
+        raise ExternalToolError(
+            f"{code}.invalid_response",
+            f"{label} の MCP の応答に structuredContent がありません。",
+            {"tool_name": tool_name},
+        )
+    return structured
+
+
+def _mcp_subject(context: ToolInvocationContext, *, code: str) -> str:
+    """token の `sub`。Run の利用者、いなければサービス利用者の user_uuid。"""
+    if context.user_uuid:
+        return context.user_uuid
+    login_id = get_settings().agent_mcp_service_user_login_id.strip()
+    if not login_id:
+        raise ExternalToolError(
+            f"{code}.user_required",
+            "Run の利用者がいない呼び出しです。AGENT_MCP_SERVICE_USER_LOGIN_ID に"
+            "サービス利用者のログインユーザー ID を設定してください。",
+        )
+    cached = _service_user_uuid_cache.get(login_id)
+    if cached is not None:
+        return cached
+    # security は agent の router を import するため、ここで遅延 import する（循環を避ける）。
+    from app.security.service import get_security_service
+
+    try:
+        user = get_security_service().store.get_user_by_login_user_id(login_id.casefold())
+    except Exception as exc:  # noqa: BLE001 - 認証 store の障害はツールの失敗として返す
+        raise ExternalToolError(
+            f"{code}.service_user_unavailable",
+            "サービス利用者を確認できません。共通認証のデータベースを確認してください。",
+            {"reason": exc.__class__.__name__},
+        ) from exc
+    if user is None:
+        raise ExternalToolError(
+            f"{code}.service_user_not_found",
+            f"サービス利用者（{login_id}）が見つかりません。ユーザー管理で作成してください。",
+        )
+    _service_user_uuid_cache[login_id] = user.user_uuid
+    return user.user_uuid
+
+
+def _validated_input[M: BaseModel](model: type[M], arguments: JsonObject, *, code: str) -> M:
+    try:
+        return model.model_validate(arguments)
     except ValidationError as exc:
         raise ExternalToolError(
-            "external_rag.invalid_request",
-            "external RAG request schema is invalid",
+            f"{code}.invalid_request",
+            "ツールの引数が正しくありません。",
             {"errors": _validation_errors(exc)},
         ) from exc
-    if request.trace_id is None:
-        request.trace_id = context.trace_id
-    client = ExternalRagClient(
-        base_url=config.base_url,
-        api_key=config.api_key,
-        timeout_seconds=config.timeout_seconds,
-        max_retries=get_settings().agent_external_rag_max_retries,
+
+
+def _validated_output(model: type[BaseModel], output: JsonObject, *, code: str) -> JsonObject:
+    try:
+        return model.model_validate(output).model_dump(mode="json")
+    except ValidationError as exc:
+        raise ExternalToolError(
+            f"{code}.invalid_response",
+            "外部サービスの応答の形式が正しくありません。",
+            {"errors": _validation_errors(exc)},
+        ) from exc
+
+
+def _external_rag_search(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
+    request = _validated_input(ExternalRagSearchInput, arguments, code="external_rag")
+    output = call_product_mcp_tool(
+        "rag",
+        "rag_search",
+        request.model_dump(exclude_none=True),
+        context=context,
+        idempotent=False,  # 回答生成に LLM を使う
     )
-    return client.search(request).model_dump()
+    return _validated_output(ExternalRagSearchOutput, output, code="external_rag")
+
+
+def _external_rag_chat(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
+    request = _validated_input(ExternalRagChatInput, arguments, code="external_rag")
+    if request.conversation_id is None and request.business_view_id is None:
+        raise ExternalToolError(
+            "external_rag.invalid_request",
+            "新しい会話を作るときは business_view_id を指定してください。",
+        )
+    output = call_product_mcp_tool(
+        "rag",
+        "rag_chat_send_message",
+        request.model_dump(exclude_none=True),
+        context=context,
+        idempotent=False,  # 会話を書き込み、LLM を使う
+    )
+    return _validated_output(ExternalRagChatOutput, output, code="external_rag")
+
+
+def _external_rag_list_business_views(
+    arguments: JsonObject, context: ToolInvocationContext
+) -> JsonObject:
+    request = _validated_input(ExternalRagListBusinessViewsInput, arguments, code="external_rag")
+    return list_rag_business_views(request, context=context).model_dump(mode="json")
+
+
+def list_rag_business_views(
+    request: ExternalRagListBusinessViewsInput, *, context: ToolInvocationContext
+) -> ExternalRagListBusinessViewsOutput:
+    """RAG の業務ビューのうち、利用者（context の利用者）が使えるもの。"""
+    output = call_product_mcp_tool(
+        "rag",
+        "rag_list_business_views",
+        request.model_dump(exclude_none=True),
+        context=context,
+        idempotent=True,
+    )
+    try:
+        return ExternalRagListBusinessViewsOutput.model_validate(output)
+    except ValidationError as exc:
+        raise ExternalToolError(
+            "external_rag.invalid_response",
+            "外部サービスの応答の形式が正しくありません。",
+            {"errors": _validation_errors(exc)},
+        ) from exc
 
 
 def _external_nl2sql_query(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
-    config = runtime_config_store.get_nl2sql()
-    if not config.base_url:
-        raise ExternalToolError(
-            "external_nl2sql.not_configured",
-            "external NL2SQL service is not configured",
-        )
-    try:
-        request = ExternalNl2SqlInput.model_validate(arguments)
-    except ValidationError as exc:
-        raise ExternalToolError(
-            "external_nl2sql.invalid_request",
-            "external NL2SQL request schema is invalid",
-            {"errors": _validation_errors(exc)},
-        ) from exc
-    if request.trace_id is None:
-        request.trace_id = context.trace_id
-    if request.limit is None:
-        request.limit = config.default_limit
-    client = ExternalNl2SqlClient(
-        base_url=config.base_url,
-        api_key=config.api_key,
-        timeout_seconds=config.timeout_seconds,
-        default_limit=config.default_limit,
-        max_retries=get_settings().agent_external_nl2sql_max_retries,
+    request = _validated_input(ExternalNl2SqlInput, arguments, code="external_nl2sql")
+    if request.row_limit is None:
+        default_limit = runtime_config_store.get_nl2sql().default_limit
+        request.row_limit = min(max(default_limit, 1), 1000)
+    output = call_product_mcp_tool(
+        "nl2sql",
+        "nl2sql_query",
+        request.model_dump(exclude_none=True),
+        context=context,
+        idempotent=False,  # SQL の生成に LLM を使う
     )
-    return client.query(request).model_dump()
+    return _validated_output(Nl2SqlJobResult, output, code="external_nl2sql")
+
+
+def _external_nl2sql_get_job(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
+    request = _validated_input(ExternalNl2SqlGetJobInput, arguments, code="external_nl2sql")
+    output = call_product_mcp_tool(
+        "nl2sql",
+        "nl2sql_get_job",
+        request.model_dump(exclude_none=True),
+        context=context,
+        idempotent=True,  # ジョブの状態を読むだけ
+    )
+    return _validated_output(Nl2SqlJobResult, output, code="external_nl2sql")
 
 
 def _external_mcp_call(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
@@ -1624,32 +1872,90 @@ tool_registry.register(
     ),
     _agent_skill_run,
 )
+# RAG / NL2SQL の MCP のツール（#233）。LLM を使うツールは 502 / 504・timeout で再試行しない
+# （`McpSession` の idempotent=False）。max_retries は 429 / 503・接続失敗の再試行回数。
 tool_registry.register(
     ToolDefinition(
         name="external_rag_search",
-        description="外部業務 RAG サービスを呼び、回答・根拠・引用を取得する。",
+        description="業務 RAG（MCP の rag_search）で検索し、回答と引用を取得する。",
         input_schema=_schema(ExternalRagSearchInput),
         output_schema=_schema(ExternalRagSearchOutput),
         permission_level=ToolPermissionLevel.READ,
         timeout_seconds=get_settings().agent_external_rag_timeout_seconds,
         max_retries=get_settings().agent_external_rag_max_retries,
-        audit_tags=["external", "rag", "business-data"],
+        audit_tags=["external", "rag", "business-data", "mcp"],
     ),
     _external_rag_search,
 )
 tool_registry.register(
     ToolDefinition(
+        name="external_rag_chat",
+        description=(
+            "業務 RAG の会話（MCP の rag_chat_send_message）にメッセージを送り、回答を取得する。"
+            "conversation_id がなければ business_view_id の業務ビューで会話を作る。"
+        ),
+        input_schema=_schema(ExternalRagChatInput),
+        output_schema=_schema(ExternalRagChatOutput),
+        # 検索と違い、利用者の会話履歴を RAG に作成・追記する（読み取りではない）。業務データの
+        # 書き込みではないため SENSITIVE ではなく WRITE。既定の policy では承認を要求する。
+        permission_level=ToolPermissionLevel.WRITE,
+        side_effects=True,
+        timeout_seconds=get_settings().agent_external_rag_timeout_seconds,
+        max_retries=get_settings().agent_external_rag_max_retries,
+        audit_tags=["external", "rag", "business-data", "conversation", "mcp"],
+    ),
+    _external_rag_chat,
+)
+tool_registry.register(
+    ToolDefinition(
+        name="external_rag_list_business_views",
+        description=(
+            "利用者が使える業務 RAG の業務ビュー（MCP の rag_list_business_views）を一覧する。"
+        ),
+        input_schema=_schema(ExternalRagListBusinessViewsInput),
+        output_schema=_schema(ExternalRagListBusinessViewsOutput),
+        permission_level=ToolPermissionLevel.READ,
+        timeout_seconds=get_settings().agent_external_rag_timeout_seconds,
+        max_retries=get_settings().agent_external_rag_max_retries,
+        audit_tags=["external", "rag", "discovery", "mcp"],
+    ),
+    _external_rag_list_business_views,
+)
+tool_registry.register(
+    ToolDefinition(
         name="external_nl2sql_query",
-        description="外部 NL2SQL/構造化データサービスを呼び、SQL と表形式結果を取得する。",
+        description=(
+            "NL2SQL（MCP の nl2sql_query）で質問から SQL を生成・実行し、表形式の結果を取得する。"
+            "待ち時間内に終わらなければ job_id を返すので external_nl2sql_get_job で続きを取る。"
+        ),
         input_schema=_schema(ExternalNl2SqlInput),
-        output_schema=_schema(ExternalNl2SqlOutput),
+        output_schema=_schema(Nl2SqlJobResult),
+        # 業務 DB へ SQL を実行するため、既定の policy では承認を要求する。
         permission_level=ToolPermissionLevel.SENSITIVE,
         side_effects=False,
         timeout_seconds=get_settings().agent_external_nl2sql_timeout_seconds,
         max_retries=get_settings().agent_external_nl2sql_max_retries,
-        audit_tags=["external", "nl2sql", "structured-data", "audit-sql"],
+        audit_tags=["external", "nl2sql", "structured-data", "audit-sql", "mcp"],
     ),
     _external_nl2sql_query,
+)
+tool_registry.register(
+    ToolDefinition(
+        name="external_nl2sql_get_job",
+        description=(
+            "NL2SQL のジョブ（MCP の nl2sql_get_job）の状態と結果を取得する（本人のジョブだけ）。"
+        ),
+        input_schema=_schema(ExternalNl2SqlGetJobInput),
+        output_schema=_schema(Nl2SqlJobResult),
+        # 承認済みの external_nl2sql_query が始めたジョブの結果を読むだけ
+        # （新しい SQL は実行しない）。
+        permission_level=ToolPermissionLevel.READ,
+        side_effects=False,
+        timeout_seconds=get_settings().agent_external_nl2sql_timeout_seconds,
+        max_retries=get_settings().agent_external_nl2sql_max_retries,
+        audit_tags=["external", "nl2sql", "structured-data", "audit-sql", "mcp"],
+    ),
+    _external_nl2sql_get_job,
 )
 tool_registry.register(
     ToolDefinition(

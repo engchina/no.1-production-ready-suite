@@ -498,6 +498,57 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  test("外部 RAG / NL2SQL は MCP の URL を保存し、サービス間認証の状態を表示する", async ({ page, mockApi }) => {
+    await page.goto("/settings/external-rag");
+
+    await expect(page.getByRole("heading", { name: "外部 RAG", level: 1 })).toBeVisible();
+    // 未設定のあいだは、足りないものと直し方を warning の Banner で示す。API キー欄はない。
+    const notice = page.getByRole("status").filter({ hasText: "この接続はまだ使えません" });
+    await expect(notice).toContainText("MCP の URL が未設定です");
+    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    await expect(page.getByText("API key")).toHaveCount(0);
+    const authStatus = page.getByRole("list", { name: "サービス間認証の状態" });
+    await expect(authStatus.getByRole("listitem")).toHaveCount(2);
+    await expect(authStatus).toContainText("AGENT_MCP_SERVICE_USER_LOGIN_ID");
+    await expect(page.getByLabel("タイムアウト秒")).toHaveValue("60");
+
+    const url = page.getByLabel("MCP の URL");
+    await expect(url).toHaveAttribute("aria-describedby", "rag-mcp-url-hint");
+    await url.fill("rag.example.test");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("MCP の URL は http:// または https:// で始めてください。")).toBeVisible();
+
+    await url.fill("http://rag-host/api/mcp");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("設定を保存しました")).toBeVisible();
+    await expect(notice).not.toContainText("MCP の URL が未設定です");
+    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    expect(mockApi.state.externalRag).toMatchObject({ mcp_url: "http://rag-host/api/mcp", configured: true });
+
+    // すべて設定済みなら Banner は出さず、状態は StatusBadge で示す。
+    Object.assign(mockApi.state.externalNl2Sql, {
+      mcp_url: "http://nl2sql-host/api/mcp",
+      configured: true,
+      service_token_configured: true,
+      service_user_configured: true,
+    });
+    await page.goto("/settings/external-nl2sql");
+    await expect(page.getByRole("heading", { name: "外部 NL2SQL", level: 1 })).toBeVisible();
+    await expect(page.getByLabel("MCP の URL")).toHaveValue("http://nl2sql-host/api/mcp");
+    await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
+    await expect(
+      page.getByRole("list", { name: "サービス間認証の状態" }).getByText("設定済み")
+    ).toHaveCount(2);
+    await page.getByLabel("既定取得件数").fill("50");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("設定を保存しました")).toBeVisible();
+    expect(mockApi.state.externalNl2Sql).toMatchObject({ default_limit: 50 });
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(page.getByLabel("MCP の URL")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("Command Policy を保存してモバイル幅でも確認できる", async ({ page }) => {
     await page.goto("/settings/command-policy");
 

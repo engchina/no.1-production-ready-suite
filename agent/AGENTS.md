@@ -57,6 +57,10 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 - Binding token は個別 env または master secret から HMAC 派生する。token/外部 API key を
   snapshot、API、ログ、Artifact に出さない。
 - 既存の schema 検証、policy、masking、監査を MCP 呼出しでも再利用する。
+- RAG / NL2SQL は各製品の `POST /api/mcp` を `external_rag_*` / `external_nl2sql_*` ツールから呼ぶ（#233）。token は
+  呼び出しごとの `issue_service_token`（`sub` = Run の利用者 `RunState.created_by_user_uuid`、なければ
+  `AGENT_MCP_SERVICE_USER_LOGIN_ID` のサービス利用者）。承認後の実行も承認者ではなく Run の利用者で呼ぶ。
+  LLM を使う・書き込むツールは 502 / 504・timeout で再試行しない。詳細は docs/agent-control-plane-design.md §4.1。
 
 ## 技術スタック
 

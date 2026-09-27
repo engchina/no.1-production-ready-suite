@@ -55,6 +55,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     app_auth_argon2_time_cost: int = 3
     app_auth_argon2_memory_kib: int = 65536
     app_auth_argon2_parallelism: int = 4
+    # サービス間の token の署名鍵（共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET。#230 / #233）。
+    app_service_token_secret: str = ""
     # システム設定（3製品共通）。
     oci_config_file: str = "~/.oci/config"
     oci_config_profile: str = "DEFAULT"
@@ -98,15 +100,19 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_adb_region: str | None = None
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
-    agent_external_rag_base_url: str | None = None
-    agent_external_rag_api_key: str | None = None
-    agent_external_rag_timeout_seconds: float = 10.0
+    # RAG / NL2SQL は各製品の MCP（`POST /api/mcp`）を Run の利用者として呼ぶ（#233）。
+    # 例: http://rag-host/api/mcp。token は共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名する。
+    # LLM を使う呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
+    agent_external_rag_mcp_url: str | None = None
+    agent_external_rag_timeout_seconds: float = 60.0
     agent_external_rag_max_retries: int = 3
-    agent_external_nl2sql_base_url: str | None = None
-    agent_external_nl2sql_api_key: str | None = None
-    agent_external_nl2sql_timeout_seconds: float = 15.0
+    agent_external_nl2sql_mcp_url: str | None = None
+    agent_external_nl2sql_timeout_seconds: float = 60.0
     agent_external_nl2sql_default_limit: int = 100
     agent_external_nl2sql_max_retries: int = 3
+    # Run の利用者がいない呼び出し（Binding 経由の MCP・外部 RBAC で作った Run）で使う共通認証の
+    # ログインユーザー ID。空ならその呼び出しは失敗する。
+    agent_mcp_service_user_login_id: str = ""
     agent_external_mcp_base_url: str | None = None
     agent_external_mcp_api_key: str | None = None
     agent_external_mcp_session_id: str | None = None

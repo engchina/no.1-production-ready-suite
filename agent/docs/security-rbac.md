@@ -96,10 +96,12 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 - ロールにエージェント ID と業務ビュー ID を割り当てます。利用者の範囲は、有効なロールの割り当ての和集合です（割り当てがなければ何も見えない）。
 - SYSTEM_ADMIN・構成管理者・`agent.admin` を持つ利用者は制限なし。`agent.admin` を含むロールの対象リストは保存時に空へ正規化します。
 - 業務ビューは Agent にマスタがありません（Run の `metadata.business_view_id` などの文字列）。権限管理で選べる業務ビューは、
-  Run に現れた ID とロールに割り当て済みの ID の和集合です。形式は `^[A-Za-z0-9._:-]{1,64}$`。
+  Run に現れた ID・ロールに割り当て済みの ID・RAG の業務ビューの和集合です。形式は `^[A-Za-z0-9._:-]{1,64}$`（合わない RAG の ID は候補にしない）。
   業務ビューを持たない Run は、エージェントの範囲だけで判定します（従来どおり）。
-- RAG の業務ビューの一覧は取得しません（RAG の API は production ではログインが必要で、API キーでは読めないため）。
-  RAG と同じ ID を使う場合は、権限管理で ID を入力します。
+- RAG の業務ビュー（#233）: 外部 RAG の MCP（`AGENT_EXTERNAL_RAG_MCP_URL`）が設定されていれば、`GET /security/access-targets` は
+  RAG の `rag_list_business_views` を**画面を開いた管理者の `user_uuid`** のサービストークンで呼び、その管理者が RAG で使える ACTIVE な
+  業務ビュー（最大 200 件）を名前付きで候補に足します。未設定・失敗のときは従来どおりの候補に、`warning_messages` で理由を返します
+  （権限管理はそのまま使えます）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
 ## 5. 権限昇格の防止
@@ -151,5 +153,9 @@ Control Plane の読み取りメニュー（ダッシュボード・業務 Agent
   呼出し元を確かめられないなら、HMAC 署名 header か JWT と組み合わせてください。
 - WebSocket のセッションは接続時だけ確認します（接続中に失効・権限変更しても切断しません）。
 - 範囲が制限された利用者の `GET /observability/events` は、件数上限（limit）を適用した後に範囲で絞ります。
-- 業務ビューのマスタは Agent にないため、権限管理の業務ビューの名前は ID と同じです。RAG の業務ビューの一覧は取得しません。
+- 業務ビューのマスタは Agent にないため、RAG から読めなかった業務ビューの名前は ID と同じです。RAG の業務ビューは権限管理を開いた
+  管理者が RAG で使えるものだけで、201 件目以降は候補に出ません（ID を入力すれば保存できます）。
+- `POST /mcp/{binding_id}`（Binding 経由の MCP）は Run と結びつかないため、RAG / NL2SQL のツールは Run の利用者ではなく
+  サービス利用者（`AGENT_MCP_SERVICE_USER_LOGIN_ID`）として呼びます。未設定ならそのツールは失敗します
+  （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - local mode のユーザー・ロールは InMemory の store で、再起動で消えます（local ではログインしないため通常は使いません）。

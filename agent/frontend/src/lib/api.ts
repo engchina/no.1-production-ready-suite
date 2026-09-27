@@ -314,6 +314,24 @@ export interface ExternalServiceSettings {
   configured: boolean;
 }
 
+/** 外部 RAG / NL2SQL（各製品の MCP）の接続設定。token は呼び出しごとに作るため API キーはない（#233）。 */
+export interface ProductMcpSettings {
+  mcp_url?: string | null;
+  timeout_seconds: number;
+  default_limit?: number | null;
+  configured: boolean;
+  /** 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET が 32 文字以上あるか（値は返らない）。 */
+  service_token_configured: boolean;
+  /** AGENT_MCP_SERVICE_USER_LOGIN_ID があるか（Run の利用者がいない呼び出しで使う）。 */
+  service_user_configured: boolean;
+}
+
+export interface ProductMcpSettingsPatch {
+  mcp_url?: string | null;
+  timeout_seconds?: number;
+  default_limit?: number;
+}
+
 export interface ExternalMcpToolInfo {
   name: string;
   description: string;
@@ -990,23 +1008,16 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
   getExternalRagSettings: () =>
-    request<ExternalServiceSettings>("/api/settings/external-rag"),
-  patchExternalRagSettings: (payload: {
-    base_url?: string | null;
-    timeout_seconds?: number;
-  }) =>
-    request<ExternalServiceSettings>("/api/settings/external-rag", {
+    request<ProductMcpSettings>("/api/settings/external-rag"),
+  patchExternalRagSettings: (payload: ProductMcpSettingsPatch) =>
+    request<ProductMcpSettings>("/api/settings/external-rag", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
   getExternalNl2SqlSettings: () =>
-    request<ExternalServiceSettings>("/api/settings/external-nl2sql"),
-  patchExternalNl2SqlSettings: (payload: {
-    base_url?: string | null;
-    timeout_seconds?: number;
-    default_limit?: number;
-  }) =>
-    request<ExternalServiceSettings>("/api/settings/external-nl2sql", {
+    request<ProductMcpSettings>("/api/settings/external-nl2sql"),
+  patchExternalNl2SqlSettings: (payload: ProductMcpSettingsPatch) =>
+    request<ProductMcpSettings>("/api/settings/external-nl2sql", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),

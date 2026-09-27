@@ -111,7 +111,10 @@ class AgentTargetData(BaseModel):
 
 
 class BusinessViewTargetData(BaseModel):
-    """権限管理画面で選べる業務ビュー（Agent にマスタはなく、ID だけ。名前は ID と同じ）。"""
+    """権限管理画面で選べる業務ビュー。
+
+    Agent にマスタはない。名前は RAG から読めたときだけ RAG の名前、それ以外は ID と同じ。
+    """
 
     id: str
     name: str
