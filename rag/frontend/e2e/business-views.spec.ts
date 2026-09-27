@@ -53,15 +53,20 @@ for (const viewport of [
       "全文検索の分割方式",
       "根拠確認",
       "回答エンジン",
+      "DocRAG の質問拡張戦略",
+      "DocRAG の回答生成フロー",
+      "DocRAG の前後の近傍 child 数",
+      "DocRAG のオプション",
       "回答スタイル",
       "回答プロンプト",
       "安全チェック",
       "品質評価",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
-    // 継承 chip: セレクト7行(分割方式・回答エンジンを含む) + 検索オプションの三値トグル5行。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(12);
-    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(7);
+    // 継承 chip: セレクト10行(分割方式・回答エンジン・DocRAG 3 行を含む)
+    // + 三値トグル6行(検索オプション5行 + DocRAG の Rerank)。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
+    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(10);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     await expectNoPageOverflow(page);
   });
@@ -130,6 +135,51 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   await page.goBack();
   await expect(page).toHaveURL(/\/business-views$/);
   await expect(page.getByRole("button", { name: "新規作成" })).toBeVisible();
+});
+
+test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上書きした値を POST する", async ({ page }) => {
+  let createBody: Record<string, unknown> | null = null;
+  await mockBusinessViews(page, [], (body) => {
+    createBody = body;
+  });
+  await page.goto("/business-views?id=new");
+
+  await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "参照する知識ベース" }).press("Escape");
+  await page.getByLabel("名前", { exact: true }).fill("DocRAG ビュー");
+
+  const engine = page.getByRole("heading", { name: "回答エンジン", level: 3 }).locator("..");
+  await engine.getByRole("button", { name: "業務ビューで上書き" }).click();
+  await engine.getByRole("combobox", { name: "回答エンジン" }).click();
+  await page.getByRole("option", { name: "標準" }).click();
+  await expect(page.getByRole("heading", { name: "DocRAG の質問拡張戦略" })).toHaveCount(0);
+
+  await engine.getByRole("combobox", { name: "回答エンジン" }).click();
+  await page.getByRole("option", { name: /DocRAG/ }).click();
+  const strategy = page
+    .getByRole("heading", { name: "DocRAG の質問拡張戦略", level: 3 })
+    .locator("..");
+  await strategy.getByRole("button", { name: "業務ビューで上書き" }).click();
+  await strategy.getByRole("combobox", { name: "DocRAG の質問拡張戦略" }).click();
+  await page.getByRole("option", { name: "仮説文生成（HyDE）" }).click();
+  const neighbor = page
+    .getByRole("heading", { name: "DocRAG の前後の近傍 child 数", level: 3 })
+    .locator("..");
+  await neighbor.getByRole("button", { name: "業務ビューで上書き" }).click();
+  await page
+    .getByRole("group", { name: "Rerank で検索候補を並べ替える" })
+    .getByRole("button", { name: "OFF" })
+    .click();
+  await page.getByRole("button", { name: "作成する" }).click();
+
+  await expect.poll(() => createBody?.name).toBe("DocRAG ビュー");
+  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
+  expect(query.answer_engine).toBe("docrag");
+  expect(query.docrag_query_strategy).toBe("hyde");
+  expect(query.docrag_neighbor_child_count).toBe(3);
+  expect(query.docrag_rerank_enabled).toBe(false);
+  expect(query.docrag_answer_flow ?? null).toBeNull();
 });
 
 for (const viewport of [

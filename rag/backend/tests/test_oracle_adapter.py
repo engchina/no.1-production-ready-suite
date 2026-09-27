@@ -423,7 +423,7 @@ def test_oracle_connection_initializes_instant_client_when_configured(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """RAG も nl2sql と同じく ORACLE_CLIENT_LIB_DIR があれば thick client を使う。"""
+    """RAG も nl2sql と同じく PLATFORM_ORACLE_CLIENT_LIB_DIR があれば thick client を使う。"""
     wallet_dir = tmp_path / "instantclient_23_26" / "network" / "admin"
     wallet_dir.mkdir(parents=True)
     (wallet_dir / "tnsnames.ora").write_text("ragdb_high = ...", encoding="utf-8")

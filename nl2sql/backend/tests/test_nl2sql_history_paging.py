@@ -353,7 +353,7 @@ def test_oracle_history_user_identities_batch_only_public_fields(
     assert identities == {"user-1": UserIdentity("user-1", "analyst1", "利用者")}
     cursor.execute.assert_called_once()
     sql, binds = cursor.execute.call_args.args
-    assert sql.startswith("SELECT USER_UUID, LOGIN_USER_ID, DISPLAY_NAME FROM NL2SQL_APP_USERS ")
+    assert sql.startswith("SELECT USER_UUID, LOGIN_USER_ID, DISPLAY_NAME FROM PLATFORM_USERS ")
     assert set(binds.values()) == {"user-1", "missing"}
     assert "user-1" not in sql
     assert "PASSWORD" not in sql and "ROLE" not in sql

@@ -307,7 +307,7 @@ def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatc
 def test_oci_client_keeps_config_region_when_object_storage_region_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """専用 region 未設定時は OCI_REGION ではなく config file の region を使う。"""
+    """専用 region 未設定時は PLATFORM_OCI_REGION ではなく config file の region を使う。"""
     captured_config: dict[str, object] = {}
 
     class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):

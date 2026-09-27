@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -32,10 +33,13 @@ from app.config import (
     enterprise_ai_vision_model_id,
 )
 from app.rag.docrag_chunking import docrag_search_text
+from app.rag.docrag_prompts import prompt_overrides
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 DOCRAG_ANSWER_ENGINE = "docrag"
 DOCRAG_SOURCE_RUN_ID = "0" * 16
@@ -51,6 +55,21 @@ class DocragAnswerOutcome:
     citations: list[RetrievedChunk]
     diagnostics: dict[str, Any]
     context_text: str
+    # 標準回答による LLM 評価(evaluate_answer_payload)の入力。回答記録に保存する。
+    evaluation_input: dict[str, Any] | None = None
+
+
+# evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。
+EVALUATION_INPUT_KEYS = (
+    "question",
+    "answer_text",
+    "reasoning_summary",
+    "insufficient_reason",
+    "used_images",
+    "external_data_required",
+    "external_data_items",
+    "evidence_items",
+)
 
 
 @dataclass
@@ -115,6 +134,11 @@ class DocragAnswerEngine:
     async def run(self, request: SearchRequest) -> DocragAnswerOutcome:
         loop = asyncio.get_running_loop()
         state = _SearchState()
+        try:
+            overrides = await self._oracle.docrag_prompt_overrides()
+        except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
+            logger.warning("docrag prompt overrides load failed", exc_info=True)
+            overrides = {}
         with tempfile.TemporaryDirectory(prefix="docrag-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -129,7 +153,7 @@ class DocragAnswerEngine:
                 self._settings, output_dir=work_dir, runtime_knowledge_path=runtime_path
             )
             result = await asyncio.to_thread(
-                self._answer_sync, request, docrag_settings, loop, state
+                self._answer_sync, request, docrag_settings, loop, state, overrides
             )
         return _outcome_from_result(result, state)
 
@@ -139,10 +163,12 @@ class DocragAnswerEngine:
         docrag_settings: Any,
         loop: asyncio.AbstractEventLoop,
         state: _SearchState,
+        overrides: Mapping[str, str] | None = None,
     ) -> Any:
         from docrag.adapters.oci import parse_multimodal_response, parse_text_response
         from docrag.dependencies import AnswerDependencies, bind_dependencies
         from docrag.generation.answering import answer_question_result
+        from docrag.knowledge.classification import classification_filter_from_values
         from docrag.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
@@ -159,14 +185,26 @@ class DocragAnswerEngine:
                 lambda: self._rerank(query, list(documents), top_n)
             ),
         )
-        with bind_dependencies(dependencies):
+        with bind_dependencies(dependencies), prompt_overrides(overrides or {}):
             return answer_question_result(
                 request.query,
                 DOCRAG_SOURCE_RUN_ID,
                 ["docling"],
                 docrag_settings,
                 chunk_top_k=max(1, int(request.top_k)),
+                chunk_neighbor_count=self._settings.rag_docrag_neighbor_child_count,
+                query_strategy=self._settings.rag_docrag_query_strategy,
+                answer_flow=self._settings.rag_docrag_answer_flow,
+                rerank_enabled=self._settings.rag_docrag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+                # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
+                # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
+                classification_filter=classification_filter_from_values(
+                    large_category=request.filters.get("large_category", ""),
+                    middle_category=request.filters.get("middle_category", ""),
+                    small_category=request.filters.get("small_category", ""),
+                    as_of=request.filters.get("as_of", ""),
+                ),
             )
 
     async def _search(
@@ -499,4 +537,33 @@ def _outcome_from_result(result: Any, state: _SearchState) -> DocragAnswerOutcom
         citations=citations,
         diagnostics=diagnostics,
         context_text=context_text,
+        evaluation_input=_evaluation_input(result),
     )
+
+
+def _evaluation_input(result: Any) -> dict[str, Any] | None:
+    """rag_poc の回答 payload から、標準回答での評価に使う部分だけを取り出す。"""
+    from docrag.generation.answer_payload import answer_result_payload
+
+    try:
+        payload = answer_result_payload(result, answer_id="", run_id=DOCRAG_SOURCE_RUN_ID)
+    except Exception:  # noqa: BLE001 - 評価の入力は補助。回答の返却を止めない。
+        logger.warning("docrag evaluation input build failed", exc_info=True)
+        return None
+    return {key: payload.get(key) for key in EVALUATION_INPUT_KEYS}
+
+
+def evaluate_answer_record(
+    evaluation_input: Mapping[str, Any], standard_answer: str, settings: Settings
+) -> dict[str, Any]:
+    """保存した回答を標準回答で評価する(rag_poc の evaluate_answer_payload)。
+
+    同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+    """
+    from docrag.evaluation.answer_eval import evaluate_answer_payload
+
+    with tempfile.TemporaryDirectory(prefix="docrag-eval-") as work:
+        docrag_settings = build_docrag_settings(settings, output_dir=Path(work))
+        return evaluate_answer_payload(
+            {**evaluation_input, "standard_answer": standard_answer}, docrag_settings
+        )

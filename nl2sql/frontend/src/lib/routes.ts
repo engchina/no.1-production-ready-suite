@@ -1,4 +1,4 @@
-import { SYSTEM_SETTINGS_PATHS } from "@engchina/production-ready-system-settings";
+import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@engchina/production-ready-system-settings";
 
 /** NL2SQL コンソールのルート定義。 */
 export const APP_ROUTES = {
@@ -33,8 +33,10 @@ export const APP_ROUTES = {
   settingsDatabase: SYSTEM_SETTINGS_PATHS.database,
   settingsSystemTables: "/settings/system-tables",
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
-  securityUsers: "/settings/security/users",
-  securityRoles: "/settings/security/roles",
+  // ユーザー管理・ロール管理は3製品共通（platform の共有パッケージ。#206）。
+  securityUsers: USER_ROLE_PATHS.users,
+  securityRoles: USER_ROLE_PATHS.roles,
+  securityPermissions: "/settings/security/permissions",
   securityDeepSec: "/settings/security/deepsec",
   /** 旧「NL2SQL モデル学習」URL。業務プロファイルの Select AI 設定へ転送する。 */
   legacyNl2sqlModelLearning: "/settings/nl2sql-model",

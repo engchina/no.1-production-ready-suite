@@ -70,6 +70,7 @@ import {
   Skeleton,
   Switch,
   Tabs,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -79,6 +80,7 @@ import {
   type ChunkingStrategyName,
   type DocumentChunkPreviewResponse,
   type DocumentChunkView,
+  type DocumentClassification,
   type DocumentExtractionExportFormat,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
@@ -119,6 +121,7 @@ import {
   usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
+  useSaveDocumentClassification,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -1100,6 +1103,11 @@ export function DocumentWorkspace({
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
           initialKnowledgeBases={doc.knowledge_bases}
+        />
+
+        <DocumentClassificationEditor
+          documentId={documentId}
+          classification={doc.classification ?? null}
         />
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
@@ -2845,6 +2853,98 @@ function DocumentKnowledgeBaseEditor({
           <FormStatus
             tone="danger"
             message={errorMessage(replace.error, t("documents.knowledgeBases.saveError"))}
+          />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+const EMPTY_CLASSIFICATION: DocumentClassification = {
+  large_category: null,
+  middle_category: null,
+  small_category: null,
+  effective_from: null,
+  effective_to: null,
+};
+const CLASSIFICATION_TEXT_FIELDS = ["large_category", "middle_category", "small_category"] as const;
+const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
+
+/** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
+function DocumentClassificationEditor({
+  documentId,
+  classification,
+}: {
+  documentId: string;
+  classification: DocumentClassification | null;
+}) {
+  const save = useSaveDocumentClassification();
+  const saved = { ...EMPTY_CLASSIFICATION, ...classification };
+  const savedKey = JSON.stringify(saved);
+  const [form, setForm] = useState(saved);
+  // 文書詳細は処理中に定期的に再取得される。保存値が実際に変わったときだけ入力を入れ替える。
+  if (useValuesChanged([savedKey])) setForm(saved);
+
+  const isDirty = JSON.stringify(form) !== savedKey;
+  useLeaveGuard(isDirty);
+  const update = (key: keyof DocumentClassification, value: string) =>
+    setForm((current) => ({ ...current, [key]: value || null }));
+  const onSave = () => {
+    if (!isDirty) return;
+    save.mutate({ id: documentId, payload: form });
+  };
+
+  return (
+    <section className="space-y-3 border-t border-border pt-4">
+      <div>
+        <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
+        <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {CLASSIFICATION_TEXT_FIELDS.map((key) => (
+          <TextField
+            key={key}
+            id={`document-classification-${key}`}
+            label={t(`documents.classification.${key}`)}
+            value={form[key] ?? ""}
+            maxLength={200}
+            disabled={save.isPending}
+            onValueChange={(value) => update(key, value)}
+          />
+        ))}
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {CLASSIFICATION_DATE_FIELDS.map((key) => (
+          <TextField
+            key={key}
+            id={`document-classification-${key}`}
+            type="date"
+            label={t(`documents.classification.${key}`)}
+            helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
+            value={form[key] ?? ""}
+            disabled={save.isPending}
+            onValueChange={(value) => update(key, value)}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          size="md"
+          onClick={onSave}
+          loading={save.isPending}
+          disabled={!isDirty}
+          icon={Save}
+        >
+          {t("documents.classification.save")}
+        </Button>
+        {save.isSuccess && !isDirty ? (
+          <FormStatus tone="success" message={t("documents.classification.saved")} />
+        ) : null}
+        {save.isError ? (
+          <FormStatus
+            tone="danger"
+            message={errorMessage(save.error, t("documents.classification.saveError"))}
           />
         ) : null}
       </div>

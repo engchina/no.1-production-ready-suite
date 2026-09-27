@@ -128,10 +128,13 @@ def _annotation_rows(cursor: Any, object_name: str, column_name: str) -> list[tu
 
 @pytest.fixture
 def live_settings() -> Iterator[Any]:
-    """conftest が ORACLE_USER=APP を強制するため、.env の接続ユーザーへ戻して実 DB に繋ぐ。"""
+    """conftest が PLATFORM_ORACLE_USER=APP を強制するため、共通 .env の接続ユーザーへ戻す。"""
     settings = get_settings()
     env_user = str(
-        dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("ORACLE_USER") or ""
+        dotenv_values(Path(__file__).resolve().parents[3] / "platform" / ".env").get(
+            "PLATFORM_ORACLE_USER"
+        )
+        or ""
     )
     original_user = settings.oracle_user
     if env_user:

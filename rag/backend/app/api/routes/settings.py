@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import logging
 import re
 import stat
@@ -21,6 +22,7 @@ from pr_system_settings.upload_storage import (
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
+from app import config as app_config
 from app.auth import AuthSession
 from app.clients.external_parser import (
     ENGINE_SPECS,
@@ -53,6 +55,13 @@ from app.rag.chunking_strategy import (
     chunking_runtime_settings,
     normalize_chunking_strategy,
 )
+from app.rag.docrag_prompts import (
+    EDITABLE_PROMPT_KEYS,
+    readonly_prompt_stages,
+)
+from app.rag.docrag_prompts import default_prompt as default_docrag_prompt
+from app.rag.docrag_prompts import required_placeholders as docrag_required_placeholders
+from app.rag.docrag_prompts import validate_prompt as validate_docrag_prompt
 from app.rag.evaluation_adapter import (
     evaluation_adapter_runtime_settings,
     normalize_evaluation_suite,
@@ -118,6 +127,9 @@ from app.schemas.settings import (
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
+    DocragPromptsData,
+    DocragPromptUpdate,
+    DocragPromptView,
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
@@ -160,6 +172,8 @@ from app.schemas.settings import (
     PromptVersionCreate,
     PromptVersionData,
     PromptVersionsData,
+    QueryHistorySettingsData,
+    QueryHistorySettingsUpdate,
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
@@ -174,21 +188,23 @@ from app.schemas.settings import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 OCI_DIRECTORY_MODE = 0o700
+# RAG 固有の設定（`RAG_*`）の保存先。3製品共通の設定（`PLATFORM_*`）は共通 `.env`
+# （app.config.PLATFORM_ENV_FILE）へ保存する（#211）。
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
-# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+# テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
 router.include_router(
     build_upload_storage_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
     )
 )
 # OCI 認証も3製品共通の実装（pr_system_settings.oci。#100）。
 router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
     )
 )
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
@@ -205,7 +221,7 @@ router.include_router(
 router.include_router(
     build_database_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_config.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
     )
@@ -572,6 +588,107 @@ async def update_answer_record_settings(
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
 
 
+@router.get("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
+async def get_query_history_settings() -> ApiResponse[QueryHistorySettingsData]:
+    """質問履歴の設定を返す。"""
+    return ApiResponse(data=_query_history_settings(get_settings()))
+
+
+@router.patch("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
+async def update_query_history_settings(
+    payload: QueryHistorySettingsUpdate,
+) -> ApiResponse[QueryHistorySettingsData]:
+    """質問履歴の設定を backend/.env と現在プロセスへ反映し、期限切れの履歴を削除する。"""
+    settings = get_settings()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_QUERY_HISTORY_ENABLED": "true" if payload.enabled else "false",
+            "RAG_QUERY_HISTORY_RETENTION_DAYS": str(payload.retention_days),
+            "RAG_QUERY_HISTORY_MIN_COUNT": str(payload.min_count),
+            "RAG_QUERY_HISTORY_SUGGESTION_LIMIT": str(payload.suggestion_limit),
+            "RAG_QUERY_HISTORY_BLOCKLIST": json.dumps(payload.blocklist, ensure_ascii=False),
+        },
+        section_comment="# 質問履歴",
+        error_detail="質問履歴の設定を backend/.env へ保存できませんでした。",
+    )
+    settings.rag_query_history_enabled = payload.enabled
+    settings.rag_query_history_retention_days = payload.retention_days
+    settings.rag_query_history_min_count = payload.min_count
+    settings.rag_query_history_suggestion_limit = payload.suggestion_limit
+    settings.rag_query_history_blocklist = list(payload.blocklist)
+    if payload.retention_days > 0:
+        try:
+            await OracleClient().purge_query_history(payload.retention_days)
+        except Exception as exc:  # 次の記録時にも削除するため、設定保存は止めない。
+            logger.warning("query history purge failed", extra={"error": str(exc)})
+    return ApiResponse(data=_query_history_settings(settings))
+
+
+def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
+    return QueryHistorySettingsData(
+        enabled=settings.rag_query_history_enabled,
+        retention_days=settings.rag_query_history_retention_days,
+        min_count=settings.rag_query_history_min_count,
+        suggestion_limit=settings.rag_query_history_suggestion_limit,
+        blocklist=list(settings.rag_query_history_blocklist),
+    )
+
+
+@router.get("/docrag-prompts", response_model=ApiResponse[DocragPromptsData])
+async def get_docrag_prompts() -> ApiResponse[DocragPromptsData]:
+    """編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプトを返す。"""
+    saved = await OracleClient().list_docrag_prompts()
+    return ApiResponse(data=_docrag_prompts_data(saved))
+
+
+@router.put("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
+async def put_docrag_prompt(
+    key: str, payload: DocragPromptUpdate
+) -> ApiResponse[DocragPromptsData]:
+    """DocRAG プロンプトを保存する(次の回答・次の解析から使う)。"""
+    try:
+        validate_docrag_prompt(key, payload.content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="プロンプトが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    oracle = OracleClient()
+    await oracle.save_docrag_prompt(key, payload.content)
+    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+
+
+@router.delete("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
+async def reset_docrag_prompt(key: str) -> ApiResponse[DocragPromptsData]:
+    """保存した DocRAG プロンプトを消して既定値へ戻す。"""
+    if key not in EDITABLE_PROMPT_KEYS:
+        raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
+    oracle = OracleClient()
+    await oracle.delete_docrag_prompt(key)
+    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+
+
+def _docrag_prompts_data(saved: dict[str, dict[str, object]]) -> DocragPromptsData:
+    prompts = []
+    for key in EDITABLE_PROMPT_KEYS:
+        row = saved.get(key)
+        prompts.append(
+            DocragPromptView.model_validate(
+                {
+                    "key": key,
+                    "content": row["content"] if row else default_docrag_prompt(key),
+                    "default_content": default_docrag_prompt(key),
+                    "customized": row is not None,
+                    "required_placeholders": list(docrag_required_placeholders(key)),
+                    "updated_at": row["updated_at"] if row else None,
+                }
+            )
+        )
+    return DocragPromptsData.model_validate(
+        {"prompts": prompts, "stages": readonly_prompt_stages()}
+    )
+
+
 @router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
 async def get_prompt_versions() -> ApiResponse[PromptVersionsData]:
     """回答生成 system prompt の版一覧と有効版を返す(custom profile が使用)。"""
@@ -834,12 +951,15 @@ def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
 
 
 def _persist_huggingface_settings(settings: Settings) -> None:
-    """HuggingFace 設定を backend/.env へ永続化する(env キーは標準名)。"""
+    """HuggingFace 設定を backend/.env へ永続化する。
+
+    parser コンテナの huggingface_hub へは、サービス管理が HF_TOKEN / HF_ENDPOINT として渡す。
+    """
     _write_env_values(
         BACKEND_ENV_FILE,
         {
-            "HF_TOKEN": settings.huggingface_token,
-            "HF_ENDPOINT": settings.huggingface_endpoint,
+            "RAG_HUGGINGFACE_TOKEN": settings.huggingface_token,
+            "RAG_HUGGINGFACE_ENDPOINT": settings.huggingface_endpoint,
         },
         section_comment="# HuggingFace モデルダウンロード",
         error_detail="HuggingFace 設定を backend/.env へ保存できませんでした。",

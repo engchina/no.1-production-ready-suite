@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
-import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -482,6 +482,53 @@ async function expectNoDocumentHorizontalOverflow(page: Page) {
   }));
   expect(width.scrollWidth).toBeLessThanOrEqual(width.clientWidth + 1);
   expect(width.bodyScrollWidth).toBeLessThanOrEqual(width.bodyClientWidth + 1);
+}
+
+for (const [label, grants, showsAccess] of [
+  ["ロール管理だけ", ["menu.profiles", "menu.security_roles"], false],
+  ["権限管理あり", ["menu.profiles", "menu.security_permissions"], true],
+] as const) {
+  test(`業務プロファイルの利用可能ロールは権限管理の権限でだけ取得する（${label}。#206）`, async ({ page }) => {
+    await page.unroute("**/api/auth/me");
+    await page.route("**/api/auth/me", (route) =>
+      fulfillJson(route, {
+        ...systemAdminMe,
+        role_codes: ["PROFILE_EDITOR"],
+        is_system_admin: false,
+        permissions: [...grants],
+      })
+    );
+    let accessRequests = 0;
+    await page.unroute("**/api/security/profile-access/profiles**");
+    await page.route("**/api/security/profile-access/profiles**", (route) => {
+      accessRequests += 1;
+      return fulfillJson(route, [
+        {
+          id: profiles[0].id,
+          name: profiles[0].name,
+          category: "",
+          description: "",
+          archived: false,
+          allowed_role_ids: ["ROLE_A"],
+        },
+      ]);
+    });
+    await mockProfileApi(page);
+
+    await page.goto(`/profiles?profile=${profiles[0].id}`);
+
+    await expect(page.locator("#profile-name")).toHaveValue(profiles[0].name);
+    await expect(page).not.toHaveURL(/\/forbidden$/u);
+    if (showsAccess) {
+      await expect(page.getByText("利用可能ロール", { exact: true })).toBeVisible();
+      await expect(page.getByText("ROLE_A", { exact: true })).toBeVisible();
+      expect(accessRequests).toBeGreaterThan(0);
+    } else {
+      // ロール管理だけの利用者は API が 403 になるため取りに行かない（403 は画面全体を権限エラーへ切り替える）。
+      await expect(page.getByText("利用可能ロール", { exact: true })).toHaveCount(0);
+      expect(accessRequests).toBe(0);
+    }
+  });
 }
 
 test("業務プロファイル一覧検索はAPI totalを件数表示に使い検索結果だけを表示する", async ({ page }) => {

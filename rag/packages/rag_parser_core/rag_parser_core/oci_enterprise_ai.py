@@ -60,11 +60,12 @@ class OciEnterpriseAiConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OciEnterpriseAiConfig:
-        """環境変数(backend と同じ OCI_ENTERPRISE_AI_* キー)から構築する。
+        """環境変数(backend と同じ共通設定の PLATFORM_OCI_ENTERPRISE_AI_* キー。#211)から構築する。
 
         microservice は VLM 抽出のみを行うため、vision_model_id は
-        `OCI_ENTERPRISE_AI_VLM_MODEL`、default_model_id は
-        `OCI_ENTERPRISE_AI_DEFAULT_MODEL`(無ければ `OCI_ENTERPRISE_AI_LLM_MODEL`)で解決する。
+        `PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL`、default_model_id は
+        `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL`(無ければ
+        `PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL`)で解決する。
         """
         src = os.environ if env is None else env
 
@@ -72,29 +73,39 @@ class OciEnterpriseAiConfig:
             return str(src.get(name, default) or default)
 
         return cls(
-            oci_enterprise_ai_endpoint=_get("OCI_ENTERPRISE_AI_ENDPOINT"),
-            oci_enterprise_ai_api_key=_get("OCI_ENTERPRISE_AI_API_KEY"),
-            oci_enterprise_ai_project_ocid=_get("OCI_ENTERPRISE_AI_PROJECT_OCID"),
-            oci_compartment_id=_get("OCI_COMPARTMENT_ID"),
-            vision_model_id=_get("OCI_ENTERPRISE_AI_VLM_MODEL"),
-            default_model_id=_get("OCI_ENTERPRISE_AI_DEFAULT_MODEL")
-            or _get("OCI_ENTERPRISE_AI_LLM_MODEL"),
-            oci_enterprise_ai_llm_path=_get("OCI_ENTERPRISE_AI_LLM_PATH", "/responses"),
-            oci_enterprise_ai_vlm_path=_get("OCI_ENTERPRISE_AI_VLM_PATH", "/responses"),
-            oci_enterprise_ai_llm_response_path=_get("OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH"),
-            oci_enterprise_ai_vlm_response_path=_get("OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH"),
-            oci_enterprise_ai_llm_payload_template=_get("OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE"),
-            oci_enterprise_ai_vlm_payload_template=_get("OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE"),
-            oci_enterprise_ai_vlm_input_mode=_get("OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "files_api"),
-            oci_enterprise_ai_timeout_seconds=_float(
-                _get("OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"), 600.0
+            oci_enterprise_ai_endpoint=_get("PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"),
+            oci_enterprise_ai_api_key=_get("PLATFORM_OCI_ENTERPRISE_AI_API_KEY"),
+            oci_enterprise_ai_project_ocid=_get("PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"),
+            oci_compartment_id=_get("PLATFORM_OCI_COMPARTMENT_ID"),
+            vision_model_id=_get("PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"),
+            default_model_id=_get("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL")
+            or _get("PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"),
+            oci_enterprise_ai_llm_path=_get("PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH", "/responses"),
+            oci_enterprise_ai_vlm_path=_get("PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH", "/responses"),
+            oci_enterprise_ai_llm_response_path=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH"
             ),
-            oci_enterprise_ai_max_retries=_int(_get("OCI_ENTERPRISE_AI_MAX_RETRIES"), 3),
+            oci_enterprise_ai_vlm_response_path=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH"
+            ),
+            oci_enterprise_ai_llm_payload_template=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE"
+            ),
+            oci_enterprise_ai_vlm_payload_template=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE"
+            ),
+            oci_enterprise_ai_vlm_input_mode=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "files_api"
+            ),
+            oci_enterprise_ai_timeout_seconds=_float(
+                _get("PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"), 600.0
+            ),
+            oci_enterprise_ai_max_retries=_int(_get("PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES"), 3),
             oci_enterprise_ai_llm_max_output_tokens=_int(
-                _get("OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS"), 1200
+                _get("PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS"), 1200
             ),
             oci_enterprise_ai_vlm_max_output_tokens=_int(
-                _get("OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS"), 65536
+                _get("PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS"), 65536
             ),
         )
 

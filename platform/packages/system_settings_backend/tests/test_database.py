@@ -98,10 +98,10 @@ def test_patch_persists_then_applies_and_keeps_secret_out_of_response(tmp_path: 
     assert data["has_password"] is True
     assert "db-secret" not in resp.text
     env = dotenv_values(h.env_file)
-    assert env["ORACLE_USER"] == "app"
-    assert env["ORACLE_PASSWORD"] == "db-secret"
-    assert env["ORACLE_DRIVER_MODE"] == "thin"
-    assert env["ORACLE_CONNECTION_SECURITY"] == "wallet_mtls"
+    assert env["PLATFORM_ORACLE_USER"] == "app"
+    assert env["PLATFORM_ORACLE_PASSWORD"] == "db-secret"
+    assert env["PLATFORM_ORACLE_DRIVER_MODE"] == "thin"
+    assert env["PLATFORM_ORACLE_CONNECTION_SECURITY"] == "wallet_mtls"
     assert h.settings.oracle_password == "db-secret"
     assert h.saved == ["app"]
 
@@ -283,7 +283,7 @@ def test_adb_settings_start_stop_and_hidden_errors(
         json={"adb_ocid": "ocid1.autonomousdatabase.oc1..x", "region": "ap-osaka-1"},
     ).json()["data"]
     assert saved["lifecycle_state"] == "STOPPED"
-    assert dotenv_values(h.env_file)["ORACLE_ADB_REGION"] == "ap-osaka-1"
+    assert dotenv_values(h.env_file)["PLATFORM_ORACLE_ADB_REGION"] == "ap-osaka-1"
 
     started = h.client.post("/api/settings/database/adb/start").json()["data"]
     assert started["status"] == "accepted"

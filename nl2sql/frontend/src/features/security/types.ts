@@ -1,3 +1,11 @@
+import type {
+  AssignedRole,
+  SecurityRole as SharedSecurityRole,
+  SecurityUser,
+} from "@engchina/production-ready-system-settings";
+
+export type { AssignedRole, SecurityUser };
+
 export type ScopeNode = ScopeGroup | { kind: "condition"; filter: DataEntitlementScopeFilter } | ScopeRelatedExists;
 export interface ScopeGroup { kind: "group"; operator: "AND" | "OR"; children: ScopeNode[] }
 export interface ScopeExpression { version: 1; root: ScopeGroup }
@@ -113,41 +121,14 @@ export interface CurrentUser {
   password_change_allowed: boolean;
 }
 
-export interface SecurityUser {
-  user_uuid: string;
-  login_user_id: string;
-  display_name: string;
-  status: "ACTIVE" | "DISABLED";
-  force_password_change: boolean;
-  locked_until: string | null;
-  version: number;
-  role_ids: string[];
-  assigned_roles: AssignedRole[];
-  is_bootstrap_admin: boolean;
-}
-
 export interface SecurityUserDeleteResult {
   deleted: boolean;
   user_uuid: string;
   login_user_id: string;
 }
 
-export interface AssignedRole {
-  role_id: string;
-  role_code: string;
-  display_name: string;
-  is_built_in: boolean;
-  archived: boolean;
-}
-
-export interface SecurityRole {
-  role_id: string;
-  role_code: string;
-  display_name: string;
-  description: string;
-  is_built_in: boolean;
-  archived: boolean;
-  version: number;
+/** 共通のロール項目（platform）に、NL2SQL の権限・Data Grant・業務プロファイル利用権限を足す（#206）。 */
+export interface SecurityRole extends SharedSecurityRole {
   permissions: string[];
   data_entitlements: DataEntitlement[];
   allowed_profile_ids: string[];

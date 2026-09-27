@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const usersPage = readFileSync(
-  new URL("../src/features/security/SecurityUsersPage.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx", import.meta.url),
   "utf8"
 );
 

@@ -361,7 +361,8 @@ def database_readiness_message(readiness: str) -> str:
     if readiness == "invalid_configuration":
         return (
             "Oracle Deep Data Security は python-oracledb Thin mode のみ対応しています。"
-            "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin にしてください。"
+            "NL2SQL_ORACLE_DEEPSEC_ENABLED=true の場合は "
+            "PLATFORM_ORACLE_DRIVER_MODE=thin にしてください。"
         )
     if readiness == "invalid":
         return (
@@ -376,7 +377,8 @@ def database_readiness_message(readiness: str) -> str:
     if readiness == "wallet_password_invalid":
         return (
             "Oracle 26ai 接続に必要な Wallet パスワードを確認してください。"
-            "暗号化 Wallet の ewallet.pem を現在の ORACLE_WALLET_PASSWORD で復号できません。"
+            "暗号化 Wallet の ewallet.pem を現在の "
+            "PLATFORM_ORACLE_WALLET_PASSWORD で復号できません。"
         )
     if readiness == "walletless_tls_dsn_required":
         return (
@@ -426,7 +428,7 @@ def database_connection_error_message(exc: Exception, error_codes: list[str]) ->
         return (
             prefix + "標準の Thin mode では Oracle Instant Client は不要です。"
             "Thick 互換設定を DeepSec 無効で使う場合のみ、"
-            "Oracle Instant Client の配置と ORACLE_CLIENT_LIB_DIR を確認してください。"
+            "Oracle Instant Client の配置と PLATFORM_ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if error_codes:
         return prefix + "下の確認ポイントと backend ログを確認してください。"
@@ -459,8 +461,9 @@ def database_connection_troubleshooting(
         )
     if readiness == "invalid_configuration":
         tips.append(
-            "DeepSec を有効にする場合は ORACLE_DRIVER_MODE=thin とし、"
-            "Thin mTLS 用の tnsnames.ora と ewallet.pem を ORACLE_WALLET_DIR に配置してください。"
+            "DeepSec を有効にする場合は PLATFORM_ORACLE_DRIVER_MODE=thin とし、"
+            "Thin mTLS 用の tnsnames.ora と ewallet.pem を "
+            "PLATFORM_ORACLE_WALLET_DIR に配置してください。"
         )
     if readiness == "invalid":
         tips.append("Wallet の tnsnames.ora とサービス名の形式を確認してください。")
@@ -492,12 +495,14 @@ def database_connection_troubleshooting(
             "データベースが停止していないか、ADB の listener に到達できるか確認してください。"
         )
     if "wallet" in combined or "dpy-4011" in combined:
-        tips.append("Wallet ZIP の内容、Wallet パスワード、ORACLE_WALLET_DIR を確認してください。")
+        tips.append(
+            "Wallet ZIP の内容、Wallet パスワード、PLATFORM_ORACLE_WALLET_DIR を確認してください。"
+        )
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(
-            "ORACLE_DRIVER_MODE=thin の標準構成へ戻してください。"
+            "PLATFORM_ORACLE_DRIVER_MODE=thin の標準構成へ戻してください。"
             "Thick 互換設定を DeepSec 無効で使う場合のみ、"
-            "Oracle Instant Client と ORACLE_CLIENT_LIB_DIR を確認してください。"
+            "Oracle Instant Client と PLATFORM_ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if "operationalerror" in combined and not tips:
         tips.append(
@@ -577,23 +582,23 @@ def _apply_database_settings(target: Any, source: Any) -> None:
 
 def _persist_database_settings(settings: Any, env_file: Path) -> None:
     values: dict[str, str | None] = {
-        "ORACLE_USER": _s(settings, "oracle_user"),
-        "ORACLE_PASSWORD": _s(settings, "oracle_password"),
-        "ORACLE_DSN": _s(settings, "oracle_dsn"),
-        "ORACLE_CLIENT_LIB_DIR": _s(settings, "oracle_client_lib_dir"),
-        "ORACLE_WALLET_DIR": _s(settings, "oracle_wallet_dir"),
-        "ORACLE_WALLET_PASSWORD": _s(settings, "oracle_wallet_password"),
+        "PLATFORM_ORACLE_USER": _s(settings, "oracle_user"),
+        "PLATFORM_ORACLE_PASSWORD": _s(settings, "oracle_password"),
+        "PLATFORM_ORACLE_DSN": _s(settings, "oracle_dsn"),
+        "PLATFORM_ORACLE_CLIENT_LIB_DIR": _s(settings, "oracle_client_lib_dir"),
+        "PLATFORM_ORACLE_WALLET_DIR": _s(settings, "oracle_wallet_dir"),
+        "PLATFORM_ORACLE_WALLET_PASSWORD": _s(settings, "oracle_wallet_password"),
     }
     # driver mode / 接続セキュリティを設定項目として持つ製品（NL2SQL）だけ保存する。
     if _has_field(settings, "oracle_driver_mode"):
-        values["ORACLE_DRIVER_MODE"] = driver_mode(settings)
+        values["PLATFORM_ORACLE_DRIVER_MODE"] = driver_mode(settings)
     if _has_field(settings, "oracle_connection_security"):
-        values["ORACLE_CONNECTION_SECURITY"] = connection_security(settings)
+        values["PLATFORM_ORACLE_CONNECTION_SECURITY"] = connection_security(settings)
     _write_env(
         env_file,
         values,
         section_comment="# Oracle 26ai",
-        error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
+        error_detail="Oracle 26ai 接続設定を platform/.env へ保存できませんでした。",
     )
 
 
@@ -601,11 +606,11 @@ def _persist_adb_settings(settings: Any, env_file: Path) -> None:
     _write_env(
         env_file,
         {
-            "ORACLE_ADB_OCID": _s(settings, "oracle_adb_ocid"),
-            "ORACLE_ADB_REGION": _s(settings, "oracle_adb_region"),
+            "PLATFORM_ORACLE_ADB_OCID": _s(settings, "oracle_adb_ocid"),
+            "PLATFORM_ORACLE_ADB_REGION": _s(settings, "oracle_adb_region"),
         },
         section_comment="# Oracle Autonomous Database 管理",
-        error_detail="ADB 設定を backend/.env へ保存できませんでした。",
+        error_detail="ADB 設定を platform/.env へ保存できませんでした。",
     )
 
 
@@ -632,7 +637,7 @@ def _wallet_storage_root(settings: Any) -> Path:
         raise HTTPException(
             status_code=422,
             detail=(
-                "ORACLE_WALLET_DIR または ORACLE_CLIENT_LIB_DIR が未設定のため "
+                "PLATFORM_ORACLE_WALLET_DIR または PLATFORM_ORACLE_CLIENT_LIB_DIR が未設定のため "
                 "Wallet 保存先を決定できません。"
             ),
         )
@@ -988,9 +993,9 @@ def wallet_download_password(settings: Any) -> str:
             status_code=422,
             detail=(
                 "Wallet を自動取得するには DB パスワードが必要です。"
-                "ORACLE_WALLET_PASSWORD が空の場合は ORACLE_PASSWORD を "
+                "PLATFORM_ORACLE_WALLET_PASSWORD が空の場合は PLATFORM_ORACLE_PASSWORD を "
                 "Wallet password として使用し、"
-                "ORACLE_WALLET_PASSWORD にも保存します。"
+                "PLATFORM_ORACLE_WALLET_PASSWORD にも保存します。"
             ),
         )
     return password

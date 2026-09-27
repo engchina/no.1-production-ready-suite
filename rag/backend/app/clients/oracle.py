@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
@@ -55,6 +55,7 @@ from app.schemas.business_view import (
 from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
+    DocumentClassification,
     DocumentDetail,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
@@ -249,6 +250,7 @@ class StoredDocument:
     indexed_at: datetime | None = None
     extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
+    classification: dict[str, object] | None = None
 
 
 @dataclass
@@ -2133,6 +2135,7 @@ class OracleClient:
             "answer": record["answer"],
             "citations_json": _json_bind(record.get("citations") or []),
             "diagnostics_json": _json_bind(record.get("diagnostics") or {}),
+            "evaluation_input_json": _json_bind(record.get("evaluation_input")),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -2150,17 +2153,23 @@ class OracleClient:
                     target.rewritten_question = :rewritten_question,
                     target.answer = :answer,
                     target.citations_json = :citations_json,
-                    target.diagnostics_json = :diagnostics_json
+                    target.diagnostics_json = :diagnostics_json,
+                    target.evaluation_input_json = :evaluation_input_json,
+                    target.evaluation_json = NULL
                 WHEN NOT MATCHED THEN INSERT (
                     trace_id, business_view_id, surface, answer_engine, question,
-                    rewritten_question, answer, citations_json, diagnostics_json
+                    rewritten_question, answer, citations_json, diagnostics_json,
+                    evaluation_input_json
                 ) VALUES (
                     :trace_id, :business_view_id, :surface, :answer_engine, :question,
-                    :rewritten_question, :answer, :citations_json, :diagnostics_json
+                    :rewritten_question, :answer, :citations_json, :diagnostics_json,
+                    :evaluation_input_json
                 )
                 """,
                 binds,
-                input_sizes=_json_input_sizes("citations_json", "diagnostics_json"),
+                input_sizes=_json_input_sizes(
+                    "citations_json", "diagnostics_json", "evaluation_input_json"
+                ),
             )
 
         await self._run_transaction(operation)
@@ -2196,7 +2205,8 @@ class OracleClient:
         row = await self._fetch_one(
             """
             SELECT trace_id, business_view_id, surface, answer_engine, question,
-                   rewritten_question, answer, citations_json, diagnostics_json, created_at
+                   rewritten_question, answer, citations_json, diagnostics_json,
+                   evaluation_input_json, evaluation_json, created_at
             FROM rag_answer_records
             WHERE trace_id = :trace_id
             """,
@@ -2204,10 +2214,157 @@ class OracleClient:
         )
         if row is None:
             return None
-        for key in ("citations_json", "diagnostics_json"):
+        for key in (
+            "citations_json",
+            "diagnostics_json",
+            "evaluation_input_json",
+            "evaluation_json",
+        ):
             if isinstance(row.get(key), str):
                 row[key] = json.loads(str(row[key]))
         return row
+
+    async def append_query_history(self, record: Mapping[str, object]) -> None:
+        """質問履歴を 1 件追記する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_query_history (
+                    query_id, business_view_id, surface, question, normalized_question,
+                    classification_filter
+                ) VALUES (
+                    :query_id, :business_view_id, :surface, :question, :normalized_question,
+                    :classification_filter
+                )
+                """,
+                {
+                    "query_id": uuid4().hex,
+                    "business_view_id": record["business_view_id"],
+                    "surface": record["surface"],
+                    "question": record["question"],
+                    "normalized_question": record["normalized_question"],
+                    "classification_filter": _json_bind(record.get("classification_filter") or {}),
+                },
+                input_sizes=_json_input_sizes("classification_filter"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_query_history(
+        self, business_view_id: str, *, retention_days: int, limit: int = 5000
+    ) -> list[dict[str, object]]:
+        """業務ビューの保持期間内の質問履歴を新しい順に返す(0 日は無期限)。"""
+        where = "WHERE business_view_id = :business_view_id"
+        binds: dict[str, object] = {"business_view_id": business_view_id, "limit": limit}
+        if retention_days > 0:
+            where += " AND created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')"
+            binds["days"] = retention_days
+        rows = await self._fetch_all(
+            f"""
+            SELECT query_id, question, normalized_question, classification_filter, created_at
+            FROM rag_query_history
+            {where}
+            ORDER BY created_at DESC
+            FETCH FIRST :limit ROWS ONLY
+            """,
+            binds,
+        )
+        for row in rows:
+            if isinstance(row.get("classification_filter"), str):
+                row["classification_filter"] = json.loads(str(row["classification_filter"]))
+        return rows
+
+    async def purge_query_history(self, retention_days: int) -> int:
+        """保持期間を過ぎた質問履歴を削除し、削除件数を返す。"""
+
+        # ponytail: created_at 単独 index なしの全走査。履歴が大量になったら index を足す。
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_query_history "
+                "WHERE created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')",
+                {"days": retention_days},
+            )
+
+        return await self._run_transaction(operation)
+
+    async def list_docrag_prompts(self) -> dict[str, dict[str, object]]:
+        """編集した DocRAG プロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
+        rows = await self._fetch_all(
+            "SELECT prompt_key, content, updated_at FROM rag_docrag_prompts", {}
+        )
+        return {
+            str(row["prompt_key"]): {
+                "content": str(row.get("content") or ""),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in rows
+        }
+
+    async def save_docrag_prompt(self, key: str, content: str) -> None:
+        """DocRAG プロンプトを保存する(同じ key は上書き)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_docrag_prompts target
+                USING (SELECT :prompt_key AS prompt_key FROM dual) source
+                ON (target.prompt_key = source.prompt_key)
+                WHEN MATCHED THEN UPDATE SET
+                    target.content = :content,
+                    target.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT (prompt_key, content)
+                VALUES (:prompt_key, :content)
+                """,
+                {"prompt_key": key, "content": content},
+            )
+
+        await self._run_transaction(operation)
+
+    async def delete_docrag_prompt(self, key: str) -> bool:
+        """保存した DocRAG プロンプトを消して既定値へ戻す。消した場合 True。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_docrag_prompts WHERE prompt_key = :prompt_key",
+                {"prompt_key": key},
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def docrag_prompt_overrides(self) -> dict[str, str]:
+        """回答・解析へ渡す DocRAG プロンプトの上書き({key: content})。"""
+        return {
+            key: str(value["content"]) for key, value in (await self.list_docrag_prompts()).items()
+        }
+
+    async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
+        """保存済み DocRAG 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> bool:
+            if not _fetch_all(
+                connection,
+                "SELECT trace_id FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            ):
+                return False
+            _execute(
+                connection,
+                """
+                UPDATE rag_answer_records
+                SET evaluation_json = :evaluation_json
+                WHERE trace_id = :trace_id
+                """,
+                {"trace_id": trace_id, "evaluation_json": _json_bind(dict(evaluation))},
+                input_sizes=_json_input_sizes("evaluation_json"),
+            )
+            return True
+
+        return await self._run_transaction(operation)
 
     async def delete_answer_record(self, trace_id: str) -> bool:
         """保存済み DocRAG 回答を 1 件削除する。削除した場合 True。"""
@@ -3347,6 +3504,52 @@ class OracleClient:
             error_message=error_message,
         )
 
+    async def save_document_classification(
+        self,
+        document_id: str,
+        classification: DocumentClassification,
+    ) -> DocumentDetail:
+        """文書の分類と有効期間を保存する(空なら列を NULL に戻す)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET classification = :classification
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "classification": (
+                            None
+                            if classification.is_empty()
+                            else _json_dumps(
+                                classification.model_dump(mode="json", exclude_none=True)
+                            )
+                        ),
+                    }
+                ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
     async def save_preprocess_artifact(
         self,
         document_id: str,
@@ -3717,6 +3920,7 @@ class OracleClient:
                         question_text,
                         answer_text,
                         comment_text,
+                        corrected_answer_text,
                         citations_json,
                         search_text
                     ) VALUES (
@@ -3727,6 +3931,7 @@ class OracleClient:
                         :question_text,
                         :answer_text,
                         :comment_text,
+                        :corrected_answer_text,
                         :citations_json,
                         :search_text
                     )
@@ -3783,6 +3988,7 @@ class OracleClient:
                 f.rating,
                 f.reason,
                 fd.comment_text AS "comment",
+                fd.corrected_answer_text AS corrected_answer,
                 f.created_at
             FROM ranked_feedback f
             LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
@@ -4052,6 +4258,7 @@ class OracleClient:
                     fd.question_text AS question,
                     fd.answer_text AS answer,
                     fd.comment_text AS "comment",
+                    fd.corrected_answer_text AS corrected_answer,
                     fd.citations_json,
                     DBMS_LOB.SUBSTR(fd.question_text, 240, 1) AS question_preview,
                     DBMS_LOB.SUBSTR(fd.comment_text, 160, 1) AS comment_preview,
@@ -7084,6 +7291,7 @@ class OracleClient:
                 content_sha256,
                 duplicate_of_document_id,
                 extraction,
+                classification,
                 error_message,
                 uploaded_at,
                 indexed_at
@@ -8908,7 +9116,10 @@ def _feedback_detail_binds(
     question = _audit_optional_str(details, "question_text")
     answer = _audit_optional_str(details, "answer_text")
     comment = _audit_optional_str(details, "comment_text")
-    search_text = "\n".join(value for value in (question, answer, comment) if value) or None
+    corrected_answer = _audit_optional_str(details, "corrected_answer_text")
+    search_text = (
+        "\n".join(value for value in (question, answer, comment, corrected_answer) if value) or None
+    )
     citations = details.get("citations", [])
     if not isinstance(citations, Sequence) or isinstance(citations, str | bytes | bytearray):
         citations = []
@@ -8920,6 +9131,7 @@ def _feedback_detail_binds(
         "question_text": question,
         "answer_text": answer,
         "comment_text": comment,
+        "corrected_answer_text": corrected_answer,
         "citations_json": _json_dumps(citations),
         "search_text": search_text,
     }
@@ -9284,6 +9496,7 @@ def _select_document(
             content_sha256,
             duplicate_of_document_id,
             extraction,
+            classification,
             error_message,
             uploaded_at,
             indexed_at
@@ -10023,9 +10236,41 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 )
                 clauses.append(predicate)
                 binds.update(kind_binds)
+        elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
+            continue  # 分類と有効期間は _classification_where でまとめて付ける。
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
+    classification_clauses, classification_binds = _classification_where(filters)
+    clauses.extend(classification_clauses)
+    binds.update(classification_binds)
     return " AND ".join(clauses), binds
+
+
+_CLASSIFICATION_FILTER_KEYS = ("large_category", "middle_category", "small_category")
+
+
+def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
+    """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
+
+    - 分類は指定した項目だけを完全一致で絞る。
+    - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
+      ISO 日付の文字列比較は時系列順と一致する。
+    """
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for key in _CLASSIFICATION_FILTER_KEYS:
+        if value := (filters.get(key) or "").strip():
+            clauses.append(f"JSON_VALUE(d.classification, '$.{key}') = :filter_{key}")
+            binds[f"filter_{key}"] = value
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) "
+        "<= :filter_as_of"
+    )
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') " "> :filter_as_of"
+    )
+    binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
+    return clauses, binds
 
 
 def _context_anchor_retrieval_where(
@@ -10547,6 +10792,7 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         indexed_at=_optional_datetime(row.get("indexed_at")),
         extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
+        classification=_json_loads(row.get("classification")) or None,
     )
 
 
@@ -11266,7 +11512,7 @@ def _oracle_connect_kwargs(
 
 
 def _init_oracle_client(oracledb: Any, settings: Settings) -> None:
-    """ORACLE_CLIENT_LIB_DIR があるときは nl2sql と同じ thick client を使う。"""
+    """PLATFORM_ORACLE_CLIENT_LIB_DIR があるときは nl2sql と同じ thick client を使う。"""
     global _ORACLE_CLIENT_INITIALIZED_LIB_DIR
     lib_dir = settings.oracle_client_lib_dir.strip()
     if not lib_dir or lib_dir == _ORACLE_CLIENT_INITIALIZED_LIB_DIR:
@@ -11433,12 +11679,43 @@ CREATE TABLE {table_name} (
     answer              CLOB NOT NULL,
     citations_json      JSON NOT NULL,
     diagnostics_json    JSON NOT NULL,
+    evaluation_input_json JSON,
+    evaluation_json     JSON,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
 );
 
 CREATE INDEX {table_name}_view_idx
     ON {table_name} (business_view_id, created_at DESC);
+""".strip()
+
+
+def oracle_query_history_schema_sql(table_name: str = "rag_query_history") -> str:
+    """質問履歴の table DDL(rag_poc の query_history/queries.jsonl に相当)。"""
+    return f"""
+CREATE TABLE {table_name} (
+    query_id              VARCHAR2(64) PRIMARY KEY,
+    business_view_id      VARCHAR2(64) NOT NULL,
+    surface               VARCHAR2(16) NOT NULL,
+    question              VARCHAR2(2000 CHAR) NOT NULL,
+    normalized_question   VARCHAR2(2000 CHAR) NOT NULL,
+    classification_filter JSON,
+    created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX {table_name}_view_idx
+    ON {table_name} (business_view_id, created_at DESC)
+""".strip()
+
+
+def oracle_docrag_prompt_schema_sql(table_name: str = "rag_docrag_prompts") -> str:
+    """編集した DocRAG プロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
+    return f"""
+CREATE TABLE {table_name} (
+    prompt_key  VARCHAR2(64) PRIMARY KEY,
+    content     CLOB NOT NULL,
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+)
 """.strip()
 
 
@@ -12053,6 +12330,7 @@ CREATE TABLE {table_name} (
     object_storage_path      VARCHAR2(1024),
     preprocess_artifact      JSON,
     processing_config        JSON,
+    classification           JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
@@ -12410,7 +12688,8 @@ CREATE TABLE {table_name} (
                 rating = 'not_helpful'
                 AND (
                     (target_type = 'answer' AND reason IN (
-                        'incorrect', 'incomplete', 'not_relevant', 'answer_untrusted'
+                        'incorrect', 'incomplete', 'not_relevant', 'answer_untrusted',
+                        'missing_knowledge', 'outdated_source', 'ambiguous_question'
                     ))
                     OR (target_type = 'citation' AND reason IN (
                         'missing_evidence', 'not_relevant', 'answer_untrusted'
@@ -12448,6 +12727,7 @@ CREATE TABLE {table_name} (
     question_text     CLOB,
     answer_text       CLOB,
     comment_text      VARCHAR2(1000 CHAR),
+    corrected_answer_text CLOB,
     citations_json    JSON,
     search_text       CLOB,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
@@ -12950,6 +13230,11 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         ),
         extraction=document.extraction,
         error_message=document.error_message,
+        classification=(
+            DocumentClassification.model_validate(document.classification)
+            if document.classification
+            else None
+        ),
         source_profile=build_source_profile(
             original_file_name=document.file_name,
             sanitized_file_name=document.file_name,

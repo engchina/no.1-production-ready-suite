@@ -12,12 +12,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend-dir", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
-    example_path, env_path, model_settings_path = default_audit_paths(args.backend_dir.resolve())
-    result = audit_configuration(
-        example_path=example_path,
-        env_path=env_path,
-        model_settings_path=model_settings_path,
-    )
+    result = audit_configuration(default_audit_paths(args.backend_dir.resolve()))
     print(stable_audit_json(result))  # noqa: T201
     return 0 if result.ok else 1
 

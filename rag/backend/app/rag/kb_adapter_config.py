@@ -31,6 +31,8 @@ from app.config import (
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
     ChunkingStrategy,
+    DocragAnswerFlow,
+    DocragQueryStrategy,
     GenerationProfile,
     GraphProfile,
     GuardrailPolicyName,
@@ -92,6 +94,10 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "evaluation_suite": "rag_evaluation_suite",
     "answer_engine": "rag_answer_engine",
     "text_search_tokenizer": "rag_text_search_tokenizer",
+    "docrag_query_strategy": "rag_docrag_query_strategy",
+    "docrag_answer_flow": "rag_docrag_answer_flow",
+    "docrag_neighbor_child_count": "rag_docrag_neighbor_child_count",
+    "docrag_rerank_enabled": "rag_docrag_rerank_enabled",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -179,6 +185,11 @@ class KnowledgeBaseQueryConfig(BaseModel):
     answer_engine: Literal["standard", "docrag"] | None = None
     # 全文検索の分割方式(builtin / sudachi)。None はグローバル継承。
     text_search_tokenizer: Literal["builtin", "sudachi"] | None = None
+    # DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。None はグローバル継承。
+    docrag_query_strategy: DocragQueryStrategy | None = None
+    docrag_answer_flow: DocragAnswerFlow | None = None
+    docrag_neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    docrag_rerank_enabled: bool | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

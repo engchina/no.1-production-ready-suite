@@ -20,6 +20,7 @@ import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { DocragPromptCard } from "./DocragPromptEditor";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -213,6 +214,7 @@ export function PromptVersionsClient() {
           )}
         </CardContent>
       </Card>
+      <DocragPromptCard promptKey="vlm_answer" showStages />
     </PageBody>
   );
 }

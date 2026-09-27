@@ -71,6 +71,7 @@ from app.schemas.document import (
     DocumentChunkSet,
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
+    DocumentClassification,
     DocumentDeleteResult,
     DocumentDetail,
     DocumentExtractionExport,
@@ -2358,6 +2359,19 @@ async def replace_document_knowledge_bases(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=refs)
+
+
+@router.put("/{document_id}/classification", response_model=ApiResponse[DocumentDetail])
+async def save_document_classification(
+    document_id: str,
+    body: DocumentClassification,
+) -> ApiResponse[DocumentDetail]:
+    """文書の分類と有効期間を保存する。検索の分類フィルタと基準日の絞り込みに使う。"""
+    try:
+        detail = await OracleClient().save_document_classification(document_id, body)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
+    return ApiResponse(data=detail)
 
 
 @router.post("/{document_id}/ingest", response_model=ApiResponse[IngestionJob])

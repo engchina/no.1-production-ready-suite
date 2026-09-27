@@ -26,7 +26,7 @@ artifact import は `POST /classifier/model/import` で上書きする。旧
 現実装は保存・返却・ログ出力をしない32文字の一時 password を生成し、Serverless はインスタンス
 Wallet (`generate_type=SINGLE`)、Dedicated は `generate_type` 省略で OCI Database API を呼ぶ。
 20 MB のダウンロード上限、100 MB の展開上限、Zip Slip / symlink / 必須4ファイル検証、worker 間
-file lock を通過した内容だけを `ORACLE_CLIENT_LIB_DIR/network/admin` へ原子的に配置する。Wallet
+file lock を通過した内容だけを `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin` へ原子的に配置する。Wallet
 directory は `0700`、配下ファイルは `0600` とし、有効な既存 Wallet は自動上書き・自動輪換しない。
 
 実行 identity には対象 Autonomous AI Database を読める policy が必要で、Wallet 生成には少なくとも

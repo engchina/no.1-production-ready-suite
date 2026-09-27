@@ -206,6 +206,76 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
   await expectNoHorizontalOverflow(page);
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`文書詳細で分類と有効期間を保存できる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const state = await mockDocumentDetail(page);
+
+    await page.goto("/documents/doc-1");
+
+    await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
+    const save = page.getByRole("button", { name: "分類を保存" });
+    await expect(save).toBeDisabled();
+    await page.getByLabel("大分類").fill("経理");
+    await page.getByLabel("小分類").fill("旅費");
+    await page.getByLabel("有効期間の開始日").fill("2026-04-01");
+    await save.click();
+
+    await expect
+      .poll(() => state.lastClassificationPayload)
+      .toEqual({
+        large_category: "経理",
+        middle_category: null,
+        small_category: "旅費",
+        effective_from: "2026-04-01",
+        effective_to: null,
+      });
+    await expect(page.getByText("分類と有効期間を保存しました。")).toBeVisible();
+    await expect(save).toBeDisabled();
+    await expect(page.getByLabel("大分類")).toHaveValue("経理");
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("RAG 検索は文書の分類と基準日を filters に入れて送る", async ({ page }) => {
+  let searchBody: Record<string, unknown> | null = null;
+  await mockDocumentDetail(page);
+  await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+  );
+  await page.route("**/api/search/stream", async (route) => {
+    searchBody = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: searchStreamBody(),
+    });
+  });
+
+  await page.goto("/search");
+  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
+  await page
+    .getByRole("listbox", { name: /対象の業務ビュー/ })
+    .getByRole("option", { name: /経理ビュー/ })
+    .click();
+  await page.getByRole("button", { name: "詳細条件" }).press("Enter");
+  await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
+  await page.getByLabel("大分類").fill("経理");
+  await page.getByLabel("基準日").fill("2026-04-01");
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+
+  await expect
+    .poll(() => (searchBody?.filters as Record<string, string> | undefined) ?? null)
+    .toEqual({ large_category: "経理", as_of: "2026-04-01" });
+  const applied = page.getByLabel("適用中の詳細条件");
+  await expect(applied.getByText("大分類: 経理")).toBeVisible();
+  await expect(applied.getByText("基準日: 2026-04-01")).toBeVisible();
+});
+
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
   let feedbackPayload: Record<string, unknown> | null = null;
   await mockDocumentDetail(page);
@@ -322,8 +392,14 @@ async function mockDocumentDetail(
     knowledgeBase("kb-2", "FAQ", 0),
   ];
   let membership: { id: string; name: string }[] = [{ id: "kb-1", name: "社内規程" }];
-  const state: { lastReplacePayload: { knowledge_base_ids: string[] } | null } = {
+  const state: {
+    lastReplacePayload: { knowledge_base_ids: string[] } | null;
+    lastClassificationPayload: Record<string, unknown> | null;
+    classification: Record<string, unknown> | null;
+  } = {
     lastReplacePayload: null,
+    lastClassificationPayload: null,
+    classification: null,
   };
 
   await page.route("**/api/knowledge-bases**", async (route) => {
@@ -474,47 +550,52 @@ async function mockDocumentDetail(
             assets: [],
             parser_artifacts: { parser_backend: "local_partition" },
           };
+  const documentData = () => ({
+      id: "doc-1",
+      file_name: "policy.txt",
+      status: "INDEXED",
+      category_name: null,
+      content_type: "text/plain",
+      file_size_bytes: 120,
+      content_sha256: "a".repeat(64),
+      duplicate_of_document_id: null,
+      knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+      uploaded_at: "2026-06-14T00:00:00Z",
+      indexed_at: "2026-06-14T00:01:00Z",
+      object_storage_path: "local://policy.txt",
+      error_message: null,
+      extraction,
+      source_profile: {
+        original_file_name: "policy.txt",
+        sanitized_file_name: "policy.txt",
+        extension: ".txt",
+        content_type: "text/plain",
+        inferred_content_type: "text/plain",
+        file_size_bytes: 120,
+        content_sha256: "a".repeat(64),
+        modality: "text",
+        parser_profile: "local_text_structure",
+        parser_backend: "local_partition",
+        parser_version: "local_partition_v1",
+        preview_kind: "text",
+        text_charset: "utf-8",
+        duplicate_of_document_id: null,
+        unsupported_reason: null,
+        quality_status: "ready",
+        quality_warnings: [],
+      },
+      classification: state.classification,
+  });
+  await page.route("**/api/documents/doc-1/classification", async (route) => {
+    state.lastClassificationPayload = route.request().postDataJSON() as Record<string, unknown>;
+    state.classification = state.lastClassificationPayload;
+    await route.fulfill({
+      json: { data: documentData(), error_messages: [], warning_messages: [] },
+    });
+  });
   await page.route("**/api/documents/doc-1", async (route) => {
     await route.fulfill({
-      json: {
-        data: {
-          id: "doc-1",
-          file_name: "policy.txt",
-          status: "INDEXED",
-          category_name: null,
-          content_type: "text/plain",
-          file_size_bytes: 120,
-          content_sha256: "a".repeat(64),
-          duplicate_of_document_id: null,
-          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
-          uploaded_at: "2026-06-14T00:00:00Z",
-          indexed_at: "2026-06-14T00:01:00Z",
-          object_storage_path: "local://policy.txt",
-          error_message: null,
-          extraction,
-          source_profile: {
-            original_file_name: "policy.txt",
-            sanitized_file_name: "policy.txt",
-            extension: ".txt",
-            content_type: "text/plain",
-            inferred_content_type: "text/plain",
-            file_size_bytes: 120,
-            content_sha256: "a".repeat(64),
-            modality: "text",
-            parser_profile: "local_text_structure",
-            parser_backend: "local_partition",
-            parser_version: "local_partition_v1",
-            preview_kind: "text",
-            text_charset: "utf-8",
-            duplicate_of_document_id: null,
-            unsupported_reason: null,
-            quality_status: "ready",
-            quality_warnings: [],
-          },
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
+      json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/doc-1/recipes", async (route) => {

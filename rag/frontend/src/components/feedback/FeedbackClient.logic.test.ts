@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { feedbackListParams, pageWindow, parseFeedbackUrl } from "./FeedbackClient.logic";
+import {
+  appendEvaluationCase,
+  feedbackListParams,
+  pageWindow,
+  parseFeedbackUrl,
+} from "./FeedbackClient.logic";
 
 describe("feedback URL state", () => {
   it("restores filters, page size and selected feedback", () => {
@@ -40,5 +45,34 @@ describe("feedback page window", () => {
 
   it("shows every page for short results", () => {
     expect(pageWindow(2, 4)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("appendEvaluationCase", () => {
+  const evaluationCase = { id: "feedback-fb-1", query: "承認者は？", expected_answer_keywords: ["部長"] };
+
+  it("未編集なら新しい要求を作る", () => {
+    const result = appendEvaluationCase(null, evaluationCase);
+
+    expect(result.ok && JSON.parse(result.json)).toMatchObject({ cases: [evaluationCase], mode: "hybrid" });
+  });
+
+  it("既存の要求へ追記し、同じ id のケースは置き換える", () => {
+    const existing = JSON.stringify({
+      cases: [{ id: "other", query: "別" }, { id: "feedback-fb-1", query: "古い" }],
+      top_k: 20,
+    });
+
+    const result = appendEvaluationCase(existing, evaluationCase);
+
+    expect(result.ok && JSON.parse(result.json)).toEqual({
+      cases: [{ id: "other", query: "別" }, evaluationCase],
+      top_k: 20,
+    });
+  });
+
+  it("壊れた JSON や cases のない要求は上書きしない", () => {
+    expect(appendEvaluationCase("{", evaluationCase)).toEqual({ ok: false });
+    expect(appendEvaluationCase("{\"top_k\": 10}", evaluationCase)).toEqual({ ok: false });
   });
 });

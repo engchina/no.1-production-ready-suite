@@ -194,6 +194,7 @@ def test_submit_feedback_saves_search_snapshot_and_optional_comment(
             "answer_text": "2024年版です。",
             "citations": [],
             "comment_text": "根拠が古いです。",
+            "corrected_answer_text": None,
         }
     ]
 

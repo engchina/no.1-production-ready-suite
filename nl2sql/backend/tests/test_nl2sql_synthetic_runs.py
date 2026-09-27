@@ -24,7 +24,15 @@ from app.settings import Settings
 
 def actor(name: Any = "owner") -> Principal:
     return Principal(
-        name, name, name, "ACTIVE", False, [], {"menu.data_management"}, [], set(), "s", ""
+        user_uuid=name,
+        login_user_id=name,
+        display_name=name,
+        status="ACTIVE",
+        force_password_change=False,
+        role_codes=[],
+        permissions={"menu.data_management"},
+        session_id="s",
+        csrf_token_hash="",
     )
 
 

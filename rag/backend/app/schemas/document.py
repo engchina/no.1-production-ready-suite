@@ -1,6 +1,6 @@
 """ドキュメント関連スキーマ。"""
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -102,6 +102,34 @@ class IngestionJob(BaseModel):
     finished_at: datetime | None = None
 
 
+class DocumentClassification(BaseModel):
+    """文書の分類と有効期間(rag_poc の document.classification / effective_from / effective_to)。
+
+    文書のメタデータで、レシピを切り替えても変わらない。ACL に使う category_name とは別に持つ。
+    有効期間の終了日は排他的(effective_to の当日は期間外)。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    large_category: str | None = Field(default=None, max_length=200)
+    middle_category: str | None = Field(default=None, max_length=200)
+    small_category: str | None = Field(default=None, max_length=200)
+    effective_from: date | None = None
+    effective_to: date | None = None
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "DocumentClassification":
+        for key in ("large_category", "middle_category", "small_category"):
+            if getattr(self, key) == "":
+                setattr(self, key, None)
+        if self.effective_from and self.effective_to and self.effective_from >= self.effective_to:
+            raise ValueError("有効期間の終了日は開始日より後の日付にしてください。")
+        return self
+
+    def is_empty(self) -> bool:
+        return not any(self.model_dump().values())
+
+
 class DocumentSummary(BaseModel):
     """一覧表示用のドキュメント要約。"""
 
@@ -155,6 +183,7 @@ class DocumentDetail(DocumentSummary):
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None
+    classification: DocumentClassification | None = None
 
 
 class UploadResult(BaseModel):

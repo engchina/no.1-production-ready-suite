@@ -12,7 +12,7 @@ export const DATABASE_MESSAGES = {
   "settings.adb.field.ocid": "ADB OCID",
   "settings.adb.field.region": "リージョン",
   "settings.adb.helper.ocidReadonly":
-    "ADB OCID は backend/.env(ORACLE_ADB_OCID)を正本とする読み取り専用項目です。",
+    "ADB OCID は platform/.env(PLATFORM_ORACLE_ADB_OCID)を正本とする読み取り専用項目です。",
   "settings.adb.lifecycle.AVAILABLE": "起動済み",
   "settings.adb.lifecycle.BACKUP_IN_PROGRESS": "バックアップ中",
   "settings.adb.lifecycle.FAILED": "失敗",
@@ -36,7 +36,7 @@ export const DATABASE_MESSAGES = {
   "settings.adb.operationResult.title": "操作履歴",
   "settings.adb.operational.lifecycle": "OCI ADB",
   "settings.adb.placeholder.ocidEmpty":
-    "ADB OCID が設定されていません（backend/.env で設定）",
+    "ADB OCID が設定されていません（platform/.env で設定）",
   "settings.adb.statusUnknown": "不明",
   "settings.adb.title": "Autonomous Database 管理",
   "settings.database.actions.save": "保存",
@@ -91,7 +91,7 @@ export const DATABASE_MESSAGES = {
   "settings.database.placeholder.serviceDsnManual": "ragdb_high",
   "settings.database.requiredMark": "必須",
   "settings.database.saveError":
-    "データベース設定の保存に失敗しました。入力値と backend/.env の書き込み権限を確認してください。",
+    "データベース設定の保存に失敗しました。入力値と platform/.env の書き込み権限を確認してください。",
   "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",
   "settings.database.secrets.clearWalletPassword":
     "保存済み Wallet パスワードを削除する",

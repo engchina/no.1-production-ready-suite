@@ -81,8 +81,10 @@
 
 **ナビゲーション/画面構成**:
 - 折りたたみ可能な**サイドナビ**。構成の正本は `frontend/src/components/layout/nav-config.ts`:
-  - **AI 活用** / **データ準備** / **改善・運用** / **セキュリティ管理**: NL2SQL の業務機能。
+  - **AI 活用** / **データ準備** / **改善・運用**: NL2SQL の業務機能。
+  - **NL2SQL セキュリティ**: 権限管理（ロールごとの機能権限・業務プロファイル利用権限）/ Deep Data Security（NL2SQL 固有。#206）。
   - **運用設定**: システムテーブル管理（NL2SQL 固有の運用項目）。
+  - **ユーザーとロール**: ユーザー管理 / ロール管理（3製品で共通。画面と API 契約は platform の共有パッケージ。#206）。
   - **システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
 - サイドナビのラベルは**日本語第一**とし、パイプライン各段階は `解析 (Parser)` のように「日本語+英語正式名」併記の短縮形(`sidebarLabelKey`)で表示する。一方**ページタイトル/`aria-label` は AGENTS.md 準拠の正式名(例: `Parser アダプター`)を維持**する(`nav.*` と `nav.*.sidebar` の二段管理。新アダプター追加時も同様にする)。
 - レイアウト構成要素: header / footer / breadcrumb / sideTabBar / tabs。
@@ -198,7 +200,7 @@ ingestion が担う(`SERVICE_ADAPTER_BACKENDS`)。
   これは確定スタックに無い **追加 OCI サービス**(LLM/VLM=Enterprise AI、OCR は Enterprise AI VLM 再
   マップという従来方針からの拡張)であり、**ユーザ明示要望による**。別 LLM provider・外部ベクトル DB は
   導入しない。設定は `OCI_DOCUMENT_UNDERSTANDING_*`(compartment/namespace/bucket/prefix/language/
-  poll/timeout)。空欄は汎用 `OCI_COMPARTMENT_ID` / `OBJECT_STORAGE_*` を使う。
+  poll/timeout)。空欄は汎用 `PLATFORM_OCI_COMPARTMENT_ID` / `PLATFORM_OBJECT_STORAGE_*` を使う。
 - 設定 API `GET/PATCH /api/settings/parser-adapters` は両 backend を選択値として受理し、GET 応答の
   `service_backends[]` で選択状態と設定可用性(`configured` / `warning_code`)を返す。
 

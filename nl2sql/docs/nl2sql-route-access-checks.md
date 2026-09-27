@@ -1,7 +1,7 @@
 # NL2SQL Route Access Checks
 
 NL2SQL の運用系 API は、ルート認可だけでなく profile 単位のデータ境界を必ず確認する。
-`PROFILE_MANAGE_PERMISSION` を持つ利用者、または `APP_AUTH_ENABLED=false` の匿名実行は全 profile を
+`PROFILE_MANAGE_PERMISSION` を持つ利用者、または `NL2SQL_APP_AUTH_ENABLED=false` の匿名実行は全 profile を
 扱える。それ以外は `Principal.allowed_profile_ids` に含まれる profile だけを対象にする。
 既存 history などで `profile_id` が空の record は、access check 上は `default` profile として扱う。
 

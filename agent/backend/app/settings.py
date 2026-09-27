@@ -3,7 +3,11 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pr_backend_core.config import BaseServiceSettings
+from pr_backend_core.config import (
+    BaseServiceSettings,
+    platform_env_file,
+    product_settings_config,
+)
 from pr_system_settings.model import (
     EnterpriseAiConfiguredModel,
     ModelSecretStateMixin,
@@ -12,25 +16,24 @@ from pr_system_settings.model import (
 from pydantic import Field
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-BACKEND_ENV_FILE = BACKEND_DIR / ".env"
+# 製品固有の設定（`AGENT_*`）は `backend/.env`（画面からは書かない）。
+# 3製品共通の設定（`PLATFORM_*`）を置く共通 `.env`（既定は `<repo>/platform/.env`。#211）。
+PLATFORM_ENV_FILE = platform_env_file(BACKEND_DIR)
 
 
 class Settings(ModelSecretStateMixin, BaseServiceSettings):
     """サービス固有設定。
 
-    OCI/Oracle 等の接続設定はここに追加する（例: oracle_dsn, oci_region ...）。
+    環境変数名は属性名から決まる（#211）。3製品共通の属性（OCI 認証・アップロード保存先・
+    モデル・データベース）は共通 `.env` の `PLATFORM_*`、それ以外は `backend/.env` の `AGENT_*`。
     """
 
+    model_config = product_settings_config(prefix="AGENT_", backend_dir=BACKEND_DIR)
+
     service_name: str = "production-ready-agent"
-    # RAG 由来のシステム設定画面との互換設定。
+    # システム設定（3製品共通）。
     oci_config_file: str = "~/.oci/config"
     oci_config_profile: str = "DEFAULT"
-    oci_user_ocid: str = ""
-    oci_fingerprint: str = ""
-    oci_tenancy_ocid: str = ""
-    oci_key_file: str = "~/.oci/oci_api_key.pem"
-    oci_key_file_exists: bool = False
-    oci_config_file_exists: bool = False
     oci_compartment_id: str = ""
     oci_region: str = ""
     object_storage_region: str = ""
@@ -40,20 +43,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     local_storage_dir: str = "/u01/data/production-ready-agent"
     max_upload_bytes: int = 100 * 1024 * 1024
     model_settings_file: str = "model-settings.json"
-    enterprise_ai_endpoint: str | None = None
-    enterprise_ai_project_ocid: str | None = None
-    enterprise_ai_api_key: str | None = None
-    enterprise_ai_default_model_id: str | None = None
-    enterprise_ai_api_path: str = "/responses"
-    enterprise_ai_vlm_input_mode: str = "auto"
-    enterprise_ai_text_payload_template: str = ""
-    enterprise_ai_vision_payload_template: str = ""
-    enterprise_ai_text_response_path: str = ""
-    enterprise_ai_vision_response_path: str = ""
-    enterprise_ai_timeout_seconds: float = 600.0
-    enterprise_ai_max_retries: int = 3
-    enterprise_ai_llm_max_output_tokens: int = 1200
-    enterprise_ai_vlm_max_output_tokens: int = 65536
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
@@ -72,9 +61,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
-    embedding_model: str = "cohere.embed-v4.0"
-    embedding_dim: int = 1536
-    rerank_model: str = "cohere.rerank-v4.0-fast"
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
@@ -84,11 +70,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
     oracle_wallet_dir: str | None = None
     oracle_wallet_password: str | None = None
-    oracle_wallet_uploaded: bool = False
-    oracle_region: str | None = None
     oracle_adb_ocid: str | None = None
     oracle_adb_region: str | None = None
-    adb_ocid: str | None = None
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
     agent_external_rag_base_url: str | None = None
@@ -234,12 +217,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     @property
     def resolved_oracle_adb_region(self) -> str:
-        """ADB 管理用の region。未設定なら OCI_REGION / ORACLE_REGION を使う。"""
-        return (self.oracle_adb_region or self.oci_region or self.oracle_region or "").strip()
+        """ADB 管理用の region。未設定なら PLATFORM_OCI_REGION を使う。"""
+        return (self.oracle_adb_region or self.oci_region or "").strip()
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:
-        """参照実装と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        """参照実装と同じく PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
         client_lib_dir = self.oracle_client_lib_dir.strip()
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
@@ -247,15 +230,17 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
-    """MODEL_SETTINGS_FILE を backend/.env と同じディレクトリ基準で解決する。"""
+    """PLATFORM_MODEL_SETTINGS_FILE を共通 `.env` と同じディレクトリ基準で解決する。"""
     path = Path(path_value.strip() or "model-settings.json").expanduser()
-    return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
+    return path if path.is_absolute() else (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
+# model-settings.json と API key は3製品で共有する（共通 `.env`。#211）。
+# テストで PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
 MODEL_SETTINGS_STORE = ModelSettingsStore(
     resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
-    env_file=lambda _settings: BACKEND_ENV_FILE,
+    env_file=lambda _settings: PLATFORM_ENV_FILE,
 )
 
 

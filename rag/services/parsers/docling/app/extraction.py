@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 import mimetypes
 import tempfile
-from dataclasses import asdict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ from docrag.parsing.rendering import (
     source_frame_warnings,
 )
 from docrag.config import Settings, get_settings
+from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 from docrag.parsing.visual_artifacts import persist_semantic_visual_crops
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,7 @@ def analyze_source(
     content_type: str,
     vision_enabled: bool,
     settings: Settings | None = None,
+    image_retrieval_prompt: str | None = None,
 ) -> StructuredExtraction:
     """PDF / 画像を解析し、DocRAG の LayoutRecord を保持した StructuredExtraction を返す。"""
     # env(DOCRAG_* / DOCLING_* / OCI_ENTERPRISE_AI_*)から解決する。.env は読まない。
@@ -102,7 +106,10 @@ def analyze_source(
         warnings = list(source_frame_warnings(source_path))
         vision_summary: dict[str, Any] = {"enabled": vision_enabled}
         if vision_enabled:
-            vision_summary.update(_describe(records, pages, run_dir, file_name, settings, pdf_path))
+            with _image_retrieval_prompt_override(image_retrieval_prompt):
+                vision_summary.update(
+                    _describe(records, pages, run_dir, file_name, settings, pdf_path)
+                )
             if vision_summary.get("failed"):
                 warnings.append("docling_vision_partial_failure")
         return layout_to_extraction(
@@ -112,6 +119,30 @@ def analyze_source(
             warnings=warnings,
             vision_summary=vision_summary,
         )
+
+
+@contextmanager
+def _image_retrieval_prompt_override(prompt: str | None) -> Iterator[None]:
+    """backend の画面で編集した画像検索のプロンプトを、Vision の間だけ docrag に渡す。
+
+    docrag の read_prompt は runtime の prompt_overrides を返す。Docling の解析本体は runtime の
+    有無で環境の準備が変わるため、Vision の段階だけ有効にする。profile は今の current_profile()
+    に上書きだけを足す(backend の app.rag.docrag_prompts.prompt_overrides と同じ)。
+    """
+    if not prompt:
+        yield
+        return
+    from docrag.resources.runtime import ResourcePaths, Runtime, current_profile
+
+    profile = current_profile()
+    overrides = {**dict(profile.prompt_overrides), IMAGE_RETRIEVAL_PROMPT_KEY: prompt}
+    with tempfile.TemporaryDirectory(prefix="docrag-prompts-") as work:
+        runtime = Runtime(
+            ResourcePaths(workspace=Path(work), output=Path(work)),
+            replace(profile, prompt_overrides=tuple(overrides.items())),
+        )
+        with runtime.activate():
+            yield
 
 
 def _describe(

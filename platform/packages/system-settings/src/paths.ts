@@ -1,4 +1,13 @@
-import { BrainCog, Cloud, Database, KeyRound, Palette, type LucideIcon } from "lucide-react";
+import {
+  BrainCog,
+  Cloud,
+  Database,
+  KeyRound,
+  Palette,
+  Shield,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * 共有システム設定画面のパス。3製品で同じ URL にそろえる（#70）。
@@ -62,3 +71,27 @@ export const SYSTEM_SETTINGS_NAV_ITEMS = [
     icon: Palette,
   },
 ] as const satisfies readonly SystemSettingsNavItem[];
+
+/**
+ * 共有のユーザー管理・ロール管理画面のパス（#206）。NL2SQL の既存 URL をそのまま使う。
+ * ロールに付ける権限の管理は製品固有の画面（NL2SQL は権限管理）で行う。
+ */
+export const USER_ROLE_PATHS = {
+  users: "/settings/security/users",
+  roles: "/settings/security/roles",
+} as const;
+
+export type UserRoleKey = keyof typeof USER_ROLE_PATHS;
+
+export interface UserRoleNavItem {
+  key: UserRoleKey;
+  href: string;
+  labelKey: string;
+  icon: LucideIcon;
+}
+
+/** サイドナビ「ユーザーとロール」の共通2項目。製品の nav config はこれをそのまま使う。 */
+export const USER_ROLE_NAV_ITEMS = [
+  { key: "users", href: USER_ROLE_PATHS.users, labelKey: "nav.securityUsers", icon: Users },
+  { key: "roles", href: USER_ROLE_PATHS.roles, labelKey: "nav.securityRoles", icon: Shield },
+] as const satisfies readonly UserRoleNavItem[];

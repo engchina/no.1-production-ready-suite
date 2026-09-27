@@ -775,6 +775,55 @@ class AnswerRecordSettingsData(BaseModel):
     config_source: Literal["runtime"] = "runtime"
 
 
+class QueryHistorySettingsData(BaseModel):
+    """質問履歴の設定(rag_poc の QUERY_HISTORY_*)。"""
+
+    enabled: bool
+    retention_days: int = Field(ge=0, le=3650)
+    min_count: int = Field(ge=1, le=1000)
+    suggestion_limit: int = Field(ge=1, le=20)
+    blocklist: list[str] = Field(default_factory=list, max_length=200)
+
+
+class QueryHistorySettingsUpdate(QueryHistorySettingsData):
+    @field_validator("blocklist")
+    @classmethod
+    def _clean_blocklist(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+class DocragPromptView(BaseModel):
+    """編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。"""
+
+    key: Literal["vlm_answer", "image_retrieval"]
+    content: str
+    default_content: str
+    customized: bool
+    required_placeholders: list[str]
+    updated_at: datetime | None = None
+
+
+class DocragPromptPart(BaseModel):
+    id: str
+    content: str
+
+
+class DocragPromptStage(BaseModel):
+    """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
+
+    id: str
+    prompts: list[DocragPromptPart]
+
+
+class DocragPromptsData(BaseModel):
+    prompts: list[DocragPromptView]
+    stages: list[DocragPromptStage]
+
+
+class DocragPromptUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=50_000)
+
+
 class AnswerRecordSettingsUpdate(BaseModel):
     """DocRAG 回答記録の保持設定の更新 payload。"""
 

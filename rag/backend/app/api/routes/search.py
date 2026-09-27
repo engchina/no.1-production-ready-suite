@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterable
 from contextlib import suppress
+from datetime import UTC, datetime
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -15,6 +16,7 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.generation_config import (
     apply_generation_profile,
     resolve_oracle_generation_settings,
@@ -27,6 +29,7 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
+    AnswerEvaluationRequest,
     AnswerRecordDeleteResult,
     AnswerRecordDetail,
     AnswerRecordSummary,
@@ -436,15 +439,52 @@ async def get_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
     row = await OracleClient().get_answer_record(trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
-    return ApiResponse(
-        data=AnswerRecordDetail.model_validate(
-            {
-                **row,
-                "citations": row.get("citations_json") or [],
-                "docrag": row.get("diagnostics_json") or {},
-            }
-        )
+    return ApiResponse(data=_answer_record_detail(row))
+
+
+def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
+    return AnswerRecordDetail.model_validate(
+        {
+            **row,
+            "citations": row.get("citations_json") or [],
+            "docrag": row.get("diagnostics_json") or {},
+            "evaluation_available": bool(row.get("evaluation_input_json")),
+            "evaluation": row.get("evaluation_json") or None,
+        }
     )
+
+
+@router.post("/answers/{trace_id}/evaluation", response_model=ApiResponse[AnswerRecordDetail])
+async def evaluate_docrag_answer(
+    http_request: Request, trace_id: str, body: AnswerEvaluationRequest
+) -> ApiResponse[AnswerRecordDetail]:
+    """保存済み DocRAG 回答を標準回答で評価し(rag_poc の 4 軸評価)、結果を保存して返す。
+
+    評価は LLM を複数回呼ぶ。失敗しても例外にせず、status=error の評価として保存する
+    (rag_poc と同じく部分評価は採用しない)。
+    """
+    enforce_rate_limit("search", http_request)
+    oracle = OracleClient()
+    row = await oracle.get_answer_record(trace_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    evaluation_input = row.get("evaluation_input_json")
+    if not isinstance(evaluation_input, dict) or not evaluation_input:
+        raise HTTPException(
+            status_code=409,
+            detail="この回答には評価に必要な記録がありません。もう一度回答を生成してから評価してください。",
+        )
+    evaluation = await asyncio.to_thread(
+        evaluate_answer_record, evaluation_input, body.standard_answer, get_settings()
+    )
+    saved = {
+        **evaluation,
+        "standard_answer": body.standard_answer,
+        "evaluated_at": datetime.now(UTC).isoformat(),
+    }
+    if not await oracle.save_answer_evaluation(trace_id, saved):
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    return ApiResponse(data=_answer_record_detail({**row, "evaluation_json": saved}))
 
 
 @router.delete("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDeleteResult])

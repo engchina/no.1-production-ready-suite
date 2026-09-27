@@ -836,7 +836,7 @@ def _builtin_runtimes() -> list[RuntimeDefinition]:
             kind="openclaw",
             base_url="http://runtime-openclaw:18789",
             # secret 値ではなく参照する環境変数名。
-            auth_secret_ref="OPENCLAW_GATEWAY_TOKEN",  # nosec B106
+            auth_secret_ref="AGENT_OPENCLAW_GATEWAY_TOKEN",  # nosec B106
             managed_service_id="runtime-openclaw",
             capabilities=OpenClawAdapter.static_capabilities,
         ),
@@ -846,7 +846,7 @@ def _builtin_runtimes() -> list[RuntimeDefinition]:
             kind="hermes",
             base_url="http://runtime-hermes:8642",
             # secret 値ではなく参照する環境変数名。
-            auth_secret_ref="HERMES_API_SERVER_KEY",  # nosec B106
+            auth_secret_ref="AGENT_HERMES_API_SERVER_KEY",  # nosec B106
             managed_service_id="runtime-hermes",
             capabilities=HermesAdapter.static_capabilities,
         ),
@@ -856,7 +856,7 @@ def _builtin_runtimes() -> list[RuntimeDefinition]:
             kind="deerflow",
             base_url="http://runtime-deerflow:2026",
             # secret 値ではなく参照する環境変数名。
-            auth_secret_ref="DEER_FLOW_INTERNAL_AUTH_TOKEN",  # nosec B106
+            auth_secret_ref="AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN",  # nosec B106
             managed_service_id="runtime-deerflow",
             capabilities=DeerFlowAdapter.static_capabilities,
         ),

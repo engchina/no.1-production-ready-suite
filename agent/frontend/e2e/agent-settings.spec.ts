@@ -193,7 +193,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByLabel("テナンシ OCID")).toHaveValue("");
     await expect(page.getByLabel("フィンガープリント")).toHaveValue("");
     await expect(page.getByRole("combobox", { name: "リージョン", exact: true })).toContainText("選択してください");
-    await expect(page.getByText("OCI_REGION=ap-osaka-1")).toHaveCount(0);
+    await expect(page.getByText("PLATFORM_OCI_REGION=ap-osaka-1")).toHaveCount(0);
     await expect(page.getByText(/=None/)).toHaveCount(0);
     await page.locator("main").evaluate((main) => {
       main.scrollTop = main.scrollHeight;

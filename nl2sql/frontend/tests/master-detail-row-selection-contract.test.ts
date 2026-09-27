@@ -6,12 +6,13 @@ const dbObjectSharedSource = readFileSync(
   new URL("../src/features/nl2sql/components/DbObjectManagementShared.tsx", import.meta.url),
   "utf8"
 );
+// ユーザー管理・ロール管理の画面は platform の共有パッケージにある（#206）。
 const securityUsersSource = readFileSync(
-  new URL("../src/features/security/SecurityUsersPage.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx", import.meta.url),
   "utf8"
 );
 const securityRolesSource = readFileSync(
-  new URL("../src/features/security/SecurityRolesPage.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url),
   "utf8"
 );
 const profileManagementSource = readFileSync(
@@ -33,8 +34,8 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
   // 利用者が選んだ行は manual として保持し、絞り込み後も選択を残す（render で読むため state で持つ。#181）。
   assert.match(securityUsersSource, /preserveSelected: selection\.manual/u);
   assert.match(securityUsersSource, /selectUser\(user\.user_uuid\)/u);
-  assert.match(securityUsersSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
-  assert.match(securityUsersSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
+  assert.match(securityUsersSource, /visibleRows=\{SECURITY_TABLE_VISIBLE_ROWS\}/u);
+  assert.match(securityUsersSource, /className: SECURITY_TABLE_ROW_CLASS/u);
   assert.match(securityUsersSource, /scrollTestId="security-users-scroll-region"/u);
   assert.match(securityUsersSource, /scrollAriaLabel/u);
 
@@ -42,8 +43,8 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
   assert.match(securityRolesSource, /selectedRowKey=\{visibleSelectedId\}/u);
   assert.match(securityRolesSource, /preserveSelected: selection\.manual/u);
   assert.match(securityRolesSource, /selectRole\(role\.role_id\)/u);
-  assert.match(securityRolesSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
-  assert.match(securityRolesSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
+  assert.match(securityRolesSource, /visibleRows=\{SECURITY_TABLE_VISIBLE_ROWS\}/u);
+  assert.match(securityRolesSource, /className: SECURITY_TABLE_ROW_CLASS/u);
   assert.match(securityRolesSource, /scrollTestId="security-roles-scroll-region"/u);
   assert.match(securityRolesSource, /scrollAriaLabel/u);
 });

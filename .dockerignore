@@ -6,3 +6,7 @@
 **/test-results
 **/playwright-report
 .claude
+# ローカルの .env（secret）をイメージへ入れない（#211）
+**/.env
+**/.env.*
+!**/.env.example

@@ -7,7 +7,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pr_backend_core.config import BaseServiceSettings
+from pr_backend_core.config import (
+    BaseServiceSettings,
+    platform_env_file,
+    product_settings_config,
+)
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsStore
 from pr_system_settings.model import (
@@ -18,7 +22,10 @@ from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise
 from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+# 製品固有の設定（NL2SQL_*）。DeepSec・Select AI Credential など製品固有の writer が書く。
 BACKEND_ENV_FILE = BACKEND_DIR / ".env"
+# 3製品共通の設定（PLATFORM_*）。システム設定画面と構成管理者のパスワード変更が書く（#211）。
+PLATFORM_ENV_FILE = platform_env_file(BACKEND_DIR)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 logger = logging.getLogger(__name__)
 
@@ -26,11 +33,15 @@ logger = logging.getLogger(__name__)
 class Settings(ModelSecretStateMixin, BaseServiceSettings):
     """サービス固有設定。
 
-    OCI/Oracle 等の接続設定はここに追加する（例: oracle_dsn, oci_region ...）。
+    共通の属性（OCI / Oracle / モデル / アップロード保存先 / 構成管理者・認証ポリシー）は
+    共通 `.env` の `PLATFORM_*`、それ以外は製品の `backend/.env` の `NL2SQL_*` から読む（#211）。
+    属性名は変えず、環境変数名は `product_settings_config` の規則で決まる。
     """
 
+    model_config = product_settings_config(prefix="NL2SQL_", backend_dir=BACKEND_DIR)
+
     service_name: str = "production-ready-nl2sql"
-    # 参考実装互換の DEBUG。認証 bypass は ENVIRONMENT=local のときだけ許可する。
+    # 参考実装互換の DEBUG。認証 bypass は NL2SQL_ENVIRONMENT=local のときだけ許可する。
     debug: bool = False
     enable_metrics: bool = True
     oracle_user: str = ""
@@ -51,9 +62,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_region: str = ""
     oci_compartment_id: str = ""
     oci_config_file: str = "~/.oci/config"
-    # OCI_CONFIG_PROFILE が正本。空の場合だけ非推奨の OCI_PROFILE へ fallback する。
-    oci_config_profile: str = ""
-    oci_profile: str = "DEFAULT"
+    oci_config_profile: str = "DEFAULT"
     oci_auth_mode: str = "config_file"
     oci_user_ocid: str = ""
     oci_fingerprint: str = ""
@@ -184,7 +193,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"
     nl2sql_feedback_vector_index: str = "NL2SQL_FEEDBACK_VEC_IDX"
 
-    # アプリケーション認証/RBAC。local/CI は APP_AUTH_ENABLED=false を明示する。
+    # アプリケーション認証/RBAC。local/CI は NL2SQL_APP_AUTH_ENABLED=false を明示する。
     app_auth_enabled: bool = True
     app_admin_login_user_id: str = ""
     app_admin_login_user_password: str = ""
@@ -206,15 +215,17 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         """非 local 環境で debug bypass と非 Secure cookie を fail-closed にする。"""
         if self.oracle_deepsec_enabled and self.oracle_driver_mode.strip().lower() != "thin":
             raise ValueError(
-                "ORACLE_DEEPSEC_ENABLED=true の場合は ORACLE_DRIVER_MODE=thin が必要です。"
+                "NL2SQL_ORACLE_DEEPSEC_ENABLED=true の場合は "
+                "PLATFORM_ORACLE_DRIVER_MODE=thin が必要です。"
             )
         if self.environment.strip().lower() == "local":
             return self
         if self.debug:
-            raise ValueError("非 local 環境では DEBUG=true を指定できません。")
+            raise ValueError("非 local 環境では NL2SQL_DEBUG=true を指定できません。")
         if self.app_auth_enabled and not self.app_auth_cookie_secure:
             raise ValueError(
-                "非 local 環境で認証を有効にする場合は APP_AUTH_COOKIE_SECURE=true が必要です。"
+                "非 local 環境で認証を有効にする場合は "
+                "PLATFORM_AUTH_COOKIE_SECURE=true が必要です。"
             )
         return self
 
@@ -225,8 +236,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     @property
     def resolved_oci_config_profile(self) -> str:
-        """正式な OCI_CONFIG_PROFILE と旧 OCI_PROFILE を一か所で解決する。"""
-        return self.oci_config_profile.strip() or self.oci_profile.strip() or "DEFAULT"
+        """PLATFORM_OCI_CONFIG_PROFILE。空なら DEFAULT。"""
+        return self.oci_config_profile.strip() or "DEFAULT"
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:
@@ -243,13 +254,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     @property
     def resolved_oracle_adb_region(self) -> str:
-        """ADB 管理専用 region。未設定なら OCI_REGION へ fallback する。"""
+        """ADB 管理専用 region。未設定なら PLATFORM_OCI_REGION へ fallback する。"""
         return self.oracle_adb_region.strip() or self.oci_region.strip()
 
     @field_validator("model_settings_file")
     @classmethod
     def normalize_model_settings_file(cls, value: str) -> str:
-        """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
+        """空指定は共通 .env と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
 
     @field_validator("oracle_driver_mode")
@@ -257,7 +268,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     def validate_oracle_driver_mode(cls, value: str) -> str:
         normalized = value.strip().lower()
         if normalized not in {"thin", "thick"}:
-            raise ValueError("ORACLE_DRIVER_MODE は thin または thick を指定してください。")
+            raise ValueError(
+                "PLATFORM_ORACLE_DRIVER_MODE は thin または thick を指定してください。"
+            )
         return normalized
 
     @field_validator("oracle_connection_security")
@@ -266,7 +279,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         normalized = value.strip().lower()
         if normalized not in {"wallet_mtls", "walletless_tls"}:
             raise ValueError(
-                "ORACLE_CONNECTION_SECURITY は wallet_mtls または "
+                "PLATFORM_ORACLE_CONNECTION_SECURITY は wallet_mtls または "
                 "walletless_tls を指定してください。"
             )
         return normalized
@@ -294,18 +307,23 @@ def reset_settings_cache() -> None:
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
-    """MODEL_SETTINGS_FILE を backend/.env と同じディレクトリ基準で解決する。"""
+    """PLATFORM_MODEL_SETTINGS_FILE を共通 .env と同じディレクトリ基準で解決する。
+
+    model-settings.json は3製品で共有する（#211）。テストが差し替えられるよう、
+    共通 .env の場所は呼出時に module の値を参照する。
+    """
     raw_path = path_value.strip() or DEFAULT_MODEL_SETTINGS_FILE
     path = Path(raw_path).expanduser()
     if path.is_absolute():
         return path
-    return (BACKEND_DIR / path).resolve()
+    return (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
+# API key（PLATFORM_OCI_ENTERPRISE_AI_API_KEY）は共通 .env へ保存する（#211）。
 MODEL_SETTINGS_STORE = ModelSettingsStore(
     resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
-    env_file=lambda _settings: BACKEND_ENV_FILE,
+    env_file=lambda _settings: PLATFORM_ENV_FILE,
 )
 
 

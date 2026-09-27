@@ -106,6 +106,8 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "knowledge_bases",
         "business_views",
         "answer_records",
+        "docrag_prompts",
+        "query_history",
         "business_view_knowledge",
         "prompt_versions",
         "generation_settings",
@@ -273,7 +275,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "CREATE TABLE rag_feedback_details" in sql
     assert "RAG_FEEDBACK_DETAILS_TEXT_IDX" in sql
     assert "SYNC (ON COMMIT)" in sql
-    assert len(statements) == 57
+    assert len(statements) == 62
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -326,6 +328,11 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260703_002_feedback_details",
         "20260925_001_business_view_knowledge",
         "20260925_002_answer_records",
+        "20260926_001_documents_classification",
+        "20260926_002_answer_record_evaluation",
+        "20260926_003_feedback_reasons_corrected_answer",
+        "20260926_004_docrag_prompts",
+        "20260926_005_query_history",
     ]
 
 

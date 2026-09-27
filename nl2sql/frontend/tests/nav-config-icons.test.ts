@@ -60,11 +60,14 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.feedbackManagement", "ThumbsUp"],
   ["nav.questionClassifierModels", "BrainCircuit"],
   ["nav.evaluation", "FlaskConical"],
-  ["nav.securityUsers", "Users"],
-  ["nav.securityRoles", "Shield"],
+  // NL2SQL セキュリティ（固有。#206）
+  ["nav.securityPermissions", "LockKeyhole"],
   ["nav.securityDeepSec", "ShieldCheck"],
   // 運用設定（#81）
   ["nav.settingsSystemTables", "TableProperties"],
+  // ユーザーとロール（3製品共通。#206）
+  ["nav.securityUsers", "Users"],
+  ["nav.securityRoles", "Shield"],
   // システム設定（3製品共通）
   ["nav.settingsOci", "KeyRound"],
   ["nav.settingsUploadStorage", "Cloud"],
@@ -105,6 +108,7 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
     "nav.section.improve": true,
     "nav.section.security": true,
     "nav.section.operations": true,
+    "nav.section.userRoles": true,
     "nav.section.settings": true,
   });
 
@@ -119,6 +123,7 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
       "nav.section.improve": true,
       "nav.section.security": true,
       "nav.section.operations": true,
+      "nav.section.userRoles": true,
       "nav.section.settings": true,
     }
   );

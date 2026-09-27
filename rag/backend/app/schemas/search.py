@@ -1,7 +1,7 @@
 """検索（RAG）関連スキーマ。"""
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -21,6 +21,12 @@ SUPPORTED_SEARCH_DATE_RANGE_FILTERS = {
     "uploaded_to",
     "indexed_from",
     "indexed_to",
+}
+# 文書の分類(完全一致)と有効期間の基準日(rag_poc の ClassificationFilter)。
+SUPPORTED_SEARCH_CLASSIFICATION_FILTERS = {
+    "large_category",
+    "middle_category",
+    "small_category",
 }
 SUPPORTED_SEARCH_LIST_FILTERS = {
     "content_kinds",
@@ -43,6 +49,8 @@ SUPPORTED_SEARCH_FILTER_KEYS = {
     "section_path",
     "source_acl",
     "document_version",
+    "as_of",
+    *SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
     *SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
 }
 SUPPORTED_SEARCH_STATUS_FILTERS = {
@@ -360,6 +368,8 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
             normalized[key] = _normalize_filter_integer(key, cleaned)
         elif key in SUPPORTED_SEARCH_DATE_RANGE_FILTERS:
             normalized[key] = _normalize_filter_date(key, cleaned)
+        elif key == "as_of":
+            normalized[key] = _normalize_as_of(cleaned)
         elif key in SUPPORTED_SEARCH_LIST_FILTERS:
             if formatted_kinds := _normalize_content_kind_list(cleaned):
                 normalized[key] = formatted_kinds
@@ -374,6 +384,14 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         raise ValueError(f"未対応の内容種別フィルターです: {content_kind}")
     _validate_filter_range_consistency(normalized)
     return normalized
+
+
+def _normalize_as_of(value: str) -> str:
+    """有効期間の基準日を YYYY-MM-DD として検証する。"""
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"基準日は YYYY-MM-DD で指定してください: {value}") from exc
 
 
 def _normalize_filter_integer(key: str, value: str) -> str:
@@ -499,6 +517,22 @@ class AnswerRecordDetail(AnswerRecordSummary):
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     docrag: dict[str, JsonValue] = Field(default_factory=dict)
+    # 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。
+    evaluation_available: bool = False
+    evaluation: dict[str, JsonValue] | None = None
+
+
+class AnswerEvaluationRequest(BaseModel):
+    """保存済み DocRAG 回答を評価する標準回答。"""
+
+    standard_answer: str = Field(min_length=1, max_length=20000)
+
+    @field_validator("standard_answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("標準回答を入力してください。")
+        return value
 
 
 class AnswerRecordDeleteResult(BaseModel):

@@ -15,29 +15,16 @@ import {
   type FeedbackTargetType,
   type RetrievedChunk,
 } from "@/lib/api";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import {
+  FEEDBACK_ANSWER_REASONS,
+  FEEDBACK_CITATION_REASONS,
+  FEEDBACK_REASON_LABEL_KEYS,
+} from "./FeedbackClient.logic";
 
-const ANSWER_REASONS: CitationFeedbackReason[] = [
-  "incorrect",
-  "incomplete",
-  "not_relevant",
-  "answer_untrusted",
-];
-const CITATION_REASONS: CitationFeedbackReason[] = [
-  "missing_evidence",
-  "not_relevant",
-  "answer_untrusted",
-];
-const REASON_LABEL_KEYS: Record<CitationFeedbackReason, I18nKey> = {
-  incorrect: "feedback.reason.incorrect",
-  incomplete: "feedback.reason.incomplete",
-  missing_evidence: "feedback.reason.missing_evidence",
-  not_relevant: "feedback.reason.not_relevant",
-  answer_untrusted: "feedback.reason.answer_untrusted",
-};
 
 interface FeedbackControlsProps {
   traceId: string | null | undefined;
@@ -67,6 +54,7 @@ export function FeedbackControls({
   const [showReasons, setShowReasons] = useState(false);
   const [selectedReason, setSelectedReason] = useState<CitationFeedbackReason | null>(null);
   const [comment, setComment] = useState("");
+  const [correctedAnswer, setCorrectedAnswer] = useState("");
   const [error, setError] = useState("");
   const [retryPayload, setRetryPayload] = useState<FeedbackRequestBody | null>(null);
   const current = currentQuery.data?.find(
@@ -76,7 +64,7 @@ export function FeedbackControls({
       (item.chunk_id ?? null) === chunkId
   );
   const disabled = !traceId || !businessViewId || currentQuery.isLoading || mutation.isPending;
-  const reasons = targetType === "answer" ? ANSWER_REASONS : CITATION_REASONS;
+  const reasons = targetType === "answer" ? FEEDBACK_ANSWER_REASONS : FEEDBACK_CITATION_REASONS;
   const label =
     targetType === "answer"
       ? t("feedback.controls.answerQuestion")
@@ -96,20 +84,24 @@ export function FeedbackControls({
     setError("");
     setSelectedReason(current?.reason ?? null);
     setComment(current?.comment ?? "");
+    setCorrectedAnswer(current?.corrected_answer ?? "");
     setShowReasons((open) => !open);
   }
 
   async function submit(
     rating: CitationFeedbackRating,
     reason: CitationFeedbackReason | null,
-    submittedComment: string | null
+    submittedComment: string | null,
+    submittedCorrectedAnswer: string | null = null
   ) {
     if (!traceId || !businessViewId) return;
     const normalizedComment = submittedComment?.trim() || null;
+    const normalizedCorrectedAnswer = submittedCorrectedAnswer?.trim() || null;
     if (
       current?.rating === rating &&
       (current.reason ?? null) === reason &&
-      (current.comment ?? null) === normalizedComment
+      (current.comment ?? null) === normalizedComment &&
+      (current.corrected_answer ?? null) === normalizedCorrectedAnswer
     ) {
       setShowReasons(false);
       return;
@@ -126,6 +118,8 @@ export function FeedbackControls({
       rating,
       reason,
       comment: rating === "not_helpful" ? normalizedComment : null,
+      corrected_answer:
+        rating === "not_helpful" && targetType === "answer" ? normalizedCorrectedAnswer : null,
     });
     setError("");
     setRetryPayload(payload);
@@ -199,7 +193,7 @@ export function FeedbackControls({
                 disabled={mutation.isPending}
                 onClick={() => setSelectedReason(reason)}
               >
-                {t(REASON_LABEL_KEYS[reason])}
+                {t(FEEDBACK_REASON_LABEL_KEYS[reason])}
               </ToggleChip>
             ))}
           </div>
@@ -219,13 +213,34 @@ export function FeedbackControls({
           <p className="mt-1 text-right text-xs tabular-nums text-fg-muted">
             {t("feedback.controls.commentCount", { count: comment.length })}
           </p>
+          {targetType === "answer" ? (
+            <>
+              <label className="mt-1 block text-xs font-medium text-fg" htmlFor={`feedback-corrected-${chunkId ?? "answer"}`}>
+                {t("feedback.controls.correctedAnswerLabel")}
+              </label>
+              <textarea
+                id={`feedback-corrected-${chunkId ?? "answer"}`}
+                value={correctedAnswer}
+                maxLength={20000}
+                rows={3}
+                disabled={mutation.isPending}
+                placeholder={t("feedback.controls.correctedAnswerPlaceholder")}
+                aria-describedby={`feedback-corrected-help-${chunkId ?? "answer"}`}
+                className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                onChange={(event) => setCorrectedAnswer(event.target.value)}
+              />
+              <p id={`feedback-corrected-help-${chunkId ?? "answer"}`} className="mt-1 text-xs text-fg-muted">
+                {t("feedback.controls.correctedAnswerHelp")}
+              </p>
+            </>
+          ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
             <Button
               type="button"
               size="md"
               loading={mutation.isPending && retryPayload?.rating === "not_helpful"}
               disabled={!selectedReason}
-              onClick={() => void submit("not_helpful", selectedReason, comment)}
+              onClick={() => void submit("not_helpful", selectedReason, comment, correctedAnswer)}
             >
               {t("feedback.controls.save")}
             </Button>
@@ -248,7 +263,8 @@ export function FeedbackControls({
                 void submit(
                   retryPayload.rating,
                   retryPayload.reason ?? null,
-                  retryPayload.comment ?? null
+                  retryPayload.comment ?? null,
+                  retryPayload.corrected_answer ?? null
                 )
               }
             >
@@ -286,11 +302,12 @@ export function buildFeedbackContentSnapshot(
 
 export function buildFeedbackPayload(payload: FeedbackRequestBody): FeedbackRequestBody {
   if (payload.rating === "helpful") {
-    return { ...payload, reason: null, comment: null };
+    return { ...payload, reason: null, comment: null, corrected_answer: null };
   }
   return {
     ...payload,
     comment: payload.comment?.trim() || null,
+    corrected_answer: payload.corrected_answer?.trim() || null,
   };
 }
 

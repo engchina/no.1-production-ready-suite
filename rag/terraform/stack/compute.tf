@@ -123,7 +123,7 @@ resource "oci_core_instance" "generated_oci_core_instance" {
     }
     precondition {
       condition     = trimspace(var.app_login_password) != ""
-      error_message = "app_login_password must be configured. The RAG backend requires a login (AUTH_MODE=production) for the UI and API."
+      error_message = "app_login_password must be configured. The RAG backend requires a login (RAG_AUTH_MODE=production) for the UI and API."
     }
   }
 }

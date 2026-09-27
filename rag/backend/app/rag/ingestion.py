@@ -290,6 +290,17 @@ class IngestionPipeline:
             fail_fast=True,
         )
 
+    async def _image_retrieval_prompt(self) -> str | None:
+        """画面で編集した画像検索のプロンプト(Docling の Vision 用)。未編集・読込失敗は既定値。"""
+        from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+
+        try:
+            overrides = await self._oracle.docrag_prompt_overrides()
+        except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
+            logger.warning("docrag image retrieval prompt load failed", exc_info=True)
+            return None
+        return overrides.get(IMAGE_RETRIEVAL_PROMPT_KEY)
+
     def _raise_if_selected_parser_was_not_used(
         self,
         parser_result: ParserRegistryResult,
@@ -336,6 +347,8 @@ class IngestionPipeline:
             source_profile=source_profile,
             base_prompt=prompt,
         )
+        if self._settings.rag_parser_docling_vision_enabled:
+            self._parser_service.image_retrieval_prompt = await self._image_retrieval_prompt()
         if manage_document_state:
             if prepared_artifact is None:
                 await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)

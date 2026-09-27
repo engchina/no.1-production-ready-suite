@@ -107,7 +107,7 @@ def test_analyze_sql_keeps_leading_comment_select_executable() -> None:
             "DBMS_XMLQUERY.GETXML",
         ),
         (
-            "SELECT DBMS_XMLGEN.GETXML('SELECT PASSWORD_HASH FROM NL2SQL_APP_USERS') FROM DUAL",
+            "SELECT DBMS_XMLGEN.GETXML('SELECT PASSWORD_HASH FROM PLATFORM_USERS') FROM DUAL",
             "DBMS_XMLGEN.GETXML",
         ),
         (

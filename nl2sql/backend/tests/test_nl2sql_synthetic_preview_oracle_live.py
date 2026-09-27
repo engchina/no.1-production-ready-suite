@@ -20,11 +20,14 @@ from app.settings import Settings
 def test_preview_oracle_staging_and_atomic_apply() -> None:
     from dotenv import dotenv_values
 
-    env = dotenv_values(Path(__file__).parents[1] / ".env")
+    # 接続設定は共通 .env（platform/.env の PLATFORM_ORACLE_*。#211）
+    env = dotenv_values(Path(__file__).parents[3] / "platform" / ".env")
     connection_settings: dict[str, Any] = {
-        k.lower(): v
+        k.removeprefix("PLATFORM_").lower(): v
         for k, v in env.items()
-        if k.startswith("ORACLE_") and k.lower() in Settings.model_fields and v is not None
+        if k.startswith("PLATFORM_ORACLE_")
+        and k.removeprefix("PLATFORM_").lower() in Settings.model_fields
+        and v is not None
     }
     settings = Settings(_env_file=None, **connection_settings)
     adapter = OracleNl2SqlAdapter(settings)
@@ -187,11 +190,14 @@ def test_preview_oracle_staging_and_atomic_apply() -> None:
 def test_select_ai_generates_into_staging_only() -> None:
     from dotenv import dotenv_values
 
-    env = dotenv_values(Path(__file__).parents[1] / ".env")
+    # 接続設定は共通 .env（platform/.env の PLATFORM_ORACLE_*。#211）
+    env = dotenv_values(Path(__file__).parents[3] / "platform" / ".env")
     connection_settings: dict[str, Any] = {
-        k.lower(): v
+        k.removeprefix("PLATFORM_").lower(): v
         for k, v in env.items()
-        if k.startswith("ORACLE_") and k.lower() in Settings.model_fields and v is not None
+        if k.startswith("PLATFORM_ORACLE_")
+        and k.removeprefix("PLATFORM_").lower() in Settings.model_fields
+        and v is not None
     }
     settings = Settings(_env_file=None, **connection_settings)
     adapter = OracleNl2SqlAdapter(settings)

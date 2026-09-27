@@ -7,6 +7,7 @@ stdlib だけで動かす（CI と release workflow で追加依存なしに実�
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import stat
 import sys
@@ -14,6 +15,8 @@ import zipfile
 from pathlib import Path
 
 RAG_DIR = Path(__file__).resolve().parents[1]
+# 共通 .env の変数名の規則（#211）の正本。stdlib だけで読むため import せず AST で読む。
+PLATFORM_ENV_RULES = RAG_DIR.parent / "platform" / "packages" / "backend_core" / "src" / "pr_backend_core" / "config" / "env.py"
 PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスのみ"
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
@@ -71,31 +74,34 @@ OPTIONAL_COMPOSE_SERVICES = [
     "parser-oci-document-understanding",
 ]
 
-# backend/.env（compose の env_file）に必ず書く値。値が入力由来のものは single quote で囲む。
+# backend/.env（compose の env_file。RAG_*）に必ず書く値。値が入力由来のものは single quote で囲む。
 REQUIRED_BACKEND_ENV_LINES = [
-    "AUTH_MODE=production\n",
-    "AUTH_USERNAME='${var.app_login_user}'\n",
-    "AUTH_PASSWORD='${var.app_login_password}'\n",
-    "AUTH_SESSION_SECRET=\n",
-    "AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}\n",
-    "AUDIT_CONTEXT_HASH_SALT=\n",
-    "OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
-    "ORACLE_USER='${local.effective_oracle_user}'\n",
-    "ORACLE_PASSWORD='${local.effective_oracle_password}'\n",
-    "ORACLE_DSN='${local.effective_oracle_dsn}'\n",
-    "ORACLE_CLIENT_LIB_DIR=\n",
-    "ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
-    "ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'\n",
-    "ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
+    "RAG_AUTH_MODE=production\n",
+    "RAG_AUTH_USERNAME='${var.app_login_user}'\n",
+    "RAG_AUTH_PASSWORD='${var.app_login_password}'\n",
+    "RAG_AUTH_SESSION_SECRET=\n",
+    "RAG_AUTH_COOKIE_SECURE=${var.app_auth_cookie_secure}\n",
+    "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
     "RAG_PARSER_ADAPTER_BACKEND=unstructured\n",
     "RAG_SERVICE_CONTROL_ENABLED=false\n",
 ]
-# docker-compose.yml の environment が正本の key。env_file に書くと compose の値に隠れて誤解を招く。
+# platform/.env（3製品共通の設定。PLATFORM_*）に必ず書く値。
+REQUIRED_PLATFORM_ENV_LINES = [
+    "PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
+    "PLATFORM_ORACLE_USER='${local.effective_oracle_user}'\n",
+    "PLATFORM_ORACLE_PASSWORD='${local.effective_oracle_password}'\n",
+    "PLATFORM_ORACLE_DSN='${local.effective_oracle_dsn}'\n",
+    "PLATFORM_ORACLE_CLIENT_LIB_DIR=\n",
+    "PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
+    "PLATFORM_ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'\n",
+    "PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
+]
+# docker-compose.yml の environment が正本の key。.env に書くと compose の値に隠れて誤解を招く。
 COMPOSE_OWNED_ENV_KEYS = {
-    "ENVIRONMENT",
-    "LOCAL_STORAGE_DIR",
-    "MODEL_SETTINGS_FILE",
-    "OCI_CONFIG_FILE",
+    "RAG_ENVIRONMENT",
+    "PLATFORM_ENV_FILE",
+    "PLATFORM_LOCAL_STORAGE_DIR",
+    "PLATFORM_OCI_CONFIG_FILE",
 }
 
 
@@ -148,10 +154,10 @@ def _schema_groups(schema: str) -> dict[str, list[str]]:
     return groups
 
 
-def _backend_env(locals_source: str) -> str:
-    match = re.search(r"(?ms)backend_env = <<-EOT\n(.*?)^EOT$", locals_source)
+def _heredoc(locals_source: str, name: str) -> str:
+    match = re.search(rf"(?ms){name} = <<-EOT\n(.*?)^EOT$", locals_source)
     if match is None:
-        raise AssertionError("locals.tf backend_env heredoc not found")
+        raise AssertionError(f"locals.tf {name} heredoc not found")
     return match.group(1)
 
 
@@ -166,6 +172,37 @@ def _settings_fields() -> set[str]:
     source = (RAG_DIR / "backend" / "app" / "config.py").read_text(encoding="utf-8")
     body = source.split("\nclass Settings(", 1)[1]
     return set(re.findall(r"(?m)^    ([a-z][a-z0-9_]*): ", body))
+
+
+def _platform_setting_fields() -> frozenset[str]:
+    """pr_backend_core.config.env の PLATFORM_SETTING_FIELDS（共通 .env に置く属性）。"""
+    tree = ast.parse(PLATFORM_ENV_RULES.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "PLATFORM_SETTING_FIELDS" for target in node.targets)
+            and isinstance(node.value, ast.Call)
+        ):
+            return frozenset(ast.literal_eval(node.value.args[0]))
+    raise AssertionError(f"PLATFORM_SETTING_FIELDS not found in {PLATFORM_ENV_RULES}")
+
+
+def _settings_env_names() -> tuple[set[str], set[str]]:
+    """RAG Settings の環境変数名を (RAG_*, PLATFORM_*) に分けて返す。
+
+    pr_backend_core.config.settings_env_name と同じ規則（共通の属性は `PLATFORM_` + 大文字で
+    先頭の `APP_` を落とす。それ以外は `RAG_` を重ねずに付ける）。
+    """
+    platform_fields = _platform_setting_fields()
+    product: set[str] = set()
+    platform: set[str] = set()
+    for field in _settings_fields():
+        name = field.upper()
+        if field in platform_fields:
+            platform.add("PLATFORM_" + name.removeprefix("APP_"))
+        else:
+            product.add(name if name.startswith("RAG_") else "RAG_" + name)
+    return product, platform
 
 
 def _docker_compose_services() -> dict[str, str]:
@@ -397,25 +434,32 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         context="Compute preconditions",
     )
 
-    backend_env = _backend_env(locals_source)
+    product_names, platform_names = _settings_env_names()
+    backend_env = _heredoc(locals_source, "backend_env")
+    platform_env = _heredoc(locals_source, "platform_env")
     _require_all(backend_env, REQUIRED_BACKEND_ENV_LINES, context="backend/.env")
-    settings_fields = _settings_fields()
-    env_keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", backend_env)
-    unknown = sorted(key for key in env_keys if key.lower() not in settings_fields)
-    if unknown:
-        raise AssertionError(f"backend/.env keys are not RAG Settings fields: {unknown}")
-    compose_owned = sorted(set(env_keys) & COMPOSE_OWNED_ENV_KEYS)
-    if compose_owned:
-        raise AssertionError(f"backend/.env must not set keys owned by docker-compose.yml: {compose_owned}")
-    duplicated = sorted({key for key in env_keys if env_keys.count(key) > 1})
-    if duplicated:
-        raise AssertionError(f"backend/.env keys are duplicated: {duplicated}")
-    # 入力由来の文字列（${var.*} / ${local.effective_*}）は single quote で囲む（数値・bool・OCID は除く）。
-    for line in backend_env.splitlines():
-        key, _, value = line.partition("=")
-        if re.search(r"\$\{(var\.app_login_|local\.effective_oracle_(user|password|dsn|wallet))", value):
-            if not (value.startswith("'") and value.endswith("'")):
-                raise AssertionError(f"backend/.env value must be single-quoted: {key}")
+    _require_all(platform_env, REQUIRED_PLATFORM_ENV_LINES, context="platform/.env")
+    # backend/.env は RAG 固有の変数（RAG_*）だけ、platform/.env は共通の変数（PLATFORM_*）だけ（#211）。
+    for context, source, allowed in (
+        ("backend/.env", backend_env, product_names),
+        ("platform/.env", platform_env, platform_names),
+    ):
+        env_keys = re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", source)
+        unknown = sorted(key for key in env_keys if key not in allowed)
+        if unknown:
+            raise AssertionError(f"{context} keys are not RAG Settings env names for this file: {unknown}")
+        compose_owned = sorted(set(env_keys) & COMPOSE_OWNED_ENV_KEYS)
+        if compose_owned:
+            raise AssertionError(f"{context} must not set keys owned by docker-compose.yml: {compose_owned}")
+        duplicated = sorted({key for key in env_keys if env_keys.count(key) > 1})
+        if duplicated:
+            raise AssertionError(f"{context} keys are duplicated: {duplicated}")
+        # 入力由来の文字列（${var.*} / ${local.effective_*}）は single quote で囲む（数値・bool・OCID は除く）。
+        for line in source.splitlines():
+            key, _, value = line.partition("=")
+            if re.search(r"\$\{(var\.app_login_|local\.effective_oracle_(user|password|dsn|wallet))", value):
+                if not (value.startswith("'") and value.endswith("'")):
+                    raise AssertionError(f"{context} value must be single-quoted: {key}")
 
     _verify_compose_services(locals_source)
 
@@ -427,6 +471,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             'app_repo_dir = "no.1-production-ready-suite/rag"',
             'compose_services = join(" ", local.compose_services)',
             "backend_env = base64gzip(local.backend_env)",
+            "platform_env = base64gzip(local.platform_env)",
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
         ],
@@ -482,7 +527,11 @@ def _verify_bootstrap_and_init(bootstrap: str, init_source: str) -> None:
         ],
         context="Compute bootstrap",
     )
-    for secret_path in ("/u01/aipoc/props/backend.env", "/u01/aipoc/props/wallet.zip"):
+    for secret_path in (
+        "/u01/aipoc/props/backend.env",
+        "/u01/aipoc/props/platform.env",
+        "/u01/aipoc/props/wallet.zip",
+    ):
         if not re.search(
             rf'(?ms)path: "{re.escape(secret_path)}"\n    permissions: "0600"\n    owner: "root:root"\n',
             bootstrap,
@@ -508,6 +557,9 @@ def _verify_bootstrap_and_init(bootstrap: str, init_source: str) -> None:
             'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
             "python -m app.rag.system_schema_cli initialize",
             "openssl rand -hex 32",
+            'PLATFORM_ENV_FILE="${PLATFORM_DIR}/.env"',
+            '"${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"',
+            'chown "${container_owner}" "${PLATFORM_ENV_FILE}"',
             "ExecStart=${COMPOSE_WRAPPER} up -d --no-build ${COMPOSE_SERVICES[*]}",
             "proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
             "proxy_buffering off;",

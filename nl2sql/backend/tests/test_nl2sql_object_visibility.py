@@ -290,3 +290,16 @@ def test_schema_refresh_targets_ignore_system_owners() -> None:
         ("APP", "ORDERS"): "unknown",
         ("NL2SQL_APP", "ORDERS"): "unknown",
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["PLATFORM_USERS", "APP.PLATFORM_AUTH_SESSIONS", "RAG_DOCUMENTS", "AGENT_RUNTIME_RUNS"],
+)
+def test_shared_platform_and_other_product_tables_are_hidden(name: str) -> None:
+    """同じ schema を共有する認証テーブルや他製品のテーブルを業務一覧に出さない（#212）。"""
+    assert is_user_visible_object_name(name) is False
+    assert is_user_visible_schema_object("APP", name.split(".")[-1]) is False
+    # 接頭辞が一致しない業務テーブルは従来どおり見える。
+    assert is_user_visible_object_name("PLATFORMS") is True
+    assert is_user_visible_object_name("APP.RAGE_EVENTS") is True

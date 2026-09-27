@@ -20,6 +20,9 @@ APP_GROUP="${APP_GROUP:-${APP_USER}}"
 SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
 APP_REPO_DIR="${SUITE_REPO_DIR}/rag"
 BACKEND_DIR="${APP_REPO_DIR}/backend"
+# 3製品共通の設定（PLATFORM_*）の共通 .env（#211）。compose が platform/ を backend / ingestion-worker に mount する。
+PLATFORM_DIR="${SUITE_REPO_DIR}/platform"
+PLATFORM_ENV_FILE="${PLATFORM_DIR}/.env"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
 WALLET_DIR="${APP_ROOT}/wallet"
 PROPS_DIR="${APP_ROOT}/props"
@@ -39,7 +42,7 @@ SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 NGINX_SITES_AVAILABLE_DIR="${NGINX_SITES_AVAILABLE_DIR:-/etc/nginx/sites-available}"
 NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
 COMPOSE_SERVICE="production-ready-rag.service"
-# backend の MAX_UPLOAD_BYTES（既定 200 MiB）より少し大きくする。
+# backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）より少し大きくする。
 NGINX_CLIENT_MAX_BODY_SIZE="210M"
 DATABASE_INITIALIZATION_READY=false
 
@@ -221,28 +224,37 @@ set_env_value() {
   fi
 }
 
-# rag/backend/.env は docker compose の env_file。値は Resource Manager の入力から作り、
-# 空の AUTH_SESSION_SECRET / AUDIT_CONTEXT_HASH_SALT だけを instance 上で生成した値で補う。
+# rag/backend/.env（RAG_*）は docker compose の env_file。値は Resource Manager の入力から作り、
+# 空の RAG_AUTH_SESSION_SECRET / RAG_AUDIT_CONTEXT_HASH_SALT だけを instance 上で生成した値で補う。
+# platform/.env（PLATFORM_*、3製品共通）はシステム設定画面の保存先でもあるため、既にあれば上書きしない
+# （画面で保存した API key などを再実行で消さない）。
 install_runtime_env() {
   local env_file="${BACKEND_DIR}/.env"
   local current
 
+  if [ -e "${PLATFORM_ENV_FILE}" ]; then
+    log "Keeping existing shared platform environment: ${PLATFORM_ENV_FILE}"
+  else
+    log "Installing shared platform environment."
+    install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"
+  fi
+
   log "Installing backend environment."
   install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" "${env_file}"
 
-  current="$(sed -n 's/^AUTH_SESSION_SECRET=//p' "${env_file}" | tail -n 1)"
+  current="$(sed -n 's/^RAG_AUTH_SESSION_SECRET=//p' "${env_file}" | tail -n 1)"
   if [ -z "${current}" ]; then
-    set_env_value "${env_file}" AUTH_SESSION_SECRET "$(ensure_generated_secret "${PROPS_DIR}/auth_session_secret")"
+    set_env_value "${env_file}" RAG_AUTH_SESSION_SECRET "$(ensure_generated_secret "${PROPS_DIR}/auth_session_secret")"
   fi
-  current="$(sed -n 's/^AUDIT_CONTEXT_HASH_SALT=//p' "${env_file}" | tail -n 1)"
+  current="$(sed -n 's/^RAG_AUDIT_CONTEXT_HASH_SALT=//p' "${env_file}" | tail -n 1)"
   if [ -z "${current}" ]; then
-    set_env_value "${env_file}" AUDIT_CONTEXT_HASH_SALT "$(ensure_generated_secret "${PROPS_DIR}/audit_context_hash_salt")"
+    set_env_value "${env_file}" RAG_AUDIT_CONTEXT_HASH_SALT "$(ensure_generated_secret "${PROPS_DIR}/audit_context_hash_salt")"
   fi
 }
 
 # rag/docker-compose.yml は変更せず、OCI の Compute で必要な差分だけを override で重ねる。
 #   - backend は host の Nginx からだけ使うため 127.0.0.1 に bind する（既定の 0.0.0.0:8000 を置き換える）
-#   - Wallet（mTLS）を backend と ingestion-worker に mount する（ORACLE_WALLET_DIR と同じ path）
+#   - Wallet（mTLS）を backend と ingestion-worker に mount する（PLATFORM_ORACLE_WALLET_DIR と同じ path）
 #   - reboot 後も戻るよう restart policy を付ける
 write_compose_override() {
   log "Writing ${COMPOSE_OVERRIDE_FILE}."
@@ -300,6 +312,14 @@ prepare_container_permissions() {
   find "${WALLET_DIR}" -type d -exec chmod 0700 {} \;
   find "${WALLET_DIR}" -type f -exec chmod 0600 {} \;
 
+  # 共通 .env は backend / ingestion-worker の appuser が読み書きする（システム設定画面の保存先）。
+  # 保存は同じディレクトリの一時ファイルと lock を使うため、platform/ にも書き込めるようにする
+  # （group は APP_USER のまま残し、frontend の build で platform/ に node_modules を作れるようにする）。
+  chown "${container_owner}" "${PLATFORM_ENV_FILE}"
+  chmod 0600 "${PLATFORM_ENV_FILE}"
+  chown "${container_owner%%:*}:${APP_GROUP}" "${PLATFORM_DIR}"
+  chmod 0775 "${PLATFORM_DIR}"
+
   # OCI 設定の named volume は空で作られると root 所有になるため、appuser に渡す。
   "${COMPOSE_WRAPPER}" run --rm --no-deps -T --user root --entrypoint sh backend \
     -c 'chown appuser:appuser /home/appuser/.oci && chmod 0700 /home/appuser/.oci'
@@ -317,7 +337,7 @@ initialize_database_schema() {
   fi
 
   DATABASE_INITIALIZATION_READY=false
-  log "WARNING: RAG system schema initialization failed. Check ADB reachability and ${BACKEND_DIR}/.env."
+  log "WARNING: RAG system schema initialization failed. Check ADB reachability and ${PLATFORM_ENV_FILE}."
   log "Recovery: sudo ${COMPOSE_WRAPPER} run --rm --no-deps -T backend uv run --no-sync python -m app.rag.system_schema_cli initialize"
   log "Recovery: or open System settings > Database > RAG system tables in the application."
   return 0
@@ -367,7 +387,7 @@ EOF
   systemctl restart "${COMPOSE_SERVICE}"
 }
 
-# RAG の backend は Cookie session の login（AUTH_MODE=production）で UI と API を保護する。
+# RAG の backend は Cookie session の login（RAG_AUTH_MODE=production）で UI と API を保護する。
 # Nginx には認証を置かず、frontend の配信と /api/ の proxy（SSE のため buffering 無効）だけを行う。
 configure_nginx() {
   log "Configuring Nginx on port ${APPLICATION_PORT}."
@@ -439,7 +459,7 @@ wait_for_backend() {
   fi
   log "Backend did not become healthy on ${BACKEND_HOST}:${BACKEND_PORT}."
   if [ "${DATABASE_INITIALIZATION_READY}" != "true" ]; then
-    log "The RAG system schema was not initialized; check ADB reachability and ${BACKEND_DIR}/.env."
+    log "The RAG system schema was not initialized; check ADB reachability and ${PLATFORM_ENV_FILE}."
   fi
   dump_compose_diagnostics
   return "${status}"

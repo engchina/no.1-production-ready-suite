@@ -154,15 +154,27 @@ const databaseDependentScenarios: Scenario[] = [
     },
   },
   {
-    name: "ロール・権限管理",
+    name: "ロール管理",
     path: "/settings/security/roles",
-    heading: "ロール・権限管理",
+    heading: "ロール管理",
+    setup: async (page, countRequest) => {
+      await page.route("**/api/security/roles?include_archived=true", (route) => {
+        countRequest();
+        return fulfill(route, []);
+      });
+    },
+  },
+  {
+    name: "権限管理",
+    path: "/settings/security/permissions",
+    heading: "権限管理",
     setup: async (page, countRequest) => {
       await page.route("**/api/security/roles?include_archived=true", (route) => {
         countRequest();
         return fulfill(route, []);
       });
       await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+      await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
     },
   },
   {
@@ -302,20 +314,20 @@ test("稼働中の読込5xxでDB停止を確認した場合も表示中ページ
   await page.route("**/api/security/permissions", (route) => fulfill(route, []));
 
   await page.goto("/settings/security/roles");
-  await expect(page.getByRole("heading", { name: "ロール・権限管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ロール管理" })).toBeVisible();
 
   unavailable = true;
   rolesFail = true;
   await clickPageHeaderAction(page, "security-roles-actions", "表示を更新");
 
   await expectFullPageGate(page);
-  await expect(page.getByRole("heading", { name: "ロール・権限管理" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "ロール管理" })).toHaveCount(0);
   await expect(page.getByText(RAW_DATABASE_ERROR, { exact: true })).toHaveCount(0);
 
   unavailable = false;
   rolesFail = false;
   await page.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByRole("heading", { name: "ロール・権限管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ロール管理" })).toBeVisible();
 });
 
 test("DB が正常な一般500は画面固有エラーを維持する", async ({ page }) => {

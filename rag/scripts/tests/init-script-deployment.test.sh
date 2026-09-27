@@ -18,6 +18,7 @@ prepare_case() {
   mkdir -p \
     "${case_dir}/app/props" \
     "${case_dir}/app/no.1-production-ready-suite/rag/backend" \
+    "${case_dir}/app/no.1-production-ready-suite/platform" \
     "${case_dir}/units" \
     "${case_dir}/sites-available" \
     "${case_dir}/sites-enabled" \
@@ -82,15 +83,23 @@ run_runtime_env_case() (
   source "${REPO_DIR}/init_script.sh"
 
   cat > "${APP_ROOT}/props/backend.env" <<'EOF'
-AUTH_MODE=production
-AUTH_PASSWORD='Ab$cd#Ef12345'
-AUTH_SESSION_SECRET=
-AUDIT_CONTEXT_HASH_SALT=
+RAG_AUTH_MODE=production
+RAG_AUTH_PASSWORD='Ab$cd#Ef12345'
+RAG_AUTH_SESSION_SECRET=
+RAG_AUDIT_CONTEXT_HASH_SALT=
+EOF
+  cat > "${APP_ROOT}/props/platform.env" <<'EOF'
+PLATFORM_ORACLE_USER='rag_app'
+PLATFORM_ORACLE_PASSWORD='Db$Pass#123'
 EOF
   install_runtime_env
   cp "${BACKEND_DIR}/.env" "${case_dir}/first.env"
+  cp "${PLATFORM_ENV_FILE}" "${case_dir}/first-platform.env"
+  # 画面から保存した値（API key 等）は再実行で消えない。
+  printf 'PLATFORM_OCI_ENTERPRISE_AI_API_KEY=saved-on-screen\n' >> "${PLATFORM_ENV_FILE}"
   install_runtime_env
   cp "${BACKEND_DIR}/.env" "${case_dir}/second.env"
+  cp "${PLATFORM_ENV_FILE}" "${case_dir}/second-platform.env"
 )
 
 run_compose_files_case() (
@@ -155,14 +164,25 @@ test "$(cat "${TEST_TMP_DIR}/degraded/ready")" = "false" || fail "schema 初期�
 run_runtime_env_case
 first="${TEST_TMP_DIR}/runtime-env/first.env"
 second="${TEST_TMP_DIR}/runtime-env/second.env"
-grep -Eq '^AUTH_SESSION_SECRET=[0-9a-f]{64}$' "${first}" || fail "AUTH_SESSION_SECRET が生成されていない"
-grep -Eq '^AUDIT_CONTEXT_HASH_SALT=[0-9a-f]{64}$' "${first}" || fail "AUDIT_CONTEXT_HASH_SALT が生成されていない"
+grep -Eq '^RAG_AUTH_SESSION_SECRET=[0-9a-f]{64}$' "${first}" || fail "RAG_AUTH_SESSION_SECRET が生成されていない"
+grep -Eq '^RAG_AUDIT_CONTEXT_HASH_SALT=[0-9a-f]{64}$' "${first}" || fail "RAG_AUDIT_CONTEXT_HASH_SALT が生成されていない"
 cmp -s "${first}" "${second}" || fail "再実行で生成済みの secret が変わった"
-grep -Fqx "AUTH_PASSWORD='Ab\$cd#Ef12345'" "${first}" || fail "入力の password が変更された"
+grep -Fqx "RAG_AUTH_PASSWORD='Ab\$cd#Ef12345'" "${first}" || fail "入力の password が変更された"
 test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/no.1-production-ready-suite/rag/backend/.env")" = "600" \
   || fail "backend/.env の permission が 0600 ではない"
 test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/props/auth_session_secret")" = "600" \
   || fail "生成した secret の permission が 0600 ではない"
+
+# --- platform/.env（3製品共通の設定。PLATFORM_*） ---
+grep -Fqx "PLATFORM_ORACLE_PASSWORD='Db\$Pass#123'" "${TEST_TMP_DIR}/runtime-env/first-platform.env" \
+  || fail "共通 .env に入力の DB password が入っていない"
+if grep -q '^PLATFORM_' "${first}"; then
+  fail "backend/.env に共通の設定（PLATFORM_*）が入っている"
+fi
+test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/no.1-production-ready-suite/platform/.env")" = "600" \
+  || fail "platform/.env の permission が 0600 ではない"
+grep -Fqx 'PLATFORM_OCI_ENTERPRISE_AI_API_KEY=saved-on-screen' "${TEST_TMP_DIR}/runtime-env/second-platform.env" \
+  || fail "再実行で画面から保存した共通 .env の値が消えた"
 
 # --- compose override / wrapper / systemd ---
 run_compose_files_case
@@ -206,7 +226,7 @@ grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backen
 grep -Fq 'root /' "${site}" || fail "frontend の静的 build を配信していない"
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
-grep -Fq 'client_max_body_size 210M;' "${site}" || fail "upload の上限が backend の MAX_UPLOAD_BYTES に合っていない"
+grep -Fq 'client_max_body_size 210M;' "${site}" || fail "upload の上限が backend の RAG_MAX_UPLOAD_BYTES に合っていない"
 awk '/location = \/health \{/,/\}/' "${site}" | grep -Fq '/api/health;' || fail "/health が backend の /api/health を返していない"
 if grep -Fq 'auth_basic' "${site}"; then
   fail "RAG は backend の login を使う（Nginx の Basic 認証は置かない）"

@@ -3,10 +3,10 @@
 ## 適用範囲
 
 本機能は OCI IAM を使用せず、Oracle に永続化した local application user と role で認証・認可する。
-ただし `backend/.env` の `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` に一致する構成管理者は、
-認証 table を参照しない `SYSTEM_ADMIN` として扱う。`APP_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
+ただし共通 `.env`（`platform/.env`）の `PLATFORM_ADMIN_LOGIN_USER_ID=system_admin` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` に一致する構成管理者は、
+認証 table を参照しない `SYSTEM_ADMIN` として扱う。`PLATFORM_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
 大小文字区別であり、`System_Admin` / `SYSTEM_ADMIN` などは database user へ fallback しない。
-`ORACLE_USER` / `ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
+`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
 アプリケーション機能権限は FastAPI の route manifest で default deny とし、画面表示制御に加えて API 側でも
 毎回ユーザー状態、role、permission を再評価する。
 
@@ -54,9 +54,9 @@ V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、De
 
 ## 初期 migration と構成管理者
 
-`APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
-アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `NL2SQL_APP_USERS` /
-`NL2SQL_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
+`PLATFORM_ADMIN_LOGIN_USER_ID=system_admin` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を共通 `.env`（`platform/.env`。#211）に設定すると、その構成管理者で
+アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `PLATFORM_USERS` /
+`PLATFORM_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
 使う場合は、DB 接続後に次を一度実行する。
 処理は幂等であり、再実行できる。
 
@@ -66,16 +66,90 @@ uv sync
 uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 ```
 
-通常の application user は `NL2SQL_APP_USERS` から照合される。構成管理者の password は application
-password 変更画面から変更でき、変更結果は `backend/.env` の `APP_ADMIN_LOGIN_USER_PASSWORD` に書き戻される。
-旧キー `APP_ADMIN_PASSWORD` だけを持つ既存 `.env` は読み取り時に fallback として受理されるが、
-password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PASSWORD` へ移行する。
+通常の application user は `PLATFORM_USERS` から照合される。構成管理者の password は application
+password 変更画面から変更でき、変更結果は共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` に書き戻される
+（3製品で同じ構成管理者を使う）。旧キー（`APP_ADMIN_LOGIN_USER_*` / `APP_ADMIN_PASSWORD` など）は読まない。
+既存環境は [configuration.md](./configuration.md) の「既存環境の更新手順（#211）」で移す。
 通常 user の password はこれまでどおり DB hash として保存される。ユーザー管理 API/UI は
 `system_admin` の大小文字違いを含む DB user 作成を拒否する。
 
 `SYSTEM_ADMIN` role は構成管理者と旧 bootstrap user 専用とする。ユーザー管理 API/UI は、後続で
 作成したユーザーへの新規付与・再付与を拒否する。旧版や手動操作で非 bootstrap user に
 `SYSTEM_ADMIN` が残っている場合も migration では自動撤去せず、管理者が必要に応じて手動で解除する。
+
+## 共通認証テーブルへの移行（#212）
+
+ユーザー・ロール・ユーザーとロールの割り当て・セッションは、3 製品（RAG / NL2SQL / Agent）で共有する
+`PLATFORM_*` テーブルに置く。ログイン・セッション・CSRF・構成管理者・ユーザー / ロール操作の実装も
+platform の `pr_system_settings.auth` にあり、NL2SQL はその上に NL2SQL 固有の権限・業務プロファイル
+利用権限・Data Grant を足している。
+
+| 旧（NL2SQL） | 新（共通） |
+|---|---|
+| `NL2SQL_APP_USERS` | `PLATFORM_USERS` |
+| `NL2SQL_APP_ROLES` | `PLATFORM_ROLES` |
+| `NL2SQL_APP_USER_ROLES` | `PLATFORM_USER_ROLES` |
+| `NL2SQL_AUTH_SESSIONS` | `PLATFORM_AUTH_SESSIONS` |
+
+NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `NL2SQL_APP_DATA_ENTITLEMENTS` /
+`NL2SQL_DEEPSEC_MIGRATIONS` は名前を変えない。旧名との互換は持たない（旧名のテーブルは読まない）。
+
+### 既存環境の更新手順
+
+DeepSec を使っていない環境は、手順 1〜2 だけでよい。DeepSec を有効にしている環境では、手順 3 が終わるまで
+DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないため、メンテナンス時間に行う。
+
+1. 新しい backend を配備する前に、旧 backend を止める（旧 backend は旧テーブル名を読む）。
+2. `uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` を実行する。
+   - migration 024 が 4 テーブルと index / constraint を `PLATFORM_*` へ改名する（データは保つ）。
+     旧名と新名のテーブルが両方ある場合は、どちらのデータを残すかを確認するよう求めて停止する。
+   - platform の DDL が `PLATFORM_*` を冪等に作る（新規環境ではここで作られる）。
+   - migration 025 が `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` の FK を
+     `ON DELETE CASCADE` に張り直す。他の製品からロールを削除したとき、NL2SQL の権限も消えるようにするため。
+     `NL2SQL_APP_DATA_ENTITLEMENTS` の FK は削除制限のままにする（Data Grant の後始末を DeepSec で行う）。
+3. DeepSec を有効にしている場合は、`Deep Data Security` 画面で次を行う。
+   - `基盤構成` で V001 の step 1・2 を再適用する。条件式・`NL2SQL_DEEPSEC_CTX_PKG`・GRANT が
+     `PLATFORM_*` を参照するよう変わり、checksum が変わるため、自動的に「未適用」になっている。
+   - `データ権限` で各ロールの Data Grant をプレビューし、再適用する。migrate は Data Grant の状態を
+     PENDING に戻している（旧テーブル名を参照する Data Grant の条件式は、改名後は使えない）。
+   - `検証` で基盤構成と Data Grant を確認する。
+4. 新しい backend を起動する。
+
+なお、NL2SQL の業務プロファイルの対象一覧・管理 SQL は、`NL2SQL_` に加えて `PLATFORM_` / `RAG_` / `AGENT_`
+で始まるオブジェクトをシステムオブジェクトとして扱い、表示・操作の対象にしない（3 製品が同じ schema を
+共有するため）。DeepSec の Data Grant の対象からも `PLATFORM_` を外す。
+
+## ユーザー管理・ロール管理・権限管理の分担（#206）
+
+| 画面 | URL | menu 権限 | 扱う内容 | 実装 |
+|---|---|---|---|---|
+| ユーザー管理 | `/settings/security/users` | `menu.security_users` | ユーザー、割り当てロール、ロック、一時パスワード | 3製品共通（`@engchina/production-ready-system-settings`） |
+| ロール管理 | `/settings/security/roles` | `menu.security_roles` | ロールコード・名称・説明、アーカイブ・復元・削除 | 3製品共通（同上） |
+| 権限管理 | `/settings/security/permissions` | `menu.security_permissions` | ロールごとの機能権限（`menu.*` / capability）と業務プロファイル利用権限 | NL2SQL 固有 |
+| Deep Data Security | `/settings/security/deepsec` | `menu.security_deepsec` | ロールごとの Data Grant | NL2SQL 固有 |
+
+- サイドナビは、3製品共通の「ユーザーとロール」（ユーザー管理・ロール管理）と、NL2SQL 固有の
+  「NL2SQL セキュリティ」（権限管理・Deep Data Security）に分ける。
+- API も同じ境界で分ける。`POST /api/security/roles` と `PATCH /api/security/roles/{role_id}` は
+  基本情報（`role_code` / `display_name` / `description`）だけを受け取り、権限は変更しない
+  （旧 client が `permissions` を送っても無視する）。権限の更新は
+  `PUT /api/security/roles/{role_id}/permissions`（`version` / `permissions` / `allowed_profile_ids`）で、
+  `menu.security_permissions` を要求する。`GET /api/security/permissions` と
+  `/api/security/profile-access/profiles` も `menu.security_permissions` を要求する。
+- どちらの更新も `SecurityService.update_role` を通り、省略した項目は現在値を保つ。権限昇格の防止
+  （追加する実効権限は actor 自身の実効権限の部分集合）と業務プロファイル変更の `SYSTEM_ADMIN` 限定は
+  権限の更新に対して従来どおり適用する。
+- ロールの一覧・詳細の参照（`GET /api/security/roles*`）は、ユーザー管理・ロール管理・権限管理の
+  いずれかの menu 権限で行える。アーカイブ済みを含む全ロールの参照はロール管理または権限管理を要求する。
+- 旧「ロール・権限管理」（`menu.security_roles`）を持つロールには、`app_security_migrate` の
+  migration 023 が `menu.security_permissions` を追加し、権限の付与を続けられるようにする。
+  旧 action 権限 `security.roles.manage` も両方へ正規化する。
+- ユーザー・ロールの request / response の形とパスワードポリシーは platform の
+  `pr_system_settings.users_roles` を正とし、NL2SQL は `RoleData` に権限・Data Grant・業務プロファイル
+  利用権限を足して返す。
+- ユーザーとロールは 3 製品で共有する（#212）。SYSTEM_ADMIN 以外がロールを割り当てる・復元するときは、
+  そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
+  操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
 ## ユーザー・ロールの物理削除
 
@@ -95,37 +169,37 @@ password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PAS
 migration 004 から `NL2SQL_*` object を直接作成する。005 に残る旧 prefix は移行元を識別するためだけの
 versioned legacy reference であり、runtime object 名としては使用しない。
 
-本番では少なくとも次を設定する。
+本番では少なくとも次を設定する（`NL2SQL_*` は `backend/.env`、`PLATFORM_*` は共通 `.env`。#211）。
 
 ```dotenv
-APP_AUTH_ENABLED=true
-APP_AUTH_COOKIE_SECURE=true
-APP_AUTH_IDLE_TIMEOUT_MINUTES=60
-APP_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
-APP_AUTH_FAILED_LOGIN_LIMIT=5
-APP_AUTH_LOCKOUT_MINUTES=15
+NL2SQL_APP_AUTH_ENABLED=true
+PLATFORM_AUTH_COOKIE_SECURE=true
+PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=60
+PLATFORM_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
+PLATFORM_AUTH_FAILED_LOGIN_LIMIT=5
+PLATFORM_AUTH_LOCKOUT_MINUTES=15
 ```
 
 既定では、通常ユーザーの無操作 timeout は 60 分、session の絶対有効期限は 12 時間とする。
 業務端末が管理下にあり、無人端末リスクを組織として受容できる低リスク環境でだけ、
-deployment 固有の `.env` で `APP_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示して 12 時間の無操作
+deployment 固有の `.env` で `PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示して 12 時間の無操作
 timeout に拡張できる。これは production 既定値ではない。
 
 `system_admin` 構成管理者は認証 table 未作成時の bootstrap / 運用復旧用 identity であり、
-`NL2SQL_AUTH_SESSIONS` を使わない署名 token として絶対有効期限のみを持つ。通常運用は DB に
+`PLATFORM_AUTH_SESSIONS` を使わない署名 token として絶対有効期限のみを持つ。通常運用は DB に
 永続化した application user を使い、`system_admin` は初期設定と復旧用途に限定する。
 
 ## DeepSec V001 の前提
 
-DeepSec は python-oracledb Thin mode のみ対応する。`ORACLE_DEEPSEC_ENABLED=true` の場合、
-`ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
+DeepSec は python-oracledb Thin mode のみ対応する。`NL2SQL_ORACLE_DEEPSEC_ENABLED=true` の場合、
+`PLATFORM_ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
 fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
 次の適用・検証・data-plane query から使用される。`DATA USER 認証` の保存 / `Oracle へ同期` は
 `DEEPSEC_DATA_USER` が未作成なら `CREATE END USER IF NOT EXISTS ...`、作成済みなら
 `ALTER END USER IF EXISTS ... IDENTIFIED BY ...` で DB 側の password / account unlock / schema association
-も同期する。同期に失敗した場合、backend `.env` と runtime 設定は保存前へ戻す。
+も同期する。同期に失敗した場合、`backend/.env`（`NL2SQL_ORACLE_DEEPSEC_*`）と runtime 設定は保存前へ戻す。
 
-DeepSec V001 と `DATA USER 認証` の同期を実行する `ORACLE_USER` には少なくとも `CREATE ROLE`、
+DeepSec V001 と `DATA USER 認証` の同期を実行する `PLATFORM_ORACLE_USER` には少なくとも `CREATE ROLE`、
 `CREATE END USER`、`ALTER END USER`、`CREATE DATA ROLE`、`GRANT ANY ROLE` / Data Role grant、`CREATE CONTEXT`、
 `CREATE PROCEDURE`、対象 object への `GRANT SELECT`、および DeepSec metadata view 参照権限が必要。
 `ORA-01017` が通常ユーザーの SELECT 実行時だけ発生する場合は、application RBAC ではなく
@@ -135,14 +209,14 @@ DATA USER password の漂移を疑い、Deep Data Security 画面で password �
 共通設定:
 
 ```dotenv
-ORACLE_DEEPSEC_ENABLED=true
-ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
-ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
-ORACLE_DRIVER_MODE=thin
-ORACLE_CLIENT_LIB_DIR=
-ORACLE_CONNECTION_SECURITY=wallet_mtls
-ORACLE_WALLET_DIR=<thin-mode-wallet-or-config-directory>
-ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
+NL2SQL_ORACLE_DEEPSEC_ENABLED=true
+NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
+NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
+PLATFORM_ORACLE_DRIVER_MODE=thin
+PLATFORM_ORACLE_CLIENT_LIB_DIR=
+PLATFORM_ORACLE_CONNECTION_SECURITY=wallet_mtls
+PLATFORM_ORACLE_WALLET_DIR=<thin-mode-wallet-or-config-directory>
+PLATFORM_ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
 ```
 
 Thin mTLS の Wallet / config directory には `tnsnames.ora` と `ewallet.pem` を配置する。
@@ -176,7 +250,7 @@ Data Grant SQL は backend が固定生成する。`NL2SQL_DEEPSEC_CTX_PKG.SET_A
 内部 application user UUID を検証し、DDS policy evaluator から参照できる `CLIENT_IDENTIFIER` へ設定する。
 同時に、ユーザー管理で登録したログインユーザーIDを `NL2SQL_APP_USER_CTX.LOGIN_USER_ID` へ設定する。predicate は
 `ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER` で現在の内部 application user UUID を取得し、
-`NL2SQL_APP_USER_ROLES` / `NL2SQL_APP_ROLES` /
+`PLATFORM_USER_ROLES` / `PLATFORM_ROLES` /
 `NL2SQL_APP_DATA_ENTITLEMENTS` から、その user に割り当てられた active role の policy を解決する。
 権限設定そのものは user id 単位ではなく `ROLE_ID` 単位であり、複数 role の policy は加法的に合成される。
 行 scope で値ソース「ログインユーザーID」を選んだ場合は、

@@ -232,6 +232,45 @@ async function mockParserAdapterContract(page: Page) {
   });
 }
 
+test("Docling の図・画像の読み取りが有効なら、読み取りプロンプトを編集できる", async ({ page }) => {
+  await mockParserAdapters(page, { docling_vision_enabled: true });
+  await mockParserAdapterContract(page);
+  let saved: unknown = null;
+  await page.route("**/api/settings/docrag-prompts**", async (route) => {
+    if (route.request().method() === "PUT") saved = route.request().postDataJSON();
+    const content = saved ? (saved as { content: string }).content : "既定の指示 {{image_metadata}}";
+    await route.fulfill({
+      json: {
+        data: {
+          prompts: [
+            {
+              key: "image_retrieval",
+              content,
+              default_content: "既定の指示 {{image_metadata}}",
+              customized: Boolean(saved),
+              required_placeholders: ["image_metadata"],
+              updated_at: saved ? "2026-09-26T01:00:00Z" : null,
+            },
+          ],
+          stages: [],
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/settings/parser-adapters");
+
+  const card = page.getByRole("heading", { name: "図・画像の読み取りプロンプト" }).locator("xpath=ancestor::*[.//textarea][1]");
+  await expect(card.getByText("既定値", { exact: true })).toBeVisible();
+  await card.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
+  await card.getByRole("button", { name: "プロンプトを保存" }).click();
+  await expect.poll(() => saved).toEqual({ content: "図の要点を短く {{image_metadata}}" });
+  await expect(card.getByText("プロンプトを保存しました。")).toBeVisible();
+  await expect(card.getByText(/^編集済み/)).toBeVisible();
+});
+
 test("文書解析設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/parser-adapters", async (route) => {
@@ -449,10 +488,11 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expectNoHorizontalOverflow(page);
 });
 
-async function mockParserAdapters(page: Page) {
+async function mockParserAdapters(page: Page, extra: object = {}) {
   await page.route("**/api/settings/parser-adapters", async (route) => {
     await route.fulfill({
       json: parserAdapterEnvelope({
+          ...extra,
           adapter_backend: "docling",
           effective_order: ["docling"],
           config_source: "runtime",

@@ -23,6 +23,9 @@ import {
   type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
+  type DocumentClassification,
+  type DocragPromptKey,
+  type QueryHistorySettingsData,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
@@ -762,6 +765,17 @@ export function useUpdateDocumentIngestionConfig() {
 }
 
 /** 文書のナレッジベース所属を置き換える。 */
+export function useSaveDocumentClassification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentClassification }) =>
+      api.saveDocumentClassification(id, payload),
+    onSuccess: (detail) => {
+      qc.setQueryData(queryKeys.document(detail.id), detail);
+    },
+  });
+}
+
 export function useReplaceDocumentKnowledgeBases() {
   const qc = useQueryClient();
   return useMutation({
@@ -1062,6 +1076,82 @@ export function useDocragAnswer(traceId: string | null) {
     queryKey: ["docrag-answer", traceId],
     queryFn: () => api.getDocragAnswer(traceId as string),
     enabled: Boolean(traceId),
+  });
+}
+
+/** 保存済み DocRAG 回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
+export function useEvaluateDocragAnswer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ traceId, standardAnswer }: { traceId: string; standardAnswer: string }) =>
+      api.evaluateDocragAnswer(traceId, standardAnswer),
+    onSuccess: (detail) => {
+      qc.setQueryData(["docrag-answer", detail.trace_id], detail);
+    },
+  });
+}
+
+/** 質問履歴の設定。 */
+export function useQueryHistorySettings() {
+  return useQuery({ queryKey: ["settings", "query-history"], queryFn: api.getQueryHistorySettings });
+}
+
+export function useUpdateQueryHistorySettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: QueryHistorySettingsData) => api.updateQueryHistorySettings(body),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "query-history"], data);
+      qc.invalidateQueries({ queryKey: ["query-suggestions"] });
+    },
+  });
+}
+
+/** 業務ビューでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
+export function useQuerySuggestions(
+  businessViewId: string | null,
+  query: string,
+  filters: Record<string, string>
+) {
+  return useQuery({
+    queryKey: ["query-suggestions", businessViewId, query, filters],
+    queryFn: () => api.getQuerySuggestions(businessViewId as string, query, filters),
+    enabled: Boolean(businessViewId),
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** 編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプト。 */
+export function useDocragPrompts() {
+  return useQuery({ queryKey: ["settings", "docrag-prompts"], queryFn: api.getDocragPrompts });
+}
+
+/** DocRAG プロンプトの保存(content あり)と既定値への復帰(content なし)。 */
+export function useSaveDocragPrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, content }: { key: DocragPromptKey; content: string | null }) =>
+      content === null ? api.resetDocragPrompt(key) : api.saveDocragPrompt(key, content),
+    onSuccess: (data) => qc.setQueryData(["settings", "docrag-prompts"], data),
+  });
+}
+
+/** 回答 feedback を業務ビューの Approved FAQ へ登録する(同じ質問は置き換える)。 */
+export function usePromoteFeedbackToApprovedFaq() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (feedbackId: string) => api.promoteFeedbackToApprovedFaq(feedbackId),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["business-views", result.business_view_id, "approved-faq"] });
+    },
+  });
+}
+
+/** 回答 feedback から品質評価のケースを作る。 */
+export function useFeedbackEvaluationCase() {
+  return useMutation({
+    mutationFn: (feedbackId: string) => api.getFeedbackEvaluationCase(feedbackId),
   });
 }
 

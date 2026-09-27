@@ -68,6 +68,17 @@ def _terraform_variable(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _heredoc_body(source: str, name: str) -> str:
+    match = re.search(rf"(?ms)^  {re.escape(name)} = <<-EOT\n(.*?)^EOT$", source)
+    if match is None:
+        raise AssertionError(f"locals.tf heredoc not found: {name}")
+    return match.group(1)
+
+
+def _env_keys(body: str) -> set[str]:
+    return set(re.findall(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)=", body))
+
+
 def _require_all(source: str, expected: list[str], *, context: str) -> None:
     missing = [value for value in expected if value not in source]
     if missing:
@@ -379,7 +390,7 @@ def verify(package_path: Path) -> None:
             "type: boolean",
             "required: true",
             "visible: true",
-            'title: "ORACLE_DEEPSEC_ENABLED"',
+            'title: "NL2SQL_ORACLE_DEEPSEC_ENABLED"',
             "default: true",
         ],
         context="DeepSec enabled schema",
@@ -497,14 +508,40 @@ def verify(package_path: Path) -> None:
         ["compartment_id      = var.compartment_ocid"],
         context="Compute deployment compartment",
     )
+    # 製品固有の設定は backend_env（backend/.env の NL2SQL_*）、3製品共通の設定は
+    # platform_env（platform/.env の PLATFORM_*）に分ける（#211）。
+    backend_env = _heredoc_body(locals_source, "backend_env")
+    platform_env = _heredoc_body(locals_source, "platform_env")
+    misplaced = sorted(
+        {key for key in _env_keys(backend_env) if not key.startswith("NL2SQL_")}
+        | {key for key in _env_keys(platform_env) if not key.startswith("PLATFORM_")}
+    )
+    if misplaced:
+        raise AssertionError(f"env keys are in the wrong heredoc: {misplaced}")
+    _require_all(
+        platform_env,
+        [
+            "PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}",
+            "PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}",
+            "PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}",
+            "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}",
+        ],
+        context="platform.env",
+    )
+    _require_all(
+        backend_env,
+        [
+            "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}",
+            "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
+            'var.oracle_deepsec_data_user_password : ""}',
+        ],
+        context="backend.env",
+    )
     _require_all(
         locals_source,
         [
-            "OCI_COMPARTMENT_ID=${var.compartment_ocid}",
-            "ORACLE_WALLET_DIR=${local.wallet_dir_host}",
-            "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}",
-            "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
-            'var.oracle_deepsec_data_user_password : ""}',
+            "backend_env         = base64gzip(local.backend_env)",
+            "platform_env        = base64gzip(local.platform_env)",
             'wallet_dir_host = "/u01/aipoc/wallet"',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
@@ -530,6 +567,9 @@ def verify(package_path: Path) -> None:
             'SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"',
             'APP_REPO_DIR="$${SUITE_REPO_DIR}/nl2sql"',
             'clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"',
+            'path: "/u01/aipoc/props/backend.env"',
+            'path: "/u01/aipoc/props/platform.env"',
+            "${platform_env}",
             "Nginx listens on TCP port",
         ],
         context="direct Compute bootstrap",
@@ -538,6 +578,9 @@ def verify(package_path: Path) -> None:
         init_source,
         [
             'WALLET_DIR="${APP_ROOT}/wallet"',
+            'PLATFORM_REPO_DIR="${SUITE_REPO_DIR}/platform"',
+            '"${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"',
+            '"${APP_ROOT}/props/platform.env" "${PLATFORM_REPO_DIR}/.env"',
             'chown "root:${APP_GROUP}" "${APP_ROOT}"',
             'chmod 0775 "${APP_ROOT}"',
             'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',

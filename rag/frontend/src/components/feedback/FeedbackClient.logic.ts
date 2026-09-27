@@ -4,6 +4,7 @@ import type {
   FeedbackListParams,
   FeedbackTargetType,
 } from "@/lib/api";
+import type { I18nKey } from "@/lib/i18n";
 
 export const FEEDBACK_PAGE_SIZES = [25, 50, 100] as const;
 export const FEEDBACK_PERIODS = [7, 30, 90, null] as const;
@@ -23,13 +24,35 @@ export interface FeedbackUrlState {
 
 const TARGETS = new Set<FeedbackTargetType>(["answer", "citation"]);
 const RATINGS = new Set<CitationFeedbackRating>(["helpful", "not_helpful"]);
-const REASONS = new Set<CitationFeedbackReason>([
+/** 理由の表示順（絞り込み・入力・表示で共通）。回答だけの理由は rag_poc の分類を含む。 */
+export const FEEDBACK_ANSWER_REASONS: CitationFeedbackReason[] = [
   "incorrect",
   "incomplete",
+  "missing_knowledge",
+  "outdated_source",
+  "ambiguous_question",
+  "not_relevant",
+  "answer_untrusted",
+];
+export const FEEDBACK_CITATION_REASONS: CitationFeedbackReason[] = [
   "missing_evidence",
   "not_relevant",
   "answer_untrusted",
-]);
+];
+export const FEEDBACK_REASONS: CitationFeedbackReason[] = [
+  ...new Set([...FEEDBACK_ANSWER_REASONS, ...FEEDBACK_CITATION_REASONS]),
+];
+export const FEEDBACK_REASON_LABEL_KEYS: Record<CitationFeedbackReason, I18nKey> = {
+  incorrect: "feedback.reason.incorrect",
+  incomplete: "feedback.reason.incomplete",
+  missing_evidence: "feedback.reason.missing_evidence",
+  not_relevant: "feedback.reason.not_relevant",
+  answer_untrusted: "feedback.reason.answer_untrusted",
+  missing_knowledge: "feedback.reason.missing_knowledge",
+  outdated_source: "feedback.reason.outdated_source",
+  ambiguous_question: "feedback.reason.ambiguous_question",
+};
+const REASONS = new Set<CitationFeedbackReason>(FEEDBACK_REASONS);
 
 export function parseFeedbackUrl(params: URLSearchParams): FeedbackUrlState {
   const period = params.get("period");
@@ -94,4 +117,31 @@ function validNumber(value: string | null, allowed: readonly number[], fallback:
 function integer(value: string | null, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : fallback;
+}
+
+/** 品質評価の要求（EvaluationClient の `evaluation.requestJson`）の既定。 */
+const EMPTY_EVALUATION_REQUEST = { cases: [], top_k: 10, rerank_top_n: 5, mode: "hybrid" };
+
+/**
+ * 品質評価の要求 JSON へ評価ケースを追記する（同じ id のケースは置き換える）。
+ * 未編集（null）なら新しい要求を作る。利用者が編集中の JSON が壊れている場合は上書きしない。
+ */
+export function appendEvaluationCase(
+  rawRequestJson: string | null,
+  evaluationCase: { id: string }
+): { ok: true; json: string } | { ok: false } {
+  let request: Record<string, unknown> = { ...EMPTY_EVALUATION_REQUEST };
+  if (rawRequestJson !== null) {
+    try {
+      const parsed: unknown = JSON.parse(rawRequestJson);
+      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { cases?: unknown }).cases)) {
+        return { ok: false };
+      }
+      request = parsed as Record<string, unknown>;
+    } catch {
+      return { ok: false };
+    }
+  }
+  const cases = (request.cases as { id?: unknown }[]).filter((item) => item?.id !== evaluationCase.id);
+  return { ok: true, json: JSON.stringify({ ...request, cases: [...cases, evaluationCase] }, null, 2) };
 }

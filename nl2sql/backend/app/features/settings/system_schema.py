@@ -212,15 +212,16 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
 
 # Explicitly preserved even though some names share the NL2SQL namespace.
+# PLATFORM_* は 3 製品で共有する認証テーブル（#212）。NL2SQL のシステムテーブル再作成で消さない。
 PRESERVED_TABLES = frozenset(
     {
-        "NL2SQL_APP_USERS",
-        "NL2SQL_APP_ROLES",
-        "NL2SQL_APP_USER_ROLES",
+        "PLATFORM_USERS",
+        "PLATFORM_ROLES",
+        "PLATFORM_USER_ROLES",
+        "PLATFORM_AUTH_SESSIONS",
         "NL2SQL_APP_ROLE_PERMISSIONS",
         "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
-        "NL2SQL_AUTH_SESSIONS",
         "NL2SQL_DEEPSEC_MIGRATIONS",
         "NL2SQL_FEEDBACK_VECTORS",
     }

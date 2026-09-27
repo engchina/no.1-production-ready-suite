@@ -22,6 +22,7 @@ export type WorkspaceField =
   | "search.contentKind"
   | "search.sectionTitle"
   | "search.sectionPath"
+  | "search.classification"
   | "search.topK"
   | "search.rerankTopN"
   | "search.advancedOpen"

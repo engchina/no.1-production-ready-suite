@@ -310,8 +310,8 @@ def test_v001_plan_contains_foundation_only_without_probe_flow() -> None:
     assert "NL2SQL_DEEPSEC_PROBE" not in preview
     assert "CREATE TABLE" not in preview
     assert "CREATE DATA ROLE IF NOT EXISTS NL2SQL_APP_DATA_ROLE" in preview
-    assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
-    assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_ROLES TO NL2SQL_APP_DB_ROLE" in preview
+    assert "GRANT SELECT ON APP_OWNER.PLATFORM_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
+    assert "GRANT SELECT ON APP_OWNER.PLATFORM_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS TO NL2SQL_APP_DB_ROLE" in preview
     assert "CREATE END USER" not in preview
     assert "ALTER END USER" not in preview
@@ -369,7 +369,7 @@ def test_target_objects_exclude_system_objects_and_allowlist_owners() -> None:
         object_rows=[
             ("SYS", "DUAL", "TABLE", None, "Oracle maintained"),
             ("MDSYS", "SPATIAL_TABLE", "TABLE", None, "Oracle maintained"),
-            ("APP_OWNER", "NL2SQL_APP_USERS", "TABLE", 3, "internal table"),
+            ("APP_OWNER", "PLATFORM_USERS", "TABLE", 3, "internal table"),
             ("APP_OWNER", "BUSINESS_VIEW", "VIEW", None, "business view"),
             ("OTHER", "CUSTOMERS", "TABLE", 4, "not allowlisted"),
             ("SALES", "ORDERS", "TABLE", 7, "orders"),
@@ -454,7 +454,7 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
             if "DBA_TAB_PRIVS" not in self.sql:
                 return (1,)
             table_name = str(self.params.get("table_name") or "")
-            return (0,) if table_name == "NL2SQL_APP_USER_ROLES" else (1,)
+            return (0,) if table_name == "PLATFORM_USER_ROLES" else (1,)
 
         def fetchall(self) -> list[tuple[object, ...]]:
             return []
@@ -488,7 +488,7 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
         item for item in result["checks"] if item["key"] == "predicate_table_grants"  # type: ignore[attr-defined]
     )
     assert predicate_check["passed"] is False
-    assert "NL2SQL_APP_USER_ROLES" in predicate_check["detail"]
+    assert "PLATFORM_USER_ROLES" in predicate_check["detail"]
 
 
 @pytest.mark.parametrize(
@@ -697,7 +697,7 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     assert "TO DEEPSEC_DATA_USER" not in sql
     assert "ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER" in sql
     assert "SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'APP_USER_ID')" not in sql
-    assert "APP_OWNER.NL2SQL_APP_USER_ROLES" in sql
+    assert "APP_OWNER.PLATFORM_USER_ROLES" in sql
     assert "APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS" in sql
     assert "e.ENTITLEMENT_ID = 'entitlement-sales'" in sql
     assert "e.ROLE_ID = 'role-sales'" in sql
@@ -1165,7 +1165,7 @@ def test_data_entitlement_apply_rejects_predicate_over_4000_before_oracle(
             long_role_id,
             expected_version=1,
             confirmation=DEEPSEC_APPLY_CONFIRMATION,
-            entitlements=store.roles[long_role_id].entitlements,
+            entitlements=cast(RoleRecord, store.roles[long_role_id]).entitlements,
             actor=_principal(),
         )
 
@@ -2074,9 +2074,9 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
 ) -> None:
     env_file = tmp_path / ".env"
     env_text = (
-        "ORACLE_DEEPSEC_ENABLED=true\n"
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!123\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!123\n"
     )
     env_file.write_text(env_text, encoding="utf-8")
     monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
@@ -2174,10 +2174,8 @@ def test_update_config_persists_runtime_settings_and_closes_pools(
     env_file.write_text(
         "\n".join(
             [
-                "ORACLE_USER=APP_OWNER",
-                "ORACLE_DEEPSEC_END_USER=NL2SQL_APP_END_USER",
-                "ORACLE_DEEPSEC_END_USER_PASSWORD=OldSecret123",
-                "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..example",
+                "NL2SQL_LOG_LEVEL=INFO",
+                "NL2SQL_RUNTIME_MODE=oracle",
             ]
         )
         + "\n",
@@ -2203,12 +2201,16 @@ def test_update_config_persists_runtime_settings_and_closes_pools(
     assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
     assert closed == [True]
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_USER=APP_OWNER" in env_text
-    assert "ORACLE_DEEPSEC_ENABLED=true" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER" in env_text
-    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
-    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..example" in env_text
-    assert "ORACLE_DEEPSEC_END_USER" not in env_text
+    # DeepSec の設定は製品の backend/.env の末尾に節を作って書き、他の値は残す（#211）。
+    assert env_text == (
+        "NL2SQL_LOG_LEVEL=INFO\n"
+        "NL2SQL_RUNTIME_MODE=oracle\n"
+        "\n"
+        "# Deep Data Security\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456\n"
+    )
     assert env_file.stat().st_mode & 0o777 == 0o600
 
 
@@ -2217,7 +2219,7 @@ def test_update_config_syncs_existing_data_user_password(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("ORACLE_USER=APP_OWNER\n", encoding="utf-8")
+    env_file.write_text("NL2SQL_LOG_LEVEL=INFO\n", encoding="utf-8")
     env_file.chmod(0o600)
     closed: list[bool] = []
     monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
@@ -2273,7 +2275,7 @@ def test_update_config_syncs_existing_data_user_password(
     assert PASSWORD_PLACEHOLDER not in executed_sql
     assert closed == [True]
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_text
 
 
 def test_sync_saved_config_password_uses_saved_password_and_closes_pools(
@@ -2504,7 +2506,7 @@ def test_update_config_skips_password_sync_when_data_user_is_absent(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("ORACLE_USER=APP_OWNER\n", encoding="utf-8")
+    env_file.write_text("NL2SQL_LOG_LEVEL=INFO\n", encoding="utf-8")
     env_file.chmod(0o600)
     monkeypatch.setattr("app.security.deepsec._BACKEND_ENV_FILE", env_file)
     monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: None)
@@ -2554,10 +2556,10 @@ def test_update_config_rolls_back_when_password_sync_fails(
 ) -> None:
     env_file = tmp_path / ".env"
     original_env = (
-        "ORACLE_USER=APP_OWNER\n"
-        "ORACLE_DEEPSEC_ENABLED=true\n"
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+        "PLATFORM_ORACLE_USER=APP_OWNER\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
     )
     env_file.write_text(original_env, encoding="utf-8")
     env_file.chmod(0o600)
@@ -2617,10 +2619,10 @@ def test_update_config_keeps_password_when_ora28007_probe_succeeds(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ORACLE_USER=APP_OWNER\n"
-        "ORACLE_DEEPSEC_ENABLED=true\n"
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n",
+        "PLATFORM_ORACLE_USER=APP_OWNER\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n",
         encoding="utf-8",
     )
     env_file.chmod(0o600)
@@ -2670,7 +2672,7 @@ def test_update_config_keeps_password_when_ora28007_probe_succeeds(
 
     assert status["has_data_user_password"] is True
     assert settings.oracle_deepsec_data_user_password == "DeepSecret!456"
-    assert "ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_file.read_text(
+    assert "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=DeepSecret!456" in env_file.read_text(
         encoding="utf-8"
     )
     assert login_probes == ["DeepSecret!456"]
@@ -2683,10 +2685,10 @@ def test_update_config_rolls_back_when_ora28007_probe_fails(
 ) -> None:
     env_file = tmp_path / ".env"
     original_env = (
-        "ORACLE_USER=APP_OWNER\n"
-        "ORACLE_DEEPSEC_ENABLED=true\n"
-        "ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
-        "ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
+        "PLATFORM_ORACLE_USER=APP_OWNER\n"
+        "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OldSecret!123\n"
     )
     env_file.write_text(original_env, encoding="utf-8")
     env_file.chmod(0o600)
@@ -2752,7 +2754,7 @@ def test_update_config_rejects_invalid_data_user_password(password: str) -> None
     security.bootstrap()
     service = DeepSecService(settings, security, OraclePoolManager(settings))
 
-    with pytest.raises(SecurityApiError, match="ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
+    with pytest.raises(SecurityApiError, match="NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
         service.update_config(password)
 
 
@@ -2863,14 +2865,14 @@ def test_deepsec_configuration_rejects_thick() -> None:
 
 
 def test_settings_validation_rejects_deepsec_thick_driver_mode() -> None:
-    with pytest.raises(ValueError, match="ORACLE_DRIVER_MODE=thin"):
+    with pytest.raises(ValueError, match="PLATFORM_ORACLE_DRIVER_MODE=thin"):
         Settings(oracle_deepsec_enabled=True, oracle_driver_mode="thick")
 
 
 def test_deepsec_configuration_requires_data_user_password() -> None:
     manager = OraclePoolManager(_settings(driver_mode="thin", data_user_password=""))
 
-    with pytest.raises(OracleAdapterError, match="ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
+    with pytest.raises(OracleAdapterError, match="NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD"):
         manager.validate_deepsec_configuration()
 
 

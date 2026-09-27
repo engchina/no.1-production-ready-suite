@@ -145,7 +145,7 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} /> : null}
+      {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} traceId={traceId} /> : null}
       {!streaming && !errorMessage && !docrag && savedDocrag && traceId ? (
         <details className="border-t border-border pt-1">
           <summary className="flex min-h-11 cursor-pointer items-center px-2 text-sm font-medium text-fg">

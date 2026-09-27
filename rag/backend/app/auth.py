@@ -18,7 +18,7 @@ from app.schemas.common import ApiResponse
 AUTH_ERROR_MESSAGE = "ログインしてください。"
 AUTH_CONFIG_ERROR_MESSAGE = (
     "認証設定が不足しています。"
-    "AUTH_USERNAME、AUTH_PASSWORD、AUTH_SESSION_SECRET を確認してください。"
+    "RAG_AUTH_USERNAME、RAG_AUTH_PASSWORD、RAG_AUTH_SESSION_SECRET を確認してください。"
 )
 AUTH_COOKIE_PATH = "/"
 AUTH_EXEMPT_PATHS = {"/api/health", "/api/ready"}

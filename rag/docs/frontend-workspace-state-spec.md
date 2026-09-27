@@ -29,7 +29,7 @@
 
 | 画面 | 保存する内容 | 保存方法 |
 |---|---|---|
-| RAG 検索 | 質問、対象の業務ビュー、検索方式、詳細条件（内容種別・見出し・候補取得数・Rerank 採用数・開閉） | sessionStorage |
+| RAG 検索 | 質問、対象の業務ビュー、検索方式、詳細条件（内容種別・見出し・文書の分類と基準日・候補取得数・Rerank 採用数・開閉） | sessionStorage |
 | チャット | 選択中の業務ビュー、選択中の会話、入力中のメッセージ | sessionStorage（URL の `business_view_id` / `conversation_id` を優先） |
 | 業務ビュー | 絞り込み・検索・ページ | sessionStorage |
 | 業務ビュー | 編集対象 | URL の `?id=`（なし / `new` / `<id>`。[frontend-page-archetypes-spec.md §1.1](./frontend-page-archetypes-spec.md)）。#132 の `businessViews.view.editingId` は使わず、保存値に残っていても読み捨てる |

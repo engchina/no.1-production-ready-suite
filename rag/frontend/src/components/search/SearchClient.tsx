@@ -12,6 +12,7 @@ import {
   RequiredBadge,
   SelectField,
   type SelectFieldOption,
+  TextField,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import {
@@ -52,6 +53,7 @@ import { useNowMs } from "@/lib/use-now-ms";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
+import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -162,6 +164,12 @@ export function SearchClient() {
   );
   const [sectionTitle, setSectionTitle] = useWorkspaceState("search.sectionTitle", "");
   const [sectionPath, setSectionPath] = useWorkspaceState("search.sectionPath", "");
+  const [classification, setClassification] = useWorkspaceState<ClassificationFilterValues>(
+    "search.classification",
+    EMPTY_CLASSIFICATION_FILTERS,
+    isClassificationFilterValues
+  );
+  const [classificationOpen, setClassificationOpen] = useState(false);
   const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
   const [rerankTopN, setRerankTopN] = useWorkspaceState<RerankTopNOption>(
     "search.rerankTopN",
@@ -192,8 +200,10 @@ export function SearchClient() {
     setBusinessViewIds((current) => current.filter((id) => !stale.has(id)));
   }, [staleBusinessViewKey, setBusinessViewIds]);
   const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
+  const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasFilters =
-    Boolean(contentKind) || hasSectionFilters;
+    Boolean(contentKind) || hasSectionFilters || hasClassificationFilters;
+  const classificationVisible = classificationOpen || hasClassificationFilters;
   const hasSearchTuning = topK !== DEFAULT_TOP_K || rerankTopN !== DEFAULT_RERANK_TOP_N;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
   const sectionFiltersVisible = sectionFiltersOpen || hasSectionFilters;
@@ -248,7 +258,7 @@ export function SearchClient() {
     });
 
     try {
-      const filters = buildSearchFilters({ contentKind, sectionTitle, sectionPath });
+      const filters = buildSearchFilters({ contentKind, sectionTitle, sectionPath, classification });
       setAppliedFilters(filters);
       await streamSearch(
         {
@@ -340,6 +350,8 @@ export function SearchClient() {
     setContentKind("");
     setSectionTitle("");
     setSectionPath("");
+    setClassification(EMPTY_CLASSIFICATION_FILTERS);
+    setClassificationOpen(false);
     setTopK(DEFAULT_TOP_K);
     setRerankTopN(DEFAULT_RERANK_TOP_N);
     setAdvancedOpen(false);
@@ -443,6 +455,14 @@ export function SearchClient() {
                   </Button>
                 ) : null}
               </div>
+
+              <QuerySuggestions
+                businessViewId={businessViewIds[0] ?? null}
+                query={query}
+                filters={classificationSuggestionFilters(classification)}
+                disabled={isStreaming}
+                onSelect={setQuery}
+              />
 
               <div className="space-y-1.5">
                 <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("search.pipeline")}>
@@ -570,6 +590,48 @@ export function SearchClient() {
                     </div>
                   </div>
 
+                  <div className="rounded-md border border-border bg-surface">
+                    <button
+                      type="button"
+                      aria-expanded={classificationVisible}
+                      aria-controls="search-classification-filters"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        setClassificationOpen((open) => !open);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setClassificationOpen((open) => !open);
+                      }}
+                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <span>{t("search.filters.classificationGroup")}</span>
+                      <span className="text-fg-muted" aria-hidden>{classificationVisible ? "−" : "+"}</span>
+                    </button>
+                    {classificationVisible ? (
+                      <div id="search-classification-filters" className="space-y-3 border-t border-border p-3">
+                        <p className="text-xs leading-relaxed text-fg-muted">
+                          {t("search.filters.classificationHelper")}
+                        </p>
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          {CLASSIFICATION_FILTER_KEYS.map((key) => (
+                            <TextField
+                              key={key}
+                              id={`search-${key}`}
+                              type={key === "as_of" ? "date" : "text"}
+                              label={t(`search.filters.${key}`)}
+                              value={classification[key]}
+                              onValueChange={(value) =>
+                                setClassification((current) => ({ ...current, [key]: value }))
+                              }
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="flex justify-end">
                     <Button
                       type="button"
@@ -668,7 +730,7 @@ export function SearchClient() {
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
                   {meta && phase === "done" && meta.diagnostics?.docrag ? (
-                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} />
+                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} traceId={meta.trace_id} />
                   ) : null}
                 </CardContent>
               </Card>
@@ -925,6 +987,17 @@ function activeFilterChips(filters: Record<string, string>) {
           label: t("search.filters.appliedSectionPath", { value: filters.section_path }),
         }
       : null,
+    ...CLASSIFICATION_FILTER_KEYS.map((key) =>
+      filters[key]
+        ? {
+            key,
+            label: t("search.filters.appliedClassification", {
+              label: t(`search.filters.${key}`),
+              value: filters[key],
+            }),
+          }
+        : null
+    ),
   ].flatMap((chip) => (chip ? [chip] : []));
 }
 
@@ -1284,16 +1357,50 @@ function buildSearchFilters({
   contentKind,
   sectionTitle,
   sectionPath,
+  classification,
 }: {
   contentKind: ContentKindFilter;
   sectionTitle: string;
   sectionPath: string;
+  classification: ClassificationFilterValues;
 }): Record<string, string> {
   const filters: Record<string, string> = {};
   if (contentKind) filters.content_kind = contentKind;
   if (sectionTitle.trim()) filters.section_title = sectionTitle.trim();
   if (sectionPath.trim()) filters.section_path = sectionPath.trim();
+  for (const key of CLASSIFICATION_FILTER_KEYS) {
+    if (classification[key].trim()) filters[key] = classification[key].trim();
+  }
   return filters;
+}
+
+/** 文書の分類（完全一致）と有効期間の基準日。backend の検索 filters のキーと同じ名前。 */
+const CLASSIFICATION_FILTER_KEYS = ["large_category", "middle_category", "small_category", "as_of"] as const;
+type ClassificationFilterValues = Record<(typeof CLASSIFICATION_FILTER_KEYS)[number], string>;
+const EMPTY_CLASSIFICATION_FILTERS: ClassificationFilterValues = {
+  large_category: "",
+  middle_category: "",
+  small_category: "",
+  as_of: "",
+};
+
+/** 質問の候補は分類だけで絞る（基準日は候補に関係しない）。 */
+function classificationSuggestionFilters(values: ClassificationFilterValues): Record<string, string> {
+  const filters: Record<string, string> = {};
+  for (const key of ["large_category", "middle_category", "small_category"] as const) {
+    if (values[key].trim()) filters[key] = values[key].trim();
+  }
+  return filters;
+}
+
+function isClassificationFilterValues(value: unknown): value is ClassificationFilterValues {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    CLASSIFICATION_FILTER_KEYS.every(
+      (key) => typeof (value as Record<string, unknown>)[key] === "string"
+    )
+  );
 }
 
 

@@ -172,7 +172,7 @@ variables:
     required: true
     visible: true
     title: "Login user"
-    description: "Written to AUTH_USERNAME. The RAG backend requires a Cookie session login (AUTH_MODE=production) for the UI and API."
+    description: "Written to RAG_AUTH_USERNAME. The RAG backend requires a Cookie session login (RAG_AUTH_MODE=production) for the UI and API."
     default: "rag_admin"
     pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
 
@@ -181,7 +181,7 @@ variables:
     required: true
     visible: true
     title: "Login password"
-    description: "Written to AUTH_PASSWORD. 12-64 characters with uppercase, lowercase, and digits. Quotes, backslashes, and line breaks are not allowed."
+    description: "Written to RAG_AUTH_PASSWORD. 12-64 characters with uppercase, lowercase, and digits. Quotes, backslashes, and line breaks are not allowed."
     confirmation: true
     pattern: '^[^"''\\\r\n]{12,64}$'
 
@@ -190,7 +190,7 @@ variables:
     required: true
     visible: true
     title: "Secure session cookie (HTTPS only)"
-    description: "Written to AUTH_COOKIE_SECURE. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
+    description: "Written to RAG_AUTH_COOKIE_SECURE. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
     default: false
 
   enable_parser_docling:
@@ -241,7 +241,7 @@ variables:
     required: false
     visible: true
     title: "既存のAutonomous AI Database"
-    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をbackend/.envへ反映します。"
+    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をplatform/.env（3製品共通の設定）へ反映します。"
     dependsOn:
       compartmentId: ${adb_compartment_ocid}
 
@@ -250,7 +250,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB username"
-    description: "Value written to ORACLE_USER in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_USER in platform/.env (the shared settings file)."
     default: "ADMIN"
 
   existing_oracle_password:
@@ -258,7 +258,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB password"
-    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    description: "Value written to PLATFORM_ORACLE_PASSWORD in platform/.env (the shared settings file)."
     confirmation: true
 
   existing_oracle_dsn:
@@ -266,7 +266,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example RAGADB -> ragadb_high."
+    description: "Optional. Value written to PLATFORM_ORACLE_DSN in platform/.env (the shared settings file). Leave blank to use <selected ADB db_name>_high, for example RAGADB -> ragadb_high."
 
   existing_oracle_wallet_password:
     type: password

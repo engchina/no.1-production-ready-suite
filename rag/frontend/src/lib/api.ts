@@ -125,7 +125,10 @@ export type CitationFeedbackReason =
   | "incomplete"
   | "missing_evidence"
   | "not_relevant"
-  | "answer_untrusted";
+  | "answer_untrusted"
+  | "missing_knowledge"
+  | "outdated_source"
+  | "ambiguous_question";
 export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
 export type UploadIngestionMode = "manual";
@@ -526,6 +529,17 @@ export interface DocumentDetail extends DocumentSummary {
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
+  /** 文書の分類と有効期間(検索の分類フィルタと基準日に使う)。未設定は null。 */
+  classification?: DocumentClassification | null;
+}
+
+/** 文書の分類と有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
+export interface DocumentClassification {
+  large_category: string | null;
+  middle_category: string | null;
+  small_category: string | null;
+  effective_from: string | null;
+  effective_to: string | null;
 }
 
 export interface DocumentDeleteResult {
@@ -770,7 +784,22 @@ export interface KnowledgeBaseQueryConfig {
   answer_engine?: AnswerEngineName | null;
   /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
   text_search_tokenizer?: TextSearchTokenizerName | null;
+  /** DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。null / 未指定はグローバル継承。 */
+  docrag_query_strategy?: DocragQueryStrategyName | null;
+  docrag_answer_flow?: DocragAnswerFlowName | null;
+  docrag_neighbor_child_count?: number | null;
+  docrag_rerank_enabled?: boolean | null;
 }
+
+export type DocragQueryStrategyName =
+  | "auto_routing"
+  | "simple_retrieval"
+  | "rag_fusion"
+  | "query_decomposition"
+  | "step_back_prompting"
+  | "hyde";
+
+export type DocragAnswerFlowName = "crag" | "standard_rag";
 
 export type TextSearchTokenizerName = "builtin" | "sudachi";
 
@@ -1152,6 +1181,8 @@ export interface FeedbackRequestBody {
   rating: CitationFeedbackRating;
   reason?: CitationFeedbackReason | null;
   comment?: string | null;
+  /** 修正した回答(回答を「役に立たなかった」と評価したときだけ)。 */
+  corrected_answer?: string | null;
 }
 
 export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
@@ -1230,6 +1261,46 @@ export interface FeedbackDetail extends FeedbackItem {
   comment: string | null;
   citations: FeedbackCitationSnapshot[];
   execution: FeedbackExecutionInfo;
+}
+
+/** 質問履歴の設定(rag_poc の QUERY_HISTORY_*)。 */
+export interface QueryHistorySettingsData {
+  enabled: boolean;
+  retention_days: number;
+  min_count: number;
+  suggestion_limit: number;
+  blocklist: string[];
+}
+
+export interface QuerySuggestionsData {
+  business_view_id: string;
+  enabled: boolean;
+  suggestions: { question: string; count: number }[];
+}
+
+export type DocragPromptKey = "vlm_answer" | "image_retrieval";
+
+/** 編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。 */
+export interface DocragPromptView {
+  key: DocragPromptKey;
+  content: string;
+  default_content: string;
+  customized: boolean;
+  required_placeholders: string[];
+  updated_at: string | null;
+}
+
+export interface DocragPromptsData {
+  prompts: DocragPromptView[];
+  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
+  stages: { id: string; prompts: { id: string; content: string }[] }[];
+}
+
+export interface FeedbackApprovedFaqPromotion {
+  business_view_id: string;
+  question: string;
+  inserted_count: number;
+  deleted_count: number;
 }
 
 export interface FeedbackDashboard {
@@ -2466,6 +2537,12 @@ export const api = {
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
     ),
+  saveDocumentClassification: (id: string, body: DocumentClassification) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   replaceDocumentKnowledgeBases: (
     id: string,
     body: DocumentKnowledgeBaseReplaceRequest,
@@ -2828,6 +2905,11 @@ export const api = {
     request<DocragAnswerDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
     ),
+  evaluateDocragAnswer: (traceId: string, standardAnswer: string) =>
+    request<DocragAnswerDetail>(
+      `/api/search/answers/${encodeURIComponent(traceId)}/evaluation`,
+      jsonBody({ standard_answer: standardAnswer }),
+    ),
   deleteDocragAnswer: (traceId: string) =>
     request<{ trace_id: string }>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
@@ -2927,6 +3009,36 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
+  getQueryHistorySettings: () => request<QueryHistorySettingsData>("/api/settings/query-history"),
+  updateQueryHistorySettings: (body: QueryHistorySettingsData) =>
+    request<QueryHistorySettingsData>("/api/settings/query-history", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getQuerySuggestions: (businessViewId: string, query: string, filters: Record<string, string>) =>
+    request<QuerySuggestionsData>(
+      `/api/business-views/${encodeURIComponent(businessViewId)}/query-suggestions?${new URLSearchParams({
+        q: query,
+        ...filters,
+      }).toString()}`,
+    ),
+  getDocragPrompts: () => request<DocragPromptsData>("/api/settings/docrag-prompts"),
+  saveDocragPrompt: (key: DocragPromptKey, content: string) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }),
+  resetDocragPrompt: (key: DocragPromptKey) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, { method: "DELETE" }),
+  promoteFeedbackToApprovedFaq: (id: string) =>
+    request<FeedbackApprovedFaqPromotion>(
+      `/api/feedback/${encodeURIComponent(id)}/approved-faq`,
+      { method: "POST" },
+    ),
+  getFeedbackEvaluationCase: (id: string) =>
+    request<EvaluationCase>(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>
@@ -3308,4 +3420,8 @@ export interface DocragAnswerDetail extends DocragAnswerSummary {
   answer: string;
   citations: RetrievedChunk[];
   docrag: Record<string, JsonValue>;
+  /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
+  evaluation_available?: boolean;
+  /** 標準回答による評価の結果(未評価は null)。 */
+  evaluation?: Record<string, JsonValue> | null;
 }

@@ -131,3 +131,16 @@ class RuntimeKnowledgePreviewData(BaseModel):
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
+
+
+class QuerySuggestion(BaseModel):
+    """よく聞かれる質問の候補(rag_poc の QueryHistorySuggestion)。"""
+
+    question: str
+    count: int
+
+
+class QuerySuggestionsData(BaseModel):
+    business_view_id: str
+    enabled: bool
+    suggestions: list[QuerySuggestion] = Field(default_factory=list)

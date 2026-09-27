@@ -43,7 +43,8 @@ zip の契約検証、`scripts/tests/init-script-deployment.test.sh` を実行�
   既定の DB 名は `AGENTADB`、workload は `OLTP`（Runtime checkpoint と Run lease の保存が主用途のため）です。
 
 AI の設定（OCI 認証、OCI Enterprise AI など）は stack では受け取りません。起動後にアプリケーションのシステム設定で行います。
-stack は secret を cloud-init に埋め込んで `backend/.env` を作るため、Resource Manager の stack・job 履歴・state は機密として扱ってください。
+stack は secret を cloud-init に埋め込んで `platform/.env`（3製品共通の `PLATFORM_*`）と `backend/.env`（Agent 固有の `AGENT_*`）を作るため（#211）、
+Resource Manager の stack・job 履歴・state は機密として扱ってください。
 
 ## instance 上の構成
 
@@ -51,9 +52,9 @@ stack は secret を cloud-init に埋め込んで `backend/.env` を作るた�
 |---|---|
 | 公開 port | `application_port`（既定 `80`）。Nginx が `frontend/dist` を配信し、`/api/` を backend へ proxy |
 | backend | `production-ready-agent-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8020`、1 worker） |
-| 設定 | `/u01/aipoc/no.1-production-ready-suite/agent/backend/.env` |
+| 設定 | 共通 `/u01/aipoc/no.1-production-ready-suite/platform/.env`（`PLATFORM_*`: Oracle 接続・OCI・モデル・アップロード保存先）と Agent `/u01/aipoc/no.1-production-ready-suite/agent/backend/.env`（`AGENT_*`）。どちらも `ubuntu:ubuntu 0600` |
 | Wallet | `/u01/aipoc/wallet`（`ubuntu:ubuntu 0700`、file は `0600`） |
-| データ | `/u01/data/production-ready-agent`（model 設定、Binding、Artifact） |
+| データ | `/u01/data/production-ready-agent`（model 設定 `model-settings.json`（`PLATFORM_MODEL_SETTINGS_FILE`）、Binding、Artifact） |
 | ログ | `/var/log/cloud-init-custom.log`、`/var/log/agent-init.log`、`journalctl -u production-ready-agent-backend` |
 
 - Runtime 状態は Oracle に保存します（`AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint`）。
@@ -62,6 +63,10 @@ stack は secret を cloud-init に埋め込んで `backend/.env` を作るた�
 - dispatcher は `in_process`、gunicorn は 1 worker に固定します。checkpoint repository は process 内に状態を持つため、
   複数 worker や外部 dispatcher（`runtime-dispatcher`）を同時に動かすと状態がずれます。
 - backend は起動時に Oracle へ接続します。ADB に届かない場合 backend は起動せず、systemd が再試行します。
+
+cloud-init は `/u01/aipoc/props/platform.env` と `/u01/aipoc/props/backend.env`（root `0600`）を書き、
+`init_script.sh` がそれぞれ `platform/.env` と `agent/backend/.env` へ置きます。
+既存 instance を #211 の構成へ更新する手順は [../README.md](../README.md) の「既存環境の更新手順（#211）」を参照してください。
 
 ## トラブルシューティング
 

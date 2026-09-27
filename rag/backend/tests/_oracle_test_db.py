@@ -1,6 +1,6 @@
 """実 Oracle 26ai を使う統合テスト用のヘルパー。
 
-`backend/.env` の接続情報で実 DB に接続し、RAG スキーマの存在保証と
+共通 `platform/.env`（`PLATFORM_ORACLE_*`）の接続情報で実 DB に接続し、RAG スキーマの存在保証と
 テストが作成した行のクリーンアップを提供する。DB が未到達の環境では
 `db_available()` が False を返し、依存テストは skip できる。
 """
@@ -17,7 +17,8 @@ from app.clients.oracle import _init_oracle_client, _oracle_connect_kwargs
 from app.config import Settings
 from app.rag.system_schema import SystemSchemaManager
 
-# .env を読み込んだ実接続設定（テスト中に singleton が書き換わっても影響を受けない）
+# 共通 .env / backend/.env を読み込んだ実接続設定
+# （テスト中に singleton が書き換わっても影響を受けない）
 _REAL_SETTINGS = Settings()
 
 # 既存（テスト開始前から存在する）ドキュメント ID。実運用データを誤って消さない基準。
@@ -42,7 +43,7 @@ def apply_real_oracle_settings(settings: Settings) -> None:
 
 def _connect() -> Any:
     oracledb = importlib.import_module("oracledb")
-    # ORACLE_CLIENT_LIB_DIR を指定した実 DB は thick client を使う。thin 接続を先に作ると
+    # PLATFORM_ORACLE_CLIENT_LIB_DIR を指定した実 DB は thick client を使う。thin 接続を先に作ると
     # アプリ側の thick 初期化が DPY-2019 で失敗するため、connect 前に初期化する
     # (冪等。既定の thin では何もしない)。
     _init_oracle_client(oracledb, _REAL_SETTINGS)
