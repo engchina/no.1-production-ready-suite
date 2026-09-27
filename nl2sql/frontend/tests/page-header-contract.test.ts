@@ -22,7 +22,8 @@ const migratedPages = [
   "../src/features/nl2sql/pages/SqlToQuestionPage.tsx",
   "../../../platform/packages/system-settings/src/users-roles/UserManagementPage.tsx",
   "../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx",
-  "../src/features/security/SecurityPermissionsPage.tsx",
+  // 権限管理の画面の実体は platform の共通 RolePermissionsPage（#220）。
+  "../../../platform/packages/system-settings/src/permissions/RolePermissionsPage.tsx",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 
 const pageHeaderStatusPages = [
