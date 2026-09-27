@@ -26,18 +26,13 @@ output "autonomous_database_high_connection_string" {
 # 配備しなかった製品の output は null（Resource Manager では表示されない）。
 
 output "rag_application_url" {
-  description = "Production Ready RAG URL (log in with rag_app_login_user)."
+  description = "Production Ready RAG URL (log in with system_admin and app_admin_login_user_password)."
   value       = lookup(local.application_urls, "rag", null)
 }
 
 output "rag_ssh_to_instance" {
   description = "SSH command for the RAG Compute instance."
   value       = contains(keys(local.instance_access_ips), "rag") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["rag"]}" : null
-}
-
-output "rag_app_login_user" {
-  description = "Login user name of the RAG application."
-  value       = var.deploy_rag ? var.rag_app_login_user : null
 }
 
 output "rag_compose_services" {

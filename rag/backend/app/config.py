@@ -228,14 +228,29 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     app_version: str = Field(default="0.1.0")
     auth_mode: AuthMode = Field(
         default="local",
-        description="local では認証を無効化し、production ではログインを必須にする。",
+        description=(
+            "local は全権限・対象範囲の制限なしのローカル利用者として動かす（ログイン不要）。"
+            "production は共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。"
+        ),
     )
-    auth_username: str = Field(default="")
-    auth_password: str = Field(default="")
-    auth_session_secret: str = Field(default="")
-    auth_session_timeout_seconds: int = Field(default=24 * 60 * 60, ge=60, le=30 * 24 * 60 * 60)
-    auth_cookie_name: str = Field(default="production_ready_rag_session")
-    auth_cookie_secure: bool = Field(default=False)
+    # --- 共通認証（platform の pr_system_settings.auth。#214）---
+    # 構成管理者と認証ポリシーは共通 `.env` の PLATFORM_ADMIN_* / PLATFORM_AUTH_*（#211）、
+    # Cookie 名は製品ごとの RAG_APP_AUTH_*。構成管理者 token の署名鍵に service_name を使う。
+    service_name: str = Field(default="production-ready-rag")
+    app_admin_login_user_id: str = Field(default="")
+    app_admin_login_user_password: str = Field(default="")
+    app_auth_cookie_secure: bool = Field(default=False)
+    app_auth_session_cookie_name: str = Field(default="rag_session")
+    app_auth_csrf_cookie_name: str = Field(default="rag_csrf")
+    app_auth_idle_timeout_minutes: int = Field(default=60)
+    app_auth_absolute_timeout_hours: int = Field(default=12)
+    app_auth_failed_login_limit: int = Field(default=5)
+    app_auth_lockout_minutes: int = Field(default=15)
+    app_auth_password_min_length: int = Field(default=12)
+    app_auth_password_max_length: int = Field(default=128)
+    app_auth_argon2_time_cost: int = Field(default=3)
+    app_auth_argon2_memory_kib: int = Field(default=65536)
+    app_auth_argon2_parallelism: int = Field(default=4)
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",
@@ -1723,6 +1738,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ):
             raise ValueError("RAG_CHUNK_MIN_CHARS は RAG_CHUNK_SIZE より小さくしてください。")
         return self
+
+    @property
+    def local_debug_enabled(self) -> bool:
+        """local mode: 全権限・対象範囲の制限なしのローカル利用者（DB セッションを作らない）。"""
+        return self.auth_mode == "local"
+
+    @property
+    def app_auth_enabled(self) -> bool:
+        """production mode: 共通認証のログインを必須にする。"""
+        return self.auth_mode == "production"
 
     @property
     def oracle_driver_mode(self) -> str:

@@ -225,7 +225,7 @@ set_env_value() {
 }
 
 # rag/backend/.env（RAG_*）は docker compose の env_file。値は Resource Manager の入力から作り、
-# 空の RAG_AUTH_SESSION_SECRET / RAG_AUDIT_CONTEXT_HASH_SALT だけを instance 上で生成した値で補う。
+# 空の RAG_AUDIT_CONTEXT_HASH_SALT だけを instance 上で生成した値で補う。
 # platform/.env（PLATFORM_*、3製品共通）はシステム設定画面の保存先でもあるため、既にあれば上書きしない
 # （画面で保存した API key などを再実行で消さない）。
 install_runtime_env() {
@@ -242,10 +242,6 @@ install_runtime_env() {
   log "Installing backend environment."
   install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" "${env_file}"
 
-  current="$(sed -n 's/^RAG_AUTH_SESSION_SECRET=//p' "${env_file}" | tail -n 1)"
-  if [ -z "${current}" ]; then
-    set_env_value "${env_file}" RAG_AUTH_SESSION_SECRET "$(ensure_generated_secret "${PROPS_DIR}/auth_session_secret")"
-  fi
   current="$(sed -n 's/^RAG_AUDIT_CONTEXT_HASH_SALT=//p' "${env_file}" | tail -n 1)"
   if [ -z "${current}" ]; then
     set_env_value "${env_file}" RAG_AUDIT_CONTEXT_HASH_SALT "$(ensure_generated_secret "${PROPS_DIR}/audit_context_hash_salt")"
@@ -387,7 +383,7 @@ EOF
   systemctl restart "${COMPOSE_SERVICE}"
 }
 
-# RAG の backend は Cookie session の login（RAG_AUTH_MODE=production）で UI と API を保護する。
+# RAG の backend は共通認証の login（RAG_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー）で UI と API を保護する。
 # Nginx には認証を置かず、frontend の配信と /api/ の proxy（SSE のため buffering 無効）だけを行う。
 configure_nginx() {
   log "Configuring Nginx on port ${APPLICATION_PORT}."

@@ -26,7 +26,7 @@ Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql`
 
 - **最低1つは選んでください。** 1つも選ばないと plan が precondition で失敗します。
 - 選んだ製品の入力グループ（`RAG` / `NL2SQL` / `NL2SQL Deep Data Security` / `Agent Control Plane`）だけがフォームに表示されます。
-- 選んだ製品のパスワード（`rag_app_login_password` / `nl2sql_app_admin_login_user_password` / `agent_app_basic_auth_password`）は必須です。
+- 選んだ製品に必要なパスワードは必須です。RAG か NL2SQL を選んだら `app_admin_login_user_password`（構成管理者 `system_admin`、RAG と NL2SQL で共通）、Agent を選んだら `agent_app_basic_auth_password`。
   選ばなかった製品のパスワードは空で構いません。
 - 後から製品を追加・削除するときは、同じ stack で選択を変えて apply します。選択を外した製品の Compute は削除され、ADB と他製品の Compute はそのまま残ります。
 
@@ -65,9 +65,9 @@ stack は secret を cloud-init に埋め込んで `backend/.env` と共通 `pla
 RAG は文書の前処理と解析を独立したマイクロサービスで動かすため（parser ごとに依存が大きく異なり、同じ Python 環境に同居できないものもある）、
 Compute に直接インストールせず [`rag/docker-compose.yml`](../rag/docker-compose.yml) を使います。
 
-- ログイン: backend の Cookie session login（`RAG_AUTH_MODE=production`）。`rag_app_login_user`（既定 `rag_admin`）→ `RAG_AUTH_USERNAME`、
-  `rag_app_login_password`（12〜64 文字、英大文字・小文字・数字を含む）→ `RAG_AUTH_PASSWORD`。
-  `rag_app_auth_cookie_secure` は HTTPS の終端を前に置いたら `true` にします。`RAG_AUTH_SESSION_SECRET` と `RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
+- ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
+  「ユーザーとロール」でユーザーとロールを作り、「RAG セキュリティ > 権限管理」でロールごとのメニュー・業務ビュー・ナレッジベースを設定します。
+  `rag_app_auth_cookie_secure`（→ `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
 - 文書解析は CPU の parser だけを配備します。GPU の parser（MinerU / Dots.OCR / GLM-OCR / Unlimited-OCR）は含めず、
   起動後に「検索・回答設定 > 文書解析」で外部 API として指定します。
 
@@ -97,7 +97,7 @@ sudo systemctl restart production-ready-rag
 
 ### NL2SQL（`deploy_nl2sql`）
 
-- ログイン: 組み込みの `SYSTEM_ADMIN`（ユーザー ID は `system_admin` 固定）。`nl2sql_app_admin_login_user_password`（12〜30 文字、`admin` と `"` を含まない）。
+- ログイン: 構成管理者 `SYSTEM_ADMIN`（ユーザー ID は `system_admin` 固定、RAG と共通）。`app_admin_login_user_password`（12〜30 文字、`admin` と `"` を含まない）。
 - Deep Data Security: `nl2sql_oracle_deepsec_enabled`（既定 `true`）。有効な場合は `nl2sql_oracle_deepsec_data_user_password` が必要です。
 - Nginx + systemd に直接配備します（Docker は使いません）。Compute の既定は 2 OCPU / 16 GB / 100 GB。
 - instance 上の構成・更新手順・障害対応は [nl2sql/docs/compute-operations.md](../nl2sql/docs/compute-operations.md) を参照してください。
@@ -169,10 +169,10 @@ CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` 
 
 | 旧（製品ごとの stack） | 新（統合 stack） |
 |---|---|
-| RAG の `app_login_user` / `app_login_password` / `app_auth_cookie_secure` | `rag_app_login_user` / `rag_app_login_password` / `rag_app_auth_cookie_secure` |
+| RAG の `app_login_user` / `app_login_password` / `app_auth_cookie_secure` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#214） / 廃止 / `rag_app_auth_cookie_secure` |
 | RAG の `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers` | `rag_enable_parser_*` / `rag_enable_oci_cloud_parsers` |
-| NL2SQL の `app_admin_login_user_password` / `oracle_deepsec_enabled` / `oracle_deepsec_data_user_password` | `nl2sql_app_admin_login_user_password` / `nl2sql_oracle_deepsec_enabled` / `nl2sql_oracle_deepsec_data_user_password` |
-| NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `nl2sql_app_environment` / `nl2sql_app_auth_cookie_secure` / `nl2sql_app_admin_login_user_id` |
+| NL2SQL の `app_admin_login_user_password` / `oracle_deepsec_enabled` / `oracle_deepsec_data_user_password` | `app_admin_login_user_password`（RAG と共通） / `nl2sql_oracle_deepsec_enabled` / `nl2sql_oracle_deepsec_data_user_password` |
+| NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `nl2sql_app_environment` / `nl2sql_app_auth_cookie_secure` / `app_admin_login_user_id`（RAG と共通） |
 | Agent の `app_basic_auth_user` / `app_basic_auth_password` | `agent_app_basic_auth_user` / `agent_app_basic_auth_password` |
 | `instance_display_name` / `instance_flex_shape_ocpus` / `instance_flex_shape_memory` / `instance_boot_volume_size` | `<製品>_instance_display_name` / `<製品>_instance_flex_shape_ocpus` / `<製品>_instance_flex_shape_memory` / `<製品>_instance_boot_volume_size` |
 | `adb_name` の既定 `RAGADB` / `NL2SQLADB` / `AGENTADB` | `SUITEADB` |

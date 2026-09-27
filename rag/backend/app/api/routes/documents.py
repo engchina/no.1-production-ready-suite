@@ -51,6 +51,7 @@ from app.rag.kb_adapter_config import (
 )
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import (
     compute_chunk_set_id,
@@ -313,6 +314,17 @@ async def _store_uploaded_document(
 ) -> UploadResult:
     """単一 UploadFile を保存し、取込前の upload result を返す。"""
     settings = get_settings()
+    selected_knowledge_base_ids = _normalize_upload_knowledge_base_ids(knowledge_base_ids)
+    if (
+        not selected_knowledge_base_ids
+        and current_audit_request_context().allowed_knowledge_base_ids is not None
+    ):
+        # 利用できる KB が制限された利用者は、KB を指定しないと DEFAULT KB に入り、
+        # 自分では見えない文書になる（#214）。
+        raise HTTPException(
+            status_code=400,
+            detail="アップロード先のナレッジベースを指定してください。",
+        )
     content_type = _normalized_content_type(file.content_type)
     original_file_name = file.filename or "document.bin"
     file_name = _safe_display_filename(original_file_name)
@@ -330,7 +342,6 @@ async def _store_uploaded_document(
     storage = ObjectStorageClient()
     oracle = OracleClient()
     content_sha256 = _sha256_hex(data)
-    selected_knowledge_base_ids = _normalize_upload_knowledge_base_ids(knowledge_base_ids)
     duplicate = await oracle.find_document_by_content_hash(content_sha256)
     source_profile = build_source_profile(
         original_file_name=original_file_name,

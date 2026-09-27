@@ -19,6 +19,7 @@ from app.api.routes.search import (
     _answer_chunks,
     _resolve_query_context,
     _sse_event,
+    ensure_business_view_knowledge_bases_permitted,
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient, StoredConversation, StoredMessage
@@ -248,6 +249,10 @@ async def stream_message(
             status_code=409,
             detail="アーカイブ済みの業務ビューではチャットできません。",
         )
+    # 業務ビューの参照 KB が 1 つも利用できないなら、stream を始める前に 403 にする（#214）。
+    view_config = getattr(view, "config", None)
+    if view_config is not None:
+        ensure_business_view_knowledge_bases_permitted(view_config.normalized_knowledge_base_ids())
     return StreamingResponse(
         _stream_chat_events(conversation_id, conversation.business_view_id, request, settings),
         media_type="text/event-stream",

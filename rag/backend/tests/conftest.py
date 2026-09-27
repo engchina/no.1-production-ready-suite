@@ -23,6 +23,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.security.service import set_security_service
 from tests import _ai_stubs, _oracle_test_db
 from tests.support import TEST_REQUEST_HEADERS
 
@@ -48,6 +49,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path / ".env")
     monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_API_KEY", raising=False)
     reset_local_store()
+    set_security_service(None)
     reset_rate_limiter()
     reset_guardrail_static_cache()
     _reset_runtime_settings(get_settings(), tmp_path)
@@ -117,11 +119,9 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.max_upload_bytes = 200 * 1024 * 1024
     settings.rate_limit_enabled = True
     settings.auth_mode = "local"
-    settings.auth_username = ""
-    settings.auth_password = ""
-    settings.auth_session_secret = ""
-    settings.auth_session_timeout_seconds = 24 * 60 * 60
-    settings.auth_cookie_secure = False
+    settings.app_admin_login_user_id = ""
+    settings.app_admin_login_user_password = ""
+    settings.app_auth_cookie_secure = False
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""

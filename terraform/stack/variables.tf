@@ -482,41 +482,8 @@ variable "rag_instance_boot_volume_size" {
   }
 }
 
-variable "rag_app_login_user" {
-  description = "Login user name for the RAG application (RAG_AUTH_USERNAME). The backend requires a Cookie session login (RAG_AUTH_MODE=production)."
-  type        = string
-  default     = "rag_admin"
-
-  validation {
-    condition     = can(regex("^[A-Za-z][A-Za-z0-9_.-]{2,31}$", var.rag_app_login_user))
-    error_message = "rag_app_login_user must start with a letter and contain 3-32 letters, digits, underscores, dots, or hyphens."
-  }
-}
-
-variable "rag_app_login_password" {
-  description = "Login password for the RAG application (RAG_AUTH_PASSWORD). Required when deploy_rag is true."
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition = (
-      var.rag_app_login_password == ""
-      || (
-        length(var.rag_app_login_password) >= 12
-        && length(var.rag_app_login_password) <= 64
-        && !can(regex("[\r\n\"'\\\\]", var.rag_app_login_password))
-        && can(regex("[0-9]", var.rag_app_login_password))
-        && can(regex("[a-z]", var.rag_app_login_password))
-        && can(regex("[A-Z]", var.rag_app_login_password))
-      )
-    )
-    error_message = "rag_app_login_password must be 12-64 characters, include uppercase, lowercase, and digits, and not contain quotes, backslashes, or line breaks."
-  }
-}
-
 variable "rag_app_auth_cookie_secure" {
-  description = "Send the RAG login session cookie only over HTTPS (RAG_AUTH_COOKIE_SECURE). Keep false while the application is served over plain HTTP."
+  description = "Send the RAG login session cookies only over HTTPS (PLATFORM_AUTH_COOKIE_SECURE in the RAG Compute platform/.env). Keep false while the application is served over plain HTTP."
   type        = bool
   default     = false
 }
@@ -602,38 +569,38 @@ variable "nl2sql_app_auth_cookie_secure" {
   default     = false
 }
 
-variable "nl2sql_app_admin_login_user_id" {
-  description = "Fixed login user ID for the built-in NL2SQL SYSTEM_ADMIN configuration administrator."
+variable "app_admin_login_user_id" {
+  description = "Fixed login user ID of the configuration administrator (SYSTEM_ADMIN) shared by RAG and NL2SQL (PLATFORM_ADMIN_LOGIN_USER_ID)."
   type        = string
   default     = "system_admin"
 
   validation {
-    condition     = var.nl2sql_app_admin_login_user_id == "system_admin"
-    error_message = "nl2sql_app_admin_login_user_id is fixed and must be exactly system_admin."
+    condition     = var.app_admin_login_user_id == "system_admin"
+    error_message = "app_admin_login_user_id is fixed and must be exactly system_admin."
   }
 }
 
-variable "nl2sql_app_admin_login_user_password" {
-  description = "Login password for the built-in NL2SQL SYSTEM_ADMIN configuration administrator. Required when deploy_nl2sql is true."
+variable "app_admin_login_user_password" {
+  description = "Login password of the configuration administrator (system_admin) shared by RAG and NL2SQL (PLATFORM_ADMIN_LOGIN_USER_PASSWORD). Required when deploy_rag or deploy_nl2sql is true."
   type        = string
   sensitive   = true
   default     = ""
 
   validation {
     condition = (
-      var.nl2sql_app_admin_login_user_password == ""
+      var.app_admin_login_user_password == ""
       || (
-        length(var.nl2sql_app_admin_login_user_password) >= 12
-        && length(var.nl2sql_app_admin_login_user_password) <= 30
-        && !can(regex("[\r\n]", var.nl2sql_app_admin_login_user_password))
-        && !can(regex("\"", var.nl2sql_app_admin_login_user_password))
-        && !can(regex("admin", var.nl2sql_app_admin_login_user_password))
-        && can(regex("[0-9]", var.nl2sql_app_admin_login_user_password))
-        && can(regex("[a-z]", var.nl2sql_app_admin_login_user_password))
-        && can(regex("[A-Z]", var.nl2sql_app_admin_login_user_password))
+        length(var.app_admin_login_user_password) >= 12
+        && length(var.app_admin_login_user_password) <= 30
+        && !can(regex("[\r\n]", var.app_admin_login_user_password))
+        && !can(regex("\"", var.app_admin_login_user_password))
+        && !can(regex("admin", var.app_admin_login_user_password))
+        && can(regex("[0-9]", var.app_admin_login_user_password))
+        && can(regex("[a-z]", var.app_admin_login_user_password))
+        && can(regex("[A-Z]", var.app_admin_login_user_password))
       )
     )
-    error_message = "nl2sql_app_admin_login_user_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
+    error_message = "app_admin_login_user_password must be 12-30 characters, include uppercase, lowercase, and digits, not include admin or double quotes, and not contain line breaks."
   }
 }
 

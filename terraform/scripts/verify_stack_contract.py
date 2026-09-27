@@ -48,15 +48,14 @@ HIDDEN_VARIABLES = [
     "adb_is_mtls_connection_required",
     "nl2sql_app_environment",
     "nl2sql_app_auth_cookie_secure",
-    "nl2sql_app_admin_login_user_id",
+    "app_admin_login_user_id",
     "agent_runtime_repository_backend",
 ]
 SECRET_VARIABLES = [
     "adb_password",
     "existing_oracle_password",
     "existing_oracle_wallet_password",
-    "rag_app_login_password",
-    "nl2sql_app_admin_login_user_password",
+    "app_admin_login_user_password",
     "nl2sql_oracle_deepsec_data_user_password",
     "agent_app_basic_auth_password",
     "agent_control_plane_mcp_token_secret",
@@ -70,10 +69,11 @@ PRODUCT_GROUPS = {
 }
 # 製品を選ばないとフォームから消えるため、Resource Manager では任意入力にして Terraform の precondition で必須にする。
 PRODUCT_PASSWORDS = {
-    "rag": "rag_app_login_password",
-    "nl2sql": "nl2sql_app_admin_login_user_password",
     "agent": "agent_app_basic_auth_password",
 }
+# RAG と NL2SQL の構成管理者（system_admin。共通 .env の PLATFORM_ADMIN_*）のパスワードは共通の入力（#214）。
+ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
+ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql")
 
 # RAG の Compute が常に build・起動する compose の service（CPU だけ）と、任意で足せる service。
 RAG_BASE_COMPOSE_SERVICES = [
@@ -109,10 +109,6 @@ REQUIRED_BACKEND_ENV_LINES = {
     # RAG の env_file は compose が `$` を展開するため、入力由来の値を single quote で囲む。
     "rag": [
         "RAG_AUTH_MODE=production\n",
-        "RAG_AUTH_USERNAME='${var.rag_app_login_user}'\n",
-        "RAG_AUTH_PASSWORD='${var.rag_app_login_password}'\n",
-        "RAG_AUTH_SESSION_SECRET=\n",
-        "RAG_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n",
         "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
         "RAG_PARSER_ADAPTER_BACKEND=unstructured\n",
         "RAG_SERVICE_CONTROL_ENABLED=false\n",
@@ -151,15 +147,13 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
     "PLATFORM_ORACLE_WALLET_PASSWORD='${local.effective_oracle_wallet_password}'\n",
     "PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
+    "PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}\n",
+    "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}\n",
 ]
 # 製品ごとの共通 .env の差分に必ず書く値（NL2SQL は構成管理者と認証ポリシー）。
 REQUIRED_PLATFORM_ENV_PRODUCT_LINES = {
-    "rag": [],
-    "nl2sql": [
-        "PLATFORM_ADMIN_LOGIN_USER_ID=${var.nl2sql_app_admin_login_user_id}\n",
-        "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.nl2sql_app_admin_login_user_password}\n",
-        "PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n",
-    ],
+    "rag": ["PLATFORM_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n"],
+    "nl2sql": ["PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n"],
     "agent": [],
 }
 PRODUCT_ENV_PREFIXES = {"rag": "RAG_", "nl2sql": "NL2SQL_", "agent": "AGENT_"}
@@ -456,6 +450,16 @@ def _verify_schema(schema: str, variables: str) -> None:
             ["type: password", "required: false", f"visible: deploy_{product}", "confirmation: true", "pattern: '^$|"],
             context=f"{name} schema",
         )
+    admin_group_visible = "or:\n" + "".join(f"        - deploy_{product}\n" for product in ADMIN_PASSWORD_PRODUCTS)
+    visible, members = groups.get("アプリケーション管理者", ("", []))
+    if visible + "\n" != admin_group_visible or members != [ADMIN_PASSWORD_VARIABLE]:
+        raise AssertionError("the administrator group must hold only the shared admin password for RAG / NL2SQL")
+    _require_all(
+        _schema_variable(schema, ADMIN_PASSWORD_VARIABLE),
+        ["type: password", "required: false", "visible:\n      or:\n        - deploy_rag\n        - deploy_nl2sql\n",
+         "confirmation: true", "pattern: '^$|"],
+        context=f"{ADMIN_PASSWORD_VARIABLE} schema",
+    )
     _require_all(
         _schema_variable(schema, "nl2sql_oracle_deepsec_data_user_password"),
         ["- deploy_nl2sql", "- nl2sql_oracle_deepsec_enabled", "confirmation: true"],
@@ -475,6 +479,7 @@ def _verify_schema(schema: str, variables: str) -> None:
             "- title: Existing Autonomous AI Database",
             '- title: "ネットワーク・アクセス"',
             "- title: RAG",
+            '- title: "アプリケーション管理者"',
             "- title: NL2SQL",
             '- title: "NL2SQL Deep Data Security"',
             "- title: Agent Control Plane",
@@ -570,11 +575,6 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             [f"!can(regex(\"[\\r\\n']\", var.{name}))"],
             context=f"{name} single quote validation",
         )
-    _require_all(
-        _terraform_variable(variables, "rag_app_login_password"),
-        ["!can(regex(\"[\\r\\n\\\"'\\\\\\\\]\", var.rag_app_login_password))"],
-        context="rag_app_login_password quote validation",
-    )
 
     _require_all(
         adb,
@@ -612,8 +612,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "for_each = local.selected_products",
             "compartment_id      = var.compartment_ocid",
             'user_data"           = local.cloud_init_user_data[each.key]',
-            'each.key != "rag" || trimspace(var.rag_app_login_password) != ""',
-            'each.key != "nl2sql" || trimspace(var.nl2sql_app_admin_login_user_password) != ""',
+            '!contains(["rag", "nl2sql"], each.key) || trimspace(var.app_admin_login_user_password) != ""',
             'each.key != "nl2sql" || !var.nl2sql_oracle_deepsec_enabled',
             'each.key != "agent" || trimspace(var.agent_app_basic_auth_password) != ""',
         ],
@@ -693,11 +692,11 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
     compose_owned = sorted(set(rag_keys) & RAG_COMPOSE_OWNED_ENV_KEYS)
     if compose_owned:
         raise AssertionError(f"RAG .env must not set keys owned by docker-compose.yml: {compose_owned}")
+    # RAG の backend/.env は compose の env_file で、compose が `$` を展開する。入力値を書くなら single quote で囲む。
     for line in rag_env.splitlines():
         key, _, value = line.partition("=")
-        if re.search(r"\$\{var\.rag_app_login_", value):
-            if not (value.startswith("'") and value.endswith("'")):
-                raise AssertionError(f"RAG backend/.env value must be single-quoted: {key}")
+        if re.search(r"\$\{var\.", value) and not (value.startswith("'") and value.endswith("'")):
+            raise AssertionError(f"RAG backend/.env value must be single-quoted: {key}")
 
     _verify_rag_compose_services(locals_source)
 

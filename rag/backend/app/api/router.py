@@ -1,9 +1,13 @@
-"""API ルーターの集約。"""
+"""API ルーターの集約。
 
-from fastapi import APIRouter
+`/api` の全 route は `authorize_api_request`（fail-closed の認証/RBAC。#214）を通る。
+公開 path（`/health` `/ready` `/ready/database` `/auth/login`）以外はログインと、
+権限 manifest（`app.security.permissions`）の権限が必要。未定義の path は 404 のまま。
+"""
+
+from fastapi import APIRouter, Depends
 
 from app.api.routes import (
-    auth,
     business_view_knowledge,
     business_views,
     chat,
@@ -17,10 +21,13 @@ from app.api.routes import (
     services,
     settings,
 )
+from app.security.dependencies import authorize_api_request
+from app.security.router import router as security_router
 
-api_router = APIRouter()
+api_router = APIRouter(dependencies=[Depends(authorize_api_request)])
 api_router.include_router(health.router, tags=["health"])
-api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+# 認証（/auth/*）・ユーザー管理・ロール管理（platform の共通 router）と RAG の権限管理。
+api_router.include_router(security_router)
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(

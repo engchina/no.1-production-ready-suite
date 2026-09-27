@@ -1,0 +1,476 @@
+"""RAG の権限カタログと API の権限 manifest（#214）。
+
+- `PERMISSION_CATALOG`: ロールに付けられる権限（メニュー権限と capability）。
+- `permission_for_route(method, path)`: API（method × route template）→ 必要な権限の集合
+  （いずれか 1 つを持てばよい）。**既定は拒否**で、登録外の API は `UNCLASSIFIED_PERMISSION`
+  を返し、認可で 403 にする。公開 API とログインだけで使える API は None を返す。
+
+システム設定・ユーザーとロールの共通メニューは NL2SQL と同じコード・グループ名を使う
+（3 製品共通の画面。#206）。権限管理は「RAG セキュリティ」の製品固有メニュー。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from pr_system_settings.auth.dependencies import UNCLASSIFIED_PERMISSION as UNCLASSIFIED_PERMISSION
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionDefinition:
+    code: str
+    group: str
+    label: str
+    description: str
+    implies: tuple[str, ...] = ()
+
+
+def _permission(
+    code: str,
+    group: str,
+    label: str,
+    description: str,
+    *,
+    implies: tuple[str, ...] = (),
+) -> PermissionDefinition:
+    return PermissionDefinition(code, group, label, description, implies)
+
+
+def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
+    return _permission(code, group, label, f"{label}を表示し、関連操作を利用できます。")
+
+
+# ---- メニュー権限 ----
+
+MENU_SEARCH = "menu.search"
+MENU_CHAT = "menu.chat"
+MENU_BUSINESS_VIEWS = "menu.business_views"
+MENU_EVALUATION = "menu.evaluation"
+MENU_FEEDBACK = "menu.feedback"
+MENU_DASHBOARD = "menu.dashboard"
+MENU_UPLOAD = "menu.upload"
+MENU_FILE_LIST = "menu.file_list"
+MENU_KNOWLEDGE_BASES = "menu.knowledge_bases"
+MENU_SETTINGS_PIPELINE = "menu.settings_pipeline"
+MENU_SETTINGS_PREPROCESS = "menu.settings_preprocess"
+MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
+MENU_SETTINGS_CHUNKING = "menu.settings_chunking"
+MENU_SETTINGS_VECTOR_INDEX = "menu.settings_vector_index"
+MENU_SETTINGS_RETRIEVAL = "menu.settings_retrieval"
+MENU_SETTINGS_GROUNDING = "menu.settings_grounding"
+MENU_SETTINGS_GENERATION = "menu.settings_generation"
+MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
+MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
+MENU_SETTINGS_EVALUATION = "menu.settings_evaluation"
+MENU_SETTINGS_GRAPH = "menu.settings_graph"
+MENU_SETTINGS_AGENTIC = "menu.settings_agentic"
+MENU_SETTINGS_HUGGINGFACE = "menu.settings_huggingface"
+MENU_SETTINGS_SERVICES = "menu.settings_services"
+MENU_SETTINGS_OCI = "menu.settings_oci"
+MENU_SETTINGS_UPLOAD_STORAGE = "menu.settings_upload_storage"
+MENU_SETTINGS_MODEL = "menu.settings_model"
+MENU_SETTINGS_DATABASE = "menu.settings_database"
+MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
+MENU_SECURITY_USERS = "menu.security_users"
+MENU_SECURITY_ROLES = "menu.security_roles"
+MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
+
+# ---- capability ----
+
+BUSINESS_VIEWS_MANAGE = "rag.business_views.manage"
+KNOWLEDGE_BASES_MANAGE = "rag.knowledge_bases.manage"
+FEEDBACK_MANAGE = "rag.feedback.manage"
+SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
+
+_GROUP_BUSINESS = "業務ビュー"
+_GROUP_INGESTION = "ナレッジ構築"
+_GROUP_PIPELINE = "検索・回答設定"
+_GROUP_OPERATIONS = "運用設定"
+_GROUP_SETTINGS = "システム設定"
+_GROUP_USERS_ROLES = "ユーザーとロール"
+_GROUP_SECURITY = "RAG セキュリティ"
+_GROUP_MANAGE = "管理権限"
+
+
+PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
+    _menu_permission(MENU_SEARCH, _GROUP_BUSINESS, "RAG 検索"),
+    _menu_permission(MENU_CHAT, _GROUP_BUSINESS, "チャット"),
+    _menu_permission(MENU_BUSINESS_VIEWS, _GROUP_BUSINESS, "業務ビュー"),
+    _menu_permission(MENU_EVALUATION, _GROUP_BUSINESS, "品質評価"),
+    _permission(
+        MENU_FEEDBACK,
+        _GROUP_BUSINESS,
+        "フィードバック",
+        "フィードバックの一覧・詳細を表示し、評価ケースを作成できます"
+        "（利用できる業務ビューのフィードバックだけ）。",
+    ),
+    _menu_permission(MENU_DASHBOARD, _GROUP_INGESTION, "ダッシュボード"),
+    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
+    _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
+    _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
+    _menu_permission(MENU_SETTINGS_PIPELINE, _GROUP_PIPELINE, "設定の概要"),
+    _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
+    _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
+    _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
+    _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
+    _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
+    _menu_permission(MENU_SETTINGS_GROUNDING, _GROUP_PIPELINE, "根拠確認"),
+    _menu_permission(MENU_SETTINGS_GENERATION, _GROUP_PIPELINE, "回答スタイル"),
+    _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
+    _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
+    _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "品質評価の設定"),
+    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係検索"),
+    _menu_permission(MENU_SETTINGS_AGENTIC, _GROUP_PIPELINE, "高度な検索"),
+    _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace 設定"),
+    _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス管理"),
+    # ユーザー管理・ロール管理は 3 製品共通の画面（#206）。権限管理は RAG 固有。
+    _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
+    _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
+    _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
+    _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
+    _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
+    _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
+    _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
+    _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観"),
+    _permission(
+        BUSINESS_VIEWS_MANAGE,
+        _GROUP_MANAGE,
+        "業務ビュー管理",
+        "業務ビューの作成・アーカイブと、すべての業務ビューの利用ができます"
+        "（業務ビューの対象範囲の制限を受けません）。",
+        implies=(MENU_BUSINESS_VIEWS,),
+    ),
+    _permission(
+        KNOWLEDGE_BASES_MANAGE,
+        _GROUP_MANAGE,
+        "ナレッジベース管理",
+        "ナレッジベースの作成・アーカイブと、すべてのナレッジベースの利用ができます"
+        "（ナレッジベースの対象範囲の制限を受けません）。",
+        implies=(MENU_KNOWLEDGE_BASES,),
+    ),
+    _permission(
+        FEEDBACK_MANAGE,
+        _GROUP_MANAGE,
+        "フィードバックの承認 FAQ 反映",
+        "フィードバックの回答を業務ビューの承認済み FAQ に登録できます"
+        "（利用できる業務ビューのフィードバックだけ）。フィードバックの表示も含みます。",
+        implies=(MENU_FEEDBACK,),
+    ),
+    _permission(
+        SYSTEM_TABLES_MANAGE,
+        _GROUP_MANAGE,
+        "システムテーブル管理",
+        "RAG のシステムテーブルの初期化・全再作成ができます。",
+        implies=(MENU_SETTINGS_DATABASE,),
+    ),
+)
+
+ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
+PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
+
+
+def unknown_permission_codes(codes: Iterable[str]) -> set[str]:
+    """カタログにない権限コード。"""
+    return {
+        code.strip() for code in codes if code.strip() and code.strip() not in PERMISSION_BY_CODE
+    }
+
+
+def normalize_permission_codes(codes: Iterable[str]) -> set[str]:
+    """カタログにある権限コードだけを残す（空白除去）。"""
+    return {code.strip() for code in codes if code.strip() in PERMISSION_BY_CODE}
+
+
+def expand_permissions(codes: Iterable[str]) -> set[str]:
+    """implies を閉包した実効権限。"""
+    expanded = normalize_permission_codes(codes)
+    pending = list(expanded)
+    while pending:
+        definition = PERMISSION_BY_CODE.get(pending.pop())
+        if definition is None:
+            continue
+        for implied in definition.implies:
+            if implied not in expanded:
+                expanded.add(implied)
+                pending.append(implied)
+    return expanded
+
+
+def grants_all_business_views(codes: Iterable[str]) -> bool:
+    """業務ビュー管理はすべての業務ビューを利用できる（対象範囲の制限を受けない）。"""
+    return BUSINESS_VIEWS_MANAGE in expand_permissions(codes)
+
+
+def grants_all_knowledge_bases(codes: Iterable[str]) -> bool:
+    """ナレッジベース管理はすべてのナレッジベースを利用できる（対象範囲の制限を受けない）。"""
+    return KNOWLEDGE_BASES_MANAGE in expand_permissions(codes)
+
+
+# ---- API の権限 manifest ----
+
+PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
+AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
+
+
+def _any(*codes: str) -> frozenset[str]:
+    return frozenset(codes)
+
+
+# 複数の画面から使う API の許可集合。
+_DOCUMENT_WORKSPACE = _any(MENU_UPLOAD, MENU_FILE_LIST)
+# 文書の詳細・原本表示は、文書ワークスペースと引用カード（検索・チャット・KB の検索テスト）が使う。
+_DOCUMENT_VIEW = _any(MENU_UPLOAD, MENU_FILE_LIST, MENU_SEARCH, MENU_CHAT, MENU_KNOWLEDGE_BASES)
+_KNOWLEDGE_BASE_READ = _any(
+    MENU_UPLOAD,
+    MENU_FILE_LIST,
+    MENU_KNOWLEDGE_BASES,
+    MENU_EVALUATION,
+    MENU_BUSINESS_VIEWS,
+    MENU_SEARCH,
+    MENU_CHAT,
+)
+_BUSINESS_VIEW_READ = _any(
+    MENU_SEARCH, MENU_CHAT, MENU_FEEDBACK, MENU_BUSINESS_VIEWS, MENU_EVALUATION
+)
+_ANSWER_USE = _any(MENU_SEARCH, MENU_CHAT)
+_SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS)
+
+_D = "/documents/{document_id}"
+_R = "/documents/{document_id}/recipes/{recipe_id}"
+_KB = "/knowledge-bases/{knowledge_base_id}"
+_BV = "/business-views/{business_view_id}"
+
+# (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
+ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
+    # ---- ナレッジ構築: ダッシュボード ----
+    ("GET", "/dashboard/summary"): _any(MENU_DASHBOARD),
+    # ---- ナレッジ構築: 文書（アップロード・文書インデックス） ----
+    ("POST", "/documents/upload"): _any(MENU_UPLOAD),
+    ("POST", "/documents/batch-upload"): _any(MENU_UPLOAD),
+    ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),
+    ("GET", "/documents/stats"): _any(MENU_DASHBOARD, MENU_FILE_LIST),
+    ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
+    ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
+    ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,
+    ("POST", "/documents/ingestion-jobs/{job_id}/cancel"): _DOCUMENT_WORKSPACE,
+    ("GET", "/documents/ingestion-jobs/{job_id}"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/ingestion-jobs"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/ingestion-jobs"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/ingestion-segments/retry"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/chunks"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/recipes"): _DOCUMENT_VIEW,
+    ("POST", f"{_D}/recipes"): _DOCUMENT_WORKSPACE,
+    ("PUT", _R): _DOCUMENT_WORKSPACE,
+    ("DELETE", _R): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_R}/ingestion-jobs"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/chunks"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_R}/chunk-preview"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/content"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
+    ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_R}/reject"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/chunk-sets"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/chunk-set-experiments"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/chunk-set-experiments/{{chunk_set_id}}/promote"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/parser-extraction-experiments"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/ingestion-config"): _DOCUMENT_WORKSPACE,
+    ("PUT", f"{_D}/ingestion-config"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/extraction-export"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/navigation"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/extracted-fields"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
+    ("GET", _D): _DOCUMENT_VIEW,
+    ("DELETE", _D): _any(MENU_FILE_LIST),
+    ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
+    ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
+    ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/ingest"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/approve"): _DOCUMENT_WORKSPACE,
+    ("PATCH", f"{_D}/review-edits"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/reject"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    # ---- ナレッジ構築: ナレッジベース ----
+    ("GET", "/knowledge-bases"): _KNOWLEDGE_BASE_READ,
+    ("POST", "/knowledge-bases"): _any(KNOWLEDGE_BASES_MANAGE),
+    ("GET", _KB): _KNOWLEDGE_BASE_READ,
+    ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/graph"): _any(MENU_KNOWLEDGE_BASES),
+    ("POST", f"{_KB}/archive"): _any(KNOWLEDGE_BASES_MANAGE),
+    ("GET", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
+    ("POST", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
+    ("DELETE", f"{_KB}/documents/{{document_id}}"): _any(MENU_KNOWLEDGE_BASES),
+    # ---- 業務ビュー ----
+    ("GET", "/business-views"): _BUSINESS_VIEW_READ,
+    ("POST", "/business-views"): _any(BUSINESS_VIEWS_MANAGE),
+    ("GET", _BV): _BUSINESS_VIEW_READ,
+    ("PATCH", _BV): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/archive"): _any(BUSINESS_VIEWS_MANAGE),
+    ("GET", f"{_BV}/domain-keywords"): _any(MENU_BUSINESS_VIEWS),
+    ("PUT", f"{_BV}/domain-keywords"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/domain-keywords/suggest"): _any(MENU_BUSINESS_VIEWS),
+    ("GET", f"{_BV}/approved-faq"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/approved-faq"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/approved-faq/import"): _any(MENU_BUSINESS_VIEWS),
+    # 回答前に類似の承認済み FAQ を提示する（読み取り）。
+    ("POST", f"{_BV}/approved-faq/suggest"): _any(MENU_SEARCH, MENU_CHAT, MENU_BUSINESS_VIEWS),
+    ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_BUSINESS_VIEWS),
+    ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
+    # ---- 業務ビュー: チャット ----
+    ("GET", "/chat/models"): _any(MENU_CHAT),
+    ("GET", "/chat/conversations"): _any(MENU_CHAT),
+    ("POST", "/chat/conversations"): _any(MENU_CHAT),
+    ("GET", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
+    ("PATCH", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
+    ("POST", "/chat/conversations/{conversation_id}/archive"): _any(MENU_CHAT),
+    ("POST", "/chat/conversations/{conversation_id}/messages/stream"): _any(MENU_CHAT),
+    # ---- 業務ビュー: 検索と回答履歴 ----
+    # 文書ワークスペースのレシピ検索テストも同期検索を使う。
+    ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
+    ("POST", "/search/citation-feedback"): _ANSWER_USE,
+    # KB 詳細の検索テストもストリーム検索を使う。
+    ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
+    ("GET", "/search/answers"): _ANSWER_USE,
+    ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
+    ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,
+    ("POST", "/search/answers/{trace_id}/evaluation"): _ANSWER_USE,
+    # ---- 業務ビュー: 品質評価 ----
+    ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/compare"): _any(MENU_EVALUATION),
+    # ---- 業務ビュー: フィードバック ----
+    ("POST", "/feedback"): _ANSWER_USE,
+    ("GET", "/feedback/current"): _ANSWER_USE,
+    # 一覧・詳細・評価ケースはフィードバック画面の権限（許可された業務ビューで絞る）。
+    ("GET", "/feedback"): _any(MENU_FEEDBACK),
+    ("GET", "/feedback/{feedback_id}"): _any(MENU_FEEDBACK),
+    ("GET", "/feedback/{feedback_id}/evaluation-case"): _any(MENU_FEEDBACK),
+    # 承認済み FAQ への反映（回答の書き込み）だけは rag.feedback.manage。
+    ("POST", "/feedback/{feedback_id}/approved-faq"): _any(FEEDBACK_MANAGE),
+    # ---- システム設定（3 製品共通の画面） ----
+    ("GET", "/settings/upload-storage"): _any(
+        MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI, MENU_UPLOAD
+    ),
+    ("PATCH", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE),
+    ("GET", "/settings/oci"): _any(MENU_SETTINGS_OCI),
+    ("PATCH", "/settings/oci"): _any(MENU_SETTINGS_OCI),
+    ("PATCH", "/settings/oci/object-storage"): _any(
+        MENU_SETTINGS_OCI, MENU_SETTINGS_UPLOAD_STORAGE
+    ),
+    ("POST", "/settings/oci/config/read"): _any(MENU_SETTINGS_OCI),
+    ("POST", "/settings/oci/config/test"): _any(MENU_SETTINGS_OCI),
+    ("POST", "/settings/oci/object-storage/namespace"): _any(
+        MENU_SETTINGS_OCI, MENU_SETTINGS_UPLOAD_STORAGE
+    ),
+    ("POST", "/settings/oci/key-file"): _any(MENU_SETTINGS_OCI),
+    # 文書ワークスペースは VLM の設定有無を表示に使う。
+    ("GET", "/settings/model"): _any(MENU_SETTINGS_MODEL, MENU_UPLOAD, MENU_FILE_LIST),
+    ("PATCH", "/settings/model"): _any(MENU_SETTINGS_MODEL),
+    ("POST", "/settings/model/test"): _any(MENU_SETTINGS_MODEL),
+    ("GET", "/settings/database"): _any(MENU_SETTINGS_DATABASE),
+    ("PATCH", "/settings/database"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/wallet"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/wallet/download"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/test"): _any(MENU_SETTINGS_DATABASE),
+    ("GET", "/settings/database/adb"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
+    ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_DATABASE),
+    ("POST", "/settings/database/system-tables/initialize"): _any(SYSTEM_TABLES_MANAGE),
+    # ---- 運用設定 ----
+    ("GET", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),
+    ("PATCH", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),
+    ("GET", "/services"): _any(MENU_SETTINGS_SERVICES),
+    ("GET", "/services/catalog"): _any(MENU_SETTINGS_SERVICES),
+    # 文書解析の設定画面も parser サービスの状態を表示する。
+    ("GET", "/services/{service_id}/status"): _any(
+        MENU_SETTINGS_SERVICES, MENU_SETTINGS_PARSER_ADAPTERS
+    ),
+    ("GET", "/services/{service_id}/logs"): _any(MENU_SETTINGS_SERVICES),
+    ("POST", "/services/{service_id}/start"): _any(MENU_SETTINGS_SERVICES),
+    ("POST", "/services/{service_id}/stop"): _any(MENU_SETTINGS_SERVICES),
+    ("POST", "/services/{service_id}/restart"): _any(MENU_SETTINGS_SERVICES),
+    ("POST", "/services/{service_id}/build"): _any(MENU_SETTINGS_SERVICES),
+    ("POST", "/services/{service_id}/remove"): _any(MENU_SETTINGS_SERVICES),
+    # ---- 検索・回答設定 ----
+    # 文書ワークスペースの処理設定パネルも文書解析の設定を読む。
+    ("GET", "/settings/parser-adapters"): _any(
+        MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
+    ),
+    ("PATCH", "/settings/parser-adapters"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/parser-adapters/contract"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/parser-adapters/{backend}/status"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
+    ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
+    ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
+    ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
+    ("GET", "/settings/retrieval"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("PATCH", "/settings/retrieval"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("GET", "/settings/grounding"): _any(MENU_SETTINGS_GROUNDING),
+    ("PATCH", "/settings/grounding"): _any(MENU_SETTINGS_GROUNDING),
+    ("GET", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
+    ("PATCH", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
+    # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
+    ("GET", "/settings/answer-records"): _any(MENU_SETTINGS_GENERATION, MENU_SEARCH, MENU_CHAT),
+    ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_GENERATION),
+    ("GET", "/settings/query-history"): _any(MENU_SETTINGS_GENERATION),
+    ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_GENERATION),
+    # DocRAG プロンプトは回答プロンプトと文書解析（抽出プロンプト）の両画面で編集する。
+    ("GET", "/settings/docrag-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
+    ("PUT", "/settings/docrag-prompts/{key}"): _any(
+        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
+    ),
+    ("DELETE", "/settings/docrag-prompts/{key}"): _any(
+        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
+    ),
+    ("GET", "/settings/prompts"): _any(MENU_SETTINGS_PROMPTS),
+    ("POST", "/settings/prompts"): _any(MENU_SETTINGS_PROMPTS),
+    ("POST", "/settings/prompts/{version_id}/activate"): _any(MENU_SETTINGS_PROMPTS),
+    # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
+    ("GET", "/settings/extraction-fields"): _any(
+        MENU_FILE_LIST, MENU_UPLOAD, MENU_SETTINGS_PARSER_ADAPTERS
+    ),
+    ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
+    ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
+    ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),
+    ("PATCH", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),
+    # 品質評価の画面は評価設定（既定値）を読む。
+    ("GET", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION, MENU_EVALUATION),
+    ("PATCH", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION),
+    ("GET", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
+    ("PATCH", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
+    ("GET", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
+    ("PATCH", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
+    # ---- RAG セキュリティ: 権限管理 ----
+    ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
+    ("GET", "/security/access-targets"): _any(MENU_SECURITY_PERMISSIONS),
+    ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
+}
+
+
+def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
+    """method + route template（`/api` なし）→ 許可する権限の集合。
+
+    None は公開 API・ログインだけで使える API。登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
+    """
+    method = method.upper()
+    if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
+        return None
+    exact = ROUTE_PERMISSIONS.get((method, route_path))
+    if exact is not None:
+        return exact
+    # ユーザー管理・ロール管理（platform の共通 router）は NL2SQL と同じ割り当て。
+    if route_path == "/security/users" or route_path.startswith("/security/users/"):
+        return _any(MENU_SECURITY_USERS)
+    if route_path == "/security/roles" or route_path.startswith("/security/roles/"):
+        if method == "GET":
+            return _SECURITY_ROLE_READ
+        return _any(MENU_SECURITY_ROLES)
+    return _any(UNCLASSIFIED_PERMISSION)

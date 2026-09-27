@@ -5,15 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-from fastapi import HTTPException, Request
 from pytest import MonkeyPatch
 
-from app.api.routes import settings as settings_route
-from app.auth import AuthSession
 from app.main import app
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
-from app.schemas.settings import SystemTablesInitializeRequest
+from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -112,20 +108,43 @@ def test_initialize_system_tables_preserves_retryable_error(monkeypatch: MonkeyP
     assert response.json()["error_code"] == "ORA-00054"
 
 
-async def test_initialize_system_tables_rejects_non_admin() -> None:
-    request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
-    request.state.auth_session = AuthSession(
-        user_id="user",
-        username="user",
-        role="USER",
-        expires_at=0,
-        remember_me=False,
+def test_initialize_system_tables_requires_system_tables_manage(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """初期化・再作成は rag.system_tables.manage が必要（旧 ADMIN 判定の置き換え）。
+
+    状態の参照はデータベース設定の権限だけでよい。
+    """
+    monkeypatch.setattr(system_schema_manager, "status", _status_payload)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "initialize",
+        lambda **_kwargs: {
+            **_status_payload(),
+            "operation": "no_op",
+            "dropped_object_count": 0,
+            "created_object_count": 0,
+        },
     )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("db-viewer", ["menu.settings_database"])
+    auth.user_with_permissions("table-manager", ["rag.system_tables.manage"])
 
-    with pytest.raises(HTTPException) as forbidden:
-        await settings_route.initialize_system_tables(
-            SystemTablesInitializeRequest(),
-            request,
-        )
+    viewer = login(client, "db-viewer")
+    assert client.get("/api/settings/database/system-tables", headers=viewer).status_code == 200
+    forbidden = client.post(
+        "/api/settings/database/system-tables/initialize",
+        json={"recreate": False},
+        headers=viewer,
+    )
+    assert forbidden.status_code == 403
 
-    assert forbidden.value.status_code == 403
+    manager = login(client, "table-manager")
+    allowed = client.post(
+        "/api/settings/database/system-tables/initialize",
+        json={"recreate": False},
+        headers=manager,
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["data"]["operation"] == "no_op"

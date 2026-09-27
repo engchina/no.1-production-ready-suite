@@ -1,16 +1,15 @@
 """利用者フィードバック API のテスト。"""
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.routes import feedback as feedback_route
 from app.main import app
 from app.rag.request_context import current_audit_request_context
 from app.schemas.feedback import FeedbackRequest
+from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -375,13 +374,53 @@ def test_feedback_detail_returns_full_context(monkeypatch: pytest.MonkeyPatch) -
     assert response.json()["data"]["execution"]["citation_count"] == 1
 
 
-def test_feedback_dashboard_rejects_non_admin() -> None:
-    request = SimpleNamespace(state=SimpleNamespace(auth_session=SimpleNamespace(role="USER")))
+def test_feedback_permissions_split_view_and_approved_faq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一覧・詳細・評価ケースは menu.feedback、承認 FAQ への反映だけ rag.feedback.manage。
 
-    with pytest.raises(HTTPException) as exc_info:
-        feedback_route._require_feedback_admin(request)  # type: ignore[arg-type]
+    一覧は利用者の業務ビューの範囲で絞る（Oracle の条件は test_security_scope で確認）。
+    """
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("searcher", ["menu.search"])
+    auth.user_with_permissions("viewer", ["menu.feedback"], business_view_ids=["bv-1"])
+    auth.user_with_permissions("feedback-manager", ["rag.feedback.manage"])
+    contexts: list[object] = []
 
-    assert exc_info.value.status_code == 403
+    class ScopeRecordingClient(FakeFeedbackClient):
+        async def list_feedback_dashboard_rows(self, **kwargs: object) -> tuple[
+            list[dict[str, object]],
+            int,
+            list[dict[str, object]],
+            list[dict[str, object]],
+        ]:
+            contexts.append(current_audit_request_context().allowed_business_view_ids)
+            return await super().list_feedback_dashboard_rows(**kwargs)
+
+    monkeypatch.setattr(feedback_route, "OracleClient", lambda: ScopeRecordingClient())
+    read_paths = (
+        ("GET", "/api/feedback"),
+        ("GET", "/api/feedback/feedback-1"),
+        ("GET", "/api/feedback/feedback-1/evaluation-case"),
+    )
+    promote = ("POST", "/api/feedback/feedback-1/approved-faq")
+
+    searcher = login(client, "searcher")
+    for method, path in (*read_paths, promote):
+        assert client.request(method, path, headers=searcher).status_code == 403, path
+
+    viewer = login(client, "viewer")
+    listed = client.get("/api/feedback", headers=viewer)
+    assert listed.status_code == 200
+    assert contexts == [frozenset({"bv-1"})]
+    for method, path in read_paths[1:]:
+        # 権限は通る（fake に該当データがないため 404）。
+        assert client.request(method, path, headers=viewer).status_code == 404, path
+    assert client.request(*promote, headers=viewer).status_code == 403
+
+    manager = login(client, "feedback-manager")
+    assert client.get("/api/feedback", headers=manager).status_code == 200
+    assert client.request(*promote, headers=manager).status_code == 404
 
 
 class FakeFeedbackClient:

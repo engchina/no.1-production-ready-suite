@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router, model_payload
@@ -23,7 +23,6 @@ from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalit
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
 from app import config as app_config
-from app.auth import AuthSession
 from app.clients.external_parser import (
     ENGINE_SPECS,
     ExternalParserBackend,
@@ -316,16 +315,10 @@ async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
 )
 async def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
-    request: Request,
 ) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
     """管理者の明示操作として作成・更新または全再作成する。"""
 
-    session = getattr(request.state, "auth_session", None)
-    if not isinstance(session, AuthSession) or session.role not in {"ADMIN", "LOCAL"}:
-        raise HTTPException(
-            status_code=403,
-            detail="システムテーブル操作には管理者権限が必要です。",
-        )
+    # 権限（rag.system_tables.manage）は API の権限 manifest で確認する（#214）。
     try:
         data = await asyncio.to_thread(
             system_schema_manager.initialize,

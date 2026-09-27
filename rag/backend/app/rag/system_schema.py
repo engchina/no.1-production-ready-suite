@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from pr_system_settings.auth.migrations import apply_platform_auth_schema
+from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
+
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER_PREFERENCE,
     ORACLE_TEXT_STOPLIST,
@@ -113,7 +116,15 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_CITATION_FEEDBACK",
     "RAG_FEEDBACK_DETAILS",
     "RAG_EVALUATION_RUNS",
+    # ロールの RAG 権限と対象範囲（#214）。PLATFORM_ROLES と業務ビュー・KB を参照する。
+    "RAG_ROLE_PERMISSIONS",
+    "RAG_ROLE_BUSINESS_VIEWS",
+    "RAG_ROLE_KNOWLEDGE_BASES",
 )
+
+# 3 製品共通の認証テーブル（platform の `apply_platform_auth_schema` が作る）。RAG の初期化は
+# 先にこれを作るが、管理対象ではないため全再作成でも削除しない（#214）。
+PRESERVED_TABLES: tuple[str, ...] = tuple(PLATFORM_AUTH_TABLES)
 
 MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_ANSWER_RECORDS_VIEW_IDX",
@@ -185,6 +196,8 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_EVALUATION_RUNS_BEST_EXPERIMENT_IDX",
     "RAG_EVALUATION_RUNS_RESULT_HASH_IDX",
     "RAG_EVALUATION_RUNS_TENANT_CREATED_IDX",
+    "RAG_ROLE_BUSINESS_VIEWS_VIEW_IDX",
+    "RAG_ROLE_KNOWLEDGE_BASES_KB_IDX",
 )
 
 MANAGED_TEXT_OBJECTS: tuple[tuple[str, str], ...] = (
@@ -209,6 +222,9 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
+
+if set(PRESERVED_TABLES) & set(MANAGED_TABLES):  # pragma: no cover - 定義の誤りを起動時に検出
+    raise RuntimeError("共通認証のテーブルを RAG の管理対象に含めないでください。")
 
 
 class SystemSchemaError(RuntimeError):
@@ -350,6 +366,8 @@ class SystemSchemaManager:
         try:
             with self._connection_factory() as connection:
                 self._configure_ddl_lock_timeout(connection)
+                # RAG_ROLE_* は PLATFORM_ROLES を参照するため、共通認証の表を先に作る（冪等）。
+                self._apply_platform_auth_schema(connection)
                 before = self._status_on(connection)
                 if before["status"] == "ready" and not recreate:
                     self._finish_operation(connection, owner, increment_epoch=False)
@@ -721,6 +739,17 @@ class SystemSchemaManager:
                 f"{self._ddl_lock_timeout_seconds}"  # nosec B608 - bounded integer
             )
 
+    @staticmethod
+    def _apply_platform_auth_schema(connection: Any) -> None:
+        """共通認証の PLATFORM_* と組み込み SYSTEM_ADMIN ロールを冪等に用意する。
+
+        ユーザーは作らない（最初は構成管理者 `system_admin` でログインする）。
+        """
+        apply_platform_auth_schema(connection)
+        with connection.cursor() as cursor:
+            OracleAuthStore._merge_system_admin_role(cursor)
+        connection.commit()
+
     def _apply_base_non_index_statements(self, connection: Any) -> None:
         statements = [
             statement
@@ -905,6 +934,7 @@ __all__ = [
     "MANAGED_TEXT_OBJECTS",
     "MIGRATIONS",
     "MIGRATION_TABLE",
+    "PRESERVED_TABLES",
     "RECREATE_CONFIRMATION",
     "RETIRED_MANAGED_OBJECTS",
     "MigrationArtifact",

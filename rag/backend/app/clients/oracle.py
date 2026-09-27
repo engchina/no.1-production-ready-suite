@@ -43,7 +43,7 @@ from app.rag.kb_adapter_config import (
     KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
-from app.rag.request_context import current_audit_request_context
+from app.rag.request_context import current_audit_request_context, unrestricted_access_scope
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.schemas.business_view import (
@@ -692,11 +692,15 @@ class OracleClient:
         *,
         name: str = DEFAULT_KNOWLEDGE_BASE_NAME,
     ) -> KnowledgeBaseDetail:
-        """tenant ごとの DEFAULT ナレッジベースを取得または作成する。"""
-        existing = await self._find_knowledge_base_by_name_with_oracle(name)
-        if existing is not None:
-            return existing
-        return await self.create_knowledge_base(name=name)
+        """tenant ごとの DEFAULT ナレッジベースを取得または作成する。
+
+        利用者の KB 範囲で探すと範囲外の DEFAULT を重複作成するため、範囲を外して探す（#214）。
+        """
+        with unrestricted_access_scope():
+            existing = await self._find_knowledge_base_by_name_with_oracle(name)
+            if existing is not None:
+                return existing
+            return await self.create_knowledge_base(name=name)
 
     async def list_knowledge_bases(
         self,
@@ -2084,8 +2088,12 @@ class OracleClient:
         )
 
     async def ensure_default_business_view(self) -> BusinessViewDetail:
-        """tenant ごとの DEFAULT KB と DEFAULT 業務ビューを取得または作成する。"""
-        return await self._run_transaction(_ensure_default_business_view)
+        """tenant ごとの DEFAULT KB と DEFAULT 業務ビューを取得または作成する。
+
+        利用者の範囲で探すと範囲外の DEFAULT を重複作成するため、範囲を外して確認する（#214）。
+        """
+        with unrestricted_access_scope():
+            return await self._run_transaction(_ensure_default_business_view)
 
     async def list_business_views(
         self,
@@ -2122,6 +2130,31 @@ class OracleClient:
             return None
         refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
         return view.model_copy(update={"knowledge_bases": refs})
+
+    async def list_access_target_ids(self) -> tuple[set[str], set[str]]:
+        """tenant 内の全業務ビュー・全ナレッジベースの ID（アーカイブ済みを含む）。
+
+        権限管理で指定された ID の存在確認に使う。利用者の対象範囲では絞らない（#214）。
+        """
+        tenant_binds = _with_tenant_bind({})
+        view_rows = await self._fetch_all(
+            _render_sql(
+                "SELECT business_view_id FROM rag_business_views WHERE {tenant_sql}",
+                tenant_sql=_oracle_tenant_predicate(),
+            ),
+            tenant_binds,
+        )
+        base_rows = await self._fetch_all(
+            _render_sql(
+                "SELECT knowledge_base_id FROM rag_knowledge_bases WHERE {tenant_sql}",
+                tenant_sql=_oracle_tenant_predicate(),
+            ),
+            tenant_binds,
+        )
+        return (
+            {str(row["business_view_id"]) for row in view_rows},
+            {str(row["knowledge_base_id"]) for row in base_rows},
+        )
 
     async def save_answer_record(self, record: Mapping[str, object]) -> None:
         """DocRAG 回答を保存する(同じ trace_id は上書き)。"""
@@ -2181,11 +2214,18 @@ class OracleClient:
         limit: int,
         offset: int = 0,
     ) -> list[dict[str, object]]:
-        """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。"""
-        where = "WHERE business_view_id = :business_view_id" if business_view_id else ""
-        binds: dict[str, object] = {"limit": limit, "offset": offset}
+        """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。
+
+        利用できる業務ビューが制限されているときは、その業務ビューの回答だけを返す（#214）。
+        """
+        clauses = _business_view_scope_predicates("business_view_id")
+        binds: dict[str, object] = _with_business_view_scope_bind(
+            {"limit": limit, "offset": offset}
+        )
         if business_view_id:
+            clauses.append("business_view_id = :business_view_id")
             binds["business_view_id"] = business_view_id
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = await self._fetch_all(
             f"""
             SELECT trace_id, business_view_id, surface, answer_engine, question,
@@ -2201,16 +2241,20 @@ class OracleClient:
         return rows
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
-        """保存済み DocRAG 回答を 1 件返す。"""
+        """保存済み DocRAG 回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
         row = await self._fetch_one(
-            """
+            _render_sql(
+                """
             SELECT trace_id, business_view_id, surface, answer_engine, question,
                    rewritten_question, answer, citations_json, diagnostics_json,
                    evaluation_input_json, evaluation_json, created_at
             FROM rag_answer_records
             WHERE trace_id = :trace_id
+              AND {scope_sql}
             """,
-            {"trace_id": trace_id},
+                scope_sql=_answer_record_scope_sql(),
+            ),
+            _with_business_view_scope_bind({"trace_id": trace_id}),
         )
         if row is None:
             return None
@@ -2348,8 +2392,12 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> bool:
             if not _fetch_all(
                 connection,
-                "SELECT trace_id FROM rag_answer_records WHERE trace_id = :trace_id",
-                {"trace_id": trace_id},
+                _render_sql(
+                    "SELECT trace_id FROM rag_answer_records "
+                    "WHERE trace_id = :trace_id AND {scope_sql}",
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_business_view_scope_bind({"trace_id": trace_id}),
             ):
                 return False
             _execute(
@@ -2372,8 +2420,11 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
                 connection,
-                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id",
-                {"trace_id": trace_id},
+                _render_sql(
+                    "DELETE FROM rag_answer_records WHERE trace_id = :trace_id AND {scope_sql}",
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_business_view_scope_bind({"trace_id": trace_id}),
             )
 
         return await self._run_transaction(operation) > 0
@@ -4295,11 +4346,15 @@ class OracleClient:
                 LEFT JOIN latest_audit a ON a.trace_id = f.trace_id
                 WHERE f.feedback_id = :feedback_id
                   AND {feedback_tenant_sql}
+                  AND {feedback_scope_sql}
                 """,
                 audit_tenant_sql=_oracle_tenant_predicate(alias="a"),
                 feedback_tenant_sql=_oracle_tenant_predicate(alias="f"),
+                feedback_scope_sql=" AND ".join(
+                    _business_view_scope_predicates("f.business_view_id") or ["1 = 1"]
+                ),
             ),
-            _with_tenant_bind({"feedback_id": feedback_id}),
+            _with_business_view_scope_bind(_with_tenant_bind({"feedback_id": feedback_id})),
         )
         if row is None:
             return None
@@ -5517,11 +5572,13 @@ class OracleClient:
                 bv.archived_at
             FROM rag_business_views bv
             WHERE bv.business_view_id = :business_view_id
-              AND {tenant_sql}
+              AND {access_sql}
             """,
-                tenant_sql=_oracle_tenant_predicate(alias="bv"),
+                access_sql=" AND ".join(_oracle_business_view_access_predicates(alias="bv")),
             ),
-            _with_tenant_bind({"business_view_id": business_view_id}),
+            _with_business_view_scope_bind(
+                _with_tenant_bind({"business_view_id": business_view_id})
+            ),
         )
         if not rows:
             return None
@@ -7801,9 +7858,10 @@ class OracleClient:
                 UPDATE rag_documents
                 SET duplicate_of_document_id = NULL
                 WHERE duplicate_of_document_id = :document_id
-                  AND {access_predicate}
+                  AND {tenant_sql}
                 """,
-                    access_predicate=_oracle_access_predicate_sql(),
+                    # 正本を消す前に FK の参照を外す。利用者の範囲外の複製も対象にする。
+                    tenant_sql=_oracle_tenant_predicate(),
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
@@ -9178,9 +9236,12 @@ def _feedback_dashboard_filters(
     search_query: str | None,
     previous_period: bool = False,
 ) -> tuple[str, dict[str, object]]:
-    """列名を固定した feedback 一覧 filter を組み立てる。"""
-    clauses = ["1 = 1"]
-    binds: dict[str, object] = {}
+    """列名を固定した feedback 一覧 filter を組み立てる。
+
+    利用できる業務ビューが制限されているときは、その業務ビューの feedback だけにする（#214）。
+    """
+    clauses = ["1 = 1", *_business_view_scope_predicates("f.business_view_id")]
+    binds: dict[str, object] = _with_business_view_scope_bind({})
     for column, value in (
         ("business_view_id", business_view_id),
         ("target_type", target_type),
@@ -9608,11 +9669,11 @@ def _select_business_view(
             archived_at
         FROM rag_business_views
         WHERE business_view_id = :business_view_id
-          AND {tenant_sql}
+          AND {access_sql}
         """,
-            tenant_sql=_oracle_tenant_predicate(),
+            access_sql=" AND ".join(_oracle_business_view_access_predicates()),
         ),
-        _with_tenant_bind({"business_view_id": business_view_id}),
+        _with_business_view_scope_bind(_with_tenant_bind({"business_view_id": business_view_id})),
     )
     return None if not rows else _stored_business_view_from_row(rows[0])
 
@@ -9700,9 +9761,11 @@ def _select_knowledge_base_by_name(
             0 AS searchable_chunk_count
         FROM rag_knowledge_bases
         WHERE LOWER(name) = :knowledge_base_name
-          AND {knowledge_base_access_sql}
+          AND {tenant_sql}
         """,
-            knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+            # DEFAULT の存在確認に使う。利用者の KB 範囲で絞ると、範囲外の DEFAULT を
+            # 「ない」と判断して重複 INSERT するため、tenant だけで探す（#214）。
+            tenant_sql=_oracle_tenant_predicate(),
         ),
         _with_tenant_bind({"knowledge_base_name": name.casefold()}),
     )
@@ -10070,8 +10133,8 @@ def _oracle_business_view_where(
     status: BusinessViewStatus | None = None,
     query: str | None = None,
 ) -> tuple[str, dict[str, object]]:
-    clauses = [_oracle_tenant_predicate(alias="bv")]
-    binds = _with_tenant_bind({})
+    clauses = _oracle_business_view_access_predicates(alias="bv")
+    binds = _with_business_view_scope_bind(_with_tenant_bind({}))
     if status is not None:
         clauses.append("bv.status = :business_view_status")
         binds["business_view_status"] = status.value
@@ -10479,12 +10542,20 @@ def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
 
 
 def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> str:
-    """会話を tenant と、認証時は作成ユーザーへ閉じる。"""
+    """会話を tenant と、認証時は作成ユーザーへ閉じる。
+
+    利用できる業務ビューが制限されているときは、その業務ビューの会話だけにする（#214）。
+    """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     context = current_audit_request_context()
     if context.user_id_hash is not None:
         column = f"{alias}.user_id_hash" if alias else "user_id_hash"
         predicates.append(f"{column} = :conversation_user_id_hash")
+    predicates.extend(
+        _business_view_scope_predicates(
+            f"{alias}.business_view_id" if alias else "business_view_id"
+        )
+    )
     return " AND ".join(predicates)
 
 
@@ -10512,7 +10583,85 @@ def _oracle_access_predicates(*, alias: str | None = None) -> list[str]:
                 for index, _ in enumerate(sorted(context.allowed_category_names))
             )
             predicates.append(f"LOWER({category_column}) IN ({placeholders})")
+    predicates.extend(_oracle_document_knowledge_base_scope_predicates(alias=alias))
     return predicates
+
+
+def _oracle_document_knowledge_base_scope_predicates(*, alias: str | None = None) -> list[str]:
+    """利用できるナレッジベースが制限されているとき、文書をその KB に属するものへ絞る（#214）。
+
+    重複アップロード（`duplicate_of_document_id`）は複製側が KB に属し、chunk は正本側に
+    ある。検索と同じく、複製が許可 KB に属する正本も見えるようにする。
+    """
+    allowed = current_audit_request_context().allowed_knowledge_base_ids
+    if allowed is None:
+        return []
+    if not allowed:
+        return ["1 = 0"]
+    document_column = f"{alias}.document_id" if alias else "rag_documents.document_id"
+    placeholders = ", ".join(
+        f":access_knowledge_base_id_{index}" for index, _ in enumerate(sorted(allowed))
+    )
+    return [f"""
+        (
+            EXISTS (
+                SELECT 1
+                FROM rag_document_knowledge_bases scope_dkb
+                WHERE scope_dkb.document_id = {document_column}
+                  AND scope_dkb.knowledge_base_id IN ({placeholders})
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM rag_documents scope_duplicate
+                JOIN rag_document_knowledge_bases scope_duplicate_dkb
+                  ON scope_duplicate_dkb.document_id = scope_duplicate.document_id
+                WHERE scope_duplicate.duplicate_of_document_id = {document_column}
+                  AND scope_duplicate_dkb.knowledge_base_id IN ({placeholders})
+            )
+        )
+        """]
+
+
+def _oracle_business_view_access_predicates(*, alias: str | None = None) -> list[str]:
+    """tenant と、利用できる業務ビュー（#214）を SQL predicate にする。
+
+    bind は `_with_business_view_scope_bind` で足す（`_with_tenant_bind` には含めない）。
+    """
+    predicates = [_oracle_tenant_predicate(alias=alias)]
+    predicates.extend(
+        _business_view_scope_predicates(
+            f"{alias}.business_view_id" if alias else "business_view_id"
+        )
+    )
+    return predicates
+
+
+def _business_view_scope_predicates(column: str) -> list[str]:
+    """利用できる業務ビューが制限されているとき、列をその業務ビューへ絞る。"""
+    allowed = current_audit_request_context().allowed_business_view_ids
+    if allowed is None:
+        return []
+    if not allowed:
+        return ["1 = 0"]
+    placeholders = ", ".join(
+        f":access_business_view_id_{index}" for index, _ in enumerate(sorted(allowed))
+    )
+    return [f"{column} IN ({placeholders})"]
+
+
+def _answer_record_scope_sql() -> str:
+    """回答履歴を、利用できる業務ビューの回答へ絞る（業務ビューなしの回答は制限時に見せない）。"""
+    return " AND ".join(_business_view_scope_predicates("business_view_id") or ["1 = 1"])
+
+
+def _with_business_view_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
+    """`_business_view_scope_predicates` の bind を足す。"""
+    resolved = dict(binds)
+    allowed = current_audit_request_context().allowed_business_view_ids
+    if allowed is not None:
+        for index, business_view_id in enumerate(sorted(allowed)):
+            resolved[f"access_business_view_id_{index}"] = business_view_id
+    return resolved
 
 
 def _oracle_access_predicate_sql(*, alias: str | None = None) -> str:
@@ -10581,8 +10730,8 @@ def _with_tenant_bind(
 
 
 def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, object]:
-    """会話 access predicate 用の tenant/user bind を足す。"""
-    resolved = _with_tenant_bind(binds)
+    """会話 access predicate 用の tenant/user/業務ビュー範囲の bind を足す。"""
+    resolved = _with_business_view_scope_bind(_with_tenant_bind(binds))
     user_id_hash = current_audit_request_context().user_id_hash
     if user_id_hash is not None:
         resolved["conversation_user_id_hash"] = user_id_hash
@@ -11862,6 +12011,59 @@ CREATE UNIQUE INDEX {table_name}_tenant_name_uidx
 
 CREATE INDEX {table_name}_tenant_status_idx
     ON {table_name} (tenant_id_hash, status, updated_at DESC);
+""".strip()
+
+
+def oracle_role_access_schema_sql() -> str:
+    """ロールに付ける RAG の権限と対象範囲（業務ビュー・ナレッジベース）の DDL（#214）。
+
+    ロール本体は platform の共通認証の `PLATFORM_ROLES`（`apply_platform_auth_schema`）。
+    `RAG_ROLE_PERMISSIONS` は製品をまたぐ権限昇格の判定（platform）も読む。
+    """
+    return """
+CREATE TABLE rag_role_permissions (
+    role_id          VARCHAR2(36) NOT NULL,
+    permission_code  VARCHAR2(128) NOT NULL,
+    CONSTRAINT rag_role_permissions_pk PRIMARY KEY (role_id, permission_code),
+    CONSTRAINT rag_role_permissions_role_fk
+        FOREIGN KEY (role_id)
+        REFERENCES platform_roles (role_id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE rag_role_business_views (
+    role_id           VARCHAR2(36) NOT NULL,
+    business_view_id  VARCHAR2(64) NOT NULL,
+    CONSTRAINT rag_role_business_views_pk PRIMARY KEY (role_id, business_view_id),
+    CONSTRAINT rag_role_business_views_role_fk
+        FOREIGN KEY (role_id)
+        REFERENCES platform_roles (role_id)
+        ON DELETE CASCADE,
+    CONSTRAINT rag_role_business_views_view_fk
+        FOREIGN KEY (business_view_id)
+        REFERENCES rag_business_views (business_view_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX rag_role_business_views_view_idx
+    ON rag_role_business_views (business_view_id);
+
+CREATE TABLE rag_role_knowledge_bases (
+    role_id            VARCHAR2(36) NOT NULL,
+    knowledge_base_id  VARCHAR2(64) NOT NULL,
+    CONSTRAINT rag_role_knowledge_bases_pk PRIMARY KEY (role_id, knowledge_base_id),
+    CONSTRAINT rag_role_knowledge_bases_role_fk
+        FOREIGN KEY (role_id)
+        REFERENCES platform_roles (role_id)
+        ON DELETE CASCADE,
+    CONSTRAINT rag_role_knowledge_bases_kb_fk
+        FOREIGN KEY (knowledge_base_id)
+        REFERENCES rag_knowledge_bases (knowledge_base_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX rag_role_knowledge_bases_kb_idx
+    ON rag_role_knowledge_bases (knowledge_base_id)
 """.strip()
 
 

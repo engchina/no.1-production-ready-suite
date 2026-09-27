@@ -29,7 +29,6 @@ from app.schemas.feedback import (
 )
 
 router = APIRouter()
-FEEDBACK_ADMIN_ROLES = {"ADMIN", "LOCAL"}
 
 
 @router.post("", response_model=ApiResponse[FeedbackSubmissionResponse])
@@ -79,7 +78,6 @@ async def current_feedback(
 
 @router.get("", response_model=ApiResponse[FeedbackDashboard])
 async def list_feedback(
-    http_request: Request,
     business_view_id: str | None = Query(default=None, min_length=1, max_length=64),
     target_type: FeedbackTargetType | None = None,
     rating: FeedbackRating | None = None,
@@ -91,7 +89,6 @@ async def list_feedback(
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[FeedbackDashboard]:
     """管理者向けに有効な最新票を集計・一覧表示する。"""
-    _require_feedback_admin(http_request)
     rows, total, groups, previous_groups = await OracleClient().list_feedback_dashboard_rows(
         business_view_id=business_view_id,
         target_type=target_type.value if target_type else None,
@@ -123,11 +120,9 @@ async def list_feedback(
 
 @router.get("/{feedback_id}", response_model=ApiResponse[FeedbackDetail])
 async def get_feedback_detail(
-    http_request: Request,
     feedback_id: str,
 ) -> ApiResponse[FeedbackDetail]:
     """管理者向けに feedback の本文・根拠・実行診断を返す。"""
-    _require_feedback_admin(http_request)
     cleaned_id = feedback_id.strip()
     if not cleaned_id or len(cleaned_id) > 64:
         raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
@@ -141,7 +136,6 @@ async def get_feedback_detail(
     "/{feedback_id}/approved-faq", response_model=ApiResponse[FeedbackApprovedFaqPromotion]
 )
 async def promote_feedback_to_approved_faq(
-    http_request: Request,
     feedback_id: str,
 ) -> ApiResponse[FeedbackApprovedFaqPromotion]:
     """回答 feedback を業務ビューの Approved FAQ へ登録する(rag_poc の FAQ 昇格)。
@@ -154,7 +148,6 @@ async def promote_feedback_to_approved_faq(
         approved_faq_import_row_from_answer_feedback,
     )
 
-    _require_feedback_admin(http_request)
     oracle = OracleClient()
     detail = await _promotable_feedback(oracle, feedback_id)
     record = await _docrag_feedback_record(oracle, detail)
@@ -179,7 +172,6 @@ async def promote_feedback_to_approved_faq(
 
 @router.get("/{feedback_id}/evaluation-case", response_model=ApiResponse[EvaluationCase])
 async def feedback_evaluation_case(
-    http_request: Request,
     feedback_id: str,
 ) -> ApiResponse[EvaluationCase]:
     """回答 feedback から品質評価のケースを作る(rag_poc の feedback → eval case 昇格)。
@@ -189,7 +181,6 @@ async def feedback_evaluation_case(
     """
     from docrag.knowledge.feedback_promotion import _expected_terms
 
-    _require_feedback_admin(http_request)
     detail = await _promotable_feedback(OracleClient(), feedback_id)
     helpful = detail.rating == FeedbackRating.HELPFUL
     expected_answer = (detail.answer if helpful else detail.corrected_answer) or ""
@@ -316,16 +307,6 @@ def _feedback_citations(value: object) -> list[dict[str, object]]:
         except ValueError:
             continue
     return snapshots
-
-
-def _require_feedback_admin(request: Request) -> None:
-    session = getattr(request.state, "auth_session", None)
-    role = str(getattr(session, "role", "")).upper()
-    if role not in FEEDBACK_ADMIN_ROLES:
-        raise HTTPException(
-            status_code=403,
-            detail="フィードバック一覧を表示する権限がありません。",
-        )
 
 
 def _feedback_summary(groups: list[dict[str, object]]) -> FeedbackSummary:
