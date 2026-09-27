@@ -419,6 +419,9 @@ def test_chat_send_timeout_returns_504_and_saves_error(
     assert result["isError"] is True
     assert result["structuredContent"]["status"] == 504
     assert result["structuredContent"]["message"] == chat_route.CHAT_TIMEOUT_MESSAGE
+    (conversation_id,) = chat_oracle.messages.keys()
+    # 新しく作った会話の ID を返し、再試行で会話を増やさないようにする（#252）。
+    assert result["structuredContent"]["details"] == {"conversation_id": conversation_id}
     (messages,) = chat_oracle.messages.values()
     assert [(message.role, message.status) for message in messages] == [
         ("USER", "COMPLETE"),

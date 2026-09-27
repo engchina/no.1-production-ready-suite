@@ -17,7 +17,13 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import HTTPException, Request
-from pr_backend_core.mcp import TOOL_ARGUMENTS_INVALID_CODE, McpServer, McpTool, McpToolError
+from pr_backend_core.mcp import (
+    TOOL_ARGUMENTS_INVALID_CODE,
+    McpServer,
+    McpTool,
+    McpToolError,
+    mcp_error_from_exception,
+)
 from pydantic import AfterValidator, BaseModel, Field, ValidationError, model_validator
 
 from app.api.routes import business_views as business_views_route
@@ -256,9 +262,24 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             )
             assert created.data is not None  # nosec B101 - route は必ず data を返す
             conversation_id = created.data.id
-        conversation, assistant, result = await chat_route.send_chat_message(
-            conversation_id, ChatMessageRequest(content=arguments.content), settings
-        )
+            new_conversation = True
+        else:
+            new_conversation = False
+        try:
+            conversation, assistant, result = await chat_route.send_chat_message(
+                conversation_id, ChatMessageRequest(content=arguments.content), settings
+            )
+        except Exception as exc:
+            # 作った会話は失敗しても残る（発話と ERROR の回答を保存済み）。再試行で会話を増やさない
+            # よう、その ID をエラーに添える（#252。内部エラーは従来どおり隠す）。
+            converted = (
+                mcp_error_from_exception(exc, details={"conversation_id": conversation_id})
+                if new_conversation
+                else None
+            )
+            if converted is None:
+                raise
+            raise converted from exc
         return ChatSendMessageOutput(
             conversation_id=conversation.id,
             message_id=assistant.id,
