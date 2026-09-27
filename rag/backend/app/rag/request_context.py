@@ -59,6 +59,8 @@ def audit_request_context_from_headers(
 
     `trust_scope_headers=False`（production）では、client が指定する対象範囲の header
     （`x-rag-allowed-*`）を使わない。対象範囲は認証済みの利用者から決める（#214）。
+    `X-Tenant-ID` も使わない（tenant なし＝単一 tenant で動かす。client が tenant を
+    切り替えて別の tenant のデータを指定できないようにする。#225）。
     """
     resolved_settings = settings or get_settings()
     header_user_id = headers.get(USER_ID_HEADER) if allow_user_header else None
@@ -66,7 +68,9 @@ def audit_request_context_from_headers(
     if not trust_scope_headers:
         return AuditRequestContext(
             request_id=request_id,
-            tenant_id_hash=_header_hash(headers.get(TENANT_ID_HEADER), resolved_settings),
+            # ponytail: 単一 tenant 前提。複数 tenant が必要になったら、
+            # tenant を利用者 / ロールに割り当てて principal から決める。
+            tenant_id_hash=None,
             user_id_hash=_header_hash(user_id, resolved_settings),
             role_id_hash=_header_hash(headers.get(ROLE_ID_HEADER), resolved_settings),
             agent_id_hash=_header_hash(headers.get(AGENT_ID_HEADER), resolved_settings),
@@ -106,8 +110,8 @@ def audit_request_context_for_principal(
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
     利用者（`user_id_hash`）と対象範囲は利用者から決め、client の `X-User-ID` と
-    `x-rag-allowed-*` は使わない。`X-Tenant-ID` と memory の分割キー（role / agent / thread）は
-    従来どおり header から読む（絞り込み方向にしか働かない）。
+    `x-rag-allowed-*` と `X-Tenant-ID` は使わない（#225）。memory の分割キー（role / agent /
+    thread）は従来どおり header から読む（絞り込み方向にしか働かない）。
     """
     base = audit_request_context_from_headers(
         headers,

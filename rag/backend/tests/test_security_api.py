@@ -482,7 +482,8 @@ def test_production_context_comes_from_principal_not_headers(
     assert context.allowed_business_view_ids == frozenset({"bv-2"})
     assert context.allowed_knowledge_base_ids == frozenset({"kb-3"})
     assert context.allowed_document_ids is None
-    assert context.tenant_id_hash is not None
+    # production は client の X-Tenant-ID を使わない（テストの client は常に送っている。#225）。
+    assert context.tenant_id_hash is None
 
     expected = _principal_context_user_hash(user.user_uuid)
     assert context.user_id_hash == expected

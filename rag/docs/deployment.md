@@ -167,7 +167,7 @@ ADB（Oracle 26ai）と Wallet も stack が用意し（NL2SQL / Agent と共有
 - Embedding/Rerank: OCI Generative AI。
 - Observability: Prometheus、OpenTelemetry、Langfuse gateway。`RAG_TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、脱機密化済み RAG span event を非同期 HTTP JSON で転送する。
 - Secret: 共通 `.env`（`platform/.env`、`PLATFORM_*`）と `backend/.env`（`RAG_*`）から読み込む。
-- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。`X-Tenant-ID` / `X-User-ID` は raw 値を保存せず hash 化し、`RAG_AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
+- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。利用者（production はログインしたユーザー、local は `X-User-ID`）と、local の `X-Tenant-ID` は raw 値を保存せず hash 化し（production は `X-Tenant-ID` を使わない。#225）、`RAG_AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
 
 backend container は production entrypoint として Gunicorn + `uvicorn.workers.UvicornWorker` を使う。worker 数と timeout は `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、listen port は `PORT` で調整する。local 開発だけ `uvicorn app.main:app --reload` を使い、本番では `/api/ready` と golden set gate で昇格判定する。
 

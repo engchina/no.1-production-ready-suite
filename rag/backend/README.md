@@ -159,7 +159,7 @@ chunking は `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御し、通常方式�
 
 ## 検索フィルター
 
-HTTP header `X-Tenant-ID` がある場合、アップロード時に tenant id を hash 化して document に保存し、文書一覧、詳細、重複判定、検索 retrieval は同じ `tenant_id_hash` のデータだけを対象にします。raw tenant id は DB / レスポンス / 監査ログへ保存しません。tenant header がないローカル開発・CI では全体を参照できます。
+RAG は単一 tenant で動かします。`RAG_AUTH_MODE=production` では client の `X-Tenant-ID` を使わず、tenant の条件なしで動きます（client が tenant を切り替えて別の tenant のデータを指定できないようにするため。#225）。`RAG_AUTH_MODE=local` では、HTTP header `X-Tenant-ID` がある場合、アップロード時に tenant id を hash 化して document に保存し、文書一覧、詳細、重複判定、検索 retrieval は同じ `tenant_id_hash` のデータだけを対象にします（開発・テスト用）。raw tenant id は DB / レスポンス / 監査ログへ保存しません。tenant header がない場合は全体を参照できます。
 
 `RAG_AUTH_MODE=local` で、認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合、文書一覧、詳細、chunk count、検索 retrieval はその document/category scope にも閉じます。header が存在するが有効値が 0 件の場合は deny-all、未指定の場合だけ制限なしです。これらの raw scope 値は監査ログへ出しません。`production` では client の範囲 header（`X-User-ID` / `X-RAG-Allowed-*`）を使わず、ログインした利用者の権限から範囲を決めます。
 
