@@ -101,8 +101,12 @@ export function agentPermissionTargets(
         grantsAllSystemAdmin: t("security.permissions.businessViewsSystemAdmin"),
       },
       // Agent に業務ビューのマスタはなく、backend は名前 = ID で返す。
-      load:({ signal }) =>
-        loadTargets(signal).then((data) => data.business_views.map((item) => ({ id: item.id, name: item.name }))),
+      // RAG の業務ビューを読めなかったときは、読めた候補を出したまま理由を警告で表示する（#240）。
+      load: ({ signal }) =>
+        loadTargets(signal).then((data) => ({
+          items: data.business_views.map((item) => ({ id: item.id, name: item.name })),
+          warning: (data.business_view_warnings ?? []).join(" "),
+        })),
       selectedIds: (role) => role.business_view_ids ?? [],
       grantsAll: grantsAllByAdmin,
       // 一覧（Run に現れた ID とロールに割り当て済みの ID）にない業務ビューも ID を入力して足せる。

@@ -123,6 +123,8 @@ class BusinessViewTargetData(BaseModel):
 class AccessTargetsData(BaseModel):
     agents: list[AgentTargetData]
     business_views: list[BusinessViewTargetData]
+    # RAG の業務ビューを読めなかった理由（#240。画面は候補を出したまま警告を表示する）。
+    business_view_warnings: list[str] = Field(default_factory=list)
 
 
 def _sorted_or_none(values: frozenset[str] | None) -> list[str] | None:
