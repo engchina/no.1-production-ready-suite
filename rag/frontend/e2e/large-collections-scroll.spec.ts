@@ -1,28 +1,14 @@
 import { expect, type Locator, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ] as const;
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 for (const viewport of VIEWPORTS) {

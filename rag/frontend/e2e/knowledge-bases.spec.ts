@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 type SearchMode = "hybrid" | "vector" | "keyword";
@@ -34,23 +34,9 @@ interface DocumentSummary {
   knowledge_bases: { id: string; name: string }[];
 }
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 test("知識ベース管理で作成、文書追加、文書解除、アーカイブができる", async ({ page }) => {

@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+import { SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 
 interface DatabaseSettingsData {
   user: string;
@@ -51,23 +51,11 @@ const databaseSettings: DatabaseSettingsData = {
   config_source: "runtime",
 };
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/auth/me") {
-      await route.fulfill({ json: authStatus });
+      await route.fulfill({ json: LOCAL_AUTH_ME });
       return;
     }
 

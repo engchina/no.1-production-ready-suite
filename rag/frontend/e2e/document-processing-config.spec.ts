@@ -1,13 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
-
-const authStatus = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const documentDetail = {
   id: "doc-1",
@@ -287,7 +281,7 @@ async function mockWorkspace(
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
 });
 
 test("文書処理設定を保存し、手動再処理を案内する", async ({ page }) => {

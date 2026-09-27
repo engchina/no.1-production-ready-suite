@@ -124,6 +124,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "citation_feedback",
         "feedback_details",
         "evaluation_artifacts",
+        "role_access",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
 
@@ -275,7 +276,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "CREATE TABLE rag_feedback_details" in sql
     assert "RAG_FEEDBACK_DETAILS_TEXT_IDX" in sql
     assert "SYNC (ON COMMIT)" in sql
-    assert len(statements) == 62
+    assert "-- migration: 20260927_001_role_access" in sql
+    assert "REFERENCES platform_roles (role_id) ON DELETE CASCADE" in sql
+    assert len(statements) == 63
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -333,6 +336,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260926_003_feedback_reasons_corrected_answer",
         "20260926_004_docrag_prompts",
         "20260926_005_query_history",
+        "20260927_001_role_access",
     ]
 
 

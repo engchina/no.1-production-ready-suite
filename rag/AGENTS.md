@@ -72,7 +72,10 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
   - **業務ビュー**: RAG 検索、業務ビュー、品質評価。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、GraphRAG、エージェント計画。
   - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。
+  - **RAG セキュリティ**: 権限管理（ロールごとのメニュー権限・業務ビュー・ナレッジベース。RAG 固有。#214）。
+  - **ユーザーとロール**: ユーザー管理、ロール管理（3製品で共通。画面と API は platform の共有パッケージ）。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観（3製品で共通。画面と API は platform の共有パッケージ）。
+- ナビ・ルート・ページ内の操作は権限（`rag/backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
 - 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の保持の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（各ページのページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）に書く。
 - ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [UX 契約 buttons.md](../platform/docs/ux-contracts/buttons.md) に従う。
 

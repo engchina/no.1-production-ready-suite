@@ -15,7 +15,7 @@ variableGroups:
       - adb_is_mtls_connection_required
       - nl2sql_app_environment
       - nl2sql_app_auth_cookie_secure
-      - nl2sql_app_admin_login_user_id
+      - app_admin_login_user_id
       - agent_runtime_repository_backend
 
   - title: Required Configuration
@@ -97,8 +97,6 @@ variableGroups:
   - title: RAG
     visible: deploy_rag
     variables:
-      - rag_app_login_user
-      - rag_app_login_password
       - rag_app_auth_cookie_secure
       - rag_enable_parser_docling
       - rag_enable_parser_marker
@@ -108,10 +106,17 @@ variableGroups:
       - rag_instance_flex_shape_memory
       - rag_instance_boot_volume_size
 
+  - title: "アプリケーション管理者"
+    visible:
+      or:
+        - deploy_rag
+        - deploy_nl2sql
+    variables:
+      - app_admin_login_user_password
+
   - title: NL2SQL
     visible: deploy_nl2sql
     variables:
-      - nl2sql_app_admin_login_user_password
       - nl2sql_instance_display_name
       - nl2sql_instance_flex_shape_ocpus
       - nl2sql_instance_flex_shape_memory
@@ -618,30 +623,12 @@ variables:
     description: "Production Control Plane for AI Agents を専用の Compute に配備します。"
     default: true
 
-  rag_app_login_user:
-    type: string
-    required: true
-    visible: deploy_rag
-    title: "RAG login user"
-    description: "Written to RAG_AUTH_USERNAME. The RAG backend requires a Cookie session login (RAG_AUTH_MODE=production) for the UI and API."
-    default: "rag_admin"
-    pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
-
-  rag_app_login_password:
-    type: password
-    required: false
-    visible: deploy_rag
-    title: "RAG login password"
-    description: "Required when RAG is deployed. Written to RAG_AUTH_PASSWORD. 12-64 characters with uppercase, lowercase, and digits. Quotes, backslashes, and line breaks are not allowed."
-    confirmation: true
-    pattern: '^$|^[^"''\\\r\n]{12,64}$'
-
   rag_app_auth_cookie_secure:
     type: boolean
     required: true
     visible: deploy_rag
     title: "RAG secure session cookie (HTTPS only)"
-    description: "Written to RAG_AUTH_COOKIE_SECURE. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
+    description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the RAG Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
     default: false
 
   rag_enable_parser_docling:
@@ -718,22 +705,25 @@ variables:
     description: "Set true when NL2SQL is served through HTTPS."
     default: false
 
-  nl2sql_app_admin_login_user_id:
+  app_admin_login_user_id:
     type: enum
     required: true
     visible: false
-    title: "NL2SQL administrator login user ID"
+    title: "Administrator login user ID"
     description: "Fixed login user ID for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
     enum:
       - "system_admin"
     default: "system_admin"
 
-  nl2sql_app_admin_login_user_password:
+  app_admin_login_user_password:
     type: password
     required: false
-    visible: deploy_nl2sql
-    title: "NL2SQL administrator password"
-    description: "Required when NL2SQL is deployed. Login password for the built-in SYSTEM_ADMIN (login user ID: system_admin). 12-30 characters with uppercase, lowercase, and digits; must not include admin, double quotes, or line breaks."
+    visible:
+      or:
+        - deploy_rag
+        - deploy_nl2sql
+    title: "Administrator password"
+    description: "Required when RAG or NL2SQL is deployed. Login password of the configuration administrator (login user ID: system_admin) shared by RAG and NL2SQL, written to PLATFORM_ADMIN_LOGIN_USER_PASSWORD. Create the other users and roles from User Management after the first login. 12-30 characters with uppercase, lowercase, and digits; must not include admin, double quotes, or line breaks."
     confirmation: true
     pattern: '^$|^[^"\r\n]{12,30}$'
 
@@ -882,12 +872,6 @@ outputs:
   rag_ssh_to_instance:
     title: "RAG SSH command"
     displayText: "RAG SSH command"
-    type: copyableString
-    visible: deploy_rag
-
-  rag_app_login_user:
-    title: "RAG login user"
-    displayText: "RAG login user"
     type: copyableString
     visible: deploy_rag
 

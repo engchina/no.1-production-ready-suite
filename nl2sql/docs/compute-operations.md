@@ -7,8 +7,9 @@ AI Database, form inputs, packaging, and releases), see
 
 This page covers what runs on the NL2SQL Compute instance and how to operate it.
 The Resource Manager inputs for NL2SQL are prefixed with `nl2sql_`
-(for example `nl2sql_app_admin_login_user_password` and
-`nl2sql_oracle_deepsec_enabled`).
+(for example `nl2sql_oracle_deepsec_enabled`). The configuration administrator
+password `app_admin_login_user_password` (login user ID `system_admin`) is shared
+with RAG.
 
 ## Runtime Notes
 

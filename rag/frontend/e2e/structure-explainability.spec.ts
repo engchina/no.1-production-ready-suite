@@ -3,6 +3,7 @@ import {
   expectMainScrollEndsAtContent,
   expectNoPageOverflow,
   mockDatabaseReady,
+  mockLocalAuth,
 } from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
@@ -11,23 +12,9 @@ const PNG_PIXEL =
 // 分割で生じた prefix 無し base64 断片の模擬。
 const BASE64_FRAGMENT = "A".repeat(300);
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 test("Dashboard で取込品質を確認できる", async ({ page }) => {

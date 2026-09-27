@@ -1,18 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const KB_COUNT = 20;
 // 空の DEFAULT は表示し、通常 KB の空項目(index 1)だけを隠す。
@@ -21,9 +9,7 @@ const VISIBLE_DEFAULT = KB_COUNT - EMPTY_COUNT;
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
   await mockManyKnowledgeBases(page);
 });
 
@@ -86,7 +72,7 @@ test("表示中をすべて選択しチップで可視化、クリアで解除�
 
   // フッターのクリアで選択をすべて解除できる。
   await page.getByRole("button", { name: "クリア" }).click();
-  await expect(page.getByText("すべての知識ベースを対象にします。")).toBeVisible();
+  await expect(page.getByText("利用できるすべての知識ベースを対象にします。")).toBeVisible();
 });
 
 async function mockManyKnowledgeBases(page: Page) {

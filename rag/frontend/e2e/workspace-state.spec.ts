@@ -1,24 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { mockDatabaseReady } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
  * （platform docs/ux-contracts/workspace-state.md）。desktop / mobile(375px) の両 project で実行する。
  */
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-    chat_enabled: true,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 const businessView = {
   id: "bv-1",
@@ -41,7 +28,7 @@ function pageEnvelope<T>(items: T[]) {
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
 });
 
 /** サイドナビの項目を開く（375px では icon-only のレールでも名前で辿れる）。 */

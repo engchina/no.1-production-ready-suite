@@ -1,11 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
-
-const auth = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const businessView = {
   id: "bv-1",
@@ -121,7 +115,7 @@ function searchStreamBody(chunkId: string): string {
 
 test("引用カードに variant(chunk_set)バッジが出る", async ({ page }, testInfo) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: auth }));
+  await mockLocalAuth(page);
   await page.route("**/api/business-views**", (route) =>
     route.fulfill({
       json: {

@@ -3,7 +3,8 @@
 import { PageBody } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 
-import { NAV_SECTIONS, type NavItem } from "@/components/layout/nav-config";
+import { visibleNavSections, type NavItem } from "@/components/layout/nav-config";
+import { useAuth } from "@/components/security/AuthProvider";
 import { APP_ROUTES } from "@/lib/routes";
 import { ja, t, type I18nKey } from "@/lib/i18n";
 
@@ -32,9 +33,13 @@ function stageDescription(item: NavItem): string {
  * 検索・回答設定の俯瞰ハブ。サイドバーの「検索・回答設定」セクション(処理順)を
  * ナレッジ構築 / 検索・回答 の 2 フェーズに分け、各工程へのカード導線を 1 画面で提供する。
  * セクション項目を動的に読むため、工程の増減に追従して drift しない。
+ * 権限のない工程はサイドナビと同じ判定で出さず、工程が 0 件のフェーズは見出しごと出さない（#214）。
  */
 export function PipelineHubClient() {
-  const section = NAV_SECTIONS.find((item) => item.titleKey === "nav.section.pipeline");
+  const { hasPermission } = useAuth();
+  const section = visibleNavSections(hasPermission).find(
+    (item) => item.titleKey === "nav.section.pipeline"
+  );
   const stages = (section?.items ?? []).filter((item) => item.href !== APP_ROUTES.settingsPipeline);
   const ingestion = stages.filter((item) => INGESTION_HREFS.has(item.href));
   const query = stages.filter((item) => !INGESTION_HREFS.has(item.href));

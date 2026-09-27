@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from time import perf_counter
 
@@ -13,12 +13,12 @@ from fastapi.exceptions import RequestValidationError
 from pr_backend_core.api.errors import api_error_response, http_exception_messages
 from pr_backend_core.observability.request_context import generate_request_id
 from pr_backend_core.security.cors import configure_cors
+from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
 from prometheus_client import make_asgi_app
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
 from app.api.router import api_router
-from app.auth import attach_refreshed_auth_cookie, auth_is_enabled, prepare_auth_request
 from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
@@ -145,27 +145,28 @@ def create_app() -> FastAPI:
     async def metrics_middleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """HTTP レベルのメトリクスを記録する（認証/監査コンテキスト付与込み）。"""
+        """HTTP レベルのメトリクスを記録し、監査コンテキストの初期値を付与する。
+
+        認証と認可は `/api` の router の dependency（`app.security.dependencies`）が行い、
+        認可を通った利用者から監査 / 対象範囲の context を作り直す（#214）。ここでは
+        dependency を通らない応答（公開 path・404 など）のための初期値だけを作る。
+        production では client の `X-User-ID` と対象範囲の header を使わない。
+        """
         started_at = perf_counter()
-        # request id の検証/採番は共有インフラへ委譲（認証/監査は RAG 固有のまま）。
+        # request id の検証/採番は共有インフラへ委譲する。
         request_id = generate_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
-        response = prepare_auth_request(request, settings)
-        session = getattr(request.state, "auth_session", None)
-        session_user_id = getattr(session, "user_id", None)
-        auth_enabled = auth_is_enabled(settings)
+        local_mode = settings.local_debug_enabled
         context = audit_request_context_from_headers(
             request.headers,
             request_id=request_id,
             settings=settings,
-            authenticated_user_id=session_user_id if auth_enabled else None,
-            default_user_id=session_user_id if not auth_enabled else None,
-            allow_user_header=not auth_enabled,
+            allow_user_header=local_mode,
+            trust_scope_headers=local_mode,
         )
         context_token = set_audit_request_context(context)
         try:
-            if response is None:
-                response = await call_next(request)
+            response = await call_next(request)
         except Exception:
             record_http_request(
                 method=request.method,
@@ -175,7 +176,6 @@ def create_app() -> FastAPI:
             )
             raise
         else:
-            attach_refreshed_auth_cookie(response, request, settings)
             response.headers["X-Request-ID"] = request_id
             record_http_request(
                 method=request.method,
@@ -195,6 +195,76 @@ def create_app() -> FastAPI:
             http_exception_messages(exc.detail, exc.status_code),
             headers=exc.headers,
             request_id=_response_request_id(request),
+        )
+
+    @app.exception_handler(SecurityApiError)
+    async def security_api_error_handler(request: Request, exc: SecurityApiError) -> JSONResponse:
+        """認証・認可・ユーザー / ロール操作のエラー（共通認証。#214）。
+
+        ApiResponse の envelope に、共通画面が使う `error_code` と `problem.field_errors` を足す
+        （NL2SQL と同じ形）。
+        """
+        return security_error_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.public_message,
+            code=exc.code,
+            title=exc.title,
+            retryable=exc.retryable,
+            field_errors=exc.field_errors,
+        )
+
+    @app.exception_handler(SecurityMigrationRequired)
+    async def security_migration_required_handler(
+        request: Request, exc: SecurityMigrationRequired
+    ) -> JSONResponse:
+        """共通認証・RAG のロール権限の表が未作成（システムテーブルの初期化が必要）。"""
+        logger.error(
+            "security_schema_migration_required",
+            extra={"request_id": _response_request_id(request), "database_object": exc.object_name},
+        )
+        return security_error_response(
+            request,
+            status_code=409,
+            detail=(
+                "認証・権限のテーブルが未作成です。システム設定 > データベース の"
+                "「システムテーブル」で作成・更新してから再試行してください。"
+            ),
+            code="SECURITY_SCHEMA_MIGRATION_REQUIRED",
+            title="セキュリティ初期化が必要です",
+            retryable=False,
+            field_errors=(),
+        )
+
+    def security_error_response(
+        request: Request,
+        *,
+        status_code: int,
+        detail: str,
+        code: str,
+        title: str | None,
+        retryable: bool,
+        field_errors: Sequence[Mapping[str, str]],
+    ) -> JSONResponse:
+        request_id = _response_request_id(request)
+        return JSONResponse(
+            status_code=status_code,
+            headers={"X-Request-ID": request_id},
+            content={
+                "data": None,
+                "error_messages": [detail],
+                "warning_messages": [],
+                "error_code": code,
+                "problem": {
+                    "title": title,
+                    "status": status_code,
+                    "detail": detail,
+                    "code": code,
+                    "request_id": request_id,
+                    "retryable": retryable,
+                    "field_errors": [dict(item) for item in field_errors],
+                },
+            },
         )
 
     @app.exception_handler(RequestValidationError)

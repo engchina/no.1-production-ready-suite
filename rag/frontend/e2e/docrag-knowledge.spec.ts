@@ -1,5 +1,5 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // rag_poc(DocRAG)移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
 // 検索前の類似問提示、DocRAG 回答の根拠パネル。
@@ -48,11 +48,7 @@ const faqSuggestion = {
 
 async function mockCommon(page: Page) {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: envelope({ mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null }),
-    })
-  );
+  await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({
       json: envelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }),

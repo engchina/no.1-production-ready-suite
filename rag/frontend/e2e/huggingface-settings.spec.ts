@@ -1,18 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 interface HfSettings {
   endpoint: string;
@@ -46,7 +34,7 @@ async function mockHuggingFace(
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   await mockDatabaseReady(page);
 });
 

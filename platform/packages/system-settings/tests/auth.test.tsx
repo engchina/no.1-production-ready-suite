@@ -12,6 +12,7 @@ import {
   CSRF_HEADER_NAME,
   ForbiddenPage,
   LoginPage,
+  requestedPathFrom,
   PasswordChangePage,
   RequireAuth,
   createPermissionCheck,
@@ -128,6 +129,17 @@ describe("CSRF と認証イベント", () => {
       { type: "app-auth-unauthorized", detail: null },
       { type: "app-auth-forbidden", detail: { requestId: "req-1" } },
     ]);
+  });
+});
+
+describe("ログイン後の戻り先", () => {
+  it("アプリ内のパスだけを使い、別オリジンや不正な値は使わない", () => {
+    expect(requestedPathFrom({ from: "/search?q=1" })).toBe("/search?q=1");
+    expect(requestedPathFrom({ from: "//evil.example/" })).toBeNull();
+    expect(requestedPathFrom({ from: "https://evil.example/" })).toBeNull();
+    expect(requestedPathFrom({ from: "/\\evil.example" })).toBeNull();
+    expect(requestedPathFrom({ from: 1 })).toBeNull();
+    expect(requestedPathFrom(null)).toBeNull();
   });
 });
 

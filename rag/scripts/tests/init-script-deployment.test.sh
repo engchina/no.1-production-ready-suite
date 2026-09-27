@@ -84,8 +84,7 @@ run_runtime_env_case() (
 
   cat > "${APP_ROOT}/props/backend.env" <<'EOF'
 RAG_AUTH_MODE=production
-RAG_AUTH_PASSWORD='Ab$cd#Ef12345'
-RAG_AUTH_SESSION_SECRET=
+RAG_PARSER_ADAPTER_BACKEND='unst$ructured'
 RAG_AUDIT_CONTEXT_HASH_SALT=
 EOF
   cat > "${APP_ROOT}/props/platform.env" <<'EOF'
@@ -164,13 +163,12 @@ test "$(cat "${TEST_TMP_DIR}/degraded/ready")" = "false" || fail "schema 初期�
 run_runtime_env_case
 first="${TEST_TMP_DIR}/runtime-env/first.env"
 second="${TEST_TMP_DIR}/runtime-env/second.env"
-grep -Eq '^RAG_AUTH_SESSION_SECRET=[0-9a-f]{64}$' "${first}" || fail "RAG_AUTH_SESSION_SECRET が生成されていない"
 grep -Eq '^RAG_AUDIT_CONTEXT_HASH_SALT=[0-9a-f]{64}$' "${first}" || fail "RAG_AUDIT_CONTEXT_HASH_SALT が生成されていない"
 cmp -s "${first}" "${second}" || fail "再実行で生成済みの secret が変わった"
-grep -Fqx "RAG_AUTH_PASSWORD='Ab\$cd#Ef12345'" "${first}" || fail "入力の password が変更された"
+grep -Fqx "RAG_PARSER_ADAPTER_BACKEND='unst\$ructured'" "${first}" || fail "入力の値が変更された"
 test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/no.1-production-ready-suite/rag/backend/.env")" = "600" \
   || fail "backend/.env の permission が 0600 ではない"
-test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/props/auth_session_secret")" = "600" \
+test "$(stat -c '%a' "${TEST_TMP_DIR}/runtime-env/app/props/audit_context_hash_salt")" = "600" \
   || fail "生成した secret の permission が 0600 ではない"
 
 # --- platform/.env（3製品共通の設定。PLATFORM_*） ---

@@ -60,21 +60,17 @@ locals {
     var.rag_enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],
   )
 
-  # rag/backend/.env（RAG_*。docker compose の env_file）。compose の env_file は `$` を展開するため、
-  # 入力値は single quote で囲んで文字どおりに渡す（入力の validation で single quote を禁止している）。
+  # rag/backend/.env（RAG_*。docker compose の env_file）。
+  # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#214）。
   # RAG_ENVIRONMENT と service URL、PLATFORM_LOCAL_STORAGE_DIR / PLATFORM_OCI_CONFIG_FILE は
   # docker-compose.yml の environment が正本のため、ここには書かない。
-  # RAG_AUTH_SESSION_SECRET / RAG_AUDIT_CONTEXT_HASH_SALT は instance 上で生成する（state に残さない）。
+  # RAG_AUDIT_CONTEXT_HASH_SALT は instance 上で生成する（state に残さない）。
   # ADB の DDL は Terraform に持たない。init_script.sh がアプリの system schema CLI で適用する。
   rag_backend_env = <<-EOT
 RAG_APP_VERSION=0.1.0
 RAG_LOG_LEVEL=INFO
 
 RAG_AUTH_MODE=production
-RAG_AUTH_USERNAME='${var.rag_app_login_user}'
-RAG_AUTH_PASSWORD='${var.rag_app_login_password}'
-RAG_AUTH_SESSION_SECRET=
-RAG_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}
 RAG_AUDIT_CONTEXT_HASH_SALT=
 
 RAG_PARSER_ADAPTER_BACKEND=unstructured
@@ -172,16 +168,20 @@ PLATFORM_ORACLE_ADB_REGION=${var.region}
 
 PLATFORM_UPLOAD_STORAGE_BACKEND=local
 PLATFORM_OBJECT_STORAGE_REGION=${var.region}
+
+PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}
+PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}
 EOT
 
-  # 製品ごとの Compute に置く共通 .env の差分（データの置き場所と、共通認証の構成管理者）。
+  # 製品ごとの Compute に置く共通 .env の差分（データの置き場所と、Cookie を HTTPS 限定にするか）。
   # RAG の保存先と model-settings.json は docker-compose.yml が正本（PLATFORM_LOCAL_STORAGE_DIR）。
   platform_env_product = {
-    rag    = ""
+    rag    = <<-EOT
+
+PLATFORM_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}
+EOT
     nl2sql = <<-EOT
 
-PLATFORM_ADMIN_LOGIN_USER_ID=${var.nl2sql_app_admin_login_user_id}
-PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.nl2sql_app_admin_login_user_password}
 PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}
 
 PLATFORM_MODEL_SETTINGS_FILE=${local.nl2sql_data_dir_host}/model-settings.json

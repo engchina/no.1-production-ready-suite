@@ -1,21 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // 段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の REVIEW ゲート UI を検証する。
 // 文書状態が REVIEW のとき、DocumentWorkspace に「承認して Chunk 作成」と段階別再処理、
 // 確認待ち Banner が出ること、承認の操作フィードバック(toast)を確認する。
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 const DOC_ID = "doc-review";
 
@@ -180,7 +168,7 @@ async function mockReviewWorkspace(page: Page) {
   } = { approve: 0, save: 0, approveBody: null, saveBody: null };
   const extraction = structuredClone(reviewDocumentDetail("REVIEW").extraction);
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({
       json: {

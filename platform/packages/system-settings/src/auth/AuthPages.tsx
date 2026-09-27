@@ -64,6 +64,18 @@ export interface LoginPageProps extends AuthPageProps {
 }
 
 /** ログイン（NL2SQL から移設。#220）。ログイン済みなら既定の画面へ移す。 */
+/**
+ * ログイン前に開こうとしていた URL（`RequireAuth` が `state.from` に入れる）。
+ * 別オリジンへ飛ばされないよう、`/` で始まるアプリ内のパスだけを使う。
+ */
+export function requestedPathFrom(state: unknown): string | null {
+  const from = (state as { from?: unknown } | null)?.from;
+  if (typeof from !== "string" || !from.startsWith("/") || from.startsWith("//") || from.includes("\\")) {
+    return null;
+  }
+  return from;
+}
+
 export function LoginPage({ brand, routes, entryRoute, messages, describeLoginError }: LoginPageProps) {
   const m = { ...AUTH_MESSAGES, ...messages };
   const auth = useAuth();
@@ -74,10 +86,18 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // ログインに成功すると、この再描画で移る。元の URL があればそこへ（権限は RequireAuth が確認する）。
+  const requested = requestedPathFrom(location.state);
   if (auth.status === "authenticated") {
     return (
       <Navigate
-        to={auth.user?.force_password_change ? routes.passwordChange : entryRoute(auth.hasPermission)}
+        to={
+          auth.user?.force_password_change
+            ? routes.passwordChange
+            : requested && requested !== routes.login
+              ? requested
+              : entryRoute(auth.hasPermission)
+        }
         replace
       />
     );
@@ -93,11 +113,12 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
     setError("");
     try {
       const current = await auth.login(loginUserId, password);
-      const requested = (location.state as { from?: string } | null)?.from;
       navigate(
         current.force_password_change
           ? routes.passwordChange
-          : requested || entryRoute(auth.permissionCheckFor(current)),
+          : requested && requested !== routes.login
+            ? requested
+            : entryRoute(auth.permissionCheckFor(current)),
         { replace: true },
       );
     } catch (cause) {

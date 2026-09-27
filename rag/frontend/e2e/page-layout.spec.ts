@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { APP_ROUTES } from "../src/lib/routes";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // RAG の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#107。#96 の作業画面だけの wide を置き換え）。
 // PageHeader と PageBody の wide がずれると、1920px 以上でタイトルと本文の左端がずれる。
@@ -15,21 +15,16 @@ test.beforeEach(async ({ page }) => {
     route.fulfill({ status: 404, json: { data: null, error_messages: ["not mocked"], warning_messages: [] } })
   );
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-        error_messages: [],
-        warning_messages: [],
-      },
-    })
-  );
+  await mockLocalAuth(page);
 });
 
-/** ログイン以外の全ルート。詳細画面（戻るリンク + 本文の 2 つの PageBody で構成）は代表 id で開く。 */
+/**
+ * 認証画面（ログイン・パスワード変更・権限なし。AppShell を持たない）以外の全ルート。
+ * 詳細画面（戻るリンク + 本文の 2 つの PageBody で構成）は代表 id で開く。
+ */
 const PATHS = [
   ...Object.entries(APP_ROUTES)
-    .filter(([name]) => !["login", "documents"].includes(name))
+    .filter(([name]) => !["login", "passwordChange", "forbidden", "documents"].includes(name))
     .map(([, path]) => path),
   `${APP_ROUTES.knowledgeBases}/kb-layout`,
   `${APP_ROUTES.documents}/doc-layout`,

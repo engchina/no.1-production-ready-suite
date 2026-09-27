@@ -1,17 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // 外観（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
 
-const authStatus = {
-  data: { mode: "local", auth_required: false, authenticated: true, user: null, expires_at: null },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   await mockDatabaseReady(page);
 });
 

@@ -1,21 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mockLocalAuth } from "./_helpers";
 
 /**
  * DB 停止時、閲覧系ページが「全画面エラー」ではなく
  * 空状態 + 縮退バナーで通常どおり開けることを検証する。
  */
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 const DB_WARNING = "データベースに接続できませんでした。データベースの起動状態を確認して再試行してください。";
 
@@ -29,7 +18,7 @@ function degradedPage() {
 }
 
 async function routeDegraded(page: Page) {
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
   // DB ゲートは通過させ(セッション中に個別クエリが縮退するケースを検証する)
   await page.route("**/api/ready/database", (route) =>
     route.fulfill({

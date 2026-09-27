@@ -1,22 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mockLocalAuth } from "./_helpers";
 
 /**
  * DB ゲート: 設定ページ以外は、DB 接続不可/未設定のとき
  * エラー画面ではなく「DB 接続を確認/設定してください」案内を表示し、
  * データベース設定への導線を出す。設定ページはゲートを通さない。
  */
-
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
 
 function dbStatus(
   status: "ok" | "not_configured" | "unreachable" | "setup_required"
@@ -47,7 +36,7 @@ test("DB 接続済みでも schema 未作成ならデータベース設定へ案
 });
 
 async function routeAuth(page: Page) {
-  await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
+  await mockLocalAuth(page);
 }
 
 test("DB 接続不可時、機能ページはエラーではなく確認案内を表示する", async ({ page }) => {
@@ -99,6 +88,21 @@ test("設定ページは DB が無くてもゲートを通って到達できる"
 
   // ゲートに塞がれず、データベース設定ページ自体が表示される
   await expect(page.getByRole("heading", { name: "データベース設定" })).toBeVisible();
+});
+
+test("ユーザー管理・ロール管理・権限管理は DB が無いとゲートの案内を出す", async ({ page }) => {
+  await routeAuth(page);
+  await page.route("**/api/ready/database", (route) =>
+    route.fulfill({ json: dbStatus("not_configured") })
+  );
+
+  // ユーザーとロールは DB に持つため、/settings 配下でもゲートを通す（#214）。
+  for (const path of ["/settings/security/users", "/settings/security/permissions"]) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("heading", { name: "データベースの接続情報が未設定です" })
+    ).toBeVisible();
+  }
 });
 
 test("DB 利用可能時は本来のページを表示する", async ({ page }) => {

@@ -2,9 +2,10 @@
 
 import hashlib
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.config import Settings, get_settings
 
@@ -34,6 +35,8 @@ class AuditRequestContext:
     allowed_document_ids: frozenset[str] | None = field(default=None, repr=False)
     allowed_category_names: frozenset[str] | None = field(default=None, repr=False)
     allowed_knowledge_base_ids: frozenset[str] | None = field(default=None, repr=False)
+    # 利用できる業務ビュー（None は制限なし）。production では認証済みの利用者から決める（#214）。
+    allowed_business_view_ids: frozenset[str] | None = field(default=None, repr=False)
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -50,11 +53,25 @@ def audit_request_context_from_headers(
     authenticated_user_id: str | None = None,
     default_user_id: str | None = None,
     allow_user_header: bool = True,
+    trust_scope_headers: bool = True,
 ) -> AuditRequestContext:
-    """HTTP header から監査用 context を作る。raw id は保存しない。"""
+    """HTTP header から監査用 context を作る。raw id は保存しない。
+
+    `trust_scope_headers=False`（production）では、client が指定する対象範囲の header
+    （`x-rag-allowed-*`）を使わない。対象範囲は認証済みの利用者から決める（#214）。
+    """
     resolved_settings = settings or get_settings()
     header_user_id = headers.get(USER_ID_HEADER) if allow_user_header else None
     user_id = authenticated_user_id or header_user_id or default_user_id
+    if not trust_scope_headers:
+        return AuditRequestContext(
+            request_id=request_id,
+            tenant_id_hash=_header_hash(headers.get(TENANT_ID_HEADER), resolved_settings),
+            user_id_hash=_header_hash(user_id, resolved_settings),
+            role_id_hash=_header_hash(headers.get(ROLE_ID_HEADER), resolved_settings),
+            agent_id_hash=_header_hash(headers.get(AGENT_ID_HEADER), resolved_settings),
+            thread_id_hash=_header_hash(headers.get(THREAD_ID_HEADER), resolved_settings),
+        )
     return AuditRequestContext(
         request_id=request_id,
         tenant_id_hash=_header_hash(headers.get(TENANT_ID_HEADER), resolved_settings),
@@ -75,6 +92,53 @@ def audit_request_context_from_headers(
             normalizer=_normalize_knowledge_base_id,
         ),
     )
+
+
+def audit_request_context_for_principal(
+    headers: Mapping[str, str],
+    *,
+    request_id: str,
+    user_uuid: str,
+    allowed_business_view_ids: frozenset[str] | None,
+    allowed_knowledge_base_ids: frozenset[str] | None,
+    settings: Settings | None = None,
+) -> AuditRequestContext:
+    """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
+
+    利用者（`user_id_hash`）と対象範囲は利用者から決め、client の `X-User-ID` と
+    `x-rag-allowed-*` は使わない。`X-Tenant-ID` と memory の分割キー（role / agent / thread）は
+    従来どおり header から読む（絞り込み方向にしか働かない）。
+    """
+    base = audit_request_context_from_headers(
+        headers,
+        request_id=request_id,
+        settings=settings,
+        authenticated_user_id=user_uuid,
+        allow_user_header=False,
+        trust_scope_headers=False,
+    )
+    return replace(
+        base,
+        allowed_business_view_ids=allowed_business_view_ids,
+        allowed_knowledge_base_ids=allowed_knowledge_base_ids,
+    )
+
+
+@contextmanager
+def unrestricted_access_scope() -> Iterator[None]:
+    """業務ビュー・ナレッジベースの対象範囲を一時的に外す（tenant は保つ）。
+
+    既定データ（DEFAULT）の存在確認や、権限管理の ID 検証など、利用者の範囲と無関係に
+    tenant 内の全件を見る必要がある処理だけで使う。
+    """
+    current = current_audit_request_context()
+    token = set_audit_request_context(
+        replace(current, allowed_business_view_ids=None, allowed_knowledge_base_ids=None)
+    )
+    try:
+        yield
+    finally:
+        reset_audit_request_context(token)
 
 
 def set_audit_request_context(

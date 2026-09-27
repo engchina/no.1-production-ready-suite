@@ -122,6 +122,35 @@ ln -s "${NEW}" "${OLD}"
 6. `/api/ready` がすべて `ok` になること、システム設定画面（OCI 認証・アップロード保存先・モデル・データベース）に
    移行前の値が表示されることを確認する。確認後に `*.bak-211` を削除する。
 
+## 既存環境の更新手順（#214 共通認証と権限管理）
+
+RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` / `RAG_AUTH_PASSWORD` / `RAG_AUTH_SESSION_SECRET`）から、
+3製品共通の認証（構成管理者 `system_admin` と DB ユーザー）に変わった。`RAG_AUTH_MODE=production` の環境は、更新時に次を行う。
+
+1. 共通 `.env` に構成管理者を設定する（NL2SQL と同じ値を共有する）。
+
+   ```bash
+   PLATFORM_ADMIN_LOGIN_USER_ID=system_admin
+   PLATFORM_ADMIN_LOGIN_USER_PASSWORD=<12〜30 文字、大文字・小文字・数字を含み、admin と " を含まない>
+   ```
+
+   HTTPS で配信している場合は `PLATFORM_AUTH_COOKIE_SECURE=true` にする。`backend/.env` の
+   `RAG_AUTH_USERNAME` / `RAG_AUTH_PASSWORD` / `RAG_AUTH_SESSION_SECRET` / `RAG_AUTH_SESSION_TIMEOUT_SECONDS` /
+   `RAG_AUTH_COOKIE_NAME` / `RAG_AUTH_COOKIE_SECURE` はもう読まないので削除する。
+2. 更新した版で起動し、システムテーブルを初期化する（`PLATFORM_*` がなければ作り、`RAG_ROLE_*` を追加する。冪等）。
+
+   ```bash
+   sudo /usr/local/bin/rag-compose run --rm --no-deps -T backend uv run --no-sync python -m app.rag.system_schema_cli initialize
+   ```
+
+   画面の「システム設定 > データベース > RAG システムテーブル」からでもよい。
+3. `system_admin` でログインし、「ユーザーとロール」でロールとユーザーを作り、「RAG セキュリティ > 権限管理」で
+   ロールごとのメニュー・業務ビュー・ナレッジベースを設定する。NL2SQL と同じ Oracle schema を使う場合、ユーザーとロールは NL2SQL と共有される。
+4. 注意:
+   - 会話と回答履歴の持ち主は、ログインしたユーザー（`user_uuid`）になる。旧方式で作った会話（持ち主は共通の `admin-user-id`）は、新しいユーザーからは見えない（移行はしない）。
+   - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
+   - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
+
 ## 本番構成
 
 OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台で `docker-compose.yml`
@@ -294,7 +323,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_RATE_LIMIT_ENABLED`: 高コスト API の app 内 limiter。外部 API Gateway / Ingress limiter と併用できる。
 - `RAG_RATE_LIMIT_WINDOW_SECONDS`: fixed-window limiter の窓幅。
 - `RAG_RATE_LIMIT_SEARCH_REQUESTS` / `RAG_RATE_LIMIT_EVALUATION_RUNS` / `RAG_RATE_LIMIT_UPLOADS` / `RAG_RATE_LIMIT_INGEST_REQUESTS`: tenant/user hash 単位の窓内上限。OCI / Oracle / LLM の quota と業務ピークに合わせて調整する。
-- `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: 認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
+- `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: `RAG_AUTH_MODE=local` のときだけ使う、認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header（`production` ではログインした利用者の権限から範囲を決め、この header は使わない。#214）。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
 - `RAG_GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS`: query / answer 内の個人番号、口座番号、電話番号、メールアドレスらしき値を `[機微情報]` にマスクする。外部 DLP と責務分担する場合だけ無効化を検討する。
 
 安全チェックを含むリリースは、コード展開後に `uv run python -m app.rag.chat_history_sanitization --dry-run --format json` を実行し、Oracle バックアップを取得してから `--apply` する。適用後は `rag_guardrail_findings_total` の `guardrail_backend_unavailable` / `prompt_injection` / `low_groundedness` と阻止率を監視する。CLI は冪等で、原文の別バックアップをアプリ DB 内には作成しない。

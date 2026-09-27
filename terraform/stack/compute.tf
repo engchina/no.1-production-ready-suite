@@ -49,12 +49,8 @@ resource "oci_core_instance" "product" {
   # 製品固有の入力は、その製品を配備するときだけ必須にする。
   lifecycle {
     precondition {
-      condition     = each.key != "rag" || trimspace(var.rag_app_login_password) != ""
-      error_message = "rag_app_login_password must be configured when deploy_rag is true. The RAG backend requires a login (RAG_AUTH_MODE=production) for the UI and API."
-    }
-    precondition {
-      condition     = each.key != "nl2sql" || trimspace(var.nl2sql_app_admin_login_user_password) != ""
-      error_message = "nl2sql_app_admin_login_user_password must be configured when deploy_nl2sql is true."
+      condition     = !contains(["rag", "nl2sql"], each.key) || trimspace(var.app_admin_login_user_password) != ""
+      error_message = "app_admin_login_user_password must be configured when deploy_rag or deploy_nl2sql is true. RAG and NL2SQL require a login (system_admin and the users created in User Management)."
     }
     precondition {
       condition     = each.key != "nl2sql" || var.nl2sql_app_environment == "local" || var.nl2sql_app_auth_cookie_secure

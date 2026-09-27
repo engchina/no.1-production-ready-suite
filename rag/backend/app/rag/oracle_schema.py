@@ -36,6 +36,7 @@ from app.clients.oracle import (
     oracle_message_schema_sql,
     oracle_prompt_version_schema_sql,
     oracle_query_history_schema_sql,
+    oracle_role_access_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_index_parameters_sql,
     oracle_text_preferences_sql,
@@ -263,6 +264,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_runs",
             sql=oracle_evaluation_artifact_schema_sql(),
         ),
+        # ロールの RAG 権限と対象範囲（#214）。PLATFORM_ROLES と業務ビュー・KB を参照する。
+        OracleSchemaSection(
+            name="role_access",
+            table_name="rag_role_permissions",
+            sql=oracle_role_access_schema_sql(),
+        ),
     ]
 
 
@@ -469,6 +476,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260926_005_query_history",
             table_name="rag_query_history",
             sql=_query_history_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260927_001_role_access",
+            table_name="rag_role_permissions",
+            sql=_role_access_migration_sql(),
         ),
     ]
 
@@ -1016,6 +1028,68 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_query_history_view_idx '
             || 'ON rag_query_history (business_view_id, created_at DESC)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _role_access_migration_sql() -> str:
+    """ロールの RAG 権限と対象範囲の表を追加する(冪等。#214)。
+
+    `PLATFORM_ROLES` は共通認証の DDL（`apply_platform_auth_schema`）が先に作る。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_role_permissions ('
+            || 'role_id VARCHAR2(36) NOT NULL,'
+            || 'permission_code VARCHAR2(128) NOT NULL,'
+            || 'CONSTRAINT rag_role_permissions_pk PRIMARY KEY (role_id, permission_code),'
+            || 'CONSTRAINT rag_role_permissions_role_fk FOREIGN KEY (role_id) '
+            || 'REFERENCES platform_roles (role_id) ON DELETE CASCADE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_BUSINESS_VIEWS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_role_business_views ('
+            || 'role_id VARCHAR2(36) NOT NULL,'
+            || 'business_view_id VARCHAR2(64) NOT NULL,'
+            || 'CONSTRAINT rag_role_business_views_pk PRIMARY KEY (role_id, business_view_id),'
+            || 'CONSTRAINT rag_role_business_views_role_fk FOREIGN KEY (role_id) '
+            || 'REFERENCES platform_roles (role_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_role_business_views_view_fk FOREIGN KEY (business_view_id) '
+            || 'REFERENCES rag_business_views (business_view_id) ON DELETE CASCADE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes WHERE index_name = 'RAG_ROLE_BUSINESS_VIEWS_VIEW_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_role_business_views_view_idx '
+            || 'ON rag_role_business_views (business_view_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_KNOWLEDGE_BASES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_role_knowledge_bases ('
+            || 'role_id VARCHAR2(36) NOT NULL,'
+            || 'knowledge_base_id VARCHAR2(64) NOT NULL,'
+            || 'CONSTRAINT rag_role_knowledge_bases_pk PRIMARY KEY (role_id, knowledge_base_id),'
+            || 'CONSTRAINT rag_role_knowledge_bases_role_fk FOREIGN KEY (role_id) '
+            || 'REFERENCES platform_roles (role_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_role_knowledge_bases_kb_fk FOREIGN KEY (knowledge_base_id) '
+            || 'REFERENCES rag_knowledge_bases (knowledge_base_id) ON DELETE CASCADE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes WHERE index_name = 'RAG_ROLE_KNOWLEDGE_BASES_KB_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_role_knowledge_bases_kb_idx '
+            || 'ON rag_role_knowledge_bases (knowledge_base_id)';
     END IF;
 END;
 /

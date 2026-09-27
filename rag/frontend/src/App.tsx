@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
   Link,
   Navigate,
@@ -11,15 +11,14 @@ import {
 } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 
-import {
-  AppShell,
-  PageBody,
-  PageHeader,
-  Button,
-  Skeleton,
-} from "@engchina/production-ready-ui";
+import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
+import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
-import { LoginPage } from "@/components/auth/LoginPage";
+import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
+import { ragIdentityKey, useAuth } from "@/components/security/AuthProvider";
+import { SecurityPermissionsPage } from "@/components/security/SecurityPermissionsPage";
+import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
+import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DashboardClient } from "@/components/dashboard/DashboardClient";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
@@ -34,7 +33,6 @@ import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
-import { ErrorState } from "@/components/StateViews";
 import { RememberedSearchParams } from "@/components/RememberedSearchParams";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
@@ -57,33 +55,29 @@ import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClie
 import { PipelineHubClient } from "@/components/settings/PipelineHubClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { UploadWorkspace } from "@/components/upload/UploadWorkspace";
-import { useAuth } from "@/lib/auth";
 import { APP_ROUTES } from "@/lib/routes";
+import { canOpenRoute, defaultEntryRoute, settingsEntryRoute } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 
+/** 認証画面とルートの保護が使う URL（共通の RequireAuth へ渡す。#214）。 */
+const AUTH_ROUTES = {
+  login: APP_ROUTES.login,
+  passwordChange: APP_ROUTES.passwordChange,
+  forbidden: APP_ROUTES.forbidden,
+};
+
 export function App() {
-  const auth = useAuth();
-
-  if (auth.isLoading) {
-    return <AuthLoading />;
-  }
-
-  if (auth.error) {
-    return (
-      <main className="grid min-h-dvh place-items-center bg-canvas p-6">
-        <div className="w-full max-w-lg">
-          <ErrorState message={t("auth.status.error")} onRetry={() => void auth.refetch()} />
-        </div>
-      </main>
-    );
-  }
+  // API の 403 は共通のイベントで受け、request ID を載せて権限なしの画面へ移す（#214）。
+  useForbiddenRedirect(APP_ROUTES.forbidden);
 
   return (
     <Routes>
-      <Route path={APP_ROUTES.login} element={<LoginRoute />} />
+      <Route path={APP_ROUTES.login} element={<LoginPage />} />
+      <Route path={APP_ROUTES.passwordChange} element={<PasswordChangePage />} />
+      <Route path={APP_ROUTES.forbidden} element={<ForbiddenPage />} />
       <Route element={<ProtectedLayout />}>
-        <Route path="/" element={<Navigate to={APP_ROUTES.dashboard} replace />} />
+        <Route path="/" element={<EntryRedirect />} />
         <Route path={APP_ROUTES.dashboard} element={<DashboardClient />} />
         <Route path={APP_ROUTES.upload} element={<UploadWorkspace />} />
         <Route path={APP_ROUTES.fileList} element={<FileListClient />} />
@@ -131,15 +125,57 @@ export function App() {
         <Route path={APP_ROUTES.settingsHuggingface} element={<SettingsHuggingfaceRoute />} />
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
-        <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
+        <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
+        <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+        <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
+        <Route path="/settings" element={<SettingsEntryRedirect />} />
+        <Route path="*" element={<EntryRedirect />} />
       </Route>
-      <Route path="*" element={<Navigate to={APP_ROUTES.dashboard} replace />} />
     </Routes>
   );
 }
 
+/** `/` と未知の URL は、権限のある既定の画面へ（ダッシュボード、無ければナビの最初の画面。#214）。 */
+function EntryRedirect() {
+  const { hasPermission } = useAuth();
+  return <Navigate to={defaultEntryRoute(hasPermission)} replace />;
+}
+
+function SettingsEntryRedirect() {
+  const { hasPermission } = useAuth();
+  return <Navigate to={settingsEntryRoute(hasPermission)} replace />;
+}
+
+/**
+ * 認証が必要な画面の入口。確認中・未認証・強制パスワード変更の振り分けは共通の RequireAuth（#220）、
+ * URL ごとの権限（詳細画面のように複数の権限のどれかで開けるものを含む）はここで判定する（#214）。
+ */
 function ProtectedLayout() {
-  const auth = useAuth();
+  return (
+    <RequireAuth routes={AUTH_ROUTES}>
+      <RoutePermissionGuard>
+        <AuthorizedLayout />
+      </RoutePermissionGuard>
+    </RequireAuth>
+  );
+}
+
+function RoutePermissionGuard({ children }: { children: ReactNode }) {
+  const { hasPermission } = useAuth();
+  const { pathname } = useLocation();
+  if (!canOpenRoute(pathname, hasPermission)) {
+    return <Navigate to={APP_ROUTES.forbidden} replace />;
+  }
+  return <>{children}</>;
+}
+
+function AuthorizedLayout() {
+  const { user } = useAuth();
+  // 利用者や権限・対象範囲が変わったら、画面の state ごと作り直す（cache は AuthProvider が破棄する）。
+  return <AppLayout key={user ? ragIdentityKey(user) : ""} />;
+}
+
+function AppLayout() {
   const location = useLocation();
   const navigationType = useNavigationType();
   // AppShell が出力する <main id="pr-main">（スキップリンクの移動先と同じ公開 ID）をスクロール復元に使う。
@@ -150,11 +186,6 @@ function ProtectedLayout() {
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
-
-  if (auth.authRequired && !auth.isAuthenticated) {
-    const from = `${location.pathname}${location.search}${location.hash}`;
-    return <Navigate to={APP_ROUTES.login} state={{ from }} replace />;
-  }
 
   return (
     <AppShell
@@ -282,40 +313,6 @@ function decodeHashId(hash: string) {
   } catch {
     return id;
   }
-}
-
-function LoginRoute() {
-  const auth = useAuth();
-  const location = useLocation();
-  if (!auth.authRequired || auth.isAuthenticated) {
-    const redirectTarget = (location.state as { from?: string } | null)?.from;
-    return (
-      <Navigate
-        to={
-          redirectTarget && redirectTarget !== APP_ROUTES.login
-            ? redirectTarget
-            : APP_ROUTES.dashboard
-        }
-        replace
-      />
-    );
-  }
-  return <LoginPage />;
-}
-
-function AuthLoading() {
-  return (
-    <main className="grid min-h-dvh place-items-center bg-canvas p-6">
-      <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6">
-        <Skeleton className="h-6 w-40" />
-        <Skeleton className="mt-4 h-11 w-full" />
-        <Skeleton className="mt-3 h-11 w-full" />
-        <Button className="mt-5 h-11 w-full" disabled>
-          {t("auth.status.checking")}
-        </Button>
-      </div>
-    </main>
-  );
 }
 
 function DocumentDetailRoute() {

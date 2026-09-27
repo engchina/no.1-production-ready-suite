@@ -7,17 +7,29 @@ import { useDatabaseStatus } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
 
+/** ユーザー管理・ロール管理・権限管理の URL の前置き（USER_ROLE_PATHS と権限管理）。 */
+const SECURITY_ROUTE_PREFIX = "/settings/security";
+
 /**
  * DB ゲート。設定ページ以外を開く前にデータベースの利用可否を確認する。
  *
  * - 未設定 / 未起動(到達不可)のときは、エラー画面ではなく落ち着いた案内を出し、
  *   データベース設定への導線を示す(取込・検索などの機能ページを保護する)。
  * - 設定ページ(/settings 配下)は DB が無くても到達できるよう、ゲートを通さない。
+ *   ただしユーザー管理・ロール管理・権限管理(/settings/security 配下)はユーザーとロールを DB に持つため、
+ *   DB が無いときは他の業務ページと同じ案内を出す(#214)。
  * - DB が利用可能なときだけ子(本来のページ)を表示する。
  */
+export function isDatabaseGateExempt(pathname: string): boolean {
+  if (pathname === SECURITY_ROUTE_PREFIX || pathname.startsWith(`${SECURITY_ROUTE_PREFIX}/`)) {
+    return false;
+  }
+  return pathname === "/settings" || pathname.startsWith("/settings/");
+}
+
 export function DatabaseGate({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const isSettingsRoute = location.pathname.startsWith("/settings");
+  const isSettingsRoute = isDatabaseGateExempt(location.pathname);
   const query = useDatabaseStatus({ enabled: !isSettingsRoute });
 
   // 設定ページは常に通す(DB 復旧の導線そのものなので塞がない)。

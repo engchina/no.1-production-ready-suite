@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from time import perf_counter
@@ -26,6 +26,7 @@ from app.rag.generation_contract import GenerationContractError
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.request_context import current_audit_request_context
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
@@ -85,8 +86,10 @@ async def stream_search(
 ) -> StreamingResponse:
     """RAG 検索結果を SSE 形式でストリーミングする。"""
     enforce_rate_limit("search", http_request)
+    # 業務ビュー・KB の解決（404 / 403）は stream を始める前に行い、HTTP の status で返す。
+    resolved = await _resolve_query_context(request, get_settings())
     return StreamingResponse(
-        _stream_search_events_with_timeout(request),
+        _stream_search_events_with_timeout(resolved),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -135,6 +138,10 @@ async def _resolve_query_context(
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
             if not request.knowledge_base_ids and kb_ids:
                 effective_request = _with_knowledge_base_ids(request, kb_ids)
+            # 利用者の KB 範囲との積集合にする（request で範囲外の KB を読めないようにする）。
+            effective_request = _scope_request_knowledge_bases(
+                effective_request, from_business_view=not request.knowledge_base_ids
+            )
             settings, applied = resolve_business_view_settings(settings, views[0].config)
             try:
                 if views[0].config.query.generation_profile is not None:
@@ -169,6 +176,7 @@ async def _resolve_query_context(
             applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 
+    request = _scope_request_knowledge_bases(request)
     try:
         if request.generation_profile is not None:
             settings = apply_generation_profile(
@@ -180,6 +188,56 @@ async def _resolve_query_context(
     except CustomPromptNotConfiguredError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return request, settings, None, None
+
+
+BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
+    "この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
+)
+REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
+    "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
+)
+
+
+def permitted_knowledge_base_ids(knowledge_base_ids: Iterable[str]) -> list[str] | None:
+    """KB を、利用者が利用できる KB との積集合にする（順序は保つ）。None は制限なし。"""
+    allowed = current_audit_request_context().allowed_knowledge_base_ids
+    if allowed is None:
+        return None
+    return [item for item in knowledge_base_ids if item in allowed]
+
+
+def ensure_business_view_knowledge_bases_permitted(knowledge_base_ids: Sequence[str]) -> None:
+    """業務ビューの参照 KB が 1 つも利用できないなら 403（黙って 0 件にしない。#214）。"""
+    permitted = permitted_knowledge_base_ids(knowledge_base_ids)
+    if knowledge_base_ids and permitted is not None and not permitted:
+        raise HTTPException(status_code=403, detail=BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE)
+
+
+def _scope_request_knowledge_bases(
+    request: SearchRequest, *, from_business_view: bool = False
+) -> SearchRequest:
+    """検索対象の KB を、利用者が利用できる KB との積集合にする（#214）。
+
+    業務ビューの参照 KB を展開した後、または request が明示した KB に適用する。一部だけ
+    許可されていれば積集合で検索を続け、積集合が空なら検索しない（403。業務ビューの KB か
+    request が指定した KB かで文言を分ける）。KB を指定しない検索は、Oracle の検索条件が
+    利用できる KB へ絞る。
+    """
+    if not request.knowledge_base_ids:
+        return request
+    permitted = permitted_knowledge_base_ids(request.knowledge_base_ids)
+    if permitted is None or permitted == list(request.knowledge_base_ids):
+        return request
+    if not permitted:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
+                if from_business_view
+                else REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
+            ),
+        )
+    return _with_knowledge_base_ids(request, permitted)
 
 
 def _merge_business_view_knowledge_base_ids(
@@ -255,11 +313,14 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIterator[str]:
-    """stage progress を即時 SSE で返しながら検索 pipeline を実行する。"""
-    request, settings, applied_kb, applied_view = await _resolve_query_context(
-        request, get_settings()
-    )
+async def _stream_search_events_with_timeout(
+    resolved: tuple[SearchRequest, Settings, str | None, str | None],
+) -> AsyncIterator[str]:
+    """stage progress を即時 SSE で返しながら検索 pipeline を実行する。
+
+    `resolved` は `_resolve_query_context` の結果（有効 request・Settings・適用 KB・業務ビュー）。
+    """
+    request, settings, applied_kb, applied_view = resolved
     timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()

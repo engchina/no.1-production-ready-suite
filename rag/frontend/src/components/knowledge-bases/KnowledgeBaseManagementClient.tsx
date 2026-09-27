@@ -21,6 +21,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
+import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   ApiError,
@@ -31,6 +32,7 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import { useCreateKnowledgeBase, useKnowledgeBases } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
@@ -82,6 +84,8 @@ export function KnowledgeBaseManagementClient() {
 
   // 行の操作（アーカイブ）は詳細ページの ObjectActionBar と同じ定義を使う。
   const knowledgeBaseActions = useKnowledgeBaseActions();
+  // 作成・アーカイブはナレッジベース管理の権限がある利用者だけ（#214）。
+  const canManage = useAuth().hasPermission(CAPABILITY_PERMISSIONS.knowledgeBasesManage);
 
   const resetView = (fn: () => void) => {
     fn();
@@ -98,9 +102,11 @@ export function KnowledgeBaseManagementClient() {
           isRetrying={query.isFetching}
         />
 
-        <KnowledgeBaseCreateForm
-          onCreated={(id) => navigate(`${APP_ROUTES.knowledgeBases}/${id}`)}
-        />
+        {canManage ? (
+          <KnowledgeBaseCreateForm
+            onCreated={(id) => navigate(`${APP_ROUTES.knowledgeBases}/${id}`)}
+          />
+        ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div
@@ -189,7 +195,12 @@ export function KnowledgeBaseManagementClient() {
           </>
         ) : (
           <Card>
-            <EmptyState title={t("knowledgeBases.empty.title")} hint={t("knowledgeBases.empty.hint")} />
+            <EmptyState
+              title={t("knowledgeBases.empty.title")}
+              hint={
+                canManage ? t("knowledgeBases.empty.hint") : t("knowledgeBases.empty.restrictedHint")
+              }
+            />
           </Card>
         )}
       </PageBody>

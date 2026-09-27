@@ -159,6 +159,7 @@ export {
 export {
   ForbiddenPage,
   LoginPage,
+  requestedPathFrom,
   PasswordChangePage,
   type AuthBrand,
   type AuthPageProps,

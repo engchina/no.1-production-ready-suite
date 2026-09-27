@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 type FileStatus = "UPLOADED" | "INGESTING" | "INDEXING" | "INDEXED" | "ERROR";
 
@@ -18,23 +18,9 @@ interface DocumentSummary {
   source_profile: null;
 }
 
-const authStatus = {
-  data: {
-    mode: "local",
-    auth_required: false,
-    authenticated: true,
-    user: null,
-    expires_at: null,
-  },
-  error_messages: [],
-  warning_messages: [],
-};
-
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
-  await page.route("**/api/auth/me", async (route) => {
-    await route.fulfill({ json: authStatus });
-  });
+  await mockLocalAuth(page);
 });
 
 // 取込中の文書がある間は自動でポーリングし、手動リロードなしで状態バッジが更新される。
