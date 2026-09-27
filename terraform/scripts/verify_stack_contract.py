@@ -140,6 +140,9 @@ REQUIRED_BACKEND_ENV_LINES = {
         "AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=false\n",
         "AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${trimspace(var.agent_control_plane_public_base_url)}\n",
         "AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET=${var.agent_control_plane_mcp_token_secret}\n",
+        # RAG / NL2SQL の MCP は、配備した製品の Compute の private IP だけを入れる（#233）。
+        'AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}\n',
+        'AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}\n',
     ],
 }
 # 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
@@ -157,6 +160,8 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_ORACLE_ADB_OCID=${local.effective_adb_ocid}\n",
     "PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}\n",
     "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}\n",
+    # 3製品で同じサービス間 token の署名鍵（#233）。stack が1つ生成して全 Compute に配る。
+    "PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}\n",
 ]
 # 製品ごとの共通 .env の差分に必ず書く値（ログインの Cookie を HTTPS 限定にするか）。
 REQUIRED_PLATFORM_ENV_PRODUCT_LINES = {
@@ -610,16 +615,32 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         compute,
         [
             'resource "oci_core_instance" "product" {',
-            "for_each = local.selected_products",
+            "for_each = local.non_agent_products",
             "compartment_id      = var.compartment_ocid",
             'user_data"           = local.cloud_init_user_data[each.key]',
             '!contains(["rag", "nl2sql", "agent"], each.key) || trimspace(var.app_admin_login_user_password) != ""',
             'each.key != "nl2sql" || !var.nl2sql_oracle_deepsec_enabled',
+            # Agent は RAG / NL2SQL の private IP（MCP の URL）を使うため別の resource。既存の state は moved で移す（#233）。
+            'resource "oci_core_instance" "agent" {',
+            "for_each = local.agent_products",
+            'user_data"           = local.agent_cloud_init_user_data',
+            'from = oci_core_instance.product["agent"]',
+            'to   = oci_core_instance.agent["agent"]',
+            # 全 Compute で同じサービス間 token の署名鍵と、Agent → RAG / NL2SQL の MCP を通す NSG。
+            'resource "random_password" "service_token_secret" {',
+            "special = false",
+            "product_mcp_nsg_enabled = var.deploy_agent && (var.deploy_rag || var.deploy_nl2sql)",
+            "source                    = data.oci_core_subnet.selected_compute_subnet.cidr_block",
+            "min = var.application_port",
+            "nsg_ids                   = oci_core_network_security_group.product_mcp[*].id",
         ],
         context="Compute per product",
     )
-    if len(re.findall(r'(?m)^resource "oci_core_instance" ', compute)) != 1:
-        raise AssertionError("Compute instances must be created by the single for_each resource")
+    instance_resources = re.findall(r'(?m)^resource "oci_core_instance" "([a-z_]+)"', compute)
+    if instance_resources != ["product", "agent"]:
+        raise AssertionError(
+            "Compute instances must be created by the for_each resources product (RAG / NL2SQL) and agent"
+        )
 
     normalized = re.sub(r"[ \t]+", " ", locals_source)
     _require_all(
@@ -630,14 +651,23 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "nl2sql = var.deploy_nl2sql",
             "agent = var.deploy_agent",
             "selected_products = toset([for product, enabled in local.product_enabled : product if enabled])",
-            "for product in local.selected_products : product =>",
+            'non_agent_products = toset([for product in local.selected_products : product if product != "agent"])',
+            'agent_products = toset([for product in local.selected_products : product if product == "agent"])',
+            "for product in local.non_agent_products : product =>",
             "product = product",
             "backend_env = base64gzip(local.backend_envs[product])",
             "platform_env = base64gzip(local.platform_envs[product])",
+            'product = "agent"',
+            "backend_env = base64gzip(local.agent_backend_env)",
+            'platform_env = base64gzip(local.platform_envs["agent"])',
             'for product, extra in local.platform_env_product : product => "${local.platform_env}${extra}"',
             'compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
+            # MCP の URL は同じ subnet の private IP の Nginx（/api/ を backend へ proxy）。
+            "for product, instance in oci_core_instance.product :",
+            'product => "http://${instance.private_ip}${local.application_port_suffix}/api/mcp"',
+            'application_port_suffix = var.application_port == 80 ? "" : ":${var.application_port}"',
         ],
         context="product selection and cloud-init rendering",
     )

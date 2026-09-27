@@ -1,6 +1,6 @@
 locals {
   instance_access_ips = {
-    for product, instance in oci_core_instance.product :
+    for product, instance in merge(oci_core_instance.product, oci_core_instance.agent) :
     product => local.compute_subnet_prohibits_public_ip ? instance.private_ip : instance.public_ip
   }
   application_urls = {

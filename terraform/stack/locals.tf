@@ -13,6 +13,10 @@ locals {
     agent  = var.deploy_agent
   }
   selected_products = toset([for product, enabled in local.product_enabled : product if enabled])
+  # Agent の backend/.env は RAG / NL2SQL の Compute の private IP を使う（#233）。同じ resource の中で
+  # 互いを参照できないため、Agent の Compute は compute.tf の別の resource で作る。
+  non_agent_products = toset([for product in local.selected_products : product if product != "agent"])
+  agent_products     = toset([for product in local.selected_products : product if product == "agent"])
 
   product_instances = {
     rag = {
@@ -147,7 +151,19 @@ AGENT_ARTIFACT_STORAGE_PATH=${local.agent_data_dir_host}/artifacts
 AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=false
 AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${trimspace(var.agent_control_plane_public_base_url)}
 AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET=${var.agent_control_plane_mcp_token_secret}
+
+AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}
+AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}
 EOT
+
+  # Agent が RAG / NL2SQL の MCP（POST /api/mcp）を呼ぶ URL（#233）。配備した製品だけ。
+  # 同じ subnet の private IP の Nginx（/api/ を backend へ proxy）へ送る。通信は compute.tf の NSG で許可する。
+  # 認証は呼び出しごとのサービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET）。
+  application_port_suffix = var.application_port == 80 ? "" : ":${var.application_port}"
+  product_mcp_urls = {
+    for product, instance in oci_core_instance.product :
+    product => "http://${instance.private_ip}${local.application_port_suffix}/api/mcp"
+  }
 
   # ---------------------------------------------------------------- 共通 .env（platform/.env。#211）
 
@@ -175,6 +191,8 @@ PLATFORM_OBJECT_STORAGE_REGION=${var.region}
 
 PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}
 PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}
+
+PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}
 EOT
 
   # 製品ごとの Compute に置く共通 .env の差分（データの置き場所と、Cookie を HTTPS 限定にするか）。
@@ -210,30 +228,39 @@ EOT
 
   # ---------------------------------------------------------------- cloud-init
 
+  # Agent の backend/.env は含めない（RAG / NL2SQL の Compute を参照するため。agent_cloud_init_user_data）。
   backend_envs = {
     rag    = local.rag_backend_env
     nl2sql = local.nl2sql_backend_env
-    agent  = local.agent_backend_env
   }
 
   # 製品ごとの差分（backend/.env、RAG の compose service）以外は全製品で同じ bootstrap を使う。
   # 使わない製品の値は空文字にする（テンプレートは製品で分岐して、その製品のファイルだけを書く）。
-  cloud_init_user_data = {
-    for product in local.selected_products : product => base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
-      product             = product
-      adb_name            = local.effective_adb_name
-      adb_ocid            = local.effective_adb_ocid
-      application_git_ref = var.application_git_ref
-      application_git_url = var.application_git_url
-      application_port    = tostring(var.application_port)
-      backend_env         = base64gzip(local.backend_envs[product])
-      platform_env        = base64gzip(local.platform_envs[product])
-      compartment_ocid    = var.compartment_ocid
-      compose_services    = product == "rag" ? join(" ", local.rag_compose_services) : ""
-      db_dsn              = local.effective_oracle_dsn
-      region              = var.region
-      wallet_content      = data.external.wallet_files.result.wallet_content
-      wallet_dir_host     = local.wallet_dir_host
-    }))
+  cloud_init_common_vars = {
+    adb_name            = local.effective_adb_name
+    adb_ocid            = local.effective_adb_ocid
+    application_git_ref = var.application_git_ref
+    application_git_url = var.application_git_url
+    application_port    = tostring(var.application_port)
+    compartment_ocid    = var.compartment_ocid
+    db_dsn              = local.effective_oracle_dsn
+    region              = var.region
+    wallet_content      = data.external.wallet_files.result.wallet_content
+    wallet_dir_host     = local.wallet_dir_host
   }
+  cloud_init_user_data = {
+    for product in local.non_agent_products : product => base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", merge(local.cloud_init_common_vars, {
+      product          = product
+      backend_env      = base64gzip(local.backend_envs[product])
+      platform_env     = base64gzip(local.platform_envs[product])
+      compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""
+    })))
+  }
+  # Agent は RAG / NL2SQL の private IP を backend/.env に書くため、それらの Compute の後に作る（別の local）。
+  agent_cloud_init_user_data = base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", merge(local.cloud_init_common_vars, {
+    product          = "agent"
+    backend_env      = base64gzip(local.agent_backend_env)
+    platform_env     = base64gzip(local.platform_envs["agent"])
+    compose_services = ""
+  })))
 }
