@@ -26,6 +26,9 @@ Business Agent ───────────────→ Skill → MCP / 
 - Dispatcher: 開発は in-process、本番は Oracle row lock + claim/lease worker。
 - Docker service management: 固定 digest、profile、healthcheck、volume、静的操作 allowlist。
 - Snapshot v2: Runtime/Binding を含む Control Plane backup。v1 snapshot/manifest を移行。
+- ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
+  エージェント・業務ビュー単位の対象範囲（「Agent セキュリティ > 権限管理」）。詳細は
+  [docs/security-rbac.md](docs/security-rbac.md)。
 
 設計詳細は [docs/agent-control-plane-design.md](docs/agent-control-plane-design.md) を参照してください。
 
@@ -43,7 +46,7 @@ no.1-production-ready-suite/
 
 | ファイル | 内容 | 雛形 |
 |---|---|---|
-| `../platform/.env` | 3製品共通の設定（`PLATFORM_*`）。OCI 認証・アップロード保存先・モデル・データベース。システム設定画面の保存先 | [`../platform/.env.example`](../platform/.env.example) |
+| `../platform/.env` | 3製品共通の設定（`PLATFORM_*`）。OCI 認証・アップロード保存先・モデル・データベース・構成管理者（`PLATFORM_ADMIN_*`）と認証ポリシー（`PLATFORM_AUTH_*`）。システム設定画面の保存先 | [`../platform/.env.example`](../platform/.env.example) |
 | `backend/.env` | Agent 固有の設定（`AGENT_*`） | [`backend/.env.example`](backend/.env.example) |
 | `../platform/model-settings.json` | モデル設定（画面から保存。3製品で共有） | — |
 
@@ -69,6 +72,10 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 `BACKEND_URL` を渡さずに `npm run dev` すると hermetic モードになり、`/api` は proxy されず 404 を返します（起動時に警告を 1 行表示）。
 `scripts/start-all.sh` / `scripts/start-frontend.sh` は `BACKEND_URL` を明示して起動します。
 
+ローカル開発の既定は `AGENT_AUTH_MODE=local`（全権限のローカル利用者。ログイン不要）です。ログインを確認するときは
+`AGENT_AUTH_MODE=production` にし、共通 `.env` の `PLATFORM_ORACLE_*` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を設定して
+`cd backend && uv run python -m app.cli.agent_security_migrate` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
+
 既存 helper を使う場合:
 
 ```bash
@@ -90,6 +97,10 @@ Runtime は必要な profile だけ起動します。Docker socket は mount さ
   `backend/.env` より優先されます。Runtime API の認証値は `AGENT_OPENCLAW_GATEWAY_TOKEN` /
   `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` に書き、compose が各 Runtime の
   期待する名前（`OPENCLAW_GATEWAY_TOKEN` / `API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN`）へ渡します。
+
+compose の `control-plane` は既定で `AGENT_AUTH_MODE=production`（共通認証のログインが必要）です。
+初回は `docker compose exec control-plane python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
+開発で全権限のローカル利用者にするときだけ `agent/.env` に `AGENT_AUTH_MODE=local` を書きます。
 
 ```bash
 cp ../platform/.env.example ../platform/.env
@@ -145,16 +156,28 @@ manifest を検証して digest を明示更新してください。
      行い、`sudo systemctl restart production-ready-agent-backend` を実行する。新しく配備する stack は最初から新構成で作られる。
    - Docker Compose: `docker compose up -d control-plane`（dispatcher を使う場合は `--profile dispatcher` も）で作り直す。
 
+## 既存環境の更新手順（#215）
+
+#215 で Agent も共通認証のログインと権限管理になり、Resource Manager の stack の Nginx Basic 認証を廃止しました。
+共通 `.env` の `PLATFORM_ADMIN_*` の確認、`AGENT_AUTH_MODE=production`、`agent_security_migrate` の実行、
+Nginx の Basic 認証の削除の手順は [docs/security-rbac.md §8](docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
+
 ## OCI への配備（Resource Manager）
 
 3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database は RAG / NL2SQL と共有し、
-Agent Control Plane は専用の Compute 1 台に配備します。「配備する製品」で Agent Control Plane を選び、入力・instance 上の構成・制約は
+Agent Control Plane は専用の Compute 1 台に配備します。ログインは構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）と、
+ユーザー管理で作る DB ユーザーです。「配備する製品」で Agent Control Plane を選び、入力・instance 上の構成・制約は
 [terraform/README.md](../terraform/README.md) を参照してください。
 
 ## 主要 API
 
 | Method | Path | 用途 |
 |---|---|---|
+| `POST` | `/api/auth/login` / `/api/auth/logout` / `/api/auth/password/change` | ログイン・ログアウト・パスワード変更（共通認証） |
+| `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids` / `allowed_business_view_ids`） |
+| `GET/POST/PATCH/DELETE` | `/api/security/users*` / `/api/security/roles*` | ユーザー管理・ロール管理（3製品共通） |
+| `GET` | `/api/security/permissions` / `/api/security/access-targets` | 権限カタログ・権限管理で選べるエージェントと業務ビュー |
+| `PUT` | `/api/security/roles/{role_id}/access` | ロールの Agent 権限と対象範囲 |
 | `GET/POST/PATCH` | `/api/runtimes` | Runtime 定義 |
 | `GET` | `/api/runtimes/{id}/status` | capability/status probe |
 | `POST` | `/api/runtimes/services/{id}/{action}` | allowlist 済み service action |
@@ -178,6 +201,9 @@ Agent Control Plane は専用の Compute 1 台に配備します。「配備す�
 
 ## セキュリティ境界
 
+- production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは
+  `AGENT_RBAC_ENABLED=true` かつ信頼できる identity（HMAC 署名 header・JWT・外部 policy）があるときだけその identity で判定し、それ以外は 401 です（`X-Agent-Roles` の自己申告は信じません）（[docs/security-rbac.md](docs/security-rbac.md)）。
+- WebSocket は Cookie のセッションで `Origin` と `Host` の一致を必須にします。承認の決定者はログイン中の利用者です。
 - Runtime secret は環境変数値ではなく env 名で参照し、API/snapshot/log に値を出しません。
 - Binding MCP は Binding 固有 token と Skill allowlist の両方を検証します。
 - Plugin install は ID 衝突時に全体を失敗させます。参照中 Skill は削除できません。

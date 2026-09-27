@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pr_backend_core.config import (
     BaseServiceSettings,
@@ -31,6 +32,29 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     model_config = product_settings_config(prefix="AGENT_", backend_dir=BACKEND_DIR)
 
     service_name: str = "production-ready-agent"
+    # --- 認証（#215）---
+    # local: 画面は全権限のローカル利用者（ログイン不要。DB セッションを作らない）。API の RBAC は
+    #   従来どおり AGENT_RBAC_ENABLED の header / JWT / 外部 policy に従う（開発・CI 用）。
+    # production: 画面は共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。Cookie の
+    #   ないリクエストは AGENT_RBAC_ENABLED=true のときだけ header / JWT / 外部 policy で判定する
+    #   （外部連携用）。どちらもなければ 401。
+    auth_mode: Literal["local", "production"] = "local"
+    # 構成管理者と認証ポリシーは共通 `.env` の PLATFORM_ADMIN_* / PLATFORM_AUTH_*（#211）、
+    # Cookie 名は製品ごとの AGENT_APP_AUTH_*。構成管理者 token の署名鍵に service_name を使う。
+    app_admin_login_user_id: str = ""
+    app_admin_login_user_password: str = ""
+    app_auth_cookie_secure: bool = False
+    app_auth_session_cookie_name: str = "agent_session"
+    app_auth_csrf_cookie_name: str = "agent_csrf"
+    app_auth_idle_timeout_minutes: int = 60
+    app_auth_absolute_timeout_hours: int = 12
+    app_auth_failed_login_limit: int = 5
+    app_auth_lockout_minutes: int = 15
+    app_auth_password_min_length: int = 12
+    app_auth_password_max_length: int = 128
+    app_auth_argon2_time_cost: int = 3
+    app_auth_argon2_memory_kib: int = 65536
+    app_auth_argon2_parallelism: int = 4
     # システム設定（3製品共通）。
     oci_config_file: str = "~/.oci/config"
     oci_config_profile: str = "DEFAULT"
@@ -204,6 +228,16 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_command_container_user: str | None = None
     agent_artifact_storage_backend: str = "inline"
     agent_artifact_storage_path: str = ".agent-artifacts"
+
+    @property
+    def local_debug_enabled(self) -> bool:
+        """local mode: 画面は全権限のローカル利用者（DB セッションを作らない）。"""
+        return self.auth_mode == "local"
+
+    @property
+    def app_auth_enabled(self) -> bool:
+        """production mode: 画面は共通認証のログインを必須にする。"""
+        return self.auth_mode == "production"
 
     @property
     def oracle_driver_mode(self) -> str:

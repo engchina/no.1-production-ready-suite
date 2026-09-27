@@ -50,6 +50,7 @@ HIDDEN_VARIABLES = [
     "nl2sql_app_auth_cookie_secure",
     "app_admin_login_user_id",
     "agent_runtime_repository_backend",
+    "agent_app_auth_cookie_secure",
 ]
 SECRET_VARIABLES = [
     "adb_password",
@@ -57,7 +58,6 @@ SECRET_VARIABLES = [
     "existing_oracle_wallet_password",
     "app_admin_login_user_password",
     "nl2sql_oracle_deepsec_data_user_password",
-    "agent_app_basic_auth_password",
     "agent_control_plane_mcp_token_secret",
 ]
 # 製品ごとの入力は、その製品を選んだときだけフォームに出す（group の visible と、group 内の変数の接頭辞）。
@@ -67,13 +67,20 @@ PRODUCT_GROUPS = {
     "NL2SQL Deep Data Security": "nl2sql",
     "Agent Control Plane": "agent",
 }
+# 3製品の構成管理者（system_admin。共通 .env の PLATFORM_ADMIN_*）のパスワードは共通の入力（#214 / #215）。
 # 製品を選ばないとフォームから消えるため、Resource Manager では任意入力にして Terraform の precondition で必須にする。
-PRODUCT_PASSWORDS = {
-    "agent": "agent_app_basic_auth_password",
-}
-# RAG と NL2SQL の構成管理者（system_admin。共通 .env の PLATFORM_ADMIN_*）のパスワードは共通の入力（#214）。
 ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
-ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql")
+ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql", "agent")
+# 廃止した入力（Agent の Nginx Basic 認証。#215）。stack と init_script.sh に残さない。
+REMOVED_AGENT_BASIC_AUTH = (
+    "agent_app_basic_auth_user",
+    "agent_app_basic_auth_password",
+    "basic_auth_user",
+    "basic_auth_password",
+    "configure_basic_auth",
+    "auth_basic",
+    "htpasswd",
+)
 
 # RAG の Compute が常に build・起動する compose の service（CPU だけ）と、任意で足せる service。
 RAG_BASE_COMPOSE_SERVICES = [
@@ -121,6 +128,7 @@ REQUIRED_BACKEND_ENV_LINES = {
         "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED\n",
     ],
     "agent": [
+        "AGENT_AUTH_MODE=production\n",
         "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}\n",
         "AGENT_RUNTIME_DISPATCH_MODE=in_process\n",
         "AGENT_RUNTIME_ORACLE_DSN=${local.effective_oracle_dsn}\n",
@@ -150,11 +158,11 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}\n",
     "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}\n",
 ]
-# 製品ごとの共通 .env の差分に必ず書く値（NL2SQL は構成管理者と認証ポリシー）。
+# 製品ごとの共通 .env の差分に必ず書く値（ログインの Cookie を HTTPS 限定にするか）。
 REQUIRED_PLATFORM_ENV_PRODUCT_LINES = {
     "rag": ["PLATFORM_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n"],
     "nl2sql": ["PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n"],
-    "agent": [],
+    "agent": ["PLATFORM_AUTH_COOKIE_SECURE=${var.agent_app_auth_cookie_secure}\n"],
 }
 PRODUCT_ENV_PREFIXES = {"rag": "RAG_", "nl2sql": "NL2SQL_", "agent": "AGENT_"}
 # 共通の属性名の正本（pr_backend_core.config.env.PLATFORM_SETTING_FIELDS）。stdlib だけで読むため AST で取り出す。
@@ -211,13 +219,11 @@ INIT_SCRIPT_CONTRACTS = {
         'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "import app.features.agent.runtime",
-        "openssl passwd -6 -stdin",
-        "auth_basic_user_file ${NGINX_HTPASSWD_PATH};",
-        "location /api/mcp/ {\n        auth_basic off;",
-        "location = /health {\n        auth_basic off;",
+        "uv run python -m app.cli.agent_security_migrate",
+        "location /api/mcp/ {\n        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
+        "proxy_set_header Host \\$http_host;",
+        "location = /health {",
         "uv sync --locked --no-dev --python 3.12",
-        '"${PROPS_DIR}/basic_auth_user.txt"',
-        '"${PROPS_DIR}/basic_auth_password"',
         '"${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"',
     ],
 }
@@ -242,12 +248,13 @@ INIT_SCRIPT_ORDER = {
         "app.cli.app_security_migrate --apply --skip-bootstrap",
     ],
     "agent": [
+        "import app.features.agent.runtime",
+        "app.cli.agent_security_migrate",
         "  install_runtime_env\n",
         "  install_backend\n",
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
-        "  configure_basic_auth\n",
         "  configure_nginx\n",
         "  wait_for_backend\n",
     ],
@@ -444,19 +451,13 @@ def _verify_schema(schema: str, variables: str) -> None:
         foreign = [name for name in members if not name.startswith(f"{product}_")]
         if foreign:
             raise AssertionError(f"{title} group must hold only {product}_* variables: {foreign}")
-    for product, name in PRODUCT_PASSWORDS.items():
-        _require_all(
-            _schema_variable(schema, name),
-            ["type: password", "required: false", f"visible: deploy_{product}", "confirmation: true", "pattern: '^$|"],
-            context=f"{name} schema",
-        )
     admin_group_visible = "or:\n" + "".join(f"        - deploy_{product}\n" for product in ADMIN_PASSWORD_PRODUCTS)
     visible, members = groups.get("アプリケーション管理者", ("", []))
     if visible + "\n" != admin_group_visible or members != [ADMIN_PASSWORD_VARIABLE]:
-        raise AssertionError("the administrator group must hold only the shared admin password for RAG / NL2SQL")
+        raise AssertionError("the administrator group must hold only the shared admin password for every product")
     _require_all(
         _schema_variable(schema, ADMIN_PASSWORD_VARIABLE),
-        ["type: password", "required: false", "visible:\n      or:\n        - deploy_rag\n        - deploy_nl2sql\n",
+        ["type: password", "required: false", "visible:\n      " + admin_group_visible,
          "confirmation: true", "pattern: '^$|"],
         context=f"{ADMIN_PASSWORD_VARIABLE} schema",
     )
@@ -612,9 +613,8 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "for_each = local.selected_products",
             "compartment_id      = var.compartment_ocid",
             'user_data"           = local.cloud_init_user_data[each.key]',
-            '!contains(["rag", "nl2sql"], each.key) || trimspace(var.app_admin_login_user_password) != ""',
+            '!contains(["rag", "nl2sql", "agent"], each.key) || trimspace(var.app_admin_login_user_password) != ""',
             'each.key != "nl2sql" || !var.nl2sql_oracle_deepsec_enabled',
-            'each.key != "agent" || trimspace(var.agent_app_basic_auth_password) != ""',
         ],
         context="Compute per product",
     )
@@ -636,7 +636,6 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "platform_env = base64gzip(local.platform_envs[product])",
             'for product, extra in local.platform_env_product : product => "${local.platform_env}${extra}"',
             'compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""',
-            'basic_auth_password = product == "agent" ? base64gzip(var.agent_app_basic_auth_password) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
         ],
@@ -767,13 +766,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
     rag_block = re.search(r'(?ms)^%\{ if product == "rag" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
     if rag_block is None or 'path: "/u01/aipoc/props/compose_services.txt"' not in rag_block.group(1):
         raise AssertionError("compose_services.txt must be written only on the RAG Compute")
-    agent_block = re.search(r'(?ms)^%\{ if product == "agent" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
-    if agent_block is None or not re.search(
-        r'(?ms)path: "/u01/aipoc/props/basic_auth_password"\n'
-        r'    permissions: "0600"\n    owner: "root:root"\n    encoding: "gzip\+base64"',
-        agent_block.group(1),
-    ):
-        raise AssertionError("basic_auth_password must be written root-only (0600) only on the Agent Compute")
+    if "basic_auth" in bootstrap:
+        raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
     _require_in_order(
         bootstrap,
         ["configure_firewall\n", "clone_or_update_repo ", "run_application_init\n"],
@@ -791,8 +785,9 @@ def _verify_init_scripts(init_sources: dict[str, str]) -> None:
         raise AssertionError("rag/init_script.sh ALLOWED_COMPOSE_SERVICES not found")
     if sorted(allowed_block.group(1).split()) != sorted(RAG_BASE_COMPOSE_SERVICES + RAG_OPTIONAL_COMPOSE_SERVICES):
         raise AssertionError("rag/init_script.sh allowed compose services differ from the stack")
-    if "auth_basic" in rag:
-        raise AssertionError("RAG uses the backend login; Nginx must not add Basic authentication")
+    for product in ("rag", "agent"):
+        if "auth_basic" in init_sources[product]:
+            raise AssertionError(f"{product} uses the backend login; Nginx must not add Basic authentication")
     for product in ("nl2sql", "agent"):
         if re.search(r"(?im)^\s*(?:docker|docker-compose)\b", init_sources[product]):
             raise AssertionError(f"{product} is deployed directly with systemd and must not require Docker")
@@ -807,6 +802,9 @@ def _verify_boundaries(sources: dict[str, str]) -> None:
         raise AssertionError("ADB DDL must stay in the application, not in the stack")
     if re.search(r"--profile[ =]gpu|parser-asr|nvidia", combined):
         raise AssertionError("GPU services must not be part of the stack")
+    for legacy in REMOVED_AGENT_BASIC_AUTH:
+        if legacy in combined:
+            raise AssertionError(f"removed Agent Basic authentication remains: {legacy}")
     for legacy in (
         "PUBLIC_ENDPOINT",
         "SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS",

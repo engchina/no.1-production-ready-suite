@@ -80,7 +80,7 @@
 - 秘密情報（MCP の OAuth client secret / session ID 等）、確認語、サーバー応答全体、未保存の編集フォームは保存しない。編集フォームは §2 の離脱ガードで守る。
 - 確認語と破壊的操作の確認は画面の state にだけ置き、ページを離れると解除される。ページに戻っただけで mutation を送り直さない。
 - Run の目標の一時保存に失敗した場合は警告を出し、離脱ガードを有効にする。
-- Agent には現状ログインがないため、ユーザー / 接続先 context による分離は未実装。認証を入れるときは logout で `clearWorkspaceState()` を呼ぶ。
+- #215 で backend は共通認証のログインに対応した（[security-rbac.md](security-rbac.md)）。画面をログインに切り替えるときは、logout とユーザーの切り替えで `clearWorkspaceState()` を呼ぶ。
 
 ## 4. 検証
 

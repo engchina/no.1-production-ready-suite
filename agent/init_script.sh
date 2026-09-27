@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # OCI Resource Manager の統合 stack（terraform/stack、#217）の cloud-init から呼ばれる agent の Compute 初期化スクリプト。
 # Agent Control Plane を Docker なしで Nginx + systemd に直接配備する。
-# ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成する。
+# ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成し、
+# 共通認証（PLATFORM_*）と Agent の権限（AGENT_ROLE_*）の table はアプリの CLI（agent_security_migrate）が作成する。
+# ログインは共通認証（AGENT_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー。#215）。
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -38,8 +40,6 @@ NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 NGINX_SITES_AVAILABLE_DIR="${NGINX_SITES_AVAILABLE_DIR:-/etc/nginx/sites-available}"
 NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
-NGINX_HTPASSWD_PATH="${NGINX_HTPASSWD_PATH:-/etc/nginx/production-ready-agent.htpasswd}"
-NGINX_GROUP="${NGINX_GROUP:-www-data}"
 OCI_IMDS_VNICS_URL="${OCI_IMDS_VNICS_URL:-http://169.254.169.254/opc/v2/vnics/}"
 BACKEND_SERVICE="production-ready-agent-backend.service"
 DATABASE_INITIALIZATION_READY=false
@@ -418,19 +418,38 @@ install_backend() {
 
 # Runtime repository は import 時に Oracle へ接続し、自分の table を冪等に作成する
 # （AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true）。ここでは起動前に一度作らせ、失敗理由を init log に残す。
+# 共通認証（PLATFORM_*）と Agent の権限（AGENT_ROLE_*）の table は agent_security_migrate が冪等に作る（#215）。
 initialize_database_schema() {
+  local runtime_ready=false
+  local security_ready=false
+
   log "Initializing Agent Runtime Oracle repository (idempotent)."
   if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
     "uv run python -c 'import app.features.agent.runtime'"; then
-    DATABASE_INITIALIZATION_READY=true
+    runtime_ready=true
     log "Agent Runtime Oracle repository is ready."
+  else
+    log "WARNING: Agent Runtime Oracle repository initialization failed."
+  fi
+
+  log "Applying Agent authentication/RBAC tables (idempotent)."
+  if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
+    "uv run python -m app.cli.agent_security_migrate"; then
+    security_ready=true
+    log "Agent authentication/RBAC tables are ready."
+  else
+    log "WARNING: Agent authentication/RBAC table initialization failed. Login returns SECURITY_SCHEMA_MIGRATION_REQUIRED until it succeeds."
+  fi
+
+  if [ "${runtime_ready}" = "true" ] && [ "${security_ready}" = "true" ]; then
+    DATABASE_INITIALIZATION_READY=true
     return 0
   fi
 
   DATABASE_INITIALIZATION_READY=false
-  log "WARNING: Agent Runtime Oracle repository initialization failed."
-  log "WARNING: The backend cannot start until ADB is reachable; systemd keeps retrying."
+  log "WARNING: Database initialization is incomplete. Check ADB reachability, backend/.env and platform/.env (PLATFORM_ORACLE_*)."
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -c 'import app.features.agent.runtime'"
+  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.agent_security_migrate"
   log "Recovery: sudo systemctl restart ${BACKEND_SERVICE}"
   return 0
 }
@@ -474,28 +493,6 @@ EOF
   systemctl restart "${BACKEND_SERVICE}"
 }
 
-# Agent には組み込みの login がないため、UI と API 全体を Nginx の Basic 認証で保護する。
-# パスワードは SHA-512 crypt の hash だけを Nginx の password file に保存する。
-configure_basic_auth() {
-  local user
-  local hash
-  local tmp_file
-
-  user="$(tr -d '[:space:]' < "${PROPS_DIR}/basic_auth_user.txt")"
-  if [ -z "${user}" ] || [ ! -s "${PROPS_DIR}/basic_auth_password" ]; then
-    log "Basic authentication user or password is missing in ${PROPS_DIR}."
-    return 1
-  fi
-
-  log "Configuring Nginx Basic authentication for ${user}."
-  hash="$(openssl passwd -6 -stdin < "${PROPS_DIR}/basic_auth_password")"
-  tmp_file="$(mktemp "${NGINX_HTPASSWD_PATH}.XXXXXX")"
-  printf '%s:%s\n' "${user}" "${hash}" > "${tmp_file}"
-  chgrp "${NGINX_GROUP}" "${tmp_file}"
-  chmod 0640 "${tmp_file}"
-  mv -f "${tmp_file}" "${NGINX_HTPASSWD_PATH}"
-}
-
 configure_nginx() {
   log "Configuring Nginx on port ${APPLICATION_PORT}."
   cat > "${NGINX_SITES_AVAILABLE_DIR}/production-ready-agent" <<EOF
@@ -514,16 +511,14 @@ server {
     proxy_send_timeout 600s;
     proxy_read_timeout 600s;
 
-    auth_basic "Production Ready Agent";
-    auth_basic_user_file ${NGINX_HTPASSWD_PATH};
+    # 認証は backend の共通認証（Cookie のセッション。#215）。Nginx では認証しない。
 
     location = /api {
         return 308 /api/;
     }
 
-    # Binding MCP endpoint は Binding 固有 token で認証する（Runtime からの呼出し境界）。
+    # Binding MCP endpoint は Binding 固有 token で認証する（Runtime からの呼出し境界。ログイン不要）。
     location /api/mcp/ {
-        auth_basic off;
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -533,10 +528,11 @@ server {
         proxy_buffering off;
     }
 
+    # WebSocket は Origin と Host の一致を確認するため、port を含む Host（\$http_host）を渡す。
     location /api/ {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
+        proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -547,7 +543,6 @@ server {
     }
 
     location = /health {
-        auth_basic off;
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/health;
         proxy_set_header Host \$host;
         access_log off;
@@ -599,10 +594,9 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_basic_auth
   configure_nginx
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/ with the Basic authentication user."
+  log "Initialization complete. Open http://<compute-ip>/ and log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
 }
 
 if [ "${AGENT_INIT_TEST_MODE:-false}" != "true" ]; then

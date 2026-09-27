@@ -1,11 +1,13 @@
 """FastAPI エントリポイント。共通 app factory で薄く構成する。"""
 
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from pr_backend_core import ApiResponse, configure_logging, create_app
+from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
@@ -16,10 +18,15 @@ from app.observability import (
     stop_trace_export_retry_worker,
 )
 from app.readiness import readiness_checks
+from app.security.dependencies import untrusted_external_rbac_warning
 from app.settings import get_settings
 
 settings = get_settings()
 configure_logging(settings.log_level)
+logger = logging.getLogger(__name__)
+_external_rbac_warning = untrusted_external_rbac_warning(settings)
+if _external_rbac_warning:
+    logger.warning(_external_rbac_warning)
 
 
 @asynccontextmanager
@@ -73,6 +80,71 @@ async def project_http_exception_handler(
     if isinstance(request_id, str):
         headers["X-Request-ID"] = request_id
     return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+
+
+def _security_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: str,
+    code: str,
+    title: str | None,
+    retryable: bool,
+    field_errors: Sequence[Mapping[str, str]],
+) -> JSONResponse:
+    """認証・認可のエラー。
+
+    共通画面が使う `error_code` と `problem` を足す（NL2SQL / RAG と同じ形）。
+    """
+    request_id = getattr(request.state, "request_id", None)
+    headers = {"X-Request-ID": request_id} if isinstance(request_id, str) else {}
+    body = ApiResponse[object](data=None, error_messages=[detail]).model_dump(mode="json")
+    body["error_code"] = code
+    body["problem"] = {
+        "title": title,
+        "status": status_code,
+        "detail": detail,
+        "code": code,
+        "request_id": request_id if isinstance(request_id, str) else None,
+        "retryable": retryable,
+        "field_errors": [dict(item) for item in field_errors],
+    }
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
+
+
+@app.exception_handler(SecurityApiError)
+async def security_api_error_handler(request: Request, exc: SecurityApiError) -> JSONResponse:
+    """認証・認可・ユーザー / ロール操作のエラー（共通認証。#215）。"""
+    return _security_error_response(
+        request,
+        status_code=exc.status_code,
+        detail=exc.public_message,
+        code=exc.code,
+        title=exc.title,
+        retryable=exc.retryable,
+        field_errors=exc.field_errors,
+    )
+
+
+@app.exception_handler(SecurityMigrationRequired)
+async def security_migration_required_handler(
+    request: Request, exc: SecurityMigrationRequired
+) -> JSONResponse:
+    """共通認証・Agent のロール権限の表が未作成（security migration が必要）。"""
+    logger.error("security_schema_migration_required", extra={"database_object": exc.object_name})
+    return _security_error_response(
+        request,
+        status_code=409,
+        detail=(
+            "認証・権限のテーブルが未作成です。"
+            "`cd agent/backend && uv run python -m app.cli.agent_security_migrate` を"
+            "実行してから再試行してください。"
+        ),
+        code="SECURITY_SCHEMA_MIGRATION_REQUIRED",
+        title="セキュリティ初期化が必要です",
+        retryable=False,
+        field_errors=(),
+    )
 
 
 async def metrics() -> Response:

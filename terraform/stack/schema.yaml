@@ -1,7 +1,7 @@
 title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
 stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database 26ai (new or existing) is shared by every product, and each selected product gets its own Compute instance. Configure AI runtime settings after startup from each application's System Settings."
 schemaVersion: 1.1.0
-version: "20260926.1"
+version: "20260927.1"
 locale: "en"
 
 variableGroups:
@@ -17,6 +17,7 @@ variableGroups:
       - nl2sql_app_auth_cookie_secure
       - app_admin_login_user_id
       - agent_runtime_repository_backend
+      - agent_app_auth_cookie_secure
 
   - title: Required Configuration
     visible: true
@@ -111,6 +112,7 @@ variableGroups:
       or:
         - deploy_rag
         - deploy_nl2sql
+        - deploy_agent
     variables:
       - app_admin_login_user_password
 
@@ -131,8 +133,6 @@ variableGroups:
   - title: Agent Control Plane
     visible: deploy_agent
     variables:
-      - agent_app_basic_auth_user
-      - agent_app_basic_auth_password
       - agent_control_plane_public_base_url
       - agent_control_plane_mcp_token_secret
       - agent_instance_display_name
@@ -722,8 +722,9 @@ variables:
       or:
         - deploy_rag
         - deploy_nl2sql
+        - deploy_agent
     title: "Administrator password"
-    description: "Required when RAG or NL2SQL is deployed. Login password of the configuration administrator (login user ID: system_admin) shared by RAG and NL2SQL, written to PLATFORM_ADMIN_LOGIN_USER_PASSWORD. Create the other users and roles from User Management after the first login. 12-30 characters with uppercase, lowercase, and digits; must not include admin, double quotes, or line breaks."
+    description: "Required when any product is deployed. Login password of the configuration administrator (login user ID: system_admin) shared by RAG, NL2SQL, and the Agent Control Plane, written to PLATFORM_ADMIN_LOGIN_USER_PASSWORD. Create the other users and roles from User Management after the first login. 12-30 characters with uppercase, lowercase, and digits; must not include admin, double quotes, or line breaks."
     confirmation: true
     pattern: '^$|^[^"\r\n]{12,30}$'
 
@@ -777,23 +778,13 @@ variables:
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
 
-  agent_app_basic_auth_user:
-    type: string
+  agent_app_auth_cookie_secure:
+    type: boolean
     required: true
-    visible: deploy_agent
-    title: "Agent Basic authentication user"
-    description: "Nginx requires HTTP Basic authentication for the Agent Control Plane UI and API because the application has no built-in login. /health and the Binding MCP endpoint (/api/mcp/) use their own checks."
-    default: "agent_admin"
-    pattern: "^[A-Za-z][A-Za-z0-9_.-]{2,31}$"
-
-  agent_app_basic_auth_password:
-    type: password
-    required: false
-    visible: deploy_agent
-    title: "Agent Basic authentication password"
-    description: "Required when the Agent Control Plane is deployed. 12-64 characters with uppercase, lowercase, and digits. Quotes, colons, and line breaks are not allowed. The instance stores only a SHA-512 crypt hash in the Nginx password file."
-    confirmation: true
-    pattern: '^$|^[^"'':\r\n]{12,64}$'
+    visible: false
+    title: "Agent secure session cookie (HTTPS only)"
+    description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the Agent Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS in front."
+    default: false
 
   agent_control_plane_public_base_url:
     type: string
@@ -902,11 +893,5 @@ outputs:
   agent_ssh_to_instance:
     title: "Agent SSH command"
     displayText: "Agent SSH command"
-    type: copyableString
-    visible: deploy_agent
-
-  agent_basic_auth_user:
-    title: "Agent Basic authentication user"
-    displayText: "Agent Basic authentication user"
     type: copyableString
     visible: deploy_agent

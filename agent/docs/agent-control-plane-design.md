@@ -119,6 +119,9 @@ Runtime へ同期する MCP server 定義の `api_key_env` にも 1 の名前を
 
 token が無い場合は fail closed (`503`)。値を Binding JSON、snapshot、API に保存しない。
 
+Binding MCP endpoint は Runtime からの呼出し境界のため、production（`AGENT_AUTH_MODE=production`）でも
+Cookie のログインと権限 manifest の対象外で、この token だけで認証する（#215）。
+
 ## 5. Dispatcher and persistence
 
 開発時は FastAPI BackgroundTasks で submit する。本番は `runtime-dispatcher` が Oracle checkpoint
@@ -162,7 +165,16 @@ Snapshot v2 は runs/agents/legacy memory に `control_plane_state.runtimes/bind
 Runtime 画面は status、capabilities、enable、probe、管理可能な service action/log を表示する。
 未 Binding、sync error、degraded、capability 非対応を warning/error state として表示する。
 
-## 9. Non-goals
+## 9. Authentication and RBAC
+
+画面は RAG / NL2SQL と同じ共通認証（`PLATFORM_*` のユーザー・ロール・セッション）でログインする。ロールに付ける
+Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENTS` / `AGENT_ROLE_BUSINESS_VIEWS`）は
+`app.cli.agent_security_migrate` が作る。capability は従来の viewer / operator / approver / auditor / admin に対応し、
+Cookie の利用者から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・`GET /agents` の既存の絞り込みに流す。
+Cookie のないリクエストは `AGENT_RBAC_ENABLED=true` のときだけ header / JWT / 外部 policy（外部連携）で判定する。
+詳細は [security-rbac.md](security-rbac.md)。
+
+## 10. Non-goals
 
 - Control Plane 内の新しい Agent Runtime / planner / workflow engine
 - Runtime 自動 failover

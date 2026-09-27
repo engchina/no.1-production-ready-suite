@@ -77,6 +77,11 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限 / Command Policy / Runtime Safety はナビに出さない（Control Plane 化で外した方針を維持）。
+- ログインと権限（#215）: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「Agent セキュリティ」
+  （権限管理）、3製品共通の「ユーザーとロール」（ユーザー管理 / ロール管理）と「システム設定」はナビの末尾にそろえる。
+  メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` /
+  `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は
+  `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
 - Agent 編集画面は Skill 選択だけ。実行先は Agent 詳細の Binding panel、Run では Binding
   上書きだけを表示する。
 - 空、読込、エラー、degraded、未 Binding、capability 非対応を明示する。
@@ -114,6 +119,10 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
   `409`。
 - RBAC は viewer/operator/approver/auditor/admin を維持する。MCP endpoint は Binding token を
   RBAC の代替にせず、Runtime からの能力呼出し境界として扱う。
+- 画面のログインは共通認証（Cookie のセッション）。capability は従来の 5 ロールに対応し、Cookie の利用者から
+  `ActorPolicy` を作って router の既存の判定に流す。新しい API は必ず権限 manifest（`app/security/permissions.py`）に
+  登録する（登録外は 403。完全性テストがある）。WebSocket は handler の中で Cookie と `Origin` を検証する。
+- 承認の決定者（`decided_by`）は Cookie の利用者から決め、request の値を使わない。
 
 ## 開発・検証
 
@@ -134,6 +143,8 @@ backend/app/features/agent/
   skills.py                 Skill registry と MCP/resource 依存
   plugins.py                Marketplace package の原子的 install
   router.py                 REST / SSE / WS / Binding MCP endpoint
+backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API（#215）
+backend/app/cli/agent_security_migrate.py  PLATFORM_* と AGENT_ROLE_* の冪等な DDL
 frontend/src/
   pages/AgentRuntimePages.tsx
   lib/api.ts, lib/i18n.ts, lib/routes.ts

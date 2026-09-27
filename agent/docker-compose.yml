@@ -9,6 +9,11 @@ name: production-ready-agent-control-plane
 # - この compose の `.env`（`.env.runtime.example` から作る）は下の ${...} の補間にだけ使う。
 x-control-plane-environment: &control-plane-environment
   PLATFORM_ENV_FILE: /app/platform/.env
+  # 認証（#215）。既定は production（共通認証のログインが必要。Cookie のないリクエストは
+  # AGENT_RBAC_ENABLED=true かつ信頼できる identity（HMAC 署名 header / JWT / 外部 policy）があるときだけ
+  # 判定し、それ以外は 401）。
+  # 開発で全権限のローカル利用者にするときだけ、compose の .env で AGENT_AUTH_MODE=local にする。
+  AGENT_AUTH_MODE: ${AGENT_AUTH_MODE:-production}
   AGENT_RUNTIME_REPOSITORY_BACKEND: ${AGENT_RUNTIME_REPOSITORY_BACKEND:-memory}
   AGENT_RUNTIME_DISPATCH_MODE: ${AGENT_RUNTIME_DISPATCH_MODE:-in_process}
   AGENT_RUNTIME_BINDINGS_DIR: /var/lib/control-plane/bindings

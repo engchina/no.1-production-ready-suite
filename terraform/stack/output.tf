@@ -51,16 +51,11 @@ output "nl2sql_ssh_to_instance" {
 }
 
 output "agent_application_url" {
-  description = "Production Ready Agent Control Plane URL (HTTP Basic authentication required)."
+  description = "Production Ready Agent Control Plane URL (log in with system_admin and app_admin_login_user_password)."
   value       = lookup(local.application_urls, "agent", null)
 }
 
 output "agent_ssh_to_instance" {
   description = "SSH command for the Agent Control Plane Compute instance."
   value       = contains(keys(local.instance_access_ips), "agent") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["agent"]}" : null
-}
-
-output "agent_basic_auth_user" {
-  description = "HTTP Basic authentication user name required by Nginx in front of the Agent Control Plane."
-  value       = var.deploy_agent ? var.agent_app_basic_auth_user : null
 }
