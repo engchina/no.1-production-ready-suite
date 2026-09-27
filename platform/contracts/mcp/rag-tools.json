@@ -1,0 +1,518 @@
+{
+  "server": "production-ready-rag",
+  "tools": [
+    {
+      "name": "rag_chat_get_conversation",
+      "description": "自分の会話と、新しいほうから最大 message_limit 件のメッセージを返します。",
+      "inputSchema": {
+        "description": "会話の取得。",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_limit": {
+            "default": 20,
+            "description": "新しいほうから返すメッセージの最大件数。",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Message Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id"
+        ],
+        "title": "ChatGetConversationInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ConversationMessageItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "role": {
+                "title": "Role",
+                "type": "string"
+              },
+              "content": {
+                "title": "Content",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "content",
+              "created_at"
+            ],
+            "title": "ConversationMessageItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "business_view_id": {
+            "title": "Business View Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/ConversationMessageItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "business_view_id",
+          "status",
+          "messages"
+        ],
+        "title": "ConversationOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_chat_send_message",
+      "description": "チャットの会話にメッセージを送り、既定のモデルの回答を返します。conversation_id がなければ business_view_id の業務ビューで会話を作ります。",
+      "inputSchema": {
+        "description": "チャットへの送信。`conversation_id` がなければ `business_view_id` で会話を作る。",
+        "properties": {
+          "content": {
+            "description": "送るメッセージ。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続ける会話の id（指定時は業務ビューを無視）。",
+            "title": "Conversation Id"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "新しい会話を作る業務ビューの id。",
+            "title": "Business View Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "新しい会話の名前。",
+            "title": "Title"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "ChatSendMessageInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "RagCitation": {
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "text": {
+                "description": "根拠の本文（先頭 1000 文字）。",
+                "title": "Text",
+                "type": "string"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "text"
+            ],
+            "title": "RagCitation",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/RagCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer",
+          "trace_id",
+          "guardrail_warnings",
+          "citations",
+          "conversation_id",
+          "message_id"
+        ],
+        "title": "ChatSendMessageOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_list_business_views",
+      "description": "利用できる業務ビュー（ACTIVE）の一覧を返します。",
+      "inputSchema": {
+        "description": "業務ビュー一覧の条件。",
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "名前・説明の部分一致（省略時は全件）。",
+            "title": "Query"
+          },
+          "limit": {
+            "default": 50,
+            "description": "返す最大件数。",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ListBusinessViewsInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "BusinessViewItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "status": {
+                "title": "Status",
+                "type": "string"
+              },
+              "knowledge_base_count": {
+                "title": "Knowledge Base Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status",
+              "knowledge_base_count"
+            ],
+            "title": "BusinessViewItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "business_views": {
+            "items": {
+              "$ref": "#/$defs/BusinessViewItem"
+            },
+            "title": "Business Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "business_views"
+        ],
+        "title": "ListBusinessViewsOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_search",
+      "description": "業務ビューのナレッジベースを検索し、根拠（citations）付きの回答を返します。",
+      "inputSchema": {
+        "description": "検索・回答の条件。",
+        "properties": {
+          "query": {
+            "description": "質問文。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "業務ビューの id。参照するナレッジベースと検索・回答設定を使う。",
+            "title": "Business View Id"
+          },
+          "knowledge_base_ids": {
+            "description": "検索するナレッジベースの id（省略時は業務ビューの参照先）。",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Knowledge Base Ids",
+            "type": "array"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索する件数。",
+            "title": "Top K"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "検索フィルター（例: category_name）。",
+            "title": "Filters",
+            "type": "object"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "RagCitation": {
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "text": {
+                "description": "根拠の本文（先頭 1000 文字）。",
+                "title": "Text",
+                "type": "string"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "text"
+            ],
+            "title": "RagCitation",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/RagCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answer",
+          "trace_id",
+          "guardrail_warnings",
+          "citations"
+        ],
+        "title": "SearchOutput",
+        "type": "object"
+      }
+    }
+  ]
+}
