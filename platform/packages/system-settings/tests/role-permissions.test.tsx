@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import {
   RolePermissionsPage,
   effectivePermissionCodes,
+  normalizeCustomTargetId,
   permissionInheritanceSources,
   targetItemLabel,
+  targetItemsWithCustomIds,
   type PermissionDefinition,
   type PermissionRole,
   type RolePermissionTargetSection,
@@ -105,5 +107,57 @@ describe("権限の継承", () => {
   it("対象の表示名は補足を括弧で添える", () => {
     expect(targetItemLabel({ id: "p1", name: "財務", secondary: "会計" })).toBe("財務 (会計)");
     expect(targetItemLabel({ id: "p1", name: "財務" })).toBe("財務");
+  });
+});
+
+describe("候補にない ID の直接入力（allowCustomIds。#215）", () => {
+  it("前後の空白を除き、空・形式に合わない ID は受け付けない", () => {
+    const pattern = /^[A-Za-z0-9._:-]{1,64}$/;
+    expect(normalizeCustomTargetId("  sales-east  ", pattern)).toBe("sales-east");
+    expect(normalizeCustomTargetId("   ", pattern)).toBeNull();
+    expect(normalizeCustomTargetId("営業 東日本", pattern)).toBeNull();
+    expect(normalizeCustomTargetId("x".repeat(65), pattern)).toBeNull();
+    // 形式の指定が無ければ空でない文字列を受け付ける。
+    expect(normalizeCustomTargetId(" 営業 ")).toBe("営業");
+  });
+
+  it("g フラグ付きの形式でも毎回先頭から判定する", () => {
+    const pattern = /^[a-z-]+$/g;
+    expect(normalizeCustomTargetId("sales", pattern)).toBe("sales");
+    expect(normalizeCustomTargetId("sales", pattern)).toBe("sales");
+  });
+
+  it("選択済みで候補にない ID を名前 = ID の候補として末尾に足し、重複させない", () => {
+    const items = [{ id: "sales", name: "sales" }];
+    expect(targetItemsWithCustomIds(items, ["sales", "hr", "hr", "finance"], "直接入力")).toEqual([
+      { id: "sales", name: "sales" },
+      { id: "hr", name: "hr", status: "直接入力" },
+      { id: "finance", name: "finance", status: "直接入力" },
+    ]);
+    // 状態の文言が無ければ status を付けない。元の配列は変えない。
+    expect(targetItemsWithCustomIds(items, ["hr"])).toEqual([
+      { id: "sales", name: "sales" },
+      { id: "hr", name: "hr" },
+    ]);
+    expect(items).toEqual([{ id: "sales", name: "sales" }]);
+  });
+
+  it("直接入力を許可する対象を渡しても、NL2SQL / RAG と同じ一覧の構成で描画できる", () => {
+    const agentTargets: RolePermissionTargetSection<RagRole>[] = [
+      {
+        ...ragTargets[0],
+        key: "business-view-access",
+        allowCustomIds: {
+          label: "業務ビュー ID を直接入力",
+          addLabel: "追加",
+          pattern: /^[A-Za-z0-9._:-]{1,64}$/,
+          invalidMessage: "業務ビュー ID の形式が正しくありません。",
+          customStatus: "直接入力",
+        },
+      },
+    ];
+    const html = render(<RolePermissionsPage api={api} canManage targets={agentTargets} />);
+    expect(html).toContain('data-testid="security-permissions-grid"');
+    expect(html).toContain("業務ビュー");
   });
 });

@@ -8,19 +8,21 @@ import {
   type FormEvent,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, LockKeyhole, Pencil, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowLeft, LockKeyhole, Pencil, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   Banner,
   BulkSelectionActions,
   Button,
   DataTable,
   EmptyState,
+  FieldError,
   FormStatus,
   ObjectActionBar,
   PageBody,
   PageHeader,
   ProcessingIndicator,
   StatusBadge,
+  TextField,
   toast,
   useConfirm,
   type DataTableColumn,
@@ -55,6 +57,7 @@ import { ROLE_PERMISSIONS_MESSAGES, type RolePermissionsMessages } from "./messa
 import type {
   PermissionDefinition,
   PermissionRole,
+  RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
   RolePermissionTargetSection,
   RolePermissionsApi,
@@ -83,6 +86,45 @@ function normalizedRole<R extends PermissionRole>(role: R): R {
 /** 対象の表示名。補足があれば「名前 (補足)」。 */
 export function targetItemLabel(item: RolePermissionTargetItem) {
   return [item.name, item.secondary ? `(${item.secondary})` : ""].filter(Boolean).join(" ");
+}
+
+/**
+ * 候補にない ID（直接入力した ID や、候補の取得元に現れなくなった保存済みの ID）を候補の末尾に足す。
+ * 名前は ID のまま、`customStatus` があれば状態として添える（#215）。
+ */
+export function targetItemsWithCustomIds(
+  items: readonly RolePermissionTargetItem[],
+  ids: readonly string[],
+  customStatus?: string,
+): RolePermissionTargetItem[] {
+  const known = new Set(items.map((item) => item.id));
+  const extra = [...new Set(ids)]
+    .filter((id) => !known.has(id))
+    .map((id): RolePermissionTargetItem => (customStatus ? { id, name: id, status: customStatus } : { id, name: id }));
+  return [...items, ...extra];
+}
+
+/** 直接入力した ID を検証する。前後の空白を除いた ID を返し、空・形式に合わなければ null（#215）。 */
+export function normalizeCustomTargetId(value: string, pattern?: RegExp): string | null {
+  const id = value.trim();
+  if (!id) return null;
+  if (pattern) {
+    // g / y フラグ付きの RegExp でも毎回先頭から判定する。
+    pattern.lastIndex = 0;
+    if (!pattern.test(id)) return null;
+  }
+  return id;
+}
+
+/** 対象の候補。直接入力を許可する対象では、選択済みで候補にない ID も含める。 */
+function targetItemsFor<R extends PermissionRole>(
+  target: RolePermissionTargetSection<R>,
+  items: readonly RolePermissionTargetItem[],
+  selectedIds: readonly string[],
+): RolePermissionTargetItem[] {
+  return target.allowCustomIds
+    ? targetItemsWithCustomIds(items, selectedIds, target.allowCustomIds.customStatus)
+    : [...items];
 }
 
 /** 直接付けた権限から `implies` で継承される権限と、その継承元の権限名。 */
@@ -255,7 +297,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         ...targets.map((target) => {
           if (targetGrantsAll(target, role.role_code, effectiveCodes)) return target.messages.all;
           const selected = target.selectedIds(role);
-          return (targetItems[target.key] ?? [])
+          return targetItemsFor(target, targetItems[target.key] ?? [], selected)
             .filter((item) => selected.includes(item.id))
             .map(targetItemLabel)
             .join(" ");
@@ -869,12 +911,18 @@ function TargetFieldset<R extends PermissionRole>({
   const tm = target.messages;
   const idPrefix = `security-roles-${target.key}`;
   const targetReadOnly = inputReadOnly || grantsAll;
+  const custom = target.allowCustomIds;
+  // 直接入力で足した ID は、選択を外しても編集中は候補に残す（選び直せるように）。
+  const [addedIds, setAddedIds] = useState<string[]>([]);
+  const displayItems = custom
+    ? targetItemsWithCustomIds(items, [...selectedIds, ...addedIds], custom.customStatus)
+    : items;
   const q = search.trim().toLowerCase();
   const filteredItems = q
-    ? items.filter((item) =>
+    ? displayItems.filter((item) =>
         [item.id, item.name, item.secondary ?? "", item.description ?? ""].join(" ").toLowerCase().includes(q),
       )
-    : items;
+    : displayItems;
   const visibleIds = filteredItems.map((item) => item.id);
   const selectedVisibleCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
   const toggle = (id: string) => {
@@ -914,7 +962,20 @@ function TargetFieldset<R extends PermissionRole>({
               }}
             />
           </div>
-          {items.length > 0 ? (
+          {custom ? (
+            <CustomTargetIdField
+              idPrefix={idPrefix}
+              options={custom}
+              disabled={targetReadOnly}
+              onAdd={(id) => {
+                setAddedIds((current) => (current.includes(id) ? current : [...current, id]));
+                onChange((ids) => (ids.includes(id) ? ids : [...ids, id]));
+                // 追加した ID が検索で隠れないよう、検索語を消す。
+                if (search) onSearchChange("");
+              }}
+            />
+          ) : null}
+          {displayItems.length > 0 ? (
             <BulkSelectionActions
               selectLabel={m.selectAll}
               clearLabel={m.clearAll}
@@ -927,7 +988,7 @@ function TargetFieldset<R extends PermissionRole>({
               onClearAll={clearVisible}
             />
           ) : null}
-          {items.length === 0 ? (
+          {displayItems.length === 0 ? (
             <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">{tm.empty}</p>
           ) : filteredItems.length === 0 ? (
             <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">{tm.noResults}</p>
@@ -973,6 +1034,85 @@ function TargetFieldset<R extends PermissionRole>({
   );
 }
 
+/**
+ * 候補にない ID を直接入力して追加する欄（#215）。Enter でも追加し、フォームは送信しない。
+ * 空・形式に合わない ID は追加せず、入力欄の直下に理由を出す。
+ */
+function CustomTargetIdField({
+  idPrefix,
+  options,
+  disabled,
+  onAdd,
+}: {
+  idPrefix: string;
+  options: RolePermissionCustomIdOptions;
+  disabled: boolean;
+  onAdd: (id: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const add = () => {
+    if (disabled) return;
+    const id = normalizeCustomTargetId(value, options.pattern);
+    if (!id) {
+      setError(options.invalidMessage);
+      return;
+    }
+    onAdd(id);
+    setValue("");
+    setError("");
+  };
+  const hintId = `${idPrefix}-custom-id-hint`;
+  const errorId = `${idPrefix}-custom-id-error`;
+  const describedBy = [options.hint ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
+  return (
+    <div className="grid gap-1.5 rounded-md border border-border bg-surface-sunken p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <TextField
+          id={`${idPrefix}-custom-id`}
+          className="min-w-0 flex-1"
+          label={options.label}
+          placeholder={options.placeholder}
+          value={value}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          data-testid={`${idPrefix}-custom-id`}
+          // 補足とエラーは追加ボタンの行の下に出すため、入力欄との関連付けをここで持つ。
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy}
+          inputClassName={error ? "border-danger-fg" : undefined}
+          onValueChange={(next) => {
+            setValue(next);
+            if (error) setError("");
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            add();
+          }}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          icon={Plus}
+          disabled={disabled}
+          onClick={add}
+          data-testid={`${idPrefix}-custom-add`}
+        >
+          {options.addLabel}
+        </Button>
+      </div>
+      {options.hint ? (
+        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+          {options.hint}
+        </p>
+      ) : null}
+      <FieldError id={errorId} message={error} />
+    </div>
+  );
+}
+
 function PermissionDetailPanel<R extends PermissionRole>({
   role,
   canManage,
@@ -997,8 +1137,8 @@ function PermissionDetailPanel<R extends PermissionRole>({
   const effectiveCodes = effectivePermissionCodes(role.permissions, permissionByCode);
   const targetSummaries = targets.map((target) => {
     const grantsAll = targetGrantsAll(target, role.role_code, effectiveCodes);
-    const items = targetItems[target.key] ?? [];
     const selected = target.selectedIds(role);
+    const items = grantsAll ? (targetItems[target.key] ?? []) : targetItemsFor(target, targetItems[target.key] ?? [], selected);
     return { target, grantsAll, items: grantsAll ? items : items.filter((item) => selected.includes(item.id)) };
   });
 

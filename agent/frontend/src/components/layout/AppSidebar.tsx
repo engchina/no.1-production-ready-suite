@@ -1,22 +1,33 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useSidebarAccount } from "@engchina/production-ready-system-settings";
 
 import {
   Sidebar as UiSidebar,
+  SidebarAccountFooter,
   type NavSection as UiNavSection,
   type SidebarLabels,
 } from "@engchina/production-ready-ui";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
+import { confirmPendingLeave } from "@/lib/leave-guard";
+import { APP_ROUTES } from "@/lib/routes";
 import { useUiStore } from "@/lib/ui-store";
-import { NAV_SECTIONS } from "./nav-config";
+import { visibleNavSections } from "./nav-config";
 
 /**
  * Agent コンソールのサイドナビ。共有 UI パッケージの <Sidebar> に
- * i18n / router / 状態ストア / nav 構成を注入する（RAG / NL2SQL と同一パターン）。
+ * i18n / router / 権限 / 状態ストア / nav 構成を注入する（RAG / NL2SQL と同一パターン）。
+ * 権限のない項目と、項目が 0 件になったセクションは出さない（#215）。
  */
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const { hasPermission } = useAuth();
+  // 表示名・ロール・パスワード変更・ログアウトは共通の helper が作る（#220）。
+  const account = useSidebarAccount({
+    routes: { login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange },
+  });
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
@@ -26,7 +37,7 @@ export function AppSidebar() {
 
   const sections = useMemo<UiNavSection[]>(
     () =>
-      NAV_SECTIONS.map((section) => ({
+      visibleNavSections(hasPermission).map((section) => ({
         key: section.titleKey,
         title: t(section.titleKey),
         collapsible: section.collapsible,
@@ -37,7 +48,7 @@ export function AppSidebar() {
           icon: item.icon,
         })),
       })),
-    []
+    [hasPermission]
   );
 
   const labels: SidebarLabels = {
@@ -46,9 +57,32 @@ export function AppSidebar() {
     collapse: t("nav.sidebar.collapse"),
     commandOpen: t("nav.command.open"),
     sectionContainsActive: t("nav.section.containsActive"),
-    sectionToggleExpand: (section) => `${section} を展開`,
-    sectionToggleCollapse: (section) => `${section} を折りたたむ`,
+    sectionToggleExpand: (section) => t("nav.section.toggle.expand", { section }),
+    sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
   };
+
+  // ローカル（ログイン省略）はログインしていないため、アカウント欄を出さない（agent/AGENTS.md）。
+  const logout = account?.onLogout;
+  const footer =
+    account && !account.debugMode ? (
+      <SidebarAccountFooter
+        name={account.name}
+        roles={account.roles}
+        collapsed={collapsed}
+        labels={account.labels}
+        actions={account.actions}
+        onLogout={
+          logout
+            ? () => {
+                // ログアウトは画面を離れる操作。未保存の編集があれば先に確認する。
+                void confirmPendingLeave().then((confirmed) => {
+                  if (confirmed) logout();
+                });
+              }
+            : undefined
+        }
+      />
+    ) : undefined;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -83,6 +117,7 @@ export function AppSidebar() {
       onSetSectionCollapsed={setSectionCollapsed}
       linkComponent={Link}
       labels={labels}
+      footer={footer}
     />
   );
 }

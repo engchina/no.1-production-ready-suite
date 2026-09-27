@@ -34,6 +34,8 @@ export type {
   ModelSettingsTestStatus,
   ModelSettingsTestTargetType,
 } from "@engchina/production-ready-system-settings";
+// Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #215）。
+import { csrfHeader, notifyAuthStatus, type BaseCurrentUser } from "@engchina/production-ready-system-settings";
 import type {
   ModelSettingsData,
   ModelSettingsPayload,
@@ -611,21 +613,98 @@ export interface RuntimeBindingWritePayload {
   policy?: Record<string, unknown>;
 }
 
+/**
+ * 承認の判断。決定者（`decided_by`）はログイン中の利用者から server が決めるため送らない（#215）。
+ */
 export interface ApprovalDecisionPayload {
   approved: boolean;
-  decided_by?: string;
   comment?: string;
+}
+
+// --- 認証（platform の共通認証。#215） ---
+
+/** CSRF の double submit に使う Cookie 名（backend の `app_auth_csrf_cookie_name` の既定値）。 */
+export const CSRF_COOKIE_NAME = "agent_csrf";
+
+/**
+ * `GET /api/auth/me` などが返すログイン中の利用者。`permissions` は implies を展開済み。
+ * `allowed_*_ids` が null なら制限なし（SYSTEM_ADMIN・`agent.admin`・ローカル DEBUG）。
+ */
+export interface CurrentUser extends BaseCurrentUser {
+  allowed_agent_ids: string[] | null;
+  allowed_business_view_ids: string[] | null;
+}
+
+/** ロール（共通のロール項目に Agent の権限と対象範囲を足したもの）。 */
+export interface SecurityRole {
+  role_id: string;
+  role_code: string;
+  display_name: string;
+  description: string;
+  is_built_in: boolean;
+  archived: boolean;
+  version: number;
+  permissions: string[];
+  agent_ids: string[];
+  business_view_ids: string[];
+}
+
+/** 権限管理で選べるエージェント（Runtime repository の業務 Agent）。status は enabled / disabled。 */
+export interface AgentAccessTarget {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+}
+
+/** 権限管理で選べる業務ビュー。Agent にマスタはなく、Run に現れた ID とロールに割り当て済みの ID。 */
+export interface BusinessViewAccessTarget {
+  id: string;
+  name: string;
+}
+
+export interface AccessTargetsData {
+  agents: AgentAccessTarget[];
+  business_views: BusinessViewAccessTarget[];
+}
+
+/** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */
+export interface RoleAccessUpdate {
+  role_id: string;
+  version: number;
+  permissions: string[];
+  agent_ids: string[];
+  business_view_ids: string[];
+}
+
+/** 入力項目に結び付く API の問題（JSON Pointer と表示文言）。 */
+export interface ApiFieldError {
+  pointer: string;
+  message: string;
+}
+
+export interface ApiErrorDetails {
+  /** 機械判定用のエラーコード（共通認証・ユーザー / ロール操作の `error_code`）。 */
+  errorCode?: string;
+  fieldErrors?: ApiFieldError[];
+  requestId?: string;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly messages: string[];
+  readonly errorCode?: string;
+  readonly fieldErrors: ApiFieldError[];
+  readonly requestId?: string;
 
-  constructor(status: number, messages: string[]) {
+  constructor(status: number, messages: string[], details: ApiErrorDetails = {}) {
     super(messages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    this.errorCode = details.errorCode;
+    this.fieldErrors = details.fieldErrors ?? [];
+    this.requestId = details.requestId;
   }
 }
 
@@ -637,44 +716,107 @@ function jsonBody(body: unknown): RequestInit {
   };
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const isFormData = init?.body instanceof FormData;
+interface ErrorBody {
+  detail?: unknown;
+  error_messages?: unknown;
+  error_code?: unknown;
+  problem?: { field_errors?: unknown; request_id?: unknown } | null;
+}
+
+function fieldErrorsOf(value: unknown): ApiFieldError[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { pointer, message } = item as { pointer?: unknown; message?: unknown };
+    return typeof message === "string"
+      ? [{ pointer: typeof pointer === "string" ? pointer : "", message }]
+      : [];
+  });
+}
+
+/** エラー応答（ApiResponse envelope / FastAPI の detail）から ApiError を作る。 */
+async function apiErrorFrom(response: Response): Promise<ApiError> {
+  let detail = response.statusText;
+  let body: ErrorBody = {};
+  try {
+    body = ((await response.json()) ?? {}) as ErrorBody;
+    if (Array.isArray(body.error_messages) && typeof body.error_messages[0] === "string") {
+      detail = body.error_messages[0];
+    } else if (typeof body.detail === "string") {
+      detail = body.detail;
+    } else if (
+      body.detail &&
+      typeof body.detail === "object" &&
+      "message" in body.detail &&
+      typeof body.detail.message === "string"
+    ) {
+      detail = body.detail.message;
+    }
+  } catch {
+    // Ignore non-JSON error bodies.
+  }
+  const problemRequestId =
+    typeof body.problem?.request_id === "string" ? body.problem.request_id : undefined;
+  return new ApiError(response.status, detail ? [detail] : [], {
+    errorCode: typeof body.error_code === "string" ? body.error_code : undefined,
+    fieldErrors: fieldErrorsOf(body.problem?.field_errors),
+    requestId: response.headers.get("X-Request-ID") || problemRequestId,
+  });
+}
+
+export interface RequestOptions {
+  /** 403 を権限なしの画面へ移すイベントにしない（ユーザー / ロール / 権限の更新のように、理由をその場で見せる API）。 */
+  inlineForbidden?: boolean;
+}
+
+/** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
+function withCsrfHeaders(method: string | undefined, headers: Headers): Headers {
+  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method ?? "GET"))) {
+    headers.set(name, value);
+  }
+  return headers;
+}
+
+/** 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。 */
+function notifyResponseAuthStatus(response: Response, options: RequestOptions): void {
+  if (response.status === 403 && options.inlineForbidden) return;
+  notifyAuthStatus(response.status, response.headers.get("X-Request-ID") || undefined);
+}
+
+/**
+ * Cookie セッションで API を呼ぶ（#215）。状態を変える method には CSRF header を付け、
+ * 401 / 403 は共通の認証イベントで通知する。
+ */
+async function fetchWithSession(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<Response> {
+  const isFormData = init.body instanceof FormData;
+  const headers = new Headers(isFormData ? undefined : { "Content-Type": "application/json" });
+  new Headers(init.headers).forEach((value, name) => headers.set(name, value));
   const response = await fetch(path, {
     ...init,
-    headers: {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...init?.headers,
-    },
+    credentials: "same-origin",
+    headers: withCsrfHeaders(init.method, headers),
   });
+  if (!response.ok) notifyResponseAuthStatus(response, options);
+  return response;
+}
+
+/** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
+export async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const response = await fetchWithSession(path, init, options);
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = (await response.json()) as {
-        detail?: unknown;
-        error_messages?: unknown;
-      };
-      if (
-        Array.isArray(body.error_messages) &&
-        typeof body.error_messages[0] === "string"
-      ) {
-        detail = body.error_messages[0];
-      } else if (typeof body.detail === "string") {
-        detail = body.detail;
-      } else if (
-        body.detail &&
-        typeof body.detail === "object" &&
-        "message" in body.detail &&
-        typeof body.detail.message === "string"
-      ) {
-        detail = body.detail.message;
-      }
-    } catch {
-      // Ignore non-JSON error bodies.
-    }
-    throw new ApiError(response.status, [detail]);
+    throw await apiErrorFrom(response);
   }
   const json = (await response.json()) as ApiResponse<T>;
   return json.data;
+}
+
+/** ファイルの応答（CSV など）を Blob で受け取る。エラー時は ApiError を投げる。 */
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetchWithSession(path);
+  if (!response.ok) {
+    throw await apiErrorFrom(response);
+  }
+  return response.blob();
 }
 
 function auditQuery(filters: ToolCallAuditFilters): string {
@@ -771,8 +913,9 @@ export const agentApi = {
     request<RunAuditData>(`/api/runs/${runId}/audit`),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
-  toolCallAuditCsvUrl: (filters: ToolCallAuditFilters) =>
-    `/api/audit/tool-calls.csv${auditQuery(filters)}`,
+  /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */
+  downloadToolCallAuditCsv: (filters: ToolCallAuditFilters) =>
+    requestBlob(`/api/audit/tool-calls.csv${auditQuery(filters)}`),
   listRunArtifacts: (runId: string) =>
     request<{ artifacts: Artifact[] }>(`/api/runs/${runId}/artifacts`),
   getRunArtifact: (runId: string, artifactId: string) =>

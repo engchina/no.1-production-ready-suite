@@ -87,6 +87,8 @@ import {
 } from "@/components/EntityLayout";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
+import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
+import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { APP_ROUTES } from "@/lib/routes";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
@@ -101,7 +103,14 @@ import {
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
-type WebSocketStreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "error";
+type WebSocketStreamStatus =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "closed"
+  | "error"
+  | "stopped";
 
 interface RunWebSocketState {
   status: WebSocketStreamStatus;
@@ -110,9 +119,37 @@ interface RunWebSocketState {
   lastError: string | null;
   lastEventId: string | null;
   reconnectAttempts: number;
+  /** 権限・認証・接続の理由で再接続をやめたときの説明（i18n 済み）。null は購読中または未接続。 */
+  stopReason: string | null;
+  /** 停止した購読を利用者の操作でつなぎ直す。 */
+  reconnect: () => void;
   sendCancel: () => void;
   sendResume: () => void;
   sendApprovalDecision: (approvalId: string, approved: boolean) => void;
+}
+
+type SseStreamStatus = "idle" | "open" | "failed";
+
+interface RunEventSourceState {
+  status: SseStreamStatus;
+  reconnect: () => void;
+}
+
+/** 接続の確立前に閉じられた回数がこの値に達したら、再接続をやめて理由を出す（#215）。 */
+const MAX_WEBSOCKET_HANDSHAKE_FAILURES = 3;
+/** backend が WebSocket を権限・認証で拒否したときの close code（policy violation）。 */
+const WEBSOCKET_POLICY_VIOLATION = 1008;
+
+/** 購読を止めた理由（error_code は backend の WebSocket の `{type: "error", error_code}`）。 */
+function streamStopReason(errorCode: string | null): string {
+  if (errorCode?.startsWith("auth.")) return t("run.stream.stoppedUnauthenticated");
+  if (errorCode === "run.not_found") return t("run.stream.stoppedNotFound");
+  return t("run.stream.stoppedForbidden");
+}
+
+/** 接続できなかった理由がログインの失効かを確かめる（401 なら共通の認証イベントでログイン画面へ移る）。 */
+function verifySession(): void {
+  void securityApi.me().catch(() => undefined);
 }
 
 interface WebSocketMessage {
@@ -153,6 +190,7 @@ const websocketStatusVariant: Record<WebSocketStreamStatus, StatusVariant> = {
   reconnecting: "info",
   closed: "neutral",
   error: "danger",
+  stopped: "warning",
 };
 
 function useRunEventWebSocket(
@@ -173,6 +211,9 @@ function useRunEventWebSocket(
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastEventId, setLastEventId] = useState<string | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [stopReason, setStopReason] = useState<string | null>(null);
+  // 利用者の「再接続」で増やし、effect をつなぎ直す。
+  const [generation, setGeneration] = useState(0);
   const inactive = !enabled || !runId || !runStatus || isRunTerminal(runStatus);
 
   // Run が変わったレンダーで、前の Run の接続情報を消す（effect で setState しない）。
@@ -186,8 +227,9 @@ function useRunEventWebSocket(
   }
   // 接続し直す条件（下の effect の deps）が変わったレンダーで、接続状態を初期化する。
   // 接続しない間は idle、接続する場合は新しい接続を張る前の connecting にする。
-  const connectionChanged = useValuesChanged([enabled, onRuntimeEvent, runId, runStatus]);
+  const connectionChanged = useValuesChanged([enabled, onRuntimeEvent, runId, runStatus, generation]);
   if (connectionChanged) {
+    setStopReason(null);
     if (inactive) {
       setStatus("idle");
     } else {
@@ -215,6 +257,20 @@ function useRunEventWebSocket(
 
     const activeRunId = runId;
     let disposed = false;
+    let stopped = false;
+    let handshakeFailures = 0;
+
+    // 権限・認証・接続の理由で購読をやめる。無限に再接続しない（#215）。
+    function stop(reason: string) {
+      if (disposed || stopped) return;
+      stopped = true;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      setStatus("stopped");
+      setStopReason(reason);
+    }
 
     function scheduleReconnect() {
       if (disposed) {
@@ -232,11 +288,14 @@ function useRunEventWebSocket(
     }
 
     function connect(isReconnect: boolean) {
-      if (disposed) {
+      if (disposed || stopped) {
         return;
       }
       const socket = new WebSocket(runEventWebSocketUrl(activeRunId, lastEventIdRef.current));
       socketRef.current = socket;
+      let opened = false;
+      // 接続単位のエラー（権限・認証・Run なし）。この後に close 1008 が来る。
+      let rejectedCode: string | null = null;
       // 初回の接続（connecting）は render 中に設定済み。再接続だけここで状態を変える。
       if (isReconnect) {
         setStatus("reconnecting");
@@ -244,13 +303,31 @@ function useRunEventWebSocket(
       }
 
       socket.onopen = () => {
+        opened = true;
+        handshakeFailures = 0;
         if (socketRef.current === socket && !disposed) {
           setStatus("open");
         }
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (socketRef.current === socket) {
           socketRef.current = null;
+        }
+        if (disposed) return;
+        // backend は権限・認証で拒否すると error を送ってから 1008 で閉じる。つなぎ直しても同じ結果になる。
+        if (event.code === WEBSOCKET_POLICY_VIOLATION || rejectedCode) {
+          if (rejectedCode?.startsWith("auth.")) verifySession();
+          stop(streamStopReason(rejectedCode));
+          return;
+        }
+        // 接続の確立前に閉じられる（Cookie・Origin の拒否は accept 前に閉じる）のが続いたら、再接続をやめる。
+        if (!opened) {
+          handshakeFailures += 1;
+          if (handshakeFailures >= MAX_WEBSOCKET_HANDSHAKE_FAILURES) {
+            verifySession();
+            stop(t("run.stream.stoppedUnreachable"));
+            return;
+          }
         }
         scheduleReconnect();
       };
@@ -278,7 +355,20 @@ function useRunEventWebSocket(
           return;
         }
         if (message.type === "error") {
-          setLastError(message.error_code ?? message.message ?? "websocket.error");
+          const code = message.error_code ?? null;
+          if (message.command) {
+            // コマンド単位の拒否（権限のない取消など）は接続を保ったまま理由だけを出す。
+            setLastError(
+              code?.startsWith("rbac.")
+                ? `${message.command}: ${t("run.stream.commandForbidden")}`
+                : code ?? message.message ?? "websocket.error"
+            );
+            return;
+          }
+          if (code && (code.startsWith("rbac.") || code.startsWith("auth.") || code === "run.not_found")) {
+            rejectedCode = code;
+          }
+          setLastError(code ?? message.message ?? "websocket.error");
           return;
         }
         if (message.event) {
@@ -305,7 +395,13 @@ function useRunEventWebSocket(
         }
       }
     };
-  }, [enabled, onRuntimeEvent, runId, runStatus]);
+  }, [enabled, onRuntimeEvent, runId, runStatus, generation]);
+
+  const reconnect = useCallback(() => {
+    reconnectAttemptRef.current = 0;
+    setReconnectAttempts(0);
+    setGeneration((current) => current + 1);
+  }, []);
 
   const sendCancel = useCallback(() => {
     const socket = socketRef.current;
@@ -346,7 +442,7 @@ function useRunEventWebSocket(
         type: "approval_decision",
         approval_id: approvalId,
         approved,
-        decided_by: "operator",
+        // 決定者はログイン中の利用者から server が決める（#215）。
         command_id: `${approved ? "approve" : "reject"}-${Date.now()}`,
       })
     );
@@ -359,10 +455,74 @@ function useRunEventWebSocket(
     lastError,
     lastEventId,
     reconnectAttempts,
+    stopReason,
+    reconnect,
     sendCancel,
     sendResume,
     sendApprovalDecision,
   };
+}
+
+const RUN_EVENT_TYPES = [
+  "run.status_changed",
+  "planner.completed",
+  "skill.planned",
+  "step.started",
+  "tool.approval_required",
+  "approval.decided",
+  "artifact.created",
+  "tool.completed",
+  "tool.failed",
+  "tool.guardrail_warning",
+  "run.completed",
+  "run.cancelled",
+  "runtime.dispatch_claimed",
+  "runtime.submitted",
+  "runtime.failed",
+  "memory.written",
+];
+
+/**
+ * 非終端の Run のイベントを SSE（Cookie セッション）で購読する。
+ * EventSource は status code を読めないため、失敗したら自動の再接続をやめ、ログインの失効かを確かめて
+ * 利用者に停止を示す（#215）。
+ */
+function useRunEventSource(
+  run: RunState | undefined,
+  enabled: boolean,
+  onRuntimeEvent: () => void
+): RunEventSourceState {
+  const runId = run?.id;
+  const active = enabled && Boolean(runId) && Boolean(run) && !isRunTerminal(run?.status ?? "completed");
+  const [status, setStatus] = useState<SseStreamStatus>("idle");
+  const [generation, setGeneration] = useState(0);
+
+  // 購読の条件が変わったレンダーで状態を初期化する（effect で setState しない）。
+  if (useValuesChanged([active, runId ?? null, generation])) {
+    setStatus(active ? "open" : "idle");
+  }
+
+  useEffect(() => {
+    if (!active || !runId) return;
+    const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?follow=true`, {
+      withCredentials: true,
+    });
+    const refresh = () => {
+      onRuntimeEvent();
+    };
+    RUN_EVENT_TYPES.forEach((type) => source.addEventListener(type, refresh));
+    source.onerror = () => {
+      // 終端した Run の stream の終了も error になる。状態は一覧の再取得で分かるので、再接続だけやめる。
+      source.close();
+      setStatus("failed");
+      verifySession();
+      onRuntimeEvent();
+    };
+    return () => source.close();
+  }, [active, runId, onRuntimeEvent, generation]);
+
+  const reconnect = useCallback(() => setGeneration((current) => current + 1), []);
+  return { status, reconnect };
 }
 
 function runEventWebSocketUrl(runId: string, afterEventId: string | null = null): string {
@@ -390,6 +550,8 @@ function isRunTerminal(status: RunState["status"]): boolean {
 export function AgentsPage() {
   const queryClient = useQueryClient();
   const editor = useEditorRoute();
+  // 業務 Agent と Binding の変更は Agent 管理の権限（admin）だけ。それ以外は閲覧だけにする（#215）。
+  const { admin: canManage } = useCapabilities();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
@@ -407,19 +569,23 @@ export function AgentsPage() {
   });
 
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const agentActions = (agent: AgentProfile): EntityAction[] => [
-    {
-      id: "toggle-enabled",
-      label: agent.enabled ? t("agent.disable") : t("agent.enable"),
-      icon: agent.enabled ? PowerOff : Power,
-      disabled: toggleAgent.isPending,
-      onSelect: () => toggleAgent.mutate(agent),
-    },
-  ];
+  const agentActions = (agent: AgentProfile): EntityAction[] =>
+    canManage
+      ? [
+          {
+            id: "toggle-enabled",
+            label: agent.enabled ? t("agent.disable") : t("agent.enable"),
+            icon: agent.enabled ? PowerOff : Power,
+            disabled: toggleAgent.isPending,
+            onSelect: () => toggleAgent.mutate(agent),
+          },
+        ]
+      : [];
 
   const agentList = agents.data?.agents ?? [];
   const bindingList = bindings.data?.bindings ?? [];
-  const { target } = editor;
+  // 作成できない利用者が `?id=new` を開いたら一覧を出す。
+  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
   if (target.kind === "list") {
     return (
@@ -428,9 +594,11 @@ export function AgentsPage() {
           wide
           title={t("nav.agents")}
           subtitle={t("page.agents.subtitle")}
-          actions={[
-            { id: "create", kind: "primary", label: t("agent.create"), icon: Plus, onClick: editor.openNew },
-          ]}
+          actions={
+            canManage
+              ? [{ id: "create", kind: "primary", label: t("agent.create"), icon: Plus, onClick: editor.openNew }]
+              : []
+          }
         />
         <PageBody wide>
           <QueryState query={agents}>
@@ -478,6 +646,7 @@ export function AgentsPage() {
       bindings={agent ? bindingList.filter((binding) => binding.agent_id === agent.id) : []}
       runtimes={runtimes.data?.runtimes ?? []}
       actions={agent ? agentActions(agent) : []}
+      readOnly={!canManage}
       onBack={() => editor.backToList()}
       onCreated={(created) => editor.openItem(created.id, { replace: true })}
     />
@@ -566,6 +735,8 @@ function AgentTable({
 }
 export function RuntimesPage() {
   const queryClient = useQueryClient();
+  // 有効 / 無効の切替とサービス操作・ログは Agent 管理の権限（admin）だけ。状態の確認は閲覧でもできる（#215）。
+  const { admin: canManage } = useCapabilities();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
   const [logs, setLogs] = useState<Record<string, string>>({});
   const patchRuntime = useMutation({
@@ -661,6 +832,7 @@ export function RuntimesPage() {
                       <div className="flex flex-wrap items-center gap-3">
                         <Switch
                           checked={runtime.enabled}
+                          disabled={!canManage}
                           onCheckedChange={(enabled) => patchRuntime.mutate({ runtime, enabled })}
                           aria-label={`${runtime.name} ${t("agent.enabled")}`}
                         />
@@ -671,7 +843,7 @@ export function RuntimesPage() {
                           {t("runtime.probe")}
                         </Button>
                       </div>
-                      {runtime.managed_service_id ? (
+                      {canManage && runtime.managed_service_id ? (
                         <div className="flex flex-wrap gap-2">
                           {(["pull", "start", "stop", "restart", "remove"] as const).map(
                             (action) => (
@@ -717,6 +889,7 @@ const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
 export function RunsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const capabilities = useCapabilities();
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: agentApi.listRuns,
@@ -780,8 +953,12 @@ export function RunsPage() {
   const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
   const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
+  // 利用できるエージェントは backend が絞り込む。既定の Agent を使えない利用者は、使える最初の Agent を選ぶ（#215）。
+  const runnableAgents = (agents.data?.agents ?? []).filter((agent) => agent.enabled);
+  const selectedAgentId =
+    runnableAgents.some((agent) => agent.id === agentId) || !runnableAgents.length ? agentId : runnableAgents[0].id;
   const agentBindings = (bindings.data?.bindings ?? []).filter(
-    (binding) => binding.agent_id === agentId && binding.enabled
+    (binding) => binding.agent_id === selectedAgentId && binding.enabled
   );
   const defaultBinding = agentBindings.find((binding) => binding.is_default);
   const resolvedBindingId = bindingId || defaultBinding?.id || "";
@@ -805,36 +982,7 @@ export function RunsPage() {
     refreshRuntimeEvents
   );
 
-  useEffect(() => {
-    if (streamMode !== "sse" || !selectedRun || isRunTerminal(selectedRun.status)) {
-      return;
-    }
-    const source = new EventSource(`/api/runs/${selectedRun.id}/events?follow=true`);
-    const refresh = () => {
-      refreshRuntimeEvents();
-    };
-    const eventTypes = [
-      "run.status_changed",
-      "planner.completed",
-      "skill.planned",
-      "step.started",
-      "tool.approval_required",
-      "approval.decided",
-      "artifact.created",
-      "tool.completed",
-      "tool.failed",
-      "tool.guardrail_warning",
-      "run.completed",
-      "run.cancelled",
-      "runtime.dispatch_claimed",
-      "runtime.submitted",
-      "runtime.failed",
-      "memory.written",
-    ];
-    eventTypes.forEach((type) => source.addEventListener(type, refresh));
-    source.onerror = () => source.close();
-    return () => source.close();
-  }, [selectedRun, refreshRuntimeEvents, streamMode]);
+  const sseState = useRunEventSource(selectedRun, streamMode === "sse", refreshRuntimeEvents);
 
   function onAgentChange(value: string) {
     setAgentId(value);
@@ -850,7 +998,7 @@ export function RunsPage() {
     }
     createRun.mutate({
       goal,
-      agent_id: agentId,
+      agent_id: selectedAgentId,
       runtime_binding_id: resolvedBindingId,
     });
   }
@@ -881,7 +1029,8 @@ export function RunsPage() {
         id: "resume",
         label: t("run.resume"),
         icon: PlayCircle,
-        visible: canResume,
+        // 取消・再開・再実行は Run の実行・操作の権限（operator）が必要（#215）。
+        visible: capabilities.operateRuns && canResume,
         disabled: actionPending,
         onSelect: () => resumeRun.mutate(run.id),
       },
@@ -889,7 +1038,7 @@ export function RunsPage() {
         id: "replay",
         label: t("run.replay"),
         icon: RefreshCw,
-        visible: !isExternal,
+        visible: capabilities.operateRuns && !isExternal,
         disabled: actionPending,
         onSelect: () => replayRun.mutate(run.id),
       },
@@ -898,7 +1047,7 @@ export function RunsPage() {
         label: t("run.cancel"),
         icon: X,
         tone: "danger",
-        visible: canCancel,
+        visible: capabilities.operateRuns && canCancel,
         disabled: actionPending,
         onSelect: () => cancelLatestRun(run),
       },
@@ -922,62 +1071,65 @@ export function RunsPage() {
           splitId="runs-list"
           left={
             <div className="min-w-0 space-y-5">
-              <Card className="min-w-0">
-                <CardHeader>
-                  <CardTitle>{t("run.form.submit")}</CardTitle>
-                  <CardDescription>{t("run.runtime")}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Field label={t("run.form.agent")} htmlFor="run-agent">
-                    <select
-                      id="run-agent"
-                      value={agentId}
-                      onChange={(event) => onAgentChange(event.target.value)}
-                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
-                        <option key={agent.id} value={agent.id}>
-                          {agent.name}
+              {/* Run の作成は Run の実行・操作の権限（operator）がある利用者だけに出す（#215）。 */}
+              {capabilities.operateRuns ? (
+                <Card className="min-w-0">
+                  <CardHeader>
+                    <CardTitle>{t("run.form.submit")}</CardTitle>
+                    <CardDescription>{t("run.runtime")}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Field label={t("run.form.agent")} htmlFor="run-agent">
+                      <select
+                        id="run-agent"
+                        value={selectedAgentId}
+                        onChange={(event) => onAgentChange(event.target.value)}
+                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      >
+                        {runnableAgents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("run.form.goal")} htmlFor="run-goal">
+                      <textarea
+                        id="run-goal"
+                        value={goal}
+                        onChange={(event) => setGoal(event.target.value)}
+                        className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      />
+                    </Field>
+                    <Field label={t("run.form.binding")} htmlFor="run-binding">
+                      <select
+                        id="run-binding"
+                        value={bindingId}
+                        onChange={(event) => setBindingId(event.target.value)}
+                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      >
+                        <option value="">
+                          {defaultBinding
+                            ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
+                            : t("run.form.selectBinding")}
                         </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label={t("run.form.goal")} htmlFor="run-goal">
-                    <textarea
-                      id="run-goal"
-                      value={goal}
-                      onChange={(event) => setGoal(event.target.value)}
-                      className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    />
-                  </Field>
-                  <Field label={t("run.form.binding")} htmlFor="run-binding">
-                    <select
-                      id="run-binding"
-                      value={bindingId}
-                      onChange={(event) => setBindingId(event.target.value)}
-                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <option value="">
-                        {defaultBinding
-                          ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
-                          : t("run.form.selectBinding")}
-                      </option>
-                      {agentBindings.map((binding) => (
-                        <option key={binding.id} value={binding.id}>
-                          {binding.native_agent_ref} / {binding.runtime_id}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  {!agentBindings.length ? <Banner severity="warning">{t("run.unbound")}</Banner> : null}
-                  {formError ? <Banner severity="danger">{formError}</Banner> : null}
-                  {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
-                  {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
-                  <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
-                    {t("run.form.submit")}
-                  </Button>
-                </CardContent>
-              </Card>
+                        {agentBindings.map((binding) => (
+                          <option key={binding.id} value={binding.id}>
+                            {binding.native_agent_ref} / {binding.runtime_id}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    {!agentBindings.length ? <Banner severity="warning">{t("run.unbound")}</Banner> : null}
+                    {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                    {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
+                    {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
+                    <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
+                      {t("run.form.submit")}
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : null}
 
               <QueryState query={runs}>
                 {restoredSelection.missing ? (
@@ -1010,6 +1162,8 @@ export function RunsPage() {
                   streamMode={streamMode}
                   onStreamModeChange={setStreamMode}
                   websocketState={websocketState}
+                  sseState={sseState}
+                  capabilities={capabilities}
                 />
               ) : (
                 <EmptyState title={t("common.empty.title")} hint={t("run.selectHint")} />
@@ -1027,6 +1181,7 @@ type ApprovalRow = { run: RunState; approval: ApprovalRequest };
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const capabilities = useCapabilities();
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: agentApi.listRuns,
@@ -1034,7 +1189,8 @@ export function ApprovalsPage() {
   });
   const decide = useMutation({
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
-      agentApi.decideApproval(approval.id, { approved, decided_by: "operator" }),
+      // 決定者はログイン中の利用者から server が決める（#215）。
+      agentApi.decideApproval(approval.id, { approved }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["memory"] });
@@ -1067,7 +1223,8 @@ export function ApprovalsPage() {
       id: "approve",
       label: t("common.approve"),
       icon: Check,
-      visible: approval.status === "pending",
+      // 承認・却下は承認の判断の権限（approver）が必要（#215）。
+      visible: capabilities.decideApprovals && approval.status === "pending",
       disabled: decide.isPending,
       onSelect: () => decideApproval(approval, true),
     },
@@ -1076,7 +1233,7 @@ export function ApprovalsPage() {
       label: t("common.reject"),
       icon: X,
       tone: "danger",
-      visible: approval.status === "pending",
+      visible: capabilities.decideApprovals && approval.status === "pending",
       disabled: decide.isPending,
       onSelect: () => decideApproval(approval, false),
     },
@@ -1260,13 +1417,20 @@ export function AuditPage() {
     setAppliedForm(filterForm);
   }
 
-  function downloadCsv() {
-    const link = document.createElement("a");
-    link.href = agentApi.toolCallAuditCsvUrl(auditFiltersOf(filterForm));
-    link.download = "agent-tool-call-audit.csv";
-    link.click();
-    toast.success(t("audit.csvDownloaded"));
-  }
+  // CSV も Cookie セッションで取得し、401 / 403 は他の API と同じく扱う（#215）。
+  const csvDownload = useMutation({
+    mutationFn: () => agentApi.downloadToolCallAuditCsv(auditFiltersOf(filterForm)),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "agent-tool-call-audit.csv";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success(t("audit.csvDownloaded"));
+    },
+    onError: (error) => toast.error(t("audit.csvFailed"), { description: error.message }),
+  });
 
   return (
     <>
@@ -1377,7 +1541,12 @@ export function AuditPage() {
               <Button onClick={applyFilters} loading={audit.isFetching} icon={RefreshCw}>
                 {t("audit.apply")}
               </Button>
-              <Button variant="secondary" onClick={downloadCsv} icon={Download}>
+              <Button
+                variant="secondary"
+                onClick={() => csvDownload.mutate()}
+                loading={csvDownload.isPending}
+                icon={Download}
+              >
                 {t("audit.downloadCsv")}
               </Button>
             </div>
@@ -1609,6 +1778,8 @@ export function ToolsPage() {
 
 export function MemoryPage() {
   const queryClient = useQueryClient();
+  // メモリの登録は Run の実行・操作の権限（operator）が必要（backend の `POST /memory` と同じ。#215）。
+  const { operateRuns: canAdd } = useCapabilities();
   // 検索語は作業状態として残し、登録フォームの未保存の入力は離脱ガードで守る（#87）。
   const [query, setQuery] = useWorkspaceState("memory", "query", "", isString);
   const [kind, setKind] = useState<MemoryKind>("user_preference");
@@ -1674,51 +1845,53 @@ export function MemoryPage() {
     <>
       <PageHeader wide title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
       <PageBody wide className="space-y-6">
-        <Section title={t("memory.create")} description={t("page.memory.subtitle")}>
-          <Card className="min-w-0">
-            <CardContent className="grid min-w-0 gap-4 pt-5 lg:grid-cols-2">
-              <div className="min-w-0 space-y-4">
-                <Field label={t("memory.kind")} htmlFor="memory-kind">
-                  <select
-                    id="memory-kind"
-                    value={kind}
-                    onChange={(event) => setKind(event.target.value as MemoryKind)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  >
-                    <option value="user_preference">{t("memory.kind.userPreference")}</option>
-                    <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
-                    <option value="note">{t("memory.kind.note")}</option>
-                    <option value="run_summary">{t("memory.kind.runSummary")}</option>
-                  </select>
-                </Field>
-                <Field label={t("memory.content")} htmlFor="memory-content">
-                  <textarea
-                    id="memory-content"
-                    value={content}
-                    onChange={(event) => setContent(event.target.value)}
-                    className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  />
-                </Field>
-              </div>
-              <div className="min-w-0 space-y-4">
-                <Field label={t("memory.metadata")} htmlFor="memory-metadata">
-                  <textarea
-                    id="memory-metadata"
-                    value={metadataText}
-                    onChange={(event) => setMetadataText(event.target.value)}
-                    className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    spellCheck={false}
-                  />
-                </Field>
-                {formError ? <Banner severity="danger">{formError}</Banner> : null}
-                {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
-                <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
-                  {t("memory.create")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </Section>
+        {canAdd ? (
+          <Section title={t("memory.create")} description={t("page.memory.subtitle")}>
+            <Card className="min-w-0">
+              <CardContent className="grid min-w-0 gap-4 pt-5 lg:grid-cols-2">
+                <div className="min-w-0 space-y-4">
+                  <Field label={t("memory.kind")} htmlFor="memory-kind">
+                    <select
+                      id="memory-kind"
+                      value={kind}
+                      onChange={(event) => setKind(event.target.value as MemoryKind)}
+                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <option value="user_preference">{t("memory.kind.userPreference")}</option>
+                      <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
+                      <option value="note">{t("memory.kind.note")}</option>
+                      <option value="run_summary">{t("memory.kind.runSummary")}</option>
+                    </select>
+                  </Field>
+                  <Field label={t("memory.content")} htmlFor="memory-content">
+                    <textarea
+                      id="memory-content"
+                      value={content}
+                      onChange={(event) => setContent(event.target.value)}
+                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    />
+                  </Field>
+                </div>
+                <div className="min-w-0 space-y-4">
+                  <Field label={t("memory.metadata")} htmlFor="memory-metadata">
+                    <textarea
+                      id="memory-metadata"
+                      value={metadataText}
+                      onChange={(event) => setMetadataText(event.target.value)}
+                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      spellCheck={false}
+                    />
+                  </Field>
+                  {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                  {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
+                  <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
+                    {t("memory.create")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </Section>
+        ) : null}
         <AgentSplitPane
           splitId="memory-list"
           left={
@@ -1779,6 +1952,8 @@ interface ExternalSettingsDraft {
 
 export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const queryClient = useQueryClient();
+  // 運用設定の変更は Agent 管理の権限（admin）だけ。メニュー権限だけの利用者は閲覧になる（#215）。
+  const { admin: canManage } = useCapabilities();
   const isRag = kind === "rag";
   const isNl2Sql = kind === "nl2sql";
   const title = isRag ? t("nav.settingsExternalRag") : t("nav.settingsExternalNl2Sql");
@@ -1857,7 +2032,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
             </CardHeader>
             <CardContent className="space-y-4">
               {/* URL は全幅、タイムアウト・既定件数は 2 列に並べる。 */}
-              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+              <fieldset disabled={!canManage} className="grid min-w-0 gap-x-6 gap-y-4 lg:grid-cols-2">
                 <Field label={t("settings.baseUrl")} htmlFor={`${kind}-base-url`} className="lg:col-span-2">
                   <input
                     id={`${kind}-base-url`}
@@ -1888,11 +2063,13 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                     />
                   </Field>
                 ) : null}
-              </div>
+              </fieldset>
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending} icon={Save}>
-                {t("common.save")}
-              </Button>
+              {canManage ? (
+                <Button onClick={save} loading={mutation.isPending} icon={Save}>
+                  {t("common.save")}
+                </Button>
+              ) : null}
             </CardContent>
           </Card>
         </QueryState>
@@ -2108,6 +2285,9 @@ export function McpServersPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
+  // 接続先の追加・変更・削除は Agent 管理の権限（admin）だけ。tool 一覧の取得は実データの閲覧権限が要る（#215）。
+  const capabilities = useCapabilities();
+  const canManage = capabilities.admin;
   const servers = useQuery({
     queryKey: ["mcp-servers"],
     queryFn: agentApi.listExternalMcpServers,
@@ -2157,7 +2337,7 @@ export function McpServersPage() {
 
   const busy = setDefaultMutation.isPending || deleteMutation.isPending;
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const serverActions = (server: ExternalMcpServerSettings): EntityAction[] => [
+  const serverActions = (server: ExternalMcpServerSettings): EntityAction[] => canManage ? [
     {
       id: "set-default",
       label: t("settings.mcpServers.setDefault"),
@@ -2174,10 +2354,11 @@ export function McpServersPage() {
       disabled: server.server_id === "default" || busy,
       onSelect: () => remove(server),
     },
-  ];
+  ] : [];
 
   const list = servers.data?.servers ?? [];
-  const { target } = editor;
+  // 追加できない利用者が `?id=new` を開いたら一覧を出す。
+  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
   const listTitle = t("nav.settingsExternalMcp");
 
   if (target.kind === "list") {
@@ -2188,15 +2369,19 @@ export function McpServersPage() {
           wide
           title={listTitle}
           subtitle={t("page.settings.mcp.subtitle")}
-          actions={[
-            {
-              id: "create",
-              kind: "primary",
-              label: t("settings.mcpServers.add"),
-              icon: Plus,
-              onClick: editor.openNew,
-            },
-          ]}
+          actions={
+            canManage
+              ? [
+                  {
+                    id: "create",
+                    kind: "primary",
+                    label: t("settings.mcpServers.add"),
+                    icon: Plus,
+                    onClick: editor.openNew,
+                  },
+                ]
+              : []
+          }
         />
         <PageBody wide className="space-y-6">
           <QueryState query={servers}>
@@ -2207,7 +2392,7 @@ export function McpServersPage() {
                 actionsFor={serverActions}
               />
             </Section>
-            <McpDiscoveryPanel configured={anyConfigured} />
+            {capabilities.viewRuns ? <McpDiscoveryPanel configured={anyConfigured} /> : null}
           </QueryState>
         </PageBody>
       </>
@@ -2239,6 +2424,7 @@ export function McpServersPage() {
       key={server?.server_id ?? "new"}
       server={server}
       actions={server ? serverActions(server) : []}
+      readOnly={!canManage}
       onBack={() => editor.backToList()}
       onSaved={async (serverId) => {
         await invalidate();
@@ -2252,11 +2438,14 @@ export function McpServersPage() {
 function McpServerEditor({
   server,
   actions,
+  readOnly,
   onBack,
   onSaved,
 }: {
   server?: ExternalMcpServerSettings;
   actions: EntityAction[];
+  /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
+  readOnly: boolean;
   onBack: () => void;
   onSaved: (serverId: string) => Promise<void>;
 }) {
@@ -2322,14 +2511,18 @@ function McpServerEditor({
         }
         actions={[
           { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
-          {
-            id: "save",
-            kind: "primary",
-            label: editingId ? t("common.save") : t("common.create"),
-            icon: Save,
-            loading: saveMutation.isPending,
-            onClick: save,
-          },
+          ...(readOnly
+            ? []
+            : [
+                {
+                  id: "save",
+                  kind: "primary" as const,
+                  label: editingId ? t("common.save") : t("common.create"),
+                  icon: Save,
+                  loading: saveMutation.isPending,
+                  onClick: save,
+                },
+              ]),
         ]}
         moreActionsLabel={t("common.moreActions")}
       />
@@ -2361,98 +2554,100 @@ function McpServerEditor({
           </Section>
         ) : null}
         {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
-        <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
-          <Card className="min-w-0">
-            <CardContent className="space-y-4 pt-5">
-              <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
-                <input
-                  id="mcp-server-id"
-                  value={form.serverId}
-                  disabled={Boolean(editingId)}
-                  onChange={(event) => setForm({ ...form, serverId: event.target.value })}
-                  className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
-                />
-                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.mcpServers.serverIdHint")}</p>
-              </Field>
-              <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
-                <input
-                  id="mcp-server-label"
-                  value={form.label}
-                  onChange={(event) => setForm({ ...form, label: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
-                <input
-                  id="mcp-server-base-url"
-                  value={form.baseUrl}
-                  onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
-                <input
-                  id="mcp-server-timeout"
-                  type="number"
-                  min="1"
-                  value={form.timeoutSeconds}
-                  onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
-                <input
-                  id="mcp-server-session"
-                  value={form.sessionId}
-                  autoComplete="off"
-                  onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-            </CardContent>
-          </Card>
-        </Section>
-        <Section title={t("mcpServers.oauth")}>
-          <Card className="min-w-0">
-            <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
-              <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
-                <input
-                  id="mcp-server-oauth-token"
-                  value={form.oauthTokenUrl}
-                  onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
-                <input
-                  id="mcp-server-oauth-scope"
-                  value={form.oauthScope}
-                  onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
-                <input
-                  id="mcp-server-oauth-client"
-                  value={form.oauthClientId}
-                  autoComplete="off"
-                  onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.mcpServers.oauthClientSecret")} htmlFor="mcp-server-oauth-secret">
-                <input
-                  id="mcp-server-oauth-secret"
-                  type="password"
-                  value={form.oauthClientSecret}
-                  autoComplete="off"
-                  onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-            </CardContent>
-          </Card>
-        </Section>
+        <fieldset disabled={readOnly} className="min-w-0 space-y-6">
+          <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
+            <Card className="min-w-0">
+              <CardContent className="space-y-4 pt-5">
+                <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
+                  <input
+                    id="mcp-server-id"
+                    value={form.serverId}
+                    disabled={Boolean(editingId)}
+                    onChange={(event) => setForm({ ...form, serverId: event.target.value })}
+                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.mcpServers.serverIdHint")}</p>
+                </Field>
+                <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
+                  <input
+                    id="mcp-server-label"
+                    value={form.label}
+                    onChange={(event) => setForm({ ...form, label: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
+                  <input
+                    id="mcp-server-base-url"
+                    value={form.baseUrl}
+                    onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
+                  <input
+                    id="mcp-server-timeout"
+                    type="number"
+                    min="1"
+                    value={form.timeoutSeconds}
+                    onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
+                  <input
+                    id="mcp-server-session"
+                    value={form.sessionId}
+                    autoComplete="off"
+                    onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+              </CardContent>
+            </Card>
+          </Section>
+          <Section title={t("mcpServers.oauth")}>
+            <Card className="min-w-0">
+              <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+                <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
+                  <input
+                    id="mcp-server-oauth-token"
+                    value={form.oauthTokenUrl}
+                    onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
+                  <input
+                    id="mcp-server-oauth-scope"
+                    value={form.oauthScope}
+                    onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
+                  <input
+                    id="mcp-server-oauth-client"
+                    value={form.oauthClientId}
+                    autoComplete="off"
+                    onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.mcpServers.oauthClientSecret")} htmlFor="mcp-server-oauth-secret">
+                  <input
+                    id="mcp-server-oauth-secret"
+                    type="password"
+                    value={form.oauthClientSecret}
+                    autoComplete="off"
+                    onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+              </CardContent>
+            </Card>
+          </Section>
+        </fieldset>
       </PageBody>
     </>
   );
@@ -2589,6 +2784,8 @@ export function SkillsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
+  // スキルの追加・変更・削除・再読込は Agent 管理の権限（admin）だけ（#215）。
+  const { admin: canManage } = useCapabilities();
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
 
   function invalidate() {
@@ -2636,14 +2833,15 @@ export function SkillsPage() {
       label: t("skills.delete"),
       icon: Trash2,
       tone: "danger",
-      visible: skill.source === "runtime",
+      visible: canManage && skill.source === "runtime",
       disabled: deleteMutation.isPending,
       onSelect: () => remove(skill),
     },
   ];
 
   const list = skills.data?.skills ?? [];
-  const { target } = editor;
+  // 追加できない利用者が `?id=new` を開いたら一覧を出す。
+  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
   if (target.kind === "list") {
     return (
@@ -2652,17 +2850,21 @@ export function SkillsPage() {
           wide
           title={t("skills.title")}
           subtitle={t("page.skills.subtitle")}
-          actions={[
-            {
-              id: "reload",
-              kind: "utility",
-              label: t("skills.reload"),
-              icon: RefreshCw,
-              loading: reloadMutation.isPending,
-              onClick: () => reloadMutation.mutate(),
-            },
-            { id: "create", kind: "primary", label: t("skills.add"), icon: Plus, onClick: editor.openNew },
-          ]}
+          actions={
+            canManage
+              ? [
+                  {
+                    id: "reload",
+                    kind: "utility",
+                    label: t("skills.reload"),
+                    icon: RefreshCw,
+                    loading: reloadMutation.isPending,
+                    onClick: () => reloadMutation.mutate(),
+                  },
+                  { id: "create", kind: "primary", label: t("skills.add"), icon: Plus, onClick: editor.openNew },
+                ]
+              : []
+          }
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
@@ -2703,6 +2905,7 @@ export function SkillsPage() {
       key={skill?.id ?? "new"}
       skill={skill}
       actions={skill ? skillActions(skill) : []}
+      readOnly={!canManage}
       onBack={() => editor.backToList()}
       onSaved={async (skillId) => {
         await invalidate();
@@ -2719,11 +2922,14 @@ export function SkillsPage() {
 function SkillEditor({
   skill,
   actions,
+  readOnly,
   onBack,
   onSaved,
 }: {
   skill?: AgentSkill;
   actions: EntityAction[];
+  /** 変更の権限がない利用者は、実行時に追加したスキルも読み取り専用の詳細で出す。 */
+  readOnly: boolean;
   onBack: () => void;
   onSaved: (skillId: string) => Promise<void>;
 }) {
@@ -2731,7 +2937,7 @@ function SkillEditor({
   const [formBaseline, setFormBaseline] = useState<SkillFormState>(() => skillFormOf(skill));
   const [formError, setFormError] = useState<string | null>(null);
   const editingId = skill?.id ?? null;
-  const editable = !skill || skill.source === "runtime";
+  const editable = !readOnly && (!skill || skill.source === "runtime");
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
   const saveMutation = useMutation({
@@ -2840,7 +3046,7 @@ function SkillEditor({
                 label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
               />
             </div>
-            {!editable ? <Banner severity="info">{t("skills.readOnly")}</Banner> : null}
+            {!editable && !readOnly ? <Banner severity="info">{t("skills.readOnly")}</Banner> : null}
           </Section>
         ) : null}
         {skill && !editable ? (
@@ -3034,6 +3240,8 @@ export function PluginsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
+  // プラグインの install・有効化・削除・再読込は Agent 管理の権限（admin）だけ（#215）。
+  const { admin: canManage } = useCapabilities();
   const plugins = useQuery({ queryKey: ["plugins"], queryFn: agentApi.listPlugins });
 
   function invalidate() {
@@ -3085,7 +3293,7 @@ export function PluginsPage() {
 
   const busy = uninstallMutation.isPending || enabledMutation.isPending;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const pluginActions = (plugin: PluginSummary): EntityAction[] => [
+  const pluginActions = (plugin: PluginSummary): EntityAction[] => canManage ? [
     {
       id: "toggle-enabled",
       label: plugin.enabled ? t("plugins.disable") : t("plugins.enable"),
@@ -3101,10 +3309,11 @@ export function PluginsPage() {
       disabled: busy,
       onSelect: () => uninstall(plugin),
     },
-  ];
+  ] : [];
 
   const list = plugins.data?.plugins ?? [];
-  const { target } = editor;
+  // install できない利用者が `?id=new` を開いたら一覧を出す。
+  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
   if (target.kind === "list") {
     return (
@@ -3113,17 +3322,21 @@ export function PluginsPage() {
           wide
           title={t("plugins.title")}
           subtitle={t("page.plugins.subtitle")}
-          actions={[
-            {
-              id: "reload",
-              kind: "utility",
-              label: t("skills.reload"),
-              icon: RefreshCw,
-              loading: reloadMutation.isPending,
-              onClick: () => reloadMutation.mutate(),
-            },
-            { id: "install", kind: "primary", label: t("plugins.install"), icon: Plus, onClick: editor.openNew },
-          ]}
+          actions={
+            canManage
+              ? [
+                  {
+                    id: "reload",
+                    kind: "utility",
+                    label: t("skills.reload"),
+                    icon: RefreshCw,
+                    loading: reloadMutation.isPending,
+                    onClick: () => reloadMutation.mutate(),
+                  },
+                  { id: "install", kind: "primary", label: t("plugins.install"), icon: Plus, onClick: editor.openNew },
+                ]
+              : []
+          }
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
@@ -3426,6 +3639,8 @@ export function PluginMarketplacesPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
+  // マーケットプレイスの追加・更新・削除とプラグインの install は Agent 管理の権限（admin）だけ（#215）。
+  const { admin: canManage } = useCapabilities();
   const markets = useQuery({
     queryKey: ["plugin-marketplaces"],
     queryFn: agentApi.listPluginMarketplaces,
@@ -3471,7 +3686,7 @@ export function PluginMarketplacesPage() {
 
   const busy = refreshMutation.isPending || deleteMutation.isPending;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const marketplaceActions = (source: MarketplaceSource): EntityAction[] => [
+  const marketplaceActions = (source: MarketplaceSource): EntityAction[] => canManage ? [
     {
       id: "refresh",
       label: t("marketplaces.refresh"),
@@ -3488,10 +3703,11 @@ export function PluginMarketplacesPage() {
       disabled: busy,
       onSelect: () => remove(source),
     },
-  ];
+  ] : [];
 
   const list = markets.data?.marketplaces ?? [];
-  const { target } = editor;
+  // 追加できない利用者が `?id=new` を開いたら一覧を出す。
+  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
   if (target.kind === "list") {
     return (
@@ -3500,9 +3716,11 @@ export function PluginMarketplacesPage() {
           wide
           title={t("marketplaces.title")}
           subtitle={t("page.pluginMarketplaces.subtitle")}
-          actions={[
-            { id: "create", kind: "primary", label: t("marketplaces.add"), icon: Plus, onClick: editor.openNew },
-          ]}
+          actions={
+            canManage
+              ? [{ id: "create", kind: "primary", label: t("marketplaces.add"), icon: Plus, onClick: editor.openNew }]
+              : []
+          }
         />
         <PageBody wide>
           <QueryState query={markets}>
@@ -3555,6 +3773,7 @@ export function PluginMarketplacesPage() {
     <MarketplaceDetail
       source={source}
       actions={marketplaceActions(source)}
+      canInstall={canManage}
       onBack={() => editor.backToList()}
       onInstalled={() => {
         void queryClient.invalidateQueries({ queryKey: ["plugins"] });
@@ -3730,11 +3949,14 @@ function MarketplaceTable({
 function MarketplaceDetail({
   source,
   actions,
+  canInstall,
   onBack,
   onInstalled,
 }: {
   source: MarketplaceSource;
   actions: EntityAction[];
+  /** プラグインの install（Agent 管理の権限）。無ければ行の操作を出さない。 */
+  canInstall: boolean;
   onBack: () => void;
   onInstalled: () => void;
 }) {
@@ -3786,6 +4008,7 @@ function MarketplaceDetail({
               id: "install",
               label: t("marketplaces.install"),
               icon: Download,
+              visible: canInstall,
               disabled: installMutation.isPending,
               loading: installMutation.isPending && installMutation.variables === manifest.id,
               onSelect: () => installMutation.mutate(manifest.id),
@@ -4742,6 +4965,7 @@ function AgentEditorView({
   bindings,
   runtimes,
   actions,
+  readOnly,
   onBack,
   onCreated,
 }: {
@@ -4751,6 +4975,8 @@ function AgentEditorView({
   bindings: RuntimeBinding[];
   runtimes: RuntimeDefinition[];
   actions: EntityAction[];
+  /** 変更の権限がない利用者は閲覧だけ（保存・Binding の操作を出さず、入力を無効にする）。 */
+  readOnly: boolean;
   onBack: () => void;
   onCreated: (agent: AgentProfile) => void;
 }) {
@@ -4864,14 +5090,18 @@ function AgentEditorView({
         breadcrumbs={<EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={title} />}
         actions={[
           { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
-          {
-            id: "save",
-            kind: "primary",
-            label: agent ? t("common.save") : t("common.create"),
-            icon: Save,
-            loading: pending,
-            onClick: saveAgent,
-          },
+          ...(readOnly
+            ? []
+            : [
+                {
+                  id: "save",
+                  kind: "primary" as const,
+                  label: agent ? t("common.save") : t("common.create"),
+                  icon: Save,
+                  loading: pending,
+                  onClick: saveAgent,
+                },
+              ]),
         ]}
         moreActionsLabel={t("common.moreActions")}
       />
@@ -4900,90 +5130,93 @@ function AgentEditorView({
         ) : null}
         {formError ? <Banner severity="danger">{formError}</Banner> : null}
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
-        <Section title={t("agent.basic")}>
-          <Card className="min-w-0">
-            <CardContent className="space-y-4 pt-5">
-              <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`}>
-                <input
-                  id={`${fieldId}-agent-name`}
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
-              <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
-                <input
-                  id={`${fieldId}-agent-description`}
-                  value={agentDescription}
-                  onChange={(event) => setAgentDescription(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
-              <Field label={t("agent.instructions")} htmlFor={`${fieldId}-agent-instructions`}>
-                <textarea
-                  id={`${fieldId}-agent-instructions`}
-                  value={instructions}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
-              {!agent ? (
-                <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
+        <fieldset disabled={readOnly} className="min-w-0 space-y-6">
+          <Section title={t("agent.basic")}>
+            <Card className="min-w-0">
+              <CardContent className="space-y-4 pt-5">
+                <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`}>
                   <input
-                    type="checkbox"
-                    checked={newEnabled}
-                    onChange={(event) => setNewEnabled(event.target.checked)}
-                    className="h-4 w-4"
+                    id={`${fieldId}-agent-name`}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
-                  {t("agent.enabled")}
-                </label>
-              ) : null}
-            </CardContent>
-          </Card>
-        </Section>
-        <Section title={t("agent.skills")}>
-          {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
-          {availableSkills.length ? (
-            <div className="grid gap-2 md:grid-cols-2">
-              {availableSkills.map((skill) => (
-                <label
-                  key={skill.id}
-                  className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm md:flex-row md:items-center"
-                >
-                  <span className="flex min-w-0 flex-1 items-start gap-2">
+                </Field>
+                <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
+                  <input
+                    id={`${fieldId}-agent-description`}
+                    value={agentDescription}
+                    onChange={(event) => setAgentDescription(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  />
+                </Field>
+                <Field label={t("agent.instructions")} htmlFor={`${fieldId}-agent-instructions`}>
+                  <textarea
+                    id={`${fieldId}-agent-instructions`}
+                    value={instructions}
+                    onChange={(event) => setInstructions(event.target.value)}
+                    className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  />
+                </Field>
+                {!agent ? (
+                  <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
                     <input
                       type="checkbox"
-                      checked={skillIds.includes(skill.id)}
-                      onChange={() => toggleSkill(skill.id)}
-                      className="mt-0.5 h-4 w-4 shrink-0"
+                      checked={newEnabled}
+                      onChange={(event) => setNewEnabled(event.target.checked)}
+                      className="h-4 w-4"
                     />
-                    <span className="min-w-0">
-                      <span className="block break-words font-medium leading-5 text-fg [overflow-wrap:anywhere]">
-                        {skill.name}
+                    {t("agent.enabled")}
+                  </label>
+                ) : null}
+              </CardContent>
+            </Card>
+          </Section>
+          <Section title={t("agent.skills")}>
+            {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
+            {availableSkills.length ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {availableSkills.map((skill) => (
+                  <label
+                    key={skill.id}
+                    className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm md:flex-row md:items-center"
+                  >
+                    <span className="flex min-w-0 flex-1 items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={skillIds.includes(skill.id)}
+                        onChange={() => toggleSkill(skill.id)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block break-words font-medium leading-5 text-fg [overflow-wrap:anywhere]">
+                          {skill.name}
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-fg-muted">{skill.description}</span>
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-fg-muted">{skill.description}</span>
                     </span>
-                  </span>
-                  <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-                    <StatusBadge
-                      variant={skillSourceVariant(skill.source)}
-                      label={skillSourceLabel(skill.source)}
-                      icon={false}
-                    />
-                    {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
-                  </span>
-                </label>
-              ))}
-            </div>
-          ) : (
-            <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
-          )}
-        </Section>
+                    <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      <StatusBadge
+                        variant={skillSourceVariant(skill.source)}
+                        label={skillSourceLabel(skill.source)}
+                        icon={false}
+                      />
+                      {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
+            )}
+          </Section>
+        </fieldset>
         {agent ? (
           <RuntimeBindingsPanel
             agent={agent}
             bindings={bindings}
             runtimes={runtimes}
+            readOnly={readOnly}
             onDirtyChange={(dirty) => dirtySources.report("binding", dirty)}
           />
         ) : null}
@@ -5003,11 +5236,14 @@ function RuntimeBindingsPanel({
   agent,
   bindings,
   runtimes,
+  readOnly,
   onDirtyChange,
 }: {
   agent: AgentProfile;
   bindings: RuntimeBinding[];
   runtimes: RuntimeDefinition[];
+  /** Binding の追加・既定の変更・同期・削除を出さない（Agent 管理の権限がない利用者）。 */
+  readOnly: boolean;
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const queryClient = useQueryClient();
@@ -5068,7 +5304,7 @@ function RuntimeBindingsPanel({
     if (ok) deleteBinding.mutate(binding.id);
   }
 
-  const bindingActions = (binding: RuntimeBinding): EntityAction[] => [
+  const bindingActions = (binding: RuntimeBinding): EntityAction[] => readOnly ? [] : [
     {
       id: "make-default",
       label: t("binding.makeDefault"),
@@ -5152,48 +5388,52 @@ function RuntimeBindingsPanel({
           ) : (
             <Banner severity="warning">{t("binding.empty")}</Banner>
           )}
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
-              <select
-                id={`${agent.id}-binding-runtime`}
-                value={runtimeId}
-                onChange={(event) => setRuntimeId(event.target.value)}
-                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+          {readOnly ? null : (
+            <>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
+                  <select
+                    id={`${agent.id}-binding-runtime`}
+                    value={runtimeId}
+                    onChange={(event) => setRuntimeId(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+                  >
+                    {candidates.map((runtime) => (
+                      <option key={runtime.id} value={runtime.id}>
+                        {runtime.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
+                  <input
+                    id={`${agent.id}-binding-native-ref`}
+                    value={nativeAgentRef}
+                    onChange={(event) => setNativeAgentRef(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+                  />
+                </Field>
+              </div>
+              {error ? <Banner severity="danger">{error.message}</Banner> : null}
+              <Button
+                variant="secondary"
+                loading={createBinding.isPending}
+                disabled={!runtimeId || !nativeAgentRef.trim()}
+                onClick={() =>
+                  createBinding.mutate({
+                    agent_id: agent.id,
+                    runtime_id: runtimeId,
+                    native_agent_ref: nativeAgentRef.trim(),
+                    is_default: !bindings.length,
+                    enabled: true,
+                  })
+                }
+                icon={Plus}
               >
-                {candidates.map((runtime) => (
-                  <option key={runtime.id} value={runtime.id}>
-                    {runtime.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
-              <input
-                id={`${agent.id}-binding-native-ref`}
-                value={nativeAgentRef}
-                onChange={(event) => setNativeAgentRef(event.target.value)}
-                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
-              />
-            </Field>
-          </div>
-          {error ? <Banner severity="danger">{error.message}</Banner> : null}
-          <Button
-            variant="secondary"
-            loading={createBinding.isPending}
-            disabled={!runtimeId || !nativeAgentRef.trim()}
-            onClick={() =>
-              createBinding.mutate({
-                agent_id: agent.id,
-                runtime_id: runtimeId,
-                native_agent_ref: nativeAgentRef.trim(),
-                is_default: !bindings.length,
-                enabled: true,
-              })
-            }
-            icon={Plus}
-          >
-            {t("binding.add")}
-          </Button>
+                {t("binding.add")}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
     </Section>
@@ -5287,6 +5527,8 @@ function RunDetail({
   streamMode,
   onStreamModeChange,
   websocketState,
+  sseState,
+  capabilities,
 }: {
   run: RunState;
   actions: EntityAction[];
@@ -5297,6 +5539,8 @@ function RunDetail({
   streamMode: RunStreamMode;
   onStreamModeChange: (mode: RunStreamMode) => void;
   websocketState: RunWebSocketState;
+  sseState: RunEventSourceState;
+  capabilities: AgentCapabilities;
 }) {
   const structured = getStructuredResult(run);
   const { isExternal, canCancel, canResume } = runCapabilities(run);
@@ -5339,9 +5583,11 @@ function RunDetail({
         mode={streamMode}
         onModeChange={onStreamModeChange}
         websocketState={websocketState}
-        canCancel={canCancel}
-        canResume={canResume}
-        pendingApproval={pendingApproval}
+        sseState={sseState}
+        // WebSocket のコマンドも REST と同じ capability で出し分ける（backend も同じ規則で拒否する）。
+        canCancel={canCancel && capabilities.operateRuns}
+        canResume={canResume && capabilities.operateRuns}
+        pendingApproval={capabilities.decideApprovals ? pendingApproval : undefined}
         actionPending={actionPending}
         onWebSocketCancel={onWebSocketCancel}
         onWebSocketResume={onWebSocketResume}
@@ -5396,7 +5642,8 @@ function RunDetail({
       </div>
 
       <ArtifactsPanel run={run} />
-      <AuditPanel runId={run.id} />
+      {/* Run の監査記録は監査の閲覧（auditor）か Agent 管理の権限が必要（#215）。 */}
+      {capabilities.viewAudit ? <AuditPanel runId={run.id} /> : null}
 
       {structured ? <StructuredResultTable result={structured} /> : null}
     </section>
@@ -5712,6 +5959,7 @@ function RunStreamControls({
   mode,
   onModeChange,
   websocketState,
+  sseState,
   canCancel,
   canResume,
   pendingApproval,
@@ -5723,6 +5971,7 @@ function RunStreamControls({
   mode: RunStreamMode;
   onModeChange: (mode: RunStreamMode) => void;
   websocketState: RunWebSocketState;
+  sseState: RunEventSourceState;
   canCancel: boolean;
   canResume: boolean;
   pendingApproval: ApprovalRequest | undefined;
@@ -5791,6 +6040,33 @@ function RunStreamControls({
         ) : (
           <p className="text-sm leading-6 text-fg-muted">{t("run.stream.sseDescription")}</p>
         )}
+
+        {mode === "websocket" && websocketState.stopReason ? (
+          <Banner
+            severity="warning"
+            title={t("run.stream.stoppedTitle")}
+            action={
+              <Button variant="secondary" size="sm" icon={RefreshCw} onClick={websocketState.reconnect}>
+                {t("run.stream.reconnect")}
+              </Button>
+            }
+          >
+            <span data-testid="run-stream-stopped">{websocketState.stopReason}</span>
+          </Banner>
+        ) : null}
+        {mode === "sse" && sseState.status === "failed" ? (
+          <Banner
+            severity="warning"
+            title={t("run.stream.stoppedTitle")}
+            action={
+              <Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>
+                {t("run.stream.reconnect")}
+              </Button>
+            }
+          >
+            <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
+          </Banner>
+        ) : null}
 
         {mode === "websocket" && (pendingApproval || canResume || canCancel) ? (
           <div className="flex flex-wrap gap-2">
@@ -5862,6 +6138,7 @@ function websocketStatusLabel(status: WebSocketStreamStatus): string {
     reconnecting: t("run.stream.wsReconnecting"),
     closed: t("run.stream.wsClosed"),
     error: t("run.stream.wsError"),
+    stopped: t("run.stream.wsStopped"),
   };
   return labels[status];
 }

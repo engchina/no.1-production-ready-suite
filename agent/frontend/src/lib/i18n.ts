@@ -42,6 +42,75 @@ const agentJa = {
   "nav.settingsRuntimeSafety": "Runtime Safety",
   "nav.settingsRuntimeSnapshot": "Control Plane バックアップ",
 
+  // 認証と権限（#215）。ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品が持つ。
+  "nav.section.security": "Agent セキュリティ",
+  "nav.section.userRoles": "ユーザーとロール",
+  "nav.securityUsers": "ユーザー管理",
+  "nav.securityRoles": "ロール管理",
+  "nav.securityPermissions": "権限管理",
+  "capability.required.title": "この画面のデータを表示する権限がありません",
+  "capability.required.description":
+    "{requirement}が必要です。システム管理者に、権限管理でロールへ付与するよう依頼してください。",
+  "capability.viewRuns":
+    "Run の閲覧・Run の実行・承認の判断・監査の閲覧・Agent 管理のいずれかの権限",
+  "capability.operateRuns": "Run の実行・操作の権限",
+  "capability.decideApprovals": "承認の判断の権限",
+  "capability.viewAudit": "監査の閲覧の権限",
+  "capability.admin": "Agent 管理の権限",
+  "security.roles.permissionSummary":
+    "付与している機能権限: {count} 件 / エージェント: {agents} 件 / 業務ビュー: {businessViews} 件",
+  "security.roles.permissionSummarySystemAdmin":
+    "SYSTEM_ADMIN はすべての機能権限を持ち、すべてのエージェント・業務ビューを利用できます。",
+  "security.roles.openPermissions": "権限管理で設定",
+  "security.permissions.subtitle":
+    "ロールごとに、使える画面（機能権限）と利用できるエージェント・業務ビューを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
+  "security.permissions.listHint":
+    "ロールを選ぶと、付与している機能権限の件数と利用できるエージェント・業務ビューを確認できます。",
+  "security.permissions.searchPlaceholder":
+    "ロールコード・ロール名・機能権限・エージェント・業務ビューで絞り込み",
+  "security.permissions.formHint":
+    "機能権限と、利用できるエージェント・業務ビューを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
+  "security.permissions.permissionsHint":
+    "メニュー権限は画面表示を許可します。Run の閲覧・実行・承認・監査・Agent 管理の権限は、関連する画面のメニュー権限を自動的に付与します。",
+  "security.permissions.agents": "利用できるエージェント",
+  "security.permissions.agentsHint":
+    "このロールの利用者が Run の実行・閲覧・承認・監査で扱えるエージェントを選択します。何も選ばない場合、このロールではエージェントを利用できません。",
+  "security.permissions.agentsAll": "すべてのエージェント",
+  "security.permissions.agentsSearch": "エージェントを検索",
+  "security.permissions.agentsSearchPlaceholder": "エージェント名・ID・説明で絞り込み",
+  "security.permissions.agentsEmpty": "利用範囲を設定できるエージェントがありません。先に業務 Agent を作成してください。",
+  "security.permissions.agentsNoResults": "条件に一致するエージェントがありません。",
+  "security.permissions.agentsLoadWarning":
+    "エージェントの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
+  "security.permissions.agentsManagedAll":
+    "Agent 管理の権限により、すべてのエージェントを利用できます。個別選択は不要です。",
+  "security.permissions.agentsSystemAdmin":
+    "SYSTEM_ADMIN はすべてのエージェントを自動的に利用できます。個別設定は不要です。",
+  "security.permissions.agentDisabled": "無効",
+  "security.permissions.businessViews": "利用できる業務ビュー",
+  "security.permissions.businessViewsHint":
+    "このロールの利用者が扱える Run の業務ビューを選択します。何も選ばない場合、このロールでは業務ビューを持つ Run を利用できません。",
+  "security.permissions.businessViewsAll": "すべての業務ビュー",
+  "security.permissions.businessViewsSearch": "業務ビューを検索",
+  "security.permissions.businessViewsSearchPlaceholder": "業務ビュー ID で絞り込み",
+  "security.permissions.businessViewsEmpty":
+    "Run に現れた業務ビューはまだありません。上の欄に業務ビュー ID を入力して追加できます。",
+  "security.permissions.businessViewsNoResults": "条件に一致する業務ビューがありません。",
+  "security.permissions.businessViewsLoadWarning":
+    "業務ビューの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
+  "security.permissions.businessViewsManagedAll":
+    "Agent 管理の権限により、すべての業務ビューを利用できます。個別選択は不要です。",
+  "security.permissions.businessViewsSystemAdmin":
+    "SYSTEM_ADMIN はすべての業務ビューを自動的に利用できます。個別設定は不要です。",
+  "security.permissions.businessViewsCustomLabel": "業務ビュー ID を追加",
+  "security.permissions.businessViewsCustomPlaceholder": "例: sales-east",
+  "security.permissions.businessViewsCustomHint":
+    "一覧は Run に現れた業務ビューと割り当て済みの業務ビューです。一覧にない業務ビューは ID を入力して追加します（英数字と . _ : - の 64 文字まで）。",
+  "security.permissions.businessViewsCustomAdd": "追加",
+  "security.permissions.businessViewsCustomInvalid":
+    "業務ビュー ID は英数字と . _ : - の 1～64 文字で入力してください。",
+  "security.permissions.businessViewsCustomStatus": "直接入力",
+
   // 未保存変更の離脱ガードと作業状態の保持（#87）
   "guard.discardTitle": "変更を破棄しますか",
   "guard.discardDescription": "保存されていない変更があります。移動すると編集内容は破棄されます。",
@@ -213,6 +282,19 @@ const agentJa = {
   "run.stream.wsReconnecting": "再接続中",
   "run.stream.wsClosed": "切断",
   "run.stream.wsError": "エラー",
+  "run.stream.wsStopped": "停止",
+  // WebSocket / SSE の購読が権限・認証・接続の理由で止まったとき（#215）。再接続はしない。
+  "run.stream.stoppedTitle": "イベントの購読を停止しました",
+  "run.stream.stoppedForbidden": "この Run のイベントを購読する権限がありません。",
+  "run.stream.stoppedUnauthenticated": "ログインの有効期限が切れました。もう一度ログインしてください。",
+  "run.stream.stoppedNotFound": "Run が見つかりません。削除されたか、参照できなくなった可能性があります。",
+  "run.stream.stoppedUnreachable":
+    "イベントの購読に接続できませんでした。権限とログイン状態、接続先を確認してから再接続してください。",
+  "run.stream.sseFailed":
+    "SSE の接続が切れたため、イベントの自動更新を停止しました。権限とログイン状態を確認してから再接続してください。",
+  "run.stream.reconnect": "再接続",
+  "run.stream.commandForbidden": "この操作を行う権限がありません。",
+  "audit.csvFailed": "CSV をダウンロードできませんでした",
 
   "binding.title": "実行先",
   "binding.description": "Agent 定義とは独立して Runtime Binding を管理します。",

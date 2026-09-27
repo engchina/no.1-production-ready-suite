@@ -239,8 +239,10 @@ for (const viewport of VIEWPORTS) {
       const stored = await page.evaluate(() =>
         Object.keys(window.sessionStorage).filter((key) => key.startsWith("production-ready-agent.workspace.v1:"))
       );
+      // owner は作業状態の持ち主（ログイン中の利用者）。利用者が変わったら作業状態を消すために使う（#215）。
       expect(stored.sort()).toEqual([
         "production-ready-agent.workspace.v1:memory.query",
+        "production-ready-agent.workspace.v1:owner",
         "production-ready-agent.workspace.v1:runs.goal",
       ]);
     });

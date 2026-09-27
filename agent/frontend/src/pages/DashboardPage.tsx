@@ -22,8 +22,10 @@ import {
   cn,
 } from "@engchina/production-ready-ui";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type RunState } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 
 const statusVariant: Record<RunState["status"], StatusVariant> = {
@@ -58,6 +60,9 @@ const latestRunColumns: DataTableColumn<RunState>[] = [
 ];
 
 export function DashboardPage() {
+  const { hasPermission } = useAuth();
+  // 開けない画面へのリンクは出さない（権限なしの画面へ送らない。#215）。
+  const canOpen = (href: string) => canOpenRoute(href, hasPermission);
   const runs = useQuery({ queryKey: ["runs"], queryFn: agentApi.listRuns, refetchInterval: 5000 });
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
   const ragSettings = useQuery({ queryKey: ["settings", "rag"], queryFn: agentApi.getExternalRagSettings });
@@ -83,13 +88,15 @@ export function DashboardPage() {
         title={t("nav.dashboard")}
         subtitle={t("page.dashboard.subtitle")}
         actions={
-          <Link
-            to={APP_ROUTES.runs}
-            className={cn(buttonVariants({ variant: "secondary" }), "hidden sm:inline-flex")}
-          >
-            <PlayCircle size={16} aria-hidden />
-            {t("nav.runs")}
-          </Link>
+          canOpen(APP_ROUTES.runs) ? (
+            <Link
+              to={APP_ROUTES.runs}
+              className={cn(buttonVariants({ variant: "secondary" }), "hidden sm:inline-flex")}
+            >
+              <PlayCircle size={16} aria-hidden />
+              {t("nav.runs")}
+            </Link>
+          ) : undefined
         }
       />
       <PageBody wide>
@@ -143,14 +150,18 @@ export function DashboardPage() {
               <ConnectionRow
                 label={t("nav.settingsExternalRag")}
                 configured={ragSettings.data?.configured}
-                href={APP_ROUTES.settingsExternalRag}
+                href={canOpen(APP_ROUTES.settingsExternalRag) ? APP_ROUTES.settingsExternalRag : undefined}
               />
               <ConnectionRow
                 label={t("nav.settingsExternalNl2Sql")}
                 configured={nl2sqlSettings.data?.configured}
-                href={APP_ROUTES.settingsExternalNl2Sql}
+                href={canOpen(APP_ROUTES.settingsExternalNl2Sql) ? APP_ROUTES.settingsExternalNl2Sql : undefined}
               />
-              <ConnectionRow label={t("nav.agents")} configured href={APP_ROUTES.agents} />
+              <ConnectionRow
+                label={t("nav.agents")}
+                configured
+                href={canOpen(APP_ROUTES.agents) ? APP_ROUTES.agents : undefined}
+              />
               {observability.data ? (
                 <div className="space-y-2 rounded-md border border-border p-3">
                   <div className="flex items-center justify-between gap-3">
@@ -220,18 +231,31 @@ function ConnectionRow({
 }: {
   label: string;
   configured?: boolean;
-  href: string;
+  /** 開ける画面のときだけリンクにする。 */
+  href?: string;
 }) {
-  return (
-    <Link
-      to={href}
-      className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-    >
+  const content = (
+    <>
       <span className="text-fg">{label}</span>
       <StatusBadge
         variant={configured ? "success" : "warning"}
         label={configured ? t("common.configured") : t("common.notConfigured")}
       />
+    </>
+  );
+  if (!href) {
+    return (
+      <div className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <Link
+      to={href}
+      className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+    >
+      {content}
     </Link>
   );
 }

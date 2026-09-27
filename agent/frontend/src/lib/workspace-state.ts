@@ -98,7 +98,10 @@ export function writeWorkspaceValue<P extends WorkspacePage>(
   }
 }
 
-/** この製品の作業状態をすべて消す（ログアウト・アカウント切替で呼ぶ）。 */
+/** 作業状態の持ち主（ログイン中の利用者の user_uuid）を記録する key。 */
+const OWNER_KEY = `${WORKSPACE_NAMESPACE}owner`;
+
+/** この製品の作業状態をすべて消す（ログアウト・認証の失効・アカウント切替で呼ぶ）。 */
 export function clearWorkspaceState(): void {
   try {
     const keys: string[] = [];
@@ -109,6 +112,20 @@ export function clearWorkspaceState(): void {
     keys.forEach((key) => window.sessionStorage.removeItem(key));
   } catch {
     // storage が使えない環境では消すものもない。
+  }
+}
+
+/**
+ * 作業状態を今の利用者に結び付ける（#215）。前回の持ち主と違えば、別の利用者の下書き・選択を
+ * 使い回さないよう先に消す（workspace-state.md「logout・認証の失効・アカウントの変更で消す」）。
+ */
+export function bindWorkspaceOwner(owner: string): void {
+  try {
+    if (window.sessionStorage.getItem(OWNER_KEY) === owner) return;
+    clearWorkspaceState();
+    window.sessionStorage.setItem(OWNER_KEY, owner);
+  } catch {
+    // storage が使えない環境では保存もしないため、結び付けるものもない。
   }
 }
 

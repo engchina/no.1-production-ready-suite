@@ -1,5 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 
+import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
 
 const now = "2026-06-28T00:00:00Z";
@@ -82,6 +83,8 @@ async function installControlPlaneApi(page: Page, options?: { unbound?: boolean 
     const respond = (data: unknown, status = 200) =>
       route.fulfill({ status, contentType: "application/json", body: api(data) });
 
+    // ローカルの全権限の利用者（#215）。spec は `page.unroute("**/api/**")` で fixture の handler も外すため、ここで返す。
+    if (path === "/api/auth/me") return respond(LOCAL_CURRENT_USER);
     if (path === "/api/agents") {
       if (method === "POST") return respond(agent);
       return respond({ agents: [agent] });

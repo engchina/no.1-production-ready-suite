@@ -56,24 +56,35 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サイドナビは運用設定のあとに共通のシステム設定を並べる (${viewport.name})`, async ({ page }) => {
+  test(`サイドナビは Agent セキュリティ → 運用設定 → ユーザーとロール → システム設定の順に並べる (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/appearance");
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
+    await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
 
-    // 「… → 運用設定 → システム設定」の順（#87）。
+    // 並びは NL2SQL / RAG と同じ「… → 製品固有のセキュリティ → 運用設定 → ユーザーとロール → システム設定」（#87 / #215）。
     const sectionIds = await sidebar
       .locator('[id^="nav-section-nav-section-"]')
       .evaluateAll((elements) => elements.map((element) => element.id));
-    expect(sectionIds.slice(-2)).toEqual([
+    expect(sectionIds).toEqual([
+      "nav-section-nav-section-overview",
+      "nav-section-nav-section-controlPlane",
+      "nav-section-nav-section-security",
       "nav-section-nav-section-operations",
+      "nav-section-nav-section-userRoles",
       "nav-section-nav-section-settings",
     ]);
 
-    // 運用設定は Agent 固有の5項目、システム設定は3製品共通の5項目。
+    // Agent セキュリティは権限管理、運用設定は Agent 固有の5項目、ユーザーとロール・システム設定は3製品共通。
+    const security = sidebar.locator("#nav-section-nav-section-security");
     const operations = sidebar.locator("#nav-section-nav-section-operations");
+    const userRoles = sidebar.locator("#nav-section-nav-section-userRoles");
     const settings = sidebar.locator("#nav-section-nav-section-settings");
+    await expect(security.getByRole("link")).toHaveCount(1);
+    await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
     await expect(operations.getByRole("link")).toHaveCount(5);
+    await expect(userRoles.getByRole("link")).toHaveCount(2);
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
       "/settings/connection",
@@ -83,6 +94,9 @@ for (const viewport of [
       "/settings/runtime-snapshot",
     ]) {
       await expect(operations.locator(`a[href="${href}"]`)).toHaveCount(1);
+    }
+    for (const href of ["/settings/security/users", "/settings/security/roles"]) {
+      await expect(userRoles.locator(`a[href="${href}"]`)).toHaveCount(1);
     }
     for (const href of [
       "/settings/oci",
