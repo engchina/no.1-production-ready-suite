@@ -7,6 +7,8 @@
 - local（`RAG_AUTH_MODE=local`）: 全権限・対象範囲の制限なしのローカル利用者。監査 context は
   従来どおり header（`X-User-ID` / `x-rag-*`）から作る。
 - production: 利用者と対象範囲は認証済みの利用者から決め、client の header の範囲は使わない。
+- MCP（`POST /api/mcp`。#232）: Cookie の代わりにサービストークン（`Authorization: Bearer`）の
+  `sub` の利用者として認証する（audience `rag`）。
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ from .permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
     PUBLIC_API_PATHS,
+    SERVICE_TOKEN_API_PATHS,
+    SERVICE_TOKEN_AUDIENCE,
     UNCLASSIFIED_PERMISSION,
     permission_for_route,
 )
@@ -79,6 +83,9 @@ def audit_context_for_request(
             allow_user_header=True,
         )
     rag_principal = as_principal(principal)
+    # MCP（サービストークン。#232）では token の利用者に加えて、Agent の agent_id / run_id を
+    # memory の分割キーに使う。
+    claims = getattr(request.state, "service_token_claims", None)
     return audit_request_context_for_principal(
         request.headers,
         request_id=request_id,
@@ -86,6 +93,7 @@ def audit_context_for_request(
         user_uuid=rag_principal.user_uuid,
         allowed_business_view_ids=rag_principal.allowed_business_view_ids,
         allowed_knowledge_base_ids=rag_principal.allowed_knowledge_base_ids,
+        service_token_claims=claims if isinstance(claims, dict) else None,
     )
 
 
@@ -107,6 +115,8 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         enter_actor=enter_actor,
         exit_actor=reset_audit_request_context,
         unclassified_permission=UNCLASSIFIED_PERMISSION,
+        service_token_paths=SERVICE_TOKEN_API_PATHS,
+        service_token_audience=SERVICE_TOKEN_AUDIENCE,
     ):
         yield
 

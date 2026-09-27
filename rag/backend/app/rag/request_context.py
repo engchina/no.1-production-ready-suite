@@ -106,26 +106,42 @@ def audit_request_context_for_principal(
     allowed_business_view_ids: frozenset[str] | None,
     allowed_knowledge_base_ids: frozenset[str] | None,
     settings: Settings | None = None,
+    service_token_claims: Mapping[str, object] | None = None,
 ) -> AuditRequestContext:
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
     利用者（`user_id_hash`）と対象範囲は利用者から決め、client の `X-User-ID` と
     `x-rag-allowed-*` と `X-Tenant-ID` は使わない（#225）。memory の分割キー（role / agent /
     thread）は従来どおり header から読む（絞り込み方向にしか働かない）。
+
+    サービストークン（MCP。#232）の呼び出しでは、agent / thread を header ではなく token の
+    claims（`agent_id` / `run_id`）から決める（署名済みの値だけを使う）。
     """
+    resolved_settings = settings or get_settings()
     base = audit_request_context_from_headers(
         headers,
         request_id=request_id,
-        settings=settings,
+        settings=resolved_settings,
         authenticated_user_id=user_uuid,
         allow_user_header=False,
         trust_scope_headers=False,
     )
+    if service_token_claims is not None:
+        base = replace(
+            base,
+            agent_id_hash=_claim_hash(service_token_claims, "agent_id", resolved_settings),
+            thread_id_hash=_claim_hash(service_token_claims, "run_id", resolved_settings),
+        )
     return replace(
         base,
         allowed_business_view_ids=allowed_business_view_ids,
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
     )
+
+
+def _claim_hash(claims: Mapping[str, object], key: str, settings: Settings) -> str | None:
+    value = claims.get(key)
+    return _header_hash(value, settings) if isinstance(value, str) else None
 
 
 @contextmanager
