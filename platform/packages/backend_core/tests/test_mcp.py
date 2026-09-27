@@ -67,6 +67,7 @@ SERVER = McpServer(
             input_model=_EchoInput,
             handler=_echo,
             permissions=(frozenset({"menu.search", "menu.chat"}),),
+            output_model=_EchoOutput,
         ),
         McpTool(
             name="shout",
@@ -146,6 +147,10 @@ def test_tools_list_shows_only_permitted_tools_with_schema() -> None:
     assert [tool["name"] for tool in tools] == ["echo"]
     assert tools[0]["inputSchema"]["required"] == ["text"]
     assert tools[0]["annotations"] == {"readOnlyHint": True}
+    # output_model を渡したツールだけ outputSchema を出す（#250）。
+    assert tools[0]["outputSchema"]["required"] == ["echoed"]
+    shout = _rpc(_client({"a", "b"}), "tools/list")["result"]["tools"][0]
+    assert "outputSchema" not in shout
     # グループはすべて満たす必要がある（a と b）。
     assert len(_rpc(_client({"a"}), "tools/list")["result"]["tools"]) == 0
     assert len(_rpc(_client({"a", "b"}), "tools/list")["result"]["tools"]) == 1
