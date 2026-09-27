@@ -38,6 +38,7 @@ from app.security.permissions import (
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
     ROUTE_PERMISSIONS,
+    SERVICE_TOKEN_API_PATHS,
     UNCLASSIFIED_PERMISSION,
     expand_permissions,
     permission_for_route,
@@ -198,7 +199,10 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     open_routes = {
         path for method, path in operations if permission_for_route(method, path) is None
     }
-    assert open_routes == set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION)
+    # MCP（#232）は認証済みなら通し、権限はツールごとに判定する。
+    assert open_routes == (
+        set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION) | set(SERVICE_TOKEN_API_PATHS)
+    )
 
 
 def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:

@@ -371,7 +371,8 @@ WHERE d.status = 'INDEXED'
 
 ### 7.1 tenant
 
-- `X-Tenant-ID` がある場合、ナレッジベース、membership、文書、chunk は同じ `tenant_id_hash` に限定する。
+- production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす（#225）。利用できるナレッジベースはログイン中の利用者（MCP ではサービストークンの利用者）のロールの対象範囲で決める（#214）。
+- local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、`X-Tenant-ID` がある場合にナレッジベース、membership、文書、chunk を同じ `tenant_id_hash` に限定する。
 - raw tenant id は DB / レスポンス / 監査ログへ保存しない。
 - tenant header がない local / CI では全体を参照できるが、`DEFAULT` は global 相当として扱う。
 

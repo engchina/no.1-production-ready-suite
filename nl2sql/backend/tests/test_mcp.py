@@ -1,0 +1,611 @@
+"""MCP サーバー（`POST /api/mcp`、#231）の回帰テスト。
+
+LLM と Oracle は呼ばない。ツールの判定は fake の service で、ローカル実行モードの 1 件だけ
+決定論（deterministic）の実 service で確認する。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from collections.abc import Callable, Iterator
+from typing import Any
+
+import httpx
+import pytest
+from pr_system_settings.auth.service_token import issue_service_token
+
+from app.features.mcp import tools as mcp_tools
+from app.features.nl2sql.models import (
+    JobCreateData,
+    JobCreateRequest,
+    JobData,
+    JobStatus,
+    Nl2SqlEngine,
+    Nl2SqlProfile,
+    Nl2SqlResult,
+    ProfileRecommendationCandidate,
+    ProfileRecommendationData,
+    ProfileRecommendationRequest,
+    ProfileSummary,
+    ProfileSummaryPage,
+    QueryResults,
+    SafetyReport,
+    TimingEnvelope,
+)
+from app.features.nl2sql.service import Nl2SqlService, StoredJob
+from app.main import app
+from app.security.domain import UserRecord
+from app.security.passwords import hash_password
+from app.security.permissions import permission_for_route
+from app.security.service import SecurityService, reset_security_service
+from app.security.store import InMemorySecurityStore
+from app.settings import get_settings
+
+SECRET = "mcp-test-secret-" + "x" * 32
+PASSWORD = "McpUserPass!12345"
+CREATED_AT = "2026-09-27T00:00:00+00:00"
+
+
+# ---------------------------------------------------------------- fake service
+
+
+class _FakeNl2SqlService:
+    """MCP ツールが使う service の関数だけを持つ fake。ジョブの所有者判定は実装を使う。"""
+
+    def __init__(self) -> None:
+        self.profiles = [
+            Nl2SqlProfile(id="default", name="既定", category="共通", description="既定の範囲"),
+            Nl2SqlProfile(id="sales", name="売上", category="営業", description="売上の分析"),
+            Nl2SqlProfile(id="hr", name="人事", category="人事", description="社員の情報"),
+        ]
+        self.started: list[tuple[JobCreateRequest, str, bool]] = []
+        self.jobs: dict[str, StoredJob] = {}
+        # start_job で作るジョブを get_job 何回目で完了させるか（None は完了させない）。
+        self.finish_after_polls: int | None = 0
+        self.polls: dict[str, int] = {}
+        self.recommendation = ProfileRecommendationData(
+            recommended_profile_id="sales",
+            recommended_profile_name="売上",
+            confidence=0.9,
+            reason="売上の語に一致しました。",
+            rewritten_question="営業部の今月の売上",
+            recommended_allowed_objects={"table_names": [], "view_names": []},
+            candidates=[
+                ProfileRecommendationCandidate(
+                    profile_id="sales", profile_name="売上", score=0.9, matched_terms=["売上"]
+                ),
+                ProfileRecommendationCandidate(
+                    profile_id="hr", profile_name="人事", score=0.2, matched_terms=[]
+                ),
+            ],
+        )
+
+    def ensure_persistence_available(self) -> None:
+        return None
+
+    def list_profiles(self, *, include_archived: bool = False) -> list[Nl2SqlProfile]:
+        return list(self.profiles)
+
+    def search_profiles(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        query: str,
+        include_archived: bool,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> ProfileSummaryPage:
+        items = [
+            ProfileSummary(
+                id=profile.id,
+                name=profile.name,
+                category=profile.category,
+                description=profile.description,
+            )
+            for profile in self.profiles
+            if (allowed_profile_ids is None or profile.id in allowed_profile_ids)
+            and (not query or query in profile.name or query in profile.description)
+        ]
+        return ProfileSummaryPage(items=items[:limit], total=len(items))
+
+    def recommend_profile(
+        self,
+        request: ProfileRecommendationRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> ProfileRecommendationData:
+        return self.recommendation
+
+    def start_job(
+        self,
+        request: JobCreateRequest,
+        *,
+        actor_user_uuid: str = "",
+        actor_is_system_admin: bool = False,
+    ) -> JobCreateData:
+        job_id = str(uuid.uuid4())
+        self.started.append((request, actor_user_uuid, actor_is_system_admin))
+        self.jobs[job_id] = StoredJob(
+            job_id=job_id, request=request, actor_user_uuid=actor_user_uuid
+        )
+        return JobCreateData(job_id=job_id, status=JobStatus.PENDING, created_at=CREATED_AT)
+
+    def get_job(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str = "",
+        actor_can_manage: bool = False,
+    ) -> JobData | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        Nl2SqlService._assert_job_actor_access(  # noqa: SLF001 - 所有者判定は実装を使う
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+        )
+        polls = self.polls.get(job_id, 0) + 1
+        self.polls[job_id] = polls
+        if self.finish_after_polls is not None and polls > self.finish_after_polls:
+            job.status = JobStatus.DONE
+            job.result = _result(job.request)
+        return JobData(
+            job_id=job.job_id,
+            status=job.status,
+            profile_id=job.request.profile_id or "default",
+            created_at=CREATED_AT,
+            result=job.result,
+        )
+
+
+def _result(request: JobCreateRequest) -> Nl2SqlResult:
+    return Nl2SqlResult(
+        history_id="history-1",
+        engine=Nl2SqlEngine.SELECT_AI,
+        original_question=request.question,
+        rewritten_question=request.question,
+        generated_sql="SELECT EMPLOYEE_ID FROM EMPLOYEE",
+        executable_sql="SELECT EMPLOYEE_ID FROM EMPLOYEE FETCH FIRST 2 ROWS ONLY",
+        explanation="社員 ID を取得します。",
+        safety=SafetyReport(
+            is_safe=True,
+            is_select_only=True,
+            row_limit_applied=request.row_limit or 0,
+            warnings=["行数を制限しました。"],
+        ),
+        results=QueryResults(
+            columns=["EMPLOYEE_ID"],
+            rows=[{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
+            total=2,
+            has_more=True,
+        ),
+        timing=TimingEnvelope(created_at=CREATED_AT),
+    )
+
+
+# ---------------------------------------------------------------- auth setup
+
+
+async def _inline_threadpool(function: Callable[..., object], *args: object) -> object:
+    return function(*args)
+
+
+class _Users:
+    def __init__(self, service: SecurityService) -> None:
+        self.service = service
+        self.admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+        self._roles: dict[str, str] = {}
+
+    def create(
+        self,
+        login_user_id: str,
+        *,
+        permissions: set[str],
+        allowed_profile_ids: set[str] | None = None,
+    ) -> UserRecord:
+        role = self.service.create_role(
+            role_code=login_user_id.upper().replace(".", "_"),
+            display_name=login_user_id,
+            description="",
+            permissions=permissions,
+            entitlements=[],
+            allowed_profile_ids=allowed_profile_ids or set(),
+            actor=self.admin,
+        )
+        user, _ = self.service.create_user(
+            login_user_id=login_user_id,
+            display_name=login_user_id,
+            role_ids=[role.role_id],
+            temporary_password=PASSWORD,
+            actor=self.admin,
+        )
+        self.service.store.set_password(user.user_uuid, hash_password(PASSWORD), force_change=False)
+        active = self.service.store.get_user(user.user_uuid)
+        assert active is not None
+        return active
+
+
+@pytest.fixture
+def fake_service(monkeypatch: pytest.MonkeyPatch) -> _FakeNl2SqlService:
+    service = _FakeNl2SqlService()
+    monkeypatch.setattr(mcp_tools, "nl2sql_service", service)
+    monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
+    return service
+
+
+@pytest.fixture
+def users(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Users]:
+    monkeypatch.setattr("app.security.dependencies.run_in_threadpool", _inline_threadpool)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "app_service_token_secret", SECRET)
+    monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
+    reset_security_service()
+    from app.security.service import get_security_service
+
+    service = get_security_service()
+    assert isinstance(service.store, InMemorySecurityStore)
+    assert service.store.bootstrap(
+        login_user_id="ADMIN",
+        display_name="ADMIN（システム管理者）",
+        password_hash=hash_password("BootstrapPass!123"),
+    )
+    try:
+        yield _Users(service)
+    finally:
+        reset_security_service()
+
+
+def _token(user_uuid: str, *, audience: str = "nl2sql", secret: str = SECRET) -> str:
+    return issue_service_token(
+        secret,
+        subject=user_uuid,
+        audience=audience,
+        issuer="agent",
+        claims={"run_id": "run-1", "agent_id": "agent-1"},
+    )
+
+
+def _rpc(method: str, params: dict[str, Any] | None = None, request_id: int = 1) -> Any:
+    return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
+
+
+def _call(name: str, arguments: dict[str, Any]) -> Any:
+    return _rpc("tools/call", {"name": name, "arguments": arguments})
+
+
+async def _post(body: Any, *, token: str | None = None) -> httpx.Response:
+    headers = {"Authorization": f"Bearer {token}"} if token is not None else {}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post("/api/mcp", json=body, headers=headers)
+
+
+def _run(body: Any, *, token: str | None = None) -> httpx.Response:
+    return asyncio.run(_post(body, token=token))
+
+
+def _tool_names(response: httpx.Response) -> set[str]:
+    assert response.status_code == 200, response.text
+    return {tool["name"] for tool in response.json()["result"]["tools"]}
+
+
+def _structured(response: httpx.Response) -> tuple[bool, dict[str, Any]]:
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    return result["isError"], result["structuredContent"]
+
+
+# ---------------------------------------------------------------- tests
+
+
+def test_mcp_route_is_authenticated_without_route_permission() -> None:
+    # 起動時の未分類 route 検査と manifest 完全性テストを通し、権限はツールごとに判定する。
+    assert permission_for_route("POST", "/mcp") is None
+    assert "/api/mcp" in app.openapi()["paths"]
+
+
+def test_missing_or_invalid_token_is_401(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"})
+
+    assert _run(_rpc("tools/list")).status_code == 401
+    assert _run(_rpc("tools/list"), token="not-a-token").status_code == 401
+    wrong_secret = _token(user.user_uuid, secret="other-secret-" + "y" * 32)
+    assert _run(_rpc("tools/list"), token=wrong_secret).status_code == 401
+    rag_token = _token(user.user_uuid, audience="rag")
+    assert _run(_rpc("tools/list"), token=rag_token).status_code == 401
+
+
+def test_session_cookie_does_not_authenticate_mcp(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    async def exercise() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            login = await client.post(
+                "/api/auth/login",
+                json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
+            )
+            assert login.status_code == 200
+            return await client.post("/api/mcp", json=_rpc("tools/list"))
+
+    assert asyncio.run(exercise()).status_code == 401
+
+
+def test_tools_list_follows_token_user_permissions(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    query_user = users.create("mcp.query", permissions={"menu.query"})
+    evaluation_user = users.create("mcp.evaluation", permissions={"menu.evaluation"})
+    direct_user = users.create("mcp.direct", permissions={"menu.direct_sql"})
+
+    initialize = _run(
+        _rpc("initialize", {"protocolVersion": "2025-06-18"}), token=_token(query_user.user_uuid)
+    )
+    assert initialize.json()["result"]["serverInfo"]["name"] == "production-ready-nl2sql"
+
+    assert _tool_names(_run(_rpc("tools/list"), token=_token(query_user.user_uuid))) == {
+        "nl2sql_list_profiles",
+        "nl2sql_recommend_profile",
+        "nl2sql_query",
+        "nl2sql_get_job",
+    }
+    # SQL 生成はできるが実行できない利用者には nl2sql_query を出さない。
+    assert _tool_names(_run(_rpc("tools/list"), token=_token(evaluation_user.user_uuid))) == {
+        "nl2sql_list_profiles",
+        "nl2sql_recommend_profile",
+        "nl2sql_get_job",
+    }
+    assert _tool_names(_run(_rpc("tools/list"), token=_token(direct_user.user_uuid))) == set()
+
+
+def test_query_requires_generate_and_execute_permissions(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    evaluation_user = users.create(
+        "mcp.evaluation", permissions={"menu.evaluation"}, allowed_profile_ids={"default"}
+    )
+    direct_user = users.create(
+        "mcp.direct", permissions={"menu.direct_sql"}, allowed_profile_ids={"default"}
+    )
+
+    for user in (evaluation_user, direct_user):
+        is_error, content = _structured(
+            _run(_call("nl2sql_query", {"question": "社員一覧"}), token=_token(user.user_uuid))
+        )
+        assert is_error is True
+        assert content["error_code"] == "MCP_TOOL_FORBIDDEN"
+    assert fake_service.started == []
+
+
+def test_list_profiles_returns_only_allowed_profiles(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+
+    is_error, content = _structured(_run(_call("nl2sql_list_profiles", {}), token=token))
+    assert is_error is False
+    assert content == {
+        "profiles": [
+            {"id": "sales", "name": "売上", "category": "営業", "description": "売上の分析"}
+        ]
+    }
+    is_error, content = _structured(
+        _run(_call("nl2sql_list_profiles", {"limit": 101}), token=token)
+    )
+    assert is_error is True
+    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+
+def test_recommend_profile_respects_scope_and_threshold(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    sales_user = users.create(
+        "mcp.sales", permissions={"menu.query"}, allowed_profile_ids={"sales"}
+    )
+    hr_user = users.create("mcp.hr", permissions={"menu.query"}, allowed_profile_ids={"hr"})
+    call = _call("nl2sql_recommend_profile", {"question": "今月の売上"})
+
+    is_error, content = _structured(_run(call, token=_token(sales_user.user_uuid)))
+    assert is_error is False
+    assert content == {
+        "recommended_profile_id": "sales",
+        "rewritten_question": "営業部の今月の売上",
+        "candidates": [{"id": "sales", "name": "売上", "reason": "売上", "score": 0.9}],
+    }
+
+    # 範囲外の推薦は返さない。
+    _, content = _structured(_run(call, token=_token(hr_user.user_uuid)))
+    assert content["recommended_profile_id"] is None
+    assert content["rewritten_question"] is None
+    assert [candidate["id"] for candidate in content["candidates"]] == ["hr"]
+
+    # しきい値未満は画面と同じく推薦しない。
+    fake_service.recommendation.confidence = 0.1
+    _, content = _structured(_run(call, token=_token(sales_user.user_uuid)))
+    assert content["recommended_profile_id"] is None
+
+
+def test_query_rejects_profile_outside_scope(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", {"question": "社員一覧", "profile_id": "hr"}), token=token)
+    )
+    assert is_error is True
+    assert content["status"] == 403
+    assert "業務プロファイル" in content["message"]
+    # profile_id 省略は既定の業務プロファイル（default）の範囲で判定する。
+    is_error, _ = _structured(_run(_call("nl2sql_query", {"question": "社員一覧"}), token=token))
+    assert is_error is True
+    assert fake_service.started == []
+
+
+def test_query_passes_row_limit_and_actor_and_returns_result(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", {"question": "売上一覧", "profile_id": "sales"}), token=token)
+    )
+    assert is_error is False
+    request, actor_user_uuid, actor_is_system_admin = fake_service.started[0]
+    # 既定の row_limit（100）を必ず渡す（None だと全件取得になる）。
+    assert request.row_limit == 100
+    assert request.profile_id == "sales"
+    assert request.use_ontology_context is True
+    assert actor_user_uuid == user.user_uuid
+    assert actor_is_system_admin is False
+    assert content == {
+        "job_id": content["job_id"],
+        "status": "done",
+        "profile_id": "sales",
+        "generated_sql": "SELECT EMPLOYEE_ID FROM EMPLOYEE",
+        "executable_sql": "SELECT EMPLOYEE_ID FROM EMPLOYEE FETCH FIRST 2 ROWS ONLY",
+        "explanation": "社員 ID を取得します。",
+        "is_safe": True,
+        "safety_issues": ["行数を制限しました。"],
+        "columns": ["EMPLOYEE_ID"],
+        "rows": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
+        "returned_count": 2,
+        "total": 2,
+        "has_more": True,
+        "truncated": False,
+        "history_id": "history-1",
+        "error_code": None,
+        "error_message": None,
+    }
+
+    _run(
+        _call("nl2sql_query", {"question": "売上", "profile_id": "sales", "row_limit": 1000}),
+        token=token,
+    )
+    assert fake_service.started[1][0].row_limit == 1000
+    for invalid in ({"row_limit": 1001}, {"row_limit": 0}, {"wait_seconds": 46}):
+        is_error, content = _structured(
+            _run(
+                _call("nl2sql_query", {"question": "売上", "profile_id": "sales", **invalid}),
+                token=token,
+            )
+        )
+        assert is_error is True
+        assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert len(fake_service.started) == 2
+
+
+def test_query_returns_pending_job_after_wait_and_get_job_continues(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+    fake_service.finish_after_polls = None
+
+    is_error, content = _structured(
+        _run(
+            _call("nl2sql_query", {"question": "売上", "profile_id": "sales", "wait_seconds": 0}),
+            token=token,
+        )
+    )
+    assert is_error is False
+    assert content["status"] == "pending"
+    assert content["rows"] == []
+    job_id = content["job_id"]
+
+    # 1 秒待っても終わらなければ pending のまま返す。
+    is_error, content = _structured(
+        _run(_call("nl2sql_get_job", {"job_id": job_id, "wait_seconds": 1}), token=token)
+    )
+    assert (is_error, content["status"], content["job_id"]) == (False, "pending", job_id)
+    assert fake_service.polls[job_id] > 2  # 待ちの間は polling する
+
+    fake_service.finish_after_polls = 0
+    _, content = _structured(_run(_call("nl2sql_get_job", {"job_id": job_id}), token=token))
+    assert content["status"] == "done"
+    assert content["returned_count"] == 2
+
+
+def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    owner = users.create("mcp.owner", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    # フィードバック管理者は画面では他人のジョブを見られるが、MCP では本人のジョブだけ。
+    other = users.create(
+        "mcp.other",
+        permissions={"menu.query", "menu.feedback_management"},
+        allowed_profile_ids={"sales"},
+    )
+    _, content = _structured(
+        _run(
+            _call("nl2sql_query", {"question": "売上", "profile_id": "sales"}),
+            token=_token(owner.user_uuid),
+        )
+    )
+    job_id = content["job_id"]
+
+    for job in (job_id, "missing-job"):
+        is_error, content = _structured(
+            _run(_call("nl2sql_get_job", {"job_id": job}), token=_token(other.user_uuid))
+        )
+        assert is_error is True
+        assert content["status"] == 404
+        assert content["message"] == "指定されたジョブが見つかりません。"
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_get_job", {"job_id": job_id}), token=_token(owner.user_uuid))
+    )
+    assert (is_error, content["job_id"]) == (False, job_id)
+
+
+def test_local_mode_uses_local_debug_user_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ローカル実行モードは token なしで全権限。実 service（deterministic）でジョブを実行する。"""
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            imported = await client.post(
+                "/api/nl2sql/sample-data/import",
+                json={"step": "all", "confirmation": "ADMIN_EXECUTE"},
+            )
+            assert imported.status_code == 200, imported.text
+            try:
+                listed = await client.post("/api/mcp", json=_rpc("tools/list"))
+                assert _tool_names(listed) == {
+                    "nl2sql_list_profiles",
+                    "nl2sql_recommend_profile",
+                    "nl2sql_query",
+                    "nl2sql_get_job",
+                }
+                response = await client.post(
+                    "/api/mcp",
+                    json=_call(
+                        "nl2sql_query",
+                        {"question": "社員一覧を確認したい", "row_limit": 2, "wait_seconds": 10},
+                    ),
+                )
+                is_error, content = _structured(response)
+                assert is_error is False, content
+                assert content["status"] == "done", content
+                assert content["profile_id"] == "default"
+                assert content["columns"]
+                assert 0 < content["returned_count"] <= 2
+                assert len(content["rows"]) == content["returned_count"]
+            finally:
+                deleted = await client.post(
+                    "/api/nl2sql/sample-data/delete",
+                    json={"confirmation": "ADMIN_EXECUTE"},
+                )
+                assert deleted.status_code == 200, deleted.text
+
+    asyncio.run(exercise())

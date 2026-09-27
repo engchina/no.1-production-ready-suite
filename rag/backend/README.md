@@ -54,6 +54,7 @@ uv run bandit -r app          # セキュリティ
 | `POST /api/search` | hybrid/vector/keyword 検索 + rerank + citation-grounded 回答生成 |
 | `POST /api/search/stream` | SSE 形式で回答・引用をストリーミング |
 | `POST /api/evaluation/run` | golden set 評価 |
+| `POST /api/mcp` | Agent 向けの MCP サーバー（Streamable HTTP の JSON 応答）。サービストークンの利用者として検索・回答・チャットを呼ぶ（下記「MCP」。#232） |
 | `GET /metrics` | Prometheus metrics |
 
 ## OCI / Oracle 実装
@@ -100,6 +101,23 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 - 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
 - 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.business_views.manage`（全業務ビュー・業務ビューの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_BUSINESS_VIEWS` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
 - 対象範囲: 業務ビュー・ナレッジベースを割り当てたロールの利用者は、その業務ビュー・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の業務ビューは 404、業務ビューの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。業務ビューで検索させるには、その業務ビューのナレッジベースも許可してください。
+
+## MCP（Agent からの呼び出し）
+
+`POST /api/mcp` は Agent（Production Control Plane）が RAG を利用者として呼ぶための MCP サーバーです（#232。共通部品は `pr_backend_core.mcp`、契約は `platform/docs/backend-standard.md`「製品間の連携」）。`initialize` / `ping` / `tools/list` / `tools/call` だけを扱い、GET は 405 です。
+
+- 認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=利用者の `user_uuid`、既定 60 秒）。署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（32 文字以上。空なら 503）。Cookie と CSRF は使いません。token なし・不正・期限切れは 401、無効な利用者・初回パスワード変更待ちは 403。`RAG_AUTH_MODE=local` では token を見ず、全権限のローカル利用者です。
+- 利用者: token の `sub` の利用者の現在のロール・権限・対象範囲をそのまま使います（会話の持ち主・回答履歴・rate limit も同じ利用者）。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れます（`X-RAG-Agent-ID` / `X-RAG-Thread-ID` header は使いません）。
+- manifest: `/mcp` は「認証済みなら通す」で登録し、権限はツールごとに判定します（`tools/list` は使えるツールだけを返し、権限のないツールの呼び出しは `MCP_TOOL_FORBIDDEN`）。
+
+| ツール | 権限 | 内容 |
+|---|---|---|
+| `rag_list_business_views` | `GET /api/business-views` と同じ | 利用者の範囲の ACTIVE な業務ビュー（`query` / `limit`） |
+| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（業務ビュー / KB の範囲、rate limit、`RAG_SEARCH_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
+| `rag_chat_send_message` | `menu.chat` | 会話に送信し、既定のモデル 1 系統の回答を返す（ストリーミングなし）。`conversation_id` がなければ `business_view_id` で会話を作る |
+| `rag_chat_get_conversation` | `menu.chat` | 自分の会話と、新しいほうから最大 `message_limit` 件のメッセージ（古い順） |
+
+ツールの業務エラーは `isError: true` の `structuredContent` に `error_code` / `message` / `status` で返します（例: 範囲外の業務ビュー・会話は `status: 404`、KB の範囲外は `error_code: RAG_SCOPE_FORBIDDEN`、タイムアウトは `status: 504`、rate limit は `status: 429`、チャット無効は `status: 404`）。
 
 ## Readiness
 

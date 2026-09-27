@@ -6,8 +6,9 @@
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -31,7 +32,7 @@ from app.config import (
 )
 from app.db_degradation import load_or_degrade
 from app.rag.generation_contract import GenerationContractError
-from app.rag.guardrails import GuardrailPolicy
+from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
@@ -47,13 +48,14 @@ from app.schemas.chat import (
     MessageStatus,
 )
 from app.schemas.common import ApiResponse, Page
-from app.schemas.search import RetrievedChunk, SearchRequest
+from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 
 router = APIRouter()
 
 CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
 BUSINESS_VIEW_NOT_FOUND_MESSAGE = "業務ビューが見つかりません。"
+CHAT_TIMEOUT_MESSAGE = "回答生成がタイムアウトしました。"
 HISTORY_PROMPT_LIMIT = 40
 BLOCKED_MESSAGE_PLACEHOLDER = "安全ポリシーにより内容を保存しませんでした。"
 
@@ -235,7 +237,21 @@ async def stream_message(
     settings = get_settings()
     _require_chat_enabled(settings)
     enforce_rate_limit("search", http_request)
-    oracle = OracleClient()
+    conversation = await _load_sendable_conversation(OracleClient(), conversation_id)
+    return StreamingResponse(
+        _stream_chat_events(conversation_id, conversation.business_view_id, request, settings),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _load_sendable_conversation(
+    oracle: OracleClient, conversation_id: str
+) -> StoredConversation:
+    """送信できる会話を返す(会話・業務ビューの存在と状態、参照 KB の範囲を確認する)。
+
+    SSE の送信(`stream_message`)と MCP の送信(`send_chat_message`)が共通で使う。
+    """
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
@@ -249,15 +265,11 @@ async def stream_message(
             status_code=409,
             detail="アーカイブ済みの業務ビューではチャットできません。",
         )
-    # 業務ビューの参照 KB が 1 つも利用できないなら、stream を始める前に 403 にする（#214）。
+    # 業務ビューの参照 KB が 1 つも利用できないなら、生成を始める前に 403 にする（#214）。
     view_config = getattr(view, "config", None)
     if view_config is not None:
         ensure_business_view_knowledge_bases_permitted(view_config.normalized_knowledge_base_ids())
-    return StreamingResponse(
-        _stream_chat_events(conversation_id, conversation.business_view_id, request, settings),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return conversation
 
 
 def _resolve_compare_models(
@@ -322,14 +334,27 @@ async def _build_safe_history(
     return turns[-HISTORY_PROMPT_LIMIT:]
 
 
-async def _stream_chat_events(
+@dataclass(frozen=True, slots=True)
+class PreparedChatTurn:
+    """保存済みのユーザー発話と、回答生成に使う有効 request / Settings / 履歴。"""
+
+    conversation_id: str
+    request: SearchRequest
+    settings: Settings
+    guardrails: GuardrailPolicy
+    query_guardrail: GuardrailResult
+    history: list[ChatTurn]
+    user_message: StoredMessage
+
+
+async def _prepare_chat_turn(
+    oracle: OracleClient,
     conversation_id: str,
     business_view_id: str,
     request: ChatMessageRequest,
     settings: Settings,
-) -> AsyncIterator[str]:
-    """USER 永続化 → 各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す。"""
-    oracle = OracleClient()
+) -> PreparedChatTurn:
+    """業務ビューの設定を解決し、発話を検査して USER メッセージを保存する。"""
     base_request = SearchRequest(
         query=request.content,
         mode=request.mode,
@@ -360,14 +385,127 @@ async def _stream_chat_events(
             created_at=now,
         )
     )
+    return PreparedChatTurn(
+        conversation_id=conversation_id,
+        request=effective_request,
+        settings=effective_settings,
+        guardrails=guardrails,
+        query_guardrail=query_guardrail,
+        history=history,
+        user_message=user_message,
+    )
 
-    columns = _resolve_compare_models(request, effective_settings)
-    timeout = effective_settings.rag_search_timeout_seconds
+
+def _chat_error_message(exc: Exception) -> str:
+    """回答生成の失敗を利用者向けの文言にする(ERROR メッセージと SSE の error event)。"""
+    if isinstance(exc, TimeoutError):
+        return CHAT_TIMEOUT_MESSAGE
+    if isinstance(exc, GenerationContractError):
+        return str(exc)
+    return STREAM_ERROR_MESSAGE
+
+
+async def _generate_chat_answer(
+    oracle: OracleClient,
+    turn: PreparedChatTurn,
+    model_id: str,
+    *,
+    progress_callback: Callable[[SearchStageProgress], Awaitable[None]] | None = None,
+) -> tuple[StoredMessage, SearchResponse]:
+    """1 モデル分の回答を生成し、ASSISTANT メッセージを保存する。
+
+    失敗したら ERROR の ASSISTANT メッセージを保存してから例外をそのまま送出する。
+    """
+    trace_id = new_trace_id()
+    try:
+        llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
+        pipeline = RagPipeline(settings=turn.settings, llm=llm, guardrails=turn.guardrails)
+        result = await asyncio.wait_for(
+            pipeline.run(
+                turn.request,
+                trace_id=trace_id,
+                progress_callback=progress_callback,
+                history=turn.history,
+                query_guardrail_result=turn.query_guardrail,
+            ),
+            timeout=turn.settings.rag_search_timeout_seconds,
+        )
+        assistant = await oracle.append_message(
+            StoredMessage(
+                id=uuid4().hex,
+                conversation_id=turn.conversation_id,
+                reply_to_message_id=turn.user_message.id,
+                role="ASSISTANT",
+                model=model_id or None,
+                content=result.answer,
+                citations=[citation.model_dump(mode="json") for citation in result.citations],
+                guardrail_warnings=result.guardrail_warnings,
+                trace_id=result.trace_id,
+                status="COMPLETE",
+                elapsed_ms=result.elapsed_ms,
+                created_at=datetime.now(UTC),
+            )
+        )
+    except Exception as exc:
+        with suppress(Exception):
+            await oracle.append_message(
+                StoredMessage(
+                    id=uuid4().hex,
+                    conversation_id=turn.conversation_id,
+                    reply_to_message_id=turn.user_message.id,
+                    role="ASSISTANT",
+                    model=model_id or None,
+                    content=_chat_error_message(exc),
+                    trace_id=trace_id,
+                    status="ERROR",
+                    created_at=datetime.now(UTC),
+                )
+            )
+        raise
+    return assistant, result
+
+
+async def send_chat_message(
+    conversation_id: str,
+    request: ChatMessageRequest,
+    settings: Settings,
+) -> tuple[StoredConversation, StoredMessage, SearchResponse]:
+    """ストリーミングせずに 1 往復を送る(MCP の `rag_chat_send_message`。#232)。
+
+    既定のモデル(`model_ids` 指定時はその先頭)1 系統で回答し、USER / ASSISTANT を保存する。
+    生成のタイムアウトは 504、生成契約の違反は 502 にする(失敗も ERROR として保存済み)。
+    rate limit とチャットの有効判定は呼び出し側で行う。
+    """
+    oracle = OracleClient()
+    conversation = await _load_sendable_conversation(oracle, conversation_id)
+    turn = await _prepare_chat_turn(
+        oracle, conversation_id, conversation.business_view_id, request, settings
+    )
+    model_id = _resolve_compare_models(request, turn.settings)[0]["model_id"]
+    try:
+        assistant, result = await _generate_chat_answer(oracle, turn, model_id)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=CHAT_TIMEOUT_MESSAGE) from exc
+    except GenerationContractError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return conversation, assistant, result
+
+
+async def _stream_chat_events(
+    conversation_id: str,
+    business_view_id: str,
+    request: ChatMessageRequest,
+    settings: Settings,
+) -> AsyncIterator[str]:
+    """USER 永続化 → 各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す。"""
+    oracle = OracleClient()
+    turn = await _prepare_chat_turn(oracle, conversation_id, business_view_id, request, settings)
+    user_message = turn.user_message
+    columns = _resolve_compare_models(request, turn.settings)
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
 
     async def run_model(column: dict[str, str]) -> None:
         model_id = column["model_id"]
-        trace_id = new_trace_id()
 
         async def emit_progress(progress: SearchStageProgress) -> None:
             await queue.put(
@@ -384,33 +522,8 @@ async def _stream_chat_events(
             )
 
         try:
-            llm = OciEnterpriseAiClient(settings=effective_settings, model_id=model_id or None)
-            pipeline = RagPipeline(settings=effective_settings, llm=llm, guardrails=guardrails)
-            result = await asyncio.wait_for(
-                pipeline.run(
-                    effective_request,
-                    trace_id=trace_id,
-                    progress_callback=emit_progress,
-                    history=history,
-                    query_guardrail_result=query_guardrail,
-                ),
-                timeout=timeout,
-            )
-            assistant = await oracle.append_message(
-                StoredMessage(
-                    id=uuid4().hex,
-                    conversation_id=conversation_id,
-                    reply_to_message_id=user_message.id,
-                    role="ASSISTANT",
-                    model=model_id or None,
-                    content=result.answer,
-                    citations=[citation.model_dump(mode="json") for citation in result.citations],
-                    guardrail_warnings=result.guardrail_warnings,
-                    trace_id=result.trace_id,
-                    status="COMPLETE",
-                    elapsed_ms=result.elapsed_ms,
-                    created_at=datetime.now(UTC),
-                )
+            assistant, result = await _generate_chat_answer(
+                oracle, turn, model_id, progress_callback=emit_progress
             )
             await queue.put(
                 (
@@ -432,30 +545,14 @@ async def _stream_chat_events(
             )
         except Exception as exc:
             # SSE では例外を error event へ落とし、ストリームを正常終了させる。
-            if isinstance(exc, TimeoutError):
-                message = "回答生成がタイムアウトしました。"
-            elif isinstance(exc, GenerationContractError):
-                message = str(exc)
-            else:
-                message = STREAM_ERROR_MESSAGE
-            with suppress(Exception):
-                await oracle.append_message(
-                    StoredMessage(
-                        id=uuid4().hex,
-                        conversation_id=conversation_id,
-                        reply_to_message_id=user_message.id,
-                        role="ASSISTANT",
-                        model=model_id or None,
-                        content=message,
-                        trace_id=trace_id,
-                        status="ERROR",
-                        created_at=datetime.now(UTC),
-                    )
-                )
             await queue.put(
                 (
                     "error",
-                    {"model_id": model_id, "message": message, "error_type": type(exc).__name__},
+                    {
+                        "model_id": model_id,
+                        "message": _chat_error_message(exc),
+                        "error_type": type(exc).__name__,
+                    },
                 )
             )
         finally:

@@ -151,6 +151,32 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
   そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
   操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
+## Agent からの呼び出し（MCP、#231）
+
+Agent は NL2SQL を `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答）で呼ぶ。共通の仕組みは
+platform の `docs/backend-standard.md`「製品間の連携（MCP とサービストークン、#230）」を正とする。
+
+- 認証: Cookie ではなく `Authorization: Bearer <サービストークン>`（audience `nl2sql`、署名鍵は共通 `.env` の
+  `PLATFORM_SERVICE_TOKEN_SECRET`。空なら 503）。token の `sub`（Run の利用者の `user_uuid`）を
+  `principal_for_worker` で現在のロール・権限・業務プロファイル利用権限から組み立てる。token なし・不正・
+  期限切れ・audience 違いは 401、無効・初回パスワード変更待ちの利用者は 403。CSRF は照合しない。
+- route manifest は `/mcp` を「認証済みなら通す」（`permission_for_route` が None）にし、権限はツールごとに
+  判定する（`tools/list` は利用者が使えるツールだけを返す）。
+- 利用者: ツールは Run の利用者として実行する。DeepSec の actor も同じ認可経路（`enter_actor`）で入り、
+  ジョブの `actor_user_uuid` に残るので、SELECT の行はその利用者の Data Grant で絞られる。
+- `NL2SQL_DEBUG=true` かつ `NL2SQL_ENVIRONMENT=local` のローカル実行モードは、token なしで全権限の
+  ローカル DEBUG 管理者として通す（他の API と同じ）。
+
+| ツール | 必要な権限 | 画面の route と同じ判定 |
+|---|---|---|
+| `nl2sql_list_profiles` | `nl2sql.profiles.read` | `GET /api/nl2sql/profiles/search` と同じ業務プロファイルの範囲 |
+| `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。範囲外・しきい値未満の推薦は `null` |
+| `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。範囲外の業務プロファイルは 403。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
+| `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。ただし管理権限があっても本人のジョブだけ（他人・不明は 404） |
+
+`menu.query` はすべてのツールを使える。`menu.direct_sql` だけのロールはどのツールも使えない
+（生成できないため）。`menu.evaluation` のように生成だけできるロールには `nl2sql_query` を出さない。
+
 ## ユーザー・ロールの物理削除
 
 削除 API は現在表示中の version を `If-Match: "<version>"` で受け取り、前提条件を同一

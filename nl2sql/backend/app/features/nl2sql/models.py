@@ -1163,6 +1163,8 @@ class JobData(BaseModel):
     business_release_id: str = ""
     job_id: str
     status: JobStatus
+    # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。
+    profile_id: str = ""
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
