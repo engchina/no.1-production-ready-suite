@@ -245,7 +245,10 @@ skill_registry.register(
         description="外部業務 RAG を使って根拠付き情報を検索する。",
         instructions="ユーザーの目的を外部 RAG の query として扱い、引用と根拠を返す。",
         mcp_requirements=[
-            SkillMcpRequirement(server_id="control-plane", tool_names=["external_rag_search"])
+            SkillMcpRequirement(
+                server_id="control-plane",
+                tool_names=["external_rag_search", "external_rag_list_business_views"],
+            )
         ],
         tags=["rag", "research", "business-data"],
         tool_calls=[
@@ -254,6 +257,7 @@ skill_registry.register(
                 arguments={
                     "query": "${goal}",
                     "business_view_id": "${arguments.business_view_id}",
+                    "knowledge_base_ids": "${arguments.knowledge_base_ids}",
                     "filters": "${arguments.filters}",
                     "top_k": "${arguments.top_k}",
                 },
@@ -266,9 +270,15 @@ skill_registry.register(
         id="structured_data_query",
         name="構造化データ照会",
         description="外部 NL2SQL/構造化データサービスへ質問を渡して表形式結果を取得する。",
-        instructions="SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。",
+        instructions=(
+            "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
+            "結果の status が pending / running なら external_nl2sql_get_job で続きを取る。"
+        ),
         mcp_requirements=[
-            SkillMcpRequirement(server_id="control-plane", tool_names=["external_nl2sql_query"])
+            SkillMcpRequirement(
+                server_id="control-plane",
+                tool_names=["external_nl2sql_query", "external_nl2sql_get_job"],
+            )
         ],
         tags=["nl2sql", "structured-data", "audit-sql"],
         tool_calls=[
@@ -276,12 +286,8 @@ skill_registry.register(
                 name="external_nl2sql_query",
                 arguments={
                     "question": "${goal}",
-                    "data_domain_id": "${arguments.data_domain_id}",
-                    "business_view_id": "${arguments.business_view_id}",
-                    "filters": "${arguments.filters}",
-                    "limit": "${arguments.limit}",
-                    "mode": "${arguments.mode}",
-                    "include_sql": "${arguments.include_sql}",
+                    "profile_id": "${arguments.profile_id}",
+                    "row_limit": "${arguments.row_limit}",
                 },
             )
         ],
@@ -338,7 +344,11 @@ skill_registry.register(
         mcp_requirements=[
             SkillMcpRequirement(
                 server_id="control-plane",
-                tool_names=["external_rag_search", "external_nl2sql_query"],
+                tool_names=[
+                    "external_rag_search",
+                    "external_nl2sql_query",
+                    "external_nl2sql_get_job",
+                ],
             )
         ],
         tags=["rag", "nl2sql", "business-data"],
@@ -348,6 +358,7 @@ skill_registry.register(
                 arguments={
                     "query": "${goal}",
                     "business_view_id": "${arguments.business_view_id}",
+                    "knowledge_base_ids": "${arguments.knowledge_base_ids}",
                     "filters": "${arguments.filters}",
                     "top_k": "${arguments.top_k}",
                 },
@@ -356,12 +367,8 @@ skill_registry.register(
                 name="external_nl2sql_query",
                 arguments={
                     "question": "${goal}",
-                    "data_domain_id": "${arguments.data_domain_id}",
-                    "business_view_id": "${arguments.business_view_id}",
-                    "filters": "${arguments.filters}",
-                    "limit": "${arguments.limit}",
-                    "mode": "${arguments.mode}",
-                    "include_sql": "${arguments.include_sql}",
+                    "profile_id": "${arguments.profile_id}",
+                    "row_limit": "${arguments.row_limit}",
                 },
             ),
         ],

@@ -15,15 +15,17 @@ from app.settings import get_settings
 
 
 class ExternalRagRuntimeConfig(BaseModel):
-    base_url: str | None = None
-    api_key: str | None = None
-    timeout_seconds: float = 10.0
+    """RAG の MCP（`POST /api/mcp`）。認証は呼び出しごとのサービストークン（#233）。"""
+
+    mcp_url: str | None = None
+    timeout_seconds: float = 60.0
 
 
 class ExternalNl2SqlRuntimeConfig(BaseModel):
-    base_url: str | None = None
-    api_key: str | None = None
-    timeout_seconds: float = 15.0
+    """NL2SQL の MCP（`POST /api/mcp`）。`default_limit` は `row_limit` の既定値。"""
+
+    mcp_url: str | None = None
+    timeout_seconds: float = 60.0
     default_limit: int = 100
 
 
@@ -98,13 +100,11 @@ class AgentRuntimeConfigStore:
         settings = get_settings()
         self._lock = Lock()
         self._rag = ExternalRagRuntimeConfig(
-            base_url=settings.agent_external_rag_base_url,
-            api_key=settings.agent_external_rag_api_key,
+            mcp_url=settings.agent_external_rag_mcp_url,
             timeout_seconds=settings.agent_external_rag_timeout_seconds,
         )
         self._nl2sql = ExternalNl2SqlRuntimeConfig(
-            base_url=settings.agent_external_nl2sql_base_url,
-            api_key=settings.agent_external_nl2sql_api_key,
+            mcp_url=settings.agent_external_nl2sql_mcp_url,
             timeout_seconds=settings.agent_external_nl2sql_timeout_seconds,
             default_limit=settings.agent_external_nl2sql_default_limit,
         )
@@ -184,12 +184,12 @@ class AgentRuntimeConfigStore:
     def patch_rag(
         self,
         *,
-        base_url: str | None = None,
+        mcp_url: str | None = None,
         timeout_seconds: float | None = None,
     ) -> ExternalRagRuntimeConfig:
         with self._lock:
-            if base_url is not None:
-                self._rag.base_url = base_url or None
+            if mcp_url is not None:
+                self._rag.mcp_url = mcp_url or None
             if timeout_seconds is not None:
                 self._rag.timeout_seconds = timeout_seconds
             return self._rag.model_copy(deep=True)
@@ -201,13 +201,13 @@ class AgentRuntimeConfigStore:
     def patch_nl2sql(
         self,
         *,
-        base_url: str | None = None,
+        mcp_url: str | None = None,
         timeout_seconds: float | None = None,
         default_limit: int | None = None,
     ) -> ExternalNl2SqlRuntimeConfig:
         with self._lock:
-            if base_url is not None:
-                self._nl2sql.base_url = base_url or None
+            if mcp_url is not None:
+                self._nl2sql.mcp_url = mcp_url or None
             if timeout_seconds is not None:
                 self._nl2sql.timeout_seconds = timeout_seconds
             if default_limit is not None:

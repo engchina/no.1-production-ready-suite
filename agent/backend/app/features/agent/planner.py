@@ -810,13 +810,13 @@ def _skill_decision(
 def _common_skill_arguments(metadata: JsonObject) -> JsonObject:
     return _compact(
         {
+            # RAG / NL2SQL の MCP のツールの引数（#233）。
             "business_view_id": metadata.get("business_view_id"),
-            "data_domain_id": metadata.get("data_domain_id"),
+            "knowledge_base_ids": metadata.get("knowledge_base_ids"),
             "filters": metadata.get("filters"),
             "top_k": metadata.get("top_k"),
-            "limit": metadata.get("limit"),
-            "mode": metadata.get("mode"),
-            "include_sql": metadata.get("include_sql"),
+            "profile_id": metadata.get("profile_id"),
+            "row_limit": metadata.get("row_limit"),
         }
     )
 

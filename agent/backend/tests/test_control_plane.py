@@ -127,7 +127,10 @@ async def test_binding_mcp_closure_and_external_run(monkeypatch: pytest.MonkeyPa
 
         assert created_binding.status_code == 200
         assert created_binding.json()["data"]["sync_status"] == "ready"
-        assert [item["name"] for item in tools.json()["result"]["tools"]] == ["external_rag_search"]
+        assert [item["name"] for item in tools.json()["result"]["tools"]] == [
+            "external_rag_list_business_views",
+            "external_rag_search",
+        ]
         assert created_run.status_code == 200
         assert fetched_run.json()["data"]["external_run_id"] == "hermes-run-1"
         assert fetched_run.json()["data"]["runtime_id"] == "hermes-default"

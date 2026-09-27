@@ -611,6 +611,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       "external-mcp": "externalMcp",
     };
     if (method === "GET" && at("settings", "*") && second in external) return state[external[second]];
+    // 外部 RAG / NL2SQL（各製品の MCP。#233）。署名鍵とサービス利用者は .env なので PATCH では変わらない。
+    if (method === "PATCH" && at("settings", "*") && (second === "external-rag" || second === "external-nl2sql")) {
+      const current = state[external[second]] as Json;
+      const mcpUrl = typeof body.mcp_url === "string" ? body.mcp_url.trim() : undefined;
+      if (mcpUrl && !/^https?:\/\/\S+/.test(mcpUrl)) {
+        throw new HttpError(422, "MCP の URL は http:// または https:// で始めてください。");
+      }
+      if (mcpUrl !== undefined) current.mcp_url = mcpUrl || null;
+      if (typeof body.timeout_seconds === "number") current.timeout_seconds = body.timeout_seconds;
+      if (second === "external-nl2sql" && typeof body.default_limit === "number") {
+        current.default_limit = body.default_limit;
+      }
+      current.configured = Boolean(current.mcp_url);
+      return current;
+    }
 
     if (second === "external-mcp-servers") {
       const servers = state.externalMcpServers;

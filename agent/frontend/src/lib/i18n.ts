@@ -355,9 +355,23 @@ const agentJa = {
   "observability.metricsPath": "メトリクス",
 
   "settings.baseUrl": "Base URL",
+  "settings.productMcp.description":
+    "Run を作った利用者として、接続先の MCP（POST /api/mcp）を呼びます。認証は呼び出しごとの短命のトークンで、署名鍵とサービス利用者は .env で管理します。",
+  "settings.productMcp.url": "MCP の URL",
+  "settings.productMcp.urlHint": "接続先の製品の /api/mcp を http:// または https:// から入力します。空にすると接続しません。",
+  "settings.productMcp.defaultLimitHint": "row_limit を指定しない問い合わせで取得する行数です（1〜1000）。",
+  "settings.productMcp.authStatus": "サービス間認証の状態",
+  "settings.productMcp.secret": "署名鍵（PLATFORM_SERVICE_TOKEN_SECRET）",
+  "settings.productMcp.secretHint": "3 製品の共通 .env に同じ値（32 文字以上）を設定します。未設定のあいだ、呼び出しは失敗します。",
+  "settings.productMcp.serviceUser": "サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）",
+  "settings.productMcp.serviceUserHint":
+    "Run の利用者がいない呼び出し（Binding 経由の MCP など）で使うログインユーザー ID です。未設定ならその呼び出しだけ失敗します。",
+  "settings.productMcp.notReady": "この接続はまだ使えません",
+  "settings.productMcp.missingUrl": "MCP の URL が未設定です。下のフォームで入力して保存してください。",
+  "settings.productMcp.missingSecret":
+    "署名鍵（PLATFORM_SERVICE_TOKEN_SECRET）が未設定です。共通 .env に 32 文字以上の値を設定し、backend を再起動してください。",
   "settings.timeout": "タイムアウト秒",
   "settings.defaultLimit": "既定取得件数",
-  "settings.apiKey": "API key",
   "settings.apiKeyManaged": ".env / Secret で管理",
   "settings.mcpDiscovery.title": "MCP tools/list",
   "settings.mcpDiscovery.description": "接続先 gateway が公開している MCP tool descriptor を確認します。",

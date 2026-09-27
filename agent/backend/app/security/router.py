@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response
 from pr_backend_core import ApiResponse
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
@@ -16,8 +18,15 @@ from pr_system_settings.auth.router import build_auth_router
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
+from app.features.agent.config import runtime_config_store
 from app.features.agent.router import run_business_view_id
 from app.features.agent.runtime import runtime_repository
+from app.features.agent.tools import (
+    ExternalRagListBusinessViewsInput,
+    ExternalToolError,
+    ToolInvocationContext,
+    list_rag_business_views,
+)
 
 from .dependencies import current_principal, local_debug_principal, request_context
 from .domain import as_principal, as_role
@@ -31,9 +40,12 @@ from .schemas import (
     RoleAccessUpdateRequest,
     RoleData,
 )
-from .service import get_security_service
+from .service import BUSINESS_VIEW_ID_PATTERN, get_security_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["security"])
+# 権限管理の候補に出す RAG の業務ビューの上限（MCP の rag_list_business_views の limit の上限）。
+_RAG_BUSINESS_VIEW_LIMIT = 200
 
 
 def _current_user_data(principal: PlatformPrincipal, debug_mode: bool) -> CurrentUserData:
@@ -68,6 +80,34 @@ def _run_business_view_ids() -> set[str]:
     }
 
 
+def _rag_business_view_names(user_uuid: str) -> tuple[dict[str, str], list[str]]:
+    """RAG の業務ビュー（ID → 名前）を、画面を開いた利用者として MCP で読む（#233）。
+
+    RAG の MCP が未設定・失敗のときは空にして、警告を返す（権限管理は今までどおり使える）。
+    """
+    if not runtime_config_store.get_rag().mcp_url:
+        return {}, [
+            "外部 RAG の MCP が設定されていないため、RAG の業務ビューは候補に含まれていません。"
+        ]
+    try:
+        views = list_rag_business_views(
+            ExternalRagListBusinessViewsInput(limit=_RAG_BUSINESS_VIEW_LIMIT),
+            context=ToolInvocationContext(user_uuid=user_uuid),
+        ).business_views
+    except ExternalToolError as exc:
+        logger.warning(
+            "RAG の業務ビューを取得できませんでした",
+            extra={"error_code": exc.code, "error_message": exc.message},
+        )
+        return {}, [f"RAG の業務ビューを取得できませんでした（{exc.message}）。"]
+    # Agent の業務ビュー ID の形式に合わないものは保存できないため候補にしない。
+    return {
+        view.id: view.name or view.id
+        for view in views
+        if BUSINESS_VIEW_ID_PATTERN.fullmatch(view.id)
+    }, []
+
+
 @router.get("/security/permissions", response_model=ApiResponse[list[PermissionData]])
 def permission_catalog() -> ApiResponse[list[PermissionData]]:
     """権限管理画面の権限カタログ（code / group / label / description / implies）。"""
@@ -80,12 +120,16 @@ async def list_access_targets(request: Request) -> ApiResponse[AccessTargetsData
 
     - エージェント: Runtime repository の業務 Agent（無効を含む）。
     - 業務ビュー: Agent にマスタがないため、Run の metadata に現れた ID とロールに割り当て済みの
-      ID の和集合（名前は ID と同じ）。
+      ID と、RAG の MCP で読んだ業務ビュー（画面を開いた利用者が RAG で使えるもの。#233）の和集合。
+      名前は RAG から読めたものは RAG の名前、それ以外は ID と同じ。RAG を読めなければ警告を返す。
     - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `agent.admin` を持つ利用者は全件）。
     """
     principal = as_principal(current_principal(request))
     assigned_views = await run_in_threadpool(get_security_service().assigned_business_view_ids)
-    view_ids = _run_business_view_ids() | assigned_views
+    rag_view_names, warnings = await run_in_threadpool(
+        _rag_business_view_names, principal.user_uuid
+    )
+    view_ids = _run_business_view_ids() | assigned_views | set(rag_view_names)
     agents = [
         agent for agent in runtime_repository.list_agents() if principal.can_use_agent(agent.id)
     ]
@@ -101,11 +145,12 @@ async def list_access_targets(request: Request) -> ApiResponse[AccessTargetsData
                 for agent in agents
             ],
             business_views=[
-                BusinessViewTargetData(id=view_id, name=view_id)
+                BusinessViewTargetData(id=view_id, name=rag_view_names.get(view_id, view_id))
                 for view_id in sorted(view_ids)
                 if principal.can_use_business_view(view_id)
             ],
-        )
+        ),
+        warning_messages=warnings,
     )
 
 

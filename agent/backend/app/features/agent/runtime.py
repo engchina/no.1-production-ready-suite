@@ -211,6 +211,9 @@ class RunState(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
+    # Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP はこの利用者として呼ぶ。
+    # 外部連携（header / JWT の RBAC）で作った Run と、この項目がない既存の Run は None。
+    created_by_user_uuid: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -299,7 +302,9 @@ class RuntimeToolCallAuditData(BaseModel):
 
 
 class AgentRuntimeRepositoryContract(Protocol):
-    def create_run(self, request: RunCreateRequest) -> RunState: ...
+    def create_run(
+        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+    ) -> RunState: ...
     def create_control_plane_run(
         self,
         request: RunCreateRequest,
@@ -307,6 +312,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         runtime_id: str,
         binding_id: str,
         capabilities: JsonObject,
+        created_by_user_uuid: str | None = None,
     ) -> RunState: ...
     def mark_runtime_submitted(
         self,
@@ -328,7 +334,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
-    def replay_run(self, run_id: str) -> RunState: ...
+    def replay_run(self, run_id: str, *, created_by_user_uuid: str | None = None) -> RunState: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -372,7 +378,9 @@ class AgentRuntimeRepository:
         if self._snapshot_path is not None and self._snapshot_path.exists():
             self._load_snapshot_from_disk()
 
-    def create_run(self, request: RunCreateRequest) -> RunState:
+    def create_run(
+        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+    ) -> RunState:
         with self._lock:
             planned_request, planner_decision = self._prepare_run_request_locked(request)
             self._validate_run_agent(planned_request)
@@ -380,6 +388,7 @@ class AgentRuntimeRepository:
                 id=f"run_{uuid4().hex}",
                 goal=planned_request.goal,
                 agent_id=planned_request.agent_id,
+                created_by_user_uuid=created_by_user_uuid,
                 status=RunStatus.QUEUED,
                 pending_tool_calls=list(planned_request.tool_calls),
                 metadata={
@@ -404,7 +413,7 @@ class AgentRuntimeRepository:
         self._start_run(run.id)
         return self.get_run(run.id)
 
-    def replay_run(self, run_id: str) -> RunState:
+    def replay_run(self, run_id: str, *, created_by_user_uuid: str | None = None) -> RunState:
         with self._lock:
             source = self._require_run(run_id)
             tool_calls = [
@@ -421,13 +430,15 @@ class AgentRuntimeRepository:
             )
             self._persist_locked()
 
+        # 再実行の Run は、再実行を指示した利用者として動く（元の Run の利用者を引き継がない）。
         return self.create_run(
             RunCreateRequest(
                 goal=source.goal,
                 agent_id=source.agent_id,
                 tool_calls=tool_calls,
                 metadata=metadata,
-            )
+            ),
+            created_by_user_uuid=created_by_user_uuid,
         )
 
     def list_runs(self) -> list[RunState]:
@@ -448,6 +459,7 @@ class AgentRuntimeRepository:
         runtime_id: str,
         binding_id: str,
         capabilities: JsonObject,
+        created_by_user_uuid: str | None = None,
     ) -> RunState:
         """外部 Runtime 用の Run を投入する。tool loop はこのプロセスで実行しない。"""
         with self._lock:
@@ -464,6 +476,7 @@ class AgentRuntimeRepository:
                 agent_id=request.agent_id,
                 runtime_id=runtime_id,
                 binding_id=binding_id,
+                created_by_user_uuid=created_by_user_uuid,
                 runtime_capabilities=dict(capabilities),
                 status=RunStatus.QUEUED,
                 metadata={**request.metadata, "_planner_mode": "runtime"},
@@ -1327,7 +1340,9 @@ class AgentRuntimeRepository:
         artifact_kind_by_tool = {
             "agent_skill_run": "skill_plan",
             "external_rag_search": "rag_evidence",
+            "external_rag_chat": "rag_evidence",
             "external_nl2sql_query": "structured_table",
+            "external_nl2sql_get_job": "structured_table",
             "sandbox_command_run": "command_output",
         }
         kind = artifact_kind_by_tool.get(step.tool_call.name)
@@ -1588,10 +1603,13 @@ class AgentRuntimeRepository:
         approval_id: str | None = None,
     ) -> ToolInvocationContext:
         agent = self._agents.get(run.agent_id)
+        # 承認後の再実行もこの context を使うため、承認者ではなく Run の利用者として呼ぶ（#233）。
         return ToolInvocationContext(
             approval_id=approval_id,
             trace_id=call.trace_id,
             agent_id=run.agent_id,
+            run_id=run.id,
+            user_uuid=run.created_by_user_uuid,
             command_allowed_prefixes=(
                 list(agent.command_allowed_prefixes) if agent is not None else []
             ),

@@ -60,7 +60,8 @@ import {
   type ApprovalRequest,
   type ExternalMcpServerSettings,
   type ExternalMcpToolInfo,
-  type ExternalServiceSettings,
+  type ProductMcpSettings,
+  type ProductMcpSettingsPatch,
   type MarketplaceSource,
   type PluginManifest,
   type PluginSummary,
@@ -1945,11 +1946,16 @@ export function MemoryPage() {
 }
 
 interface ExternalSettingsDraft {
-  baseUrl: string;
+  mcpUrl: string;
   timeoutSeconds: string;
   defaultLimit: string;
 }
 
+/**
+ * 外部 RAG / 外部 NL2SQL（各製品の MCP）の接続設定（#233）。
+ * 認証は呼び出しごとのサービストークン（Run の利用者として呼ぶ）なので API キー欄はない。
+ * 署名鍵とサービス利用者は .env で管理し、ここでは設定済みかどうかだけを表示する。
+ */
 export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const queryClient = useQueryClient();
   // 運用設定の変更は Agent 管理の権限（admin）だけ。メニュー権限だけの利用者は閲覧になる（#215）。
@@ -1963,11 +1969,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
     queryFn: isRag ? agentApi.getExternalRagSettings : agentApi.getExternalNl2SqlSettings,
   });
   const mutation = useMutation({
-    mutationFn: (payload: {
-      base_url?: string | null;
-      timeout_seconds?: number;
-      default_limit?: number;
-    }) => {
+    mutationFn: (payload: ProductMcpSettingsPatch) => {
       if (isRag) {
         return agentApi.patchExternalRagSettings(payload);
       }
@@ -1978,8 +1980,8 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       void queryClient.invalidateQueries({ queryKey: ["settings", kind] });
     },
   });
-  const [baseUrl, setBaseUrl] = useState("");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("10");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const [defaultLimit, setDefaultLimit] = useState("100");
   const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
 
@@ -1989,18 +1991,18 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
     const current = settings.data;
     if (current) {
       const saved = {
-        baseUrl: current.base_url ?? "",
+        mcpUrl: current.mcp_url ?? "",
         timeoutSeconds: String(current.timeout_seconds),
         defaultLimit: String(current.default_limit ?? 100),
       };
-      setBaseUrl(saved.baseUrl);
+      setMcpUrl(saved.mcpUrl);
       setTimeoutSeconds(saved.timeoutSeconds);
       setDefaultLimit(saved.defaultLimit);
       setBaseline(saved);
     }
   }
 
-  const draft: ExternalSettingsDraft = { baseUrl, timeoutSeconds, defaultLimit };
+  const draft: ExternalSettingsDraft = { mcpUrl, timeoutSeconds, defaultLimit };
   // RAG では既定件数を扱わないので比較から外す。
   const comparable = (value: ExternalSettingsDraft) => (isNl2Sql ? value : { ...value, defaultLimit: "" });
   const isDirty = baseline !== null && !sameDraft(comparable(draft), comparable(baseline));
@@ -2010,7 +2012,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
     const submitted = draft;
     mutation.mutate(
       {
-        base_url: baseUrl,
+        mcp_url: mcpUrl.trim(),
         timeout_seconds: Number(timeoutSeconds),
         default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
       },
@@ -2024,22 +2026,31 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       <PageBody wide>
 <div className="space-y-5">
         <QueryState query={settings}>
-          <ConnectionBanner settings={settings.data} />
+          <ProductMcpNotice settings={settings.data} />
           <Card>
             <CardHeader>
               <CardTitle>{title}</CardTitle>
-              <CardDescription>{t("settings.apiKeyManaged")}</CardDescription>
+              <CardDescription>{t("settings.productMcp.description")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* URL は全幅、タイムアウト・既定件数は 2 列に並べる。 */}
               <fieldset disabled={!canManage} className="grid min-w-0 gap-x-6 gap-y-4 lg:grid-cols-2">
-                <Field label={t("settings.baseUrl")} htmlFor={`${kind}-base-url`} className="lg:col-span-2">
+                <Field label={t("settings.productMcp.url")} htmlFor={`${kind}-mcp-url`} className="lg:col-span-2">
                   <input
-                    id={`${kind}-base-url`}
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
+                    id={`${kind}-mcp-url`}
+                    type="url"
+                    inputMode="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={mcpUrl}
+                    onChange={(event) => setMcpUrl(event.target.value)}
+                    placeholder={isRag ? "http://rag-host/api/mcp" : "http://nl2sql-host/api/mcp"}
+                    aria-describedby={`${kind}-mcp-url-hint`}
                     className={INPUT_CLASS}
                   />
+                  <p id={`${kind}-mcp-url-hint`} className="mt-1 text-xs leading-5 text-fg-muted">
+                    {t("settings.productMcp.urlHint")}
+                  </p>
                 </Field>
                 <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`}>
                   <input
@@ -2057,13 +2068,19 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                       id="nl2sql-default-limit"
                       type="number"
                       min="1"
+                      max="1000"
                       value={defaultLimit}
                       onChange={(event) => setDefaultLimit(event.target.value)}
+                      aria-describedby="nl2sql-default-limit-hint"
                       className={INPUT_CLASS}
                     />
+                    <p id="nl2sql-default-limit-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                      {t("settings.productMcp.defaultLimitHint")}
+                    </p>
                   </Field>
                 ) : null}
               </fieldset>
+              {settings.data ? <ProductMcpAuthStatus settings={settings.data} /> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               {canManage ? (
                 <Button onClick={save} loading={mutation.isPending} icon={Save}>
@@ -2076,6 +2093,67 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       </div>
 </PageBody>
     </>
+  );
+}
+
+/** 未設定のときだけ、何が足りずどう直すかを示す（設定済みの常設 success バナーは出さない）。 */
+function ProductMcpNotice({ settings }: { settings?: ProductMcpSettings }) {
+  if (!settings) {
+    return null;
+  }
+  const missing = [
+    settings.configured ? null : t("settings.productMcp.missingUrl"),
+    settings.service_token_configured ? null : t("settings.productMcp.missingSecret"),
+  ].filter((item): item is string => item !== null);
+  if (missing.length === 0) {
+    return null;
+  }
+  return (
+    <Banner severity="warning" title={t("settings.productMcp.notReady")}>
+      {/* 環境変数名は長く区切りがないため、狭い幅では任意の位置で折り返す。 */}
+      <ul className="list-disc space-y-1 pl-5 break-words [overflow-wrap:anywhere]">
+        {missing.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </Banner>
+  );
+}
+
+/** サービス間認証の状態（.env で管理。値は表示しない）。 */
+function ProductMcpAuthStatus({ settings }: { settings: ProductMcpSettings }) {
+  const rows = [
+    {
+      id: "secret",
+      label: t("settings.productMcp.secret"),
+      hint: t("settings.productMcp.secretHint"),
+      configured: settings.service_token_configured,
+      missingVariant: "warning" as const,
+    },
+    {
+      id: "service-user",
+      label: t("settings.productMcp.serviceUser"),
+      hint: t("settings.productMcp.serviceUserHint"),
+      configured: settings.service_user_configured,
+      missingVariant: "neutral" as const,
+    },
+  ];
+  return (
+    <ul aria-label={t("settings.productMcp.authStatus")} className="divide-y divide-border rounded-md border border-border">
+      {rows.map((row) => (
+        <li key={row.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-0.5 break-words [overflow-wrap:anywhere]">
+            <p className="text-sm font-medium text-fg">{row.label}</p>
+            <p className="text-xs leading-5 text-fg-muted">{row.hint}</p>
+          </div>
+          <StatusBadge
+            className="shrink-0 self-start"
+            variant={row.configured ? "success" : row.missingVariant}
+            label={row.configured ? t("common.configured") : t("common.notConfigured")}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -6441,21 +6519,6 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
         />
       </CardContent>
     </Card>
-  );
-}
-
-function ConnectionBanner({ settings }: { settings?: ExternalServiceSettings }) {
-  if (!settings) {
-    return null;
-  }
-  return (
-    <Banner severity={settings.configured ? "success" : "warning"}>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span>{settings.configured ? t("common.configured") : t("common.notConfigured")}</span>
-        <span>{`${t("settings.timeout")}: ${settings.timeout_seconds}`}</span>
-        <span>{`${t("settings.apiKey")}: ${settings.api_key_configured ? t("common.configured") : t("common.notConfigured")}`}</span>
-      </div>
-    </Banner>
   );
 }
 

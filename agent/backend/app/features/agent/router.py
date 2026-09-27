@@ -54,7 +54,8 @@ from pr_system_settings.oci_auth import (
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
 from app.features.agent.config import runtime_config_store
@@ -149,6 +150,7 @@ from app.security.dependencies import (
     permission_route_path,
     session_principal,
 )
+from app.security.domain import Principal
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 
@@ -171,6 +173,35 @@ class SettingsPatch(BaseModel):
     timeout_seconds: float | None = None
     default_limit: int | None = None
     session_id: str | None = None
+
+
+class ProductMcpSettings(BaseModel):
+    """外部 RAG / NL2SQL（各製品の MCP）の接続設定。token は呼び出しごとに作る（#233）。"""
+
+    mcp_url: str | None = None
+    timeout_seconds: float
+    default_limit: int | None = None
+    configured: bool = False
+    # 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET（値は返さない）。
+    service_token_configured: bool = False
+    # Run の利用者がいない呼び出しで使う AGENT_MCP_SERVICE_USER_LOGIN_ID（値は返さない）。
+    service_user_configured: bool = False
+
+
+class ProductMcpSettingsPatch(BaseModel):
+    mcp_url: str | None = None
+    timeout_seconds: float | None = Field(default=None, gt=0, le=600)
+    default_limit: int | None = Field(default=None, ge=1, le=1000)
+
+    @field_validator("mcp_url")
+    @classmethod
+    def _validate_mcp_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if value and not re.match(r"^https?://[^\s/]+", value):
+            raise ValueError("MCP の URL は http:// または https:// で始めてください。")
+        return value
 
 
 class ExternalMcpServerSettings(ExternalServiceSettings):
@@ -1375,10 +1406,21 @@ async def list_external_mcp_tool_definitions(
 @router.post("/agent/tools/invoke", response_model=ApiResponse[ToolResult])
 async def invoke_tool(
     call: ToolCall,
+    request: Request,
     _: None = Depends(require_operator),
 ) -> ApiResponse[ToolResult]:
-    """単発ツール呼び出し。承認が必要な場合は approval_required を返す。"""
-    return ApiResponse(data=tool_registry.invoke(call, policy=_configured_tool_policy()))
+    """単発ツール呼び出し。承認が必要な場合は approval_required を返す。
+
+    RAG / NL2SQL の MCP のツールは、呼び出したログイン中の利用者として呼ぶ（#233）。
+    """
+    context = ToolInvocationContext(
+        trace_id=call.trace_id, user_uuid=_run_creator_user_uuid(request)
+    )
+    return ApiResponse(
+        data=await run_in_threadpool(
+            tool_registry.invoke, call, policy=_configured_tool_policy(), context=context
+        )
+    )
 
 
 def _binding_token_env_name(binding_id: str) -> str:
@@ -1487,10 +1529,15 @@ async def control_plane_mcp(
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
             return _json_rpc_error(request_id, -32602, "arguments must be an object")
-        result = tool_registry.invoke(
+        # Binding の MCP は Run と結びつかない（Runtime は Run の ID を送らない）。RAG / NL2SQL の
+        # ツールは Run の利用者ではなく、サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）で
+        # 呼ぶ（#233）。
+        # ツールは外部の HTTP を同期で待つため、event loop を止めないよう threadpool で実行する。
+        result = await run_in_threadpool(
+            tool_registry.invoke,
             ToolCall(name=name, arguments=arguments),
             policy=_configured_tool_policy(),
-            context=ToolInvocationContext(agent_id=binding.agent_id),
+            context=ToolInvocationContext(agent_id=binding.agent_id, user_uuid=None),
         )
         body = result.model_dump(mode="json")
         return {
@@ -1796,7 +1843,11 @@ async def create_run(
             response.headers["Warning"] = (
                 '299 - "Agent Runtime v1 is deprecated; migrate to Skill + Runtime Binding"'
             )
-            return ApiResponse(data=runtime_repository.create_run(run_request))
+            return ApiResponse(
+                data=runtime_repository.create_run(
+                    run_request, created_by_user_uuid=_run_creator_user_uuid(request)
+                )
+            )
         agent = _control_plane_agent(run_request.agent_id)
         if agent.migration_required:
             raise HTTPException(
@@ -1857,6 +1908,7 @@ async def create_run(
             runtime_id=runtime.id,
             binding_id=binding.id,
             capabilities=runtime.capabilities.model_dump(mode="json"),
+            created_by_user_uuid=_run_creator_user_uuid(request),
         )
         if get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process":
             background_tasks.add_task(
@@ -2193,7 +2245,11 @@ async def replay_run(
                     "capability": "replay",
                 },
             )
-        return ApiResponse(data=runtime_repository.replay_run(run_id))
+        return ApiResponse(
+            data=runtime_repository.replay_run(
+                run_id, created_by_user_uuid=_run_creator_user_uuid(request)
+            )
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
 
@@ -2296,52 +2352,53 @@ async def add_memory(
     )
 
 
-@router.get("/settings/external-rag", response_model=ApiResponse[ExternalServiceSettings])
-async def get_external_rag_settings() -> ApiResponse[ExternalServiceSettings]:
-    config = runtime_config_store.get_rag()
-    return ApiResponse(
-        data=ExternalServiceSettings(
-            base_url=config.base_url,
-            api_key_configured=bool(config.api_key),
-            timeout_seconds=config.timeout_seconds,
-            configured=bool(config.base_url),
-        )
+def _product_mcp_settings(
+    mcp_url: str | None, timeout_seconds: float, default_limit: int | None = None
+) -> ProductMcpSettings:
+    settings = get_settings()
+    return ProductMcpSettings(
+        mcp_url=mcp_url,
+        timeout_seconds=timeout_seconds,
+        default_limit=default_limit,
+        configured=bool(mcp_url),
+        service_token_configured=len(settings.app_service_token_secret.strip()) >= 32,
+        service_user_configured=bool(settings.agent_mcp_service_user_login_id.strip()),
     )
 
 
-@router.patch("/settings/external-rag", response_model=ApiResponse[ExternalServiceSettings])
+@router.get("/settings/external-rag", response_model=ApiResponse[ProductMcpSettings])
+async def get_external_rag_settings() -> ApiResponse[ProductMcpSettings]:
+    config = runtime_config_store.get_rag()
+    return ApiResponse(data=_product_mcp_settings(config.mcp_url, config.timeout_seconds))
+
+
+@router.patch("/settings/external-rag", response_model=ApiResponse[ProductMcpSettings])
 async def patch_external_rag_settings(
-    patch: SettingsPatch,
+    patch: ProductMcpSettingsPatch,
     _: None = Depends(require_admin),
-) -> ApiResponse[ExternalServiceSettings]:
+) -> ApiResponse[ProductMcpSettings]:
     runtime_config_store.patch_rag(
-        base_url=patch.base_url,
+        mcp_url=patch.mcp_url,
         timeout_seconds=patch.timeout_seconds,
     )
     return await get_external_rag_settings()
 
 
-@router.get("/settings/external-nl2sql", response_model=ApiResponse[ExternalServiceSettings])
-async def get_external_nl2sql_settings() -> ApiResponse[ExternalServiceSettings]:
+@router.get("/settings/external-nl2sql", response_model=ApiResponse[ProductMcpSettings])
+async def get_external_nl2sql_settings() -> ApiResponse[ProductMcpSettings]:
     config = runtime_config_store.get_nl2sql()
     return ApiResponse(
-        data=ExternalServiceSettings(
-            base_url=config.base_url,
-            api_key_configured=bool(config.api_key),
-            timeout_seconds=config.timeout_seconds,
-            default_limit=config.default_limit,
-            configured=bool(config.base_url),
-        )
+        data=_product_mcp_settings(config.mcp_url, config.timeout_seconds, config.default_limit)
     )
 
 
-@router.patch("/settings/external-nl2sql", response_model=ApiResponse[ExternalServiceSettings])
+@router.patch("/settings/external-nl2sql", response_model=ApiResponse[ProductMcpSettings])
 async def patch_external_nl2sql_settings(
-    patch: SettingsPatch,
+    patch: ProductMcpSettingsPatch,
     _: None = Depends(require_admin),
-) -> ApiResponse[ExternalServiceSettings]:
+) -> ApiResponse[ProductMcpSettings]:
     runtime_config_store.patch_nl2sql(
-        base_url=patch.base_url,
+        mcp_url=patch.mcp_url,
         timeout_seconds=patch.timeout_seconds,
         default_limit=patch.default_limit,
     )
@@ -3011,6 +3068,16 @@ def _request_roles(request: Request) -> set[str]:
     if _trusted_policy_required(settings):
         return set()
     return _roles_from_headers(request.headers, roles_header=settings.agent_rbac_roles_header)
+
+
+def _run_creator_user_uuid(request: Request) -> str | None:
+    """Run を作る利用者（#233）。
+
+    Cookie のセッションの利用者と、local のローカル利用者（`request.state.principal`）。
+    外部連携（header / JWT / 外部 policy の RBAC）の request には利用者がいないので None。
+    """
+    principal = getattr(request.state, "principal", None)
+    return principal.user_uuid if isinstance(principal, Principal) else None
 
 
 def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
