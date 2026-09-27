@@ -233,7 +233,12 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#runtime-snapshot-confirm").fill("REPLACE");
       await sidebarLink(page, "/runs").click();
       await expect(page).toHaveURL(/\/runs$/);
+      // URL が変わっても、遅い環境では Run の画面が出るまで前の画面が残る。画面が切り替わって
+      // スナップショット画面が unmount されたことを確かめてから戻る（#254）。
+      await expect(page.locator("#run-goal")).toBeVisible();
+      await expect(page.locator("#runtime-snapshot-confirm")).toHaveCount(0);
       await sidebarLink(page, "/settings/runtime-snapshot").click();
+      await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);
       await expect(page.locator("#runtime-snapshot-confirm")).toHaveValue("");
 
       const stored = await page.evaluate(() =>
