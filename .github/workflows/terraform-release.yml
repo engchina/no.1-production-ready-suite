@@ -1,25 +1,19 @@
 name: Terraform Release Package
 
-# monorepo の release は製品ごと（#94）。tag は <製品>-v*（nl2sql-v* / agent-v* / rag-v*）で、version も製品ごとに独立する。
-# 各製品は <製品>/terraform/stack と、次の 2 本（必須）+ 1 本（任意）を用意する。
-#   scripts/package_terraform_stack.py              → dist/production-ready-<製品>-terraform-stack.zip
-#   scripts/verify_terraform_stack_contract.py <zip> → stack の契約検証
-#   scripts/verify_terraform_release_extras.py <zip> → 製品固有の追加検証（あれば実行）
+# OCI Resource Manager の統合 stack（terraform/stack、#217）の release。tag は suite-v*（例: suite-v0.1.0）。
+# ADB 1つと、選んだ製品（RAG / NL2SQL / Agent）ごとの Compute を1つの zip で配る。
+# 製品ごとの release（<製品>-v*、#94）は作らない（既存の release は残す）。
+#   terraform/scripts/package_stack.py              → terraform/dist/production-ready-suite-terraform-stack.zip
+#   terraform/scripts/verify_stack_contract.py <zip> → stack の契約検証
 
 on:
   push:
     tags:
-      - "nl2sql-v*"
-      - "agent-v*"
-      - "rag-v*"
+      - "suite-v*"
   workflow_dispatch:
     inputs:
-      products:
-        description: "Release する製品（カンマ区切り。例: nl2sql,agent,rag）"
-        required: true
-        type: string
       version:
-        description: "version（例: v0.1.33）。製品ごとに <製品>-<version> の tag と release を作る"
+        description: "version（例: v0.1.0）。suite-<version> の tag と release を作る"
         required: true
         type: string
 
@@ -27,62 +21,33 @@ permissions:
   contents: write
 
 jobs:
-  resolve:
-    name: Resolve release targets
+  package:
+    name: Package and publish
     runs-on: ubuntu-latest
-    outputs:
-      targets: ${{ steps.targets.outputs.targets }}
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      PACKAGE_NAME: production-ready-suite-terraform-stack.zip
     steps:
-      - name: Resolve products and tags
-        id: targets
+      - name: Resolve release tag
+        working-directory: .
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_PRODUCTS: ${{ inputs.products }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-          import re
+          if [ "$EVENT_NAME" = "push" ]; then
+            tag="$REF_NAME"
+          else
+            tag="suite-$(printf '%s' "$INPUT_VERSION" | tr -d '[:space:]')"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^suite-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::invalid release tag: $tag (expected suite-vX.Y.Z)"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
 
-          # stack を持つ製品だけを許可する。
-          allowed = {"nl2sql", "agent", "rag"}
-          if os.environ["EVENT_NAME"] == "push":
-              product, _, version = os.environ["REF_NAME"].partition("-")
-              pairs = [(product, version)]
-          else:
-              version = os.environ["INPUT_VERSION"].strip()
-              products = [p.strip() for p in os.environ["INPUT_PRODUCTS"].split(",") if p.strip()]
-              pairs = [(p, version) for p in dict.fromkeys(products)]
-          targets = []
-          for product, version in pairs:
-              if product not in allowed:
-                  raise SystemExit(f"unknown product: {product} (allowed: {sorted(allowed)})")
-              if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
-                  raise SystemExit(f"invalid version: {version} (expected vX.Y.Z)")
-              targets.append({"product": product, "tag": f"{product}-{version}"})
-          if not targets:
-              raise SystemExit("no release targets")
-          print("targets=" + json.dumps(targets))
-          PY
-
-  package:
-    name: Package and publish (${{ matrix.target.tag }})
-    needs: resolve
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ${{ fromJSON(needs.resolve.outputs.targets) }}
-    defaults:
-      run:
-        working-directory: ${{ matrix.target.product }}
-    env:
-      PRODUCT: ${{ matrix.target.product }}
-      RELEASE_TAG: ${{ matrix.target.tag }}
-      PACKAGE_NAME: production-ready-${{ matrix.target.product }}-terraform-stack.zip
-    steps:
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -96,36 +61,32 @@ jobs:
         with:
           terraform_version: "1.5.7"
 
+      # stack が cloud-init から呼ぶ各製品の init_script.sh を検証する。
       - name: Test deployment scripts
+        working-directory: .
         run: |
-          for script in init_script.sh scripts/*.sh; do
-            [ -f "$script" ] && bash -n "$script"
-          done
-          for test in scripts/tests/*.test.sh; do
-            [ -f "$test" ] || continue
-            echo "::group::$test"
-            bash "$test"
+          bash -n terraform/stack/extract_wallet.sh
+          for product in rag nl2sql agent; do
+            bash -n "$product/init_script.sh"
+            echo "::group::$product/scripts/tests/init-script-deployment.test.sh"
+            (cd "$product" && bash scripts/tests/init-script-deployment.test.sh)
             echo "::endgroup::"
           done
 
       - name: Format check
-        run: terraform fmt -check -recursive terraform/stack
+        run: terraform fmt -check -recursive stack
 
       - name: Validate Terraform
-        working-directory: ${{ matrix.target.product }}/terraform/stack
+        working-directory: terraform/stack
         run: |
           terraform init -backend=false
           terraform validate
 
       - name: Build Terraform stack package
-        run: python scripts/package_terraform_stack.py
+        run: python scripts/package_stack.py
 
       - name: Verify stack contract
-        run: |
-          python scripts/verify_terraform_stack_contract.py "dist/$PACKAGE_NAME"
-          if [ -f scripts/verify_terraform_release_extras.py ]; then
-            python scripts/verify_terraform_release_extras.py "dist/$PACKAGE_NAME"
-          fi
+        run: python scripts/verify_stack_contract.py "dist/$PACKAGE_NAME"
 
       - name: Write checksum
         run: |
@@ -142,7 +103,7 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --target "$TARGET_SHA" \
               --title "$RELEASE_TAG" \
-              --notes "OCI Resource Manager Terraform stack package for Production Ready ${PRODUCT}."
+              --notes "OCI Resource Manager Terraform stack package for the Production Ready Suite (RAG / NL2SQL / Agent Control Plane on one shared Autonomous AI Database)."
           fi
           gh release upload "$RELEASE_TAG" \
             "dist/$PACKAGE_NAME" \

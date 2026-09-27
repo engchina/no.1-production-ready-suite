@@ -30,10 +30,24 @@ write_files:
     encoding: "base64"
     content: |
       ${wallet_content}
+%{ if product == "rag" ~}
   - path: "/u01/aipoc/props/compose_services.txt"
     permissions: "0644"
     content: |
       ${compose_services}
+%{ endif ~}
+%{ if product == "agent" ~}
+  - path: "/u01/aipoc/props/basic_auth_password"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${basic_auth_password}
+  - path: "/u01/aipoc/props/basic_auth_user.txt"
+    permissions: "0644"
+    content: |
+      ${basic_auth_user}
+%{ endif ~}
   - path: "/u01/aipoc/props/adb_name.txt"
     permissions: "0644"
     content: |
@@ -58,7 +72,7 @@ write_files:
     permissions: "0644"
     content: |
       ${application_port}
-  - path: "/u01/aipoc/bootstrap-rag.sh"
+  - path: "/u01/aipoc/bootstrap-${product}.sh"
     permissions: "0755"
     owner: "root:root"
     content: |
@@ -68,13 +82,13 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
 
       APP_ROOT="/u01/aipoc"
-      # RAG と共有 platform は monorepo の rag/ と platform/ にあるため、clone は1回だけ行う。
+      # 製品（${product}/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
       SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"
-      APP_REPO_DIR="$${SUITE_REPO_DIR}/rag"
+      APP_REPO_DIR="$${SUITE_REPO_DIR}/${product}"
       APPLICATION_PORT="${application_port}"
 
       log() {
-        printf '[rag-bootstrap] %s\n' "$*"
+        printf '[${product}-bootstrap] %s\n' "$*"
       }
 
       trap 'status=$?; log "Bootstrap failed at line $${LINENO} with status $${status}: $${BASH_COMMAND}"; exit "$${status}"' ERR
@@ -134,4 +148,4 @@ write_files:
       run_application_init
       log "Deployment finished. Nginx listens on TCP port $${APPLICATION_PORT}."
 runcmd:
-  - "nohup bash /u01/aipoc/bootstrap-rag.sh >> /var/log/cloud-init-custom.log 2>&1 &"
+  - "nohup bash /u01/aipoc/bootstrap-${product}.sh >> /var/log/cloud-init-custom.log 2>&1 &"

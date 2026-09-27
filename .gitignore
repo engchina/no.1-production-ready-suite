@@ -7,3 +7,13 @@ __pycache__/
 
 # pr_system_settings が .env の保存時に作る排他用の lock ファイル
 ..env.lock
+
+# 統合 Terraform stack（terraform/stack）の作業ファイルと package 出力
+terraform/dist/
+terraform/stack/.terraform/
+terraform/stack/.terraform.lock.hcl
+terraform/stack/*.tfstate
+terraform/stack/*.tfstate.*
+terraform/stack/*.tfvars
+terraform/stack/wallet*.zip
+terraform/stack/wallet_extracted/

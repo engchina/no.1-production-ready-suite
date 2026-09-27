@@ -145,26 +145,26 @@ def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> 
 
 def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    locals_tf = (repo_root.parent / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
     init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
 
-    assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" in _terraform_env_body(
-        "backend_env"
-    )
-    assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in _terraform_env_body("platform_env")
-    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in _terraform_env_body("platform_env")
-    assert "platform_env        = base64gzip(local.platform_env)" in locals_tf
+    backend_env = _terraform_env_body("nl2sql_backend_env")
+    platform_env = _terraform_env_body("platform_env")
+    assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}" in backend_env
+    assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in platform_env
+    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in platform_env
+    assert "platform_env        = base64gzip(local.platform_envs[product])" in locals_tf
     assert '"${app_root}/props/platform.env" "${platform_repo_dir}/.env"' in init_script
     assert "instantclient" not in init_script
     assert "instantclient" not in dockerfile
 
 
 def _terraform_env_body(name: str) -> str:
-    """locals.tf の `<name> = <<-EOT` heredoc 本文だけを取り出す。"""
+    """統合 stack（#217）の locals.tf から `<name> = <<-EOT` heredoc 本文だけを取り出す。"""
     repo_root = Path(__file__).resolve().parents[2]
-    locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
-    _, _, after = locals_tf.partition(f"{name} = <<-EOT\n")
+    locals_tf = (repo_root.parent / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
+    _, _, after = locals_tf.partition(f" {name} = <<-EOT\n")
     assert after, f"locals.tf に {name} heredoc が見つかりません。"
     body, _, _ = after.partition("\nEOT")
     return body
@@ -180,8 +180,8 @@ def _rendered_keys(body: str) -> set[str]:
 
 def test_terraform_backend_env_renders_select_ai_credential_name() -> None:
     """Select AI credential 名は env 専用キーのため Terraform が書き込む必要がある。"""
-    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_env_body("backend_env")
-    assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in _terraform_env_body("backend_env")
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_env_body("nl2sql_backend_env")
+    assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in _terraform_env_body("nl2sql_backend_env")
 
 
 def test_terraform_env_keys_are_known_settings_in_the_right_file() -> None:
@@ -190,8 +190,11 @@ def test_terraform_env_keys_are_known_settings_in_the_right_file() -> None:
     未知キーや置き場所の誤りは audit の error になる（#211）。
     """
     platform_keys, product_keys = settings_env_keys()
-    backend_keys = _rendered_keys(_terraform_env_body("backend_env"))
-    platform_env_keys = _rendered_keys(_terraform_env_body("platform_env"))
+    backend_keys = _rendered_keys(_terraform_env_body("nl2sql_backend_env"))
+    # 共通部分（全製品）と NL2SQL の Compute だけの差分（構成管理者など）が platform.env。
+    platform_env_keys = _rendered_keys(_terraform_env_body("platform_env")) | _rendered_keys(
+        _terraform_env_body("nl2sql")
+    )
 
     assert backend_keys, "backend_env から key を抽出できませんでした。"
     assert platform_env_keys, "platform_env から key を抽出できませんでした。"

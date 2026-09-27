@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OCI Resource Manager stack（rag/terraform/stack）の cloud-init から呼ばれる Compute 初期化スクリプト。
+# OCI Resource Manager の統合 stack（terraform/stack、#217）の cloud-init から呼ばれる rag の Compute 初期化スクリプト。
 # RAG は rag/docker-compose.yml で動かす（parser / 前処理は独立したマイクロサービスのため）。
 #   - backend / ingestion-worker / 前処理 / CPU parser: Docker Compose（backend は 127.0.0.1:8000 だけに公開）
 #   - frontend: node の container で静的 build し、host の Nginx が配信して /api/ を backend へ proxy する
