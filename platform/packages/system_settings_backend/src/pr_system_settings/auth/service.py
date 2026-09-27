@@ -46,6 +46,7 @@ from .errors import (
     SecurityNotFound,
 )
 from .passwords import hash_password, verify_password
+from .service_token import verify_service_token
 from .store import PLATFORM_AUTH_TABLES, PRODUCT_ROLE_PERMISSION_TABLES, AuthStore
 
 logger = logging.getLogger(__name__)
@@ -741,6 +742,22 @@ class AuthService:
                 last_seen_at=current,
             ),
         )
+
+    def authenticate_service_token(
+        self, token: str, *, audience: str
+    ) -> tuple[Principal, dict[str, Any]]:
+        """サービストークン（#230）の `sub` の利用者として、現在の権限で principal を作る。"""
+        secret = str(getattr(self.settings, "app_service_token_secret", "") or "")
+        claims = verify_service_token(secret, token, audience=audience)
+        try:
+            principal = self.principal_for_worker(str(claims["sub"]))
+        except SecurityApiError as exc:
+            if exc.status_code != 403:
+                raise
+            raise SecurityApiError(
+                403, "呼び出し元の利用者は無効か、初回パスワード変更が済んでいません。"
+            ) from None
+        return principal, claims
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
         roles = [self.get_role(role_id) for role_id in user.role_ids]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any, Protocol
 
 from fastapi import HTTPException, Request
@@ -69,6 +70,8 @@ async def authorize_request(
     enter_actor: Callable[[Principal], Any],
     exit_actor: Callable[[Any], None],
     unclassified_permission: str = UNCLASSIFIED_PERMISSION,
+    service_token_paths: Collection[str] = (),
+    service_token_audience: str = "",
 ) -> AsyncIterator[None]:
     """1 リクエストの認可。`async with` の中で route を実行する。
 
@@ -77,6 +80,9 @@ async def authorize_request(
     - 公開 path: そのまま通す。
     - それ以外: session Cookie を検証し、更新系は CSRF を照合し、強制パスワード変更中は
       `authenticated_without_permission` 以外を拒否し、manifest の権限を確認する（登録外は拒否）。
+    - `service_token_paths`（例: MCP の `/mcp`）: Cookie の代わりに
+      `Authorization: Bearer <サービストークン>` の `sub` の利用者として認証する（#230）。
+      Cookie を使わないので CSRF は照合しない。claims は `request.state.service_token_claims`。
     """
     if settings.local_debug_enabled:
         principal = local_debug_principal()
@@ -94,11 +100,16 @@ async def authorize_request(
     if route_path in public_paths:
         yield
         return
-    session_token = request.cookies.get(settings.app_auth_session_cookie_name, "")
     try:
-        principal = await run_sync(service.authenticate_session, session_token)
+        if route_path in service_token_paths:
+            principal = await _authenticate_service_token(
+                request, service=service, run_sync=run_sync, audience=service_token_audience
+            )
+        else:
+            session_token = request.cookies.get(settings.app_auth_session_cookie_name, "")
+            principal = await run_sync(service.authenticate_session, session_token)
         request.state.principal = principal
-        if request.method.upper() not in SAFE_METHODS:
+        if route_path not in service_token_paths and request.method.upper() not in SAFE_METHODS:
             cookie_csrf = request.cookies.get(settings.app_auth_csrf_cookie_name, "")
             header_csrf = request.headers.get("X-CSRF-Token", "")
             await run_sync(service.verify_csrf, principal, cookie_csrf, header_csrf)
@@ -123,6 +134,22 @@ async def authorize_request(
         yield
     finally:
         exit_actor(token)
+
+
+async def _authenticate_service_token(
+    request: Request, *, service: AuthService, run_sync: RunSync, audience: str
+) -> Principal:
+    if not audience:
+        raise ValueError("service_token_audience を指定してください。")
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise SecurityApiError(401, "サービストークンを Authorization header で指定してください。")
+    authenticated: tuple[Principal, dict[str, Any]] = await run_sync(
+        partial(service.authenticate_service_token, token.strip(), audience=audience)
+    )
+    request.state.service_token_claims = authenticated[1]
+    return authenticated[0]
 
 
 def current_principal[P: Principal](request: Request, principal_class: type[P]) -> P:
