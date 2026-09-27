@@ -1,0 +1,632 @@
+{
+  "server": "production-ready-nl2sql",
+  "tools": [
+    {
+      "name": "nl2sql_get_job",
+      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "wait_seconds": {
+            "default": 0,
+            "description": "完了を待つ秒数",
+            "maximum": 45,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "GetJobInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "JobStatus": {
+            "description": "非同期ジョブ状態。",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "error"
+            ],
+            "title": "JobStatus",
+            "type": "string"
+          }
+        },
+        "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/JobStatus"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile Id"
+          },
+          "generated_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generated Sql"
+          },
+          "executable_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Executable Sql"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Explanation"
+          },
+          "is_safe": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Is Safe"
+          },
+          "safety_issues": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Safety Issues",
+            "type": "array"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "returned_count": {
+            "default": 0,
+            "title": "Returned Count",
+            "type": "integer"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "history_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "History Id"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Message"
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "Nl2SqlJobResult",
+        "type": "object"
+      }
+    },
+    {
+      "name": "nl2sql_list_profiles",
+      "description": "利用者が使える業務プロファイル（SQL を生成する対象の範囲）を一覧します。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "業務プロファイル名・説明の絞り込み語",
+            "title": "Query"
+          },
+          "limit": {
+            "default": 20,
+            "description": "返す件数の上限",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ListProfilesInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ProfileItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "category": {
+                "title": "Category",
+                "type": "string"
+              },
+              "description": {
+                "title": "Description",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "category",
+              "description"
+            ],
+            "title": "ProfileItem",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/$defs/ProfileItem"
+            },
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "ListProfilesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "nl2sql_query",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "description": "利用者の質問（日本語）",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "使う業務プロファイルの ID。省略時は既定の業務プロファイル",
+            "title": "Profile Id"
+          },
+          "row_limit": {
+            "default": 100,
+            "description": "取得する行数の上限",
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Row Limit",
+            "type": "integer"
+          },
+          "wait_seconds": {
+            "default": 40,
+            "description": "結果を待つ秒数。過ぎたら pending / running のまま job_id を返す",
+            "maximum": 45,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "QueryInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "JobStatus": {
+            "description": "非同期ジョブ状態。",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "error"
+            ],
+            "title": "JobStatus",
+            "type": "string"
+          }
+        },
+        "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/JobStatus"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile Id"
+          },
+          "generated_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generated Sql"
+          },
+          "executable_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Executable Sql"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Explanation"
+          },
+          "is_safe": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Is Safe"
+          },
+          "safety_issues": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Safety Issues",
+            "type": "array"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "returned_count": {
+            "default": 0,
+            "title": "Returned Count",
+            "type": "integer"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "history_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "History Id"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Message"
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "Nl2SqlJobResult",
+        "type": "object"
+      }
+    },
+    {
+      "name": "nl2sql_recommend_profile",
+      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "description": "利用者の質問（日本語）",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "RecommendProfileInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "RecommendationCandidate": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Reason"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "title": "RecommendationCandidate",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "recommended_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Profile Id"
+          },
+          "rewritten_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewritten Question"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/$defs/RecommendationCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recommended_profile_id",
+          "rewritten_question",
+          "candidates"
+        ],
+        "title": "RecommendProfileOutput",
+        "type": "object"
+      }
+    }
+  ]
+}

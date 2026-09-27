@@ -296,6 +296,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 description="利用できる業務ビュー（ACTIVE）の一覧を返します。",
                 input_model=ListBusinessViewsInput,
                 handler=list_business_views,
+                output_model=ListBusinessViewsOutput,
                 permissions=(BUSINESS_VIEW_READ_PERMISSIONS,),
             ),
             McpTool(
@@ -305,6 +306,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ),
                 input_model=SearchInput,
                 handler=search,
+                output_model=SearchOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(
@@ -315,6 +317,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ),
                 input_model=ChatSendMessageInput,
                 handler=chat_send_message,
+                output_model=ChatSendMessageOutput,
                 permissions=(CHAT_PERMISSIONS,),
                 read_only=False,
             ),
@@ -325,6 +328,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ),
                 input_model=ChatGetConversationInput,
                 handler=chat_get_conversation,
+                output_model=ConversationOutput,
                 permissions=(CHAT_PERMISSIONS,),
             ),
         ],
