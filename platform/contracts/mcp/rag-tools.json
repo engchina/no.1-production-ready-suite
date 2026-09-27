@@ -1,0 +1,208 @@
+{
+  "server": "production-ready-rag",
+  "tools": [
+    {
+      "name": "rag_chat_get_conversation",
+      "description": "自分の会話と、新しいほうから最大 message_limit 件のメッセージを返します。",
+      "inputSchema": {
+        "description": "会話の取得。",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_limit": {
+            "default": 20,
+            "description": "新しいほうから返すメッセージの最大件数。",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Message Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id"
+        ],
+        "title": "ChatGetConversationInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "rag_chat_send_message",
+      "description": "チャットの会話にメッセージを送り、既定のモデルの回答を返します。conversation_id がなければ business_view_id の業務ビューで会話を作ります。",
+      "inputSchema": {
+        "description": "チャットへの送信。`conversation_id` がなければ `business_view_id` で会話を作る。",
+        "properties": {
+          "content": {
+            "description": "送るメッセージ。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続ける会話の id（指定時は業務ビューを無視）。",
+            "title": "Conversation Id"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "新しい会話を作る業務ビューの id。",
+            "title": "Business View Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "新しい会話の名前。",
+            "title": "Title"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "ChatSendMessageInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "rag_list_business_views",
+      "description": "利用できる業務ビュー（ACTIVE）の一覧を返します。",
+      "inputSchema": {
+        "description": "業務ビュー一覧の条件。",
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "名前・説明の部分一致（省略時は全件）。",
+            "title": "Query"
+          },
+          "limit": {
+            "default": 50,
+            "description": "返す最大件数。",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ListBusinessViewsInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "rag_search",
+      "description": "業務ビューのナレッジベースを検索し、根拠（citations）付きの回答を返します。",
+      "inputSchema": {
+        "description": "検索・回答の条件。",
+        "properties": {
+          "query": {
+            "description": "質問文。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "業務ビューの id。参照するナレッジベースと検索・回答設定を使う。",
+            "title": "Business View Id"
+          },
+          "knowledge_base_ids": {
+            "description": "検索するナレッジベースの id（省略時は業務ビューの参照先）。",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Knowledge Base Ids",
+            "type": "array"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索する件数。",
+            "title": "Top K"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "検索フィルター（例: category_name）。",
+            "title": "Filters",
+            "type": "object"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  ]
+}
