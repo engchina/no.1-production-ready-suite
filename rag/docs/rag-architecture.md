@@ -117,6 +117,15 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
    - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は `embedding`、`retrieval`、`rerank`、`generation` などの `started` / `success` / `error` と低機密 attributes を表し、最終 `metadata.diagnostics.stream_stage_timings` には stage 別の ms timing を含める。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。`RAG_STREAM_REALTIME_ENABLED` は廃止予定の互換設定で、検査前出力を有効化しない。
 
+## Agent からの呼び出し（MCP）
+
+Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答。#232）で呼ぶ。製品同士はコードで依存しない。
+
+- 入口と認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=Run の利用者の `user_uuid`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）。Cookie / CSRF は使わない。route manifest では `/mcp` を「認証済みなら通す」とし、権限はツールごとに判定する。
+- 利用者: token の利用者の現在のロール・権限・業務ビュー / ナレッジベースの対象範囲を画面と同じ判定で使う。会話の持ち主・回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
+- ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）、`rag_chat_send_message`（`menu.chat`。既定のモデル 1 系統で回答し、USER / ASSISTANT を保存。会話がなければ業務ビューで作る）、`rag_chat_get_conversation`（`menu.chat`）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
+- チャットの送信は SSE（`POST /api/chat/conversations/{id}/messages/stream`）と MCP で同じ関数（`_prepare_chat_turn` → `_generate_chat_answer`）を使う。
+
 ## ダッシュボード集計
 
 - API: `GET /api/dashboard/summary`
@@ -271,7 +280,7 @@ CREATE TABLE rag_ingestion_audit (
 );
 ```
 
-document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-Tenant-ID` がある場合、raw tenant id は保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる。tenant header がない場合は全体を参照できる。認証済みの上位層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
+document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と業務ビュー / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
 監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context 文字数、RAG 設定 fingerprint を保存する。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 

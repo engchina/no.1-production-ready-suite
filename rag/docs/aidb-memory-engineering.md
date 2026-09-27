@@ -18,11 +18,11 @@ Oracle Developer Day 2026 の「AIDBで進化するRAG / ベクトルを超え�
 
 検索前に、誰のどの業務かを確定する。
 
-- tenant: `X-Tenant-ID` を hash 化し、Oracle document/chunk/knowledge base の predicate に使う。
-- user: `X-User-ID` を hash 化し、監査相関と Agent Memory scope に使う。
+- tenant: production では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす（#225）。local だけは `X-Tenant-ID` を hash 化し、Oracle document/chunk/knowledge base の predicate に使う。
+- user: production はログイン中の利用者（MCP ではサービストークンの利用者。#232）、local は `X-User-ID` を hash 化し、監査相関と Agent Memory scope に使う。
 - role: `X-RAG-Role-ID` を hash 化し、Business Context と Agent Memory scope に使う。
-- agent / thread: `X-RAG-Agent-ID`、`X-RAG-Thread-ID` を hash 化し、Agent Memory の検索・保存 scope に使う。
-- ACL: `X-RAG-Allowed-Document-Ids`、`X-RAG-Allowed-Category-Names`、`X-RAG-Allowed-Knowledge-Base-Ids` を request scope として固定する。
+- agent / thread: `X-RAG-Agent-ID`、`X-RAG-Thread-ID` を hash 化し、Agent Memory の検索・保存 scope に使う。MCP（`POST /api/mcp`。#232）では header ではなくサービストークンの `agent_id` / `run_id` を使う。
+- ACL: production はログイン中の利用者のロールの業務ビュー / ナレッジベースの対象範囲を使う（#214）。local だけは `X-RAG-Allowed-Document-Ids`、`X-RAG-Allowed-Category-Names`、`X-RAG-Allowed-Knowledge-Base-Ids` を request scope として固定する。
 - dataset: `knowledge_base_ids` / `filters.knowledge_base_id` を Oracle knowledge base membership に固定する。
 - source ACL: `filters.source_acl` を chunk metadata `source_acl` に固定する。
 - version: `filters.document_version` を chunk metadata `document_version` に固定する。
