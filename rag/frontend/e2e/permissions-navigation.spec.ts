@@ -182,6 +182,8 @@ test("業務ビューの KB を利用できない検索の 403 は、画面を�
         data: null,
         error_messages: ["この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"],
         warning_messages: [],
+        // 範囲外は経路の権限拒否と区別できる error_code で返る（#224）。
+        error_code: "RAG_SCOPE_FORBIDDEN",
       },
     })
   );

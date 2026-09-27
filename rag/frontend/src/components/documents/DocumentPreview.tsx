@@ -428,8 +428,8 @@ function TextPreview({ url }: { url: string }) {
     fetch(url, { signal: controller.signal, credentials: "same-origin" })
       .then(async (res) => {
         if (!res.ok) {
-          // セッション切れはログインへ。範囲外の 403 はプレビュー内の失敗表示にとどめる（#214）。
-          notifyResponseAuthStatus(res, { inlineForbidden: true });
+          // セッション切れはログインへ。経路の権限拒否以外の 403 はプレビュー内の失敗表示にとどめる（#224）。
+          notifyResponseAuthStatus(res);
           throw new Error(String(res.status));
         }
         const charset = charsetFromContentType(res.headers.get("Content-Type"));

@@ -14,7 +14,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, Response
+from fastapi import Request, Response
 
 from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
@@ -442,7 +442,8 @@ def test_debug_flag_cannot_bypass_auth_outside_local(
             }
         )
         authorization = authorize_api_request(request)
-        with pytest.raises(HTTPException) as error:
+        # 共通認証は error_code を落とさないよう SecurityApiError のまま返す（#224）。
+        with pytest.raises(SecurityApiError) as error:
             await anext(authorization)
         assert error.value.status_code == 401
 

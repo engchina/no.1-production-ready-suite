@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import Request
+from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE
 from starlette.responses import JSONResponse
 
 from app.features.settings import router as settings_router
@@ -1010,13 +1011,14 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
         "get_security_service",
         lambda: viewer_service,
     )
-    with pytest.raises(HTTPException) as no_csrf:
+    with pytest.raises(SecurityApiError) as no_csrf:
         await anext(security_dependencies.authorize_api_request(request(csrf=False)))
     assert no_csrf.value.status_code == 403
 
-    with pytest.raises(HTTPException) as no_execute:
+    with pytest.raises(SecurityApiError) as no_execute:
         await anext(security_dependencies.authorize_api_request(request(csrf=True)))
     assert no_execute.value.status_code == 403
+    assert no_execute.value.code == ROUTE_FORBIDDEN_CODE
 
     executor_service = FakeSecurityService(principal({"menu.settings_system_tables"}))
     monkeypatch.setattr(

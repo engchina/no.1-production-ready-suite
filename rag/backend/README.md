@@ -99,7 +99,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 - セッション: Cookie `rag_session`（HttpOnly）と `rag_csrf`（名前は `RAG_APP_AUTH_SESSION_COOKIE_NAME` / `RAG_APP_AUTH_CSRF_COOKIE_NAME`）。更新系の API は `X-CSRF-Token` header に `rag_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
 - 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
 - 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.business_views.manage`（全業務ビュー・業務ビューの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_BUSINESS_VIEWS` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
-- 対象範囲: 業務ビュー・ナレッジベースを割り当てたロールの利用者は、その業務ビュー・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の業務ビューは 404、業務ビューの KB を 1 つも許可されていない検索・チャットは 403 です。業務ビューで検索させるには、その業務ビューのナレッジベースも許可してください。
+- 対象範囲: 業務ビュー・ナレッジベースを割り当てたロールの利用者は、その業務ビュー・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の業務ビューは 404、業務ビューの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。業務ビューで検索させるには、その業務ビューのナレッジベースも許可してください。
 
 ## Readiness
 

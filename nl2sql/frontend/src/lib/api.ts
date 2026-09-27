@@ -8,7 +8,7 @@ import {
 } from "./database-load-error.ts";
 import { t } from "./i18n";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220）。
-import { csrfHeader, notifyAuthStatus } from "@engchina/production-ready-system-settings";
+import { csrfHeader, notifyAuthResponse } from "@engchina/production-ready-system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
@@ -185,8 +185,14 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
   return recovery;
 }
 
+/**
+ * 応答の 401 / 403 を共通の認証イベントとして通知する。403 は error_code が経路の権限拒否の
+ * ときだけ権限なしの画面へ移し、権限の付与の制限などは画面がその場で表示する（#224）。
+ * 本文を読む前に呼ぶ（本文は消費しない）。
+ */
 function notifyResponseAuthStatus(response: Response) {
-  notifyAuthStatus(response.status, response.headers.get("X-Request-ID") || undefined);
+  if (response.ok) return;
+  void notifyAuthResponse(response);
 }
 
 async function recoverAndRetrySafeRequest(

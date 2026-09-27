@@ -108,14 +108,19 @@ describe("401 / 403 の通知", () => {
 
   it("業務ビュー / KB の範囲外の 403（検索・stream・セキュリティの更新）は画面を移さず理由を返す", async () => {
     const events = stubBrowser();
-    const forbidden = () =>
+    // 範囲外は RAG_SCOPE_FORBIDDEN、権限の付与の制限は SECURITY_PERMISSION_DENIED（#224）。
+    const forbidden = (url: string) =>
       jsonResponse(
-        { data: null, error_messages: ["この業務ビューのナレッジベースを利用する権限がありません。"] },
+        {
+          data: null,
+          error_messages: ["この業務ビューのナレッジベースを利用する権限がありません。"],
+          error_code: url.includes("/security/") ? "SECURITY_PERMISSION_DENIED" : "RAG_SCOPE_FORBIDDEN",
+        },
         403
       );
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockImplementation(() => Promise.resolve(forbidden()))
+      vi.fn().mockImplementation((url: string) => Promise.resolve(forbidden(String(url))))
     );
 
     await expect(api.search({ query: "q" } as never)).rejects.toMatchObject({
@@ -133,7 +138,28 @@ describe("401 / 403 の通知", () => {
       })
     ).rejects.toMatchObject({ status: 403 });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events).toEqual([]);
+  });
+
+  it("経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）の 403 だけ権限なしの画面へ移す", async () => {
+    const events = stubBrowser();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          jsonResponse(
+            { data: null, error_messages: ["この機能を利用する権限がありません。"], error_code: "SECURITY_ROUTE_FORBIDDEN" },
+            403
+          )
+        )
+      )
+    );
+
+    await expect(api.search({ query: "q" } as never)).rejects.toMatchObject({ status: 403 });
+    await expect(streamSearch({ query: "q" } as never, {})).rejects.toBeInstanceOf(ApiError);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["app-auth-forbidden", "app-auth-forbidden"]);
   });
 
   it("stream の 401 はログインへ戻すイベントを出す", async () => {

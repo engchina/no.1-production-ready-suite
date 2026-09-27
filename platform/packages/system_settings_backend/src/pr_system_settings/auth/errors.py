@@ -16,6 +16,15 @@ _SECURITY_ERROR_CODES = {
 }
 
 
+# 経路（API そのもの）の権限拒否。frontend はこのコードのときだけ権限なしの画面へ移し、
+# それ以外の 403（権限の付与の制限・範囲外・CSRF など）はその場で理由を表示する（#224）。
+ROUTE_FORBIDDEN_CODE = "SECURITY_ROUTE_FORBIDDEN"
+ROUTE_UNCLASSIFIED_CODE = "SECURITY_ROUTE_UNCLASSIFIED"
+ROUTE_FORBIDDEN_CODES = frozenset({ROUTE_FORBIDDEN_CODE, ROUTE_UNCLASSIFIED_CODE})
+PASSWORD_CHANGE_REQUIRED_CODE = "SECURITY_PASSWORD_CHANGE_REQUIRED"  # nosec B105 - エラーコード
+CSRF_INVALID_CODE = "SECURITY_CSRF_INVALID"
+
+
 class SecurityApiError(RuntimeError):
     """利用者に見せてよい認証・認可のエラー。router は problem 形式で返す。"""
 

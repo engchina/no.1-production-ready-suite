@@ -16,6 +16,10 @@ from dataclasses import dataclass
 
 from pr_system_settings.auth.dependencies import UNCLASSIFIED_PERMISSION as UNCLASSIFIED_PERMISSION
 
+# 利用者の範囲（業務ビュー / ナレッジベース）外の対象を指定したときの 403 の error_code（#224）。
+# 経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）と違い、frontend はその場で理由を表示する。
+SCOPE_FORBIDDEN_CODE = "RAG_SCOPE_FORBIDDEN"
+
 
 @dataclass(frozen=True, slots=True)
 class PermissionDefinition:

@@ -69,9 +69,8 @@ export async function streamChatMessage(
   );
 
   if (!res.ok || !res.body) {
-    // 401 はログインへ。403 は業務ビューの KB を利用できない理由をチャット内で見せるため、
-    // 権限なしの画面へは移さない（#214）。
-    notifyResponseAuthStatus(res, { inlineForbidden: true });
+    // 401 はログインへ。範囲外の 403（RAG_SCOPE_FORBIDDEN）はチャット内で理由を見せる（#224）。
+    notifyResponseAuthStatus(res);
     let envelope: unknown = null;
     try {
       envelope = await res.json();

@@ -42,11 +42,11 @@ function send(method: "POST" | "PUT" | "PATCH" | "DELETE", body?: unknown, heade
 }
 
 /**
- * ユーザー / ロール / 権限の更新。403 は「自分が持たない権限・対象は付けられない」などの理由を
- * 共通画面のフォームに出すため、権限なしの画面へは移さない（画面自体の権限は開く前に確認済み）。
+ * ユーザー / ロール / 権限の更新。「自分が持たない権限・対象は付けられない」などの 403 は
+ * 経路の権限拒否ではないので、共通画面のフォームに理由を出す（error_code で判定。#224）。
  */
 function mutate<T>(path: string, init: RequestInit): Promise<T> {
-  return request<T>(path, init, { inlineForbidden: true });
+  return request<T>(path, init);
 }
 
 /** 楽観ロックの version を `If-Match` で送る（削除）。 */

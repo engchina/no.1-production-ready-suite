@@ -2997,7 +2997,8 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
             })
           : problemEnvelope({
               status: 403,
-              code: "SECURITY_PERMISSION_DENIED",
+              // 経路の権限拒否（#224）。権限なしの画面へ移る。
+              code: "SECURITY_ROUTE_FORBIDDEN",
               title: "この操作を実行する権限がありません",
               detail: "ロールを作成する権限がありません。システム管理者に確認してください。",
               requestId: "role-forbidden-request",

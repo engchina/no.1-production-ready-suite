@@ -13,6 +13,12 @@ from typing import Any
 
 import pytest
 from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_ID
+from pr_system_settings.auth.errors import (
+    CSRF_INVALID_CODE,
+    PASSWORD_CHANGE_REQUIRED_CODE,
+    ROUTE_FORBIDDEN_CODE,
+    ROUTE_FORBIDDEN_CODES,
+)
 from pytest import MonkeyPatch
 
 from app.api.routes import business_views as business_views_route
@@ -400,7 +406,10 @@ def test_user_without_roles_is_denied_everything_except_auth(
         ("GET", "/api/security/users"),
         ("GET", "/api/settings/oci"),
     ):
-        assert client.request(method, path, headers=headers).status_code == 403, path
+        response = client.request(method, path, headers=headers)
+        assert response.status_code == 403, path
+        # 経路の権限拒否は専用の error_code（frontend は権限なしの画面へ移す。#224）。
+        assert response.json()["error_code"] == ROUTE_FORBIDDEN_CODE, path
 
 
 def test_state_changing_request_requires_csrf_token(
@@ -413,6 +422,7 @@ def test_state_changing_request_requires_csrf_token(
     response = client.post("/api/security/roles", json=body, headers=without_csrf)
     assert response.status_code == 403
     assert "安全性" in response.json()["error_messages"][0]
+    assert response.json()["error_code"] == CSRF_INVALID_CODE
     wrong_csrf = {**headers, "X-CSRF-Token": "tampered"}
     assert client.post("/api/security/roles", json=body, headers=wrong_csrf).status_code == 403
     created = client.post("/api/security/roles", json=body, headers=headers)
@@ -430,6 +440,7 @@ def test_forced_password_change_blocks_other_apis(
     response = client.get("/api/dashboard/summary", headers=headers)
     assert response.status_code == 403
     assert response.json()["error_messages"] == ["初回パスワード変更を完了してください。"]
+    assert response.json()["error_code"] == PASSWORD_CHANGE_REQUIRED_CODE
 
 
 def test_local_mode_uses_all_permissions_without_login() -> None:
@@ -694,6 +705,8 @@ def test_role_access_update_prevents_permission_escalation(
         response = _put_access(headers, role.role_id, permissions=permissions)
         assert response.status_code == 403
         assert "権限" in response.json()["error_messages"][0]
+        # 権限の付与の制限は経路の権限拒否ではない（その場で理由を表示する。#224）。
+        assert response.json()["error_code"] not in ROUTE_FORBIDDEN_CODES
     # 自分の範囲外の業務ビュー / KB は足せない（存在はする ID）。
     assert _put_access(headers, role.role_id, business_view_ids=["bv-2"]).status_code == 403
     assert _put_access(headers, role.role_id, knowledge_base_ids=["kb-2"]).status_code == 403

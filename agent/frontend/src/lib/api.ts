@@ -35,7 +35,7 @@ export type {
   ModelSettingsTestTargetType,
 } from "@engchina/production-ready-system-settings";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #215）。
-import { csrfHeader, notifyAuthStatus, type BaseCurrentUser } from "@engchina/production-ready-system-settings";
+import { csrfHeader, notifyAuthResponse, type BaseCurrentUser } from "@engchina/production-ready-system-settings";
 import type {
   ModelSettingsData,
   ModelSettingsPayload,
@@ -764,11 +764,6 @@ async function apiErrorFrom(response: Response): Promise<ApiError> {
   });
 }
 
-export interface RequestOptions {
-  /** 403 を権限なしの画面へ移すイベントにしない（ユーザー / ロール / 権限の更新のように、理由をその場で見せる API）。 */
-  inlineForbidden?: boolean;
-}
-
 /** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
 function withCsrfHeaders(method: string | undefined, headers: Headers): Headers {
   for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method ?? "GET"))) {
@@ -777,17 +772,12 @@ function withCsrfHeaders(method: string | undefined, headers: Headers): Headers 
   return headers;
 }
 
-/** 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。 */
-function notifyResponseAuthStatus(response: Response, options: RequestOptions): void {
-  if (response.status === 403 && options.inlineForbidden) return;
-  notifyAuthStatus(response.status, response.headers.get("X-Request-ID") || undefined);
-}
 
 /**
  * Cookie セッションで API を呼ぶ（#215）。状態を変える method には CSRF header を付け、
  * 401 / 403 は共通の認証イベントで通知する。
  */
-async function fetchWithSession(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<Response> {
+async function fetchWithSession(path: string, init: RequestInit = {}): Promise<Response> {
   const isFormData = init.body instanceof FormData;
   const headers = new Headers(isFormData ? undefined : { "Content-Type": "application/json" });
   new Headers(init.headers).forEach((value, name) => headers.set(name, value));
@@ -796,13 +786,15 @@ async function fetchWithSession(path: string, init: RequestInit = {}, options: R
     credentials: "same-origin",
     headers: withCsrfHeaders(init.method, headers),
   });
-  if (!response.ok) notifyResponseAuthStatus(response, options);
+  // 403 は error_code が経路の権限拒否のときだけ権限なしの画面へ移す。権限の付与の制限などは
+  // 呼び出した画面がその場で理由を表示する（#224）。本文は消費しない。
+  if (!response.ok) void notifyAuthResponse(response);
   return response;
 }
 
 /** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
-export async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
-  const response = await fetchWithSession(path, init, options);
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetchWithSession(path, init);
   if (!response.ok) {
     throw await apiErrorFrom(response);
   }
