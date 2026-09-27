@@ -54,7 +54,6 @@ services:
       <<: [*parser-service-urls, *platform-env]
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
       RAG_ENVIRONMENT: prod
-      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       PLATFORM_LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
       PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
@@ -81,7 +80,7 @@ services:
     #   - ./docker-compose.yml:/app/docker-compose.yml:ro
     # OCI 設定は権限調整済みの named volume に一度だけ seed して使う。
     volumes:
-      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - /u01/aipoc/wallet:/u01/aipoc/wallet
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
       - ../platform:/u01/production-ready-platform
@@ -108,7 +107,6 @@ services:
     environment:
       <<: [*parser-service-urls, *platform-env]
       RAG_ENVIRONMENT: prod
-      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       PLATFORM_LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
       PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
       RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
@@ -126,7 +124,7 @@ services:
     healthcheck:
       disable: true
     volumes:
-      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - /u01/aipoc/wallet:/u01/aipoc/wallet
       - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/data/production-ready-rag
       - ../platform:/u01/production-ready-platform

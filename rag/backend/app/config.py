@@ -320,11 +320,17 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oracle_user: str = Field(default="")
     oracle_password: str = Field(default="")
     oracle_dsn: str = Field(default="")
-    oracle_client_lib_dir: str = Field(default="/u01/aipoc/instantclient_23_26")
-    oracle_wallet_dir: str = Field(
+    oracle_client_lib_dir: str = Field(
         default="",
         description=(
-            "互換用。Wallet 配置先は PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin へ固定する。"
+            "指定したときだけ Thick mode（Instant Client）で接続する。既定は空で Thin mode。"
+        ),
+    )
+    oracle_wallet_dir: str = Field(
+        default="/u01/aipoc/wallet",
+        description=(
+            "Thin mode の Wallet 配置先。"
+            "Thick mode では PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin を使う。"
         ),
     )
     oracle_wallet_password: str = Field(default="")
@@ -1720,7 +1726,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
     @property
     def oracle_driver_mode(self) -> str:
-        """PLATFORM_ORACLE_CLIENT_LIB_DIR があれば Thick mode で接続する（Wallet の判定用）。"""
+        """既定は Thin mode。PLATFORM_ORACLE_CLIENT_LIB_DIR を指定したときだけ Thick mode。
+
+        Wallet の判定にも使う。
+        """
         return "thick" if self.oracle_client_lib_dir.strip() else "thin"
 
     @property
@@ -1730,7 +1739,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:
-        """参照実装と同じく PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        """Wallet 配置先。
+
+        Thin は PLATFORM_ORACLE_WALLET_DIR、Thick は <CLIENT_LIB_DIR>/network/admin。
+        """
         client_lib_dir = self.oracle_client_lib_dir.strip()
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
