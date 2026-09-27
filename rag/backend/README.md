@@ -99,7 +99,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 `GET /api/ready` は外部 API へ ping せず、デプロイ時に注入される設定を依存グループ単位で検証します。
 
-checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
+checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
 
 ## ダッシュボード
 
