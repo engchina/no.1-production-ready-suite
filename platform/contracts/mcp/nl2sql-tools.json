@@ -1,0 +1,150 @@
+{
+  "server": "production-ready-nl2sql",
+  "tools": [
+    {
+      "name": "nl2sql_get_job",
+      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "wait_seconds": {
+            "default": 0,
+            "description": "完了を待つ秒数",
+            "maximum": 45,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "GetJobInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "nl2sql_list_profiles",
+      "description": "利用者が使える業務プロファイル（SQL を生成する対象の範囲）を一覧します。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "業務プロファイル名・説明の絞り込み語",
+            "title": "Query"
+          },
+          "limit": {
+            "default": 20,
+            "description": "返す件数の上限",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ListProfilesInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "nl2sql_query",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "description": "利用者の質問（日本語）",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "使う業務プロファイルの ID。省略時は既定の業務プロファイル",
+            "title": "Profile Id"
+          },
+          "row_limit": {
+            "default": 100,
+            "description": "取得する行数の上限",
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Row Limit",
+            "type": "integer"
+          },
+          "wait_seconds": {
+            "default": 40,
+            "description": "結果を待つ秒数。過ぎたら pending / running のまま job_id を返す",
+            "maximum": 45,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "QueryInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "nl2sql_recommend_profile",
+      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "description": "利用者の質問（日本語）",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "RecommendProfileInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  ]
+}
