@@ -147,3 +147,74 @@ export {
   type UserManagementApi,
   type UserWithTemporaryPassword,
 } from "./users-roles/types";
+
+// ログイン・パスワード変更・権限なし・ルートの保護・CSRF・401/403 イベント（NL2SQL から移設。#220）
+export {
+  AuthProvider,
+  defaultIdentityKey,
+  useAuth,
+  type AuthContextValue,
+  type AuthProviderProps,
+} from "./auth/AuthProvider";
+export {
+  ForbiddenPage,
+  LoginPage,
+  PasswordChangePage,
+  type AuthBrand,
+  type AuthPageProps,
+  type ForbiddenPageProps,
+  type LoginPageProps,
+  type PasswordChangePageProps,
+} from "./auth/AuthPages";
+export {
+  RequireAuth,
+  useSidebarAccount,
+  type RequireAuthProps,
+  type SidebarAccount,
+} from "./auth/RequireAuth";
+export { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./auth/messages";
+export {
+  AUTH_FORBIDDEN_EVENT,
+  AUTH_UNAUTHORIZED_EVENT,
+  notifyAuthStatus,
+  useForbiddenRedirect,
+  type AuthForbiddenDetail,
+} from "./auth/events";
+export { CSRF_HEADER_NAME, csrfHeader, readCookie } from "./auth/csrf";
+export {
+  createPermissionCheck,
+  expandPermissions,
+  firstAllowedRoute,
+  routePermissionMap,
+  type PermissionRouteItem,
+} from "./auth/permissions";
+export type {
+  AuthApi,
+  AuthRequestOptions,
+  AuthRoutes,
+  AuthStatus,
+  BaseCurrentUser,
+  HasPermission,
+} from "./auth/types";
+
+// 権限管理（ロールごとの機能権限と、製品固有の利用できる対象。NL2SQL から移設。#220）
+export {
+  RolePermissionsPage,
+  effectivePermissionCodes,
+  permissionInheritanceSources,
+  targetItemLabel,
+  type RolePermissionsPageProps,
+} from "./permissions/RolePermissionsPage";
+export {
+  ROLE_PERMISSIONS_MESSAGES,
+  type RolePermissionTargetMessages,
+  type RolePermissionsMessages,
+} from "./permissions/messages";
+export type {
+  PermissionDefinition,
+  PermissionRole,
+  RolePermissionTargetItem,
+  RolePermissionTargetSection,
+  RolePermissionsApi,
+  RolePermissionsDraft,
+} from "./permissions/types";

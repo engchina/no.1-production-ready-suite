@@ -13,7 +13,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
   useNavigationType,
 } from "react-router-dom";
 
@@ -29,6 +28,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 import { useAuth } from "@/features/security/AuthProvider";
+import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 import {
   ROUTE_PERMISSIONS,
   defaultEntryRoute,
@@ -212,19 +212,16 @@ const KEEP_ALIVE_PAGES = [
 ];
 const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.path));
 
+/** 認証画面とルートの保護が使う URL（共通の RequireAuth へ渡す。#220）。 */
+const AUTH_ROUTES = {
+  login: APP_ROUTES.login,
+  passwordChange: APP_ROUTES.passwordChange,
+  forbidden: APP_ROUTES.forbidden,
+};
+
 export function App() {
-  const navigate = useNavigate();
-  useEffect(() => {
-    const handleForbidden = (event: Event) => {
-      const detail = (event as CustomEvent<{ requestId?: string }>).detail;
-      navigate(APP_ROUTES.forbidden, {
-        replace: true,
-        state: { requestId: detail?.requestId },
-      });
-    };
-    window.addEventListener("app-auth-forbidden", handleForbidden);
-    return () => window.removeEventListener("app-auth-forbidden", handleForbidden);
-  }, [navigate]);
+  // API の 403 は共通のイベントで受け、request ID を載せて権限なしの画面へ移す（#220）。
+  useForbiddenRedirect(APP_ROUTES.forbidden);
 
   return (
     <Routes>
@@ -273,32 +270,17 @@ function RouteLoadingFallback() {
 }
 
 function AuthenticatedApplication() {
-  const auth = useAuth();
   const location = useLocation();
+  // 確認中・未認証・強制パスワード変更・権限なしの振り分けは共通の RequireAuth（#220）。
+  return (
+    <RequireAuth routes={AUTH_ROUTES} requiredPermission={ROUTE_PERMISSIONS[location.pathname]}>
+      <AuthorizedApplication />
+    </RequireAuth>
+  );
+}
 
-  if (auth.status === "loading") {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
-        <TimedLoadingState
-          label={t("auth.loading")}
-          operationKey="auth-session"
-          placement="page"
-          testId="auth-session-loading"
-        />
-      </main>
-    );
-  }
-  if (auth.status === "unauthenticated") {
-    return <Navigate to={APP_ROUTES.login} state={{ from: location.pathname }} replace />;
-  }
-  if (auth.user?.force_password_change) {
-    return <Navigate to={APP_ROUTES.passwordChange} replace />;
-  }
-
-  const requiredPermission = ROUTE_PERMISSIONS[location.pathname];
-  if (requiredPermission && !auth.hasPermission(requiredPermission)) {
-    return <Navigate to={APP_ROUTES.forbidden} replace />;
-  }
+function AuthorizedApplication() {
+  const auth = useAuth();
 
   return (
     <AppLayout key={JSON.stringify([auth.user?.user_uuid, auth.user?.permissions, auth.user?.data_entitlements, auth.user?.allowed_profile_ids])}>

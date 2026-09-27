@@ -7,6 +7,8 @@ import {
   type DatabaseOperationalFailure,
 } from "./database-load-error.ts";
 import { t } from "./i18n";
+// Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220）。
+import { csrfHeader, notifyAuthStatus } from "@engchina/production-ready-system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
@@ -131,7 +133,8 @@ export interface ApiRequestOptions {
   headers?: HeadersInit;
 }
 
-const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** NL2SQL の CSRF Cookie 名（backend の `nl2sql_csrf`）。 */
+const CSRF_COOKIE_NAME = "nl2sql_csrf";
 
 export function isAbortError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
@@ -149,25 +152,16 @@ function requestSignal(options: ApiRequestOptions): AbortSignal | undefined {
     : timeoutSignal;
 }
 
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const prefix = `${encodeURIComponent(name)}=`;
-  const item = document.cookie
-    .split(";")
-    .map((value) => value.trim())
-    .find((value) => value.startsWith(prefix));
-  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
-}
-
 let inFlightPersistenceRecovery: Promise<boolean> | null = null;
 
 function recoverPersistenceForSafeRead(): Promise<boolean> {
   if (inFlightPersistenceRecovery) return inFlightPersistenceRecovery;
   let recovery: Promise<boolean>;
   recovery = (async () => {
-    const headers = new Headers({ Accept: "application/json" });
-    const csrfToken = readCookie("nl2sql_csrf");
-    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+    const headers = new Headers({
+      Accept: "application/json",
+      ...csrfHeader(CSRF_COOKIE_NAME, "POST"),
+    });
     try {
       const response = await fetch(PERSISTENCE_RECOVERY_PATH, {
         method: "POST",
@@ -191,19 +185,8 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
   return recovery;
 }
 
-function notifyAuthStatus(response: Response) {
-  if (typeof window === "undefined") return;
-  if (response.status === 401)
-    window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
-  if (response.status === 403) {
-    window.dispatchEvent(
-      new CustomEvent("app-auth-forbidden", {
-        detail: {
-          requestId: response.headers.get("X-Request-ID") || undefined,
-        },
-      }),
-    );
-  }
+function notifyResponseAuthStatus(response: Response) {
+  notifyAuthStatus(response.status, response.headers.get("X-Request-ID") || undefined);
 }
 
 async function recoverAndRetrySafeRequest(
@@ -236,9 +219,8 @@ export async function apiFetch(
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   headers.set("Accept", headers.get("Accept") ?? "application/json");
-  if (UNSAFE_METHODS.has(method)) {
-    const csrfToken = readCookie("nl2sql_csrf");
-    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method))) {
+    headers.set(name, value);
   }
   const requestInit = {
     ...init,
@@ -262,14 +244,14 @@ export async function apiFetch(
         failure,
       );
       if (retried) {
-        notifyAuthStatus(retried);
+        notifyResponseAuthStatus(retried);
         return retried;
       }
       if (failure) reportDatabaseOperationalFailure(failure);
     }
     throw cause;
   }
-  notifyAuthStatus(response);
+  notifyResponseAuthStatus(response);
   if (shouldConfirmDatabaseUnavailable(path, response.status)) {
     let failure: DatabaseOperationalFailure | null = null;
     await confirmDatabaseUnavailable(fetch, (next) => {
@@ -282,7 +264,7 @@ export async function apiFetch(
       failure,
     );
     if (retried) {
-      notifyAuthStatus(retried);
+      notifyResponseAuthStatus(retried);
       return retried;
     }
     if (failure) reportDatabaseOperationalFailure(failure);

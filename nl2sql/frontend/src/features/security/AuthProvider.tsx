@@ -1,129 +1,55 @@
+import type { ReactNode } from "react";
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+  AuthProvider as SharedAuthProvider,
+  useAuth as useSharedAuth,
+  type AuthContextValue,
+  type HasPermission,
+} from "@engchina/production-ready-system-settings";
 
-import { useQueryClient } from "@tanstack/react-query";
 import { bindWorkspaceOwner, clearWorkspaceDrafts } from "@/lib/workspace-drafts";
-
-import { isAbortError } from "@/lib/api";
 import { securityApi } from "./api";
 import { currentUserHasPermission, normalizeMenuPermissions } from "./menu-permissions";
 import type { CurrentUser } from "./types";
 
-type AuthStatus = "loading" | "authenticated" | "unauthenticated";
-
-interface AuthContextValue {
-  status: AuthStatus;
-  user: CurrentUser | null;
-  hasPermission: (permission: string) => boolean;
-  login: (loginUserId: string, password: string) => Promise<CurrentUser>;
-  logout: () => Promise<void>;
-  refresh: () => Promise<void>;
+/**
+ * 利用者と認可が変わったと判断する key。NL2SQL は権限に加えて Data Grant と業務プロファイル利用権限も含め、
+ * どれかが変わったら React Query の cache を破棄する（#220 で共通の AuthProvider に渡す形にした）。
+ */
+export function nl2sqlIdentityKey(user: CurrentUser): string {
+  return JSON.stringify([
+    user.user_uuid,
+    [...user.permissions].sort(),
+    user.data_entitlements,
+    user.allowed_profile_ids,
+  ]);
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+/** 旧コードの読み替えと NL2SQL の権限展開表で判定する（backend の展開前のコードにも対応する）。 */
+export function nl2sqlPermissionCheck(user: CurrentUser): HasPermission {
+  const normalizedPermissions = normalizeMenuPermissions(user.permissions);
+  return (permission) => currentUserHasPermission(user, permission, normalizedPermissions);
+}
 
+/** 作業中の下書きの持ち主を記録し、未認証になったら下書きを消す。 */
+function syncWorkspaceOwner(user: CurrentUser | null) {
+  if (user) bindWorkspaceOwner(window.sessionStorage, user.user_uuid);
+  else clearWorkspaceDrafts(window.sessionStorage);
+}
+
+/** 認証状態。実体は platform の共通 AuthProvider（#220）。 */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const queryClient = useQueryClient();
-  const identity = useRef("");
-  const applyIdentity = useCallback((current: CurrentUser | null) => {
-    const next = current ? JSON.stringify([current.user_uuid, [...current.permissions].sort(), current.data_entitlements, current.allowed_profile_ids]) : "";
-    if (identity.current !== next) {
-      void queryClient.cancelQueries();
-      queryClient.clear();
-      identity.current = next;
-    }
-    try {
-      if (current) bindWorkspaceOwner(window.sessionStorage, current.user_uuid);
-      else clearWorkspaceDrafts(window.sessionStorage);
-    } catch { /* storage が無効でも認証を妨げない */ }
-  }, [queryClient]);
-  const [status, setStatus] = useState<AuthStatus>("loading");
-  const [user, setUser] = useState<CurrentUser | null>(null);
-
-  // state は応答の callback の中だけで更新する（effect から同期的に setState しない）。
-  const refresh = useCallback(
-    (signal?: AbortSignal): Promise<void> =>
-      securityApi.me({ signal }).then(
-        (current) => {
-          if (signal?.aborted) return;
-          applyIdentity(current);
-          setUser(current);
-          setStatus("authenticated");
-        },
-        (cause: unknown) => {
-          if (isAbortError(cause)) return;
-          applyIdentity(null);
-          setUser(null);
-          setStatus("unauthenticated");
-        },
-      ),
-    [applyIdentity],
+  return (
+    <SharedAuthProvider<CurrentUser>
+      api={securityApi}
+      identityKey={nl2sqlIdentityKey}
+      onIdentityChange={syncWorkspaceOwner}
+      createPermissionCheck={nl2sqlPermissionCheck}
+    >
+      {children}
+    </SharedAuthProvider>
   );
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void refresh(controller.signal);
-    return () => controller.abort();
-  }, [refresh]);
-
-  useEffect(() => {
-    const handleUnauthorized = () => {
-      applyIdentity(null);
-      setUser(null);
-      setStatus("unauthenticated");
-    };
-    window.addEventListener("app-auth-unauthorized", handleUnauthorized);
-    return () => window.removeEventListener("app-auth-unauthorized", handleUnauthorized);
-  }, [applyIdentity]);
-
-  const login = useCallback(async (loginUserId: string, password: string) => {
-    const current = await securityApi.login(loginUserId, password);
-    applyIdentity(current);
-    setUser(current);
-    setStatus("authenticated");
-    return current;
-  }, [applyIdentity]);
-
-  const logout = useCallback(async () => {
-    try {
-      await securityApi.logout();
-    } finally {
-      applyIdentity(null);
-      setUser(null);
-      setStatus("unauthenticated");
-    }
-  }, [applyIdentity]);
-
-  const value = useMemo<AuthContextValue>(
-    () => {
-      const normalizedPermissions = user ? normalizeMenuPermissions(user.permissions) : new Set<string>();
-      return {
-        status,
-        user,
-        login,
-        logout,
-        refresh,
-        hasPermission: (permission) => {
-          return currentUserHasPermission(user, permission, normalizedPermissions);
-        },
-      };
-    },
-    [login, logout, refresh, status, user]
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth(): AuthContextValue {
-  const value = useContext(AuthContext);
-  if (!value) throw new Error("AuthProvider が設定されていません。");
-  return value;
+export function useAuth(): AuthContextValue<CurrentUser> {
+  return useSharedAuth<CurrentUser>();
 }

@@ -25,6 +25,8 @@ test("app source has no legacy asterisk required indicator or legend note", () =
     "../src/features/nl2sql/pages/DataManagementPage.tsx",
     "../src/features/nl2sql/pages/ProfileManagementPage.tsx",
     "../src/features/security/AuthPages.tsx",
+    // ログイン・パスワード変更の画面の実体は platform の共通部品（#220）。
+    "../../../platform/packages/system-settings/src/auth/AuthPages.tsx",
     "../src/features/security/SecurityDeepSecPage.tsx",
   ]) {
     assert.doesNotMatch(source(path), /RequiredIndicator|RequiredFieldsNote/u, path);
@@ -47,4 +49,13 @@ test("table import requires table, workbook sheet, file, and confirmation in the
   assert.match(page, /htmlFor="table-import-sheet-name"[\s\S]*required=\{sheetRequired\}/u);
   assert.match(page, /<FileDropzone[\s\S]*label=\{t\("dataTools\.dbAdmin\.file"\)\}[\s\S]*required/u);
   assert.match(page, /fileReady[\s\S]*\(!sheetRequired \|\| Boolean\(sheet\.trim\(\)\)\)[\s\S]*isConfirmed/u);
+});
+
+test("shared auth pages use TextField required semantics instead of hand-written inputs (#220)", () => {
+  const authPages = source("../../../platform/packages/system-settings/src/auth/AuthPages.tsx");
+
+  assert.match(authPages, /<TextField[\s\S]*id="auth-login-user-id"[\s\S]*required[\s\S]*requiredLabel=\{m\.required\}/u);
+  assert.match(authPages, /id: "auth-password-new"/u);
+  assert.match(authPages, /<TextField[\s\S]*id=\{field\.id\}[\s\S]*required[\s\S]*requiredLabel=\{m\.required\}/u);
+  assert.doesNotMatch(authPages, /<input\b/u);
 });

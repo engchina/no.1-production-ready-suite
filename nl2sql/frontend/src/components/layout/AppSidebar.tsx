@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
-import { Bug, KeyRound } from "lucide-react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Bug } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import { useSidebarAccount } from "@engchina/production-ready-system-settings";
 
 import {
   Sidebar as UiSidebar,
@@ -22,8 +23,11 @@ import { NAV_SECTIONS, resolveCollapsedSections } from "./nav-config";
  */
 export function AppSidebar() {
   const { pathname } = useLocation();
-  const navigate = useNavigate();
   const auth = useAuth();
+  // 表示名・ロール・パスワード変更・ログアウトは共通の helper が作る（#220）。
+  const account = useSidebarAccount({
+    routes: { login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange },
+  });
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const savedCollapsedSections = useUiStore((state) => state.collapsedSections);
@@ -36,9 +40,6 @@ export function AppSidebar() {
     (key: string) => setSectionCollapsed(key, !collapsedSections[key]),
     [collapsedSections, setSectionCollapsed]
   );
-  const handleLogout = () => void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
-  const passwordChangeActive =
-    pathname === APP_ROUTES.passwordChange || pathname.startsWith(`${APP_ROUTES.passwordChange}/`);
 
   const sections = useMemo<UiNavSection[]>(
     () =>
@@ -83,28 +84,16 @@ export function AppSidebar() {
       linkComponent={Link}
       labels={labels}
       footer={
-        auth.user ? (
+        account ? (
           <SidebarAccountFooter
-            name={auth.user.display_name}
-            roles={t("auth.sidebar.roles", { roles: auth.user.role_codes.join(", ") })}
+            name={account.name}
+            roles={account.roles}
             collapsed={collapsed}
-            labels={{ logout: t("auth.sidebar.logout"), switchToLight: "", switchToDark: "" }}
+            labels={account.labels}
             // ローカル DEBUG はログインしていないため、パスワード変更・ログアウトの代わりに状態を示す。
-            notice={auth.user.debug_mode ? <DebugModeNotice collapsed={collapsed} /> : undefined}
-            actions={
-              !auth.user.debug_mode && auth.user.password_change_allowed !== false
-                ? [
-                    {
-                      id: "password-change",
-                      label: t("auth.sidebar.password"),
-                      icon: KeyRound,
-                      active: passwordChangeActive,
-                      onClick: () => navigate(APP_ROUTES.passwordChange),
-                    },
-                  ]
-                : []
-            }
-            onLogout={auth.user.debug_mode ? undefined : handleLogout}
+            notice={account.debugMode ? <DebugModeNotice collapsed={collapsed} /> : undefined}
+            actions={account.actions}
+            onLogout={account.onLogout}
           />
         ) : null
       }
