@@ -251,6 +251,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     app_auth_argon2_time_cost: int = Field(default=3)
     app_auth_argon2_memory_kib: int = Field(default=65536)
     app_auth_argon2_parallelism: int = Field(default=4)
+    # Agent が MCP（`POST /api/mcp`）を利用者として呼ぶサービストークンの署名鍵（#230 / #232）。
+    # 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET。空なら MCP は 503 で拒否する。
+    app_service_token_secret: str = Field(default="", repr=False)
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",

@@ -215,6 +215,10 @@ def grants_all_knowledge_bases(codes: Iterable[str]) -> bool:
 
 PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
+# サービストークン（Agent から利用者として呼ぶ。#230 / #232）で認証する path。認証済みなら通し、
+# 権限は MCP のツールごとに判定する（`app.mcp.tools`）。
+SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
+SERVICE_TOKEN_AUDIENCE = "rag"  # nosec B105 - token の audience（呼び先の製品名）で秘密ではない
 
 
 def _any(*codes: str) -> frozenset[str]:
@@ -462,10 +466,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     """method + route template（`/api` なし）→ 許可する権限の集合。
 
-    None は公開 API・ログインだけで使える API。登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
+    None は公開 API・ログインだけで使える API・MCP（ツールごとに権限を判定）。
+    登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
     """
     method = method.upper()
     if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
+        return None
+    if route_path in SERVICE_TOKEN_API_PATHS:
         return None
     exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:

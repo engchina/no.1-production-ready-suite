@@ -177,7 +177,7 @@ RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出
 
 監査ログには query、回答本文、OCR 原文、tenant/user id の raw 値を出さない。query と原本は SHA-256 hash とメタデータのみ、tenant/user id は hash のみを保存し、契約番号・金額・取引先名などの機密業務データをログへ漏らさない。
 
-`X-Tenant-ID` がある request では、document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する。tenant header がない場合は全体を参照できる。認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
+production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X-RAG-Allowed-*` header を使わず、tenant なし（単一 tenant）で動かし、対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決める（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、`X-Tenant-ID` がある request で document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する（tenant header がない場合は全体を参照できる）。同じく local で `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
 
 ## ガードレール
 
