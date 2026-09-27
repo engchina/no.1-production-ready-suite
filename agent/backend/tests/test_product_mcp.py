@@ -511,6 +511,7 @@ def test_access_targets_include_rag_business_views_as_viewer(
     views = {item["id"]: item["name"] for item in body["data"]["business_views"]}
     assert views["bv-sales"] == "営業の業務ビュー"
     assert body["warning_messages"] == []
+    assert body["data"]["business_view_warnings"] == []
     [call] = mcp.calls_of("rag_list_business_views")
     assert call["arguments"] == {"limit": 200}
     # 画面を開いた管理者として RAG を呼ぶ。
@@ -534,5 +535,7 @@ def test_access_targets_warn_when_rag_fails_or_is_not_configured(
         assert "bv-assigned" in view_ids
         assert "bv-sales" not in view_ids
         assert len(body["warning_messages"]) == 1
+        # 画面が候補を出したまま警告を表示できるよう、data にも同じ警告を入れる（#240）。
+        assert body["data"]["business_view_warnings"] == body["warning_messages"]
     assert "RAG の業務ビューを取得できませんでした" in failed["warning_messages"][0]
     assert "設定されていない" in unconfigured["warning_messages"][0]

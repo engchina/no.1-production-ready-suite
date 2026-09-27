@@ -131,7 +131,7 @@ function createState() {
     security: {
       users: clone(SECURITY_USERS),
       roles: [clone(SYSTEM_ADMIN_ROLE), clone(OPERATOR_ROLE)],
-      accessTargets: clone(ACCESS_TARGETS) as { agents: Json[]; business_views: Json[] },
+      accessTargets: clone(ACCESS_TARGETS) as { agents: Json[]; business_views: Json[]; business_view_warnings?: string[] },
     },
   };
 }

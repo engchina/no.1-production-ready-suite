@@ -11,6 +11,7 @@ import {
   permissionInheritanceSources,
   targetItemLabel,
   targetItemsWithCustomIds,
+  targetLoadRows,
   type PermissionDefinition,
   type PermissionRole,
   type RolePermissionTargetSection,
@@ -159,5 +160,17 @@ describe("候補にない ID の直接入力（allowCustomIds。#215）", () => 
     const html = render(<RolePermissionsPage api={api} canManage targets={agentTargets} />);
     expect(html).toContain('data-testid="security-permissions-grid"');
     expect(html).toContain("業務ビュー");
+  });
+});
+
+describe("候補の一部だけ読めた場合（#240）", () => {
+  it("配列は警告なし、{ items, warning } は候補を残して警告を出す", () => {
+    const items = [{ id: "sales", name: "営業" }];
+    expect(targetLoadRows(items)).toEqual({ rows: items, warning: "" });
+    expect(targetLoadRows({ items, warning: "  RAG の業務ビューを読めませんでした。  " })).toEqual({
+      rows: items,
+      warning: "RAG の業務ビューを読めませんでした。",
+    });
+    expect(targetLoadRows({ items: [] })).toEqual({ rows: [], warning: "" });
   });
 });
