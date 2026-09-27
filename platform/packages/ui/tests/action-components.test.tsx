@@ -6,6 +6,8 @@ import {
   BulkSelectionActions,
   ClearActionButton,
   ContentActionBar,
+  FormActionBar,
+  entityActionToFormAction,
 } from "../src";
 
 const noop = () => {};
@@ -101,5 +103,62 @@ describe("ActionResultRegion", () => {
     expect(html).toContain('data-testid="run-region"');
     expect(html).toContain("<p>結果</p>");
     expect(html).not.toContain("aria-busy");
+  });
+});
+
+describe("FormActionBar", () => {
+  it("primary → secondary の順に直置きし、danger は「その他の操作」メニューにまとめる", () => {
+    const html = renderToStaticMarkup(
+      <FormActionBar
+        ariaLabel="ロール編集操作"
+        testId="form-actions"
+        primaryActions={[{ id: "save", label: "保存", onClick: noop }]}
+        secondaryActions={[{ id: "cancel", label: "キャンセル", onClick: noop }]}
+        dangerActions={[{ id: "delete", label: "削除", onClick: noop }]}
+      />
+    );
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="ロール編集操作"');
+    expect(html.indexOf(">保存<")).toBeLessThan(html.indexOf(">キャンセル<"));
+    // danger は閉じたメニューの中にあり、赤いボタンとして直置きしない。
+    expect(html).toContain(">その他の操作<");
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).not.toContain(">削除<");
+  });
+
+  it("メニューの見出しは moreLabel で差し替えられ、danger がなければメニューを出さない", () => {
+    const withLabel = renderToStaticMarkup(
+      <FormActionBar
+        ariaLabel="操作"
+        moreLabel="危険な操作"
+        dangerActions={[{ id: "delete", label: "削除", onClick: noop }]}
+      />
+    );
+    expect(withLabel).toContain(">危険な操作<");
+    const without = renderToStaticMarkup(
+      <FormActionBar ariaLabel="操作" primaryActions={[{ id: "save", label: "保存", onClick: noop }]} />
+    );
+    expect(without).not.toContain('aria-haspopup="menu"');
+  });
+
+  it("entityActionToFormAction は一覧・詳細の EntityAction をそのまま移す", () => {
+    const action = entityActionToFormAction({
+      id: "archive",
+      label: "アーカイブ",
+      onSelect: noop,
+      loading: true,
+      disabled: false,
+      ariaLabel: "ロールをアーカイブ",
+      testId: "archive",
+    });
+    expect(action).toMatchObject({
+      id: "archive",
+      label: "アーカイブ",
+      onClick: noop,
+      loading: true,
+      disabled: false,
+      ariaLabel: "ロールをアーカイブ",
+      testId: "archive",
+    });
   });
 });

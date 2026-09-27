@@ -38,6 +38,12 @@ export {
 } from "./components/ui/confirm-dialog";
 export { ContentActionBar } from "./components/ui/content-action-bar";
 export {
+  FormActionBar,
+  entityActionToFormAction,
+  type FormActionBarProps,
+  type FormActionDescriptor,
+} from "./components/ui/form-action-bar";
+export {
   DisclosureChevron,
   type DisclosureChevronProps,
 } from "./components/ui/disclosure-chevron";

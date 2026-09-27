@@ -35,9 +35,9 @@ import {
   ObjectActionBar,
   type EntityAction,
   FixedSplitPane,
+  FormActionBar,
 } from "@engchina/production-ready-ui";
 
-import { FormActionBar } from "@/components/FormActionBar";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 
 import { PageNotice } from "@/components/page-notice";

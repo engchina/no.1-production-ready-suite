@@ -38,12 +38,13 @@ import {
   ObjectActionBar,
   cn,
   type EntityAction,
+  FormActionBar,
+  entityActionToFormAction,
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { FieldLabel } from "../oci/required-field";
 import { useRequestScope } from "../oci/useRequestScope";
-import { FormActionBar, entityActionToFormAction } from "./FormActionBar";
 import { t } from "./messages";
 import {
   SECURITY_TABLE_ROW_CLASS,

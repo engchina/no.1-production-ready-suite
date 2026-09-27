@@ -28,12 +28,12 @@ import {
   type DataTableColumn,
   type DataTableSort,
   type EntityAction,
+  FormActionBar,
 } from "@engchina/production-ready-ui";
 
 import { formatMessage } from "../auth/messages";
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
-import { FormActionBar } from "../users-roles/FormActionBar";
 import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import {
   SECURITY_LIST_FOCUS_CLASS,
