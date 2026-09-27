@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster, initTheme } from "@engchina/production-ready-ui";
 
 import { App } from "./App";
+import { AuthProvider } from "@/components/security/AuthProvider";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
 // 書体は @fontsource の woff2 を同一 origin で配信する（外部 CDN に依存しない）。
@@ -39,9 +40,12 @@ const router = createBrowserRouter([
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ConfirmProvider labels={{ confirm: "実行", cancel: "キャンセル" }}>
-        <RouterProvider router={router} />
-      </ConfirmProvider>
+      {/* 共通の認証（Cookie セッション。ローカルはログインなしの全権限の利用者。#215）。 */}
+      <AuthProvider>
+        <ConfirmProvider labels={{ confirm: "実行", cancel: "キャンセル" }}>
+          <RouterProvider router={router} />
+        </ConfirmProvider>
+      </AuthProvider>
     </QueryClientProvider>
   </StrictMode>
 );

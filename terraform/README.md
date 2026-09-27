@@ -17,7 +17,7 @@
         ┌───────────────────────┼────────────────────────┐
   deploy_rag              deploy_nl2sql              deploy_agent
   RAG_INSTANCE            NL2SQL_INSTANCE            AGENT_INSTANCE
-  Docker Compose + Nginx  systemd + Nginx            systemd + Nginx（Basic 認証）
+  Docker Compose + Nginx  systemd + Nginx            systemd + Nginx
 ```
 
 ## 配備する製品の選択
@@ -26,8 +26,8 @@ Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql`
 
 - **最低1つは選んでください。** 1つも選ばないと plan が precondition で失敗します。
 - 選んだ製品の入力グループ（`RAG` / `NL2SQL` / `NL2SQL Deep Data Security` / `Agent Control Plane`）だけがフォームに表示されます。
-- 選んだ製品に必要なパスワードは必須です。RAG か NL2SQL を選んだら `app_admin_login_user_password`（構成管理者 `system_admin`、RAG と NL2SQL で共通）、Agent を選んだら `agent_app_basic_auth_password`。
-  選ばなかった製品のパスワードは空で構いません。
+- どの製品を選んでも `app_admin_login_user_password`（構成管理者 `system_admin`、3製品で共通）は必須です。
+  NL2SQL で Deep Data Security を有効にする場合は `nl2sql_oracle_deepsec_data_user_password` も必要です。
 - 後から製品を追加・削除するときは、同じ stack で選択を変えて apply します。選択を外した製品の Compute は削除され、ADB と他製品の Compute はそのまま残ります。
 
 ## Autonomous AI Database（全製品で共有）
@@ -55,7 +55,7 @@ stack は secret を cloud-init に埋め込んで `backend/.env` と共通 `pla
 
 | ファイル | 内容 | 接頭辞 |
 |---|---|---|
-| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・モデル設定の場所、NL2SQL では構成管理者と認証ポリシー）。システム設定画面の保存先でもあるため、既にあれば上書きしない | `PLATFORM_` |
+| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・モデル設定の場所・構成管理者 `PLATFORM_ADMIN_*`・製品ごとの `PLATFORM_AUTH_COOKIE_SECURE`）。システム設定画面の保存先でもあるため、既にあれば上書きしない | `PLATFORM_` |
 | `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
 
 変数名の規則と既存環境の移行は [AGENTS.md](../AGENTS.md) の「設定（`.env`）とデータベース object の命名」と各製品の配備ドキュメントを参照してください。
@@ -104,9 +104,13 @@ sudo systemctl restart production-ready-rag
 
 ### Agent Control Plane（`deploy_agent`）
 
-- Agent には組み込みの login が無いため、Nginx の **HTTP Basic 認証**で UI と API 全体を保護します。
-  `agent_app_basic_auth_user`（既定 `agent_admin`）と `agent_app_basic_auth_password`（12〜64 文字、`"` `'` `:` を含まない）。
-  instance には SHA-512 crypt の hash だけを保存します。`/health` と Binding MCP（`/api/mcp/`）は対象外です。
+- ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
+  ログインし、「ユーザーとロール」でユーザーとロールを作り、「Agent セキュリティ > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
+  エージェント・業務ビューを設定します。`init_script.sh` が `python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
+  Nginx の Basic 認証は廃止しました。Binding MCP（`/api/mcp/`）は従来どおり Binding 固有 token で認証し、ログインは不要です。
+  `agent_app_auth_cookie_secure`（非表示の入力。既定 `false` → `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。
+  画面を使わない外部連携で header / JWT の RBAC を使う場合は、instance の `backend/.env` で `AGENT_RBAC_ENABLED=true` と信頼できる identity を設定します
+  （[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
 - Runtime 連携（任意）: `agent_control_plane_public_base_url`（空なら `http://<Compute の private IP>[:port]/api`）、
   `agent_control_plane_mcp_token_secret`（32 文字以上。空なら Binding MCP は fail closed）。
 - Agent Runtime（OpenClaw / Hermes / DeerFlow）はこの stack では配備しません。起動後に Runtime 画面から登録します。
@@ -124,7 +128,11 @@ sudo systemctl restart production-ready-rag
 sudo tail -f /var/log/agent-init.log
 sudo journalctl -u production-ready-agent-backend -f
 curl -i http://127.0.0.1:8020/api/health
+# 認証・権限のテーブルの作成（冪等）を手動で再実行する
+cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_security_migrate
 ```
+
+既存の Agent の instance（Basic 認証で配備したもの）を更新する手順は [agent/docs/security-rbac.md §8](../agent/docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
 
 ### 全 Compute で共通
 
@@ -173,7 +181,8 @@ CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` 
 | RAG の `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers` | `rag_enable_parser_*` / `rag_enable_oci_cloud_parsers` |
 | NL2SQL の `app_admin_login_user_password` / `oracle_deepsec_enabled` / `oracle_deepsec_data_user_password` | `app_admin_login_user_password`（RAG と共通） / `nl2sql_oracle_deepsec_enabled` / `nl2sql_oracle_deepsec_data_user_password` |
 | NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `nl2sql_app_environment` / `nl2sql_app_auth_cookie_secure` / `app_admin_login_user_id`（RAG と共通） |
-| Agent の `app_basic_auth_user` / `app_basic_auth_password` | `agent_app_basic_auth_user` / `agent_app_basic_auth_password` |
+| Agent の `app_basic_auth_user` / `app_basic_auth_password` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#215） |
+| 統合 stack の `agent_app_basic_auth_user` / `agent_app_basic_auth_password`（output の `agent_basic_auth_user`） | 廃止（`app_admin_login_user_password` を Agent にも使う。#215）。Cookie を HTTPS 限定にする `agent_app_auth_cookie_secure` を新設 |
 | `instance_display_name` / `instance_flex_shape_ocpus` / `instance_flex_shape_memory` / `instance_boot_volume_size` | `<製品>_instance_display_name` / `<製品>_instance_flex_shape_ocpus` / `<製品>_instance_flex_shape_memory` / `<製品>_instance_boot_volume_size` |
 | `adb_name` の既定 `RAGADB` / `NL2SQLADB` / `AGENTADB` | `SUITEADB` |
 | NL2SQL の `adb_workload` の既定 `LH` | `OLTP`（3製品で共有するため） |

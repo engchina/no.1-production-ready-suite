@@ -141,6 +141,15 @@ from app.observability import (
     patch_trace_policy,
     trace_exporter_status,
 )
+from app.oracle_connection import oracle_connect_kwargs
+from app.security.dependencies import (
+    WebSocketAuthRejected,
+    actor_roles_for_principal,
+    authenticate_websocket,
+    permission_route_path,
+    session_principal,
+)
+from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 
 router = APIRouter(tags=["agent-runtime"])
@@ -404,6 +413,28 @@ async def require_admin(request: Request) -> None:
     _require_actor_roles(request, {"admin"})
 
 
+async def require_system_settings_write(request: Request) -> None:
+    """共通のシステム設定の保存・操作（OCI 認証・アップロード保存先・モデル・データベース。#215）。
+
+    Cookie のセッションでは RAG / NL2SQL と同じくメニュー権限（manifest の同じ判定）で許可する。
+    header / JWT / 外部 policy の経路と local は従来どおり admin だけ。
+    """
+    principal = session_principal(request)
+    if principal is None:
+        _require_actor_roles(request, {"admin"})
+        return
+    permissions = permission_for_route(request.method, permission_route_path(request))
+    if (
+        permissions is None
+        or UNCLASSIFIED_PERMISSION in permissions
+        or not principal.has_any_permission(set(permissions))
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"actor {principal.login_user_id} cannot change system settings",
+        )
+
+
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
 # 保存先は3製品共通の `.env`（app.settings.PLATFORM_ENV_FILE。#211）。
 # テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
@@ -411,7 +442,7 @@ router.include_router(
     build_upload_storage_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: app_settings.PLATFORM_ENV_FILE,
-        write_dependencies=[Depends(require_admin)],
+        write_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
 )
@@ -421,8 +452,8 @@ router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: app_settings.PLATFORM_ENV_FILE,
-        write_dependencies=[Depends(require_admin)],
-        action_dependencies=[Depends(require_admin)],
+        write_dependencies=[Depends(require_system_settings_write)],
+        action_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
 )
@@ -433,8 +464,8 @@ router.include_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: _test_database_connection(candidate),
-        write_dependencies=[Depends(require_admin)],
-        action_dependencies=[Depends(require_admin)],
+        write_dependencies=[Depends(require_system_settings_write)],
+        action_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
 )
@@ -445,8 +476,8 @@ router.include_router(
         get_settings=lambda: get_settings(),
         store=MODEL_SETTINGS_STORE,
         run_model_test=lambda settings, request: _run_model_settings_test(settings, request),
-        write_dependencies=[Depends(require_admin)],
-        action_dependencies=[Depends(require_admin)],
+        write_dependencies=[Depends(require_system_settings_write)],
+        action_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
 )
@@ -850,24 +881,8 @@ def _test_oracle_connection_sync(settings: SimpleNamespace) -> None:
 
 
 def _oracle_connect_kwargs(settings: SimpleNamespace) -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "user": settings.oracle_user,
-        "dsn": settings.oracle_dsn,
-        "retry_count": 0,
-        "retry_delay": 0,
-    }
-    tcp_connect_timeout = float(settings.oracle_tcp_connect_timeout_seconds)
-    if tcp_connect_timeout > 0:
-        kwargs["tcp_connect_timeout"] = tcp_connect_timeout
-    if str(settings.oracle_password).strip():
-        kwargs["password"] = settings.oracle_password
-    wallet_dir = str(settings.oracle_wallet_dir or "").strip()
-    if wallet_dir:
-        kwargs["config_dir"] = str(Path(wallet_dir).expanduser())
-        kwargs["wallet_location"] = str(Path(wallet_dir).expanduser())
-    if str(settings.oracle_wallet_password).strip():
-        kwargs["wallet_password"] = settings.oracle_wallet_password
-    return kwargs
+    """接続テストの引数（共通の `app.oracle_connection` と同じ規則。#215）。"""
+    return oracle_connect_kwargs(settings)
 
 
 class OracleConnectionTimeoutError(RuntimeError):
@@ -989,20 +1004,30 @@ async def patch_trace_policy_settings(
 
 @router.get("/observability/events", response_model=ApiResponse[TraceEventsData])
 async def get_observability_events(
+    request: Request,
     event_type: str | None = None,
     run_id: str | None = None,
     tool_name: str | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
     _: None = Depends(require_auditor),
 ) -> ApiResponse[TraceEventsData]:
-    return ApiResponse(
-        data=list_trace_events(
-            event_type=event_type,
-            run_id=run_id,
-            tool_name=tool_name,
-            limit=limit,
-        )
+    data = list_trace_events(
+        event_type=event_type,
+        run_id=run_id,
+        tool_name=tool_name,
+        limit=limit,
     )
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None and (
+        session_policy.agent_ids is not None or session_policy.business_view_ids is not None
+    ):
+        # 対象範囲が制限された利用者には、範囲内の Run の event だけを返す（#215）。
+        allowed_run_ids = {
+            run.id for run in _filter_runs_for_actor(request, runtime_repository.list_runs())
+        }
+        events = [event for event in data.events if event.run_id in allowed_run_ids]
+        data = TraceEventsData(total=len(events), events=events)
+    return ApiResponse(data=data)
 
 
 @router.post(
@@ -1643,10 +1668,16 @@ async def get_runtime_service_logs(
 
 @router.get("/runtime-bindings", response_model=ApiResponse[RuntimeBindingListData])
 async def list_runtime_bindings(
+    request: Request,
     agent_id: str | None = None,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RuntimeBindingListData]:
-    bindings = runtime_binding_registry.list(agent_id=agent_id)
+    """Binding の一覧。RBAC が有効なら利用者が使えるエージェントの Binding だけに絞る（#215）。"""
+    bindings = [
+        binding
+        for binding in runtime_binding_registry.list(agent_id=agent_id)
+        if _agent_allowed(request, binding.agent_id)
+    ]
     return ApiResponse(data=RuntimeBindingListData(bindings=bindings))
 
 
@@ -1996,6 +2027,13 @@ async def stream_run_events_websocket(
     heartbeat_interval_seconds: float = 15.0,
     max_events_per_tick: int = 50,
 ) -> None:
+    # production の Cookie セッション（Origin 必須）は accept 前に確認する（#215）。
+    # local と、production で Cookie がなく外部連携の RBAC が有効なときは従来の header 判定。
+    try:
+        await authenticate_websocket(websocket, "/runs/{run_id}/events/ws")
+    except WebSocketAuthRejected:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     if not _websocket_has_roles(websocket, {"viewer", "operator", "approver", "auditor"}):
         await websocket.send_json(
@@ -2171,14 +2209,22 @@ async def decide_approval(
         run = _run_for_approval(approval_id)
         _require_agent_access(http_request, run.agent_id)
         _require_business_view_access(http_request, _run_business_view_id(run))
+        principal = session_principal(http_request)
+        if principal is not None:
+            # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
+            request = request.model_copy(update={"decided_by": principal.login_user_id})
         return ApiResponse(data=runtime_repository.decide_approval(approval_id, request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="approval not found") from exc
 
 
 @router.get("/agents", response_model=ApiResponse[AgentsData])
-async def list_agents() -> ApiResponse[AgentsData]:
-    return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
+async def list_agents(request: Request) -> ApiResponse[AgentsData]:
+    """業務 Agent の一覧。RBAC が有効なら利用者が使えるエージェントだけに絞る（#215）。"""
+    agents = [
+        agent for agent in runtime_repository.list_agents() if _agent_allowed(request, agent.id)
+    ]
+    return ApiResponse(data=AgentsData(agents=agents))
 
 
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
@@ -2783,6 +2829,10 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             )
             return
         decided_by = message.get("decided_by")
+        principal = session_principal(websocket)
+        if principal is not None:
+            # 決定者はログイン中の利用者（message の decided_by は使わない。#215）。
+            decided_by = principal.login_user_id
         comment = message.get("comment")
         runtime_repository.decide_approval(
             approval_id,
@@ -2882,14 +2932,70 @@ def _configured_tool_policy() -> ToolPolicy:
     )
 
 
+def _session_actor_policy(connection: object) -> ActorPolicy | None:
+    """Cookie のセッションの利用者から作る ActorPolicy（#215）。
+
+    capability → 従来のロール、対象範囲は利用者の許可（None は制限なし）。
+    利用者がいなければ None で、呼出し側は従来の header / JWT / 外部 policy の判定を使う。
+    """
+    principal = session_principal(connection)
+    if principal is None:
+        return None
+    return ActorPolicy(
+        roles=actor_roles_for_principal(principal),
+        business_view_ids=(
+            None
+            if principal.allowed_business_view_ids is None
+            else set(principal.allowed_business_view_ids)
+        ),
+        agent_ids=None if principal.allowed_agent_ids is None else set(principal.allowed_agent_ids),
+    )
+
+
+def _policy_allows_agent(policy: ActorPolicy, agent_id: str) -> bool:
+    allowed = policy.agent_ids
+    return allowed is None or "*" in allowed or agent_id in allowed
+
+
+def _policy_allows_business_view(policy: ActorPolicy, business_view_id: str | None) -> bool:
+    if business_view_id is None:
+        return True
+    allowed = policy.business_view_ids
+    return allowed is None or "*" in allowed or business_view_id in allowed
+
+
+def _rbac_active(connection: object) -> bool:
+    """RBAC で絞り込むか（Cookie のセッションの利用者がいる、または AGENT_RBAC_ENABLED）。"""
+    return _session_actor_policy(connection) is not None or bool(get_settings().agent_rbac_enabled)
+
+
+def _actor_display_name(connection: Request | WebSocket) -> str:
+    principal = session_principal(connection)
+    if principal is not None:
+        return principal.login_user_id
+    return _actor_name_from_headers(connection.headers)
+
+
+def external_actor_roles(request: Request) -> set[str]:
+    """外部連携（header / JWT / 外部 policy）のロール。
+
+    Cookie のないリクエストの manifest 判定（`app.security.dependencies`）が使う。
+    """
+    return _request_roles(request)
+
+
 def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
-    settings = get_settings()
-    if not settings.agent_rbac_enabled:
-        return
-    roles = _request_roles(request)
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None:
+        roles = session_policy.roles
+    else:
+        settings = get_settings()
+        if not settings.agent_rbac_enabled:
+            return
+        roles = _request_roles(request)
     if "admin" in roles or roles.intersection(allowed_roles):
         return
-    actor = _actor_name_from_headers(request.headers)
+    actor = _actor_display_name(request)
     required = ", ".join(sorted(allowed_roles | {"admin"}))
     raise HTTPException(
         status_code=403,
@@ -2908,7 +3014,7 @@ def _request_roles(request: Request) -> set[str]:
 
 
 def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
-    if not get_settings().agent_rbac_enabled:
+    if not _rbac_active(request):
         return runs
     return [
         run
@@ -2921,7 +3027,7 @@ def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunSt
 def _require_business_view_access(request: Request, business_view_id: str | None) -> None:
     if _business_view_allowed(request, business_view_id):
         return
-    actor = _actor_name_from_headers(request.headers)
+    actor = _actor_display_name(request)
     raise HTTPException(
         status_code=403,
         detail=f"actor {actor} cannot access business_view_id={business_view_id}",
@@ -2931,7 +3037,7 @@ def _require_business_view_access(request: Request, business_view_id: str | None
 def _require_agent_access(request: Request, agent_id: str) -> None:
     if _agent_allowed(request, agent_id):
         return
-    actor = _actor_name_from_headers(request.headers)
+    actor = _actor_display_name(request)
     raise HTTPException(
         status_code=403,
         detail=f"actor {actor} cannot access agent_id={agent_id}",
@@ -2939,6 +3045,9 @@ def _require_agent_access(request: Request, agent_id: str) -> None:
 
 
 def _agent_allowed(request: Request, agent_id: str) -> bool:
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None:
+        return _policy_allows_agent(session_policy, agent_id)
     settings = get_settings()
     if not settings.agent_rbac_enabled:
         return True
@@ -2947,6 +3056,9 @@ def _agent_allowed(request: Request, agent_id: str) -> bool:
 
 
 def _business_view_allowed(request: Request, business_view_id: str | None) -> bool:
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None:
+        return _policy_allows_business_view(session_policy, business_view_id)
     settings = get_settings()
     if not settings.agent_rbac_enabled or business_view_id is None:
         return True
@@ -2968,6 +3080,10 @@ def _business_view_allowed(request: Request, business_view_id: str | None) -> bo
 
 
 def _websocket_has_roles(websocket: WebSocket, allowed_roles: set[str]) -> bool:
+    session_policy = _session_actor_policy(websocket)
+    if session_policy is not None:
+        roles = session_policy.roles
+        return "admin" in roles or bool(roles.intersection(allowed_roles))
     settings = get_settings()
     if not settings.agent_rbac_enabled:
         return True
@@ -2988,6 +3104,9 @@ def _websocket_has_business_view_access(
     websocket: WebSocket,
     business_view_id: str | None,
 ) -> bool:
+    session_policy = _session_actor_policy(websocket)
+    if session_policy is not None:
+        return _policy_allows_business_view(session_policy, business_view_id)
     settings = get_settings()
     if not settings.agent_rbac_enabled or business_view_id is None:
         return True
@@ -3009,6 +3128,9 @@ def _websocket_has_business_view_access(
 
 
 def _websocket_has_agent_access(websocket: WebSocket, agent_id: str) -> bool:
+    session_policy = _session_actor_policy(websocket)
+    if session_policy is not None:
+        return _policy_allows_agent(session_policy, agent_id)
     settings = get_settings()
     if not settings.agent_rbac_enabled:
         return True
@@ -3422,6 +3544,15 @@ def _jwt_policy_from_claims(claims: Mapping[str, object]) -> ActorPolicy | None:
     return _actor_policy_from_mapping(policy_payload)
 
 
+def _request_agent_ids(request: Request) -> set[str] | None:
+    """利用者が使えるエージェント（None は制限なし）。Cookie のセッションを header より優先する。"""
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None:
+        agent_ids = session_policy.agent_ids
+        return None if agent_ids is None or "*" in agent_ids else agent_ids
+    return _actor_agent_ids(request.headers)
+
+
 def _actor_agent_ids(headers: Mapping[str, str]) -> set[str] | None:
     settings = get_settings()
     actor_policy = _actor_policy_from_headers(headers)
@@ -3455,6 +3586,11 @@ def _run_create_business_view_id(request: RunCreateRequest) -> str | None:
         if isinstance(view, str) and view:
             return view
     return None
+
+
+def run_business_view_id(run: RunState) -> str | None:
+    """Run の業務ビュー ID（権限管理の対象一覧も使う）。"""
+    return _run_business_view_id(run)
 
 
 def _run_business_view_id(run: RunState) -> str | None:
@@ -3718,7 +3854,7 @@ def _tool_call_audit_data(
         has_guardrail_warnings=has_guardrail_warnings,
     )
     projection_reader = getattr(runtime_repository, "list_tool_call_audit_projection", None)
-    if callable(projection_reader) and _actor_agent_ids(request.headers) is None:
+    if callable(projection_reader) and _request_agent_ids(request) is None:
         try:
             projection = projection_reader(
                 run_id=run_id,
@@ -3780,6 +3916,10 @@ def _tool_call_audit_data(
 
 
 def _projection_business_view_allowlist(request: Request) -> set[str] | None:
+    session_policy = _session_actor_policy(request)
+    if session_policy is not None:
+        views = session_policy.business_view_ids
+        return None if views is None or "*" in views else views
     settings = get_settings()
     if not settings.agent_rbac_enabled:
         return None

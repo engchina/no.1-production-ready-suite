@@ -202,8 +202,10 @@ export type {
 export {
   RolePermissionsPage,
   effectivePermissionCodes,
+  normalizeCustomTargetId,
   permissionInheritanceSources,
   targetItemLabel,
+  targetItemsWithCustomIds,
   type RolePermissionsPageProps,
 } from "./permissions/RolePermissionsPage";
 export {
@@ -214,6 +216,7 @@ export {
 export type {
   PermissionDefinition,
   PermissionRole,
+  RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
   RolePermissionTargetSection,
   RolePermissionsApi,

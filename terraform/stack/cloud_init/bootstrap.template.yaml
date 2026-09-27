@@ -36,18 +36,6 @@ write_files:
     content: |
       ${compose_services}
 %{ endif ~}
-%{ if product == "agent" ~}
-  - path: "/u01/aipoc/props/basic_auth_password"
-    permissions: "0600"
-    owner: "root:root"
-    encoding: "gzip+base64"
-    content: |
-      ${basic_auth_password}
-  - path: "/u01/aipoc/props/basic_auth_user.txt"
-    permissions: "0644"
-    content: |
-      ${basic_auth_user}
-%{ endif ~}
   - path: "/u01/aipoc/props/adb_name.txt"
     permissions: "0644"
     content: |

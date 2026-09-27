@@ -15,6 +15,17 @@
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
+import {
+  ACCESS_TARGETS,
+  LOCAL_CURRENT_USER,
+  OPERATOR_ROLE,
+  PERMISSION_CATALOG,
+  SECURITY_USERS,
+  SYSTEM_ADMIN_ROLE,
+  expandPermissions,
+  type CurrentUserPayload,
+} from "./auth";
+
 type Json = Record<string, unknown>;
 
 export const MOCK_NOW = "2026-06-28T00:00:00Z";
@@ -28,6 +39,14 @@ export interface RecordedRequest {
   path: string;
   searchParams: URLSearchParams;
   body: unknown;
+  /** 小文字の header 名 → 値（CSRF header の検証に使う）。 */
+  headers: Record<string, string>;
+}
+
+/** `POST /api/auth/login` で受け付ける利用者（spec が `mockApi.state.auth.accounts` に足す）。 */
+export interface MockAccount {
+  password: string;
+  user: CurrentUserPayload;
 }
 
 /** 外部 MCP gateway の tools/list 相当（旧 external-tools-server.mjs の応答と同じ内容）。 */
@@ -104,6 +123,16 @@ function createState() {
     adbInfo: d.adbInfo as Json,
     uploadStorage: d.uploadStorage as Json,
     ociSettings: d.ociSettings as Json,
+    // 認証（#215）。既定はローカルの全権限の利用者（ログインなし）。null は未ログイン（me が 401）。
+    auth: {
+      currentUser: clone(LOCAL_CURRENT_USER) as CurrentUserPayload | null,
+      accounts: {} as Record<string, MockAccount>,
+    },
+    security: {
+      users: clone(SECURITY_USERS),
+      roles: [clone(SYSTEM_ADMIN_ROLE), clone(OPERATOR_ROLE)],
+      accessTargets: clone(ACCESS_TARGETS) as { agents: Json[]; business_views: Json[] },
+    },
   };
 }
 
@@ -115,15 +144,23 @@ export interface MockApi {
   unmocked: string[];
   /** 条件に合う最後のリクエスト。保存 payload の検証に使う。 */
   lastRequest(method: string, path: string): RecordedRequest | undefined;
+  /** ログイン中の利用者を差し替える（null で未ログイン = 401）。 */
+  setCurrentUser(user: CurrentUserPayload | null): void;
 }
 
 class HttpError extends Error {
   readonly status: number;
+  readonly errorCode?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, errorCode?: string) {
     super(message);
     this.status = status;
+    this.errorCode = errorCode;
   }
+}
+
+function findRole(state: MockApiState, roleId: string): Json {
+  return findOr404(state.security.roles, "role_id", roleId, "role");
 }
 
 function pluginSummary(plugin: Json): Json {
@@ -245,6 +282,53 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   const [head, second, third] = segments;
   const at = (...parts: string[]) =>
     parts.length === segments.length && parts.every((part, index) => part === "*" || part === segments[index]);
+
+  // --- 認証（platform の共通認証。#215） ---
+  if (head === "auth") {
+    if (method === "GET" && at("auth", "me")) {
+      if (!state.auth.currentUser) throw new HttpError(401, "ログインが必要です。", "auth.unauthenticated");
+      return state.auth.currentUser;
+    }
+    if (method === "POST" && at("auth", "login")) {
+      const account = state.auth.accounts[String(body.login_user_id ?? "")];
+      if (!account || account.password !== body.password) {
+        throw new HttpError(401, "ログインユーザーIDまたはパスワードを確認してください。", "auth.invalid_credentials");
+      }
+      state.auth.currentUser = clone(account.user);
+      return state.auth.currentUser;
+    }
+    if (method === "POST" && at("auth", "logout")) {
+      state.auth.currentUser = null;
+      return { logged_out: true };
+    }
+    if (method === "POST" && at("auth", "password", "change")) {
+      // 変更後はセッションを失効させ、新しいパスワードでのログインを求める（backend と同じ）。
+      state.auth.currentUser = null;
+      return { changed: true };
+    }
+  }
+  if (head === "security") {
+    if (method === "GET" && at("security", "users")) return state.security.users;
+    if (method === "GET" && at("security", "roles")) {
+      const includeArchived = query.get("include_archived") === "true";
+      return state.security.roles.filter((role) => includeArchived || !role.archived);
+    }
+    if (method === "GET" && at("security", "permissions")) return PERMISSION_CATALOG;
+    if (method === "GET" && at("security", "access-targets")) return state.security.accessTargets;
+    if (method === "PUT" && at("security", "roles", "*", "access")) {
+      const role = findRole(state, third);
+      if (body.version !== role.version) throw new HttpError(409, "ロールが更新されています。再読み込みしてください。");
+      const grantsAll = expandPermissions((body.permissions as string[]) ?? []).includes("agent.admin");
+      Object.assign(role, {
+        version: (role.version as number) + 1,
+        permissions: [...((body.permissions as string[]) ?? [])].sort(),
+        // agent.admin を含むロールは対象を空に正規化する（backend と同じ）。
+        agent_ids: grantsAll ? [] : [...((body.agent_ids as string[]) ?? [])].sort(),
+        business_view_ids: grantsAll ? [] : [...((body.business_view_ids as string[]) ?? [])].sort(),
+      });
+      return role;
+    }
+  }
 
   // --- health / observability ---
   if (method === "GET" && at("health")) return state.health;
@@ -669,6 +753,9 @@ export async function installMockApi(page: Page): Promise<MockApi> {
         .reverse()
         .find((request) => request.method === method && request.path === path);
     },
+    setCurrentUser(user) {
+      this.state.auth.currentUser = user ? clone(user) : null;
+    },
   };
 
   await page.route("**/api/**", async (route) => {
@@ -681,7 +768,19 @@ export async function installMockApi(page: Page): Promise<MockApi> {
     } catch {
       body = request.postData();
     }
-    mockApi.requests.push({ method, path: url.pathname, searchParams: url.searchParams, body });
+    mockApi.requests.push({
+      method,
+      path: url.pathname,
+      searchParams: url.searchParams,
+      body,
+      headers: await request.allHeaders(),
+    });
+    // Run のイベント購読（SSE）。e2e は stream を保てないため空の stream を返して閉じる
+    // （画面は購読の停止を示す。#215）。
+    if (method === "GET" && /^\/api\/runs\/[^/]+\/events$/.test(url.pathname)) {
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+      return;
+    }
     try {
       const data = handle(
         mockApi.state,
@@ -702,7 +801,13 @@ export async function installMockApi(page: Page): Promise<MockApi> {
       await fulfillJson(route, 200, { data, error_messages: [], warning_messages: [] });
     } catch (error) {
       if (error instanceof HttpError) {
-        await fulfillJson(route, error.status, { detail: error.message });
+        await fulfillJson(route, error.status, {
+          data: null,
+          error_messages: [error.message],
+          warning_messages: [],
+          error_code: error.errorCode ?? null,
+          detail: error.message,
+        });
         return;
       }
       throw error;

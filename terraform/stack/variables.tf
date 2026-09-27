@@ -581,7 +581,7 @@ variable "app_admin_login_user_id" {
 }
 
 variable "app_admin_login_user_password" {
-  description = "Login password of the configuration administrator (system_admin) shared by RAG and NL2SQL (PLATFORM_ADMIN_LOGIN_USER_PASSWORD). Required when deploy_rag or deploy_nl2sql is true."
+  description = "Login password of the configuration administrator (system_admin) shared by RAG, NL2SQL, and the Agent Control Plane (PLATFORM_ADMIN_LOGIN_USER_PASSWORD). Required when any product is deployed."
   type        = string
   sensitive   = true
   default     = ""
@@ -671,38 +671,10 @@ variable "agent_instance_boot_volume_size" {
   }
 }
 
-variable "agent_app_basic_auth_user" {
-  description = "HTTP Basic authentication user name that Nginx requires in front of the Agent Control Plane UI and API."
-  type        = string
-  default     = "agent_admin"
-
-  validation {
-    condition     = can(regex("^[A-Za-z][A-Za-z0-9_.-]{2,31}$", var.agent_app_basic_auth_user))
-    error_message = "agent_app_basic_auth_user must start with a letter and contain 3-32 letters, digits, underscores, dots, or hyphens."
-  }
-}
-
-variable "agent_app_basic_auth_password" {
-  description = "HTTP Basic authentication password that Nginx requires in front of the Agent Control Plane UI and API. Required when deploy_agent is true."
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition = (
-      var.agent_app_basic_auth_password == ""
-      || (
-        length(var.agent_app_basic_auth_password) >= 12
-        && length(var.agent_app_basic_auth_password) <= 64
-        && !can(regex("[\r\n]", var.agent_app_basic_auth_password))
-        && !can(regex("[\"':]", var.agent_app_basic_auth_password))
-        && can(regex("[0-9]", var.agent_app_basic_auth_password))
-        && can(regex("[a-z]", var.agent_app_basic_auth_password))
-        && can(regex("[A-Z]", var.agent_app_basic_auth_password))
-      )
-    )
-    error_message = "agent_app_basic_auth_password must be 12-64 characters, include uppercase, lowercase, and digits, and not contain quotes, colons, or line breaks."
-  }
+variable "agent_app_auth_cookie_secure" {
+  description = "Send the Agent login session cookies only over HTTPS (PLATFORM_AUTH_COOKIE_SECURE in the Agent Compute platform/.env). Keep false while the application is served over plain HTTP."
+  type        = bool
+  default     = false
 }
 
 variable "agent_control_plane_mcp_token_secret" {

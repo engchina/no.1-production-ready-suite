@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 
-import { APP_ROUTES } from "../src/lib/routes";
+import { APP_ROUTES, AUTH_ROUTE_PATHS } from "../src/lib/routes";
 
 const CONTENT_MAX_WIDTH = 1440;
 
@@ -39,7 +39,8 @@ test.describe("画面幅（PageHeader / PageBody の wide）", () => {
       test.setTimeout(90_000);
       await page.setViewportSize({ width, height });
 
-      for (const route of Object.values(APP_ROUTES)) {
+      // ログイン・パスワード変更・権限なしは AppShell の外の画面なので対象外（#215）。
+      for (const route of Object.values(APP_ROUTES).filter((path) => !AUTH_ROUTE_PATHS.includes(path))) {
         await page.goto(route);
         const layout = await measureLayout(page);
         const label = `${route} ${JSON.stringify(layout)}`;

@@ -49,8 +49,8 @@ resource "oci_core_instance" "product" {
   # 製品固有の入力は、その製品を配備するときだけ必須にする。
   lifecycle {
     precondition {
-      condition     = !contains(["rag", "nl2sql"], each.key) || trimspace(var.app_admin_login_user_password) != ""
-      error_message = "app_admin_login_user_password must be configured when deploy_rag or deploy_nl2sql is true. RAG and NL2SQL require a login (system_admin and the users created in User Management)."
+      condition     = !contains(["rag", "nl2sql", "agent"], each.key) || trimspace(var.app_admin_login_user_password) != ""
+      error_message = "app_admin_login_user_password must be configured when deploy_rag, deploy_nl2sql, or deploy_agent is true. Every product requires a login (system_admin and the users created in User Management)."
     }
     precondition {
       condition     = each.key != "nl2sql" || var.nl2sql_app_environment == "local" || var.nl2sql_app_auth_cookie_secure
@@ -59,10 +59,6 @@ resource "oci_core_instance" "product" {
     precondition {
       condition     = each.key != "nl2sql" || !var.nl2sql_oracle_deepsec_enabled || trimspace(var.nl2sql_oracle_deepsec_data_user_password) != ""
       error_message = "nl2sql_oracle_deepsec_data_user_password must be configured when nl2sql_oracle_deepsec_enabled=true."
-    }
-    precondition {
-      condition     = each.key != "agent" || trimspace(var.agent_app_basic_auth_password) != ""
-      error_message = "agent_app_basic_auth_password must be configured when deploy_agent is true. Nginx protects the Agent Control Plane UI and API with HTTP Basic authentication."
     }
   }
 }

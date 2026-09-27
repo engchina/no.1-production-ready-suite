@@ -34,23 +34,6 @@ export const ja = {
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
 
-  "auth.status.checking": "認証状態を確認中…",
-  "auth.status.error": "認証状態の確認に失敗しました。",
-  "auth.login.title": "ログイン",
-  "auth.login.subtitle": "Production Ready RAG コンソールにサインインします。",
-  "auth.login.username": "ユーザー名",
-  "auth.login.usernamePlaceholder": "ユーザー名を入力",
-  "auth.login.password": "パスワード",
-  "auth.login.passwordPlaceholder": "パスワードを入力",
-  "auth.login.rememberMe": "ログイン状態を保持する",
-  "auth.login.showPassword": "パスワードを表示",
-  "auth.login.hidePassword": "パスワードを隠す",
-  "auth.login.signIn": "ログイン",
-  "auth.login.signingIn": "ログイン中…",
-  "auth.login.error.failed": "ログイン処理に失敗しました。",
-  "auth.logout": "ログアウト",
-  "auth.user.unknown": "ログインユーザー",
-  "auth.user.role": "USER",
 
   "nav.section.ingestion": "データ取込",
   "nav.section.rag": "RAG",

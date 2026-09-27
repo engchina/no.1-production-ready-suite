@@ -28,8 +28,28 @@ export interface RolePermissionTargetItem {
 }
 
 /**
+ * 候補の一覧にない ID を直接入力して追加する欄の設定（#215）。
+ * マスタを持たない対象（例: Agent の業務ビュー）に使う。入力した ID は候補に足して選択状態にする。
+ */
+export interface RolePermissionCustomIdOptions {
+  /** 入力欄のラベル（例: 業務ビュー ID を直接入力）。 */
+  label: string;
+  placeholder?: string;
+  /** 入力欄の補足。 */
+  hint?: string;
+  /** 追加ボタンの文言。 */
+  addLabel: string;
+  /** 受け付ける ID の形式（前後の空白を除いた値で判定する）。無ければ空でない文字列を受け付ける。 */
+  pattern?: RegExp;
+  /** 空・形式に合わない ID を追加しようとしたときの文言。 */
+  invalidMessage: string;
+  /** 候補の一覧にない ID（直接入力・保存済み）に添える状態（例: 直接入力）。 */
+  customStatus?: string;
+}
+
+/**
  * ロールに付ける「利用できる対象」の 1 種類。製品固有の対象はこの形で権限管理画面へ差し込む。
- * 例: NL2SQL の業務プロファイル、RAG の業務ビュー・ナレッジベース、Agent のエージェント。
+ * 例: NL2SQL の業務プロファイル、RAG の業務ビュー・ナレッジベース、Agent のエージェント・業務ビュー。
  */
 export interface RolePermissionTargetSection<R extends PermissionRole = PermissionRole> {
   /** draft.targets の key。テスト ID と要素 ID の `security-roles-<key>-*` にも使う。 */
@@ -44,6 +64,11 @@ export interface RolePermissionTargetSection<R extends PermissionRole = Permissi
    * SYSTEM_ADMIN は常に全件が対象。全件のときは個別選択を出さず、保存では空の一覧を送る。
    */
   grantsAll?: (effectivePermissions: ReadonlySet<string>) => boolean;
+  /**
+   * 候補にない ID の直接入力を許可する（任意）。指定すると、選択済みで候補にない ID も
+   * 一覧・詳細に ID のまま表示する。
+   */
+  allowCustomIds?: RolePermissionCustomIdOptions;
 }
 
 /** 保存する内容。targets は対象の key ごとの ID 一覧（全件が対象のときは空）。 */

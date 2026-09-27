@@ -118,7 +118,9 @@ EOT
   # ---------------------------------------------------------------- Agent
 
   # Agent は python-oracledb Thin mode + Wallet(mTLS) だけで接続する。
-  # Runtime 状態の Oracle repository は起動時に自分の table を作成する（DDL は Terraform に持たない）。
+  # Runtime 状態の Oracle repository は起動時に自分の table を作成し、共通認証と Agent の権限の table は
+  # init_script.sh が agent_security_migrate で作成する（DDL は Terraform に持たない）。
+  # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#215）。
   # gunicorn は 1 worker・dispatcher は in_process に固定する（checkpoint repository は process 内に状態を持つため）。
   agent_data_dir_host = "/u01/data/production-ready-agent"
 
@@ -129,6 +131,8 @@ AGENT_LOG_LEVEL=INFO
 AGENT_ENVIRONMENT=production
 AGENT_SERVICE_NAME=production-ready-agent
 AGENT_CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
+
+AGENT_AUTH_MODE=production
 
 AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}
 AGENT_RUNTIME_DISPATCH_MODE=in_process
@@ -191,6 +195,8 @@ PLATFORM_OBJECT_STORAGE_BUCKET=nl2sql-originals
 EOT
     agent  = <<-EOT
 
+PLATFORM_AUTH_COOKIE_SECURE=${var.agent_app_auth_cookie_secure}
+
 PLATFORM_MODEL_SETTINGS_FILE=${local.agent_data_dir_host}/model-settings.json
 PLATFORM_LOCAL_STORAGE_DIR=${local.agent_data_dir_host}
 PLATFORM_OBJECT_STORAGE_NAMESPACE=
@@ -210,7 +216,7 @@ EOT
     agent  = local.agent_backend_env
   }
 
-  # 製品ごとの差分（backend/.env、RAG の compose service、Agent の Basic 認証）以外は全製品で同じ bootstrap を使う。
+  # 製品ごとの差分（backend/.env、RAG の compose service）以外は全製品で同じ bootstrap を使う。
   # 使わない製品の値は空文字にする（テンプレートは製品で分岐して、その製品のファイルだけを書く）。
   cloud_init_user_data = {
     for product in local.selected_products : product => base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
@@ -222,8 +228,6 @@ EOT
       application_port    = tostring(var.application_port)
       backend_env         = base64gzip(local.backend_envs[product])
       platform_env        = base64gzip(local.platform_envs[product])
-      basic_auth_password = product == "agent" ? base64gzip(var.agent_app_basic_auth_password) : ""
-      basic_auth_user     = product == "agent" ? var.agent_app_basic_auth_user : ""
       compartment_ocid    = var.compartment_ocid
       compose_services    = product == "rag" ? join(" ", local.rag_compose_services) : ""
       db_dsn              = local.effective_oracle_dsn
