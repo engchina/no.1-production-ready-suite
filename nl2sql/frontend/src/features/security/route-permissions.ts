@@ -1,24 +1,18 @@
+import {
+  firstAllowedRoute as sharedFirstAllowedRoute,
+  routePermissionMap,
+} from "@engchina/production-ready-system-settings";
+
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
 import { APP_ROUTES } from "@/lib/routes";
 
-export const ROUTE_PERMISSIONS: Record<string, string> = Object.fromEntries(
-  NAV_SECTIONS.flatMap((section) =>
-    section.items.map((item) => [item.href, item.permission] as const)
-  )
-);
+// ナビの並び順と各画面の権限から、ルートの判定を作る。判定の実体は platform の共通関数（#220）。
+const NAV_ITEMS = NAV_SECTIONS.flatMap((section) => section.items);
 
-const FIRST_ALLOWED_ORDER = NAV_SECTIONS.flatMap((section) =>
-  section.items.map((item) => item.href)
-);
+export const ROUTE_PERMISSIONS: Record<string, string> = routePermissionMap(NAV_ITEMS);
 
 export function firstAllowedRoute(hasPermission: (permission: string) => boolean): string {
-  return (
-    FIRST_ALLOWED_ORDER.find((path) => {
-      const permission = ROUTE_PERMISSIONS[path];
-      return Boolean(permission && hasPermission(permission));
-    }) ??
-    APP_ROUTES.forbidden
-  );
+  return sharedFirstAllowedRoute(NAV_ITEMS, hasPermission, APP_ROUTES.forbidden);
 }
 
 /**
