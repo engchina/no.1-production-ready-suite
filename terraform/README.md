@@ -152,11 +152,15 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   stack は Agent と RAG / NL2SQL を一緒に配備するとき、同じ subnet の CIDR からその port だけを許可する NSG
   （`production-ready-suite-product-mcp`）を作って RAG / NL2SQL の VNIC に付けます。stack を実行するユーザーには NSG の作成と
   VNIC への関連付けの権限（`manage network-security-groups` と VCN の `use`）が必要です。
-- 既存の stack を更新するとき（#233）: Agent の Compute の resource は `oci_core_instance.product["agent"]` から
-  `oci_core_instance.agent["agent"]` へ `moved` で移るため、作り直しにはなりません。apply 前に plan で Agent の Compute が
-  置き換え（replace）にならないことを確認してください。cloud-init は既存の Compute では再実行されず、`platform/.env` も上書きしないため、
-  各 Compute の `platform/.env` に同じ `PLATFORM_SERVICE_TOKEN_SECRET`（`openssl rand -base64 48` などで作った1つの値）を追記し、
-  Agent の `backend/.env` に `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` を追記して backend を再起動します。
+- 既存の stack を更新するとき（#233）: 共通 `.env` に `PLATFORM_SERVICE_TOKEN_SECRET` が加わり、Agent の `backend/.env` に MCP の URL が
+  加わるため、全製品の Compute の `user_data`（cloud-init）が変わります。OCI provider は `user_data` の変更で Compute を
+  **置き換え（replace）** ます（`oci_core_instance` の CustomizeDiff。Agent の resource の移動は `moved` で扱うが、置き換え自体は避けられない）。
+  - 作り直してよい環境: そのまま apply します（データの正本は ADB。Compute 上のローカル保存のファイルは失われます）。
+  - 作り直したくない環境: stack を apply せず、各 Compute で手動で追記します。各 Compute の `platform/.env` に同じ
+    `PLATFORM_SERVICE_TOKEN_SECRET`（`openssl rand -base64 48` などで作った1つの値）を、Agent の `backend/.env` に
+    `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<private IP>[:port]/api/mcp`）を追記し、backend を再起動します。
+    Agent から RAG / NL2SQL の `application_port` へ通信できない場合は、subnet の security list か NSG で同じ subnet からの TCP を許可します。
+  - どちらの場合も、apply 前に Resource Manager の plan で置き換えになる resource を確認してください。
   旧名の `AGENT_EXTERNAL_RAG_BASE_URL` / `AGENT_EXTERNAL_RAG_API_KEY`（NL2SQL も同じ）は読まれないので削除してください。
 
 ## パッケージと検証
