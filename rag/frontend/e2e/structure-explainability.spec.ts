@@ -135,12 +135,13 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
   await expect(page.getByRole("heading", { name: "所属知識ベース" })).toBeVisible();
   // 既存の所属はチップで可視化される。
   await expect(page.getByLabel("社内規程 を選択から外す")).toBeVisible();
-  // FAQ は空(0 文書)なので「空のKBを隠す」を解除してから選ぶ。
+  // 候補はサーバー側で検索するため（#302）、空（0 文書）の FAQ も隠さずに出る。
   const kbCombo = page.getByRole("combobox", { name: "所属先" });
   await kbCombo.click();
-  await page.getByRole("checkbox", { name: "空のKBを隠す" }).uncheck();
   await page.getByRole("option", { name: /FAQ/ }).click();
-  await kbCombo.press("Escape");
+  // 「完了」で一覧を閉じる（#316）。
+  await page.getByRole("button", { name: "完了" }).click();
+  await expect(page.getByRole("listbox", { name: "所属先" })).toHaveCount(0);
   await page.getByRole("button", { name: "所属先を保存" }).click();
 
   await expect

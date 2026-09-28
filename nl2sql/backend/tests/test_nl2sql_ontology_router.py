@@ -1040,6 +1040,62 @@ def test_generate_sql_includes_published_qa_sql_examples(
     assert context.context_hash == generated.session.sql_artifacts[-1].generation_context_hash
 
 
+@pytest.mark.parametrize("narrowing", ["columns", "tables"])
+def test_legacy_published_markdown_is_not_sent_to_narrowed_session(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    narrowing: str,
+) -> None:
+    """旧形式の公開 Markdown は概念単位に絞れないため、範囲を絞った問い合わせには渡さない。"""
+    api, _store, legacy = runtime
+    markdown = "\n".join(
+        [
+            "# Confirmed Markdown",
+            "",
+            "## Q/A SQL 例",
+            "```jsonl",
+            json.dumps(
+                {"question": "受注金額を確認したい", "sql": "SELECT AMOUNT FROM APP.ORDERS"},
+                ensure_ascii=False,
+            ),
+            "```",
+            "",
+        ]
+    )
+    base = api.current_ontology().revision
+    draft, _artifact = api.create_build_markdown_draft(
+        profile_id="sales",
+        base_revision_id=base.id,
+        payloads=[],
+        titles=[],
+        markdown=markdown,
+        note="legacy scope test",
+    )
+    api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+    api.copy_draft_markdown_to_published(draft.revision.id)
+    if narrowing == "columns":
+        allowed = AllowedObjects(table_names=["APP.ORDERS"], columns={"APP.ORDERS": ["ID"]})
+    else:
+        # Profile は 2 表を許可し、今回は 1 表だけに絞る。
+        legacy.profile = legacy.profile.model_copy(
+            update={"allowed_tables": ["APP.ORDERS", "APP.SALARY"]}
+        )
+        allowed = AllowedObjects(table_names=["APP.ORDERS"])
+
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="受注金額を確認したい", profile_id="sales", allowed_objects=allowed
+        )
+    )
+    api.generate_sql(created.session.id, _generate_request(created))
+    context = legacy.preview_requests[-1].ontology_context
+
+    assert context is not None
+    assert context.qa_sql_examples == []
+
+
 def test_generate_sql_reads_published_qa_sql_patterns_without_fixed_examples(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
