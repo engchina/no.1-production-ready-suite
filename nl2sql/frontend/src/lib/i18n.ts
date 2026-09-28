@@ -88,6 +88,8 @@ const nl2sqlJa = {
   "common.backToList": "一覧へ戻る",
   "common.errorWithRequestId": "{message}（リクエストID: {requestId}）",
   "common.requestId": "リクエストID",
+  "common.clearSearch": "検索語をクリア",
+  "common.clearInput": "入力をクリア",
   "common.processing.elapsed": "経過時間",
   "common.processing.duration": "処理時間",
   "common.processing.refreshing": "表示を更新しています",

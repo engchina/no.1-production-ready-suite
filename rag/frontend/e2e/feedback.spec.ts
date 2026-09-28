@@ -516,3 +516,137 @@ function feedbackDetailEnvelope() {
     warning_messages: [],
   };
 }
+
+// #384: 検索欄は共有の TextField（先頭アイコン・クリア）。高さはコントロールの高さのトークン（--field-height）。
+test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・クリアボタン・Escape で入力を扱える", async ({ page }, testInfo) => {
+  await mockFeedback(page, []);
+  await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+
+  const search = page.getByRole("searchbox", { name: "問題・回答・コメントを検索" });
+  await expect(search).toBeVisible();
+  const select = page.getByRole("combobox", { name: "業務ビュー" });
+  const [searchBox, selectBox] = await Promise.all([search.boundingBox(), select.boundingBox()]);
+  expect(searchBox && selectBox).toBeTruthy();
+  // --field-height（36px）。タッチ端末でも入力欄は 36px（Button だけが 44px になる）。
+  expect(Math.round(searchBox!.height)).toBe(36);
+  expect(Math.abs(searchBox!.height - selectBox!.height)).toBeLessThanOrEqual(0.5);
+  // 同じ行の SelectField と上端がそろう（desktop の横並び）。
+  if (testInfo.project.name === "desktop") expect(Math.abs(searchBox!.y - selectBox!.y)).toBeLessThanOrEqual(0.5);
+  // 角丸は Button・SelectField と同じ --radius-control（6px）。
+  expect(await search.evaluate((node) => getComputedStyle(node).borderTopLeftRadius)).toBe("6px");
+  expect(await select.evaluate((node) => getComputedStyle(node).borderTopLeftRadius)).toBe("6px");
+
+  // 先頭アイコンは 16px・読み上げない。押すと入力欄にフォーカスが入る（ポインタを透過する）。
+  const field = search.locator("xpath=..");
+  const icon = field.locator('[data-text-field-slot="leading"]');
+  await expect(icon).toHaveAttribute("aria-hidden", "true");
+  const iconBox = await icon.boundingBox();
+  expect(Math.round(iconBox!.width)).toBe(16);
+  const paddingLeft = await search.evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft));
+  expect(paddingLeft).toBeGreaterThanOrEqual(iconBox!.x + iconBox!.width - searchBox!.x + 7);
+  await icon.click({ force: true });
+  await expect(search).toBeFocused();
+
+  // 値が空のときはクリアボタンを出さない。入力すると入力欄の中の右端に出て、文字と重ならない。
+  const clear = page.getByRole("button", { name: "検索語をクリア" });
+  await expect(clear).toHaveCount(0);
+  await search.fill("申請期限");
+  await expect(clear).toBeVisible();
+  const [clearBox, filledBox] = await Promise.all([clear.boundingBox(), search.boundingBox()]);
+  expect(clearBox!.x + clearBox!.width).toBeLessThanOrEqual(filledBox!.x + filledBox!.width);
+  expect(clearBox!.y).toBeGreaterThanOrEqual(filledBox!.y);
+  expect(clearBox!.y + clearBox!.height).toBeLessThanOrEqual(filledBox!.y + filledBox!.height);
+  const paddingRight = await search.evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingRight));
+  expect(paddingRight).toBeGreaterThanOrEqual(clearBox!.width);
+  // ブラウザ既定の type=search のクリア（×）は出さない（共有のクリアボタンと二重にしない）。
+  // getComputedStyle は ::-webkit-search-cancel-button を解決しないため、入力欄に当たる規則を CSSOM で確かめる。
+  expect(
+    await search.evaluate((node) => {
+      const rules: CSSStyleRule[] = [];
+      const collect = (list: CSSRuleList) => {
+        for (const rule of Array.from(list)) {
+          if (rule instanceof CSSStyleRule) {
+            rules.push(rule);
+            if (rule.cssRules.length) collect(rule.cssRules);
+          } else if ("cssRules" in rule) collect((rule as CSSGroupingRule).cssRules);
+        }
+      };
+      for (const sheet of Array.from(document.styleSheets)) collect(sheet.cssRules);
+      return rules.some((rule) => {
+        const style = rule.style.getPropertyValue("appearance");
+        const text = rule.selectorText ?? "";
+        if (style !== "none" || !text.includes("::-webkit-search-cancel-button")) return false;
+        // ネストした規則（&::-webkit-search-cancel-button）は親のクラスで入力欄に当たるかを見る。
+        const parent = rule.parentRule instanceof CSSStyleRule ? rule.parentRule.selectorText : text.split("::")[0];
+        return node.matches(parent);
+      });
+    })
+  ).toBe(true);
+
+  // Tab 順は入力欄 → クリアボタン。押すと値を消して入力欄に戻る。
+  await search.focus();
+  await page.keyboard.press("Tab");
+  await expect(clear).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+  await expect(clear).toHaveCount(0);
+
+  // ポインタで押しても入力欄からフォーカスを外さない。
+  await search.fill("経費");
+  await clear.click();
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+
+  // Escape でも消える（値があるときだけ）。
+  await search.fill("経費");
+  await search.press("Escape");
+  await expect(search).toHaveValue("");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`feedback-search-${testInfo.project.name}.png`) });
+});
+
+// #374: 強制カラーモードで、選ばれていないタブに下線を出さない（選んだタブだけ Highlight の下線）。
+test("強制カラーモードでは、選んだタブだけに Highlight の下線を出す", async ({ page }) => {
+  await mockFeedback(page, []);
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.goto("/feedback?period=30&sort=newest&size=50&page=1&feedback=feedback-answer");
+
+  const detail = page.getByRole("region", { name: "フィードバック詳細" });
+  const selected = detail.getByRole("tab", { name: "内容" });
+  const unselected = detail.getByRole("tab", { name: "根拠" });
+  await expect(selected).toHaveAttribute("aria-selected", "true");
+  await expect(unselected).toHaveAttribute("aria-selected", "false");
+
+  const systemColor = (name: string) =>
+    page.evaluate((color) => {
+      const probe = document.createElement("div");
+      probe.style.color = color;
+      document.body.append(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    }, name);
+  const [canvas, canvasText, highlight] = await Promise.all([
+    systemColor("Canvas"),
+    systemColor("CanvasText"),
+    systemColor("Highlight"),
+  ]);
+  const underline = (tab: typeof selected) => tab.evaluate((node) => getComputedStyle(node).borderBottomColor);
+
+  // 選ばれていないタブの透明の下線は CanvasText に塗られず、背景と同じ Canvas になる。
+  expect(await underline(unselected)).toBe(canvas);
+  expect(await underline(unselected)).not.toBe(canvasText);
+  // 選んだタブは Highlight の下線と太字で区別する。
+  expect(await underline(selected)).toBe(highlight);
+  expect(Number(await selected.evaluate((node) => getComputedStyle(node).fontWeight))).toBeGreaterThan(
+    Number(await unselected.evaluate((node) => getComputedStyle(node).fontWeight))
+  );
+
+  // 選び直すと、下線も移る。
+  await unselected.click();
+  await expect(unselected).toHaveAttribute("aria-selected", "true");
+  // 色の transition の途中の値は system color ではないため CanvasText に置き換わる。終わるのを待つ。
+  await expect.poll(() => underline(unselected)).toBe(highlight);
+  await expect.poll(() => underline(selected)).toBe(canvas);
+});

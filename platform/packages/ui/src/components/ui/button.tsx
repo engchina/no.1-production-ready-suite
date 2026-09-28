@@ -16,7 +16,7 @@ import { Tooltip, type TooltipPlacement } from "./tooltip";
 export const buttonVariants = cva(
   [
     "inline-flex max-w-full min-w-[32px] cursor-pointer items-center justify-center gap-[var(--button-gap)] overflow-hidden whitespace-nowrap",
-    "rounded-[var(--button-radius)] border border-transparent text-sm font-medium leading-5 transition-colors",
+    "rounded-control border border-transparent text-sm font-medium leading-5 transition-colors",
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
     "disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-disabled disabled:text-fg-disabled disabled:shadow-none",
     // loading 中はネイティブの disabled を付けず aria-disabled にする（フォーカスを保つ）。見た目は disabled と同じ。

@@ -15,6 +15,7 @@ import {
   usePagination,
   StatusBadge,
   Tabs,
+  TextField,
   cn,
   ClearActionButton,
   ActionResultRegion,
@@ -1213,6 +1214,7 @@ export function ObjectListPanel({
   emptyHint: string;
 }) {
   const [query, setQuery] = useState("");
+  const searchId = useId();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return items;
@@ -1223,18 +1225,16 @@ export function ObjectListPanel({
 
   return (
     <div className="grid content-start gap-3">
-      <label className="grid gap-1 text-sm font-medium text-fg">
-        <span>{t("dbAdmin.search.label")}</span>
-        <span className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" aria-hidden="true" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 focus:border-focus-ring"
-            placeholder={t("dbAdmin.search.placeholder")}
-          />
-        </span>
-      </label>
+      <TextField
+        id={searchId}
+        label={t("dbAdmin.search.label")}
+        value={query}
+        onValueChange={setQuery}
+        onClear={() => setQuery("")}
+        clearLabel={t("common.clearSearch")}
+        leadingIcon={Search}
+        placeholder={t("dbAdmin.search.placeholder")}
+      />
       <p className="text-xs text-fg-muted">
         {t("dbAdmin.search.resultCount", { filtered: filtered.length, total: items.length })}
       </p>

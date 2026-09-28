@@ -10,6 +10,7 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
+  "common.clearSearch": "検索語をクリア",
   "common.degraded.title": "データベースに接続できません",
   "common.degraded.fallback":
     "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",

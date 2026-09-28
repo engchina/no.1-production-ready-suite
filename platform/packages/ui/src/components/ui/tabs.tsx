@@ -202,7 +202,9 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
               "aria-selected:border-accent-emphasis aria-selected:font-semibold aria-selected:text-accent-fg-strong aria-selected:hover:border-accent-emphasis aria-selected:hover:text-accent-fg-strong",
               "disabled:cursor-not-allowed disabled:text-fg-disabled",
               "focus-visible:rounded-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
-              "forced-colors:aria-selected:border-[Highlight]"
+              // 強制カラーモードでは透明の枠線も system color（CanvasText）に塗られ、選ばれていないタブにも下線が出る（#374）。
+              // 選ばれていないタブは背景と同じ Canvas にして消し、選んだタブだけを Highlight の下線で示す（文字の太さと aria-selected も残る）。
+              "forced-colors:border-b-[Canvas] forced-colors:aria-selected:border-b-[Highlight]"
             )}
           >
             {Icon ? <Icon size={16} className="shrink-0" aria-hidden /> : null}

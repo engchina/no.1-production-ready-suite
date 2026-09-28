@@ -10,6 +10,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  TextField,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -125,28 +126,21 @@ export function KnowledgeBaseSearchTestPanel({
         ) : (
           <>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <label htmlFor={inputId} className="sr-only">
-                {t("knowledgeBases.searchTest.title")}
-              </label>
-              <div className="relative min-w-0 flex-1">
-                <SearchIcon
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
-                  aria-hidden
-                />
-                <input
-                  id={inputId}
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (isSubmitEnter(e)) void submit();
-                  }}
-                  placeholder={t("knowledgeBases.searchTest.placeholder")}
-                  aria-label={t("knowledgeBases.searchTest.title")}
-                  className="h-11 w-full rounded-md border border-border-control bg-surface-sunken py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
-                />
-              </div>
+              {/* 隣の lg の Button と同じ高さ（size="lg"）。 */}
+              <TextField
+                id={inputId}
+                label={t("knowledgeBases.searchTest.title")}
+                labelHidden
+                size="lg"
+                value={query}
+                onValueChange={setQuery}
+                onKeyDown={(e) => {
+                  if (isSubmitEnter(e)) void submit();
+                }}
+                placeholder={t("knowledgeBases.searchTest.placeholder")}
+                leadingIcon={SearchIcon}
+                className="min-w-0 flex-1"
+              />
               <Button
                 type="button"
                 icon={SearchIcon}

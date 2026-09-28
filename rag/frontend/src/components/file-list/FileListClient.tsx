@@ -14,6 +14,7 @@ import {
   type SelectFieldOption,
   ToggleChip,
   TableSkeleton,
+  TextField,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
@@ -178,6 +179,11 @@ export function FileListClient() {
     const next = search.trim();
     if (next === q) return;
     resetView(() => setQ(next));
+  };
+  // クリアは入力と適用中の検索語の両方を消す（blur を待たずに一覧を戻す）。
+  const clearSearch = () => {
+    setSearch("");
+    if (q !== "") resetView(() => setQ(""));
   };
 
   const runRowIngest = (doc: DocumentSummary) => {
@@ -364,26 +370,23 @@ export function FileListClient() {
               className="w-60 [&_label]:text-xs"
               buttonClassName="bg-surface"
             />
-            <div className="relative">
-              <SearchIcon
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
-                aria-hidden
-              />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitSearch();
-                }}
-                onBlur={commitSearch}
-                maxLength={FILE_LIST_QUERY_MAX_LENGTH}
-                placeholder={t("fileList.searchPlaceholder")}
-                aria-label={t("fileList.searchPlaceholder")}
-                className="h-10 w-56 rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring"
-              />
-            </div>
+            <TextField
+              id="file-list-search"
+              label={t("fileList.searchPlaceholder")}
+              labelHidden
+              value={search}
+              onValueChange={setSearch}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitSearch();
+              }}
+              onBlur={commitSearch}
+              onClear={clearSearch}
+              clearLabel={t("common.clearSearch")}
+              maxLength={FILE_LIST_QUERY_MAX_LENGTH}
+              placeholder={t("fileList.searchPlaceholder")}
+              leadingIcon={SearchIcon}
+              className="w-56"
+            />
           </div>
         </div>
 

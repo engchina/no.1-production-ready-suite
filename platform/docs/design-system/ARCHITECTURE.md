@@ -188,6 +188,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - 旧トークン名（`bg-card` / `var(--primary)` 等。§5 の表の左列）→ 新名
 - `@engchina/production-ready-ui/dist/**` など内部パスへの直 import → パッケージのルートから import する
 - `loading` 中に `Button` のラベルを差し替える → ラベルは固定する
+- アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-*` を持つ `<input>`）→ `TextField` の `leadingIcon` / `trailing` / `onClear`
 
 prop の妥当性（`Button` に存在しない prop を渡す等）は lint ではなく TypeScript の型チェックで検出します。
 

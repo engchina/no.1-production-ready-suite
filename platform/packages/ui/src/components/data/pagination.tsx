@@ -178,7 +178,7 @@ export function Pagination({
           <span>{prevLabel}</span>
         </Button>
         {pageIndicator ? (
-          <span className="tnum inline-flex min-h-[var(--button-height-sm)] items-center rounded-[var(--button-radius)] border border-border-control px-3 text-fg">
+          <span className="tnum inline-flex min-h-[var(--button-height-sm)] items-center rounded-control border border-border-control px-3 text-fg">
             {pageIndicator}
           </span>
         ) : null}

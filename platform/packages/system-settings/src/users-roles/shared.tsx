@@ -1,8 +1,8 @@
 // ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧＋詳細レイアウトの部品と補助関数。
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
-import { Children, useState, type ReactNode } from "react";
+import { Children, useId, useState, type ReactNode } from "react";
 import { Search, type LucideIcon } from "lucide-react";
-import { FixedSplitPane, cn, type FixedSplitWidePane } from "@engchina/production-ready-ui";
+import { FixedSplitPane, TextField, cn, type FixedSplitWidePane } from "@engchina/production-ready-ui";
 
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
@@ -264,26 +264,23 @@ export function SecuritySearchField({
   disabled?: boolean;
   onChange: (value: string) => void;
 }) {
+  const id = useId();
+  // 検索欄は共有の TextField（先頭アイコン・クリア）で作る（#384）。
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-      <span>{label}</span>
-      <span className="relative">
-        <Search
-          size={16}
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
-          aria-hidden="true"
-        />
-        <input
-          type="search"
-          value={value}
-          data-testid={testId}
-          disabled={disabled}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
-          placeholder={placeholder}
-        />
-      </span>
-    </label>
+    <TextField
+      id={`security-search-${id}`}
+      label={label}
+      type="search"
+      value={value}
+      data-testid={testId}
+      disabled={disabled}
+      onValueChange={onChange}
+      onClear={() => onChange("")}
+      clearLabel={t("security.common.clearSearch")}
+      leadingIcon={Search}
+      placeholder={placeholder}
+      className="min-w-0"
+    />
   );
 }
 
