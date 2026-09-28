@@ -15,7 +15,7 @@
 | `reasoning_tree_search` | 検索方式(PageIndex 型) | 戦略として**選択可能**(`rag_retrieval_strategy`)。`pending_execution=True` | `strategy_bias=None` のため **hybrid 検索へ安全縮退** |
 | `colpali_visual_retrieval` | 検索方式(ColPali 型) | 同上 | 同上(hybrid 縮退) |
 | `self_reflective`(Self-RAG) | 回答スタイル | 未着手 | — |
-| Temporal GraphRAG 検索時フィルタ | 検索/関係情報 | フラグ `rag_graph_temporal_enabled` のみ存在 | 構築側 timestamp 付与のみ |
+| Temporal GraphRAG | 関係情報の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) | — |
 | RAPTOR 検索時昇格 | 検索/根拠確認 | 取込側で summary node を索引済 | 通常検索が summary node にヒット |
 
 未配線時の安全縮退は `app/rag/retrieval_strategy.py::resolve_retrieval_strategy` が未対応 strategy を
@@ -92,9 +92,9 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
   `{"answer":..., "confidence":0-1, "grounded_in_context":bool}` を出力。`confidence<閾値` or
   `grounded_in_context==false` で grounding と連携し **1 回だけ再検索**(CRAG と同じ corrective
   machinery を再利用)。generation_adapter に profile 追加 + pipeline で reflection パース。
-- **Temporal GraphRAG 検索時フィルタ**: build 側 timestamp(`rag_graph_temporal_enabled`)に加え、
-  検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出し Oracle の `valid_from/valid_to`
-  条件でフィルタ。`graph_augmented` 経路に時間条件を足す。
+- **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
+  検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
+  `graph_augmented` 経路に時間条件を足す。設定は実装と同時に追加する(未実装の設定は置かない。#301)。
 - **RAPTOR 検索時昇格**: 既に summary node を索引済。`grounding` の dependency promotion と同様に、
   leaf hit 時に対応する summary node を citation context へ昇格する経路を追加(opt-in)。
 

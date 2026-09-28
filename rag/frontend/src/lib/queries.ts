@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  ANSWER_TRACE_ID_FILTER_MAX,
   api,
   ApiError,
   type BatchUploadFailedItem,
@@ -401,6 +402,14 @@ export function retryUnlessNotFound(failureCount: number, error: unknown): boole
   return failureCount < 3;
 }
 
+/**
+ * 初回の取得に失敗したときだけエラーを返す(#311)。
+ * データがあるときの再取得の失敗では前の内容を出したままにする(UX 契約 messaging.md §3.6)。
+ */
+export function initialLoadError(query: { data: unknown; error: unknown }): unknown {
+  return query.data === undefined ? query.error : null;
+}
+
 /** ドキュメント詳細。 */
 export function useDocument(
   id: string | null,
@@ -423,7 +432,7 @@ export function useDocumentChunks(id: string | null) {
     queryKey: queryKeys.documentChunks(id ?? ""),
     queryFn: () => api.listDocumentChunks(id as string),
     enabled: id != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -433,7 +442,7 @@ export function useDocumentChunkSets(id: string | null, enabled = true) {
     queryKey: queryKeys.documentChunkSets(id ?? ""),
     queryFn: () => api.listDocumentChunkSets(id as string),
     enabled: id != null && enabled,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -492,7 +501,7 @@ export function useDocumentExtractionExport(
     queryKey: queryKeys.documentExtractionExport(id ?? "", format),
     queryFn: () => api.exportDocumentExtraction(id as string, format),
     enabled: id != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -502,7 +511,7 @@ export function useDocumentIngestionSegments(id: string | null) {
     queryKey: queryKeys.documentIngestionSegments(id ?? ""),
     queryFn: () => api.listDocumentIngestionSegments(id as string),
     enabled: id != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -512,7 +521,7 @@ export function useDocumentIngestionJobs(id: string | null) {
     queryKey: queryKeys.documentIngestionJobs(id ?? ""),
     queryFn: () => api.listDocumentIngestionJobs(id as string),
     enabled: id != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -556,9 +565,9 @@ export function useDocumentIngestionConfig(id: string | null) {
     queryKey: queryKeys.documentIngestionConfig(id ?? ""),
     queryFn: () => api.getDocumentIngestionConfig(id as string),
     enabled: id != null,
-    // 404(削除済み/未登録の文書)はリトライしても無意味。兄弟の文書スコープ
-    // クエリ(chunks / extraction-export / ingestion-segments)と挙動を揃える。
-    retry: false,
+    // 404(削除済み/未登録の文書)はリトライしても無意味。それ以外(backend の一時停止による
+    // 時間切れなど)は再試行する。兄弟の文書スコープのクエリと挙動を揃える(#311)。
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -568,7 +577,7 @@ export function useDocumentRecipes(id: string | null) {
     queryKey: queryKeys.documentRecipes(id ?? ""),
     queryFn: () => api.listDocumentRecipes(id as string),
     enabled: id != null,
-    retry: false,
+    retry: retryUnlessNotFound,
     refetchInterval: (query) => {
       const recipes = query.state.data;
       return recipes?.some((recipe) =>
@@ -591,7 +600,7 @@ export function useDocumentRecipeChunks(
     queryFn: () =>
       api.listDocumentRecipeChunks(id as string, recipeId as string),
     enabled: id != null && recipeId != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -627,7 +636,7 @@ export function useDocumentRecipeExtractionExport(
         format,
       ),
     enabled: id != null && recipeId != null,
-    retry: false,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -1116,12 +1125,40 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
   });
 }
 
-/** 保存済み DocRAG 回答の一覧(業務ビュー単位、新しい順)。 */
-export function useDocragAnswers(businessViewId: string | null) {
+/** 保存済み DocRAG 回答の一覧(業務ビュー単位、新しい順。サーバー側のページング。#304)。 */
+export function useDocragAnswers(
+  businessViewId: string | null,
+  page: { limit: number; offset: number },
+) {
   return useQuery({
-    queryKey: ["docrag-answers", businessViewId],
-    queryFn: () => api.listDocragAnswers(businessViewId as string),
+    queryKey: ["docrag-answers", businessViewId, page.limit, page.offset],
+    queryFn: () =>
+      api.listDocragAnswers({
+        businessViewId: businessViewId as string,
+        limit: page.limit,
+        offset: page.offset,
+      }),
     enabled: Boolean(businessViewId),
+  });
+}
+
+/**
+ * 指定した trace_id のうち、保存済みの DocRAG 回答があるもの（チャットの会話の回答用。#304）。
+ * 回答履歴のページングに依存せず、開いている会話の回答だけを引き当てる。
+ */
+export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: string[]) {
+  const ids = traceIds.slice(-ANSWER_TRACE_ID_FILTER_MAX);
+  return useQuery({
+    queryKey: ["docrag-answers", businessViewId, "trace-ids", ids],
+    queryFn: async () => {
+      const page = await api.listDocragAnswers({
+        businessViewId: businessViewId as string,
+        limit: ids.length,
+        traceIds: ids,
+      });
+      return new Set(page.items.map((answer) => answer.trace_id));
+    },
+    enabled: Boolean(businessViewId) && ids.length > 0,
   });
 }
 

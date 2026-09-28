@@ -227,6 +227,17 @@ grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backen
 grep -Fq 'root /' "${site}" || fail "frontend の静的 build を配信していない"
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
+evaluation_location="$(awk '/location ~ \^\/api\/search\/answers\/\[\^\/\]\+\/evaluation\$ \{/,/^ *\}$/' "${site}")"
+test -n "${evaluation_location}" || fail "保存済みの回答の評価の location がない"
+printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_read_timeout 660s;' \
+  || fail "保存済みの回答の評価の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
+printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_pass http://127.0.0.1:8000;' \
+  || fail "保存済みの回答の評価が backend へ proxy されていない"
+frontend_template="${REPO_DIR}/frontend/nginx.conf.template"
+# 範囲の終わりは行だけの `}`（`${BACKEND_URL}` の `}` で止めない）。
+awk '/location ~ \^\/api\/search\/answers\/\[\^\/\]\+\/evaluation\$ \{/,/^ *\}$/' "${frontend_template}" \
+  | grep -Fq 'proxy_read_timeout 660s;' \
+  || fail "frontend の nginx の保存済みの回答の評価の待ち時間が延びていない"
 grep -Fq 'client_max_body_size 210M;' "${site}" || fail "upload の上限が backend の RAG_MAX_UPLOAD_BYTES に合っていない"
 # docker compose の frontend（nginx.conf.template）も同じ上限にする。既定の 1m だと 1 MB 超を送れない（#280）。
 frontend_nginx="${REPO_DIR}/frontend/nginx.conf.template"

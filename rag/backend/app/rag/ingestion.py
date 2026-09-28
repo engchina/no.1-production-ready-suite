@@ -50,8 +50,12 @@ from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.docrag_chunking import (
     DOCRAG_CHUNKING_STRATEGY,
+    DOCRAG_FALLBACK_CHUNKING_STRATEGY,
+    DOCRAG_LAYOUT_MISSING_REASON,
     build_docrag_chunks,
+    docrag_fallback_needed,
     docrag_search_text,
+    mark_docrag_fallback,
 )
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
@@ -1029,16 +1033,23 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
+        # DocRAG 親子階層は Docling の解析結果(docrag_layout)を入力にする。それがない文書は
+        # 失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に残す(#300)。
+        docrag_fallback = docrag_fallback_needed(chunking_params.strategy, extraction)
+        is_docrag = chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY
+        effective_strategy = (
+            DOCRAG_FALLBACK_CHUNKING_STRATEGY if docrag_fallback else chunking_params.strategy
+        )
+        if docrag_fallback:
+            logger.info(
+                "docrag_chunking_fallback",
+                extra={"trace_id": trace_id, "effective_chunk_strategy": effective_strategy},
+            )
 
-        def _run_chunking() -> list[Chunk]:
-            if chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY:
-                # DocRAG 親子階層は docling レイアウトを入力にするため backend 内で行う。
-                return build_docrag_chunks(
-                    extraction, source_name=source_name, params=chunking_params.docrag
-                )
+        def _run_standard_chunking() -> list[Chunk]:
             request = ChunkingStageRequest(
                 extraction=extraction,
-                strategy=chunking_params.strategy,
+                strategy=effective_strategy,
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
                 min_chars=chunking_params.min_chars,
@@ -1049,12 +1060,22 @@ class IngestionPipeline:
                 return remote_chunks
             return chunk_extraction_with_strategy(
                 extraction,
-                strategy=chunking_params.strategy,
+                strategy=effective_strategy,
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
                 min_chars=chunking_params.min_chars,
                 delimiter=chunking_params.delimiter,
             )
+
+        def _run_chunking() -> list[Chunk]:
+            if docrag_fallback:
+                return mark_docrag_fallback(_run_standard_chunking())
+            if is_docrag:
+                # DocRAG 親子階層は docling レイアウトを入力にするため backend 内で行う。
+                return build_docrag_chunks(
+                    extraction, source_name=source_name, params=chunking_params.docrag
+                )
+            return _run_standard_chunking()
 
         docrag_attributes: dict[str, int] = (
             {
@@ -1064,7 +1085,12 @@ class IngestionPipeline:
                 "docrag_parent_max_pages": chunking_params.docrag.parent_max_pages,
                 "docrag_parent_max_children": chunking_params.docrag.parent_max_children,
             }
-            if chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY
+            if is_docrag and not docrag_fallback
+            else {}
+        )
+        fallback_attributes: dict[str, str] = (
+            {"chunk_strategy_fallback_reason": DOCRAG_LAYOUT_MISSING_REASON}
+            if docrag_fallback
             else {}
         )
         chunks = await _observe_cpu_ingestion_stage(
@@ -1074,6 +1100,8 @@ class IngestionPipeline:
             attributes={
                 "chunk_profile": "structure_v1",
                 "chunk_strategy": chunking_params.strategy,
+                "effective_chunk_strategy": effective_strategy,
+                **fallback_attributes,
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
                 "chunk_min_chars": chunking_params.min_chars,
@@ -3147,6 +3175,24 @@ def _safe_artifact_key_part(value: str) -> str:
     if cleaned in {".", ".."}:
         return "segment"
     return cleaned[:160] or "segment"
+
+
+def document_artifact_prefixes(settings: object, document_id: str) -> list[str]:
+    """文書の取込の成果物（正規化原本・抽出 artifact・segment artifact）を置く prefix を返す。
+
+    成果物の key は `{prefix}/{document_id}/{trace_id}...` なので、この prefix を消せば
+    参照が残っていない過去の取込の成果物も含めて後始末できる（文書の削除。#303）。
+    """
+    document_key = _safe_artifact_key_part(document_id)
+    prefixes = [
+        _safe_artifact_prefix(
+            getattr(settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
+        ),
+        _safe_artifact_prefix(
+            getattr(settings, "rag_extraction_artifact_prefix", "artifacts/extractions")
+        ),
+    ]
+    return list(dict.fromkeys(f"{prefix}/{document_key}/" for prefix in prefixes))
 
 
 def _safe_artifact_prefix(value: object) -> str:

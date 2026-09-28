@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, UserRound } from "lucide-react";
+import { ChevronDown, LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 import type { NavLinkComponent, NavSection, SidebarLabels } from "../../navigation/types";
@@ -22,8 +22,6 @@ export interface SidebarProps {
   /** ルーター非依存のリンク（react-router Link 等）。 */
   linkComponent: NavLinkComponent;
   labels: SidebarLabels;
-  /** Command パレットを開く。未指定なら検索ボタンを表示しない。 */
-  onOpenCommandPalette?: () => void;
   /** 下部のユーザー/ログアウト等のスロット（アプリ側が auth を注入）。 */
   footer?: ReactNode;
 }
@@ -43,7 +41,6 @@ export function Sidebar({
   onSetSectionCollapsed,
   linkComponent: Link,
   labels,
-  onOpenCommandPalette,
   footer,
 }: SidebarProps) {
   const sidebarState = collapsed ? "collapsed" : "expanded";
@@ -107,40 +104,6 @@ export function Sidebar({
         </button>
       </div>
       <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden py-3", collapsed ? "px-2" : "px-3")}>
-        {onOpenCommandPalette ? (
-          <SidebarTooltip label={labels.commandOpen} enabled={collapsed}>
-            <button
-              type="button"
-              onClick={onOpenCommandPalette}
-              aria-label={labels.commandOpen}
-              title={collapsed ? undefined : labels.commandOpen}
-              className={cn(
-                "mb-3 flex h-9 min-h-9 w-full items-center overflow-hidden rounded-md border border-border text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg",
-                collapsed ? "justify-center px-0" : "gap-2 px-3"
-              )}
-            >
-              <Search className="shrink-0" size={16} aria-hidden />
-              <span
-                className={cn(
-                  "sidebar-reveal min-w-0 flex-1 truncate text-left",
-                  collapsed && "w-0"
-                )}
-                aria-hidden={collapsed}
-              >
-                {labels.commandOpen}
-              </span>
-              <kbd
-                className={cn(
-                  "sidebar-reveal shrink-0 rounded border border-border-strong px-1.5 py-0.5 text-xs font-medium text-fg-subtle",
-                  collapsed && "hidden"
-                )}
-                aria-hidden
-              >
-                ⌘K
-              </kbd>
-            </button>
-          </SidebarTooltip>
-        ) : null}
         {sections.map((section) => {
           const containsActive = section.items.some((item) => isActive(item.href));
           // セクション開閉は展開幅サイドバーでのみ作用（icon-only 幅は常に全表示）。

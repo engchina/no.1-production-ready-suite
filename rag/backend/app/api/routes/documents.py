@@ -40,7 +40,13 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_docrag_chunking_params
-from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY, build_docrag_chunks
+from app.rag.docrag_chunking import (
+    DOCRAG_CHUNKING_STRATEGY,
+    DOCRAG_FALLBACK_CHUNKING_STRATEGY,
+    build_docrag_chunks,
+    docrag_fallback_needed,
+    mark_docrag_fallback,
+)
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
@@ -48,6 +54,7 @@ from app.rag.ingestion import (
     IngestionPipeline,
     IngestionTimeoutError,
     IngestionUserError,
+    document_artifact_prefixes,
 )
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
@@ -80,6 +87,7 @@ from app.schemas.document import (
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentClassification,
+    DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
     DocumentExtractionExport,
@@ -504,6 +512,46 @@ async def document_stats() -> ApiResponse[DocumentStats]:
         data=stats,
         warning_messages=[degraded.message] if degraded else [],
     )
+
+
+DELETE_IMPACT_MAX_DOCUMENTS = 100
+
+
+@router.get("/delete-impact", response_model=ApiResponse[list[DocumentDeleteImpact]])
+async def document_delete_impact(
+    document_id: Annotated[
+        list[str],
+        Query(min_length=1, max_length=DELETE_IMPACT_MAX_DOCUMENTS),
+    ],
+) -> ApiResponse[list[DocumentDeleteImpact]]:
+    """削除の前に、正本を参照する重複文書の件数と所属 KB を返す（#303）。
+
+    重複文書は chunk を持たず正本の chunk を使うため、正本を消すとその KB の検索対象から
+    内容が消える。自前の索引を持つ（INDEXED の）重複文書と、同時に削除する文書は数えない。
+    """
+    requested = list(dict.fromkeys(value.strip() for value in document_id if value.strip()))
+    if not requested:
+        raise HTTPException(status_code=422, detail="document_id を指定してください。")
+    deleting = set(requested)
+    duplicates = await OracleClient().list_duplicate_documents(requested)
+    impacts: dict[str, DocumentDeleteImpact] = {
+        requested_id: DocumentDeleteImpact(document_id=requested_id) for requested_id in requested
+    }
+    for duplicate in duplicates:
+        source_id = duplicate.duplicate_of_document_id
+        if source_id not in impacts or duplicate.id in deleting:
+            continue
+        if duplicate.status == FileStatus.INDEXED:
+            continue
+        impact = impacts[source_id]
+        known = {knowledge_base.id for knowledge_base in impact.knowledge_bases}
+        impact.duplicate_count += 1
+        impact.knowledge_bases.extend(
+            knowledge_base
+            for knowledge_base in duplicate.knowledge_bases
+            if knowledge_base.id not in known
+        )
+    return ApiResponse(data=list(impacts.values()))
 
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])
@@ -1010,8 +1058,10 @@ async def preview_document_recipe_chunks(
         (request or DocumentChunkPreviewRequest()).settings_overrides(),
     )
     extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
+    # Docling の解析結果がない文書では、DocRAG 親子階層の代わりに構造認識で分割する(#300)。
+    docrag_fallback = docrag_fallback_needed(candidate.rag_chunking_strategy, extraction)
     try:
-        if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY:
+        if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY and not docrag_fallback:
             chunks = build_docrag_chunks(
                 extraction,
                 source_name=detail.file_name,
@@ -1020,12 +1070,18 @@ async def preview_document_recipe_chunks(
         else:
             chunks = chunk_extraction_with_strategy(
                 extraction,
-                strategy=candidate.rag_chunking_strategy,
+                strategy=(
+                    DOCRAG_FALLBACK_CHUNKING_STRATEGY
+                    if docrag_fallback
+                    else candidate.rag_chunking_strategy
+                ),
                 chunk_size=candidate.rag_chunk_size,
                 overlap=candidate.rag_chunk_overlap,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
             )
+            if docrag_fallback:
+                chunks = mark_docrag_fallback(chunks)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -2419,6 +2475,25 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             logger.info(
                 "document_artifact_delete_failed",
                 extra={"document_id": document_id, "artifact_ref_hash": artifact_ref_hash},
+            )
+    # 参照が残っていない過去の取込の成果物も、文書の prefix ごと消す（#303）。
+    # 失敗しても文書の削除は取り消さず、ログと warning で知らせる。
+    for artifact_prefix in document_artifact_prefixes(get_settings(), document_id):
+        try:
+            prefix_result = await storage.delete_prefix(artifact_prefix)
+        except Exception as exc:  # noqa: BLE001 - 後始末の失敗で削除の結果を変えない
+            artifact_delete_failed_count += 1
+            logger.warning(
+                "document_artifact_prefix_delete_failed",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            continue
+        artifact_deleted_count += prefix_result.deleted
+        if prefix_result.failed:
+            artifact_delete_failed_count += prefix_result.failed
+            logger.warning(
+                "document_artifact_prefix_delete_partial",
+                extra={"document_id": document_id, "failed_count": prefix_result.failed},
             )
     if artifact_delete_failed_count:
         warning_messages.append(
@@ -4578,6 +4653,17 @@ async def _document_artifact_paths(
     for segment in segments:
         if segment.artifact_path:
             paths.append(segment.artifact_path)
+    # レシピ行の `preprocess_artifact`（レシピごとのファイル準備の成果物。#303）。
+    try:
+        recipes = await oracle.list_document_recipes(detail.id)
+    except Exception:
+        recipes = []
+    for recipe in recipes:
+        artifact = recipe.get("preprocess_artifact")
+        if isinstance(artifact, Mapping):
+            recipe_artifact_path = artifact.get("object_storage_path")
+            if isinstance(recipe_artifact_path, str):
+                paths.append(recipe_artifact_path)
     original_path = detail.object_storage_path
     deduped: list[str] = []
     seen: set[str] = set()

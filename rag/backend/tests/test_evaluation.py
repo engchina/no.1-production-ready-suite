@@ -10,6 +10,8 @@ from pytest import LogCaptureFixture, MonkeyPatch
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
+from app.rag.evaluation_adapter import resolve_evaluation_suite
+from app.rag.pipeline import NO_RESULTS_ANSWER, NO_RESULTS_WARNING
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationExperiment,
@@ -572,6 +574,85 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
         "guardrail_warning": 1,
     }
     assert result.elapsed_ms == 12.5
+
+
+class NoResultsPipeline:
+    """根拠が見つからず no-results で答える pipeline(本番の固定文言と同じ応答)。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+    ) -> SearchResponse:
+        return SearchResponse(
+            answer=NO_RESULTS_ANSWER,
+            citations=[],
+            trace_id=trace_id or "trace-no-results",
+            guardrail_warnings=[NO_RESULTS_WARNING],
+            elapsed_ms=3.0,
+        )
+
+
+@pytest.mark.parametrize("suite", ["retrieval_focused", "balanced", "strict_ci", "ragas_like"])
+async def test_expected_no_results_case_passes_every_suite(suite: str) -> None:
+    """正解が no-results の否定 case は、no-results で答えれば合格として数える(#301)。"""
+    runner = EvaluationRunner(pipeline=NoResultsPipeline())
+    thresholds = resolve_evaluation_suite(suite)
+    assert thresholds is not None
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-negative",
+                query="存在しない社内規程の承認者は？",
+                relevant_document_ids=[],
+                expected_answer_keywords=[],
+            )
+        ],
+        top_k=5,
+        rerank_top_n=3,
+        thresholds=thresholds,
+    )
+
+    assert metrics.threshold_failures == []
+    assert metrics.passed is True
+    assert metrics.precision_at_k == 1.0
+    assert metrics.recall_at_k == 1.0
+    assert metrics.mrr == 1.0
+    assert metrics.groundedness_pass_rate == 1.0
+    assert metrics.faithfulness == 1.0
+    assert metrics.response_relevancy == 1.0
+    assert metrics.failure_reason_counts == {}
+    result = metrics.case_results[0]
+    assert result.reciprocal_rank == 1.0
+    assert result.groundedness_passed is True
+    assert result.groundedness_score == 1.0
+    assert result.failure_reasons == []
+
+
+async def test_positive_case_with_no_results_still_counts_low_groundedness() -> None:
+    """正解の document がある case で no-results になったら、従来どおり根拠なしとして数える。"""
+    runner = EvaluationRunner(pipeline=NoResultsPipeline())
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-positive",
+                query="経費申請の承認者は？",
+                relevant_document_ids=["doc-a"],
+                expected_answer_keywords=[],
+            )
+        ],
+        top_k=5,
+        rerank_top_n=3,
+    )
+
+    assert metrics.mrr == 0.0
+    assert metrics.groundedness_pass_rate == 0.0
+    assert metrics.response_relevancy == 0.0
+    result = metrics.case_results[0]
+    assert result.groundedness_passed is False
+    assert result.failure_reasons == ["retrieval_miss", "low_groundedness", "guardrail_warning"]
 
 
 async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture) -> None:
@@ -1200,16 +1281,16 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
     assert data["precision_at_k"] == 1.0
     assert data["recall_at_k"] == 1.0
     assert data["answer_keyword_hit_rate"] == 1.0
-    # 非空の固定回答に根拠が無い case は low-groundedness として扱う。
-    assert data["groundedness_pass_rate"] == 0.0
+    # 正解が no-results の否定 case を no-results で答えたので、groundedness も合格(#301)。
+    assert data["groundedness_pass_rate"] == 1.0
     assert data["passed"] is True
     assert data["threshold_failures"] == []
-    assert data["failure_reason_counts"] == {"low_groundedness": 1}
+    assert data["failure_reason_counts"] == {}
     assert data["case_results"][0]["case_id"] == "empty-store"
     assert data["case_results"][0]["retrieved_document_ids"] == []
     assert data["case_results"][0]["answer_keyword_hit"] is True
-    assert data["case_results"][0]["groundedness_passed"] is False
-    assert data["case_results"][0]["failure_reasons"] == ["low_groundedness"]
+    assert data["case_results"][0]["groundedness_passed"] is True
+    assert data["case_results"][0]["failure_reasons"] == []
 
 
 def _minimal_eval_metrics() -> EvaluationMetrics:

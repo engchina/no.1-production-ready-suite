@@ -251,6 +251,13 @@ class FakeWorkspaceOracle:
         _ = document_id
         return []
 
+    async def list_duplicate_documents(self, document_ids: list[str]) -> list[DocumentSummary]:
+        return [
+            DocumentSummary.model_validate(detail.model_dump())
+            for detail in self.documents.values()
+            if detail.duplicate_of_document_id in document_ids
+        ]
+
     async def delete_document(self, document_id: str) -> bool:
         if document_id not in self.documents:
             return False
@@ -2573,6 +2580,157 @@ def test_delete_document_clears_duplicate_references(
 
     assert resp.status_code == 200
     assert fake_document_dependencies.documents[duplicate_id].duplicate_of_document_id is None
+
+
+def test_delete_document_removes_past_ingestion_artifacts_by_prefix(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """参照が残っていない過去の取込の成果物とレシピの preprocess_artifact も消す（#303）。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    other_id = _upload("other.txt", b"other policy", "text/plain")
+    storage = ObjectStorageClient()
+    past_paths = [
+        anyio.run(
+            storage.put,
+            f"artifacts/extractions/{document_id}/old-trace.json",
+            b'{"raw_text":"old"}',
+            "application/json",
+        ),
+        anyio.run(
+            storage.put,
+            f"artifacts/extractions/{document_id}/old-trace/segments/p1.json",
+            b'{"raw_text":"old segment"}',
+            "application/json",
+        ),
+        anyio.run(
+            storage.put,
+            f"artifacts/canonical/{document_id}/old-trace/canonical.pdf",
+            b"%PDF-1.7\nold",
+            "application/pdf",
+        ),
+    ]
+    # prefix の設定を変える前に作ったレシピの成果物（文書の prefix の外）も、行の参照から消す。
+    recipe_artifact_path = anyio.run(
+        storage.put,
+        f"legacy-canonical/{document_id}/recipe-2/prepared.pdf",
+        b"%PDF-1.7\nrecipe",
+        "application/pdf",
+    )
+    other_path = anyio.run(
+        storage.put,
+        f"artifacts/extractions/{other_id}/trace.json",
+        b'{"raw_text":"other"}',
+        "application/json",
+    )
+
+    async def list_document_recipes(requested_id: str) -> list[dict[str, object]]:
+        assert requested_id == document_id
+        return [
+            {"recipe_id": "recipe-1", "preprocess_artifact": None},
+            {
+                "recipe_id": "recipe-2",
+                "preprocess_artifact": {"object_storage_path": recipe_artifact_path},
+            },
+        ]
+
+    monkeypatch.setattr(
+        fake_document_dependencies, "list_document_recipes", list_document_recipes, raising=False
+    )
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["artifact_deleted_count"] == 4
+    assert body["data"]["artifact_delete_failed_count"] == 0
+    assert body["warning_messages"] == []
+    for path in [*past_paths, recipe_artifact_path]:
+        with pytest.raises(FileNotFoundError):
+            anyio.run(storage.get, path)
+    assert anyio.run(storage.get, other_path) == b'{"raw_text":"other"}'
+
+
+def test_delete_document_keeps_deleting_when_prefix_cleanup_fails(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成果物の後始末に失敗しても文書の削除は止めず、warning で知らせる（#303）。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+
+    async def failing_delete_prefix(self: ObjectStorageClient, prefix: str) -> object:
+        raise RuntimeError(f"list failed: {prefix}")
+
+    monkeypatch.setattr(ObjectStorageClient, "delete_prefix", failing_delete_prefix)
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["object_deleted"] is True
+    assert body["data"]["artifact_delete_failed_count"] == 2
+    assert any("artifact" in message for message in body["warning_messages"])
+    assert document_id not in fake_document_dependencies.documents
+
+
+def test_delete_impact_counts_duplicates_that_rely_on_the_source(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """正本の削除の前に、正本を参照する重複文書の件数と所属 KB を返す（#303）。"""
+    source_id = _upload("original.txt", b"same body", "text/plain")
+    duplicate_id = _upload("duplicate.txt", b"same body", "text/plain")
+    indexed_duplicate_id = _upload("duplicate-indexed.txt", b"same body", "text/plain")
+    co_deleted_duplicate_id = _upload("duplicate-selected.txt", b"same body", "text/plain")
+    standalone_id = _upload("standalone.txt", b"other body", "text/plain")
+    anyio.run(
+        fake_document_dependencies.assign_documents_to_knowledge_base,
+        "kb-hr",
+        [duplicate_id],
+    )
+    anyio.run(
+        fake_document_dependencies.assign_documents_to_knowledge_base,
+        "kb-indexed",
+        [indexed_duplicate_id],
+    )
+    anyio.run(
+        fake_document_dependencies.assign_documents_to_knowledge_base,
+        "kb-selected",
+        [co_deleted_duplicate_id],
+    )
+    # 自前の索引を持つ重複文書は、正本を消しても検索対象が消えない。
+    fake_document_dependencies.documents[indexed_duplicate_id] = (
+        fake_document_dependencies.documents[indexed_duplicate_id].model_copy(
+            update={"status": FileStatus.INDEXED}
+        )
+    )
+
+    resp = client.get(
+        "/api/documents/delete-impact",
+        params=[
+            ("document_id", source_id),
+            ("document_id", standalone_id),
+            ("document_id", co_deleted_duplicate_id),
+        ],
+    )
+
+    assert resp.status_code == 200
+    impacts = {impact["document_id"]: impact for impact in resp.json()["data"]}
+    assert impacts[source_id]["duplicate_count"] == 1
+    assert [kb["id"] for kb in impacts[source_id]["knowledge_bases"]] == ["kb-default", "kb-hr"]
+    assert impacts[standalone_id] == {
+        "document_id": standalone_id,
+        "duplicate_count": 0,
+        "knowledge_bases": [],
+    }
+    assert impacts[co_deleted_duplicate_id]["duplicate_count"] == 0
+
+
+def test_delete_impact_requires_document_ids() -> None:
+    """対象の文書を指定しない問い合わせは 422 にする。"""
+    assert client.get("/api/documents/delete-impact").status_code == 422
+    assert (
+        client.get("/api/documents/delete-impact", params={"document_id": " "}).status_code == 422
+    )
 
 
 def test_document_detail_returns_extraction_after_ingest() -> None:

@@ -100,6 +100,7 @@ import {
   CHUNK_SIZE_MIN_CHARS,
   DOCRAG_CHUNKING_PARAMS,
   chunkSizeLabelKey,
+  docragChunkingFellBack,
   chunkingStrategyPreset,
   isSemanticBoundaryStrategy,
   overlapLabelKey,
@@ -108,6 +109,7 @@ import { parseStructuredExtraction, type SourceDerivationView } from "@/lib/extr
 import {
   documentWorkspaceShouldRefresh,
   ingestionJobIsActive,
+  initialLoadError,
   useDocument,
   useDocumentChunkSets,
   useDocumentRecipeChunks,
@@ -1069,7 +1071,7 @@ export function DocumentWorkspace({
           selectedRecipeId={selectedRecipeId}
           onSelect={selectRecipe}
           loading={recipesQuery.isPending}
-          error={recipesQuery.error}
+          error={initialLoadError(recipesQuery)}
           onRetry={() => void recipesQuery.refetch()}
           chunkSets={chunkSetsQuery.data}
           sourceModality={sourceProfile?.modality ?? null}
@@ -1411,7 +1413,7 @@ export function DocumentWorkspace({
                   onFormatChange={setExportFormat}
                   content={extractionExportQuery.data?.content ?? ""}
                   loading={hasSelectedRecipeExtraction && extractionExportQuery.isPending}
-                  error={extractionExportQuery.isError}
+                  error={initialLoadError(extractionExportQuery) != null}
                   pageCount={extractionExportQuery.data?.page_count ?? 0}
                   elementCount={extractionExportQuery.data?.element_count ?? 0}
                   chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
@@ -1444,7 +1446,7 @@ export function DocumentWorkspace({
               jobs={recipeJobs}
               segments={recipeSegments}
               loading={documentJobsQuery.isPending}
-              error={documentJobsQuery.isError}
+              error={initialLoadError(documentJobsQuery) != null}
               nowMs={elapsedNowMs}
               suppressMessage={documentFailure.primaryMessage}
               ingestionParser={ingestionParser}
@@ -1472,7 +1474,7 @@ export function DocumentWorkspace({
             <IngestionSegmentsPanel
               segments={recipeSegments}
               loading={segmentsQuery.isPending}
-              error={segmentsQuery.isError}
+              error={initialLoadError(segmentsQuery) != null}
               retrying={retryFailedSegments.isPending}
               visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
               retryStatus={
@@ -2598,7 +2600,8 @@ function DocumentChunksPanel({
     );
   }
 
-  return (
+  const docragFellBack = docragChunkingFellBack(chunks);
+  const list = (
     <ol className="space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
       {chunks.map((chunk) => {
         const selected = chunk.chunk_id === selectedChunkId;
@@ -2658,6 +2661,16 @@ function DocumentChunksPanel({
         );
       })}
     </ol>
+  );
+  if (!docragFellBack) return list;
+  // DocRAG 親子階層を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
+  return (
+    <div className="space-y-3">
+      <Banner severity="warning" title={t("flow.chunks.docragFallbackTitle")}>
+        {t("flow.chunks.docragFallback")}
+      </Banner>
+      {list}
+    </div>
   );
 }
 

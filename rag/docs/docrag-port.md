@@ -44,7 +44,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 ## 使い方（推奨の流れ）
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、Vision（図・画像を AI で読み取る）を有効にする。有効にすると、画像 1 枚ごとに LLM の呼び出しと時間がかかる。
-2. **分割**：文書分割を「DocRAG 親子階層」にする。Docling の解析結果が必要で、他のパーサーの結果に対して選ぶと Chunk 作成のジョブが「DocRAG 親子階層には Docling の解析結果が必要です。…」で失敗する（分割プレビューは 422）。失敗しても直前の active chunk_set は検索対象のまま残る。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
+2. **分割**：文書分割を「DocRAG 親子階層」にする。親子の分割は Docling の解析結果（`parser_artifacts.docrag_layout`）を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI の解析結果など）では、失敗させずに「構造認識」（`structure_aware`。chunk size・overlap・最小文字数は文書分割の設定値）で分割する（#300）。縮退したことは各 chunk の metadata（`chunk_strategy=structure_aware`、`chunk_strategy_requested=docrag_small_to_big`、`chunk_strategy_fallback_reason=docrag_layout_missing`）と取込の trace（`effective_chunk_strategy`）に残り、文書詳細の Chunk タブと分割プレビューに「構造認識で分割しました」と表示する。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直す。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
 3. **確認**：文書詳細の抽出タブで、次を確認できる。
    - 要素の種別と bbox
    - 表のテキスト化
@@ -57,8 +57,10 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 5. **検索**：
    - 業務ビューを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - DocRAG の回答には「回答の根拠と実行記録（DocRAG）」パネル（信頼度、人手確認、根拠の構成、実行記録）が付く。
-   - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。どちらも「この回答を削除」で個別に削除できる。
-6. **評価**：DocRAG の回答パネル（RAG 検索・回答履歴・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。
+   - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる（新しい順に 10 件ずつ。共通の `Pagination` でページを移り、ページ番号は作業状態として残る。#304）。チャットでは各回答の「DocRAG の根拠と実行記録」から開く（会話の回答の trace_id で保存の有無を引き当てる）。どちらも「この回答を削除」で個別に削除できる。
+   - 回答履歴に出るのは自分の回答だけ（詳細・評価・削除も同じ）。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は、利用できる業務ビューのすべての利用者の回答を扱える（#304）。
+   - 参照するナレッジベースが 0 件の業務ビューでは検索・チャットしない（利用者が使える全 KB を検索しない）。画面は選んだ時点で理由を示し、API は 409 と理由（「この業務ビューには参照するナレッジベースがありません。…」）を返す。複数の業務ビューを選んだときは、KB を持つ業務ビューの KB だけを検索する（#304）。
+6. **評価**：DocRAG の回答パネル（RAG 検索・回答履歴・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。評価は LLM を複数回呼ぶため、この API だけ時間の上限を長くしている（#304）：backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で打ち切って 504 と理由を返し、評価を保存しない。画面は 630 秒、nginx（`frontend/nginx.conf.template`・`init_script.sh` の `location ~ ^/api/search/answers/[^/]+/evaluation$`）は 660 秒待つ（backend の理由が画面に届くよう、外側ほど長くする）。
 7. **フィードバック**：回答を「役に立たなかった」と評価するときに、rag_poc の分類（ナレッジ不足・情報が古い・質問が曖昧を含む）と修正した回答を入力できる。管理者はフィードバック画面の詳細から、Approved FAQ への登録と品質評価のケースへの追加ができる。
 8. **検証**：`uv run python -m app.rag.docrag_verify_cli`（`answers` / `regression` / `crag-goldset`）で、QA の一括の標準回答評価、rag_poc の問い合わせ回帰、CRAG goldset の評価を実行できる（`docs/evaluation-observability-guardrails.md`）。
 9. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
@@ -84,7 +86,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | DocRAG 回答記録の保存日数（`0` は無期限）。検索・回答設定 > 回答スタイルの「DocRAG 回答の保存期間」で変更できる |
-| `RAG_DOCRAG_PROFILE` | `generic` | `legacy` で業務固有の分類・日本語問い合わせ規則を有効にする。規則は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON から読む（書式は rag_poc の `domain_profile.example.json`）。業務固有の profile は同梱していない |
+| `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
 | `DOCRAG_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
 docling サービスの Vision は、backend のサービス管理が橋渡しする `OCI_ENTERPRISE_AI_*`（endpoint / API キー / project / VLM モデル）を使う。モデル設定を変更したら docling サービスを再起動する。
@@ -95,10 +97,25 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
-- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
+- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報・持ち主 `user_id_hash`）。持ち主は回答を生成した利用者（監査 context の `user_id_hash`）で、migration `20260928_002_answer_record_owner` が列と index（`rag_answer_records_owner_idx`）を足す。既存の行（持ち主なし）は、同じ trace_id のチャットの回答（`rag_messages`）か検索の監査（`rag_search_audit`。監査を Oracle に保存している環境だけ）から利用者が 1 人に決まるものだけ持ち主を補い、補えなかった行は持ち主なしのまま SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが扱える（一般の利用者の回答履歴には出ない）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。
 
 DocRAG 親子階層の 5 項目は rag_poc の「チャンキング」tab と同じ名前・既定値・範囲（`docrag.chunking.constants` の `DEFAULT_*` / `*_RANGE`）。検索用テキストの 3 項目（`contextual_search_text_enabled` / `search_text_context_max_chars` / `child_search_text_max_chars`）は rag_poc でも画面に出していないので、既定値のまま使う。DocRAG 親子階層は検索用テキストを自分で組み立てるため、文書分割の「文脈ヘッダを検索対象へ追加」は効かない（画面でも DocRAG 選択時は出さない）。5 項目を既定から変えた文書だけ chunk_set_id が変わる（既定のままなら変わらない）。
+
+## 回答エンジンが DocRAG のときに使われない設定（#300）
+
+DocRAG の回答フロー（`DocragAnswerEngine`）は `rag_docrag_*` の設定と DocRAG の回答生成テンプレートで回答し、標準の回答エンジン向けの次の設定は読まない。入力は残し、画面の各欄に「回答エンジンが DocRAG の業務ビューでは使われません」と表示する（業務ビューの編集画面では、回答エンジンが DocRAG のときと、グローバル既定を継承しているとき）。
+
+| 設定 | 画面 | DocRAG での扱い |
+|---|---|---|
+| 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、業務ビュー「検索方法」 | 使わない。DocRAG は質問拡張戦略で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答生成フロー）が行う |
+| 全文検索の分割方式 | 同上 | **使う**（Oracle Text の検索語の切り出し） |
+| 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認、業務ビュー「根拠確認」 | 使わない。DocRAG の根拠確認は業務ビューの「DocRAG の回答生成フロー」（補正 RAG / 通常 RAG）で選ぶ |
+| 回答スタイル | 検索・回答設定 > 回答スタイル、業務ビュー「回答スタイル」 | 使わない（同じ画面の「DocRAG 回答の保存期間」は使う） |
+| system prompt の版（カスタム回答スタイル） | 検索・回答設定 > 回答プロンプト | 使わない。DocRAG は同じ画面の「DocRAG の回答生成テンプレート」を使う |
+| 回答の役割・口調・既定の回答言語 | 業務ビュー「回答プロンプト」 | 使わない |
+
+安全チェックは DocRAG でも質問と回答の両方に適用する。
 
 ## 親子階層（`hierarchical_parent_child`）の削除（#271）
 
@@ -106,8 +123,8 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 
 - 保存済みの `hierarchical_parent_child`（`backend/.env` の `RAG_CHUNKING_STRATEGY`、文書・レシピの処理設定、KB の構築設定）は、読み込み時に `docrag_small_to_big` として扱う。子サイズ `chunk_child_size` / `RAG_CHUNK_CHILD_SIZE` は読まない。DB の移行は不要で、次に保存すると新しい値だけが残る（文書分割の設定を保存すると `.env` から `RAG_CHUNK_CHILD_SIZE` の行も消える）。
 - 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。`GET /api/documents/{id}/ingestion-config` は `chunking_strategy` の差分（`chunking_drift`）として返す。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない。DocRAG 親子階層で作り直すには、その文書の Chunk を再作成する。
-- DocRAG 親子階層は Docling の解析結果が必要。親子階層を使っていた文書の文書解析が Docling 以外なら、Chunk を作り直すと失敗する（上の「使い方」2.）。その文書は文書解析を Docling にして再解析するか、文書のレシピで別の分割方式（構造認識など）を選ぶ。
-- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は DocRAG 親子階層として読み、後者は無視する）。Docling を使わない環境では、更新前に `RAG_CHUNKING_STRATEGY` を `structure_aware` などへ変えておく。
+- DocRAG 親子階層は Docling の解析結果で親子に分割する。旧「親子階層」は Docling 以外の解析結果でも動いていたため、そうした文書の Chunk を作り直すと、失敗させずに構造認識で分割する（上の「使い方」2.。#300 より前は失敗していた）。親子で分割したい文書は、文書解析を Docling にして再解析する。
+- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は DocRAG 親子階層として読み、後者は無視する）。Docling を使わない環境では、Chunk は構造認識で作られる。最初から構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
 
 ## rag_poc との差分
 

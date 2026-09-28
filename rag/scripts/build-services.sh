@@ -2,8 +2,9 @@
 # parser / preprocess マイクロサービスの Docker イメージをビルドする。
 #
 # dev(サービス管理画面)の「起動」は --no-build で行うため、事前にこのスクリプトで
-# イメージをビルドしておく必要がある。dev 起動と同じ compose ファイル群でビルドし、
-# イメージ名(例 no1-production-ready-rag-parser-docling)を一致させる。
+# イメージをビルドしておく必要がある。dev 起動と同じ compose project 名・ファイル群でビルドし、
+# イメージ名(例 production-ready-rag-parser-docling)を一致させる。project 名は
+# docker-compose.yml の name・backend/app/services/control.py・init_script.sh と同じ(#310)。
 #
 # 使い方:
 #   scripts/build-services.sh                  # 既定: 全サービスをビルド(CPU + ASR + 前処理)
@@ -19,7 +20,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
+COMPOSE_PROJECT_NAME="production-ready-rag"
+COMPOSE_ARGS=(
+  --project-name "${COMPOSE_PROJECT_NAME}"
+  --project-directory "${ROOT_DIR}"
+  -f "${ROOT_DIR}/docker-compose.yml"
+  -f "${ROOT_DIR}/docker-compose.dev.yml"
+)
 CPU_PARSERS=(parser-docling parser-unstructured)
 GPU_PARSERS=(parser-asr)
 PREPROCESS=(
@@ -89,6 +96,6 @@ for t in "${targets[@]}"; do
 done
 
 echo "[build-services] ビルド対象: ${targets[*]}"
-echo "[build-services] docker compose ${COMPOSE_FILES[*]} ${profile_args[*]:-} build ${targets[*]}"
-docker compose "${COMPOSE_FILES[@]}" ${profile_args[@]+"${profile_args[@]}"} build "${targets[@]}"
+echo "[build-services] docker compose ${COMPOSE_ARGS[*]} ${profile_args[*]:-} build ${targets[*]}"
+docker compose "${COMPOSE_ARGS[@]}" ${profile_args[@]+"${profile_args[@]}"} build "${targets[@]}"
 echo "[build-services] 完了。サービス管理画面の「起動」で立ち上げられます。"

@@ -126,6 +126,9 @@ def normalize_legacy_chunking_strategy_value(value: object) -> object:
 # DocRAG 親子階層(docrag_small_to_big)の分割パラメータ。既定値と範囲は rag_poc の
 # docrag.chunking.constants(DEFAULT_* / *_RANGE)と同じ(テストで一致を確認する)。
 # docrag.chunking は import すると分割実装一式を読み込むため、ここでは値を複製して持つ。
+# OCI Enterprise AI の LLM 1 回の timeout（`oci_enterprise_ai_timeout_seconds`）の上限（秒）。
+# 保存済みの回答の評価の時間の上限もこの値から決める（#304）。
+OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
 DOCRAG_CHILD_TARGET_CHARS_DEFAULT = 1000
 DOCRAG_CHILD_TARGET_CHARS_MIN = 300
 DOCRAG_CHILD_TARGET_CHARS_MAX = 1600
@@ -376,7 +379,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "空なら既知 envelope を順番に照合する。"
         ),
     )
-    oci_enterprise_ai_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
+    oci_enterprise_ai_timeout_seconds: float = Field(
+        default=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+        gt=0.0,
+        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    )
     oci_enterprise_ai_max_retries: int = Field(default=3, ge=0, le=5)
     oci_enterprise_ai_llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
     oci_enterprise_ai_vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
@@ -573,7 +580,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
-            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果が必要)、"
+            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果を使う。"
+            "解析結果が Docling でない文書は structure_aware で分割する)、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"
             "fixed_delimiter は指定文字列での固定分割。"
@@ -854,10 +862,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
     )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
-        default="generic",
+        default="legacy",
         description=(
-            "DocRAG の業務 profile。legacy は DOCRAG_DOMAIN_PROFILE_FILE の業務分類・"
-            "日本語問い合わせ規則を有効化する(既定 OFF)。"
+            "DocRAG の業務 profile。DocRAG の回答フローは docrag の current_profile()"
+            "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
+            " DOCRAG_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
+            "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"
+            "受け付けるが、回答フローには反映されない。"
         ),
     )
     rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
@@ -1429,13 +1440,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_retrieval_service_url: str = Field(
         default="http://pipeline-retrieval:8000",
         description="retrieval ステージマイクロサービスの base URL。",
-    )
-    rag_graph_temporal_enabled: bool = Field(
-        default=False,
-        description=(
-            "Temporal GraphRAG: full プロファイル時に KG の entity/relationship へ timestamp を"
-            "付与し、検索時に時間文脈フィルタを可能にする。off/entities では無効。"
-        ),
     )
     rag_raptor_enabled: bool = Field(
         default=False,

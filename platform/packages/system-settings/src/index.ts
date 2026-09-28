@@ -172,6 +172,7 @@ export {
   type RequireAuthProps,
   type SidebarAccount,
 } from "./auth/RequireAuth";
+export { SidebarAccountSection, type SidebarAccountSectionProps } from "./auth/SidebarAccountSection";
 export { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./auth/messages";
 export {
   AUTH_FORBIDDEN_EVENT,

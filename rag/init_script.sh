@@ -404,6 +404,23 @@ server {
         return 308 /api/;
     }
 
+    # 保存済みの回答の評価（標準回答による評価。LLM を複数回呼ぶ）だけ待ち時間を延ばす（#304）。
+    # backend の上限（LLM 1 回の timeout の設定の上限 600 秒）と画面の timeout（630 秒）より長くし、
+    # 画面が失敗を出した後で backend が評価を保存する、を起こさない。
+    location ~ ^/api/search/answers/[^/]+/evaluation\$ {
+        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_send_timeout 660s;
+        proxy_read_timeout 660s;
+    }
+
     location /api/ {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;

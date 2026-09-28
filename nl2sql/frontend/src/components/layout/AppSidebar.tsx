@@ -1,12 +1,9 @@
 import { useCallback, useMemo } from "react";
-import { Bug } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
-import { useSidebarAccount } from "@engchina/production-ready-system-settings";
+import { SidebarAccountSection } from "@engchina/production-ready-system-settings";
 
 import {
   Sidebar as UiSidebar,
-  SidebarAccountFooter,
-  cn,
   type NavSection as UiNavSection,
   type SidebarLabels,
 } from "@engchina/production-ready-ui";
@@ -24,10 +21,6 @@ import { NAV_SECTIONS, resolveCollapsedSections } from "./nav-config";
 export function AppSidebar() {
   const { pathname } = useLocation();
   const auth = useAuth();
-  // 表示名・ロール・パスワード変更・ログアウトは共通の helper が作る（#220）。
-  const account = useSidebarAccount({
-    routes: { login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange },
-  });
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const savedCollapsedSections = useUiStore((state) => state.collapsedSections);
@@ -61,7 +54,6 @@ export function AppSidebar() {
     aria: t("nav.sidebar.aria"),
     expand: t("nav.sidebar.expand"),
     collapse: t("nav.sidebar.collapse"),
-    commandOpen: t("nav.command.open"),
     sectionContainsActive: t("nav.section.containsActive"),
     sectionToggleExpand: (section) => t("nav.section.toggle.expand", { section }),
     sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
@@ -83,35 +75,14 @@ export function AppSidebar() {
       onSetSectionCollapsed={setSectionCollapsed}
       linkComponent={Link}
       labels={labels}
+      // 表示名・ロール・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307）。
       footer={
-        account ? (
-          <SidebarAccountFooter
-            name={account.name}
-            roles={account.roles}
-            collapsed={collapsed}
-            labels={account.labels}
-            // ローカル DEBUG はログインしていないため、パスワード変更・ログアウトの代わりに状態を示す。
-            notice={account.debugMode ? <DebugModeNotice collapsed={collapsed} /> : undefined}
-            actions={account.actions}
-            onLogout={account.onLogout}
-          />
-        ) : null
+        <SidebarAccountSection
+          routes={{ login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange }}
+          collapsed={collapsed}
+        />
       }
     />
   );
 }
 
-function DebugModeNotice({ collapsed }: { collapsed: boolean }) {
-  const label = t("auth.sidebar.debugMode");
-  return (
-    <div
-      className={cn("sidebar-debug-status flex min-h-9 items-center gap-2 rounded-md border", collapsed ? "justify-center px-1" : "px-2 py-1.5")}
-      role="status"
-      aria-label={label}
-      title={collapsed ? label : undefined}
-    >
-      <Bug size={16} className="shrink-0" aria-hidden />
-      {!collapsed ? <span className="text-xs leading-4">{label}</span> : null}
-    </div>
-  );
-}

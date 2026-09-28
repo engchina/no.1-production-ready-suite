@@ -52,7 +52,7 @@ for (const viewport of [
       page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })
     ).toBeChecked();
 
-    await expectStrategyParams(page, /構造認識/, [
+    await expectStrategyParams(page, /^構造認識/, [
       "chunk サイズ(文字)",
       "overlap(文字)",
       "最小 chunk 文字数",
@@ -89,7 +89,7 @@ for (const viewport of [
     );
     await expectStrategyParams(page, /^固定長 /, ["chunk サイズ(文字)", "overlap(文字)"]);
 
-    await page.getByRole("radio", { name: /構造認識/ }).click();
+    await page.getByRole("radio", { name: /^構造認識/ }).click();
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
 

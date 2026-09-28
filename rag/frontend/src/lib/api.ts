@@ -100,6 +100,17 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
 /** アップロードの送信は時間で打ち切らない（0 = タイムアウトなし。#280）。 */
 export const UPLOAD_REQUEST_TIMEOUT_MS = 0;
 
+/**
+ * 保存済みの回答の評価（標準回答による評価）の timeout（#304）。評価は LLM を複数回呼ぶため、
+ * 通常の API の 30 秒では足りない。backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で
+ * 打ち切って 504 と理由を返すので、画面はそれより 30 秒長く待ち、backend の理由を表示する。
+ * nginx（`nginx.conf.template`・`init_script.sh`）はさらに長い 660 秒にしている。
+ */
+export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
+
+/** チャットが会話の回答の保存有無を一度に引き当てる trace_id の上限（backend と同じ）。 */
+export const ANSWER_TRACE_ID_FILTER_MAX = 100;
+
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
 export type JsonValue =
@@ -515,6 +526,13 @@ export interface DocumentDeleteResult {
   artifact_delete_failed_count: number;
 }
 
+/** 削除の前に確認する影響（#303）。正本を参照する重複文書の件数と、その所属ナレッジベース。 */
+export interface DocumentDeleteImpact {
+  document_id: string;
+  duplicate_count: number;
+  knowledge_bases: KnowledgeBaseRef[];
+}
+
 export interface UploadResult {
   id: string;
   file_name: string;
@@ -753,7 +771,6 @@ export interface KnowledgeBaseQueryConfig {
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
-  evaluation_suite: EvaluationSuiteName | null;
   /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
   answer_engine?: AnswerEngineName | null;
   /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
@@ -2590,6 +2607,11 @@ export const api = {
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
     ),
+  getDocumentDeleteImpact: (ids: string[]) => {
+    const search = new URLSearchParams();
+    for (const id of ids) search.append("document_id", id);
+    return request<DocumentDeleteImpact[]>(`/api/documents/delete-impact?${search.toString()}`);
+  },
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",
@@ -2953,13 +2975,21 @@ export const api = {
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query }),
     ),
-  listDocragAnswers: (businessViewId: string, limit = 50) =>
-    request<DocragAnswerSummary[]>(
-      `/api/search/answers?${new URLSearchParams({
-        business_view_id: businessViewId,
-        limit: String(limit),
-      }).toString()}`,
-    ),
+  listDocragAnswers: (params: {
+    businessViewId: string;
+    limit: number;
+    offset?: number;
+    /** 指定するとその回答だけを返す（チャットが会話の回答の保存有無を引き当てる）。 */
+    traceIds?: string[];
+  }) => {
+    const search = new URLSearchParams({
+      business_view_id: params.businessViewId,
+      limit: String(params.limit),
+      offset: String(params.offset ?? 0),
+    });
+    for (const traceId of params.traceIds ?? []) search.append("trace_id", traceId);
+    return request<Page<DocragAnswerSummary>>(`/api/search/answers?${search.toString()}`);
+  },
   getDocragAnswer: (traceId: string) =>
     request<DocragAnswerDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
@@ -2968,6 +2998,7 @@ export const api = {
     request<DocragAnswerDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}/evaluation`,
       jsonBody({ standard_answer: standardAnswer }),
+      { timeoutMs: ANSWER_EVALUATION_TIMEOUT_MS },
     ),
   deleteDocragAnswer: (traceId: string) =>
     request<{ trace_id: string }>(
