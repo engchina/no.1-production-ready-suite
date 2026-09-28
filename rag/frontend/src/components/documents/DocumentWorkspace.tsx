@@ -460,6 +460,9 @@ export function DocumentWorkspace({
     ],
     segmentStatuses: recipeSegments.map((segment) => segment.status),
   });
+  // レシピの step で FAILED の工程（ステップ表示と同じ工程を Banner でも失敗として示す。#329）。
+  const failedRecipePhase =
+    selectedRecipe?.steps.find((step) => step.status === "FAILED")?.phase ?? null;
   // 文書失敗を 1 本化（messaging-spec §9 P2/P5）: 原因 1 本 + 失敗工程の導出。
   const documentFailure = useMemo(
     () =>
@@ -467,6 +470,7 @@ export function DocumentWorkspace({
         documentStatus: status,
         latestJobStatus: failedDocumentJob?.status ?? latestDocumentJob?.status,
         latestJobPhase: failedDocumentJob?.phase ?? latestDocumentJob?.phase,
+        failedRecipePhase,
         latestJobErrorMessage:
           failedDocumentJob?.error_message ?? latestDocumentJob?.error_message,
         segments: recipeSegments,
@@ -476,6 +480,7 @@ export function DocumentWorkspace({
       status,
       failedDocumentJob?.status,
       failedDocumentJob?.phase,
+      failedRecipePhase,
       failedDocumentJob?.error_message,
       latestDocumentJob?.status,
       latestDocumentJob?.phase,
@@ -487,7 +492,7 @@ export function DocumentWorkspace({
   );
   // 失敗工程のタイトル用 phase(failedStep は同じ入力から導出されるため対応が取れる)。
   const failedPhase = documentFailure.failedStep
-    ? failedDocumentJob?.phase ?? latestDocumentJob?.phase ?? null
+    ? failedRecipePhase ?? failedDocumentJob?.phase ?? latestDocumentJob?.phase ?? null
     : null;
   const ingestionErrorDisplays = useMemo(
     () =>
