@@ -149,6 +149,41 @@ export {
   type DatabaseUnavailableEventDetail,
 } from "./database-gate/types";
 
+// システムテーブルの管理（状態・作成 / 更新・確認語付きの全再作成・台帳。RAG / NL2SQL から共通化。#325）
+export { SystemTablesCard, type SystemTablesCardProps } from "./system-tables/SystemTablesCard";
+export {
+  SYSTEM_TABLES_MESSAGES,
+  systemObjectTypeMessageKey,
+  type SystemTablesMessageKey,
+  type SystemTablesMessages,
+} from "./system-tables/messages";
+export {
+  SYSTEM_TABLES_RUNNING_REFETCH_MS,
+  isSystemTableRecreateConfirmationValid,
+  isSystemTablesStatusData,
+  systemTableControlsBusy,
+  systemTableDetailCounts,
+  systemTableObjects,
+  useInitializeSystemTables,
+  useSystemTablesStatus,
+  type UseInitializeSystemTablesOptions,
+} from "./system-tables/systemTables";
+export {
+  SYSTEM_TABLES_QUERY_KEY,
+  type SystemObjectMetadata,
+  type SystemObjectType,
+  type SystemTableMetadata,
+  type SystemTableObjectRef,
+  type SystemTableOperationResult,
+  type SystemTableOperationState,
+  type SystemTableOperationStatus,
+  type SystemTableSchemaStatus,
+  type SystemTablesApi,
+  type SystemTablesInitializeRequest,
+  type SystemTablesOperationData,
+  type SystemTablesStatusData,
+} from "./system-tables/types";
+
 // ユーザー管理・ロール管理（NL2SQL から移設。#206）
 export { UserManagementPage, type UserManagementPageProps } from "./users-roles/UserManagementPage";
 export {

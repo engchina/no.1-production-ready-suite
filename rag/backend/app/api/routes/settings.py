@@ -16,6 +16,7 @@ from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router, model_payload
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci import test_oci_config as _test_oci_config
+from pr_system_settings.system_schema import system_tables_status_error
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
@@ -106,11 +107,7 @@ from app.rag.retrieval_adapter import (
     RetrievalStrategyStatus,
     retrieval_adapter_runtime_settings,
 )
-from app.rag.system_schema import (
-    SystemSchemaError,
-    oracle_error_code,
-    system_schema_manager,
-)
+from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
     normalize_vector_index_profile,
@@ -301,12 +298,7 @@ async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     try:
         data = await asyncio.to_thread(system_schema_manager.status)
     except Exception as exc:
-        code = oracle_error_code(exc)
-        safe_code = code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
-        raise HTTPException(
-            status_code=503,
-            detail=f"システムテーブルの状態を取得できませんでした ({safe_code})。",
-        ) from exc
+        raise system_tables_status_error(exc) from exc
     return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
@@ -327,10 +319,9 @@ async def initialize_system_tables(
             confirmation=payload.confirmation,
         )
     except SystemSchemaError as exc:
-        headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
         return JSONResponse(
             status_code=exc.status_code,
-            headers=headers,
+            headers=exc.retry_headers,
             content={
                 "data": None,
                 "error_messages": [exc.public_message],

@@ -26,6 +26,7 @@ from pr_system_settings.oci import oci_config_file as _oci_config_file
 from pr_system_settings.oci import oci_profile as _oci_profile
 from pr_system_settings.oci import parse_oci_config as _parse_oci_config
 from pr_system_settings.oci import read_oci_config_text as _read_oci_config_text
+from pr_system_settings.system_schema import oracle_error_code, system_tables_status_error
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
@@ -47,11 +48,7 @@ from app.features.nl2sql.oracle_adapter import (
     OracleNl2SqlAdapter,
     SelectAiCredentialExistsError,
 )
-from app.features.settings.system_schema import (
-    SystemSchemaError,
-    oracle_error_code,
-    system_schema_manager,
-)
+from app.features.settings.system_schema import SystemSchemaError, system_schema_manager
 from app.features.settings.system_schema_runtime import reset_system_schema_runtime
 from app.readiness import deepsec_readiness
 from app.schemas.settings import (
@@ -396,11 +393,7 @@ def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     try:
         data = system_schema_manager.status()
     except Exception as exc:
-        code = _safe_schema_error_code(exc)
-        raise HTTPException(
-            status_code=503,
-            detail=f"システムテーブルの状態を取得できませんでした ({code})。",
-        ) from exc
+        raise system_tables_status_error(exc) from exc
     return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
@@ -420,14 +413,13 @@ def initialize_system_tables(
             confirmation=payload.confirmation,
         )
     except SystemSchemaError as exc:
-        headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
         return api_problem_response(
             request,
             status_code=exc.status_code,
             detail=exc.public_message,
             code=exc.code,
-            retryable=True if exc.code == "ORA-00054" else None,
-            headers=headers,
+            retryable=True if exc.retryable else None,
+            headers=exc.retry_headers,
         )
     try:
         reset_system_schema_runtime(
@@ -442,11 +434,6 @@ def initialize_system_tables(
             ),
         ) from exc
     return ApiResponse(data=SystemTablesOperationData.model_validate(data))
-
-
-def _safe_schema_error_code(exc: Exception) -> str:
-    code = oracle_error_code(exc)
-    return code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
 
 
 async def _run_model_settings_test(

@@ -47,6 +47,11 @@ from pr_system_settings.oci import OciObjectStorageSettingsUpdate as OciObjectSt
 from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploadData
 from pr_system_settings.oci import OciSettingsData as OciSettingsData
 from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
+from pr_system_settings.system_schema import SystemSchemaOperation, SystemSchemaStatus
+from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
+from pr_system_settings.system_schema import (
+    SystemTablesInitializeRequest as SystemTablesInitializeRequest,
+)
 
 # アップロード保存先の schema は3製品共通（platform の pr_system_settings。#97）。
 # 互換のため re-export する。
@@ -63,10 +68,9 @@ from pydantic import BaseModel, Field, field_validator
 
 SelectAiCredentialRegion = Literal["ap-osaka-1", "us-chicago-1"]
 SelectAiCredentialOperation = Literal["created", "recreated", "already_exists"]
-SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
-SystemTableOperationStatus = Literal["idle", "running", "failed"]
-SystemTableOperationKind = Literal["initialize", "recreate"]
-SystemTableOperationResult = Literal["no_op", "initialized", "migrated", "recreated"]
+# 状態・操作の型と、操作の状態・初期化の request は 3 製品共通（#325）。
+SystemTableSchemaStatus = SystemSchemaStatus
+SystemTableOperationResult = SystemSchemaOperation
 
 
 class SelectAiCredentialData(BaseModel):
@@ -127,17 +131,6 @@ class SystemObjectMetadata(BaseModel):
     last_analyzed_at: str | None = None
 
 
-class SystemTableOperationState(BaseModel):
-    """複数 replica が共有する schema operation lease 状態。"""
-
-    status: SystemTableOperationStatus
-    operation_kind: SystemTableOperationKind | None = None
-    lease_expires_at: str | None = None
-    last_error_code: str | None = None
-    schema_epoch: int = 0
-    updated_at: str | None = None
-
-
 class SystemTablesStatusData(BaseModel):
     """NL2SQL system table の read-only status。"""
 
@@ -153,13 +146,6 @@ class SystemTablesStatusData(BaseModel):
     tables: list[SystemTableMetadata]
     objects: list[SystemObjectMetadata]
     operation_state: SystemTableOperationState
-
-
-class SystemTablesInitializeRequest(BaseModel):
-    """初期化または全再作成の request。"""
-
-    recreate: bool = False
-    confirmation: str | None = Field(default=None, max_length=128)
 
 
 class SystemTablesOperationData(SystemTablesStatusData):

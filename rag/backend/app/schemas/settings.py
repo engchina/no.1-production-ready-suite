@@ -44,6 +44,11 @@ from pr_system_settings.oci import OciObjectStorageSettingsUpdate as OciObjectSt
 from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploadData
 from pr_system_settings.oci import OciSettingsData as OciSettingsData
 from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
+from pr_system_settings.system_schema import SystemSchemaOperation, SystemSchemaStatus
+from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
+from pr_system_settings.system_schema import (
+    SystemTablesInitializeRequest as SystemTablesInitializeRequest,
+)
 
 # アップロード保存先の schema は3製品共通（platform の pr_system_settings。#97）。
 # 互換のため re-export する。
@@ -142,10 +147,9 @@ _CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
 }
 
 
-SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
-SystemTableOperationStatus = Literal["idle", "running", "failed"]
-SystemTableOperationKind = Literal["initialize", "recreate"]
-SystemTableOperationResult = Literal["no_op", "initialized", "migrated", "recreated"]
+# 状態・操作の型と、操作の状態・初期化の request は 3 製品共通（#325）。
+SystemTableSchemaStatus = SystemSchemaStatus
+SystemTableOperationResult = SystemSchemaOperation
 
 
 class SystemTableObjectData(BaseModel):
@@ -165,17 +169,6 @@ class SystemTableMetadata(BaseModel):
     last_analyzed_at: str | None = None
 
 
-class SystemTableOperationState(BaseModel):
-    """DB lease と直近操作状態。"""
-
-    status: SystemTableOperationStatus
-    operation_kind: SystemTableOperationKind | None = None
-    lease_expires_at: str | None = None
-    last_error_code: str | None = None
-    schema_epoch: int = 0
-    updated_at: str | None = None
-
-
 class SystemTablesStatusData(BaseModel):
     """RAG system table の read-only status。"""
 
@@ -192,13 +185,6 @@ class SystemTablesStatusData(BaseModel):
     retired_objects: list[SystemTableObjectData]
     tables: list[SystemTableMetadata]
     operation_state: SystemTableOperationState
-
-
-class SystemTablesInitializeRequest(BaseModel):
-    """初期化または全再作成の request。"""
-
-    recreate: bool = False
-    confirmation: str | None = Field(default=None, max_length=128)
 
 
 class SystemTablesOperationData(SystemTablesStatusData):

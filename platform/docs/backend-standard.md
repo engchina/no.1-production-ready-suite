@@ -67,6 +67,15 @@ Dockerfile は持たない（自前のコードは Docker イメージを作ら�
 - 各製品の `/api/ready` の `oracle` check も同じ `database_readiness` を使う。
 - 画面側は `@engchina/production-ready-system-settings` の `DatabaseGate` / `useDatabaseStatus` / `DatabaseUnavailableNotice` を使う（製品は API・導線・製品名の入る文言だけを渡す）。ゲートを通さない画面は3製品ともシステム設定の 5 画面（OCI 認証・アップロード保存先・モデル・データベース・外観）だけ。NL2SQL の保存領域の確認のような製品固有の確認は `secondaryGate` で差し込む。
 
+### システムテーブルの管理（`/api/settings/database/system-tables`、#325）
+
+製品のシステムテーブル（versioned Oracle system schema）の状態の取得・作成 / 更新・全再作成は、`pr_system_settings.system_schema.SystemSchemaManagerBase` の上に製品の manager を作る（RAG の `app.rag.system_schema`、NL2SQL の `app.features.settings.system_schema`）。Agent はシステムテーブルの管理を持たない（DDL は `agent_security_migrate` の CLI だけ）。
+
+- API: `GET /api/settings/database/system-tables`（DDL を実行しない。取得できなければ 503、公開するのは ORA コードだけ）と `POST /api/settings/database/system-tables/initialize`（`{recreate, confirmation}`）。応答の骨格は `{status, schema_head, applied_versions, pending_versions, expected_/existing_object_count, expected_/existing_table_count, missing_objects, tables, operation_state}` で、製品が項目を足す（RAG の `schema_version` / `retired_objects`、NL2SQL の `objects`）。
+- 骨格が持つもの: 状態の分類（業務テーブルが無い → `missing`、必須 object の不足 → `partial`、廃止 object の残り・未適用 / checksum 不一致の migration → `outdated`、それ以外 → `ready`）、操作の lease（`<製品>_SCHEMA_OPERATIONS` の 1 行。期限切れは奪える。成功で `schema_epoch` を 1 増やす）、台帳（`<製品>_SCHEMA_MIGRATIONS` の MERGE と読み込み）、確認語の検証（DB に触る前に完全一致だけを通す。不一致は 422）、失敗の記録と安全化（`LAST_ERROR_CODE` に ORA コード。ORA-00054 は 409 と `Retry-After: 5`）、`ALTER SESSION SET DDL_LOCK_TIMEOUT`（0〜120 秒）。
+- 製品が持つもの: manifest（テーブル・索引などの一覧）と DDL の正本、migration の適用方法、`_status_on`（状態の組み立て）・`_ensure_control_schema`・`_initialize_on`（lease を取った後の手順）、実行中の job の確認、接続 pool、製品名が入る文言と確認語（`RECREATE_<製品>_SYSTEM_TABLES`）。
+- 画面側は `@engchina/production-ready-system-settings` の `SystemTablesCard`（と `useSystemTablesStatus` / `useInitializeSystemTables`）を使う（NL2SQL の見た目が基準）。製品は API・権限（`canManage`）・確認語・製品名の入る文言・成功時に捨てる cache を渡す。NL2SQL は所有者付きの object 名の表示（`renderObjectName`）、RAG は確認語に加えた確認ダイアログ（`confirmRecreate`）を差し込む。
+
 ## 製品間の連携（MCP とサービストークン、#230）
 
 Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答）を使う。製品同士はコードで依存しない。

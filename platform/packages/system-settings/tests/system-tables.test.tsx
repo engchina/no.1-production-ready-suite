@@ -1,0 +1,254 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
+
+import {
+  SYSTEM_TABLES_MESSAGES,
+  SYSTEM_TABLES_QUERY_KEY,
+  SystemTablesCard,
+  isSystemTableRecreateConfirmationValid,
+  isSystemTablesStatusData,
+  systemObjectTypeMessageKey,
+  systemTableControlsBusy,
+  systemTableDetailCounts,
+  systemTableObjects,
+  type SystemTableSchemaStatus,
+  type SystemTablesApi,
+  type SystemTablesCardProps,
+  type SystemTablesStatusData,
+} from "../src";
+
+const PHRASE = "RECREATE_DEMO_SYSTEM_TABLES";
+const routes = { databaseSettings: "/settings/database#adb-management", systemTables: "/settings/system-tables" };
+const api: SystemTablesApi = {
+  getSystemTablesStatus: () => new Promise<never>(() => undefined),
+  initializeSystemTables: () => new Promise<never>(() => undefined),
+};
+
+function statusData(
+  status: SystemTableSchemaStatus,
+  overrides: Partial<SystemTablesStatusData> = {},
+): SystemTablesStatusData {
+  return {
+    status,
+    schema_head: 17,
+    applied_versions: [0, 1, 2],
+    pending_versions: status === "outdated" ? [17] : [],
+    expected_object_count: 3,
+    existing_object_count: status === "missing" ? 0 : status === "partial" ? 2 : 3,
+    expected_table_count: 2,
+    existing_table_count: status === "missing" ? 0 : 2,
+    missing_objects: status === "partial" ? [{ name: "DEMO_IDX", object_type: "INDEX" }] : [],
+    tables: [
+      {
+        name: "DEMO_ITEMS",
+        exists: status !== "missing",
+        estimated_rows: 12,
+        created_at: "2026-07-19T00:00:00Z",
+        last_analyzed_at: null,
+      },
+    ],
+    operation_state: {
+      status: "idle",
+      operation_kind: null,
+      lease_expires_at: null,
+      last_error_code: null,
+      schema_epoch: 7,
+      updated_at: null,
+    },
+    ...overrides,
+  };
+}
+
+function clientWith(data?: unknown, error = false) {
+  // 失敗した状態を描くため、mount 時の取り直しをしない。
+  const client = new QueryClient({ defaultOptions: { queries: { retryOnMount: false } } });
+  const query = client.getQueryCache().build(client, { queryKey: SYSTEM_TABLES_QUERY_KEY });
+  if (data !== undefined) client.setQueryData(SYSTEM_TABLES_QUERY_KEY, data);
+  if (error) query.setState({ status: "error", error: new Error("503"), fetchStatus: "idle" });
+  return client;
+}
+
+function renderCard(client: QueryClient, props: Partial<SystemTablesCardProps> = {}) {
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <SystemTablesCard
+          api={api}
+          canManage
+          recreateConfirmation={PHRASE}
+          databaseRoutes={routes}
+          {...props}
+        />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("判定の helper", () => {
+  it("確認語は前後の空白を除いた完全一致だけを許す", () => {
+    expect(isSystemTableRecreateConfirmationValid(PHRASE, PHRASE)).toBe(true);
+    expect(isSystemTableRecreateConfirmationValid(`  ${PHRASE} `, PHRASE)).toBe(true);
+    expect(isSystemTableRecreateConfirmationValid(PHRASE.toLowerCase(), PHRASE)).toBe(false);
+    expect(isSystemTableRecreateConfirmationValid("ADMIN_EXECUTE", PHRASE)).toBe(false);
+    expect(isSystemTableRecreateConfirmationValid("", PHRASE)).toBe(false);
+  });
+
+  it("mutation か DB の lease が実行中なら操作を止める", () => {
+    expect(systemTableControlsBusy(false, "idle")).toBe(false);
+    expect(systemTableControlsBusy(false, "failed")).toBe(false);
+    expect(systemTableControlsBusy(true, "idle")).toBe(true);
+    expect(systemTableControlsBusy(false, "running")).toBe(true);
+  });
+
+  it("描画に必要な項目が無い payload を弾く（retired_objects は任意）", () => {
+    expect(isSystemTablesStatusData(statusData("ready"))).toBe(true);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), retired_objects: [] })).toBe(true);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), retired_objects: null })).toBe(false);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), tables: null })).toBe(false);
+    expect(isSystemTablesStatusData({ status: "ready" })).toBe(false);
+    expect(isSystemTablesStatusData(null)).toBe(false);
+  });
+
+  it("全管理 object が無い応答はテーブルだけを、テーブルの件数で並べる", () => {
+    const tablesOnly = statusData("ready");
+    expect(systemTableObjects(tablesOnly).map((row) => row.object_type)).toEqual(["TABLE"]);
+    expect(systemTableDetailCounts(tablesOnly)).toEqual({ existing: 2, expected: 2 });
+
+    const withObjects = statusData("ready", {
+      objects: [{ ...tablesOnly.tables[0], object_type: "INDEX" }],
+    });
+    expect(systemTableObjects(withObjects).map((row) => row.object_type)).toEqual(["INDEX"]);
+    expect(systemTableDetailCounts(withObjects)).toEqual({ existing: 3, expected: 3 });
+  });
+
+  it("object の種類の表示名は既知の種類だけ", () => {
+    expect(systemObjectTypeMessageKey("PACKAGE BODY")).toBe(
+      "settings.database.systemTables.table.objectType.package body",
+    );
+    expect(systemObjectTypeMessageKey("TEXT_PREFERENCE")).toBeUndefined();
+  });
+});
+
+describe("SystemTablesCard の状態ごとの表示", () => {
+  it("読み込み中は経過時間付きの読み込み表示と Skeleton だけを出す", () => {
+    const html = renderCard(new QueryClient());
+    expect(html).toContain('data-testid="system-tables-loading"');
+    expect(html).toContain(SYSTEM_TABLES_MESSAGES["settings.database.systemTables.loading"]);
+    expect(html).not.toContain(SYSTEM_TABLES_MESSAGES["settings.database.systemTables.action.initialize"]);
+  });
+
+  it.each([
+    ["missing", "未初期化", "主要テーブルがまだありません"],
+    ["partial", "一部不足", "必須オブジェクトが 1 件不足しています"],
+    ["outdated", "更新必要", "migration version または checksum が古く"],
+  ] as const)("%s は状態のバッジと対処の案内を出す", (status, label, hint) => {
+    const html = renderCard(clientWith(statusData(status)));
+    expect(html).toContain(label);
+    expect(html).toContain(hint);
+  });
+
+  it("ready は案内を出さず、要約（件数・head・epoch）と操作を出す", () => {
+    const html = renderCard(clientWith(statusData("ready")));
+    expect(html).toContain("初期化済み");
+    expect(html).not.toContain('role="alert"');
+    expect(html).toContain("2 / 2");
+    expect(html).toContain("3 / 3");
+    expect(html).toContain("v17");
+    expect(html).toContain("作成・更新");
+    expect(html).toContain("状態を再取得");
+    expect(html).toContain('data-testid="execution-confirmation-field"');
+    expect(html).toContain(`入力条件: <span class="font-mono`);
+    expect(html).toContain(`placeholder="${PHRASE}"`);
+    // 確認語が未入力の間は全再作成を押せない。
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?すべて再作成/s);
+  });
+
+  it("名前の head はそのまま出し、製品の文言で上書きできる", () => {
+    const html = renderCard(clientWith(statusData("ready", { schema_head: "20260703_002_feedback" })), {
+      messages: { "settings.database.systemTables.title": "RAG システムテーブル" },
+    });
+    expect(html).toContain("20260703_002_feedback");
+    expect(html).toContain("RAG システムテーブル");
+  });
+
+  it("権限が無い利用者には状態と再取得だけを出す", () => {
+    const html = renderCard(clientWith(statusData("missing")), { canManage: false });
+    // Banner は文ごとに分けて描くので、文単位で確かめる。
+    expect(html).toContain("状態は参照できます。");
+    expect(html).toContain("作成・更新するにはシステムテーブル管理権限が必要です。");
+    expect(html).toContain("状態を再取得");
+    expect(html).not.toContain("作成・更新</button>");
+    expect(html).not.toContain("execution-confirmation-field");
+  });
+
+  it("操作中（lease が running）は操作中のバッジを出し、作成・更新を止める", () => {
+    const running = statusData("partial", {
+      operation_state: { ...statusData("partial").operation_state, status: "running", operation_kind: "initialize" },
+    });
+    const html = renderCard(clientWith(running));
+    expect(html).toContain("操作中");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+  });
+
+  it("前回の失敗はエラーコードを、ロック待ちの失敗は対処を出す", () => {
+    const failed = (code: string) =>
+      statusData("partial", {
+        operation_state: { ...statusData("partial").operation_state, status: "failed", last_error_code: code },
+      });
+    expect(renderCard(clientWith(failed("ORA-00600")))).toContain("エラーコード: ORA-00600");
+    expect(renderCard(clientWith(failed("ORA-00054")))).toContain("待機時間内に解放されませんでした (ORA-00054)");
+  });
+
+  it("状態を取得できないときは DB の案内（banner）と再試行を出し、操作を出さない", () => {
+    const html = renderCard(clientWith(undefined, true));
+    expect(html).toContain("データベースを起動してください");
+    expect(html).toContain("再試行");
+    expect(html).not.toContain("作成・更新");
+  });
+
+  it("想定外の形の payload は描画せず、取得失敗として扱う", () => {
+    const html = renderCard(clientWith({ status: "ready" }));
+    expect(html).toContain("データベースを起動してください");
+    expect(html).not.toContain("作成・更新");
+  });
+
+  it("詳細の表は既定で所有者付きの名前と種類を出し、製品の表示に差し替えられる", () => {
+    const data = statusData("ready", {
+      objects: [
+        {
+          name: "DEMO_ITEMS",
+          owner: "APP",
+          qualified_name: "APP.DEMO_ITEMS",
+          object_type: "TABLE",
+          exists: true,
+          estimated_rows: 1200,
+          created_at: null,
+          last_analyzed_at: null,
+        },
+        {
+          name: "DEMO_IDX",
+          object_type: "INDEX",
+          exists: false,
+          estimated_rows: null,
+          created_at: null,
+          last_analyzed_at: null,
+        },
+      ],
+    });
+    const html = renderCard(clientWith(data));
+    expect(html).toContain("管理オブジェクトの詳細を表示（存在 3 / 必須 3）");
+    expect(html).toContain("APP.DEMO_ITEMS");
+    expect(html).toContain("1,200");
+    expect(html).toContain("索引");
+    expect(html).toContain("対象外");
+    expect(html).toContain('data-testid="system-tables-scroll-region"');
+
+    const custom = renderCard(clientWith(data), {
+      renderObjectName: (object) => <strong>{`name:${object.name}`}</strong>,
+    });
+    expect(custom).toContain("<strong>name:DEMO_IDX</strong>");
+  });
+});

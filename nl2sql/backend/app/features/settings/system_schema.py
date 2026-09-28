@@ -5,13 +5,29 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import uuid
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+
+from pr_system_settings.system_schema import (
+    IGNORED_APPLY_CODES,
+    IGNORED_DROP_CODES,
+    SystemSchemaBusyError,
+    SystemSchemaError,
+    SystemSchemaManagerBase,
+    SystemSchemaStatus,
+    bind_list,
+    iso_timestamp,
+    oracle_error_code,
+)
+from pr_system_settings.system_schema import (
+    SystemSchemaActiveJobsError as _SharedActiveJobsError,
+)
+from pr_system_settings.system_schema import (
+    classify_system_schema_status as classify_schema_status,
+)
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
 from app.features.nl2sql.object_identity import qualified_object_name
@@ -19,24 +35,12 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-SystemSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
-SystemSchemaOperation = Literal["no_op", "initialized", "migrated", "recreated"]
-
 RECREATE_CONFIRMATION = "RECREATE_NL2SQL_SYSTEM_TABLES"
 CONTROL_TABLE = "NL2SQL_SCHEMA_OPERATIONS"
 MIGRATION_TABLE = "NL2SQL_SCHEMA_MIGRATIONS"
-CONTROL_KEY = "system_schema"
 
-_IGNORED_APPLY_CODES = frozenset(
-    {
-        "ORA-00001",  # idempotent seed / migration ledger insert
-        "ORA-00955",  # object already exists
-        "ORA-01430",  # column already exists
-        "ORA-01442",  # column is already NOT NULL
-        "ORA-01451",  # column is already NULL
-    }
-)
-_IGNORED_DROP_CODES = frozenset({"ORA-00942", "ORA-01418", "ORA-02289"})
+# DROP で読み飛ばす Oracle のエラーに、sequence が無い（ORA-02289）を足す。
+_IGNORED_DROP_CODES = IGNORED_DROP_CODES | {"ORA-02289"}
 _ACTIVE_JOB_STATES = ("ACCEPTED", "PENDING", "QUEUED", "RUNNING", "PROCESSING")
 _CREATE_OBJECT_PATTERN = re.compile(
     r"\bCREATE\s+(?:OR\s+REPLACE\s+|UNIQUE\s+|VECTOR\s+)?"
@@ -253,32 +257,11 @@ MANAGED_FOREIGN_KEYS: tuple[ManagedForeignKey, ...] = (
 _MANAGED_FOREIGN_KEYS_BY_NAME = {constraint.name: constraint for constraint in MANAGED_FOREIGN_KEYS}
 
 
-class SystemSchemaError(RuntimeError):
-    """secret や SQL を含めない schema operation error。"""
-
-    def __init__(self, code: str, public_message: str, *, status_code: int = 500) -> None:
-        super().__init__(public_message)
-        self.code = code
-        self.public_message = public_message
-        self.status_code = status_code
-
-
-class SystemSchemaBusyError(SystemSchemaError):
+class SystemSchemaActiveJobsError(_SharedActiveJobsError):
     def __init__(self) -> None:
         super().__init__(
-            "SCHEMA_OPERATION_IN_PROGRESS",
-            "別のシステムテーブル操作が実行中です。完了後に状態を再取得してください。",
-            status_code=409,
-        )
-
-
-class SystemSchemaActiveJobsError(SystemSchemaError):
-    def __init__(self) -> None:
-        super().__init__(
-            "SCHEMA_JOBS_RUNNING",
             "実行中の schema refresh、Ontology、または SQL生成評価 job があります。"
-            "完了または停止してから再実行してください。",
-            status_code=409,
+            "完了または停止してから再実行してください。"
         )
 
 
@@ -397,46 +380,37 @@ def _object_owner_fields(owner: str, name: str) -> dict[str, str]:
     return {"owner": owner, "qualified_name": qualified_object_name(owner, name)}
 
 
-def oracle_error_code(exc: Exception) -> str:
-    match = re.search(r"ORA-\d{5}", str(exc), flags=re.IGNORECASE)
-    return match.group(0).upper() if match else "SCHEMA_OPERATION_FAILED"
-
-
-def _iso(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        current = value if value.tzinfo else value.replace(tzinfo=UTC)
-        return current.isoformat()
-    return str(value)
-
-
-def _bind_list(prefix: str, values: Sequence[str]) -> tuple[str, dict[str, str]]:
-    binds = {f"{prefix}{index}": value for index, value in enumerate(values)}
-    return ", ".join(f":{name}" for name in binds), binds
-
-
 def classify_system_schema_status(
     objects: set[tuple[str, str]],
     applied_checksums: dict[int, str],
 ) -> SystemSchemaStatus:
-    """Dictionary / ledger snapshot を四つの公開状態へ決定論的に分類する。"""
+    """Dictionary / ledger snapshot を四つの公開状態へ決定論的に分類する（規則は platform）。"""
 
-    expected = set(MANAGED_OBJECTS)
-    existing_domain = {name for name in DOMAIN_TABLES if (name, "TABLE") in objects}
-    if not existing_domain:
-        return "missing"
-    if expected - objects:
-        return "partial"
-    if any(
-        applied_checksums.get(migration.version) != migration.checksum for migration in MIGRATIONS
-    ):
-        return "outdated"
-    return "ready"
+    return classify_schema_status(
+        objects,
+        domain_tables=DOMAIN_TABLES,
+        managed_objects=MANAGED_OBJECTS,
+        migrations_current=all(
+            applied_checksums.get(migration.version) == migration.checksum
+            for migration in MIGRATIONS
+        ),
+    )
 
 
-class SystemSchemaManager:
-    """Status / initialize / recreate を同じ manifest と lease で提供する。"""
+class SystemSchemaManager(SystemSchemaManagerBase):
+    """NL2SQL の migration・manifest・外部キーの検証を、platform の骨格（lease・台帳）に渡す。"""
+
+    control_table = CONTROL_TABLE
+    migration_table = MIGRATION_TABLE
+    migration_key_column = "VERSION_NO"
+    managed_tables = MANAGED_TABLES
+    recreate_confirmation = RECREATE_CONFIRMATION
+    log_prefix = "nl2sql"
+    lock_timeout_guidance = (
+        "実行中の schema refresh、Ontology、SQL生成評価 job を完了または停止してから、"
+    )
+    ignored_drop_codes = _IGNORED_DROP_CODES
+    logger = logger
 
     def __init__(
         self,
@@ -445,14 +419,15 @@ class SystemSchemaManager:
         lease_seconds: int = 900,
         ddl_lock_timeout_seconds: int | None = None,
     ) -> None:
-        self._connection_factory = connection_factory or self._default_connection
-        self._lease_seconds = lease_seconds
-        configured_timeout = (
-            get_settings().nl2sql_system_schema_ddl_lock_timeout_seconds
-            if ddl_lock_timeout_seconds is None
-            else ddl_lock_timeout_seconds
+        super().__init__(
+            connection_factory or self._default_connection,
+            lease_seconds=lease_seconds,
+            ddl_lock_timeout_seconds=(
+                get_settings().nl2sql_system_schema_ddl_lock_timeout_seconds
+                if ddl_lock_timeout_seconds is None
+                else ddl_lock_timeout_seconds
+            ),
         )
-        self._ddl_lock_timeout_seconds = max(0, min(120, int(configured_timeout)))
 
     @staticmethod
     @contextmanager
@@ -460,11 +435,11 @@ class SystemSchemaManager:
         with get_oracle_pool_manager().control_connection() as connection:
             yield connection
 
-    def status(self) -> dict[str, Any]:
-        """USER_* dictionary と migration ledger だけを読む。DDL は実行しない。"""
+    def _migration_key(self, value: Any) -> int:
+        return int(value)
 
-        with self._connection_factory() as connection:
-            return self._status_on(connection)
+    def _table_identity_fields(self, name: str, owner: str) -> dict[str, Any]:
+        return _object_owner_fields(owner, name)
 
     def current_epoch(self) -> int | None:
         """別 replica の cache invalidation 用 epoch。control table 未作成時は None。"""
@@ -476,119 +451,51 @@ class SystemSchemaManager:
             operation = self._load_operation(connection)
             return int(operation["schema_epoch"])
 
-    def initialize(
-        self,
-        *,
-        recreate: bool = False,
-        confirmation: str | None = None,
-    ) -> dict[str, Any]:
-        if recreate and confirmation != RECREATE_CONFIRMATION:
-            raise SystemSchemaError(
-                "SCHEMA_RECREATE_CONFIRMATION_REQUIRED",
-                "すべて再作成するには確認値を正確に入力してください。",
-                status_code=422,
-            )
-
-        owner = uuid.uuid4().hex
-        kind = "recreate" if recreate else "initialize"
-        self._ensure_control_schema()
-        self._claim_lease(owner, kind)
-        before: dict[str, Any] | None = None
+    def _initialize_on(self, connection: Any, owner: str, *, recreate: bool) -> dict[str, Any]:
         applied_versions: list[int] = []
         dropped_count = 0
-        try:
-            with self._connection_factory() as connection:
-                before = self._status_on(connection)
-                if before["status"] == "ready" and not recreate:
-                    self._finish_operation(connection, owner, increment_epoch=False)
-                    return {
-                        **self._status_on(connection),
-                        "operation": "no_op",
-                        "dropped_object_count": 0,
-                        "created_object_count": 0,
-                    }
-                self._configure_ddl_lock_timeout(connection)
-                if recreate:
-                    self._assert_no_active_jobs(connection)
-                    dropped_count = self._drop_managed_objects(connection, owner)
-                    migrations_to_apply = list(MIGRATIONS)
-                else:
-                    migrations_to_apply = self._plan_migrations(before)
-                for migration in migrations_to_apply:
-                    self._heartbeat(connection, owner)
-                    self._apply_migration(connection, migration)
-                    applied_versions.append(migration.version)
-                    self._heartbeat(connection, owner)
-                self._finish_operation(connection, owner, increment_epoch=True)
-                after = self._status_on(connection)
-                if after["status"] != "ready":
-                    raise SystemSchemaError(
-                        "SCHEMA_POSTCONDITION_FAILED",
-                        "システムテーブル操作は完了しましたが、必須オブジェクトが不足しています。状態を再取得して再試行してください。",
-                    )
-                previous_existing = int(before["existing_object_count"])
-                operation: SystemSchemaOperation
-                if recreate:
-                    operation = "recreated"
-                elif before["status"] == "missing":
-                    operation = "initialized"
-                else:
-                    operation = "migrated"
-                logger.info(
-                    "nl2sql_system_schema_operation_succeeded",
-                    extra={
-                        "operation": operation,
-                        "schema_epoch": after["operation_state"]["schema_epoch"],
-                        "applied_versions": applied_versions,
-                        "dropped_object_count": dropped_count,
-                    },
-                )
-                return {
-                    **after,
-                    "operation": operation,
-                    "dropped_object_count": dropped_count,
-                    "created_object_count": (
-                        int(after["existing_object_count"]) - 1
-                        if recreate
-                        else max(0, int(after["existing_object_count"]) - previous_existing)
-                    ),
-                }
-        except SystemSchemaError as exc:
-            self._record_failure(owner, exc.code)
-            logger.error(
-                "nl2sql_system_schema_operation_failed",
-                extra={
-                    "operation": kind,
-                    "error_code": exc.code,
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            raise
-        except Exception as exc:
-            code = oracle_error_code(exc)
-            self._record_failure(owner, code)
-            logger.error(
-                "nl2sql_system_schema_operation_failed",
-                extra={
-                    "operation": kind,
-                    "error_code": code,
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            if code == "ORA-00054":
-                raise SystemSchemaError(
-                    code,
-                    "Oracle の対象オブジェクトのロックが "
-                    f"{self._ddl_lock_timeout_seconds} 秒以内に解放されませんでした "
-                    "(ORA-00054)。実行中の schema refresh、Ontology、SQL生成評価 job "
-                    "を完了または停止してから、状態を再取得して再試行してください。",
-                    status_code=409,
-                ) from exc
+        before = self._status_on(connection)
+        if before["status"] == "ready" and not recreate:
+            return self._no_op_result(connection, owner)
+        self._configure_ddl_lock_timeout(connection)
+        if recreate:
+            self._assert_no_active_jobs(connection)
+            dropped_count = self._drop_managed_objects(connection, owner)
+            migrations_to_apply = list(MIGRATIONS)
+        else:
+            migrations_to_apply = self._plan_migrations(before)
+        for migration in migrations_to_apply:
+            self._heartbeat(connection, owner)
+            self._apply_migration(connection, migration)
+            applied_versions.append(migration.version)
+            self._heartbeat(connection, owner)
+        self._finish_operation(connection, owner, increment_epoch=True)
+        after = self._status_on(connection)
+        if after["status"] != "ready":
             raise SystemSchemaError(
-                code,
-                f"システムテーブル操作に失敗しました ({code})。"
-                "状態を再取得して再試行してください。",
-            ) from exc
+                "SCHEMA_POSTCONDITION_FAILED",
+                "システムテーブル操作は完了しましたが、必須オブジェクトが不足しています。状態を再取得して再試行してください。",
+            )
+        operation = self._operation_name(before["status"], recreate=recreate)
+        self._log_operation_succeeded(
+            operation,
+            after,
+            dropped_object_count=dropped_count,
+            applied_versions=applied_versions,
+        )
+        return {
+            **after,
+            "operation": operation,
+            "dropped_object_count": dropped_count,
+            "created_object_count": (
+                int(after["existing_object_count"]) - 1
+                if recreate
+                else max(
+                    0,
+                    int(after["existing_object_count"]) - int(before["existing_object_count"]),
+                )
+            ),
+        }
 
     def _plan_migrations(self, status: dict[str, Any]) -> list[MigrationArtifact]:
         """未適用/checksum 不一致と欠損 object の所有 migration だけを選ぶ。"""
@@ -654,7 +561,7 @@ class SystemSchemaManager:
 
     def _load_objects(self, connection: Any) -> dict[tuple[str, str], Any]:
         names = tuple(dict.fromkeys(name for name, _object_type in MANAGED_OBJECTS))
-        placeholders, binds = _bind_list("object_name_", names)
+        placeholders, binds = bind_list("object_name_", names)
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT OBJECT_NAME, OBJECT_TYPE, CREATED FROM USER_OBJECTS "
@@ -672,53 +579,6 @@ class SystemSchemaManager:
             cursor.execute("SELECT USER FROM DUAL")
             row = cursor.fetchone()
         return str(row[0] or "").strip().upper() if row else ""
-
-    def _load_migrations(
-        self,
-        connection: Any,
-        objects: dict[tuple[str, str], Any],
-    ) -> dict[int, str]:
-        if (MIGRATION_TABLE, "TABLE") not in objects:
-            return {}
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT VERSION_NO, CHECKSUM FROM NL2SQL_SCHEMA_MIGRATIONS " "ORDER BY VERSION_NO"
-            )
-            return {int(row[0]): str(row[1]) for row in cursor.fetchall()}
-
-    def _load_table_metadata(
-        self,
-        connection: Any,
-        objects: dict[tuple[str, str], Any],
-        *,
-        owner: str = "",
-    ) -> list[dict[str, Any]]:
-        existing_names = [name for name in MANAGED_TABLES if (name, "TABLE") in objects]
-        metadata: dict[str, tuple[Any, Any]] = {}
-        if existing_names:
-            placeholders, binds = _bind_list("table_name_", existing_names)
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT TABLE_NAME, NUM_ROWS, LAST_ANALYZED FROM USER_TABLES "
-                    f"WHERE TABLE_NAME IN ({placeholders})",  # nosec B608 - fixed manifest binds
-                    binds,
-                )
-                metadata = {str(row[0]).upper(): (row[1], row[2]) for row in cursor.fetchall()}
-        return [
-            {
-                "name": name,
-                **_object_owner_fields(owner, name),
-                "exists": (name, "TABLE") in objects,
-                "estimated_rows": (
-                    int(metadata[name][0])
-                    if name in metadata and metadata[name][0] is not None
-                    else None
-                ),
-                "created_at": _iso(objects.get((name, "TABLE"))),
-                "last_analyzed_at": _iso(metadata[name][1]) if name in metadata else None,
-            }
-            for name in MANAGED_TABLES
-        ]
 
     @staticmethod
     def _build_object_metadata(
@@ -740,56 +600,13 @@ class SystemSchemaManager:
                     "object_type": object_type,
                     "exists": (name, object_type) in objects,
                     "estimated_rows": (table.get("estimated_rows") if table is not None else None),
-                    "created_at": _iso(objects.get((name, object_type))),
+                    "created_at": iso_timestamp(objects.get((name, object_type))),
                     "last_analyzed_at": (
                         table.get("last_analyzed_at") if table is not None else None
                     ),
                 }
             )
         return result
-
-    def _operation_payload(
-        self,
-        connection: Any,
-        objects: dict[tuple[str, str], Any],
-    ) -> dict[str, Any]:
-        if (CONTROL_TABLE, "TABLE") not in objects:
-            return {
-                "status": "idle",
-                "operation_kind": None,
-                "lease_expires_at": None,
-                "last_error_code": None,
-                "schema_epoch": 0,
-                "updated_at": None,
-            }
-        return self._load_operation(connection)
-
-    def _load_operation(self, connection: Any) -> dict[str, Any]:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT STATUS, OPERATION_KIND, LEASE_EXPIRES_AT, LAST_ERROR_CODE, "
-                "SCHEMA_EPOCH, UPDATED_AT FROM NL2SQL_SCHEMA_OPERATIONS "
-                "WHERE OPERATION_KEY = :operation_key",
-                {"operation_key": CONTROL_KEY},
-            )
-            row = cursor.fetchone()
-        if row is None:
-            return {
-                "status": "idle",
-                "operation_kind": None,
-                "lease_expires_at": None,
-                "last_error_code": None,
-                "schema_epoch": 0,
-                "updated_at": None,
-            }
-        return {
-            "status": str(row[0]).lower(),
-            "operation_kind": str(row[1]).lower() if row[1] else None,
-            "lease_expires_at": _iso(row[2]),
-            "last_error_code": str(row[3]) if row[3] else None,
-            "schema_epoch": int(row[4] or 0),
-            "updated_at": _iso(row[5]),
-        }
 
     def _ensure_control_schema(self) -> None:
         with self._connection_factory() as connection:
@@ -798,113 +615,6 @@ class SystemSchemaManager:
                 return
             self._configure_ddl_lock_timeout(connection)
             self._apply_migration(connection, MIGRATIONS[0])
-
-    def _claim_lease(self, owner: str, operation_kind: str) -> None:
-        with self._connection_factory() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE NL2SQL_SCHEMA_OPERATIONS
-                   SET STATUS = 'RUNNING',
-                       OPERATION_KIND = :operation_kind,
-                       LEASE_OWNER = :lease_owner,
-                       LEASE_EXPIRES_AT = SYSTIMESTAMP
-                           + NUMTODSINTERVAL(:lease_seconds, 'SECOND'),
-                       LAST_ERROR_CODE = NULL,
-                       UPDATED_AT = SYSTIMESTAMP
-                 WHERE OPERATION_KEY = :operation_key
-                   AND (
-                       STATUS <> 'RUNNING'
-                       OR LEASE_EXPIRES_AT IS NULL
-                       OR LEASE_EXPIRES_AT < SYSTIMESTAMP
-                   )
-                """,
-                {
-                    "operation_kind": operation_kind,
-                    "lease_owner": owner,
-                    "lease_seconds": self._lease_seconds,
-                    "operation_key": CONTROL_KEY,
-                },
-            )
-            claimed = int(cursor.rowcount or 0) == 1
-            connection.commit()
-        if not claimed:
-            raise SystemSchemaBusyError()
-
-    def _heartbeat(self, connection: Any, owner: str) -> None:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE NL2SQL_SCHEMA_OPERATIONS
-                   SET LEASE_EXPIRES_AT = SYSTIMESTAMP
-                           + NUMTODSINTERVAL(:lease_seconds, 'SECOND'),
-                       UPDATED_AT = SYSTIMESTAMP
-                 WHERE OPERATION_KEY = :operation_key
-                   AND STATUS = 'RUNNING'
-                   AND LEASE_OWNER = :lease_owner
-                """,
-                {
-                    "lease_seconds": self._lease_seconds,
-                    "operation_key": CONTROL_KEY,
-                    "lease_owner": owner,
-                },
-            )
-            renewed = int(cursor.rowcount or 0) == 1
-            connection.commit()
-        if not renewed:
-            raise SystemSchemaBusyError()
-
-    def _finish_operation(
-        self,
-        connection: Any,
-        owner: str,
-        *,
-        increment_epoch: bool,
-    ) -> None:
-        epoch_sql = "SCHEMA_EPOCH + 1" if increment_epoch else "SCHEMA_EPOCH"
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "UPDATE NL2SQL_SCHEMA_OPERATIONS "
-                "SET STATUS = 'IDLE', OPERATION_KIND = NULL, LEASE_OWNER = NULL, "
-                "LEASE_EXPIRES_AT = NULL, LAST_ERROR_CODE = NULL, "
-                f"SCHEMA_EPOCH = {epoch_sql}, UPDATED_AT = SYSTIMESTAMP "  # nosec B608
-                "WHERE OPERATION_KEY = :operation_key AND LEASE_OWNER = :lease_owner",
-                {"operation_key": CONTROL_KEY, "lease_owner": owner},
-            )
-            finished = int(cursor.rowcount or 0) == 1
-            connection.commit()
-        if not finished:
-            raise SystemSchemaBusyError()
-
-    def _record_failure(self, owner: str, error_code: str) -> None:
-        with (
-            suppress(Exception),
-            self._connection_factory() as connection,
-            connection.cursor() as cursor,
-        ):
-            cursor.execute(
-                """
-                UPDATE NL2SQL_SCHEMA_OPERATIONS
-                   SET STATUS = 'FAILED', OPERATION_KIND = NULL, LEASE_OWNER = NULL,
-                       LEASE_EXPIRES_AT = NULL, LAST_ERROR_CODE = :error_code,
-                       UPDATED_AT = SYSTIMESTAMP
-                 WHERE OPERATION_KEY = :operation_key AND LEASE_OWNER = :lease_owner
-                """,
-                {
-                    "error_code": error_code[:64],
-                    "operation_key": CONTROL_KEY,
-                    "lease_owner": owner,
-                },
-            )
-            connection.commit()
-
-    def _configure_ddl_lock_timeout(self, connection: Any) -> None:
-        """system schema 専用 session に bounded DDL wait を設定する。"""
-
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "ALTER SESSION SET DDL_LOCK_TIMEOUT = "
-                f"{self._ddl_lock_timeout_seconds}"  # nosec B608 - bounded integer
-            )
 
     def _apply_migration(self, connection: Any, migration: MigrationArtifact) -> None:
         statements = split_migration_sql(migration.path.read_text(encoding="utf-8"))
@@ -927,7 +637,7 @@ class SystemSchemaManager:
                             continue
                         if state == "mismatch":
                             raise self._foreign_key_mismatch_error(foreign_key) from exc
-                    if code in _IGNORED_APPLY_CODES:
+                    if code in IGNORED_APPLY_CODES:
                         continue
                     if (
                         migration.version == 9
@@ -936,30 +646,11 @@ class SystemSchemaManager:
                     ):
                         continue
                     raise
-            cursor.execute(
-                """
-                MERGE INTO NL2SQL_SCHEMA_MIGRATIONS target
-                USING (
-                    SELECT :version_no AS VERSION_NO,
-                           :description AS DESCRIPTION,
-                           :checksum AS CHECKSUM
-                    FROM DUAL
-                ) source
-                ON (target.VERSION_NO = source.VERSION_NO)
-                WHEN MATCHED THEN UPDATE SET
-                    target.DESCRIPTION = source.DESCRIPTION,
-                    target.CHECKSUM = source.CHECKSUM,
-                    target.APPLIED_AT = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN INSERT
-                    (VERSION_NO, DESCRIPTION, CHECKSUM, APPLIED_AT)
-                VALUES
-                    (source.VERSION_NO, source.DESCRIPTION, source.CHECKSUM, SYSTIMESTAMP)
-                """,
-                {
-                    "version_no": migration.version,
-                    "description": migration.description,
-                    "checksum": migration.checksum,
-                },
+            self._merge_migration(
+                cursor,
+                key=migration.version,
+                description=migration.description,
+                checksum=migration.checksum,
             )
             connection.commit()
 
@@ -1082,7 +773,7 @@ class SystemSchemaManager:
             if (table_name, "TABLE") not in objects:
                 continue
             states = (*_ACTIVE_JOB_STATES, "VERIFYING", "UNKNOWN")
-            placeholders, binds = _bind_list("job_state_", states)
+            placeholders, binds = bind_list("job_state_", states)
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT COUNT(*) FROM {table_name} "  # nosec B608 - fixed manifest value
@@ -1119,18 +810,6 @@ class SystemSchemaManager:
             dropped += self._execute_drop(connection, f"DROP SEQUENCE {sequence_name}")
             self._heartbeat(connection, owner)
         return dropped
-
-    @staticmethod
-    def _execute_drop(connection: Any, statement: str) -> int:
-        with connection.cursor() as cursor:
-            try:
-                cursor.execute(statement)
-            except Exception as exc:
-                if oracle_error_code(exc) in _IGNORED_DROP_CODES:
-                    return 0
-                raise
-            connection.commit()
-        return 1
 
 
 system_schema_manager = SystemSchemaManager()
