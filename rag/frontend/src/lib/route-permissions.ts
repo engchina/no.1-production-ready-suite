@@ -55,11 +55,12 @@ export function firstAllowedRoute(hasPermission: HasPermission): string {
 }
 
 /**
- * ログイン後・未知の URL・廃止した旧 URL の移動先（NL2SQL と同じ方針。#261）。主画面の RAG 検索を
- * 開ければ RAG 検索、開けなければ `/` に戻し、`/` がナビの並び順で最初に開ける画面へ振り分ける。
+ * ログイン後・未知の URL・廃止した旧 URL の移動先（NL2SQL と同じ方針。#261）。主画面のチャット
+ * （ナビの先頭。#399 / #432）を開ければチャット、開けなければ `/` に戻し、`/` がナビの並び順で
+ * 最初に開ける画面へ振り分ける。
  */
 export function defaultEntryRoute(hasPermission: HasPermission): string {
-  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.search]) ? APP_ROUTES.search : APP_ROUTES.home;
+  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.chat]) ? APP_ROUTES.chat : APP_ROUTES.home;
 }
 
 /** `/settings` の移動先。共通のシステム設定のうち最初に開ける画面、無ければ既定の入口。 */

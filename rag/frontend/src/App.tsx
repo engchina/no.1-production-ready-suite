@@ -145,7 +145,7 @@ function HomeRedirect() {
   return <Navigate to={firstAllowedRoute(hasPermission)} replace />;
 }
 
-/** 未知の URL と旧 URL は既定の入口へ（RAG 検索、開けなければ `/` 経由で最初に開ける画面）。 */
+/** 未知の URL と旧 URL は既定の入口へ（チャット、開けなければ `/` 経由で最初に開ける画面）。 */
 function EntryRedirect() {
   const { hasPermission } = useAuth();
   return <Navigate to={defaultEntryRoute(hasPermission)} replace />;

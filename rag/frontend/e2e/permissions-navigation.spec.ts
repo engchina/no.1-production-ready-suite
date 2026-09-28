@@ -99,18 +99,18 @@ test("廃止したダッシュボードの旧 URL と未知の URL は既定の�
   await mockApi(page);
   const setUser = await mockAuthUser(page, { permissions: ["menu.search", "menu.chat"] });
 
-  // RAG 検索を開ける利用者は RAG 検索へ。履歴を置き換えるので、戻ると旧 URL ではなく直前の画面。
-  await page.goto("/chat");
-  await expect(page).toHaveURL(/\/chat$/);
-  await page.goto("/dashboard");
+  // チャットを開ける利用者はチャットへ（#432）。履歴を置き換えるので、戻ると旧 URL ではなく直前の画面。
+  await page.goto("/search");
   await expect(page).toHaveURL(/\/search$/);
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/chat$/);
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toHaveCount(0);
   await page.goBack();
-  await expect(page).toHaveURL(/\/chat$/);
-  await page.goto("/no-such-page");
   await expect(page).toHaveURL(/\/search$/);
+  await page.goto("/no-such-page");
+  await expect(page).toHaveURL(/\/chat$/);
 
-  // RAG 検索を開けない利用者は `/` 経由でナビの並びで最初に開ける画面へ（権限なしの画面にしない）。
+  // チャットを開けない利用者は `/` 経由でナビの並びで最初に開ける画面へ（権限なしの画面にしない）。
   setUser(dbUser({ permissions: ["menu.upload", "menu.file_list"] }));
   for (const path of ["/dashboard", "/", "/no-such-page"]) {
     await page.goto(path);
