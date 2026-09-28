@@ -208,6 +208,7 @@ class _FakeOracleStore:
         self.created_objects: set[str] = set()
         self.snapshot_by_key: dict[str, str] = {}
         self.rows_by_table: dict[str, list[dict[str, Any]]] = {}
+        self.session_statements: list[str] = []
         self.executed_statements: list[str] = []
 
     @property
@@ -303,6 +304,10 @@ class _FakeOracleCursor:
         if normalized.startswith("INSERT INTO"):
             table_name = normalized.split()[2]
             self._store.rows_by_table.setdefault(table_name, []).append(dict(params))
+            return
+        if normalized == "ALTER SESSION SET RESULT_CACHE_MODE = MANUAL":
+            # 接続ごとの初期化（result cache を使わない。#333）。
+            self._store.session_statements.append(normalized)
             return
         raise AssertionError(f"unexpected statement: {statement}")
 

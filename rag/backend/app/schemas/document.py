@@ -95,6 +95,9 @@ class IngestionJob(BaseModel):
 
     id: str
     document_id: str
+    # 一覧で「どのファイルか」を示すための文書のファイル名（rag_documents.file_name）。
+    # 一覧・取得の SELECT が文書表と JOIN して埋める。作成直後の応答などでは None（#306）。
+    document_file_name: str | None = None
     recipe_id: str | None = None
     recipe_revision: int | None = Field(default=None, ge=1)
     status: IngestionJobStatus
@@ -208,7 +211,6 @@ class UploadResult(BaseModel):
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     source_profile: SourceProfile
     ingestion_started: bool = False
-    ingestion_job: IngestionJob | None = None
 
 
 class BatchUploadResult(BaseModel):
@@ -219,8 +221,6 @@ class BatchUploadResult(BaseModel):
     total_count: int = 0
     uploaded_count: int = 0
     failed_count: int = 0
-    queued_count: int = 0
-    skipped_count: int = 0
 
 
 class DocumentChunkView(BaseModel):

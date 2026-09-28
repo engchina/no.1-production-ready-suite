@@ -62,26 +62,20 @@ describe("CSRF header", () => {
     expect(sentHeaders(fetchMock).get("Accept")).toBe("application/json");
   });
 
-  it("multipart のアップロードと stream の直接 fetch にも付ける", async () => {
+  // multipart のアップロード（XHR）は api.test.ts の「文書アップロードの送信（XHR）」で確認する（#306）。
+  it("stream の直接 fetch にも付ける", async () => {
     stubBrowser(`${CSRF_COOKIE_NAME}=token-xyz`);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ ...OK, data: { id: "doc-1" } }))
-      .mockResolvedValueOnce(
-        new Response("event: done\ndata: {\"trace_id\":\"t\"}\n\n", {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        })
-      );
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("event: done\ndata: {\"trace_id\":\"t\"}\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.uploadDocument(new File(["x"], "a.txt"), ["kb-1"]);
     await streamSearch({ query: "q" } as never, {});
 
     expect(sentHeaders(fetchMock, 0).get("X-CSRF-Token")).toBe("token-xyz");
-    // FormData の boundary はブラウザが付けるため Content-Type は指定しない。
-    expect(sentHeaders(fetchMock, 0).has("Content-Type")).toBe(false);
-    expect(sentHeaders(fetchMock, 1).get("X-CSRF-Token")).toBe("token-xyz");
   });
 });
 

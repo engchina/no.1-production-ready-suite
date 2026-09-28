@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from pr_backend_core.oracle_session import init_oracle_session
+
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.settings import Settings
 
@@ -706,6 +708,8 @@ class OracleNl2SqlAdapter:
             call_timeout_ms = int(max(1.0, float(timeout_seconds)) * 1000)
             if hasattr(conn, "call_timeout"):
                 conn.call_timeout = call_timeout_ms
+            # result cache を使わない（ADB の内部エラーを避ける。#333）。失敗は finally で閉じる。
+            init_oracle_session(conn)
             try:
                 yield conn
             except Exception:

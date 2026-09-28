@@ -19,6 +19,7 @@ from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import BaseModel, Field, ValidationError
 
 from app.features.agent.config import runtime_config_store
@@ -1833,7 +1834,10 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         if self._oracle_connect_factory is not None:
             return self._oracle_connect_factory()
         oracledb = import_module("oracledb")
-        return oracledb.connect(**self._oracle_connect_kwargs())
+        connection = oracledb.connect(**self._oracle_connect_kwargs())
+        # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+        init_oracle_session(connection)
+        return connection
 
     def _oracle_connect_kwargs(self) -> dict[str, object]:
         """Thin mode の接続引数。Wallet(mTLS) 指定時だけ config_dir 等を足す。"""

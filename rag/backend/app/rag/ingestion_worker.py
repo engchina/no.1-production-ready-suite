@@ -314,20 +314,30 @@ class IngestionQueueWorker:
 
 
 async def _mark_running_job_failed(job_id: str, *, error: Exception) -> None:
-    """subprocess が落ちた時に RUNNING のまま放置しない。"""
+    """subprocess が落ちた時に RUNNING のまま放置しない。
+
+    - RUNNING の job は FAILED にする(RUNNING のときだけ書く。#305)。レシピの job は
+      レシピ行だけを ERROR にし、文書(全レシピの集約)の status は変えない。文書単位の job は
+      文書を ERROR にする(子が落ちたので pipeline は書けていない)。
+    - 取り消し済みの job は、取り消しを検知した側として文書・レシピの status を戻す。
+    """
     try:
+        # 循環 import を避けるため遅延 import する。
+        from app.api.routes.documents import _fail_ingestion_job, _restore_statuses_after_cancel
+
         oracle = OracleClient()
         job = await oracle.get_ingestion_job(job_id)
-        if job is None or job.status != IngestionJobStatus.RUNNING:
+        if job is None:
+            return
+        if job.status == IngestionJobStatus.CANCELLED:
+            await _restore_statuses_after_cancel(oracle, job)
+            return
+        if job.status != IngestionJobStatus.RUNNING:
             return
         message = str(error)[:500] or "取込ジョブ実行プロセスが異常終了しました。"
-        await oracle.update_ingestion_job(
-            job_id,
-            status=IngestionJobStatus.FAILED,
-            error_message=message,
-            finished_at=datetime.now(UTC),
-        )
-        await oracle.update_document_status(job.document_id, FileStatus.ERROR, message)
+        failed = await _fail_ingestion_job(oracle, job, message)
+        if failed and job.recipe_id is None:
+            await oracle.update_document_status(job.document_id, FileStatus.ERROR, message)
     except Exception:
         logger.exception(
             "ingestion_worker_job_failure_mark_failed_failed",

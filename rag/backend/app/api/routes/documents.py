@@ -7,8 +7,7 @@ import logging
 import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
-from enum import StrEnum
+from datetime import UTC, datetime
 from html import escape
 from pathlib import PurePath
 from typing import Annotated, Literal
@@ -150,6 +149,8 @@ MAX_UPLOAD_FILE_NAME_BYTES = 512
 _MAX_PRESERVED_SUFFIX_CHARS = 16
 CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
+# cancel API が CANCELLED へ遷移できる状態。
+_CANCELLABLE_INGESTION_JOB_STATUSES = (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
 # ブラウザが開くとスクリプトを実行しうる形式。原本配信では CSP sandbox を付ける。
 SCRIPTABLE_CONTENT_TYPES = frozenset(
     {
@@ -197,23 +198,18 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 
-class UploadIngestionMode(StrEnum):
-    """アップロード後の取込開始方針。"""
-
-    MANUAL = "manual"
-
-
 @router.post("/upload", response_model=ApiResponse[UploadResult])
 async def upload_document(
     http_request: Request,
     file: Annotated[UploadFile, File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
-    ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
 ) -> ApiResponse[UploadResult]:
-    """ドキュメントファイルをアップロードし、Object Storage へ保管する。"""
+    """ドキュメントファイルをアップロードし、Object Storage へ保管する。
+
+    原本の保存と文書行の登録までを行い、取込 job は作らない（取込は文書ごとに明示して始める）。
+    """
     enforce_rate_limit("upload", http_request)
     result = await _store_uploaded_document(file, knowledge_base_ids)
-    _ = ingestion_mode
     return ApiResponse(data=result)
 
 
@@ -222,7 +218,6 @@ async def batch_upload_documents(
     http_request: Request,
     files: Annotated[list[UploadFile], File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
-    ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
 ) -> ApiResponse[BatchUploadResult]:
     """複数ドキュメントをまとめてアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
@@ -233,7 +228,6 @@ async def batch_upload_documents(
     for file in files:
         try:
             result = await _store_uploaded_document(file, knowledge_base_ids)
-            _ = ingestion_mode
             items.append(result)
         except HTTPException as exc:
             source_profile = await _failed_upload_source_profile(file)
@@ -266,18 +260,6 @@ async def batch_upload_documents(
             total_count=len(files),
             uploaded_count=len(items),
             failed_count=len(failed_items),
-            queued_count=sum(
-                1
-                for item in items
-                if item.ingestion_job is not None
-                and item.ingestion_job.status == IngestionJobStatus.QUEUED
-            ),
-            skipped_count=sum(
-                1
-                for item in items
-                if item.ingestion_job is not None
-                and item.ingestion_job.status == IngestionJobStatus.SKIPPED
-            ),
         )
     )
 
@@ -613,13 +595,27 @@ async def retry_ingestion_job(
     job_id: str,
     force: bool = Query(default=False),
 ) -> ApiResponse[IngestionJob]:
-    """完了済みまたは失敗済み job の対象文書を新しい job として再投入する。"""
+    """完了済みまたは失敗済み job の対象を新しい job として再投入する。
+
+    レシピの job(``recipe_id`` あり)は同じレシピの job として投入し、文書全体(全レシピ)の
+    出力は初期化しない(#305)。``force`` は文書単位の job の重複・未対応の skip 判定にだけ使う。
+    """
     enforce_rate_limit("ingest", http_request)
     job = await OracleClient().get_ingestion_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
     if job.status in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}:
         raise HTTPException(status_code=409, detail="この取込ジョブはまだ実行中です。")
+    if job.recipe_id is not None:
+        try:
+            recipe_job = await _enqueue_ingestion_job_for_recipe(
+                job.document_id, job.recipe_id, phase=job.phase
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="レシピが見つかりません。") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return ApiResponse(data=recipe_job)
     retry_job = await _enqueue_ingestion_job_for_document(
         job.document_id,
         force=force or job.status == IngestionJobStatus.FAILED,
@@ -633,25 +629,33 @@ async def cancel_ingestion_job(
     http_request: Request,
     job_id: str,
 ) -> ApiResponse[IngestionJob]:
-    """待機中または実行中の取込 job をキャンセル済みにする。"""
+    """待機中または実行中の取込 job をキャンセル済みにする。
+
+    job の状態だけを QUEUED / RUNNING → CANCELLED に条件付きで変える(#305)。文書・レシピの
+    status は戻さない。
+
+    - RUNNING の job: 処理を続けている worker が cancel を検知し、文書単位の job なら文書を、
+      レシピの job ならレシピ行だけを戻す(`_restore_statuses_after_cancel`)。
+    - QUEUED の job: worker がまだ何も書いておらず、投入時の文書・レシピは安定した状態のため、
+      戻すものはない。
+    """
     enforce_rate_limit("ingest", http_request)
     oracle = OracleClient()
     job = await oracle.get_ingestion_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
-    if job.status not in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}:
+    if job.status not in _CANCELLABLE_INGESTION_JOB_STATUSES:
         raise HTTPException(status_code=409, detail="この取込ジョブはキャンセルできません。")
-    cancelled = await oracle.update_ingestion_job(
+    cancelled = await oracle.transition_ingestion_job(
         job_id,
-        status=IngestionJobStatus.CANCELLED,
+        from_statuses=_CANCELLABLE_INGESTION_JOB_STATUSES,
+        to_status=IngestionJobStatus.CANCELLED,
         error_message=INGESTION_JOB_CANCELLED_MESSAGE,
         finished_at=datetime.now(UTC),
     )
     if cancelled is None:
-        raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
-    if job.status == IngestionJobStatus.RUNNING:
-        restore_status = _restore_status_for_cancelled_phase(job.phase)
-        await oracle.update_document_status(job.document_id, restore_status)
+        # 確かめた後に完了・失敗した。その最終状態を CANCELLED で上書きしない。
+        raise HTTPException(status_code=409, detail="この取込ジョブはキャンセルできません。")
     return ApiResponse(data=cancelled)
 
 
@@ -1701,6 +1705,7 @@ async def _materialize_experiment_candidate(
     if job.recipe_id is None and candidate_chunk_set_id == serving_chunk_set_id:
         raise IngestionUserError("現在配信中のレシピと同じ設定です。")
     if job.recipe_id is not None:
+        await _raise_if_job_cancelled(cancel_checker)
         await oracle.update_document_recipe_status(
             recipe_id=job.recipe_id,
             status=_PHASE_TO_RUNNING_STATUS[job.phase],
@@ -1844,6 +1849,8 @@ async def _materialize_experiment_candidate(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
     )
     if job.recipe_id is not None:
+        # active の切り替えは検索対象を変えるため、取り消された job では行わない(#305)。
+        await _raise_if_job_cancelled(cancel_checker)
         await oracle.activate_recipe_chunk_set(
             recipe_id=job.recipe_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -3735,12 +3742,28 @@ def _dispatch_ingestion_job(
     request_ingestion_worker_wakeup()
 
 
+async def _raise_if_job_cancelled(
+    cancel_checker: Callable[[], Awaitable[bool]] | None,
+) -> None:
+    """文書・レシピの status や出力を書き換える前に、job が取り消されていないかを確かめる。"""
+    if cancel_checker is not None and await cancel_checker():
+        raise IngestionCancelledError(INGESTION_JOB_CANCELLED_MESSAGE)
+
+
 def _restore_status_for_cancelled_phase(phase: IngestionJobPhase) -> FileStatus:
     if phase == IngestionJobPhase.INDEX:
         return FileStatus.CHUNKED
     if phase == IngestionJobPhase.CHUNK:
         return FileStatus.REVIEW
     return FileStatus.UPLOADED
+
+
+def _restore_recipe_status_for_cancelled_phase(phase: IngestionJobPhase) -> FileStatus:
+    """レシピの job を取り消した後の、レシピ行の status(工程を始める前の状態)。"""
+    if phase == IngestionJobPhase.EXTRACT:
+        # EXTRACT はファイル準備の成果物(処理後ファイル)がある状態から始まる。
+        return FileStatus.PREPROCESSED
+    return _restore_status_for_cancelled_phase(phase)
 
 
 async def _enqueue_ingestion_job_for_document(
@@ -3998,21 +4021,6 @@ async def _list_delete_blocking_ingestion_jobs(
     for status in DELETE_BLOCKING_INGESTION_STATUSES:
         jobs.extend(await oracle.list_document_ingestion_jobs(document_id, status=status))
     return jobs
-
-
-async def _create_ingestion_job(result: UploadResult) -> IngestionJob:
-    """upload 結果から取込 job を作る。重複・未対応は SKIPPED として記録する。"""
-    is_duplicate = result.duplicate_of_document_id is not None
-    unsupported_reason = result.source_profile.unsupported_reason
-    skip_reason = "duplicate_content" if is_duplicate else unsupported_reason
-    return await _create_ingestion_job_record(
-        oracle=OracleClient(),
-        document_id=result.id,
-        parser_profile=result.source_profile.parser_profile,
-        quality_warnings=result.source_profile.quality_warnings,
-        status=IngestionJobStatus.SKIPPED if skip_reason else IngestionJobStatus.QUEUED,
-        skip_reason=skip_reason,
-    )
 
 
 async def _create_ingestion_job_record(
@@ -4699,16 +4707,16 @@ async def _run_ingestion_job(
     *,
     propagate_errors: bool = False,
 ) -> None:
-    """キュー投入済み取込 job を実行する。"""
+    """キュー投入済み取込 job を実行する。
+
+    job の完了・失敗は RUNNING のときだけ書く(`transition_ingestion_job`)。cancel を検知したら
+    (pipeline の途中でも、完了・失敗を書く直前でも)、文書・レシピの status を取り消し後の
+    状態へ戻し、次工程は投入しない(#305)。
+    """
     oracle = OracleClient()
     job = await oracle.claim_ingestion_job(job_id, started_at=datetime.now(UTC))
     if job is None:
         return
-    if job.recipe_id is not None:
-        await oracle.update_document_recipe_status(
-            recipe_id=job.recipe_id,
-            status=_PHASE_TO_RUNNING_STATUS[job.phase],
-        )
 
     async def is_cancelled() -> bool:
         current = await oracle.get_ingestion_job(job_id)
@@ -4717,24 +4725,30 @@ async def _run_ingestion_job(
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
+    # 文書単位の job の実行結果。自動進行(次工程の投入)は SUCCEEDED を書けた後に判定する。
+    finished_detail: DocumentDetail | None = None
     try:
+        if job.recipe_id is not None:
+            await _raise_if_job_cancelled(is_cancelled)
+            await oracle.update_document_recipe_status(
+                recipe_id=job.recipe_id,
+                status=_PHASE_TO_RUNNING_STATUS[job.phase],
+            )
         if job.recipe_id is not None or job.settings_overrides is not None:
             # 正式レシピは旧 active を維持した隔離 materialize。recipe_id 無しは旧実験互換。
             next_recipe_phase = await _materialize_experiment_candidate(
                 oracle, job, cancel_checker=is_cancelled
             )
         elif job.phase == IngestionJobPhase.CHUNK:
-            detail = await _chunk_reviewed_document(
+            finished_detail = await _chunk_reviewed_document(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
-            await _enqueue_auto_advance_job(job, detail)
         elif job.phase == IngestionJobPhase.INDEX:
-            detail = await _index_reviewed_document(
+            finished_detail = await _index_reviewed_document(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
-            await _enqueue_auto_advance_job(job, detail)
         elif job.phase == IngestionJobPhase.EXTRACT:
             current_detail = await oracle.get_document(job.document_id)
             if (
@@ -4746,35 +4760,29 @@ async def _run_ingestion_job(
                     status_code=409,
                     detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
                 )
+            await _raise_if_job_cancelled(is_cancelled)
             await _reset_document_outputs_for_extract(oracle, job.document_id)
-            detail = await _ingest_existing_document(
+            finished_detail = await _ingest_existing_document(
                 job.document_id,
                 force=True,
                 use_prepared_artifact=True,
                 cancel_checker=is_cancelled,
             )
-            await _enqueue_auto_advance_job(job, detail)
         else:
+            await _raise_if_job_cancelled(is_cancelled)
             await _reset_document_outputs_for_extract(
                 oracle,
                 job.document_id,
                 clear_preprocess_artifact=True,
             )
-            detail = await _ingest_existing_document(
+            finished_detail = await _ingest_existing_document(
                 job.document_id,
                 force=True,
                 use_prepared_artifact=False,
                 cancel_checker=is_cancelled,
             )
-            await _enqueue_auto_advance_job(job, detail)
     except HTTPException as exc:
-        await _mark_recipe_job_failed(oracle, job, str(exc.detail))
-        await _finish_ingestion_job_unless_cancelled(
-            oracle,
-            job_id,
-            status=IngestionJobStatus.FAILED,
-            error_message=str(exc.detail),
-        )
+        await _fail_ingestion_job(oracle, job, str(exc.detail))
         logger.info(
             "ingestion_job_user_error",
             extra={
@@ -4786,7 +4794,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionCancelledError:
-        await _restore_recipe_status_after_cancel(oracle, job)
+        await _restore_statuses_after_cancel(oracle, job)
         logger.info(
             "ingestion_job_cancelled",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4794,13 +4802,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionTimeoutError as exc:
-        await _mark_recipe_job_failed(oracle, job, str(exc))
-        await _finish_ingestion_job_unless_cancelled(
-            oracle,
-            job_id,
-            status=IngestionJobStatus.FAILED,
-            error_message=str(exc),
-        )
+        await _fail_ingestion_job(oracle, job, str(exc))
         logger.info(
             "ingestion_job_timeout",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4808,13 +4810,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionUserError as exc:
-        await _mark_recipe_job_failed(oracle, job, str(exc))
-        await _finish_ingestion_job_unless_cancelled(
-            oracle,
-            job_id,
-            status=IngestionJobStatus.FAILED,
-            error_message=str(exc),
-        )
+        await _fail_ingestion_job(oracle, job, str(exc))
         logger.info(
             "ingestion_job_validation_error",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4823,13 +4819,7 @@ async def _run_ingestion_job(
             raise
     except Exception as exc:
         safe_error = _safe_ingestion_job_error_message(exc)
-        await _mark_recipe_job_failed(oracle, job, safe_error)
-        await _finish_ingestion_job_unless_cancelled(
-            oracle,
-            job_id,
-            status=IngestionJobStatus.FAILED,
-            error_message=safe_error,
-        )
+        await _fail_ingestion_job(oracle, job, safe_error)
         logger.exception(
             "ingestion_job_failed",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4837,11 +4827,18 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     else:
-        await _finish_ingestion_job_unless_cancelled(
+        succeeded = await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
         )
+        if succeeded is None:
+            # SUCCEEDED を書く直前に取り消された。取り消しを検知した側として status を戻し、
+            # 次工程は投入しない。
+            await _restore_statuses_after_cancel(oracle, job)
+            return
+        if finished_detail is not None:
+            await _enqueue_auto_advance_job(job, finished_detail)
         if next_recipe_phase is not None and job.recipe_id is not None:
             # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
@@ -4860,6 +4857,68 @@ async def _run_ingestion_job(
                     },
                     exc_info=True,
                 )
+
+
+async def _fail_ingestion_job(
+    oracle: OracleClient,
+    job: IngestionJob,
+    error_message: str,
+) -> bool:
+    """RUNNING の job を FAILED にし、レシピの job はレシピ行だけを ERROR にする。
+
+    文書単位の job の文書は pipeline(または異常終了を検知した worker)が ERROR にする。
+    FAILED を書く前に取り消されていたら、取り消しとして status を戻す。FAILED を書けたら True。
+    """
+    failed = await _finish_ingestion_job_unless_cancelled(
+        oracle,
+        job.id,
+        status=IngestionJobStatus.FAILED,
+        error_message=error_message,
+    )
+    if failed is None:
+        await _restore_statuses_after_cancel(oracle, job)
+        return False
+    await _mark_recipe_job_failed(oracle, job, error_message)
+    return True
+
+
+async def _restore_statuses_after_cancel(
+    oracle: OracleClient,
+    job: IngestionJob,
+) -> None:
+    """取り消しを検知した側(worker)が、job の対象の status を取り消し後の状態へ戻す。
+
+    - レシピの job(``recipe_id`` あり): レシピ行だけを戻す。文書(全レシピの集約)には触れない。
+    - 文書単位の job: 文書の status を工程に応じて戻す。
+
+    job が CANCELLED でない(stale の回復で QUEUED に戻された等)場合と、同じ文書の別の job が
+    RUNNING の場合(その job が status を書いている)は戻さない。
+    """
+    current = await oracle.get_ingestion_job(job.id)
+    if current is None or current.status != IngestionJobStatus.CANCELLED:
+        logger.info(
+            "ingestion_job_cancel_restore_skipped",
+            extra={
+                "job_id": job.id,
+                "status": current.status.value if current is not None else None,
+            },
+        )
+        return
+    running_jobs = await oracle.list_document_ingestion_jobs(
+        job.document_id, status=IngestionJobStatus.RUNNING
+    )
+    if any(other.id != job.id for other in running_jobs):
+        logger.info(
+            "ingestion_job_cancel_restore_skipped_other_running",
+            extra={"job_id": job.id, "document_id": job.document_id},
+        )
+        return
+    if job.recipe_id is not None:
+        await _restore_recipe_status_after_cancel(oracle, job)
+        return
+    await oracle.update_document_status(
+        job.document_id, _restore_status_for_cancelled_phase(job.phase)
+    )
 
 
 async def _mark_recipe_job_failed(
@@ -4898,7 +4957,11 @@ async def _restore_recipe_status_after_cancel(
     oracle: OracleClient,
     job: IngestionJob,
 ) -> None:
-    """取消後は旧 active があれば検索対象、無ければ未処理へ戻す。"""
+    """取消後は旧 active があれば検索対象、無ければ job の工程を始める前の状態へ戻す。
+
+    工程の前の状態は stale の回復(`_restore_recipe_status_for_job_phase`)と同じ対応にする。
+    以前は一律に未処理へ戻していたため、Chunk 作成の取消で抽出の確認済み(REVIEW)が失われていた。
+    """
     if job.recipe_id is None:
         return
     row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
@@ -4907,7 +4970,7 @@ async def _restore_recipe_status_after_cancel(
         status=(
             FileStatus.INDEXED
             if row is not None and row.get("active_chunk_set_id") is not None
-            else FileStatus.UPLOADED
+            else _restore_recipe_status_for_cancelled_phase(job.phase)
         ),
     )
 
@@ -4952,55 +5015,24 @@ async def _finish_ingestion_job_unless_cancelled(
     status: IngestionJobStatus,
     error_message: str | None = None,
 ) -> IngestionJob | None:
-    """実行中に cancel された job の最終状態を上書きしない。"""
-    current = await oracle.get_ingestion_job(job_id)
-    if current is not None and current.status == IngestionJobStatus.CANCELLED:
-        logger.info(
-            "ingestion_job_finish_skipped_after_cancel",
-            extra={"job_id": job_id, "final_status": status.value},
-        )
-        return current
-    return await oracle.update_ingestion_job(
+    """RUNNING の job だけを完了・失敗にする。取り消し済みなどで書けなければ None を返す。
+
+    状態の確認と書き込みは 1 回の条件付き UPDATE で行い、確認と書き込みの間に cancel API が
+    割り込んでも CANCELLED を上書きしない(#305)。
+    """
+    finished = await oracle.transition_ingestion_job(
         job_id,
-        status=status,
+        from_statuses=(IngestionJobStatus.RUNNING,),
+        to_status=status,
         error_message=error_message,
         finished_at=datetime.now(UTC),
     )
-
-
-async def recover_and_drain_ingestion_jobs(
-    *,
-    limit: int,
-    stale_running_seconds: float,
-    concurrency: int,
-) -> list[IngestionJob]:
-    """起動時などに stale/queued 取込 job を回復して実行する。"""
-    oracle = OracleClient()
-    stale_before = datetime.now(UTC) - timedelta(seconds=stale_running_seconds)
-    stale_jobs = await oracle.recover_stale_ingestion_jobs(
-        stale_before=stale_before,
-        limit=limit,
-    )
-    if stale_jobs:
+    if finished is None:
         logger.info(
-            "ingestion_jobs_recovered",
-            extra={"job_count": len(stale_jobs)},
+            "ingestion_job_finish_skipped_not_running",
+            extra={"job_id": job_id, "final_status": status.value},
         )
-    queued_jobs = await oracle.list_ingestion_jobs(
-        status=IngestionJobStatus.QUEUED,
-        limit=limit,
-        offset=0,
-    )
-    if not queued_jobs:
-        return []
-    semaphore = asyncio.Semaphore(max(1, concurrency))
-
-    async def run_job(job: IngestionJob) -> None:
-        async with semaphore:
-            await _run_ingestion_job(job.id)
-
-    await asyncio.gather(*(run_job(job) for job in queued_jobs))
-    return queued_jobs
+    return finished
 
 
 @router.get("/{document_id}/content")

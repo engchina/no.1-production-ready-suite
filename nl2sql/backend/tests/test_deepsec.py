@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
 
 from app.clients.oracle_runtime import OraclePoolManager
@@ -2901,6 +2902,7 @@ def test_data_user_login_probe_uses_data_credentials_without_context_calls() -> 
             "min": 1,
             "max": 1,
             "increment": 1,
+            "session_callback": init_oracle_session,
         }
     ]
     assert calls == []
@@ -2926,6 +2928,7 @@ def test_data_pool_uses_thin_driver_and_data_user_credentials() -> None:
             "min": 1,
             "max": 4,
             "increment": 1,
+            "session_callback": init_oracle_session,
         }
     ]
 
@@ -2948,6 +2951,8 @@ def test_data_pool_invalid_credentials_points_to_data_user_password_sync() -> No
     assert "DATA USER パスワードを保存し直し" in message
     assert "DeepSecret!123" not in message
     assert fake_oracledb.pool_kwargs[0]["user"] == "DEEPSEC_DATA_USER"
+    # 新しい接続ごとに result cache を無効にする（ADB の内部エラーを避ける。#333）。
+    assert fake_oracledb.pool_kwargs[0]["session_callback"] is init_oracle_session
 
 
 def test_deepsec_pool_rejects_thick_before_driver_initialization() -> None:
@@ -2979,6 +2984,7 @@ def test_thick_control_pool_initializes_oracle_client_when_deepsec_disabled() ->
             "min": 1,
             "max": 4,
             "increment": 1,
+            "session_callback": init_oracle_session,
         }
     ]
 
@@ -3009,6 +3015,7 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "min": 1,
             "max": 4,
             "increment": 1,
+            "session_callback": init_oracle_session,
         },
         {
             "user": "DEEPSEC_DATA_USER",
@@ -3021,6 +3028,7 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "min": 1,
             "max": 4,
             "increment": 1,
+            "session_callback": init_oracle_session,
         },
     ]
 

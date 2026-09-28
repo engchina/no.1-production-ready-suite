@@ -353,14 +353,15 @@ class IngestionPipeline:
         )
         if self._settings.rag_parser_docling_vision_enabled:
             self._parser_service.image_retrieval_prompt = await self._image_retrieval_prompt()
-        if manage_document_state:
-            if prepared_artifact is None:
-                await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)
-            else:
-                await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
         checkpoint_segments: list[IngestionSegment] = []
         try:
+            # status は cancel を確かめてから書く。取り消し後に中間の status を書き戻さない(#305)。
             await _raise_if_cancelled(cancel_checker)
+            if manage_document_state:
+                if prepared_artifact is None:
+                    await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)
+                else:
+                    await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
             if prepared_artifact is None:
                 # 前処理(Preprocess): parse の前に原本を一度だけ canonical な中間物へ変換し、
                 # 派生系譜(SourceDerivation)を残す。passthrough(既定)は原本そのまま。
@@ -371,6 +372,8 @@ class IngestionPipeline:
                     content_type=content_type,
                     source_profile=source_profile,
                 )
+                # ファイル準備中に取り消されたら、artifact と後続の status を書かない。
+                await _raise_if_cancelled(cancel_checker)
                 if manage_document_state or self._recipe_id is not None:
                     # 文書レシピは legacy 文書列を上書きせず、レシピ固有 artifact を保存する。
                     await self._save_preprocess_artifact(
@@ -404,6 +407,7 @@ class IngestionPipeline:
                         )
                     record_ingestion("preprocessed", 0)
                     return detail
+                await _raise_if_cancelled(cancel_checker)
                 if self._recipe_id is not None:
                     await self._oracle.update_document_recipe_status(
                         recipe_id=self._recipe_id,
@@ -563,6 +567,8 @@ class IngestionPipeline:
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
+            # 抽出の正本の保存(レシピは抽出 pointer も切り替える)と REVIEW の前に確かめる。
+            await _raise_if_cancelled(cancel_checker)
             # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
             extraction_recipe_id = await self._persist_extraction_layer(
                 document_id, source_profile, extraction
@@ -572,6 +578,7 @@ class IngestionPipeline:
             ) and self._settings.rag_review_gate_enabled:
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
                 # candidate モードは REVIEW で止めず索引まで進める。
+                await _raise_if_cancelled(cancel_checker)
                 if self._recipe_id is not None:
                     await self._oracle.update_document_recipe_status(
                         recipe_id=self._recipe_id,
@@ -765,6 +772,8 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        # 開始時の status も cancel を確かめてから書く(#305)。
+        await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:
             await self._oracle.update_document_recipe_status(
                 recipe_id=self._recipe_id,
@@ -838,6 +847,8 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        # 開始時の status も cancel を確かめてから書く(#305)。
+        await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:
             await self._oracle.update_document_recipe_status(
                 recipe_id=self._recipe_id,
@@ -951,6 +962,8 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        # 開始時の status も cancel を確かめてから書く(#305)。
+        await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:
             await self._oracle.update_document_recipe_status(
                 recipe_id=self._recipe_id,

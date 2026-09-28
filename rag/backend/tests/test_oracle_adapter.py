@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.oracle_session import init_oracle_session
 
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
@@ -528,6 +529,7 @@ def test_oracle_pool_initializes_instant_client_when_configured(
 
     def fake_create_pool(**kwargs: object) -> object:
         calls.append(("create_pool", kwargs["dsn"]))
+        calls.append(("session_callback", kwargs.get("session_callback")))
         return pool
 
     monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
@@ -553,6 +555,8 @@ def test_oracle_pool_initializes_instant_client_when_configured(
     assert client.connection_pool() is pool
     assert calls[0] == ("init", str(tmp_path / "instantclient_23_26"))
     assert calls[1] == ("create_pool", "ragdb_high")
+    # 新しい接続ごとに result cache を無効にする（ADB の内部エラーを避ける。#333）。
+    assert calls[2] == ("session_callback", init_oracle_session)
 
 
 def test_oracle_connection_uses_database_password_as_wallet_password(
@@ -992,6 +996,34 @@ async def test_oracle_client_lists_document_ingestion_jobs() -> None:
     assert call.parameters["ingestion_job_status"] == "RUNNING"
 
 
+async def test_oracle_client_ingestion_jobs_carry_document_file_name() -> None:
+    """取込 job の一覧・取得は文書のファイル名を返す（一覧で文書 ID ではなく名前を出す。#306）。"""
+    row = {**_oracle_ingestion_job_row(), "document_file_name": "経費規程.pdf"}
+    pool = FakeOraclePool(execute_results=[[row], [row], [row]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    listed = await client.list_ingestion_jobs(limit=5, offset=0)
+    fetched = await client.get_ingestion_job("job-1")
+    by_document = await client.list_document_ingestion_jobs("doc-1")
+
+    assert listed[0].document_file_name == "経費規程.pdf"
+    assert fetched is not None
+    assert fetched.document_file_name == "経費規程.pdf"
+    assert by_document[0].document_file_name == "経費規程.pdf"
+    for call in pool.connection.calls:
+        assert "d.file_name AS document_file_name" in call.statement
+
+
+async def test_oracle_client_ingestion_job_without_document_file_name_is_none() -> None:
+    """ファイル名の列がない行（作成直後の job 等）は None のまま扱う。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    jobs = await client.list_ingestion_jobs(limit=5, offset=0)
+
+    assert jobs[0].document_file_name is None
+
+
 async def test_oracle_client_updates_ingestion_job_status() -> None:
     """取込 job 状態更新後に最新行を返す。"""
     started_at = datetime(2026, 1, 2, 0, 1, tzinfo=UTC)
@@ -1018,6 +1050,58 @@ async def test_oracle_client_updates_ingestion_job_status() -> None:
     assert update_call.parameters["status"] == "RUNNING"
     assert update_call.parameters["attempt_count"] == 1
     assert update_call.parameters["started_at"] == started_at
+
+
+async def test_oracle_client_transition_ingestion_job_uses_status_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """状態遷移は遷移元の status を WHERE に入れた 1 回の UPDATE で行う(#305)。"""
+    finished_at = datetime(2026, 1, 2, 0, 5, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[[_oracle_ingestion_job_row(status="CANCELLED")]],
+    )
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.transition_ingestion_job(
+        "job-1",
+        from_statuses=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+        to_status=IngestionJobStatus.CANCELLED,
+        error_message="利用者によりキャンセルされました。",
+        finished_at=finished_at,
+    )
+
+    assert updated is not None
+    assert updated.status == IngestionJobStatus.CANCELLED
+    update_call = pool.connection.calls[0]
+    assert "UPDATE rag_ingestion_jobs" in update_call.statement
+    assert "status IN (:from_status_0, :from_status_1)" in update_call.statement
+    assert "EXISTS (" in update_call.statement
+    assert update_call.parameters["from_status_0"] == "QUEUED"
+    assert update_call.parameters["from_status_1"] == "RUNNING"
+    assert update_call.parameters["to_status"] == "CANCELLED"
+    assert update_call.parameters["finished_at"] == finished_at
+    assert pool.connection.commits == 1
+
+
+async def test_oracle_client_transition_ingestion_job_returns_none_when_no_row_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """遷移元の status でなければ 0 行更新になり、None を返して他者の状態を上書きしない。"""
+    pool = FakeOraclePool(execute_results=[])
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 0, raising=False)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.transition_ingestion_job(
+        "job-1",
+        from_statuses=(IngestionJobStatus.RUNNING,),
+        to_status=IngestionJobStatus.SUCCEEDED,
+        finished_at=datetime(2026, 1, 2, 0, 5, tzinfo=UTC),
+    )
+
+    assert updated is None
+    assert len(pool.connection.calls) == 1
+    assert "status IN (:from_status_0)" in pool.connection.calls[0].statement
 
 
 async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:

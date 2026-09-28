@@ -273,7 +273,8 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
   expect(uploadBody).toContain("policy-a.txt");
   expect(uploadBody).toContain("policy-b.txt");
   expect(uploadBody).toContain("policy.exe");
-  expect(uploadBody).toContain("manual");
+  // 取込開始方針（ingestion_mode）は廃止した。アップロードは取込 job を作らない（#306）。
+  expect(uploadBody).not.toContain('name="ingestion_mode"');
 });
 
 async function mockUploadStorageSettings(
@@ -354,7 +355,6 @@ async function mockDocumentUpload(
           knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
           source_profile: audio ? audioUploadSourceProfile() : uploadSourceProfile(),
           ingestion_started: false,
-          ingestion_job: null,
         },
         error_messages: [],
         warning_messages: [],
@@ -390,8 +390,6 @@ async function mockBatchDocumentUpload(page: Page, onUpload: (body: string) => v
           total_count: 3,
           uploaded_count: 2,
           failed_count: 1,
-          queued_count: 0,
-          skipped_count: 0,
         },
         error_messages: [],
         warning_messages: [],
@@ -550,7 +548,6 @@ function uploadResult(id: string, fileName: string) {
     knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
     source_profile: uploadSourceProfile(fileName),
     ingestion_started: false,
-    ingestion_job: null,
   };
 }
 

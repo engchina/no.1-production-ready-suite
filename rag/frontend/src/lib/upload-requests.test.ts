@@ -4,9 +4,12 @@ import type { BatchUploadResult } from "./api";
 import {
   DEFAULT_MAX_UPLOAD_BYTES,
   failedUploadItem,
-  formatUploadLimit,
+  formatByteSize,
   mergeBatchUploadResults,
   planUploadRequests,
+  totalUploadBytes,
+  uploadProgressOf,
+  uploadProgressPercent,
 } from "./upload-requests";
 
 const MB = 1024 * 1024;
@@ -63,8 +66,6 @@ describe("mergeBatchUploadResults", () => {
       total_count: 2,
       uploaded_count: 1,
       failed_count: 1,
-      queued_count: 0,
-      skipped_count: 0,
     };
     const second: BatchUploadResult = {
       items: [item("b")],
@@ -72,8 +73,6 @@ describe("mergeBatchUploadResults", () => {
       total_count: 1,
       uploaded_count: 1,
       failed_count: 0,
-      queued_count: 0,
-      skipped_count: 0,
     };
 
     const merged = mergeBatchUploadResults(
@@ -86,14 +85,59 @@ describe("mergeBatchUploadResults", () => {
       ["x.exe", 415],
       ["huge.pdf", 413],
     ]);
-    expect(merged).toMatchObject({ total_count: 4, uploaded_count: 2, failed_count: 2 });
+    expect(merged).toEqual(
+      expect.objectContaining({ total_count: 4, uploaded_count: 2, failed_count: 2 }),
+    );
+    // アップロードは取込 job を作らないため、job の状態を数える指標は持たない（#306）。
+    expect(Object.keys(merged).sort()).toEqual(
+      ["failed_count", "failed_items", "items", "total_count", "uploaded_count"],
+    );
   });
 });
 
-describe("formatUploadLimit", () => {
+describe("formatByteSize", () => {
   it("MiB 単位の上限を整数で示す", () => {
-    expect(formatUploadLimit(200 * MB)).toBe("200 MB");
-    expect(formatUploadLimit(1.5 * MB)).toBe("1.5 MB");
-    expect(formatUploadLimit(512)).toBe("512 B");
+    expect(formatByteSize(200 * MB)).toBe("200 MB");
+    expect(formatByteSize(1.5 * MB)).toBe("1.5 MB");
+    expect(formatByteSize(512)).toBe("512 B");
+  });
+});
+
+describe("送信の進み具合", () => {
+  it("1 リクエストの送信割合をファイルのバイト数へ換算する", () => {
+    // multipart の本文（境界などを含む）は 110 MB、ファイルは 100 MB。半分送った時点で 50 MB。
+    const progress = uploadProgressOf(0, 100 * MB, { loaded: 55 * MB, total: 110 * MB }, 100 * MB);
+
+    expect(progress).toEqual({ sentBytes: 50 * MB, totalBytes: 100 * MB });
+    expect(uploadProgressPercent(progress)).toBe(50);
+  });
+
+  it("分けて送るときは送り終えたまとまりの分を足して全体の進み具合にする", () => {
+    const groups = [[file("a", 150 * MB)], [file("b", 30 * MB), file("c", 20 * MB)]];
+    const totalBytes = totalUploadBytes(groups.flat());
+    const doneBytes = totalUploadBytes(groups[0]);
+
+    const progress = uploadProgressOf(
+      doneBytes,
+      totalUploadBytes(groups[1]),
+      { loaded: 1, total: 2 },
+      totalBytes,
+    );
+
+    expect(totalBytes).toBe(200 * MB);
+    expect(progress.sentBytes).toBe(175 * MB);
+    expect(uploadProgressPercent(progress)).toBe(87);
+  });
+
+  it("割合は送り終えるまで 100% にしない。合計が 0 のときは 0%", () => {
+    expect(uploadProgressPercent({ sentBytes: 999, totalBytes: 1000 })).toBe(99);
+    expect(uploadProgressPercent({ sentBytes: 1000, totalBytes: 1000 })).toBe(100);
+    expect(uploadProgressPercent({ sentBytes: 0, totalBytes: 0 })).toBe(0);
+  });
+
+  it("送信割合が範囲外でも合計を超えない", () => {
+    const progress = uploadProgressOf(90, 20, { loaded: 5, total: 2 }, 100);
+
+    expect(progress.sentBytes).toBe(100);
   });
 });

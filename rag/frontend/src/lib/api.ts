@@ -97,9 +97,6 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   30_000,
 );
 
-/** アップロードの送信は時間で打ち切らない（0 = タイムアウトなし。#280）。 */
-export const UPLOAD_REQUEST_TIMEOUT_MS = 0;
-
 /**
  * 保存済みの回答の評価（標準回答による評価）の timeout（#304）。評価は LLM を複数回呼ぶため、
  * 通常の API の 30 秒では足りない。backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で
@@ -142,7 +139,6 @@ export type CitationFeedbackReason =
   | "ambiguous_question";
 export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
-export type UploadIngestionMode = "manual";
 export type SourceModality =
   "pdf" | "image" | "text" | "html" | "email" | "office" | "audio" | "unknown";
 export type SourcePreviewKind =
@@ -353,6 +349,8 @@ export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
 export interface IngestionJob {
   id: string;
   document_id: string;
+  /** 文書のファイル名。一覧・取得の応答だけが持つ（作成直後の応答などでは null。#306）。 */
+  document_file_name?: string | null;
   recipe_id: string | null;
   recipe_revision: number | null;
   status: IngestionJobStatus;
@@ -543,7 +541,6 @@ export interface UploadResult {
   knowledge_bases: KnowledgeBaseRef[];
   source_profile: SourceProfile;
   ingestion_started: boolean;
-  ingestion_job: IngestionJob | null;
 }
 
 export interface BatchUploadFailedItem {
@@ -713,8 +710,6 @@ export interface BatchUploadResult {
   total_count: number;
   uploaded_count: number;
   failed_count: number;
-  queued_count: number;
-  skipped_count: number;
 }
 
 // --- ナレッジベース ---
@@ -2451,6 +2446,64 @@ async function requestDegradable<T extends object>(
   };
 }
 
+/** アップロードの送信済みバイト数（multipart の本文全体に対する値）。 */
+export interface UploadTransferProgress {
+  loaded: number;
+  total: number;
+}
+
+/**
+ * 文書アップロード用の multipart 送信（#306）。
+ *
+ * `fetch` では送信（request body）の進み具合を取れないため、XHR の `upload.onprogress` で送信済みの
+ * バイト数を通知する。CSRF header・401 / 403 の認証イベント・エラーの ApiError 化は `requestEnvelope` と
+ * 同じにする。大きなファイルの送信・保存は既定の 30 秒を超えるため、時間では打ち切らない（#280。途中で
+ * 打ち切ると、backend では保存済みなのに画面は失敗と表示し、再送で同じ文書が二重に登録される）。
+ */
+function requestUpload<T>(
+  path: string,
+  body: FormData,
+  onUploadProgress?: (progress: UploadTransferProgress) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    const headers = withCsrfHeaders("POST");
+    if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    headers.forEach((value, name) => xhr.setRequestHeader(name, value));
+    if (onUploadProgress) {
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          onUploadProgress({ loaded: event.loaded, total: event.total });
+        }
+      });
+    }
+    xhr.addEventListener("load", () => {
+      let envelope: ApiResponse<T>;
+      try {
+        envelope = JSON.parse(xhr.responseText) as ApiResponse<T>;
+      } catch {
+        envelope = { data: null, error_messages: [], warning_messages: [] } as ApiResponse<T>;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const error = apiErrorFromEnvelope(
+          xhr.status,
+          envelope,
+          xhr.getResponseHeader("X-Request-ID"),
+        );
+        notifyAuthStatus(xhr.status, error.requestId, error.errorCode);
+        reject(error);
+        return;
+      }
+      resolve(envelope.data as T);
+    });
+    // 接続の失敗は fetch と同じく ApiError ではない例外にする（画面は既定の失敗文言を出す）。
+    xhr.addEventListener("error", () => reject(new TypeError("upload request failed")));
+    xhr.addEventListener("abort", () => reject(new DOMException("upload aborted", "AbortError")));
+    xhr.send(body);
+  });
+}
+
 function jsonBody(body: unknown): RequestInit {
   return {
     method: "POST",
@@ -2642,26 +2695,19 @@ export const api = {
   uploadDocument: (
     file: File,
     knowledgeBaseIds: string[] = [],
-    ingestionMode: UploadIngestionMode = "manual",
+    onUploadProgress?: (progress: UploadTransferProgress) => void,
   ) => {
     const form = new FormData();
     form.append("file", file);
     for (const id of knowledgeBaseIds) {
       form.append("knowledge_base_ids", id);
     }
-    form.append("ingestion_mode", ingestionMode);
-    return request<UploadResult>(
-      "/api/documents/upload",
-      { method: "POST", body: form },
-      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
-      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
-      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
-    );
+    return requestUpload<UploadResult>("/api/documents/upload", form, onUploadProgress);
   },
   batchUploadDocuments: (
     files: File[],
     knowledgeBaseIds: string[] = [],
-    ingestionMode: UploadIngestionMode = "manual",
+    onUploadProgress?: (progress: UploadTransferProgress) => void,
   ) => {
     const form = new FormData();
     for (const file of files) {
@@ -2670,13 +2716,10 @@ export const api = {
     for (const id of knowledgeBaseIds) {
       form.append("knowledge_base_ids", id);
     }
-    form.append("ingestion_mode", ingestionMode);
-    return request<BatchUploadResult>(
+    return requestUpload<BatchUploadResult>(
       "/api/documents/batch-upload",
-      { method: "POST", body: form },
-      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
-      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
-      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
+      form,
+      onUploadProgress,
     );
   },
   ingestDocument: (
