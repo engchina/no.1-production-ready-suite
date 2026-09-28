@@ -453,7 +453,7 @@ export function GuidedClarificationPanel({
             <h4
               ref={questionHeadingRef}
               tabIndex={-1}
-              className="mt-1 text-sm font-semibold leading-6 text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="mt-1 text-sm font-semibold leading-6 text-fg"
             >
               {currentQuestion.prompt_ja}
             </h4>
@@ -507,7 +507,7 @@ export function GuidedClarificationPanel({
                 }}
                 disabled={Boolean(busyAction)}
                 rows={2}
-                className="min-h-20 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:text-sm"
+                className="min-h-20 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring sm:text-sm"
                 placeholder={t("nl2sql.clarification.otherPlaceholder")}
               />
             </label>
@@ -595,7 +595,7 @@ export function GuidedClarificationPanel({
                       value={value.freeText}
                       disabled={Boolean(busyAction)}
                       onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
-                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:text-sm"
+                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 focus:border-focus-ring sm:text-sm"
                     />
                   </label>
                 ) : null}

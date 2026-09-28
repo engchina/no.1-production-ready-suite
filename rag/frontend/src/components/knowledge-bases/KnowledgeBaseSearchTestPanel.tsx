@@ -149,6 +149,7 @@ export function KnowledgeBaseSearchTestPanel({
               </div>
               <Button
                 type="button"
+                icon={SearchIcon}
                 onPointerDown={(event) => {
                   event.preventDefault();
                   void submit();
@@ -156,7 +157,7 @@ export function KnowledgeBaseSearchTestPanel({
                 onClick={() => void submit()}
                 loading={isStreaming}
                 size="lg"
-                className="sm:w-28"
+                className="sm:min-w-28"
               >
                 {t("knowledgeBases.searchTest.button")}
               </Button>

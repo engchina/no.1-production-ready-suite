@@ -91,7 +91,7 @@ const ROLE_POINTER_TO_FIELD = {
 const EMPTY_DRAFT: RoleDraftState = { roleCode: "", displayName: "", description: "" };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus:border-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -769,7 +769,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   <span>{t("security.roles.description")}</span>
                   <textarea
                     disabled={inputReadOnly}
-                    className="min-h-24 w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+                    className="min-h-24 w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
                     value={draft.description}
                     onChange={(event) => {
                       if (inputReadOnly) return;

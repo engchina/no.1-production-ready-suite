@@ -1,4 +1,4 @@
-import { CheckCircle2, ThumbsDown, ThumbsUp } from "lucide-react";
+import { CheckCircle2, Save, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -207,7 +207,7 @@ export function FeedbackControls({
             rows={3}
             disabled={mutation.isPending}
             placeholder={t("feedback.controls.commentPlaceholder")}
-            className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+            className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-muted disabled:opacity-50"
             onChange={(event) => setComment(event.target.value)}
           />
           <p className="mt-1 text-right text-xs tabular-nums text-fg-muted">
@@ -226,7 +226,7 @@ export function FeedbackControls({
                 disabled={mutation.isPending}
                 placeholder={t("feedback.controls.correctedAnswerPlaceholder")}
                 aria-describedby={`feedback-corrected-help-${chunkId ?? "answer"}`}
-                className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-muted disabled:opacity-50"
                 onChange={(event) => setCorrectedAnswer(event.target.value)}
               />
               <p id={`feedback-corrected-help-${chunkId ?? "answer"}`} className="mt-1 text-xs text-fg-muted">
@@ -238,6 +238,7 @@ export function FeedbackControls({
             <Button
               type="button"
               size="md"
+              icon={Save}
               loading={mutation.isPending && retryPayload?.rating === "not_helpful"}
               disabled={!selectedReason}
               onClick={() => void submit("not_helpful", selectedReason, comment, correctedAnswer)}

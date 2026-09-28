@@ -163,9 +163,9 @@ function emptyProfileForm(): ProfileFormState {
 }
 
 const inputClass =
-  "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
+  "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-focus-ring";
 const textareaClass =
-  "rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
+  "rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring";
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -405,7 +405,7 @@ function ProfileList({
               render: (profile) => (
                 <button
                   type="button"
-                  className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                  className="grid max-w-full text-left"
                   aria-current={profile.id === selectedProfileId ? "true" : undefined}
                   aria-label={t("profiles.action.selectProfile", { name: profile.name })}
                   onClick={() => onSelect(profile)}
@@ -502,7 +502,7 @@ function SelectAiConfigFields({
   return (
     <section
       id="profile-select-ai"
-      className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-surface-sunken p-3 focus:outline-none focus:ring-2 focus:ring-focus-ring"
+      className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-surface-sunken p-3"
       aria-label={t("profiles.editor.selectAi")}
       tabIndex={-1}
     >
@@ -588,7 +588,7 @@ function SelectAiConfigFields({
               type="checkbox"
               checked={Boolean(form.selectAiConfig[key])}
               onChange={(event) => updateSelectAiConfig(setForm, { [key]: event.currentTarget.checked })}
-              className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+              className="h-4 w-4 rounded border-border text-accent-fg"
             />
             <span>{t(labelKey)}</span>
           </label>
@@ -657,7 +657,7 @@ function SchemaObjectOption({
   const qualified = schemaTableQualifiedName(object);
   return (
     <label
-      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent-subtle focus-within:ring-2 focus-within:ring-focus-ring ${className}`}
+      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent-subtle ${className}`}
       style={{ height: SCHEMA_OPTION_ROW_HEIGHT }}
     >
       <input
@@ -1055,7 +1055,7 @@ function ProfileEditor({
             aria-invalid={Boolean(nameError)}
             aria-describedby={nameDescriptionId}
             className={`${inputClass} order-2 md:order-none ${
-              nameError ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border" : ""
+              nameError ? "border-danger-fg focus:border-danger-fg" : ""
             }`}
           />
           <input
@@ -1072,7 +1072,7 @@ function ProfileEditor({
             }}
             className={`${inputClass} order-6 md:order-none ${
               requiredErrors.category
-                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
+                ? "border-danger-fg focus:border-danger-fg"
                 : ""
             }`}
           />
@@ -1193,7 +1193,7 @@ function ProfileEditor({
             type="checkbox"
             checked={rebuildAgentAssets}
             onChange={(event) => onRebuildAgentAssetsChange(event.currentTarget.checked)}
-            className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+            className="h-4 w-4 rounded border-border text-accent-fg"
           />
           <span>{t("profiles.oracle.assets.refreshAgent")}</span>
         </label>

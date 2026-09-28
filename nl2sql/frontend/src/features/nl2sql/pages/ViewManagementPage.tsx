@@ -254,7 +254,7 @@ function ViewJoinWherePanel({
           </div>
           {result.structure_markdown ? (
             <details className="group/disclosure rounded-md border border-border bg-surface p-3">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
                 <span>{t("viewMgmt.joinWhere.structureResult")}</span>
                 <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
               </summary>

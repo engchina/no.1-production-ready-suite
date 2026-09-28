@@ -23,7 +23,10 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 .bounded-scroll-area { max-height: min(22rem, 56vh); }
 .bounded-scroll-area-lg { max-height: min(34rem, 68vh); }
 
-:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+/* フォーカスの表示は outline に一本化。部品が形（offset・内側）を変えられるよう、既定は @layer base に置く（README §4）。 */
+@layer base {
+  :focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+}
 :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):focus-visible {
   outline: none;
   border-color: var(--color-focus-ring);

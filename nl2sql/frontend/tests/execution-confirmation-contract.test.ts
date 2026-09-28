@@ -31,7 +31,9 @@ test("ExecutionConfirmationField uses a stable neutral surface without a left da
   assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
   assert.doesNotMatch(component, /bg-danger-subtle\/70/u);
   assert.match(component, /border border-border-control bg-surface/u);
-  assert.match(component, /focus:border-danger-fg focus:ring-2 focus:ring-danger-border/u);
+  assert.match(component, /focus:border-danger-fg/u);
+  // フォーカスの表示は入力欄の共通規則（枠線 + 内側の影）に任せ、ring を重ねない（#355）
+  assert.doesNotMatch(component, /focus:ring-/u);
   assert.doesNotMatch(component, /tone\??:|isDanger/u);
 });
 

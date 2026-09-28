@@ -108,7 +108,7 @@ type ScrollPositionSnapshot = {
 };
 
 const INPUT_CLASS =
-  "h-11 min-w-0 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
+  "h-11 min-w-0 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm focus:border-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;
@@ -570,7 +570,7 @@ function DeepSecTargetObjectPicker({
                 role="option"
                 aria-selected={selected}
                 className={cn(
-                  "grid min-h-11 min-w-0 gap-1 rounded-md px-2 py-1.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus-ring",
+                  "grid min-h-11 min-w-0 gap-1 rounded-md px-2 py-1.5 text-left transition hover:bg-surface-hover",
                   selected && "bg-accent-subtle text-accent-fg"
                 )}
                 disabled={disabled}
@@ -686,7 +686,7 @@ function DeepSecPlanSteps({
         <CardContent className="space-y-4">
           {step.error_message ? <Banner severity="danger">{step.error_message}</Banner> : null}
           <details className="group/disclosure min-w-0 rounded-md border border-border bg-surface-sunken">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
               <span>{t("security.deepsec.sqlDetails")}</span>
               <DisclosureChevron
                 expanded="group"
@@ -2097,7 +2097,7 @@ export function SecurityDeepSecPage() {
                             key={role.role_id}
                             type="button"
                             className={cn(
-                              "min-w-0 rounded-md border border-border bg-surface-sunken p-2.5 text-left outline-none transition hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring",
+                              "min-w-0 rounded-md border border-border bg-surface-sunken p-2.5 text-left transition hover:border-accent-emphasis",
                               selected && "border-accent-emphasis bg-accent-subtle"
                             )}
                             aria-pressed={selected}
@@ -2229,7 +2229,7 @@ export function SecurityDeepSecPage() {
                                     key={entitlement.client_key}
                                     type="button"
                                     className={cn(
-                                      "min-w-0 rounded-md border border-border bg-surface p-3 text-left outline-none transition hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring",
+                                      "min-w-0 rounded-md border border-border bg-surface p-3 text-left transition hover:border-accent-emphasis",
                                       selected && "border-accent-emphasis bg-accent-subtle"
                                     )}
                                     aria-pressed={selected}
@@ -2503,7 +2503,7 @@ export function SecurityDeepSecPage() {
                             data-testid="security-deepsec-sql-preview"
                           >
                             <summary
-                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-surface-sunken px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden"
+                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-surface-sunken px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"
                               onClick={(event) => {
                                 event.preventDefault();
                                 setEntitlementSqlPreviewOpen((current) => !current);
@@ -2715,7 +2715,7 @@ export function SecurityDeepSecPage() {
                       role="region"
                       aria-label={t("security.deepsec.resultListAriaLabel")}
                       tabIndex={0}
-                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1"
                       data-testid="security-deepsec-verification-results"
                     >
                       {verification.checks.map((check) => (

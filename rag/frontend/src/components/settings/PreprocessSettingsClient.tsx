@@ -145,7 +145,7 @@ export function PreprocessSettingsClient() {
                     disabled={save.isPending}
                     onClick={() => choose(status.name)}
                     className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                       selected
                         ? "border-accent-emphasis bg-accent-subtle text-fg"
                         : "border-border bg-surface text-fg hover:bg-surface-hover"

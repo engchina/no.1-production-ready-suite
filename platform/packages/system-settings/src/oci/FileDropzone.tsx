@@ -195,7 +195,7 @@ export function FileDropzone({
           className={cn(
             "group flex h-[44px] min-w-0 touch-manipulation items-center gap-2 rounded-md border border-dashed bg-surface-sunken px-3 py-1 text-left",
             "transition-[border-color,background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none",
-            "focus-within:ring-2 focus-within:ring-focus-ring",
+            "focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring",
             interactionDisabled
               ? "cursor-not-allowed border-border opacity-60"
               : isDragActive

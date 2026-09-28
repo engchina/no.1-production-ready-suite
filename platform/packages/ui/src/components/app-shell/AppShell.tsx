@@ -29,7 +29,7 @@ export function AppShell({
       <main
         id="pr-main"
         tabIndex={-1}
-        className={cn("flex min-w-0 flex-1 flex-col overflow-y-auto focus:outline-none", mainClassName)}
+        className={cn("flex min-w-0 flex-1 flex-col overflow-y-auto", mainClassName)}
       >
         {children}
       </main>

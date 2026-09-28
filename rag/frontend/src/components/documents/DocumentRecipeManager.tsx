@@ -418,7 +418,7 @@ function RecipeCard({
       aria-pressed={selected}
       onClick={onSelect}
       className={cn(
-        "min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        "min-w-0 rounded-lg border p-3 text-left transition-colors",
         selected
           ? "border-accent-emphasis bg-accent-subtle shadow-sm"
           : "border-border bg-surface hover:border-accent-emphasis hover:bg-surface-hover"
@@ -744,7 +744,7 @@ function RecipeComparison({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("documents.experiment.compare.placeholder")}
-                className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void run();
                 }}
@@ -752,6 +752,7 @@ function RecipeComparison({
             </label>
             <Button
               type="button"
+              icon={Play}
               onClick={() => void run()}
               loading={pending}
               disabled={!query.trim() || left?.recipe_id === right?.recipe_id}
@@ -823,7 +824,7 @@ function AddModeOption({
       aria-checked={selected}
       onClick={onSelect}
       className={cn(
-        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium",
         selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
       )}
     >

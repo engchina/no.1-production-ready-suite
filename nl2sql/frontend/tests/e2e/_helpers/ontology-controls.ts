@@ -32,12 +32,15 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await expect(all).toHaveCSS("height", mobile ? "36px" : "32px");
   // アイコンは 14 / 16 / 20 / 24px に統一（奇数 px はボケる。README §3）。
   await expect(all.locator("svg")).toHaveCSS("width", "14px");
+  // フォーカスの表示はグローバルの :focus-visible の outline 1 つ（ring と二重にしない。#355）。
   const focus = await all.evaluate(element => {
     const style = getComputedStyle(element);
-    return { visible: element.matches(":focus-visible"), shadow: style.boxShadow };
+    return { visible: element.matches(":focus-visible"), outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, shadow: style.boxShadow };
   });
   expect(focus.visible).toBe(true);
-  expect(focus.shadow).not.toBe("none");
+  expect(focus.outlineStyle).toBe("solid");
+  expect(focus.outlineWidth).toBe("2px");
+  expect(focus.shadow).toBe("none");
   // semantic primary と完全一致する塗り（統一後の薄い混色背景とは異なる）。
   const selectedColors = await all.evaluate(element => {
     const probe = document.createElement("span");

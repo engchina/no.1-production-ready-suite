@@ -153,7 +153,7 @@ export function SecretField({
           className={cn(fieldControlClass, "pr-11", error ? "border-danger-fg" : "border-border-control")}
         />
         {/* 入力欄の直後に置く（`#id + button` で引ける）。高さは入力欄に合わせる。
-            無効時の地と枠は入力欄が示すので、ボタン側では重ねない。 */}
+            無効時の地と枠は入力欄が示すので、ボタン側では重ねない（loading 中の aria-disabled も同じ）。 */}
         <Button
           type="button"
           variant="ghost"
@@ -163,7 +163,7 @@ export function SecretField({
           disabled={inputDisabled}
           aria-label={toggleLabel}
           onClick={toggleVisible}
-          className="absolute inset-y-0 right-0 h-full min-h-0 rounded-l-none disabled:border-transparent disabled:bg-transparent"
+          className="absolute inset-y-0 right-0 h-full min-h-0 rounded-l-none disabled:border-transparent disabled:bg-transparent aria-disabled:border-transparent aria-disabled:bg-transparent"
         />
       </div>
       {helper ? (

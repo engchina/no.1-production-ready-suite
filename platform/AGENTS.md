@@ -56,7 +56,8 @@
 
 `docs/design-system/adherence.oxlintrc.json` が、デザインシステム遵守ルールの正本である。**新規コードにこの lint を通すことが、デザインシステムからのドリフトを止める唯一の現実的な手段である。**
 
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出するのは次の 7 つ: 生の hex、inline style の生の px、デザインシステムに無い書体、文字サイズ・行間・字間・角丸の任意値（`text-[10px]` 等）、旧トークン名（ユーティリティ / CSS 変数）、`@engchina/production-ready-ui` の内部パス import、`loading` 中の `Button` ラベルの差し替え。
+- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出するのは次の 9 つ: 生の hex、inline style の生の px、デザインシステムに無い書体、文字サイズ・行間・字間・角丸の任意値（`text-[10px]` 等）、旧トークン名（ユーティリティ / CSS 変数）、`@engchina/production-ready-ui` の内部パス import、`loading` 中の `Button` ラベルの差し替え、`loading` があるのに `icon` が無い `Button`、フォーカスの表示の ring（`focus(-visible|-within):ring-*`）と `focus(-visible):outline-none`（#355。フォーカスの表示は outline に一本化）。
+- 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
 - prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない（コンポーネントごとの許可 prop 一覧は廃止した）。
 - oxlint にはネイティブの `no-restricted-syntax` が無い。そのため、同じ `{selector, message}` 形式を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を platform に置き、adherence 設定から相対パスで読み込む。
 - **各製品はルールもプラグインもコピーせず、platform の設定を相対パス（`../../platform/docs/design-system/…`）で参照する。** monorepo なので CI でもローカルでも同じパスで解決できる。コピーすると、ルール変更が各製品に届かない。

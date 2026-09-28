@@ -664,7 +664,7 @@ export function DbSingleObjectPickerList({
               aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
               aria-describedby={commentId}
               disabled={selectionDisabled}
-              className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed md:min-h-0"
+              className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left disabled:cursor-not-allowed md:min-h-0"
               onClick={() => onSelect(item)}
             >
               <DbObjectName value={item.name} size="xs" interactive />
@@ -1072,7 +1072,7 @@ export function DbObjectGrid({
                     aria-label={labels.showObject(qualifiedName)}
                     aria-describedby={showComments ? commentId : undefined}
                     aria-current={qualifiedName === selectedName ? "true" : undefined}
-                    className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                    className="grid max-w-full text-left"
                     onClick={() => onSelect(qualifiedName)}
                   >
                     <DbObjectName value={qualifiedName} size="xs" interactive />

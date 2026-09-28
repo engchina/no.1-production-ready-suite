@@ -165,7 +165,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - `<table>` を手書きする。`DataTable` を使う。例外は「元の文書の表を再現して編集するグリッド」（見出し行がなく、列数が表ごとに変わるもの。RAG の `ReviewTextEditor.tsx`）だけで、使う理由をコードのコメントに書く（#129）。
 - `<div className="px-8 py-6">` や `style={{ padding: "1.5rem 2rem" }}` のような余白コンテナを手書きする。`PageBody` を使う。
 - `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
-- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。
+- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。`loading` を渡す `Button` は必ず `icon` を持つ。
+- フォーカスの表示を `focus:ring-*` / `focus-visible:ring-*` で作る、`focus(-visible):outline-none` で消す。フォーカスの表示はグローバルの `:focus-visible`（outline）1 つに任せ、形の調整は `focus-visible:outline-*` / `-outline-offset-*` で行う（#355）。
 - 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
 - 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
 - `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。

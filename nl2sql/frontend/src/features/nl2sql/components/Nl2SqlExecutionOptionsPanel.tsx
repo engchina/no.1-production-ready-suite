@@ -24,7 +24,7 @@ function OptionCheckbox({
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.checked)}
-        className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg disabled:cursor-not-allowed disabled:opacity-60"
       />
       <span className="flex min-w-0 items-start gap-2">
         <Icon size={16} className="mt-0.5 shrink-0 text-fg-muted" aria-hidden="true" />

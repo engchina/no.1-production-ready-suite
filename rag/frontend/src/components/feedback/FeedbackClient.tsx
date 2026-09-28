@@ -216,7 +216,7 @@ export function FeedbackClient() {
                     value={searchDraft}
                     maxLength={200}
                     placeholder={t("feedback.filters.searchPlaceholder")}
-                    className="h-9 w-full rounded-md border border-border-control bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring"
+                    className="h-9 w-full rounded-md border border-border-control bg-surface pl-9 pr-3 text-sm text-fg placeholder:text-fg-muted"
                     onChange={(event) => setSearchDraft(event.target.value)}
                   />
                 </span>

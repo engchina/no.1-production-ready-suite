@@ -951,7 +951,7 @@ function MetadataTargetGrid({
                       aria-labelledby={`${rowId}-name ${rowId}-hint`}
                       aria-describedby={`${rowId}-comment`}
                       onChange={() => onToggle(item)}
-                      className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg"
                     />
                     <span className="grid min-w-0">
                       <span id={`${rowId}-name`} className="block">
@@ -1121,7 +1121,7 @@ function MetadataInputPanel({
                     const value = Number(event.currentTarget.value);
                     onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
                   }}
-                  className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                  className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                 />
               </label>
               <StatusBadge icon={false} variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
@@ -1153,7 +1153,7 @@ function MetadataInputPanel({
               value={extraText}
               onChange={(event) => onExtraTextChange(event.currentTarget.value)}
               rows={6}
-              className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+              className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
             />
           </label>
 

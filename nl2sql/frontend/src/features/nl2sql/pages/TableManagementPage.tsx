@@ -72,7 +72,7 @@ type ImportStep = "file" | "execute";
 
 const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
 const importControlClass =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg focus:border-focus-ring";
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (

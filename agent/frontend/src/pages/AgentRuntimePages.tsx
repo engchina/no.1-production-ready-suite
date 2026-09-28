@@ -41,6 +41,7 @@ import {
   Section,
   StatusBadge,
   Switch,
+  ToggleChip,
   toast,
   useConfirm,
   type DataTableColumn,
@@ -6073,35 +6074,14 @@ function RunStreamControls({
         />
       </CardHeader>
       <CardContent className="space-y-4">
-        <div
-          className="grid min-h-11 grid-cols-2 overflow-hidden rounded-md border border-border text-sm"
-          role="group"
-          aria-label={t("run.streamMode")}
-        >
-          <button
-            type="button"
-            aria-pressed={mode === "sse"}
-            onClick={() => onModeChange("sse")}
-            className={`px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              mode === "sse"
-                ? "bg-accent-emphasis text-fg-on-accent"
-                : "bg-surface-sunken text-fg-muted hover:bg-surface-hover hover:text-fg"
-            }`}
-          >
+        {/* 購読の方式（モード）の切り替え。共有の ToggleChip を使う（buttons.md §6。手書きのセグメントは作らない）。 */}
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t("run.streamMode")}>
+          <ToggleChip selected={mode === "sse"} onClick={() => onModeChange("sse")}>
             {t("run.stream.sse")}
-          </button>
-          <button
-            type="button"
-            aria-pressed={mode === "websocket"}
-            onClick={() => onModeChange("websocket")}
-            className={`border-l border-border px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              mode === "websocket"
-                ? "bg-accent-emphasis text-fg-on-accent"
-                : "bg-surface-sunken text-fg-muted hover:bg-surface-hover hover:text-fg"
-            }`}
-          >
+          </ToggleChip>
+          <ToggleChip selected={mode === "websocket"} onClick={() => onModeChange("websocket")}>
             {t("run.stream.websocket")}
-          </button>
+          </ToggleChip>
         </div>
 
         {mode === "websocket" ? (
@@ -6159,8 +6139,11 @@ function RunStreamControls({
                   aria-label={t("run.stream.wsApprove")} icon={Check}>
                   {t("run.stream.wsApprove")}
                 </Button>
+                {/* 承認の拒否・Run のキャンセルは確定的な破壊ではないため赤塗り（danger）にせず、
+                    secondary + tone="danger" で控えめに示す（buttons.md §3、README §4 Button）。 */}
                 <Button
-                  variant="danger"
+                  variant="secondary"
+                  tone="danger"
                   size="sm"
                   onClick={() => onWebSocketApprovalDecision(pendingApproval.id, false)}
                   loading={actionPending}
@@ -6183,7 +6166,8 @@ function RunStreamControls({
             ) : null}
             {canCancel ? (
               <Button
-                variant="danger"
+                variant="secondary"
+                tone="danger"
                 size="sm"
                 onClick={onWebSocketCancel}
                 loading={actionPending}

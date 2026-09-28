@@ -279,7 +279,7 @@ export function SecuritySearchField({
           data-testid={testId}
           disabled={disabled}
           onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+          className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
           placeholder={placeholder}
         />
       </span>

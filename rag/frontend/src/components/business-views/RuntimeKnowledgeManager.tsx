@@ -340,20 +340,24 @@ export function RuntimeKnowledgeManager({
               <>
                 <Button
                   size="sm"
-                  variant="danger"
-                  icon={Trash2}
-                  disabled={save.isPending}
-                  onClick={() => void confirmDelete()}
-                >
-                  {t("businessViews.faq.delete")}
-                </Button>
-                <Button
-                  size="sm"
                   variant="ghost"
                   icon={X}
                   onClick={() => load({ ...EMPTY_FORM, kind: form.kind })}
                 >
                   {t("businessViews.runtime.cancel")}
+                </Button>
+                {/* 確認ダイアログを開く起点。確定は ConfirmDialog の danger ボタンで行う。
+                    保存（主操作）の隣に置かず、操作行の反対の端に ghost + tone="danger" で置く（README §4 カード内の操作行）。 */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  tone="danger"
+                  icon={Trash2}
+                  className="sm:ml-auto"
+                  disabled={save.isPending}
+                  onClick={() => void confirmDelete()}
+                >
+                  {t("businessViews.faq.delete")}
                 </Button>
               </>
             ) : null}

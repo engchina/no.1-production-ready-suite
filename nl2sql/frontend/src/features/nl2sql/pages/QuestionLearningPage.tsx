@@ -93,9 +93,9 @@ type ClassifierPredictionSnapshot = ClassifierPredictionData & {
 
 const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
 const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
+  "min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-focus-ring";
 const linkButtonClass =
-  "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-focus-ring";
+  "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover";
 const TRAINING_DATA_PAGE_SIZE = 10;
 const CANDIDATE_PAGE_SIZE = 20;
 const CANDIDATE_STATUS_VALUES = [
@@ -792,7 +792,7 @@ function TrainingDataPanel({
             type="checkbox"
             checked={replace}
             onChange={(event) => onReplaceChange(event.currentTarget.checked)}
-            className="mt-1 h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+            className="mt-1 h-4 w-4 rounded border-border text-accent-fg"
           />
           <span>{t("learning.classifier.replace")}</span>
         </label>
@@ -1461,7 +1461,7 @@ function TrainingCandidatesPanel({
                           else next.delete(item.history_id);
                           onSelectionChange(next);
                         }}
-                        className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+                        className="h-4 w-4 rounded border-border text-accent-fg"
                       />
                     </label>
                     <div className="min-w-0 pt-0.5">

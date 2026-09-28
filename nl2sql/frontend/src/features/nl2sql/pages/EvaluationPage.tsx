@@ -73,7 +73,7 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
 const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg outline-none transition focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "min-h-11 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg transition focus:border-focus-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
 
@@ -535,7 +535,7 @@ export function EvaluationPage() {
                     return (
                       <label
                         key={capability.engine}
-                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 outline-none transition focus-within:ring-2 focus-within:ring-focus-ring ${
+                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 transition ${
                           capability.available
                             ? selected
                               ? "border-accent-emphasis bg-accent-subtle"
@@ -1301,7 +1301,7 @@ function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) 
   return (
     <details className="group/disclosure min-w-0 text-xs">
       <summary
-        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-accent-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden"
+        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-accent-fg [&::-webkit-details-marker]:hidden"
         data-testid="quality-evaluation-analysis-toggle"
       >
         <span>{t("qualityEvaluation.details.analysis")}</span>

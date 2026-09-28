@@ -462,6 +462,7 @@ export function SearchClient() {
                 </div>
                 <Button
                   type="button"
+                  icon={SearchIcon}
                   onPointerDown={(event) => {
                     event.preventDefault();
                     void submit();
@@ -469,7 +470,7 @@ export function SearchClient() {
                   onClick={() => void submit()}
                   loading={isStreaming}
                   size="lg"
-                  className="sm:w-28"
+                  className="sm:min-w-28"
                 >
                   {t("search.button")}
                 </Button>
@@ -1192,7 +1193,7 @@ function CandidateRow({
       role="row"
       className="group rounded-md border border-border bg-surface text-xs"
     >
-      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 transition-colors hover:bg-surface-hover motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
         <span
           role="cell"
           data-testid="candidate-file-name"

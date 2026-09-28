@@ -132,13 +132,23 @@ body {
   animation: dialog-in 200ms ease-out;
 }
 
-/* キーボードフォーカスを明瞭に（アクセシビリティ） */
-:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
+/*
+ * キーボードフォーカスを明瞭に（アクセシビリティ）。フォーカスの表示は outline に一本化する（README §4「フォーカスの表示」）。
+ * `@layer base` に置く: レイヤーの外に置くと Tailwind のユーティリティ（utilities レイヤー）に常に勝ち、
+ * 部品の `focus-visible:-outline-offset-2` 等の調整が効かず、`focus-visible:outline-none` + `ring` と二重に表示されていた（#355）。
+ * ring（box-shadow）をフォーカスの表示に使わない（adherence の lint が検出する）。
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
 }
 
-/* フォーム入力は内側リングにして、label や隣接要素への重なりを防ぐ */
+/*
+ * フォーム入力は枠線の色 + 内側 1px の影にして、label や隣接要素への重なりを防ぐ。
+ * 入力欄の見た目は部品で変えないため、こちらはレイヤーの外に置いて常に優先する。
+ */
 :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):focus-visible {
   outline: none;
   outline-offset: 0;

@@ -39,7 +39,9 @@
 - コピー、ダウンロード、状態の再確認、追加読込は局所ツール（`secondary/sm`）。追加読込は `ListPlus`、更新は `RefreshCw`。
 - 入力欄に並ぶ取得 / 接続テストは入力と同じ 44px。`touchTarget` と `icon` を渡す。
 - 同じ操作行は主操作・補助操作とも同じ size。非同期操作は必ず `icon` prop を使い、loading 中もラベルと幅を保つ。
-- `danger` は実際の破壊的確定に使う。選択・未選択の変化で variant やアイコンを切り替えず、`disabled` だけを変える。
+- `danger`（赤塗り）は実際の破壊的確定に使う。選択・未選択の変化で variant やアイコンを切り替えず、`disabled` だけを変える。
+- 確定の前の起点（確認ダイアログを開くボタン）と、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は赤塗りにしない。`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。確定は `ConfirmDialog` の `danger` ボタンで行う（#355）。
+- `variant="danger"` と `tone="danger"` は同時に指定できない（型で禁止。赤地に赤文字になる）。
 
 各製品の具体的な割り当て（どの画面のどの操作が主操作か）は、製品の `docs/frontend-button-spec.md` に書く。
 
@@ -78,7 +80,7 @@
 
 - 固定の並びは **danger → utility（今の表示の再取得 → 外部データの同期）→ secondary → primary**（右端が主操作）。配列順ではなく `kind` で並べ、同じ `kind` の中は宣言順を保つ。
 - `utility`（表示更新など）は `secondary` と同じ枠付きの見た目で表示される。compact メニューの中は `ghost`。
-- `primary` はページ全体で最大 1 件。`primary/secondary` は作業開始のグループ、`utility` はページツールのグループ、`danger` は危険操作のグループとし、グループの境界に軽い区切りと余白を置く。
+- `primary` はページ全体で最大 1 件。`primary/secondary` は作業開始のグループ、`utility` はページツールのグループ、`danger` は危険操作のグループとし、グループの境界に軽い区切りと余白を置く（`PageHeader` が縦の区切り線を描く。「その他の操作」メニューでは危険操作の前に区切り線。#355）。
 - 共通文言は `common.action.refresh`＝`表示を更新` を使う（今の表示の GET に限る）。外部データや構造の同期を始める操作は、製品ごとに別の文言にする。
 - 非同期操作は `loading` を渡し、処理中の再送信を防ぐ。成功の Toast と回復可能なエラーの表示は [messaging.md](./messaging.md) に従い handler 側で行う。
 - `lg` 未満で操作が 2 件以上なら、最も優先度の高い操作だけを表示し、残りを `その他の操作` メニューへ入れる。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印 / Home / End、フォーカスの復帰を満たす。
@@ -178,7 +180,9 @@
 
 - Lucide を使う。ラベル付きは**アイコンを左**に置き（共通 `Button` の `icon` prop）、`aria-hidden` を付ける。
 - サイズは共通 `Button` の `icon` スロットが制御する。
-- 非同期処理は `loading` prop を使う（共通 `Button` がアイコンをスピナーに置き換え、自動で disabled にする）。
+- 非同期処理は `loading` prop を使う（共通 `Button` がアイコンをスピナーに置き換え、`aria-busy` と `aria-disabled` を付けてクリック・Enter / Space・form の送信を止める）。
+  - **`loading` を渡すボタンは必ず `icon` を持つ**（アイコンが無いとスピナーの分だけ幅が変わる。adherence の lint が検出する）。
+  - **`loading` 中もフォーカスはボタンに残る。** ネイティブの `disabled` を付けるとフォーカスが `body` へ外れるため、共通 `Button` は `loading` のときだけ `aria-disabled` にする。完了後もフォーカスはボタンのまま（#355）。製品側で `disabled={pending}` を足してフォーカスを外さない。
   - **ボタン内の loading 表示は共通 `Button` に任せる。** `Loader2` や `Spinner` を子要素として描画しない。loading 中にラベルを「実行中…」などに差し替えない。
   - **同じ処理の動的なスピナーは 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的なラベル・経過時間・slow hint だけを表示する。
   - 更新・同期などの busy 表示も `<Button loading>` を使い、ボタン内のアイコンに個別に `animate-spin` を付けない。
@@ -190,10 +194,11 @@
 
 - [ ] Icon-only に `aria-label`。
 - [ ] 操作領域：desktop 32/36/40px、icon-only 36px、mobile / coarse pointer は 44px。
-- [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。
+- [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。フォーカスの表示は outline 1 つ。`focus:ring-*` / `focus-visible:ring-*` を足したり、`focus(-visible):outline-none` で消したりしない（[デザインシステム README §4「フォーカスの表示」](../design-system/README.md)、adherence の lint が検出する）。
 - [ ] disabled は `disabled` 属性 + disabled の意味の色（共通 `Button` 済み）。見た目だけの無効化をしない。
+- [ ] `loading` 中は `aria-disabled="true"` + `aria-busy="true"`（共通 `Button` 済み）。Enter → loading → 完了でフォーカスがボタンに残り、`loading` 中の Enter / Space / クリック / 入力欄の Enter で二重に送信しない。
 - [ ] トグルは `aria-pressed`、色だけで状態を伝えない。
-- [ ] 破壊的操作は danger + 確認（`useConfirm`）、主アクションと分ける。
+- [ ] 破壊的操作は danger + 確認（`useConfirm`）、主アクションと分ける。確認の前の起点・取り消せる停止や拒否は赤塗りにしない（§3）。
 
 ---
 
