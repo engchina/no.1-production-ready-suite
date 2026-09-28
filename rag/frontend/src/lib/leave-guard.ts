@@ -11,7 +11,7 @@ import { t } from "@/lib/i18n";
  * 未保存変更の離脱ガード（platform `docs/ux-contracts/workspace-state.md`）。
  *
  * 内部リンク（サイドナビ含む）の click と `beforeunload` は共有 hook が守る。
- * コマンドパレットやログアウトのように `navigate()` で移動する経路は
+ * ログアウトのように `navigate()` で移動する経路は
  * `confirmPendingLeave()` を先に呼び、同じ確認ダイアログを通す。
  */
 export function draftGuardMessages(): DraftGuardMessages {

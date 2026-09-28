@@ -43,7 +43,6 @@ const nl2sqlJa = {
   "nav.sidebar.aria": "サイドナビゲーション",
   "nav.sidebar.expand": "サイドバーを展開",
   "nav.sidebar.collapse": "サイドバーを折りたたむ",
-  "nav.command.open": "コマンドパレットを開く",
   "nav.section.containsActive": "現在地を含む",
   "nav.section.toggle.collapse": "{section} を折りたたむ",
   "nav.section.toggle.expand": "{section} を展開",
@@ -85,7 +84,6 @@ const nl2sqlJa = {
   "nav.securityPermissions": "権限管理",
   "nav.securityDeepSec": "Deep Data Security",
 
-  "auth.sidebar.debugMode": "ログイン省略",
 
   "common.backToList": "一覧へ戻る",
   "common.errorWithRequestId": "{message}（リクエストID: {requestId}）",

@@ -648,7 +648,7 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - **`DropdownMenu`** — 破壊的アクションをヘッダーからオーバーフローに移すために必要。最優先
 - **`Tooltip`** — `iconOnly` ボタンが増えたので必須
 - **`Checkbox`** — 不在のため `DataTable` の一括選択が組めない
-- **`CommandPalette`** — `--shadow-palette` と `--z-palette` は定義済みなのに本体が無い（孤児トークン）。サイドバーに起動ボタンだけある
+- **`CommandPalette`** — 3 製品とも持たないと決めた（#308）。サイドバーの起動ボタンも削除した。`--shadow-palette` / `--z-palette` は未使用のトークンとして残っている
 - **モバイル対応の方針決定** — `.pr-button` に `@media (max-width: 639px)` の 44px 強制があるが、`AppShell` は `height: 100vh` + 固定 15rem サイドバーで 639px では成立しない。**到達しない死にコード**。desktop-only と明記して coarse-pointer ルールを削除するか、レスポンシブシェルを作るか、どちらかに倒すべき
 - **`html { font-size: 14px }` の撤去** — ルート上書きは利用者のブラウザ設定を無視します。撤去すると Tailwind の rem ユーティリティ経由で全余白が 14.3% 増えるため、単独のタスクとして計画が必要
 - **空状態 / ローディングの使い分け規定** — `DataTable` の `emptyText`（表内1行）と `StateViews` の `EmptyState`（カードごと置換）の2系統、ローディングは4系統あり、どちらを使うかの規定が無い。推奨: 「行が0件 → 表内テキスト」「取得前・権限なし・前提未達 → StateViews」「200ms 未満は何も出さない / 200ms–1s は Skeleton / 1s 超は LoadingState」

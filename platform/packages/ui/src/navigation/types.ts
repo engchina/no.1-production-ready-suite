@@ -48,7 +48,6 @@ export interface SidebarLabels {
   aria: string;
   expand: string;
   collapse: string;
-  commandOpen: string;
   sectionContainsActive: string;
   sectionToggleExpand: (section: string) => string;
   sectionToggleCollapse: (section: string) => string;
