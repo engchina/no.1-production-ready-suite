@@ -9,6 +9,7 @@ import {
   FormActionBar,
   FormStatus,
   PageBody,
+  ProcessingIndicator,
   SecretField,
   SelectField,
   Skeleton,
@@ -670,6 +671,19 @@ export function DatabaseSettingsPage({
                 }
               />
 
+              {test.isPending ? (
+                // DB への接続確認は wallet の読み込みと接続を伴い数秒かかる。
+                // スピナーは接続テストのボタンが担う（messaging.md §3.7）。
+                <ProcessingIndicator
+                  active
+                  label={t("settings.database.test.running")}
+                  operationKey="database-test"
+                  placement="action"
+                  activityIcon="none"
+                  testId="settings-database-test-processing"
+                />
+              ) : null}
+
               <DatabaseTestResultPanel
                 result={testResult}
                 error={test.error}
@@ -865,6 +879,14 @@ function AdbManagementCard({
     }
   }
 
+  const adbProcessingLabel = startButtonLoading
+    ? t("settings.adb.processing.start")
+    : stopButtonLoading
+      ? t("settings.adb.processing.stop")
+      : saveButtonLoading || refreshButtonLoading
+        ? t("settings.adb.processing.refresh")
+        : null;
+
   const apiMessage = (error: unknown) =>
     error ? errorMessage?.(error) : undefined;
   const actionError =
@@ -972,6 +994,19 @@ function AdbManagementCard({
             ) : null
           }
         />
+
+        {adbProcessingLabel ? (
+          // ADB の起動・停止は OCI 側の遷移（STARTING / STOPPING）が終わるまで数分かかる。
+          // スピナーは操作したボタンが担う（messaging.md §3.7）。
+          <ProcessingIndicator
+            active
+            label={adbProcessingLabel}
+            operationKey={adbProcessingLabel}
+            placement="action"
+            activityIcon="none"
+            testId="settings-adb-processing"
+          />
+        ) : null}
 
         {infoError ? (
           <FormStatus tone="danger" className="text-xs" message={infoError} />

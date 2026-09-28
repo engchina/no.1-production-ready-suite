@@ -11,7 +11,9 @@ import {
   DataTable,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  ProcessingIndicator,
   SelectField,
+  Skeleton,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import {
@@ -263,6 +265,18 @@ export function EvaluationClient() {
                     {t("evaluation.actions.loadSample")}
                   </Button>
                 </div>
+                {runMutation.isPending ? (
+                  // 評価は golden set の件数だけ検索・生成を繰り返すため数十秒かかる。ボタンの loading が
+                  // スピナーを担うので、ここは文言と経過時間だけを出す（messaging.md §3.7）。
+                  <ProcessingIndicator
+                    active
+                    label={t("evaluation.actions.running")}
+                    operationKey="evaluation-run"
+                    placement="action"
+                    activityIcon="none"
+                    testId="evaluation-run-processing"
+                  />
+                ) : null}
               </form>
             </CardContent>
           </Card>
@@ -303,12 +317,40 @@ export function EvaluationClient() {
                   disabled={!canCompare} icon={GitCompare}>
                   {t("evaluation.actions.compare")}
                 </Button>
+                {compareMutation.isPending ? (
+                  <ProcessingIndicator
+                    active
+                    label={t("evaluation.actions.comparing")}
+                    operationKey="evaluation-compare"
+                    placement="action"
+                    activityIcon="none"
+                    testId="evaluation-compare-processing"
+                  />
+                ) : null}
               </form>
             </CardContent>
           </Card>
         </div>
 
-        {runMutation.data ? (
+        {runMutation.isPending ? (
+          // 結果の領域は前の結果や空の案内を消し、結果の形の Skeleton で寸法を予約する。
+          // 経過時間はフォームの中（操作の直下）に出しているため、ここでは重ねない。
+          <section
+            className="min-w-0 space-y-4"
+            aria-busy="true"
+            aria-label={t("evaluation.actions.running")}
+            data-testid="evaluation-result-loading"
+          >
+            <Skeleton className="h-6 w-40" aria-hidden="true" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Skeleton className="h-20 w-full" aria-hidden="true" />
+              <Skeleton className="h-20 w-full" aria-hidden="true" />
+              <Skeleton className="h-20 w-full" aria-hidden="true" />
+              <Skeleton className="h-20 w-full" aria-hidden="true" />
+            </div>
+            <Skeleton className="h-48 w-full" aria-hidden="true" />
+          </section>
+        ) : runMutation.data ? (
           <EvaluationResult metrics={runMutation.data} />
         ) : (
           <Card>

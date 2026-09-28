@@ -31,6 +31,7 @@ export const OCI_MESSAGES = {
   "settings.oci.configTest.apiError": "{message} バックエンドの起動状態と OCI 認証ファイルを確認して再試行してください。",
   "settings.oci.configTest.error": "OCI config の保存または確認に失敗しました。",
   "settings.oci.configTest.missingField": "不足項目: {field}",
+  "settings.oci.configTest.running": "OCI への接続を確認しています",
   "settings.oci.configTest.missingKey": "秘密鍵ファイルが見つかりません。",
   "settings.oci.configTest.stage.authentication": "認証（API 応答）",
   "settings.oci.configTest.stage.config_format": "設定の形式",

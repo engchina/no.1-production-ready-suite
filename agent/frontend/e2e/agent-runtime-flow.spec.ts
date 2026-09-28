@@ -197,6 +197,11 @@ test.describe("AI Agent Control Plane", () => {
     await expect(runDetail(page).getByText(/Runtime: hermes-default/)).toBeVisible();
     await expect(page.getByText("この Runtime は取消に対応していません。")).toBeVisible();
     await expect(page.getByText("runtime.submitted")).toBeVisible();
+    // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
+    const progress = page.getByTestId("run-progress");
+    await expect(progress).toContainText("Run を実行しています");
+    await expect(progress).toHaveAttribute("data-processing-placement", "job");
+    await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 /);
   });
 
   test("Runtime の degraded 状態、capability、管理操作を表示する", async ({ page }) => {
@@ -223,4 +228,37 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
+
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 375, height: 812 },
+  ]) {
+    test(`Runtime のサービス操作の間は経過時間を出す (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await installControlPlaneApi(page);
+      // pull の応答を止めて、実行中の表示（#376）を確かめてから既定の mock へ渡す。
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route("**/api/runtimes/services/**", async (route) => {
+        await released;
+        await route.fallback();
+      });
+      await page.goto("/runtimes");
+      await page.getByRole("button", { name: "Pull" }).click();
+
+      const processing = page.getByTestId("runtime-processing-hermes-default");
+      await expect(processing).toContainText("Hermes のイメージを取得しています");
+      await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+      await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+      // 同じ Runtime の他の操作は、実行中の操作が終わるまで押せない。
+      await expect(page.getByRole("button", { name: "起動", exact: true })).toBeDisabled();
+      await expectNoHorizontalOverflow(page);
+
+      release();
+      await expect(processing).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "起動", exact: true })).toBeEnabled();
+    });
+  }
 });

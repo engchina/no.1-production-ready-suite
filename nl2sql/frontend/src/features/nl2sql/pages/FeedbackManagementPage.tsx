@@ -901,6 +901,17 @@ export function FeedbackManagementPage() {
                 },
               ]}
             />
+            {loading === "vector-index" ? (
+              // ベクトル索引の再作成は件数に比例して数十秒かかる（messaging.md §3.7）。
+              <ProcessingIndicator
+                active
+                label={t("feedbackManagement.index.progress")}
+                operationKey="feedback-vector-index"
+                placement="action"
+                activityIcon="none"
+                testId="feedback-vector-index-processing"
+              />
+            ) : null}
           </DbObjectManagementPanelShell>
         )}
 

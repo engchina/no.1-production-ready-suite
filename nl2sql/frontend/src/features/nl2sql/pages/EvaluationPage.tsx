@@ -659,6 +659,18 @@ export function EvaluationPage() {
                   } icon={Play}>
                   {t("qualityEvaluation.action.start")}
                 </Button>
+                {startMutation.isPending ? (
+                  // 評価ファイルの送信と検証の間。ジョブの作成後は進捗の表示（placement="job"）が引き継ぐ。
+                  <ProcessingIndicator
+                    active
+                    label={t("qualityEvaluation.progress.starting")}
+                    operationKey="quality-evaluation-start"
+                    placement="action"
+                    activityIcon="none"
+                    className="w-full justify-self-stretch"
+                    testId="quality-evaluation-start-processing"
+                  />
+                ) : null}
                 <FormStatus
                   tone="danger"
                   message={startError}
@@ -729,6 +741,17 @@ export function EvaluationPage() {
                 ) : null
               }
             />
+            {downloading ? (
+              // 結果の Excel は件数に比例して生成に数秒以上かかる。スピナーはボタンの loading が担う。
+              <ProcessingIndicator
+                active
+                label={t("qualityEvaluation.progress.downloading")}
+                operationKey="quality-evaluation-download"
+                placement="action"
+                activityIcon="none"
+                testId="quality-evaluation-download-processing"
+              />
+            ) : null}
             <div>
               {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
                 <EmptyState

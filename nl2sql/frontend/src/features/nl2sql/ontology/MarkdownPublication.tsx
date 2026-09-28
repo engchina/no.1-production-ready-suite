@@ -7,6 +7,7 @@ import {
   useConfirm,
   ContentActionBar,
   DisclosureChevron,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -134,6 +135,8 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     <ContentActionBar ariaLabel={t("markdownOntology.actions")}>
       <Button icon={Upload} type="button" variant="primary" size="lg" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
     </ContentActionBar>
+    {/* 公開の準備（下書きの保存・差分と検査）は数十秒かかる。スピナーはボタンの loading が担う（messaging.md §3.7）。 */}
+    {(busy === "prepare" || running) && <ProcessingIndicator active label={t("markdownOntology.progress.preparing")} operationKey="markdown-prepare" placement="action" activityIcon="none" testId="markdown-prepare-processing" />}
     {(error || preparation.isError) && <Banner severity="danger"><div tabIndex={0} className="max-h-72 overflow-y-auto break-words">{error || t("markdownOntology.refreshFailed")}</div></Banner>}
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
     {value && <section className="grid min-w-0 gap-3" aria-label={t("markdownOntology.check")}>
@@ -171,6 +174,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
             <ContentActionBar ariaLabel={t("markdownOntology.dataValidation")}>
               <Button icon={ShieldCheck} type="button" variant="secondary" size="md" disabled={Boolean(busy)} loading={busy === "data"} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
             </ContentActionBar>
+            {busy === "data" && <ProcessingIndicator active label={t("markdownOntology.progress.validatingData")} operationKey="markdown-data-validation" placement="action" activityIcon="none" testId="markdown-data-validation-processing" />}
             {value.data_report && <div className="grid min-w-0 gap-3 border-t border-border pt-4">
               <DefinitionFields definition={Object.fromEntries(["checked_at", "sample_limit", "instance_count", "errors", "acceptance_cases"].filter(key => key in value.data_report!).map(key => [key, value.data_report![key]]))} />
               <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.sampledOnly")}</p>
@@ -180,6 +184,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
         </details>
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
         <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || hasErrors || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
+        {busy === "publish" && <ProcessingIndicator active label={t("markdownOntology.progress.publishing")} operationKey="markdown-publish" placement="action" activityIcon="none" testId="markdown-publish-processing" />}
       </>}
     </section>}
   </div>;
