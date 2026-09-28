@@ -32,6 +32,7 @@ from app.config import (
     get_settings,
 )
 from app.db_degradation import load_or_degrade
+from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.generation_contract import GenerationContractError
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
@@ -56,7 +57,6 @@ router = APIRouter()
 CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
 BUSINESS_VIEW_NOT_FOUND_MESSAGE = "業務ビューが見つかりません。"
-CHAT_TIMEOUT_MESSAGE = "回答生成がタイムアウトしました。"
 HISTORY_PROMPT_LIMIT = 40
 BLOCKED_MESSAGE_PLACEHOLDER = "安全ポリシーにより内容を保存しませんでした。"
 
@@ -402,8 +402,8 @@ async def _prepare_chat_turn(
 
 def _chat_error_message(exc: Exception) -> str:
     """回答生成の失敗を利用者向けの文言にする(ERROR メッセージと SSE の error event)。"""
-    if isinstance(exc, TimeoutError):
-        return CHAT_TIMEOUT_MESSAGE
+    if isinstance(exc, AnswerTimeoutError):
+        return exc.user_message
     if isinstance(exc, GenerationContractError):
         return str(exc)
     return STREAM_ERROR_MESSAGE
@@ -418,21 +418,24 @@ async def _generate_chat_answer(
 ) -> tuple[StoredMessage, SearchResponse]:
     """1 モデル分の回答を生成し、ASSISTANT メッセージを保存する。
 
+    生成は回答生成の上限（`rag_answer_timeout_seconds`。#375）で打ち切る。時間切れは
+    最後の工程を持つ `AnswerTimeoutError` になる。
     失敗したら ERROR の ASSISTANT メッセージを保存してから例外をそのまま送出する。
     """
     trace_id = new_trace_id()
     try:
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
         pipeline = RagPipeline(settings=turn.settings, llm=llm, guardrails=turn.guardrails)
-        result = await asyncio.wait_for(
-            pipeline.run(
+        result = await run_answer_with_timeout(
+            lambda tracker: pipeline.run(
                 turn.request,
                 trace_id=trace_id,
-                progress_callback=progress_callback,
+                progress_callback=tracker,
                 history=turn.history,
                 query_guardrail_result=turn.query_guardrail,
             ),
-            timeout=turn.settings.rag_search_timeout_seconds,
+            turn.settings,
+            progress_callback,
         )
         assistant = await oracle.append_message(
             StoredMessage(
@@ -488,8 +491,8 @@ async def send_chat_message(
     model_id = _resolve_compare_models(request, turn.settings)[0]["model_id"]
     try:
         assistant, result = await _generate_chat_answer(oracle, turn, model_id)
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail=CHAT_TIMEOUT_MESSAGE) from exc
+    except AnswerTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=exc.user_message) from exc
     except GenerationContractError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return conversation, assistant, result
@@ -556,6 +559,8 @@ async def _stream_chat_events(
                         "model_id": model_id,
                         "message": _chat_error_message(exc),
                         "error_type": type(exc).__name__,
+                        # 時間切れになった工程（#375）。画面は文言をそのまま出し、工程は記録に使う。
+                        "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else None,
                     },
                 )
             )

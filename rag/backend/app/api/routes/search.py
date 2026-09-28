@@ -15,6 +15,7 @@ from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
+from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
@@ -44,11 +45,11 @@ from app.security.permissions import SCOPE_FORBIDDEN_CODE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
 STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
 # 保存済みの回答の評価（標準回答による 4 軸評価）の時間の上限（秒。#304）。
-# 評価は LLM を複数回呼ぶため、検索の timeout（`rag_search_timeout_seconds`）ではなく、LLM 1 回の
-# timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を評価全体の上限にする。
+# 評価は LLM を複数回呼ぶため、回答生成の timeout（`rag_answer_timeout_seconds`）ではなく、
+# LLM 1 回の timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を
+# 評価全体の上限にする。
 # 画面の timeout（frontend の `ANSWER_EVALUATION_TIMEOUT_MS` = 630 秒）と nginx の待ち時間（660 秒。
 # `init_script.sh` が生成する設定）はこれより長くし、backend の 504 と理由が画面に
 # 届くようにする（画面が先に諦めた後で backend が評価を保存する、を起こさない）。
@@ -306,23 +307,28 @@ def _with_knowledge_base_ids(
 
 
 async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
-    """検索 pipeline をリクエスト単位の timeout 付きで実行する。"""
+    """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
+
+    pipeline は回答を LLM で生成するため、検索だけの上限（`rag_search_timeout_seconds`）は使わない。
+    """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
         request, get_settings()
     )
-    timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
     try:
-        result = await asyncio.wait_for(
-            RagPipeline(settings=settings).run(request, trace_id=trace_id), timeout=timeout
+        result = await run_answer_with_timeout(
+            lambda tracker: RagPipeline(settings=settings).run(
+                request, trace_id=trace_id, progress_callback=tracker
+            ),
+            settings,
         )
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb
         if applied_view is not None:
             result.diagnostics.business_view_applied = applied_view
         return result
-    except TimeoutError as exc:
+    except AnswerTimeoutError as exc:
         elapsed = elapsed_ms(started_at)
         diagnostics = build_search_diagnostics(request, settings=settings)
         if applied_kb is not None:
@@ -341,10 +347,11 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
             citations=[],
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
-            error=exc,
+            # 監査の error_type は従来どおり元の TimeoutError にする。
+            error=exc.original_error,
             error_stage="timeout",
         )
-        raise HTTPException(status_code=504, detail=SEARCH_TIMEOUT_MESSAGE) from exc
+        raise HTTPException(status_code=504, detail=exc.user_message) from exc
     except GenerationContractError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -357,7 +364,6 @@ async def _stream_search_events_with_timeout(
     `resolved` は `_resolve_query_context` の結果（有効 request・Settings・適用 KB・業務ビュー）。
     """
     request, settings, applied_kb, applied_view = resolved
-    timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
@@ -381,20 +387,22 @@ async def _stream_search_events_with_timeout(
 
     async def produce() -> None:
         try:
-            result = await asyncio.wait_for(
-                RagPipeline(settings=settings).run(
+            # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
+            result = await run_answer_with_timeout(
+                lambda tracker: RagPipeline(settings=settings).run(
                     request,
                     trace_id=trace_id,
-                    progress_callback=emit_progress,
+                    progress_callback=tracker,
                 ),
-                timeout=timeout,
+                settings,
+                emit_progress,
             )
             if applied_kb is not None:
                 result.diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
                 result.diagnostics.business_view_applied = applied_view
             await queue.put(("result", result))
-        except TimeoutError as exc:
+        except AnswerTimeoutError as exc:
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
                 request,
@@ -417,7 +425,7 @@ async def _stream_search_events_with_timeout(
                 citations=[],
                 elapsed_ms=elapsed,
                 diagnostics=diagnostics,
-                error=exc,
+                error=exc.original_error,
                 error_stage="timeout",
             )
             await queue.put(
@@ -425,8 +433,11 @@ async def _stream_search_events_with_timeout(
                     "error",
                     {
                         "trace_id": trace_id,
-                        "message": SEARCH_TIMEOUT_MESSAGE,
-                        "error_type": type(exc).__name__,
+                        "message": exc.user_message,
+                        # 画面は error_type で 504 相当に揃える
+                        # （`AnswerTimeoutError` は TimeoutError の派生）。
+                        "error_type": "TimeoutError",
+                        "stage": exc.stage,
                     },
                 )
             )

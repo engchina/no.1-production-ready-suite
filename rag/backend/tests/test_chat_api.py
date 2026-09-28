@@ -21,9 +21,11 @@ from app.clients.oracle import (
 from app.config import EnterpriseAiConfiguredModel, Settings, get_settings
 from app.main import app
 from app.rag import oracle_schema
+from app.rag.answer_timeout import answer_timeout_message
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import (
     ChatTurn,
+    SearchStageProgress,
     _format_chat_history,
     _query_with_history,
 )
@@ -469,6 +471,106 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     assert assistant.content == "回答"
     assert assistant.reply_to_message_id == fake.messages["conv-x"][0].id
     assert assistant.citations  # 引用が保存される
+
+
+def _chat_conversation(fake: FakeChatOracle, conversation_id: str) -> None:
+    fake.conversations[conversation_id] = StoredConversation(
+        id=conversation_id,
+        business_view_id="bv-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake.messages[conversation_id] = []
+
+
+class _SlowPlanningPipeline(_FakePipeline):
+    """追加の検索の計画（LLM）の途中で止まる pipeline。"""
+
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
+        assert progress_callback is not None
+        for stage, outcome in (
+            ("agentic_planning", "started"),
+            ("agentic_planning", "success"),
+            ("agentic_multi_hop", "started"),
+        ):
+            await progress_callback(
+                SearchStageProgress(
+                    trace_id=trace_id or "trace",
+                    stage=stage,
+                    outcome=outcome,
+                    elapsed_ms=0.0,
+                    attributes={},
+                )
+            )
+        await asyncio.sleep(1)
+        raise AssertionError("時間切れの前に終わらない")
+
+
+class _SlowAnswerPipeline(_FakePipeline):
+    """検索だけの上限より長く、回答生成の上限より短くかかる pipeline。"""
+
+    async def run(self, request, trace_id=None, **kwargs):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.1)
+        return await super().run(request, trace_id, **kwargs)
+
+
+def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyPatch) -> None:
+    """回答生成の時間切れは、工程を含む文言を ERROR として保存し SSE で返す（#375）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-timeout")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _SlowPlanningPipeline)
+    monkeypatch.setattr(get_settings(), "rag_answer_timeout_seconds", 0.05)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-timeout/messages/stream", json={"content": "得点は?"}
+    )
+
+    assert resp.status_code == 200
+    text = resp.text
+    # 計画・再分解の進捗は時間切れの前に届く。
+    assert '"stage": "agentic_planning", "outcome": "started"' in text
+    assert '"stage": "agentic_multi_hop", "outcome": "started"' in text
+    expected = answer_timeout_message("agentic_multi_hop", 0.05)
+    assert "event: error" in text
+    assert expected in text
+    assert '"stage": "agentic_multi_hop"}' in text
+    assert "event: all_done" in text
+    user, assistant = fake.messages["conv-timeout"]
+    assert (user.role, user.status) == ("USER", "COMPLETE")
+    assert (assistant.role, assistant.status) == ("ASSISTANT", "ERROR")
+    assert assistant.content == expected
+    assert "追加の検索の計画" in assistant.content
+    assert assistant.reply_to_message_id == user.id
+
+
+def test_chat_answer_uses_answer_timeout_not_search_timeout(monkeypatch: MonkeyPatch) -> None:
+    """チャットの回答生成は、検索だけの上限（30 秒）ではなく回答生成の上限で打ち切る（#375）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-slow")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _SlowAnswerPipeline)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.01)
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 5.0)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-slow/messages/stream", json={"content": "質問"}
+    )
+
+    assert "event: done" in resp.text
+    assert "event: error" not in resp.text
+    assert [m.status for m in fake.messages["conv-slow"]] == ["COMPLETE", "COMPLETE"]
 
 
 def test_stream_message_sanitizes_user_content_before_database_and_sse(

@@ -105,6 +105,13 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
  */
 export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
 
+/**
+ * 回答を LLM で生成する `POST /api/search`（非ストリーム）の timeout（#375）。backend は回答生成を
+ * `RAG_ANSWER_TIMEOUT_SECONDS`（上限 600 秒）で打ち切って 504 と理由（時間切れになった工程）を返すので、
+ * 画面はそれより 30 秒長く待つ。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
+ */
+export const ANSWER_GENERATION_TIMEOUT_MS = 630_000;
+
 /** チャットが会話の回答の保存有無を一度に引き当てる trace_id の上限（backend と同じ）。 */
 export const ANSWER_TRACE_ID_FILTER_MAX = 100;
 
@@ -3187,7 +3194,10 @@ export const api = {
 
   // 検索
   // 業務ビュー / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。
-  search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
+  search: (body: SearchRequestBody) =>
+    request<SearchResponse>("/api/search", jsonBody(body), {
+      timeoutMs: ANSWER_GENERATION_TIMEOUT_MS,
+    }),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>(
       "/api/search/citation-feedback",

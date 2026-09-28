@@ -118,7 +118,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 | ツール | 権限 | 内容 |
 |---|---|---|
 | `rag_list_business_views` | `GET /api/business-views` と同じ | 利用者の範囲の ACTIVE な業務ビュー（`query` / `limit`） |
-| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（業務ビュー / KB の範囲、rate limit、`RAG_SEARCH_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
+| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（業務ビュー / KB の範囲、rate limit、`RAG_ANSWER_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
 | `rag_chat_send_message` | `menu.chat` | 会話に送信し、既定のモデル 1 系統の回答を返す（ストリーミングなし）。`conversation_id` がなければ `business_view_id` で会話を作る |
 | `rag_chat_get_conversation` | `menu.chat` | 自分の会話と、新しいほうから最大 `message_limit` 件のメッセージ（古い順） |
 
@@ -215,7 +215,7 @@ retrieval / rerank 後に citation が 0 件の場合は LLM を呼び出さず�
 
 検索レスポンスの `diagnostics` は、`top_k`、`rerank_top_n`、query variant 件数、retrieval/rerank/去重/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression 節約文字数、context 文字数、RRF 定数、Oracle vector target accuracy、filter key、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、no-results や評価回帰の原因調査に使います。
 
-`RAG_SEARCH_TIMEOUT_SECONDS` で `/api/search` と `/api/search/stream` の pipeline 実行時間を制限します。timeout 時は `ApiResponse` 形式の 504 を返し、`rag_search_audit` に `outcome=error` / `error_stage=timeout` を残して、worker を長時間占有しないようにします。
+`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒、上限 600 秒）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search` / `rag_chat_send_message`）の pipeline 実行時間を制限します（#375）。agentic の計画・multi_hop の再分解・回答の生成で LLM を複数回呼ぶため、検索だけの上限（`RAG_SEARCH_TIMEOUT_SECONDS`、既定 30 秒。品質評価の 1 ケースに使う）とは分けています。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 「追加の検索の計画」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 
 回答生成後は secret leakage をブロックし、citation context との token / n-gram 重なりが少ない場合は `low_groundedness` warning を返します。warning はレスポンスと `rag_search_audit.guardrail_codes` の両方に残るため、UI と運用監視で引用確認を促せます。
 
