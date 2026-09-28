@@ -118,3 +118,80 @@ def test_generation_profiles_reject_contentless_format_shells(
         )
 
     assert code in captured.value.codes
+
+
+# ファイル名に空白・括弧・読点を含む出典(#276)。
+SPACED_ALLOWED = {"就業規則 (2024年版).pdf#3f2a9c", "経費精算,FAQ.docx#c-1"}
+SPACED_CONTEXT = """[Evidence 1 | mid | optional | 就業規則 (2024年版).pdf#3f2a9c]
+申請期限は7月31日です。
+
+---
+
+[Evidence 2 | mid | optional | 経費精算,FAQ.docx#c-1]
+承認者は部門長です。"""
+
+
+@pytest.mark.parametrize(
+    ("profile", "answer"),
+    [
+        (
+            "detailed_cited",
+            "申請期限は7月31日です。[Evidence 1 | 就業規則 (2024年版).pdf#3f2a9c]\n\n"
+            "承認者は部門長です。[Evidence 2 | 経費精算,FAQ.docx#c-1]",
+        ),
+        ("inline_cited", "申請期限は7月31日です。[就業規則 (2024年版).pdf#3f2a9c]"),
+        ("inline_cited", "承認者は部門長です。[経費精算,FAQ.docx#c-1]"),
+        ("strict_extractive", "申請期限は7月31日です。[就業規則 (2024年版).pdf#3f2a9c]"),
+    ],
+)
+def test_source_ids_with_spaces_and_brackets_are_accepted(profile: str, answer: str) -> None:
+    """空白・括弧・読点を含むファイル名の出典も許可 ID として照合する。"""
+    assert validate_generation_contract(
+        profile=profile,  # type: ignore[arg-type]
+        answer=answer,
+        context=SPACED_CONTEXT,
+        allowed_source_ids=SPACED_ALLOWED,
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "answer"),
+    [
+        # 許可 ID を末尾に含むだけの別ファイル名。
+        ("inline_cited", "申請期限は7月31日です。[旧就業規則 (2024年版).pdf#3f2a9c]"),
+        # 許可 ID の chunk_id を前方一致で含むだけの別 chunk。
+        ("inline_cited", "申請期限は7月31日です。[就業規則 (2024年版).pdf#3f2a9c0]"),
+        ("detailed_cited", "申請期限は7月31日です。[Evidence 9 | other.pdf#x-1]"),
+    ],
+)
+def test_lookalike_source_ids_are_still_rejected(profile: str, answer: str) -> None:
+    with pytest.raises(GenerationContractViolation) as captured:
+        validate_generation_contract(
+            profile=profile,  # type: ignore[arg-type]
+            answer=answer,
+            context=SPACED_CONTEXT,
+            allowed_source_ids=SPACED_ALLOWED,
+        )
+    assert "unknown_citation" in captured.value.codes
+
+
+def test_detailed_cited_ignores_heading_only_paragraphs() -> None:
+    """見出しだけの段落には出典を要求しない。本文の段落は引き続き出典が必要。"""
+    answer = (
+        "## 申請期限\n\n申請期限は7月31日です。[Evidence 1 | policy.pdf#chunk-1]\n\n"
+        "### 承認\n\n承認者は部門長です。[Evidence 2 | guide.md#chunk-2]"
+    )
+    assert validate_generation_contract(
+        profile="detailed_cited",
+        answer=answer,
+        context=CONTEXT,
+        allowed_source_ids=ALLOWED,
+    )
+    with pytest.raises(GenerationContractViolation) as captured:
+        validate_generation_contract(
+            profile="detailed_cited",
+            answer="## 申請期限\n\n申請期限は7月31日です。",
+            context=CONTEXT,
+            allowed_source_ids=ALLOWED,
+        )
+    assert "missing_paragraph_citation" in captured.value.codes

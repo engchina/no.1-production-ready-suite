@@ -113,3 +113,59 @@ def test_bilingual_profile_overrides_single_language_instruction() -> None:
     prompt = params.system_prompt or ""
     assert "日英バイリンガル形式を優先" in prompt
     assert "回答は原則 日本語" not in prompt
+
+
+@pytest.mark.parametrize(
+    "profile", ["detailed_cited", "structured_json", "inline_cited", "grounded_concise"]
+)
+def test_business_view_language_takes_precedence_over_profile_language(profile: str) -> None:
+    """回答スタイルの「日本語で」より業務ビューの既定言語を優先すると明示する(#276)。"""
+    params = resolve_generation_adapter(
+        Settings(
+            rag_generation_profile=profile,
+            rag_generation_default_language="English",
+            rag_generation_service_enabled=False,
+        )
+    )
+    prompt = params.system_prompt or ""
+    assert "回答は原則 English で行う" in prompt
+    assert "言語の指定より、この指定を優先する" in prompt
+    profile_marker = "【回答形式】" if profile == "grounded_concise" else "あなたは"
+    assert prompt.index("【言語】") < prompt.index(profile_marker)
+
+
+def test_strict_extractive_language_does_not_ask_for_translation() -> None:
+    """抽出型は原文との一致を検証するため、既定言語があっても翻訳させない(#276)。"""
+    params = resolve_generation_adapter(
+        Settings(
+            rag_generation_profile="strict_extractive",
+            rag_generation_default_language="English",
+            rag_generation_service_enabled=False,
+        )
+    )
+    prompt = params.system_prompt or ""
+    assert "翻訳しない" in prompt
+    assert "回答は原則 English" not in prompt
+
+
+def test_profile_prompts_describe_the_publish_contract() -> None:
+    """指示は公開前検証(generation_contract)と同じ契約を伝える(#276)。"""
+    detailed = (
+        resolve_generation_adapter(
+            Settings(rag_generation_profile="detailed_cited", rag_generation_service_enabled=False)
+        ).system_prompt
+        or ""
+    )
+    strict = (
+        resolve_generation_adapter(
+            Settings(
+                rag_generation_profile="strict_extractive", rag_generation_service_enabled=False
+            )
+        ).system_prompt
+        or ""
+    )
+    assert "各段落の末尾" in detailed
+    assert "本文末尾" not in detailed
+    assert "そのまま抜き出して" in strict
+    assert "言い換え" in strict
+    assert "提供された根拠には該当する情報がありません。" in strict

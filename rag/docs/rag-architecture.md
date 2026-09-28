@@ -106,7 +106,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 
 10. 回答生成
    - LLM は **OCI Enterprise AI**。検索根拠だけを context として渡す。
-   - 回答スタイルは **Generation アダプター(`rag_generation_profile`)** で手動選択する。`app/rag/generation_adapter.py` が profile を system prompt 変種へ決定論で解決し、`grounded_concise`(既定・現行 system prompt)/ `detailed_cited`(出典 ID 明示)/ `strict_extractive`(抽出のみ・推測禁止)/ `structured_json`(JSON 構造化出力)/ `bilingual_ja_en`(日英)を `app/clients/oci_enterprise_ai.py` の `generate` / `generate_stream` へ渡す。追加 LLM 呼び出しや別 provider は導入しない。`GET/PATCH /api/settings/generation` と専用設定画面で切替。`SearchDiagnostics.generation_profile` に残す。
+   - 回答スタイルは **Generation アダプター(`rag_generation_profile`)** で手動選択する。`app/rag/generation_adapter.py` が profile を system prompt 変種へ決定論で解決し、`grounded_concise`(既定・根拠に基づく簡潔な回答)/ `detailed_cited`(段落ごとに出典 ID 明示)/ `strict_extractive`(context の文をそのまま抜き出す・推測禁止)/ `structured_json`(JSON 構造化出力)/ `bilingual_ja_en`(日英)/ `inline_cited`(文ごとに出典付与)/ `custom`(有効な回答プロンプト版)を `app/clients/oci_enterprise_ai.py` の `generate` / `generate_stream` へ渡す。追加 LLM 呼び出しや別 provider は導入しない。`GET/PATCH /api/settings/generation` と専用設定画面で切替。`SearchDiagnostics.generation_profile` に残す。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - retrieval / rerank 後に citation が 0 件の場合は LLM を呼ばず、固定の no-results 回答と warning を返す。
