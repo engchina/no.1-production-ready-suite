@@ -3168,8 +3168,10 @@ for (const theme of ["light", "dark"]) {
       await expect(progress).not.toContainText("共有定義（Shared Definitions）");
       await expect(concepts.getByText("13種類の関連概念を抽出しています。",{exact:true})).toHaveCount(1);
       await expect(concepts.getByText("13種類の関連概念を抽出しています。",{exact:true})).toBeVisible();
-      const mainConcepts = concepts.getByText("主要概念（6種類）",{exact:true});
-      await mainConcepts.focus(); await page.keyboard.press("Enter");
+      // 共有の Disclosure は見出しの文言を summary の中の span に置く（#397）。getByText は focus できない span を指すため、
+      // キーボード操作は focus できる summary に対して行う（#424）。
+      const mainConcepts = concepts.locator("summary").filter({hasText:"主要概念（6種類）"});
+      await mainConcepts.focus(); await expect(mainConcepts).toBeFocused(); await page.keyboard.press("Enter");
       await expect(concepts.getByText(/オブジェクト型（Object Type）/)).toBeVisible();
       await progress.screenshot({path:testInfo.outputPath(`unified-progress-${theme}-${width}.png`)});
       const savedNote = "Markdown 下書き v2 を生成しました(候補 13 件)。";
