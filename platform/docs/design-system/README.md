@@ -464,6 +464,8 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 --z-palette: 1200    コマンドパレット
 ```
 
+**SelectField の一覧と操作メニュー（`FloatingActionMenu`）は body へ Portal で描きます（#352。SelectField はモーダルの中ならそのモーダルの中）。** z-index を持つ層（モーダル・固定ヘッダー）の中で開いたときは、その層より 1 段上に出します（`--z-dialog` の中なら 1001）。層の外では `--z-dropdown` のままです。
+
 **通知（Toast）はモーダルの下に置きます。** モーダル（`aria-modal`）が開いている間はモーダルの外を操作できないため、
 通知を上に重ねても閉じるボタンや action は押せず、狭い画面では確認ダイアログのボタンを覆うだけになります
 （NL2SQL #372 で 375px 幅の確認ダイアログのボタンが成功通知に塞がれた）。Material Design の elevation でも
@@ -495,7 +497,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**17点あります。**
+QA に事前共有してください。**18点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -516,6 +518,7 @@ QA に事前共有してください。**17点あります。**
 | 15 | **通知がモーダルの下に表示される** | `--z-toast` 1100（モーダルの上）→ **800（暗幕の下）**。通知の action / 閉じるは共有 `Button`（ghost） | モーダル外は操作できないため、上に重ねると確認ダイアログのボタンを塞ぐだけになる（§6 z-index） |
 | 16 | **ページヘッダーの補助操作に枠線を表示** | `utility` の `ghost` → `secondary` | 更新・再取得も取込と同じ操作範囲を示す。並び順とメニュー表示は維持 |
 | 17 | **通知の消え方が変わる** | danger 8 秒・warning 6 秒で自動で消える → **danger は閉じるまで残る**、warning は 4 秒。ホバー・フォーカス中は消えず、離れたら残り時間から再開。Banner の閉じる × は共有 `Button`（ghost・iconOnly、16px のアイコン） | UX 契約 messaging §3.1 に合わせる。読んでいる・押そうとしている途中で消さない（WCAG 2.2.1）。閉じる × の見た目を Toast とそろえる（#351） |
+| 18 | **SelectField の一覧が画面の下端で上に開く** | 常に下（親の overflow で切れる）→ body へ Portal で描き、下に入らなければ**上に反転**。モーダルの中ではモーダルの中に描き、暗幕とモーダルの上に出す | 画面の下端・表のセル・モーダルの中でも選択肢が見える（#352、components-reference「SelectField — 変更」） |
 
 ### API の非互換
 
