@@ -145,6 +145,8 @@ import {
   bboxPageRotationFromMetadata,
   bboxPageSizeFromMetadata,
   bboxUnitFromMetadata,
+  buildPreviewHighlights,
+  displayRegionsFromMetadata,
   withBboxPageRotation,
 } from "@/lib/bbox";
 import {
@@ -720,6 +722,40 @@ export function DocumentWorkspace({
     parsedExtraction.pages,
     urlFallbackFocus,
   ]);
+  // chunk の強調は、DocRAG の表示領域（根拠にした要素ごとの bbox）があれば要素ごとに重ねる（#349）。
+  const focusChunkRegions = useMemo(
+    () =>
+      previewFocusSource === "chunk" && selectedChunk
+        ? displayRegionsFromMetadata(selectedChunk.metadata)
+        : [],
+    [previewFocusSource, selectedChunk]
+  );
+  const previewHighlights = useMemo(
+    () =>
+      buildPreviewHighlights({
+        focusPage: effectiveFocusPage,
+        focusBbox: effectiveFocusBbox,
+        focusBboxMode: effectiveFocusBboxMode,
+        focusBboxUnit: effectiveFocusBboxUnit,
+        focusPageSize,
+        regions: focusChunkRegions,
+        pageSizeFor: (pageNumber) => {
+          const page = parsedExtraction.pages.find((item) => item.page_number === pageNumber);
+          return page?.width && page?.height
+            ? withBboxPageRotation({ width: page.width, height: page.height }, page.rotation)
+            : null;
+        },
+      }),
+    [
+      effectiveFocusBbox,
+      effectiveFocusBboxMode,
+      effectiveFocusBboxUnit,
+      effectiveFocusPage,
+      focusChunkRegions,
+      focusPageSize,
+      parsedExtraction.pages,
+    ]
+  );
   function selectElement(elementId: string) {
     const linkedChunk = displayedChunks.find((chunk) => chunk.element_ids.includes(elementId));
     setUrlFallbackFocus(null);
@@ -1139,8 +1175,12 @@ export function DocumentWorkspace({
         />
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-          {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定) */}
-          <section className="min-w-0 xl:sticky xl:top-4 xl:self-start">
+          {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定)。
+              高さは 1 画面分(上下の余白を除いたビューポートの高さ)で、ページは内部でスクロールする(#349)。 */}
+          <section
+            data-testid="document-preview-pane"
+            className="flex h-[calc(100dvh-2rem)] min-h-[28rem] min-w-0 flex-col xl:sticky xl:top-4 xl:self-start"
+          >
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-fg">{t("flow.preview")}</h3>
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1202,11 +1242,17 @@ export function DocumentWorkspace({
               focusBboxMode={effectiveFocusBboxMode}
               focusBboxUnit={effectiveFocusBboxUnit}
               focusPageSize={focusPageSize}
+              highlights={previewHighlights}
+              className="min-h-0 flex-1"
             />
           </section>
 
-          {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替 */}
-          <section className="min-w-0">
+          {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替。
+              desktop は左のプレビューと同じ 1 画面分の高さにそろえ、タブの内容は内部でスクロールする(#349)。 */}
+          <section
+            data-testid="document-inspector-pane"
+            className="min-w-0 xl:flex xl:h-[calc(100dvh-2rem)] xl:min-h-[28rem] xl:flex-col"
+          >
             <Tabs
               idPrefix="inspector"
               ariaLabel={t("flow.inspector.tabs")}
@@ -1231,7 +1277,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentRawText extraction={selectedExtraction} />
               </div>
@@ -1243,7 +1289,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 {status === "REVIEW" && selectedRecipeId ? (
                   <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-surface-sunken xl:pb-2">
@@ -1354,7 +1400,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <div className="space-y-3">
                   {selectedRecipeId && (status === "REVIEW" || status === "CHUNKED") ? (
@@ -1411,7 +1457,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
                   format={exportFormat}

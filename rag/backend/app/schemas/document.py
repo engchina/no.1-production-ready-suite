@@ -188,6 +188,21 @@ class DocumentPreprocessArtifact(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class DocumentPreviewPage(BaseModel):
+    """プレビューのページ画像 1 ページの表示寸法(pt。ページの /Rotate を反映した向き)。"""
+
+    page_number: int
+    width: float
+    height: float
+
+
+class DocumentPreviewPages(BaseModel):
+    """プレビューのページ画像の一覧(PDF のページごとに画像を描き、bbox の強調を重ねる。#349)。"""
+
+    page_count: int
+    pages: list[DocumentPreviewPage] = Field(default_factory=list)
+
+
 class DocumentDetail(DocumentSummary):
     """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
 

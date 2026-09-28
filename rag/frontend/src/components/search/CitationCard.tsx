@@ -17,6 +17,8 @@ import {
   bboxPageRotationFromMetadata,
   bboxPageSizeFromMetadata,
   bboxUnitFromMetadata,
+  buildPreviewHighlights,
+  displayRegionsFromMetadata,
   withBboxPageRotation,
 } from "@/lib/bbox";
 import {
@@ -69,6 +71,18 @@ export function CitationCard({
     bboxPageSizeFromMetadata(chunk.metadata),
     bboxPageRotationFromMetadata(chunk.metadata)
   );
+
+  // 回答の根拠でも、DocRAG の表示領域（要素ごとの bbox）を要素ごとに強調する（#349）。
+  const previewHighlights = previewOpen
+    ? buildPreviewHighlights({
+        focusPage,
+        focusBbox,
+        focusBboxMode,
+        focusBboxUnit,
+        focusPageSize,
+        regions: displayRegionsFromMetadata(chunk.metadata),
+      })
+    : null;
 
   function openPreview() {
     setPreviewOpen(true);
@@ -182,11 +196,12 @@ export function CitationCard({
           if (event.target === dialogRef.current) closePreview();
         }}
         aria-label={t("search.citation.openPreview", { file: previewFileName })}
-        className="m-auto w-[min(92vw,900px)] max-h-[85vh] overflow-auto rounded-lg border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
+        // プレビューは 1 画面分の高さにし、ページはビューアの中でスクロールする(#349)。
+        className="m-auto h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[min(96vw,75rem)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
       >
         {previewOpen ? (
-          <div className="flex flex-col">
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3">
               <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
                 <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
                 <span className="truncate" title={previewFileName}>
@@ -212,7 +227,7 @@ export function CitationCard({
                 </button>
               </div>
             </div>
-            <div className="p-4">
+            <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-4">
               <DocumentPreview
                 documentId={chunk.document_id}
                 recipeId={recipeId}
@@ -227,6 +242,8 @@ export function CitationCard({
                 focusBboxMode={focusBboxMode}
                 focusBboxUnit={focusBboxUnit}
                 focusPageSize={focusPageSize}
+                highlights={previewHighlights}
+                className="min-h-0 flex-1"
               />
             </div>
           </div>

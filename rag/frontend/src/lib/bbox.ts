@@ -477,3 +477,232 @@ function normalizeBboxUnitValue(value: string): BboxOverlayUnit | null {
   }
   return null;
 }
+
+// ---- 強調する領域（#349） ----
+// DocRAG の chunk は metadata.docrag_metadata_json.layout.display_regions に、根拠にした要素ごとの
+// bbox（解析時のページ画像 px・左上原点・[x1, y1, x2, y2]）をページ別に持つ（rag_poc と同じ形式）。
+// プレビューでは要素ごとに矩形を重ね、無い chunk だけ包含 bbox 1 つを重ねる。
+
+export type BboxHighlightTone = "primary" | "secondary";
+
+/** プレビューに重ねる 1 つの領域。座標の解釈は normalizeBboxForPreview と同じ。 */
+export type PreviewHighlight = {
+  key: string;
+  /** 1 始まりのページ番号。null はページを持たない（画像 1 枚・フォーカス中のページ）。 */
+  page: number | null;
+  bbox: number[];
+  mode?: BboxCoordinateMode | null;
+  unit?: BboxOverlayUnit | null;
+  /** bbox の基準にしたページの寸法。unit が absolute のときに必要。 */
+  pageSize?: BboxPageSize | null;
+  /** pageSize がどのページの寸法か（別のページに重ねるときに比例させる）。null は page と同じ。 */
+  pageSizePage?: number | null;
+  tone: BboxHighlightTone;
+  label?: string | null;
+};
+
+export type BboxDisplayRegionBox = {
+  recordId: string;
+  seqNo: number;
+  category: string;
+  bbox: number[];
+  textPreview: string | null;
+};
+
+export type BboxDisplayRegion = { page: number; boxes: BboxDisplayRegionBox[] };
+
+/** chunk metadata から DocRAG の表示領域（ページごとの要素 bbox）を取り出す。 */
+export function displayRegionsFromMetadata(
+  metadata?: Record<string, unknown> | null
+): BboxDisplayRegion[] {
+  if (!metadata) return [];
+  const layout =
+    recordValue(docragMetadata(metadata)?.layout) ?? recordValue(metadata.layout);
+  const raw = layout?.display_regions ?? metadata.display_regions;
+  if (!Array.isArray(raw)) return [];
+  const regions: BboxDisplayRegion[] = [];
+  for (const item of raw) {
+    const region = recordValue(item);
+    const page = numberValue(region?.page);
+    if (!region || page == null || !Number.isInteger(page) || page < 1) continue;
+    const boxes: BboxDisplayRegionBox[] = [];
+    for (const boxItem of Array.isArray(region.boxes) ? region.boxes : []) {
+      const box = recordValue(boxItem);
+      const bbox = Array.isArray(box?.bbox) ? numberArrayValue(box.bbox) : null;
+      if (!box || !bbox) continue;
+      boxes.push({
+        recordId: typeof box.record_id === "string" ? box.record_id : "",
+        seqNo: numberValue(box.seq_no) ?? 0,
+        category: typeof box.category === "string" ? box.category : "",
+        bbox,
+        textPreview: typeof box.text_preview === "string" ? box.text_preview : null,
+      });
+    }
+    if (boxes.length > 0) regions.push({ page, boxes });
+  }
+  return regions;
+}
+
+function docragMetadata(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  const raw = metadata.docrag_metadata_json ?? metadata.docrag_metadata;
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      return recordValue(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+  return recordValue(raw);
+}
+
+/**
+ * フォーカス対象の bbox と表示領域から、プレビューに重ねる領域の一覧を作る。
+ *
+ * - 表示領域がある（DocRAG の chunk）: 要素ごとの bbox をすべて primary にする（rag_poc の子 chunk と同じ）。
+ *   座標は解析時のページ画像 px なので unit は absolute、基準寸法は chunk の page_width / page_height。
+ *   別のページの寸法は、同じ dpi で描いた前提で基準ページとの表示寸法（pt）の比率から求める（resolveRegionPageSize）。
+ * - 無い: 包含 bbox 1 つを primary にする（従来どおり mode / unit を推定する）。
+ */
+export function buildPreviewHighlights({
+  focusPage,
+  focusBbox,
+  focusBboxMode,
+  focusBboxUnit,
+  focusPageSize,
+  regions = [],
+  pageSizeFor,
+}: {
+  focusPage?: number | null;
+  focusBbox?: number[] | null;
+  focusBboxMode?: BboxCoordinateMode | null;
+  focusBboxUnit?: BboxOverlayUnit | null;
+  focusPageSize?: BboxPageSize | null;
+  regions?: BboxDisplayRegion[];
+  /** ページごとの解析時の寸法（抽出結果の pages）。分かるページはこちらを優先する。 */
+  pageSizeFor?: (page: number) => BboxPageSize | null;
+}): PreviewHighlight[] {
+  const seen = new Set<string>();
+  const highlights: PreviewHighlight[] = [];
+  for (const region of regions) {
+    for (const box of region.boxes) {
+      const key = `${region.page}:${box.recordId || box.seqNo}:${box.bbox.join(",")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      highlights.push({
+        key,
+        page: region.page,
+        bbox: box.bbox,
+        mode: "xyxy",
+        unit: "absolute",
+        ...regionPageSize(region.page, focusPage ?? null, focusPageSize ?? null, pageSizeFor),
+        tone: "primary",
+        label: box.textPreview,
+      });
+    }
+  }
+  if (highlights.length > 0) return highlights;
+  if (!focusBbox || focusBbox.length < MIN_BBOX_VALUES) return [];
+  return [
+    {
+      key: `focus:${focusPage ?? ""}:${focusBbox.join(",")}`,
+      page: focusPage ?? null,
+      bbox: focusBbox,
+      mode: focusBboxMode ?? null,
+      unit: focusBboxUnit ?? null,
+      pageSize: focusPageSize ?? null,
+      pageSizePage: focusPage ?? null,
+      tone: "primary",
+    },
+  ];
+}
+
+function regionPageSize(
+  page: number,
+  focusPage: number | null,
+  focusPageSize: BboxPageSize | null,
+  pageSizeFor?: (page: number) => BboxPageSize | null
+): Pick<PreviewHighlight, "pageSize" | "pageSizePage"> {
+  const own = pageSizeFor?.(page) ?? null;
+  if (own?.width && own?.height) return { pageSize: own, pageSizePage: page };
+  return { pageSize: focusPageSize, pageSizePage: focusPage ?? page };
+}
+
+/**
+ * 表示中のページに重ねる矩形（ページに対する %）を返す。
+ *
+ * `highlight.pageSize` は bbox の基準ページ（通常は chunk の先頭ページ）の寸法。表示中のページが
+ * 基準と違い、両ページの表示寸法（pt）が分かるときは、同じ dpi で描いた前提で基準の px 寸法を比例させる。
+ */
+export function highlightRectsForPage(
+  highlights: readonly PreviewHighlight[],
+  page: number | null,
+  options: {
+    pagePoints?: (page: number) => { width: number; height: number } | null;
+    /** bbox の基準寸法が無いときに使う寸法（画像ファイルは画像の実寸 px）。 */
+    fallbackPageSize?: BboxPageSize | null;
+  } = {}
+): Array<{ key: string; tone: BboxHighlightTone; label: string | null; rect: BboxOverlayRect }> {
+  const rects: Array<{
+    key: string;
+    tone: BboxHighlightTone;
+    label: string | null;
+    rect: BboxOverlayRect;
+  }> = [];
+  for (const highlight of highlights) {
+    if (highlight.page != null && page != null && highlight.page !== page) continue;
+    const pageSize = resolveRegionPageSize(highlight, page, options);
+    const rect = normalizeBboxForPreview(
+      highlight.bbox,
+      pageSize,
+      highlight.mode ?? null,
+      highlight.unit ?? null
+    );
+    if (rect) rects.push({ key: highlight.key, tone: highlight.tone, label: highlight.label ?? null, rect });
+  }
+  return rects;
+}
+
+export function resolveRegionPageSize(
+  highlight: Pick<PreviewHighlight, "page" | "pageSize" | "pageSizePage">,
+  page: number | null,
+  {
+    pagePoints,
+    fallbackPageSize = null,
+  }: {
+    pagePoints?: (page: number) => { width: number; height: number } | null;
+    fallbackPageSize?: BboxPageSize | null;
+  } = {}
+): BboxPageSize | null {
+  const base = highlight.pageSize?.width && highlight.pageSize?.height
+    ? highlight.pageSize
+    : fallbackPageSize
+      ? { ...fallbackPageSize, rotation: highlight.pageSize?.rotation ?? fallbackPageSize.rotation }
+      : (highlight.pageSize ?? null);
+  if (base !== highlight.pageSize) return base;
+  const referencePage = highlight.pageSizePage ?? highlight.page ?? null;
+  if (!base || page == null || referencePage == null || page === referencePage || !pagePoints) {
+    return base;
+  }
+  const width = Number(base.width);
+  const height = Number(base.height);
+  const reference = pagePoints(referencePage);
+  const target = pagePoints(page);
+  if (!reference || !target || !(width > 0) || !(height > 0)) return base;
+  if (!(reference.width > 0) || !(reference.height > 0)) return base;
+  return {
+    ...base,
+    width: (width * target.width) / reference.width,
+    height: (height * target.height) / reference.height,
+  };
+}
+
+/** 強調する領域のあるページ（昇順・重複なし）。 */
+export function highlightPages(highlights: readonly PreviewHighlight[]): number[] {
+  return [
+    ...new Set(
+      highlights
+        .map((highlight) => highlight.page)
+        .filter((page): page is number => page != null)
+    ),
+  ].sort((a, b) => a - b);
+}

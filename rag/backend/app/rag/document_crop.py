@@ -1,4 +1,7 @@
-"""解析に使ったファイルから bbox の領域を切り出す(解析結果プレビューと DocRAG 回答画像で共用)。"""
+"""解析に使ったファイルから bbox の領域を切り出す(解析結果プレビューと DocRAG 回答画像で共用)。
+
+文書プレビューのページ画像(bbox の強調を重ねるための PDF のページ画像)もここで作る(#349)。
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,9 @@ from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient
 
 MAX_CROP_PIXELS = 4000 * 4000
+# プレビューのページ画像の上限(大判の図面でも 1 枚 16M px に収める)。
+MAX_PAGE_PIXELS = 4000 * 4000
+MAX_PREVIEW_PAGES = 10000
 
 
 class DocumentSourceNotFoundError(LookupError):
@@ -70,4 +76,47 @@ def crop_png(
         if clip.is_empty or clip.width * clip.height * zoom * zoom > MAX_CROP_PIXELS:
             raise ValueError("切り出し範囲が不正です。")
         pixmap = page.get_pixmap(clip=clip, matrix=fitz.Matrix(zoom, zoom))
+        return bytes(pixmap.tobytes("png"))
+
+
+def page_sizes(data: bytes) -> list[tuple[float, float]]:
+    """PDF / 画像の各ページの表示寸法(pt。ページの /Rotate を反映した向き)を返す(pymupdf)。"""
+    import fitz
+
+    try:
+        document = fitz.open(stream=data)
+    except Exception as exc:
+        raise ValueError("このファイルはページ画像のプレビューに対応していません。") from exc
+    with document:
+        if document.page_count < 1:
+            raise ValueError("このファイルにはページがありません。")
+        return [
+            (float(document[index].rect.width), float(document[index].rect.height))
+            for index in range(min(document.page_count, MAX_PREVIEW_PAGES))
+        ]
+
+
+def render_page_png(data: bytes, page_number: int, dpi: int = 144) -> bytes:
+    """PDF / 画像の 1 ページ全体を PNG にする(pymupdf)。
+
+    ページの /Rotate を反映した向きで描く。解析の bbox(ページ画像 px 座標)も同じ向きなので、
+    画面ではページに対する割合で重ねれば解像度に関係なく位置が合う。
+    """
+    import fitz
+
+    try:
+        document = fitz.open(stream=data)
+    except Exception as exc:
+        raise ValueError("このファイルはページ画像のプレビューに対応していません。") from exc
+    with document:
+        if page_number < 1 or page_number > document.page_count:
+            raise ValueError("ページ番号がファイルのページ数を超えています。")
+        page = document[page_number - 1]
+        zoom = dpi / 72
+        area = page.rect.width * page.rect.height
+        if area <= 0:
+            raise ValueError("ページの寸法が不正です。")
+        # 大判のページは上限の画素数に収まるまで倍率を下げる。
+        zoom = min(zoom, (MAX_PAGE_PIXELS / area) ** 0.5)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
         return bytes(pixmap.tobytes("png"))
