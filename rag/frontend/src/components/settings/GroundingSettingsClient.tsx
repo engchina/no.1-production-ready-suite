@@ -16,6 +16,7 @@ import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import {
   ApiError,
   type GroundingPipelineStatusData,
@@ -160,6 +161,9 @@ export function GroundingSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
+          <DocragUnusedNote id="grounding-docrag-note">
+            {t("settings.grounding.docragUnused")}
+          </DocragUnusedNote>
           <div className="space-y-2">
             <div className="text-sm font-medium text-fg">
               {t("settings.grounding.pipeline")}
@@ -167,6 +171,7 @@ export function GroundingSettingsClient() {
             <div
               role="radiogroup"
               aria-label={t("settings.grounding.pipeline")}
+              aria-describedby="grounding-docrag-note"
               className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
             >
               {pipelines.map((item) => {

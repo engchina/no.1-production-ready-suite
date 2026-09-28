@@ -40,7 +40,13 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_docrag_chunking_params
-from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY, build_docrag_chunks
+from app.rag.docrag_chunking import (
+    DOCRAG_CHUNKING_STRATEGY,
+    DOCRAG_FALLBACK_CHUNKING_STRATEGY,
+    build_docrag_chunks,
+    docrag_fallback_needed,
+    mark_docrag_fallback,
+)
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
@@ -1010,8 +1016,10 @@ async def preview_document_recipe_chunks(
         (request or DocumentChunkPreviewRequest()).settings_overrides(),
     )
     extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
+    # Docling の解析結果がない文書では、DocRAG 親子階層の代わりに構造認識で分割する(#300)。
+    docrag_fallback = docrag_fallback_needed(candidate.rag_chunking_strategy, extraction)
     try:
-        if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY:
+        if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY and not docrag_fallback:
             chunks = build_docrag_chunks(
                 extraction,
                 source_name=detail.file_name,
@@ -1020,12 +1028,18 @@ async def preview_document_recipe_chunks(
         else:
             chunks = chunk_extraction_with_strategy(
                 extraction,
-                strategy=candidate.rag_chunking_strategy,
+                strategy=(
+                    DOCRAG_FALLBACK_CHUNKING_STRATEGY
+                    if docrag_fallback
+                    else candidate.rag_chunking_strategy
+                ),
                 chunk_size=candidate.rag_chunk_size,
                 overlap=candidate.rag_chunk_overlap,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
             )
+            if docrag_fallback:
+                chunks = mark_docrag_fallback(chunks)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

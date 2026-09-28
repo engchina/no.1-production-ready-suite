@@ -100,6 +100,7 @@ import {
   CHUNK_SIZE_MIN_CHARS,
   DOCRAG_CHUNKING_PARAMS,
   chunkSizeLabelKey,
+  docragChunkingFellBack,
   chunkingStrategyPreset,
   isSemanticBoundaryStrategy,
   overlapLabelKey,
@@ -2598,7 +2599,8 @@ function DocumentChunksPanel({
     );
   }
 
-  return (
+  const docragFellBack = docragChunkingFellBack(chunks);
+  const list = (
     <ol className="space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
       {chunks.map((chunk) => {
         const selected = chunk.chunk_id === selectedChunkId;
@@ -2658,6 +2660,16 @@ function DocumentChunksPanel({
         );
       })}
     </ol>
+  );
+  if (!docragFellBack) return list;
+  // DocRAG 親子階層を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
+  return (
+    <div className="space-y-3">
+      <Banner severity="warning" title={t("flow.chunks.docragFallbackTitle")}>
+        {t("flow.chunks.docragFallback")}
+      </Banner>
+      {list}
+    </div>
   );
 }
 

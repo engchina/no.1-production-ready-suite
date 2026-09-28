@@ -1,4 +1,4 @@
-import type { ChunkingStrategyName } from "@/lib/api";
+import type { ChunkingStrategyName, DocumentChunkView } from "@/lib/api";
 import type { I18nKey } from "@/lib/i18n";
 
 export const CHUNK_SIZE_MIN_CHARS = 200;
@@ -33,6 +33,19 @@ export function overlapLabelKey(strategy: ChunkingStrategyName): I18nKey {
 }
 
 export const DOCRAG_CHUNKING_STRATEGY: ChunkingStrategyName = "docrag_small_to_big";
+
+/** Docling の解析結果がなく、DocRAG 親子階層の代わりに構造認識で分割したときの理由(#300)。 */
+export const DOCRAG_LAYOUT_MISSING_REASON = "docrag_layout_missing";
+
+/**
+ * DocRAG 親子階層を選んだが、解析結果が Docling でないため構造認識で分割した chunk を含むか。
+ * backend が chunk metadata の `chunk_strategy_fallback_reason` に残した縮退の印を見る。
+ */
+export function docragChunkingFellBack(chunks: readonly Pick<DocumentChunkView, "metadata">[]): boolean {
+  return chunks.some(
+    (chunk) => chunk.metadata.chunk_strategy_fallback_reason === DOCRAG_LAYOUT_MISSING_REASON
+  );
+}
 
 export type DocragChunkingParamField =
   | "docrag_child_target_chars"
