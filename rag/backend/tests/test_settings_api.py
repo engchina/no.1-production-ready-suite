@@ -90,12 +90,9 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     # 旧 runtime 値 auto は利用者向けには返さず、明示値 local へ寄せる。
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_unlimited_ocr_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
 
     def package_info(
         import_name: str,
@@ -121,37 +118,29 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["docling"]["distribution_name"] == "docling"
     assert by_backend["docling"]["install_package"] == "docling==2.103.0"
     assert by_backend["docling"]["version"] == "1.2.3"
-    assert by_backend["marker"]["status"] == "ignored"
-    assert by_backend["marker"]["install_package"] == "marker-pdf[full]==1.10.2"
-    assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
+    assert by_backend["docling"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
-    # unlimited_ocr はローカル package/image ではなく外部 API で配信する。
-    unlimited_pkg = by_backend["unlimited_ocr"]["install_package"]
-    assert unlimited_pkg == "外部 Unlimited-OCR API"
+    # dots_ocr はローカル package/image ではなく外部 API で配信する。
+    assert by_backend["dots_ocr"]["install_package"] == "外部 Dots.OCR API"
     connections = {item["backend"]: item for item in body["connections"]}
-    assert connections["unlimited_ocr"]["endpoint"] == ""
-    assert connections["unlimited_ocr"]["api_key_configured"] is False
-    assert "api_key" not in connections["unlimited_ocr"]
-    assert by_backend["unlimited_ocr"]["status"] == "disabled"
+    assert set(connections) == {"mineru", "dots_ocr"}
+    assert connections["dots_ocr"]["endpoint"] == ""
+    assert connections["dots_ocr"]["api_key_configured"] is False
+    assert "api_key" not in connections["dots_ocr"]
     assert by_backend["mineru"]["install_package"] == "外部 MinerU API"
     assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
-    assert by_backend["glm_ocr"]["status"] == "disabled"
+    # 削除したエンジン(#270)は画面の選択肢・接続・対応形式に出さない。
+    assert list(by_backend) == ["docling", "unstructured", "mineru", "dots_ocr"]
     assert body["scorecard"]["selected_backend"] == "local"
     assert body["scorecard"]["recommended_backend"] == "local"
     score_by_backend = {entry["backend"]: entry for entry in body["scorecard"]["entries"]}
     assert score_by_backend["local"]["recommended"] is True
-    assert score_by_backend["marker"]["warning_codes"] == ["adapter_flag_ignored_by_backend"]
+    assert score_by_backend["docling"]["warning_codes"] == ["adapter_flag_ignored_by_backend"]
+    assert set(score_by_backend) == {"local", "docling", "unstructured"}
     route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}
-    assert route_by_kind["pdf"]["candidate_order"] == [
-        "docling",
-        "marker",
-        "unstructured",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    ]
+    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured", "mineru"]
     assert route_by_kind["pdf"]["attempted_order"] == []
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["selected_backend"] == "local"
@@ -164,8 +153,10 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert matrix["missing_source_kinds"] == []
     assert "raw_text" not in str(matrix)
     capability_by_backend = {item["backend"]: item for item in body["capabilities"]}
-    assert capability_by_backend["marker"]["modalities"] == ["pdf", "image"]
-    assert ".pdf" in capability_by_backend["marker"]["extensions"]
+    assert capability_by_backend["dots_ocr"]["modalities"] == ["pdf", "image"]
+    assert ".pdf" in capability_by_backend["dots_ocr"]["extensions"]
+    for removed in ("marker", "unlimited_ocr", "glm_ocr"):
+        assert removed not in capability_by_backend
     assert capability_by_backend["oci_document_understanding"]["modalities"] == [
         "pdf",
         "image",
@@ -212,7 +203,6 @@ def test_parser_adapter_contract_endpoint_reports_non_sensitive_matrix(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -253,7 +243,6 @@ def test_parser_adapter_contract_endpoint_blocks_enabled_missing_adapter(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -280,49 +269,13 @@ def test_parser_adapter_contract_endpoint_blocks_enabled_missing_adapter(
     assert "adapter_package_missing" in resp.text
 
 
-def test_parser_adapter_settings_reports_marker_distribution_name(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Marker は import 名 marker と配布 package marker-pdf を分けて表示する。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "marker")
-    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-
-    def package_info(
-        import_name: str,
-        distribution_names: Sequence[str],
-    ) -> tuple[bool, str | None, str | None]:
-        if import_name != "marker":
-            return False, None, None
-        assert import_name == "marker"
-        assert tuple(distribution_names) == ("marker-pdf", "marker")
-        return True, "5.0.0", "marker-pdf"
-
-    monkeypatch.setattr(parser_adapter_readiness, "_package_info", package_info)
-
-    resp = client.get("/api/settings/parser-adapters")
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    marker = {adapter["backend"]: adapter for adapter in body["adapters"]}["marker"]
-    assert marker["status"] == "active"
-    assert marker["package_name"] == "marker"
-    assert marker["import_name"] == "marker"
-    assert marker["distribution_name"] == "marker-pdf"
-    assert marker["install_package"] == "marker-pdf[full]==1.10.2"
-    assert marker["version"] == "5.0.0"
-
-
 def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """backend を明示しても flag が false なら実行順から外し警告する。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "marker")
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "unstructured")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -335,12 +288,12 @@ def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
     assert resp.status_code == 200
     body = resp.json()["data"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
-    assert body["adapter_backend"] == "marker"
+    assert body["adapter_backend"] == "unstructured"
     assert body["effective_order"] == []
-    assert by_backend["marker"]["selected"] is True
-    assert by_backend["marker"]["enabled"] is False
-    assert by_backend["marker"]["status"] == "disabled"
-    assert by_backend["marker"]["warning_code"] == "adapter_feature_flag_disabled"
+    assert by_backend["unstructured"]["selected"] is True
+    assert by_backend["unstructured"]["enabled"] is False
+    assert by_backend["unstructured"]["status"] == "disabled"
+    assert by_backend["unstructured"]["warning_code"] == "adapter_feature_flag_disabled"
     assert by_backend["docling"]["status"] == "ignored"
 
 
@@ -351,7 +304,6 @@ def test_update_parser_adapter_settings_rejects_legacy_auto_without_mutating_run
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -363,7 +315,6 @@ def test_update_parser_adapter_settings_rejects_legacy_auto_without_mutating_run
         json={
             "adapter_backend": "auto",
             "docling_enabled": True,
-            "marker_enabled": False,
             "unstructured_enabled": True,
         },
     )
@@ -371,7 +322,6 @@ def test_update_parser_adapter_settings_rejects_legacy_auto_without_mutating_run
     assert resp.status_code == 422
     assert settings.rag_parser_adapter_backend == "local"
     assert settings.rag_parser_docling_enabled is False
-    assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
 
 
@@ -382,12 +332,9 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_unlimited_ocr_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
@@ -397,10 +344,8 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
         "/api/settings/parser-adapters",
         json={
             "adapter_backend": "mineru",
-            "unlimited_ocr_enabled": True,
             "mineru_enabled": True,
             "dots_ocr_enabled": False,
-            "glm_ocr_enabled": True,
         },
     )
 
@@ -410,25 +355,21 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     assert body["effective_order"] == ["mineru"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["enabled"] is True
-    assert by_backend["unlimited_ocr"]["enabled"] is True
     assert by_backend["mineru"]["enabled"] is True
     assert by_backend["dots_ocr"]["enabled"] is False
-    assert by_backend["glm_ocr"]["enabled"] is True
     assert settings.rag_parser_adapter_backend == "mineru"
     assert settings.rag_parser_docling_enabled is True
-    assert settings.rag_parser_unlimited_ocr_enabled is True
     assert settings.rag_parser_mineru_enabled is True
     assert settings.rag_parser_dots_ocr_enabled is False
-    assert settings.rag_parser_glm_ocr_enabled is True
     persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
     assert persisted["version"] == 3
     parser = persisted["parser_adapters"]
     assert parser["adapter_backend"] == "mineru"
     assert parser["docling_enabled"] is True
-    assert parser["unlimited_ocr_enabled"] is True
     assert parser["mineru_enabled"] is True
     assert parser["dots_ocr_enabled"] is False
-    assert parser["glm_ocr_enabled"] is True
+    # 削除したエンジン(#270)の項目は保存しない。
+    assert not [key for key in parser if "marker" in key or "unlimited" in key or "glm" in key]
 
 
 def test_update_external_parser_connection_retains_and_clears_secret(
@@ -495,8 +436,8 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
         _env_file=None,
         model_settings_file=str(settings_file),
         rag_parser_adapter_backend="local",
-        rag_parser_glm_ocr_api_host="",
-        rag_parser_glm_ocr_api_key="",
+        rag_parser_dots_ocr_api_host="",
+        rag_parser_dots_ocr_api_key="",
     )
     # 別 worker は別プロセスなので、読込状態を持つ store も別になる。
     worker_store = ModelSettingsStore(
@@ -510,13 +451,13 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     response = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "glm_ocr",
-            "glm_ocr_enabled": True,
+            "adapter_backend": "dots_ocr",
+            "dots_ocr_enabled": True,
             "connections": [
                 {
-                    "backend": "glm_ocr",
-                    "endpoint": "https://glm.example.com/v1",
-                    "model": "glm-production",
+                    "backend": "dots_ocr",
+                    "endpoint": "https://dots.example.com/v1",
+                    "model": "dots-production",
                     "api_key": "parser-secret",
                 }
             ],
@@ -530,19 +471,19 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
     worker_store.reload_if_changed(worker_settings)
-    assert worker_settings.rag_parser_adapter_backend == "glm_ocr"
-    assert worker_settings.rag_parser_glm_ocr_api_host == "https://glm.example.com/v1"
-    assert worker_settings.rag_parser_glm_ocr_model == "glm-production"
-    assert worker_settings.rag_parser_glm_ocr_api_key == "parser-secret"
+    assert worker_settings.rag_parser_adapter_backend == "dots_ocr"
+    assert worker_settings.rag_parser_dots_ocr_api_host == "https://dots.example.com/v1"
+    assert worker_settings.rag_parser_dots_ocr_model == "dots-production"
+    assert worker_settings.rag_parser_dots_ocr_api_key == "parser-secret"
 
     model_response = client.patch("/api/settings/model", json=_payload())
 
     assert model_response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert "glm_ocr_api_key" not in persisted["parser_adapters"]
-    assert _saved_env_value(settings, "RAG_PARSER_GLM_OCR_API_KEY") == "parser-secret"
-    assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
+    assert "dots_ocr_api_key" not in persisted["parser_adapters"]
+    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "parser-secret"
+    assert persisted["parser_adapters"]["dots_ocr_model"] == "dots-production"
 
 
 def test_parallel_model_and_parser_updates_preserve_both_sections(
@@ -577,13 +518,13 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
     monkeypatch.setattr(MODEL_SETTINGS_STORE, "write_document", pause_first_persist)
     parser_update = ParserAdapterSettingsUpdate.model_validate(
         {
-            "adapter_backend": "glm_ocr",
-            "glm_ocr_enabled": True,
+            "adapter_backend": "dots_ocr",
+            "dots_ocr_enabled": True,
             "connections": [
                 {
-                    "backend": "glm_ocr",
-                    "endpoint": "https://glm.example.com/v1",
-                    "model": "glm-production",
+                    "backend": "dots_ocr",
+                    "endpoint": "https://dots.example.com/v1",
+                    "model": "dots-production",
                     "api_key": "parser-secret",
                 }
             ],
@@ -611,9 +552,9 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
 
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert "glm_ocr_api_key" not in persisted["parser_adapters"]
-    assert _saved_env_value(settings, "RAG_PARSER_GLM_OCR_API_KEY") == "parser-secret"
-    assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
+    assert "dots_ocr_api_key" not in persisted["parser_adapters"]
+    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "parser-secret"
+    assert persisted["parser_adapters"]["dots_ocr_model"] == "dots-production"
     lock_file = settings_file.with_name(f"{settings_file.name}.lock")
     assert stat.S_IMODE(lock_file.stat().st_mode) == 0o600
 
@@ -626,7 +567,6 @@ def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_writ
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
     monkeypatch.setattr(settings, "model_settings_file", str(tmp_path))
 
@@ -635,7 +575,6 @@ def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_writ
         json={
             "adapter_backend": "docling",
             "docling_enabled": True,
-            "marker_enabled": True,
             "unstructured_enabled": True,
         },
     )
@@ -643,7 +582,6 @@ def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_writ
     assert resp.status_code == 500
     assert settings.rag_parser_adapter_backend == "local"
     assert settings.rag_parser_docling_enabled is False
-    assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
 
 
@@ -653,12 +591,29 @@ def test_update_parser_adapter_settings_rejects_unknown_backend() -> None:
         json={
             "adapter_backend": "llama_parse",
             "docling_enabled": True,
-            "marker_enabled": False,
             "unstructured_enabled": False,
         },
     )
 
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+def test_update_parser_adapter_settings_rejects_removed_engine(removed: str) -> None:
+    """削除したエンジン(#270)は新たに選択・接続設定できない。"""
+    settings = get_settings()
+    before = settings.rag_parser_adapter_backend
+    resp = client.patch("/api/settings/parser-adapters", json={"adapter_backend": removed})
+    assert resp.status_code == 422
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "unstructured",
+            "connections": [{"backend": removed, "endpoint": "https://example.com"}],
+        },
+    )
+    assert resp.status_code == 422
+    assert settings.rag_parser_adapter_backend == before
 
 
 def test_external_parser_status_endpoint_and_unknown_backend(
@@ -679,16 +634,18 @@ def test_external_parser_status_endpoint_and_unknown_backend(
         ),
     )
 
-    response = client.get("/api/settings/parser-adapters/glm_ocr/status")
+    response = client.get("/api/settings/parser-adapters/dots_ocr/status")
 
     assert response.status_code == 200
     assert response.json()["data"] == {
-        "backend": "glm_ocr",
+        "backend": "dots_ocr",
         "status": "available",
         "version": "served-model",
         "warning_code": None,
     }
     assert client.get("/api/settings/parser-adapters/removed_engine/status").status_code == 422
+    for removed in ("marker", "unlimited_ocr", "glm_ocr"):
+        assert client.get(f"/api/settings/parser-adapters/{removed}/status").status_code == 422
 
 
 def test_update_parser_connection_rejects_unknown_engine() -> None:

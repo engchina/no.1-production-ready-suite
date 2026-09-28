@@ -7,7 +7,7 @@
 #
 # 使い方:
 #   scripts/build-services.sh                  # 既定: 全サービスをビルド(CPU + ASR + 前処理)
-#   scripts/build-services.sh --cpu            # CPU parser のみ(docling/marker/unstructured)
+#   scripts/build-services.sh --cpu            # CPU parser のみ(docling/unstructured)
 #   scripts/build-services.sh --gpu            # ローカル GPU parser(ASR)のみ
 #   scripts/build-services.sh --preprocess     # 前処理サービスのみ
 #   scripts/build-services.sh --cpu --preprocess  # 選択したグループのみ(組み合わせ可)
@@ -20,7 +20,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
-CPU_PARSERS=(parser-docling parser-marker parser-unstructured)
+CPU_PARSERS=(parser-docling parser-unstructured)
 GPU_PARSERS=(parser-asr)
 PREPROCESS=(
   preprocess-office-to-pdf

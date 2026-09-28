@@ -6,7 +6,6 @@
 | サービス | 実行 | 既定起動 | 備考 |
 |---|---|---|---|
 | `docling` | CPU | ✅ | PDF/Office/HTML/画像 |
-| `marker` | CPU | ✅ | PDF/画像(LLM 補正は無効) |
 | `unstructured` | CPU | ✅ | 多形式 partition |
 | `asr` | **GPU** | `--profile gpu` | 音声/動画の文字起こし(faster-whisper)。OCI AI Speech の fallback |
 
@@ -23,13 +22,13 @@ fallback する。詳細は [AGENTS.md](../../AGENTS.md) の「Parser マイク�
 
 ```bash
 # CPU parser + backend + frontend(リポジトリ root から)
-docker compose up backend ingestion-worker frontend parser-docling parser-marker parser-unstructured
+docker compose up backend ingestion-worker frontend parser-docling parser-unstructured
 
 # GPU parser(CUDA host)
 docker compose --profile gpu up parser-asr
 ```
 
-Unlimited-OCR、MinerU、Dots.OCR、GLM-OCR はこのリポジトリでは構築・起動しない。
+MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
 「検索・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
 
 > 依存(`rag-parser-core` path 依存)を変更したら、Docker build 前に各 pyproject の `uv lock` を

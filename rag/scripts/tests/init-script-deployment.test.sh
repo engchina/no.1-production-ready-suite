@@ -144,6 +144,9 @@ run_compose_services_case services-gpu "backend ingestion-worker parser-unstruct
 test "$(cat "${TEST_TMP_DIR}/services-gpu/result")" = "rejected" || fail "GPU の service（parser-asr）を拒否していない"
 run_compose_services_case services-unknown "backend ingestion-worker parser-unstructured frontend"
 test "$(cat "${TEST_TMP_DIR}/services-unknown/result")" = "rejected" || fail "許可していない service を拒否していない"
+run_compose_services_case services-removed-marker "backend ingestion-worker parser-unstructured parser-marker"
+test "$(cat "${TEST_TMP_DIR}/services-removed-marker/result")" = "rejected" \
+  || fail "削除した parser-marker（#270）を拒否していない"
 run_compose_services_case services-glob "backend ingestion-worker parser-unstructured *"
 test "$(cat "${TEST_TMP_DIR}/services-glob/result")" = "rejected" || fail "glob が展開された、または拒否されていない"
 run_compose_services_case services-missing-required "backend ingestion-worker parser-docling"

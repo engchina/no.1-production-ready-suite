@@ -23,7 +23,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="rag-parser-adapter-contract",
         description=(
-            "Docling / Marker / Unstructured adapter が本プロジェクト schema へ "
+            "Docling / Unstructured adapter が本プロジェクト schema へ "
             "remap できるかを非機密 JSON artifact として出力します。"
         ),
     )
@@ -41,7 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--backend",
         action="append",
-        choices=["docling", "marker", "unstructured"],
+        choices=["docling", "unstructured"],
         help="対象 backend。複数指定可。未指定なら全 adapter。",
     )
     parser.add_argument(

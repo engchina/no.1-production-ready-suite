@@ -1,6 +1,6 @@
 """ファイル種別ごとの軽量 parser registry。
 
-Docling / Marker / Unstructured 系の「ファイルタイプ別 partition -> 共通 schema」
+Docling / Unstructured 系の「ファイルタイプ別 partition -> 共通 schema」
 という考え方を、本プロジェクトの `StructuredExtraction` へ再マップする。
 外部 parser は任意依存として扱い、feature flag 有効時だけ呼び出す。
 得られた出力は必ず本プロジェクトの `StructuredExtraction` へ再マップする。
@@ -8,24 +8,19 @@ Docling / Marker / Unstructured 系の「ファイルタイプ別 partition -> �
 
 from __future__ import annotations
 
-import base64
 import csv
-import gc
 import html
 import importlib
 import importlib.util
 import inspect
 import json
 import logging
-import multiprocessing
 import os
-import queue
 import re
 import subprocess
 import sys
 import tempfile
 import types
-import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -619,17 +614,14 @@ def parse_with_registry(
     content_type: str,
     adapter_backend: str = "local",
     docling_enabled: bool = False,
-    marker_enabled: bool = False,
     unstructured_enabled: bool = False,
     mineru_enabled: bool = False,
     dots_ocr_enabled: bool = False,
-    glm_ocr_enabled: bool = False,
-    unlimited_ocr_enabled: bool = False,
     external_adapter_runner: ExternalAdapterRunner | None = None,
 ) -> ParserRegistryResult:
     """source profile に基づき、ローカル parser で処理できる場合は抽出する。
 
-    `external_adapter_runner` を渡すと、外部 adapter(docling/marker/...)の実行を
+    `external_adapter_runner` を渡すと、外部 adapter(docling/unstructured/...)の実行を
     その callable へ委譲する。backend は in-process import の代わりに parser
     マイクロサービスを呼ぶ HTTP runner を注入する。None の場合は同一プロセス内で
     optional package を import する既定挙動(`_external_adapter_result`)を使う。
@@ -684,12 +676,9 @@ def parse_with_registry(
         source_profile=source_profile,
         content_type=content_type,
         docling_enabled=docling_enabled,
-        marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
-        glm_ocr_enabled=glm_ocr_enabled,
-        unlimited_ocr_enabled=unlimited_ocr_enabled,
     )
     adapter_fallback_used = bool(adapter_warnings)
     for backend in _requested_external_adapters(
@@ -697,12 +686,9 @@ def parse_with_registry(
         source_profile=source_profile,
         content_type=content_type,
         docling_enabled=docling_enabled,
-        marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
-        glm_ocr_enabled=glm_ocr_enabled,
-        unlimited_ocr_enabled=unlimited_ocr_enabled,
     ):
         runner = external_adapter_runner or _default_external_adapter_runner
         adapter_result = runner(
@@ -776,24 +762,18 @@ def _requested_external_adapters(
     source_profile: SourceProfile | None,
     content_type: str,
     docling_enabled: bool,
-    marker_enabled: bool,
     unstructured_enabled: bool,
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
-    glm_ocr_enabled: bool,
-    unlimited_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized in EXTERNAL_ADAPTER_PACKAGES:
         if _external_adapter_flag_enabled(
             normalized,
             docling_enabled=docling_enabled,
-            marker_enabled=marker_enabled,
             unstructured_enabled=unstructured_enabled,
             mineru_enabled=mineru_enabled,
             dots_ocr_enabled=dots_ocr_enabled,
-            glm_ocr_enabled=glm_ocr_enabled,
-            unlimited_ocr_enabled=unlimited_ocr_enabled,
         ) and _external_adapter_supports_source(
             normalized,
             source_profile=source_profile,
@@ -810,12 +790,9 @@ def _external_adapter_disabled_warnings(
     source_profile: SourceProfile | None,
     content_type: str,
     docling_enabled: bool,
-    marker_enabled: bool,
     unstructured_enabled: bool,
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
-    glm_ocr_enabled: bool,
-    unlimited_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized not in EXTERNAL_ADAPTER_PACKAGES:
@@ -823,12 +800,9 @@ def _external_adapter_disabled_warnings(
     if _external_adapter_flag_enabled(
         normalized,
         docling_enabled=docling_enabled,
-        marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
-        glm_ocr_enabled=glm_ocr_enabled,
-        unlimited_ocr_enabled=unlimited_ocr_enabled,
     ):
         if _external_adapter_supports_source(
             normalized,
@@ -892,21 +866,15 @@ def _external_adapter_flag_enabled(
     backend: str,
     *,
     docling_enabled: bool,
-    marker_enabled: bool,
     unstructured_enabled: bool,
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
-    glm_ocr_enabled: bool,
-    unlimited_ocr_enabled: bool,
 ) -> bool:
     return {
         "docling": docling_enabled,
-        "marker": marker_enabled,
         "unstructured": unstructured_enabled,
-        "unlimited_ocr": unlimited_ocr_enabled,
         "mineru": mineru_enabled,
         "dots_ocr": dots_ocr_enabled,
-        "glm_ocr": glm_ocr_enabled,
     }.get(backend, False)
 
 
@@ -919,7 +887,7 @@ def run_external_adapter(
     """単一の外部 adapter を同一プロセス内で実行する公開 API。
 
     parser マイクロサービスはこの関数を呼んで、その image に導入済みの adapter
-    (docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)で parse し、結果を
+    (docling/unstructured/mineru/dots_ocr)で parse し、結果を
     `ParseResponse` として返す。package 未導入なら `*_adapter_package_missing`、
     parse 失敗なら `*_adapter_failed` の fallback を返す。
     """
@@ -963,12 +931,6 @@ def _external_adapter_result(
                 source_profile=source_profile,
                 content_type=content_type,
             )
-        if backend == "marker":
-            return _marker_adapter_result(
-                source_bytes,
-                source_profile=source_profile,
-                content_type=content_type,
-            )
         if backend == "unstructured":
             return _unstructured_adapter_result(
                 source_bytes,
@@ -983,18 +945,6 @@ def _external_adapter_result(
             )
         if backend == "dots_ocr":
             return _dots_ocr_adapter_result(
-                source_bytes,
-                source_profile=source_profile,
-                content_type=content_type,
-            )
-        if backend == "glm_ocr":
-            return _glm_ocr_adapter_result(
-                source_bytes,
-                source_profile=source_profile,
-                content_type=content_type,
-            )
-        if backend == "unlimited_ocr":
-            return _unlimited_ocr_adapter_result(
                 source_bytes,
                 source_profile=source_profile,
                 content_type=content_type,
@@ -1023,7 +973,7 @@ def _external_adapter_result(
 # registry は import される)ため、型そのものではなく型名でマッチする。
 _INVALID_INPUT_EXCEPTION_NAMES = frozenset(
     {
-        "PdfiumError",  # pypdfium2(marker): "Data format error" 等
+        "PdfiumError",  # pypdfium2: "Data format error" 等
         "PDFSyntaxError",  # pdfminer(unstructured)
         "PSEOF",
         "PSSyntaxError",
@@ -1059,26 +1009,8 @@ def _is_invalid_input_error(exc: BaseException) -> bool:
 
 
 def _external_adapter_package_available(backend: str) -> bool:
-    """adapter の実行に必要な import があるか確認する。
-
-    GLM-OCR / Unlimited-OCR は専用 pip package が無く、wrapper が無い場合は
-    実行 runtime の軽い import を確認する。
-    """
-    package = EXTERNAL_ADAPTER_PACKAGES[backend]
-    if _module_available(package):
-        return True
-    if backend == "glm_ocr":
-        return _module_available("transformers")
-    if backend == "unlimited_ocr":
-        runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
-        if runtime in {"sglang", "official_sglang"}:
-            return _module_available("sglang") or bool(
-                os.environ.get("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "").strip()
-            )
-        if runtime in {"transformers", "hf", "local_transformers"}:
-            return _module_available("transformers")
-        return True
-    return False
+    """adapter の実行に必要な import があるか確認する。"""
+    return _module_available(EXTERNAL_ADAPTER_PACKAGES[backend])
 
 
 def _module_available(name: str) -> bool:
@@ -1160,86 +1092,6 @@ def _docling_adapter_result(
     return ParserRegistryResult(
         extraction=extraction,
         parser_backend="docling",
-        parser_version=version,
-        template=template_for_source_profile(source_profile),
-    )
-
-
-def _marker_adapter_result(
-    source_bytes: bytes,
-    *,
-    source_profile: SourceProfile | None,
-    content_type: str,
-) -> ParserRegistryResult:
-    """Marker の markdown/chunk 変換結果を共通抽出 schema へ再マップする。
-
-    Marker の LLM 補正モードは使わない。parser engine としてのローカル変換だけを
-    呼び出すことで、非 OCI LLM provider を混ぜない。
-    """
-    converter_module = importlib.import_module("marker.converters.pdf")
-    models_module = importlib.import_module("marker.models")
-    output_module = importlib.import_module("marker.output")
-    converter_type = converter_module.PdfConverter
-    create_model_dict = models_module.create_model_dict
-    text_from_rendered = getattr(output_module, "text_from_rendered", None)
-
-    with _temporary_source_file(source_bytes, source_profile, content_type) as path:
-        converter = converter_type(artifact_dict=create_model_dict())
-        rendered = converter(str(path))
-    structured_elements = _adapter_child_elements(rendered)
-    if structured_elements:
-        text = ""
-        export_kind = "structured_elements"
-    elif callable(text_from_rendered):
-        exported = text_from_rendered(rendered)
-        text = exported[0] if isinstance(exported, tuple | list) else exported
-        export_kind = "text_from_rendered"
-    else:
-        text, export_kind = _export_adapter_text(
-            rendered,
-            preferred_methods=("markdown", "text", "raw_text"),
-        )
-    if not structured_elements and (not isinstance(text, str) or not text.strip()):
-        return _adapter_fallback_result("marker", "marker_adapter_empty")
-    version = _adapter_version("marker")
-    artifacts: dict[str, ExtractionMetadataValue] = {
-        "adapter_export": export_kind,
-        "external_adapter": "marker",
-        "llm_enabled": False,
-    }
-    if structured_elements:
-        extraction = _structured_from_adapter_elements(
-            structured_elements,
-            document_type=_document_type_for_source(source_profile),
-            source_parser="marker_adapter",
-            template=template_for_source_profile(source_profile),
-            parser_backend="marker",
-            parser_version=version,
-            pages=_adapter_pages_from_source(rendered),
-            extra_artifacts=artifacts,
-        )
-    else:
-        extraction = _structured_from_text(
-            text,
-            document_type=_document_type_for_source(source_profile),
-            source_parser="marker_adapter",
-            template=template_for_source_profile(source_profile),
-            default_content_kind=_default_content_kind_for_source(source_profile),
-            parser_backend="marker",
-            parser_version=version,
-            extra_artifacts=artifacts,
-        )
-    extraction = _adapter_extraction_with_source_lineage(
-        extraction,
-        source_profile=source_profile,
-        source_parser="marker_adapter",
-        parser_backend="marker",
-        parser_version=version,
-        template=template_for_source_profile(source_profile),
-    )
-    return ParserRegistryResult(
-        extraction=extraction,
-        parser_backend="marker",
         parser_version=version,
         template=template_for_source_profile(source_profile),
     )
@@ -1750,616 +1602,6 @@ def _optional_int_env(name: str) -> int | None:
     return int(value)
 
 
-def _run_glm_ocr(path: Path) -> object:
-    """GLM-OCR(GPU)で 1 ファイルを OCR して markdown を得る(GPU 統合シーム)。
-
-    GLM-OCR は公式 self-host では vLLM/SGLang の OpenAI-compatible endpoint を使う。
-    テスト用 wrapper module があればそれを優先し、通常は vLLM endpoint を呼ぶ。
-    `GLM_OCR_RUNTIME=transformers` の場合だけローカル transformers 直ロードへ退避する。
-    """
-    if _module_available("glm_ocr"):
-        module = importlib.import_module("glm_ocr")
-        for attr in ("parse", "ocr", "to_markdown", "convert", "infer", "run"):
-            candidate = getattr(module, attr, None)
-            if callable(candidate):
-                return candidate(str(path))
-    runtime = os.environ.get("GLM_OCR_RUNTIME", "vllm").strip().lower() or "vllm"
-    if runtime in {"vllm", "official_vllm"}:
-        runner = _run_glm_ocr_vllm
-    elif runtime in {"transformers", "hf", "local_transformers"}:
-        runner = _run_glm_ocr_transformers
-    else:
-        raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
-    # GLM-OCR は画像入力前提。PDF はページ画像へラスタライズしてから OCR する
-    # (dots_ocr / unlimited_ocr と同じ扱い)。
-    if path.suffix.lower() == ".pdf":
-        return _run_glm_ocr_pdf(path, runner)
-    return runner(path)
-
-
-def _run_glm_ocr_pdf(path: Path, runner: Callable[[Path], object]) -> str:
-    """PDF をページ画像へラスタライズし、各ページを画像 OCR して連結する。"""
-    dpi = int(os.environ.get("GLM_OCR_DPI", "300"))
-    texts: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="glm-ocr-pages-") as page_dir:
-        for image_file in _unlimited_ocr_pdf_to_images(path, Path(page_dir), dpi=dpi):
-            rendered = runner(Path(image_file))
-            text = rendered if isinstance(rendered, str) else str(rendered)
-            if text.strip():
-                texts.append(text.strip())
-    return "\n\n".join(texts)
-
-
-def _run_unlimited_ocr(path: Path) -> object:
-    """Unlimited-OCR(GPU)で 1 ファイルを OCR して markdown を得る(GPU 統合シーム)。"""
-    if _module_available("unlimited_ocr"):
-        module = importlib.import_module("unlimited_ocr")
-        for attr in ("parse", "ocr", "to_markdown", "convert", "infer", "run"):
-            candidate = getattr(module, attr, None)
-            if callable(candidate):
-                return candidate(str(path))
-    runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
-    if runtime in {"sglang", "official_sglang"}:
-        return _run_unlimited_ocr_sglang(path)
-    if runtime in {"transformers", "hf", "local_transformers"}:
-        return _run_unlimited_ocr_transformers(path)
-    raise RuntimeError(
-        "unlimited_ocr_invalid_runtime: set UNLIMITED_OCR_RUNTIME to sglang or transformers"
-    )
-
-
-def _run_glm_ocr_vllm(path: Path) -> object:
-    """公式 self-host(vLLM OpenAI-compatible)で GLM-OCR を実行する。"""
-    base_url = os.environ.get("GLM_OCR_VLLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-    model_name = os.environ.get("GLM_OCR_VLLM_MODEL", "glm-ocr").strip() or "glm-ocr"
-    prompt = os.environ.get("GLM_OCR_PROMPT", "Text Recognition:").strip()
-    if not prompt:
-        prompt = "Text Recognition:"
-    content_type = _content_type_for_path(path)
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    payload = {
-        "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{content_type};base64,{encoded}"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-        "max_tokens": int(os.environ.get("GLM_OCR_MAX_NEW_TOKENS", "8192")),
-        "temperature": float(os.environ.get("GLM_OCR_TEMPERATURE", "0")),
-    }
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=_glm_ocr_vllm_headers(),
-        method="POST",
-    )
-    timeout = float(os.environ.get("GLM_OCR_VLLM_TIMEOUT_SECONDS", "900"))
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = json.loads(response.read().decode("utf-8"))
-    return _chat_completion_text(body)
-
-
-def _glm_ocr_vllm_headers() -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    api_key = os.environ.get("GLM_OCR_VLLM_API_KEY", "").strip()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
-
-
-def _chat_completion_text(body: Mapping[str, object]) -> str:
-    choices = body.get("choices")
-    if not isinstance(choices, Sequence) or not choices:
-        raise RuntimeError("glm_ocr_vllm_empty_choices")
-    first = choices[0]
-    if not isinstance(first, Mapping):
-        raise RuntimeError("glm_ocr_vllm_invalid_choice")
-    message = first.get("message")
-    if not isinstance(message, Mapping):
-        raise RuntimeError("glm_ocr_vllm_invalid_message")
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, Sequence):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, Mapping):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    raise RuntimeError("glm_ocr_vllm_invalid_content")
-
-
-def _content_type_for_path(path: Path) -> str:
-    suffix = path.suffix.lower()
-    return {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-    }.get(suffix, "application/octet-stream")
-
-
-def _run_glm_ocr_transformers(path: Path) -> object:
-    """transformers で HuggingFace の GLM-OCR モデルをロードし 1 ファイルを OCR する。
-
-    実 GPU でのみ通る経路(CI 非搭載)。remap 層のテストは fake `glm_ocr` module で
-    この経路を迂回する。
-    """
-    import os
-
-    model_id = os.environ.get("GLM_OCR_MODEL_ID", "zai-org/GLM-OCR").strip() or "zai-org/GLM-OCR"
-    processor, model = cast(tuple[Any, Any], _load_glm_ocr_pipeline(model_id))
-    image_module = importlib.import_module("PIL.Image")
-    prompt = os.environ.get(
-        "GLM_OCR_PROMPT",
-        "この画像の内容をレイアウトを保ったまま Markdown で書き起こしてください。",
-    )
-    image = image_module.open(str(path)).convert("RGB")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
-    inputs = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-    ).to(model.device)
-    max_new_tokens = int(os.environ.get("GLM_OCR_MAX_NEW_TOKENS", "8192"))
-    generated = model.generate(**inputs, max_new_tokens=max_new_tokens)
-    trimmed = generated[:, inputs["input_ids"].shape[1] :]
-    decoded = processor.batch_decode(trimmed, skip_special_tokens=True)
-    return decoded[0] if decoded else ""
-
-
-_GLM_OCR_PIPELINE_CACHE: dict[str, tuple[object, object]] = {}
-_UNLIMITED_OCR_PIPELINE_CACHE: dict[str, tuple[object, object]] = {}
-
-
-def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
-    """GLM-OCR の processor/model を遅延ロードしてプロセス内キャッシュする(重い初期化を 1 回に)。"""
-    cached = _GLM_OCR_PIPELINE_CACHE.get(model_id)
-    if cached is not None:
-        return cached
-    import os
-
-    torch = importlib.import_module("torch")
-    if not torch.cuda.is_available():
-        raise RuntimeError("glm_ocr_cuda_unavailable: GLM-OCR requires a CUDA GPU")
-    dtype = _torch_dtype(
-        torch,
-        os.environ.get("GLM_OCR_TORCH_DTYPE", "bfloat16"),
-        error_prefix="glm_ocr",
-    )
-    device = torch.device("cuda:0")
-    transformers = importlib.import_module("transformers")
-    processor = transformers.AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    model = transformers.AutoModelForImageTextToText.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        dtype=dtype,
-    )
-    model.to(device)
-    model.eval()
-    _GLM_OCR_PIPELINE_CACHE[model_id] = (processor, model)
-    return processor, model
-
-
-def _run_unlimited_ocr_transformers(path: Path) -> object:
-    """transformers で HuggingFace の Unlimited-OCR モデルをロードし OCR する。"""
-    if path.suffix.lower() == ".pdf":
-        return _run_unlimited_ocr_pdf_with_timeout(path)
-    return _run_unlimited_ocr_transformers_in_process(path)
-
-
-def _run_unlimited_ocr_sglang(path: Path) -> object:
-    """公式 SGLang OpenAI-compatible endpoint で Unlimited-OCR を実行する。"""
-    image_files: list[str]
-    if path.suffix.lower() == ".pdf":
-        with tempfile.TemporaryDirectory(prefix="unlimited-ocr-sglang-pages-") as page_dir:
-            image_files = _unlimited_ocr_pdf_to_images(
-                path,
-                Path(page_dir),
-                dpi=int(os.environ.get("UNLIMITED_OCR_DPI", "300")),
-            )
-            return _run_unlimited_ocr_sglang_pdf_batches(
-                image_files,
-            )
-    return _run_unlimited_ocr_sglang_images(
-        [str(path)],
-        image_mode=os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip() or "gundam",
-        ngram_window=_env_int("UNLIMITED_OCR_NGRAM_WINDOW", 128),
-        prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "document parsing."),
-    )
-
-
-def _run_unlimited_ocr_sglang_images(
-    image_files: Sequence[str],
-    *,
-    image_mode: str,
-    ngram_window: int,
-    prompt: str,
-) -> str:
-    payload = _unlimited_ocr_sglang_payload(
-        prompt=prompt,
-        image_files=image_files,
-        image_mode=image_mode,
-        ngram_window=ngram_window,
-    )
-    base_url = os.environ.get(
-        "UNLIMITED_OCR_SGLANG_BASE_URL",
-        "http://127.0.0.1:10000/v1",
-    ).rstrip("/")
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    timeout = _env_float("UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS", 1200.0)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return _streaming_chat_completion_text(response)
-
-
-def _run_unlimited_ocr_sglang_pdf_batches(image_files: Sequence[str]) -> str:
-    batch_size = _env_int("UNLIMITED_OCR_PDF_BATCH_SIZE", 2)
-    texts: list[str] = []
-    for index in range(0, len(image_files), batch_size):
-        batch = image_files[index : index + batch_size]
-        text = _run_unlimited_ocr_sglang_images(
-            batch,
-            image_mode="base",
-            ngram_window=_env_int("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", 1024),
-            prompt=os.environ.get("UNLIMITED_OCR_MULTI_PROMPT", "Multi page parsing."),
-        )
-        if text.strip():
-            texts.append(text.strip())
-    return "\n\n".join(texts)
-
-
-def _unlimited_ocr_sglang_payload(
-    *,
-    prompt: str,
-    image_files: Sequence[str],
-    image_mode: str,
-    ngram_window: int,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "model": os.environ.get("UNLIMITED_OCR_SGLANG_MODEL", "Unlimited-OCR").strip()
-        or "Unlimited-OCR",
-        "messages": [
-            {
-                "role": "user",
-                "content": _unlimited_ocr_sglang_content(prompt, image_files),
-            }
-        ],
-        "temperature": float(os.environ.get("UNLIMITED_OCR_TEMPERATURE", "0")),
-        "skip_special_tokens": False,
-        "images_config": {"image_mode": image_mode},
-        "stream": True,
-    }
-    processor = _unlimited_ocr_no_repeat_processor()
-    if processor:
-        payload["custom_logit_processor"] = processor
-        payload["custom_params"] = {
-            "ngram_size": _env_int("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", 35),
-            "window_size": ngram_window,
-        }
-    return payload
-
-
-def _unlimited_ocr_sglang_content(
-    prompt: str,
-    image_files: Sequence[str],
-) -> list[dict[str, object]]:
-    return [
-        {"type": "text", "text": prompt},
-        *(_encoded_image_content(Path(image_file)) for image_file in image_files),
-    ]
-
-
-def _encoded_image_content(path: Path) -> dict[str, object]:
-    content_type = _content_type_for_path(path)
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:{content_type};base64,{encoded}"},
-    }
-
-
-def _unlimited_ocr_no_repeat_processor() -> str | None:
-    override = os.environ.get("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "").strip()
-    if override:
-        return override
-    try:
-        processor_module = importlib.import_module("sglang.srt.sampling.custom_logit_processor")
-    except Exception:
-        return None
-    processor = getattr(processor_module, "DeepseekOCRNoRepeatNGramLogitProcessor", None)
-    to_str = getattr(processor, "to_str", None)
-    return to_str() if callable(to_str) else None
-
-
-def _streaming_chat_completion_text(response: Any) -> str:
-    chunks: list[str] = []
-    for raw_line in response:
-        line = (
-            raw_line.decode("utf-8", errors="replace")
-            if isinstance(raw_line, bytes)
-            else str(raw_line)
-        )
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[len("data:") :].strip()
-        if data == "[DONE]":
-            break
-        try:
-            event = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        choices = event.get("choices")
-        if not isinstance(choices, Sequence) or not choices:
-            continue
-        first = choices[0]
-        if not isinstance(first, Mapping):
-            continue
-        delta = first.get("delta")
-        if not isinstance(delta, Mapping):
-            continue
-        content = delta.get("content")
-        if isinstance(content, str):
-            chunks.append(content)
-    return "".join(chunks)
-
-
-def _run_unlimited_ocr_pdf_with_timeout(path: Path) -> object:
-    timeout_seconds = _env_float("UNLIMITED_OCR_PDF_TIMEOUT_SECONDS", 1200.0)
-    with tempfile.TemporaryDirectory(prefix="unlimited-ocr-child-result-") as result_dir:
-        result_path = Path(result_dir) / "result.txt"
-        result_queue: Any = multiprocessing.Queue(maxsize=1)
-        process = multiprocessing.Process(
-            target=_run_unlimited_ocr_pdf_child,
-            args=(str(path), str(result_path), result_queue),
-            daemon=True,
-        )
-        process.start()
-        process.join(timeout_seconds)
-        if process.is_alive():
-            process.terminate()
-            process.join(10)
-            if process.is_alive():
-                process.kill()
-                process.join()
-            _release_unlimited_ocr_gpu_cache()
-            result_queue.close()
-            result_queue.join_thread()
-            raise TimeoutError(f"unlimited_ocr_pdf_timeout: exceeded {timeout_seconds:g}s")
-        try:
-            status, payload = result_queue.get(timeout=1)
-        except queue.Empty as exc:
-            raise RuntimeError(
-                f"unlimited_ocr_pdf_subprocess_failed: exit_code={process.exitcode}"
-            ) from exc
-        finally:
-            result_queue.close()
-            result_queue.join_thread()
-        if status == "ok":
-            return result_path.read_text(encoding="utf-8", errors="replace")
-        if isinstance(payload, tuple) and len(payload) == 2:
-            error_type, message = payload
-            raise RuntimeError(f"unlimited_ocr_pdf_failed: {error_type}: {message}")
-        raise RuntimeError("unlimited_ocr_pdf_failed")
-
-
-def _run_unlimited_ocr_pdf_child(
-    path_value: str,
-    result_path_value: str,
-    result_queue: Any,
-) -> None:
-    try:
-        result = _run_unlimited_ocr_transformers_in_process(Path(path_value))
-        Path(result_path_value).write_text(
-            _adapter_text_value(result),
-            encoding="utf-8",
-        )
-        result_queue.put(("ok", None))
-    except BaseException as exc:  # noqa: BLE001 - child boundary serializes failures
-        logger.exception("unlimited_ocr_pdf_child_failed")
-        result_queue.put(("error", (type(exc).__name__, str(exc))))
-    finally:
-        _release_unlimited_ocr_gpu_cache()
-
-
-def _run_unlimited_ocr_transformers_in_process(path: Path) -> object:
-    """実 OCR 本体。PDF は caller 側で timeout 用 subprocess に隔離される。"""
-    model_id = (
-        os.environ.get("UNLIMITED_OCR_MODEL_ID", "baidu/Unlimited-OCR").strip()
-        or "baidu/Unlimited-OCR"
-    )
-    tokenizer: object | None = None
-    model: object | None = None
-    try:
-        tokenizer, model = _load_unlimited_ocr_pipeline(model_id)
-        model_runner = cast(Any, model)
-        with tempfile.TemporaryDirectory(prefix="unlimited-ocr-output-") as output_dir:
-            output_path = Path(output_dir)
-            if path.suffix.lower() == ".pdf":
-                with tempfile.TemporaryDirectory(prefix="unlimited-ocr-pages-") as page_dir:
-                    image_files = _unlimited_ocr_pdf_to_images(
-                        path,
-                        Path(page_dir),
-                        dpi=int(os.environ.get("UNLIMITED_OCR_DPI", "300")),
-                    )
-                    result = _run_unlimited_ocr_pdf_batches(
-                        model_runner,
-                        tokenizer,
-                        image_files,
-                        output_path,
-                    )
-            else:
-                base_size, image_size, crop_mode = _unlimited_ocr_image_config()
-                result = model_runner.infer(
-                    tokenizer,
-                    prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "<image>document parsing."),
-                    image_file=str(path),
-                    output_path=str(output_path),
-                    base_size=base_size,
-                    image_size=image_size,
-                    crop_mode=crop_mode,
-                    max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
-                    no_repeat_ngram_size=int(
-                        os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
-                    ),
-                    ngram_window=int(os.environ.get("UNLIMITED_OCR_NGRAM_WINDOW", "128")),
-                    save_results=True,
-                )
-            return _unlimited_ocr_output_text(result, output_path)
-    finally:
-        tokenizer = None
-        model = None
-        _release_unlimited_ocr_gpu_cache()
-
-
-def _run_unlimited_ocr_pdf_batches(
-    model_runner: Any,
-    tokenizer: object,
-    image_files: Sequence[str],
-    output_path: Path,
-) -> str:
-    batch_size = _env_int("UNLIMITED_OCR_PDF_BATCH_SIZE", 2)
-    texts: list[str] = []
-    for index in range(0, len(image_files), batch_size):
-        batch = list(image_files[index : index + batch_size])
-        batch_output_path = output_path / f"batch_{index // batch_size + 1:04d}"
-        batch_output_path.mkdir(parents=True, exist_ok=True)
-        batch_result = model_runner.infer_multi(
-            tokenizer,
-            prompt=os.environ.get(
-                "UNLIMITED_OCR_MULTI_PROMPT",
-                "<image>Multi page parsing.",
-            ),
-            image_files=batch,
-            output_path=str(batch_output_path),
-            image_size=int(os.environ.get("UNLIMITED_OCR_PDF_IMAGE_SIZE", "1024")),
-            max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
-            no_repeat_ngram_size=int(os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")),
-            ngram_window=int(os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")),
-            save_results=True,
-        )
-        text = _adapter_text_value(_unlimited_ocr_output_text(batch_result, batch_output_path))
-        if text.strip():
-            texts.append(text.strip())
-    return "\n\n".join(texts)
-
-
-def _load_unlimited_ocr_pipeline(model_id: str) -> tuple[object, object]:
-    """Unlimited-OCR の tokenizer/model を遅延ロードしてプロセス内キャッシュする。"""
-    cached = _UNLIMITED_OCR_PIPELINE_CACHE.get(model_id)
-    if cached is not None:
-        return cached
-    torch = importlib.import_module("torch")
-    device_name = os.environ.get("UNLIMITED_OCR_DEVICE", "cuda:0").strip() or "cuda:0"
-    if device_name.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("unlimited_ocr_cuda_unavailable: Unlimited-OCR requires a CUDA GPU")
-    dtype = _torch_dtype(
-        torch,
-        os.environ.get("UNLIMITED_OCR_TORCH_DTYPE", "bfloat16"),
-        error_prefix="unlimited_ocr",
-    )
-    transformers = importlib.import_module("transformers")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    model = transformers.AutoModel.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        use_safetensors=True,
-        dtype=dtype,
-    )
-    model = model.eval()
-    model.to(torch.device(device_name))
-    _UNLIMITED_OCR_PIPELINE_CACHE[model_id] = (tokenizer, model)
-    return tokenizer, model
-
-
-def _release_unlimited_ocr_gpu_cache() -> None:
-    """Unlimited-OCR は 1 request 後に GPU を空ける。"""
-    _UNLIMITED_OCR_PIPELINE_CACHE.clear()
-    gc.collect()
-    try:
-        torch = importlib.import_module("torch")
-    except Exception:
-        return
-    empty_cache = getattr(getattr(torch, "cuda", None), "empty_cache", None)
-    if callable(empty_cache):
-        empty_cache()
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.environ.get(name, str(default))))
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return max(1.0, float(os.environ.get(name, str(default))))
-    except ValueError:
-        return default
-
-
-def _unlimited_ocr_image_config() -> tuple[int, int, bool]:
-    mode = os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip().casefold()
-    if mode == "base":
-        return 1024, 1024, False
-    return 1024, 640, True
-
-
-def _unlimited_ocr_pdf_to_images(path: Path, output_dir: Path, *, dpi: int) -> list[str]:
-    fitz = importlib.import_module("fitz")
-    doc = fitz.open(str(path))
-    try:
-        matrix = fitz.Matrix(dpi / 72, dpi / 72)
-        image_files: list[str] = []
-        for index, page in enumerate(doc):
-            image_path = output_dir / f"page_{index + 1:04d}.png"
-            page.get_pixmap(matrix=matrix).save(str(image_path))
-            image_files.append(str(image_path))
-        return image_files
-    finally:
-        doc.close()
-
-
-def _unlimited_ocr_output_text(result: object, output_dir: Path) -> object:
-    for suffix in ("*.md", "*.txt"):
-        texts = [
-            path.read_text(encoding="utf-8", errors="replace")
-            for path in sorted(output_dir.rglob(suffix))
-            if path.is_file()
-        ]
-        text = "\n\n".join(item for item in texts if item.strip())
-        if text.strip():
-            return text
-    return result
-
-
 def _torch_dtype(torch: Any, dtype_name: str | None, *, error_prefix: str) -> object:
     """GPU OCR parser の dtype を明示的に解決する。未知値は実行時に誤設定として落とす。"""
     normalized = (dtype_name or "bfloat16").strip().lower()
@@ -2392,7 +1634,7 @@ def _ocr_engine_adapter_result(
 ) -> ParserRegistryResult:
     """GPU OCR engine の document/markdown 出力を共通抽出 schema へ再マップする。
 
-    GPU 上の実 OCR 実行(`runner`)以外は docling/marker と同じ汎用 remap を再利用するため、
+    GPU 上の実 OCR 実行(`runner`)以外は docling と同じ汎用 remap を再利用するため、
     fixture(fake module)で remap 層だけを決定論テストできる。
     """
     with _temporary_source_file(source_bytes, source_profile, content_type) as path:
@@ -2512,38 +1754,6 @@ def _dots_ocr_adapter_result(
         source_profile=source_profile,
         content_type=content_type,
         runner=_run_dots_ocr,
-    )
-
-
-def _glm_ocr_adapter_result(
-    source_bytes: bytes,
-    *,
-    source_profile: SourceProfile | None,
-    content_type: str,
-) -> ParserRegistryResult:
-    """GLM-OCR(GPU)の OCR 結果を共通抽出 schema へ再マップする。"""
-    return _ocr_engine_adapter_result(
-        "glm_ocr",
-        source_bytes,
-        source_profile=source_profile,
-        content_type=content_type,
-        runner=_run_glm_ocr,
-    )
-
-
-def _unlimited_ocr_adapter_result(
-    source_bytes: bytes,
-    *,
-    source_profile: SourceProfile | None,
-    content_type: str,
-) -> ParserRegistryResult:
-    """Unlimited-OCR(GPU)の OCR 結果を共通抽出 schema へ再マップする。"""
-    return _ocr_engine_adapter_result(
-        "unlimited_ocr",
-        source_bytes,
-        source_profile=source_profile,
-        content_type=content_type,
-        runner=_run_unlimited_ocr,
     )
 
 
