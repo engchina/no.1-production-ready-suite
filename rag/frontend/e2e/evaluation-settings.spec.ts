@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -23,8 +23,9 @@ for (const viewport of [
     await expect(
       page.getByText("プリセット閾値なし(request の thresholds を使用)")
     ).toBeVisible();
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect(
-      page
+      (await openSidebarNav(page))
         .locator("#nav-section-nav-section-pipeline")
         .getByRole("link", { name: "品質評価" })
     ).toHaveAttribute("aria-current", "page");

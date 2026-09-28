@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
@@ -267,8 +268,8 @@ test("運用設定のメニューからシステムテーブル管理を開け�
   await expect(page.locator("#system-tables")).toHaveCount(0);
 
   // システムテーブルは「運用設定」（既定で折りたたみ）にある（#81）。
-  // 375px のアイコン表示ではセクションを折りたたまないため、展開ボタンがあるときだけ押す。
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから、展開ボタンがあるときだけ押す。
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "データベース" })).toBeVisible();
   const expandOperations = sidebar.getByRole("button", { name: "運用設定 を展開" });
   if (await expandOperations.isVisible()) await expandOperations.click();

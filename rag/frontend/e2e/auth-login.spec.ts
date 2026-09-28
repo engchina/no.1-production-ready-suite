@@ -7,6 +7,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   type CurrentUserPayload,
+  openSidebarNav,
 } from "./_helpers";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#214）。
@@ -116,8 +117,7 @@ test("未ログインで開くとログイン画面へ移り、DB ユーザー�
 
   await expect(page).toHaveURL(/\/file-list$/);
   expect(auth.loginCalls).toEqual([{ login_user_id: "admin.user", password: "CorrectPass!123" }]);
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  await expect(sidebar).toBeVisible();
+  await openSidebarNav(page);
 });
 
 test("ログイン失敗は入力ミスの文言だけを出し、ログイン画面に留まる", async ({ page }) => {
@@ -187,8 +187,7 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
   );
 
   await page.goto("/settings/appearance");
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  await expect(sidebar).toBeVisible();
+  const sidebar = await openSidebarNav(page);
 
   expired = true;
   await sidebar.getByRole("link", { name: "文書インデックス" }).click();
@@ -201,21 +200,15 @@ test("アカウント欄のパスワード変更とログアウト", async ({ pa
   const auth = await mockAuthApi(page, loginTarget("admin.user"));
 
   await page.goto("/settings/appearance");
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  const viewport = page.viewportSize();
-  if (viewport && viewport.width <= 640) {
-    // 375px ではサイドバーが icon 幅に折りたたまれる。展開して文言付きの操作を使う。
-    await page.getByRole("button", { name: "サイドバーを展開" }).click();
-  }
+  // 375px ではナビがドロワー（#367）。開いて文言付きの操作を使う。
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByText("管理 太郎")).toBeVisible();
   await sidebar.getByRole("button", { name: "パスワード変更" }).click();
   await expect(page).toHaveURL(/\/password\/change$/);
   await page.getByRole("button", { name: "戻る" }).click();
   await expect(page).toHaveURL(/\/settings\/appearance$/);
 
-  if (viewport && viewport.width <= 640) {
-    await page.getByRole("button", { name: "サイドバーを展開" }).click();
-  }
+  await openSidebarNav(page);
   await sidebar.getByRole("button", { name: "ログアウト" }).click();
   await expect(page).toHaveURL(/\/login$/);
   expect(auth.logoutCalls).toBe(1);
@@ -244,10 +237,7 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
   // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
   await page.goto("/");
   await expect(page).toHaveURL(/\/search$/);
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  if ((page.viewportSize()?.width ?? 1280) <= 640) {
-    await page.getByRole("button", { name: "サイドバーを展開" }).click();
-  }
+  const sidebar = await openSidebarNav(page);
   // NL2SQL と同じく、利用者名とログイン省略の表示を出し、パスワード変更・ログアウトは出さない。
   await expect(sidebar.getByText("ローカル利用者")).toBeVisible();
   await expect(sidebar.getByRole("status", { name: "ログイン省略" })).toBeVisible();

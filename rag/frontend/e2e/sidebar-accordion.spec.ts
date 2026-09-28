@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LOCAL_AUTH_ME } from "./_helpers";
+import { LOCAL_AUTH_ME, openSidebarNav } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
@@ -57,15 +57,19 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     await expect(evalLink).toHaveCount(1);
   });
 
-  test("狭幅（375px・icon-only）ではアコーディオン無効で全項目を表示する", async ({ page }) => {
+  test("狭幅（375px）のドロワーの中でもセクションを開閉できる（#367）", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await mockApi(page);
     await page.goto("/settings/appearance");
 
-    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-    // icon-only 幅ではセクション開閉ボタンは出さず、全リンクを表示する。
-    await expect(sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" })).toHaveCount(0);
+    // md 未満はドロワーの中に展開した幅で描くため、desktop と同じくセクションの開閉ボタンを出す。
+    const sidebar = await openSidebarNav(page);
+    const ragItem = sidebar.getByText("RAG 検索", { exact: true });
+    await expect(ragItem).toBeVisible();
+    await sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" }).click();
+    await expect(ragItem).toBeHidden();
+    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).click();
+    await expect(ragItem).toBeVisible();
     await expect(sidebar.getByRole("link", { name: "検索方法" })).toBeVisible();
-    await expect(sidebar.getByRole("link", { name: "高度な検索" })).toBeVisible();
   });
 });

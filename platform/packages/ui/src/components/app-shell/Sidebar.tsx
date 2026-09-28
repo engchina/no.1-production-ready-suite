@@ -1,9 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound } from "lucide-react";
+import { ChevronDown, LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound, X } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 import type { NavLinkComponent, NavSection, SidebarLabels } from "../../navigation/types";
+import { Tooltip } from "../ui/tooltip";
+import { useNavDrawer, useSidebarCollapsed } from "./nav-drawer";
 
 export interface SidebarProps {
   /** ナビ構成（解決済みラベル）。 */
@@ -12,7 +14,7 @@ export interface SidebarProps {
   currentPath: string;
   /** アプリ名（展開時に 2 行で表示 + ツールチップ）。 */
   title: { line1: string; line2: string; full: string };
-  /** サイドバー全体の折りたたみ状態とハンドラ。 */
+  /** サイドバー全体の折りたたみ状態とハンドラ（md 以上）。md 未満のドロワーの中では常に展開して描く。 */
   collapsed: boolean;
   onToggleCollapsed: () => void;
   /** セクション単位の折りたたみ状態とハンドラ。 */
@@ -29,12 +31,13 @@ export interface SidebarProps {
 /**
  * 折りたたみ可能なサイドナビ（参照実装の sideTabBar 構造を踏襲）。
  * ルーター・i18n・auth・状態ストアには依存せず、すべて props で注入する。
+ * md 未満では AppShell のドロワーの中に描かれ（#367）、展開した幅・閉じるボタンで描く。
  */
 export function Sidebar({
   sections,
   currentPath,
   title,
-  collapsed,
+  collapsed: collapsedPreference,
   onToggleCollapsed,
   collapsedSections,
   onToggleSection,
@@ -43,7 +46,23 @@ export function Sidebar({
   labels,
   footer,
 }: SidebarProps) {
+  const nav = useNavDrawer();
+  const inDrawer = Boolean(nav?.drawer);
+  // ドロワーの中では常に展開する。製品の折りたたみの状態（md 以上の選好）は変えない。
+  const collapsed = inDrawer ? false : collapsedPreference;
   const sidebarState = collapsed ? "collapsed" : "expanded";
+  const setBrand = nav?.setBrand;
+  const closeDrawer = nav?.closeDrawer;
+
+  // ドロワーの外の上端のバーに製品名を出す（ドロワーを閉じている間も製品が分かるように）。
+  useLayoutEffect(() => {
+    if (inDrawer) setBrand?.({ line1: title.line1, line2: title.line2, full: title.full });
+  }, [inDrawer, setBrand, title.line1, title.line2, title.full]);
+
+  // 画面を移ったらドロワーを閉じる（フッターのパスワード変更など、リンク以外からの移動も含む）。
+  useEffect(() => {
+    if (inDrawer) closeDrawer?.();
+  }, [currentPath, inDrawer, closeDrawer]);
 
   const isActive = (href: string) =>
     currentPath === href || currentPath.startsWith(href + "/");
@@ -64,8 +83,13 @@ export function Sidebar({
     <aside
       data-surface="inverted"
       className={cn(
-        "sidebar-shell flex h-screen shrink-0 flex-col overflow-hidden bg-surface text-fg-muted transition-[width] duration-200 ease-out motion-reduce:transition-none",
-        collapsed ? "w-[var(--sidebar-width-collapsed)]" : "w-[var(--sidebar-width)]"
+        "sidebar-shell flex shrink-0 flex-col overflow-hidden bg-surface text-fg-muted",
+        inDrawer
+          ? "h-full w-[var(--sidebar-width)] max-w-full"
+          : cn(
+              "h-screen transition-[width] duration-200 ease-out motion-reduce:transition-none",
+              collapsed ? "w-[var(--sidebar-width-collapsed)]" : "w-[var(--sidebar-width)]"
+            )
       )}
       aria-label={labels.aria}
       data-state={sidebarState}
@@ -92,18 +116,35 @@ export function Sidebar({
             {title.line2}
           </span>
         </div>
-        <button
-          type="button"
-          className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
-          aria-label={collapsed ? labels.expand : labels.collapse}
-          aria-expanded={!collapsed}
-          title={collapsed ? labels.expand : labels.collapse}
-          onClick={onToggleCollapsed}
-        >
-          {collapsed ? <PanelLeftOpen size={20} aria-hidden /> : <PanelLeftClose size={20} aria-hidden />}
-        </button>
+        {inDrawer && nav ? (
+          // ドロワーの中では折りたたみの代わりに「閉じる」（Escape・scrim のタップと同じ）。
+          // 見える名前は共有の Tooltip（#372。HTML の title は使わない）。
+          <Tooltip content={nav.labels.close} placement="bottom">
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+              aria-label={nav.labels.close}
+              data-testid="nav-drawer-close"
+              onClick={nav.closeDrawer}
+            >
+              <X size={20} aria-hidden />
+            </button>
+          </Tooltip>
+        ) : (
+          <Tooltip content={collapsed ? labels.expand : labels.collapse} placement="bottom">
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+              aria-label={collapsed ? labels.expand : labels.collapse}
+              aria-expanded={!collapsed}
+              onClick={onToggleCollapsed}
+            >
+              {collapsed ? <PanelLeftOpen size={20} aria-hidden /> : <PanelLeftClose size={20} aria-hidden />}
+            </button>
+          </Tooltip>
+        )}
       </div>
-      <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden py-3", collapsed ? "px-2" : "px-3")}>
+      <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden py-3", collapsed ? "px-2" : "px-3", inDrawer && "overscroll-contain")}>
         {sections.map((section) => {
           const containsActive = section.items.some((item) => isActive(item.href));
           // セクション開閉は展開幅サイドバーでのみ作用（icon-only 幅は常に全表示）。
@@ -250,12 +291,12 @@ export interface SidebarFooterAction {
  * Sidebar の `footer` スロットに渡す。ラベルは翻訳済み文字列で上書きする。
  * - 認証の無いアプリ（Agent 等）は `name` を省き、テーマ切替だけを置ける。
  * - `notice` はモード表示（ローカル DEBUG など）。ログアウトを出さない場合は `onLogout` を省く。
- *   折りたたみ時の表示はアプリ側で `collapsed` を見て切り替える。
+ *   折りたたみ時の表示はアプリ側で `useSidebarCollapsed(collapsed)` の値を見て切り替える（ドロワーの中では展開）。
  */
 export function SidebarAccountFooter({
   name,
   roles,
-  collapsed,
+  collapsed: collapsedPreference,
   theme = "light",
   onToggleTheme,
   onLogout,
@@ -274,6 +315,8 @@ export function SidebarAccountFooter({
   notice?: ReactNode;
   labels?: { logout: string; switchToLight: string; switchToDark: string };
 }) {
+  // ドロワーの中（md 未満）では常に展開して描く。
+  const collapsed = useSidebarCollapsed(collapsedPreference);
   const themeLabel = theme === "dark" ? labels.switchToLight : labels.switchToDark;
   return (
     <div className="grid gap-1">
@@ -317,15 +360,17 @@ export function SidebarAccountFooter({
           {onToggleTheme ? (
             <SidebarTooltip label={themeLabel} enabled={collapsed}>
               {onLogout && !collapsed ? (
-                <button
-                  type="button"
-                  onClick={onToggleTheme}
-                  aria-label={themeLabel}
-                  title={themeLabel}
-                  className="flex h-11 min-h-11 w-11 cursor-pointer items-center justify-center rounded-md border border-border transition-colors hover:bg-surface-hover hover:text-fg forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]"
-                >
-                  {theme === "dark" ? <Sun size={20} aria-hidden /> : <Moon size={20} aria-hidden />}
-                </button>
+                // 見える名前は共有の Tooltip（#372。HTML の title は使わない）。
+                <Tooltip content={themeLabel}>
+                  <button
+                    type="button"
+                    onClick={onToggleTheme}
+                    aria-label={themeLabel}
+                    className="flex h-11 min-h-11 w-11 cursor-pointer items-center justify-center rounded-md border border-border transition-colors hover:bg-surface-hover hover:text-fg forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]"
+                  >
+                    {theme === "dark" ? <Sun size={20} aria-hidden /> : <Moon size={20} aria-hidden />}
+                  </button>
+                </Tooltip>
               ) : (
                 // ログアウトと並ばない（テーマ切替だけ・折りたたみ時）ときはナビ行と同じ形にし、展開時はラベルも出す
                 <button

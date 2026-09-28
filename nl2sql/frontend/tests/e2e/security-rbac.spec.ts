@@ -7,6 +7,7 @@ import {
   type Route,
   type TestInfo,
 } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 
@@ -731,7 +732,8 @@ test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、�
 
   await page.goto("/settings/appearance");
 
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  const sidebar = await openSidebarNav(page);
   await expect(page).toHaveURL(/\/settings\/appearance$/);
   await expect(page.getByRole("heading", { name: "システムにログイン" })).toHaveCount(0);
   await expect(
@@ -779,7 +781,8 @@ test("外観ページは専用権限だけで表示でき、権限なしでは�
   await page.goto("/");
   await expect(page).toHaveURL(/\/settings\/appearance$/);
   await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "外観" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -856,7 +859,8 @@ test("構成管理者はパスワード変更入口を表示し、サイドバ�
   await mockDatabaseGateReady(page);
   await page.goto("/query");
 
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  const sidebar = await openSidebarNav(page);
   const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
   const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
@@ -951,7 +955,8 @@ test("通常ユーザーはパスワード変更ページから元の画面へ�
   );
 
   await page.goto("/query");
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  const sidebar = await openSidebarNav(page);
   const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
   const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
@@ -1105,7 +1110,8 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
     fulfill(route, "この機能を利用する権限がありません。", 403)
   );
   await page.goto("/query");
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
   await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeVisible();
   await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");

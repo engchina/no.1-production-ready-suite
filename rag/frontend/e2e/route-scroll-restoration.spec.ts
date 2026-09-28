@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LOCAL_AUTH_ME } from "./_helpers";
+import { LOCAL_AUTH_ME, openSidebarNav } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
@@ -78,10 +78,7 @@ test("sidebar route changes reset the main pane while browser back restores it",
   });
   expect(ociScrollTop).toBeGreaterThan(100);
 
-  await page
-    .getByRole("complementary", { name: "サイドナビゲーション" })
-    .getByRole("link", { name: "アップロード保存先" })
-    .click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "アップロード保存先" }).click();
 
   await expect(page).toHaveURL(/\/settings\/upload-storage$/);
   await expect(

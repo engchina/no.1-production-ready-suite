@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -101,7 +101,8 @@ for (const viewport of [
     await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("最小 chunk 文字数")).toHaveCount(0);
 
-    const navLink = page.getByRole("link", { name: "文書分割" });
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
+    const navLink = (await openSidebarNav(page)).getByRole("link", { name: "文書分割" });
     await expect(navLink).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });

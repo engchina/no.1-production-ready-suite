@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { dbUser, type CurrentUserPayload } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { openSidebarNav } from "./fixtures/nav";
 
 // 権限によるナビ・ルート・ページ内の操作の出し分け（#215）。
 // メニュー権限は画面の表示、capability（agent.runs.view / operate / approvals.decide / audit.view / admin）は
@@ -68,6 +69,8 @@ function sidebar(page: Page) {
 }
 
 async function sidebarHrefs(page: Page): Promise<string[]> {
+  // 375px ではナビがドロワー（#367）。開いてから読む。
+  await openSidebarNav(page);
   await expect(sidebar(page).locator("a[href]").first()).toBeVisible();
   return sidebar(page)
     .locator("nav a[href]")

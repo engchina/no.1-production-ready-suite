@@ -1,5 +1,5 @@
 import { Bug } from "lucide-react";
-import { SidebarAccountFooter, cn } from "@engchina/production-ready-ui";
+import { SidebarAccountFooter, cn, useSidebarCollapsed } from "@engchina/production-ready-ui";
 
 import { useSidebarAccount } from "./RequireAuth";
 import { AUTH_MESSAGES, type AuthMessages } from "./messages";
@@ -18,8 +18,10 @@ export interface SidebarAccountSectionProps {
  * 利用者名・ロール・パスワード変更・ログアウトを出し、ログイン省略（ローカル DEBUG）では
  * パスワード変更・ログアウトの代わりに「ログイン省略」を示す。未ログインなら何も出さない。
  */
-export function SidebarAccountSection({ routes, collapsed, confirmLeave, messages }: SidebarAccountSectionProps) {
+export function SidebarAccountSection({ routes, collapsed: collapsedPreference, confirmLeave, messages }: SidebarAccountSectionProps) {
   const account = useSidebarAccount({ routes, messages });
+  // md 未満のドロワーの中では展開して描く（#367）。
+  const collapsed = useSidebarCollapsed(collapsedPreference);
   if (!account) return null;
   const logout = account.onLogout;
   const debugLabel = messages?.sidebarDebugMode ?? AUTH_MESSAGES.sidebarDebugMode;

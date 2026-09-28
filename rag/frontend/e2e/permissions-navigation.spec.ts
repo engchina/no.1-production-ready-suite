@@ -6,6 +6,7 @@ import {
   expectNoPageOverflow,
   mockAuthUser,
   mockDatabaseReady,
+  openSidebarNav,
 } from "./_helpers";
 
 // 権限によるナビ・ルート・ページ内操作の出し分け（#214）。
@@ -53,10 +54,6 @@ async function mockApi(page: Page) {
   await page.route("**/api/business-views**", (route) => route.fulfill({ json: page1([BUSINESS_VIEW]) }));
 }
 
-async function openSidebarIfCollapsed(page: Page) {
-  const expand = page.getByRole("button", { name: "サイドバーを展開" });
-  if ((page.viewportSize()?.width ?? 1280) <= 640 && (await expand.isVisible())) await expand.click();
-}
 
 test("権限のある画面だけをナビに出し、空のセクションは隠す", async ({ page }) => {
   await mockApi(page);
@@ -67,9 +64,7 @@ test("権限のある画面だけをナビに出し、空のセクションは�
   // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
   await page.goto("/");
   await expect(page).toHaveURL(/\/search$/);
-  await openSidebarIfCollapsed(page);
-
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   for (const name of ["RAG 検索", "チャット", "文書アップロード", "ユーザー管理"]) {
     await expect(sidebar.getByRole("link", { name })).toBeVisible();
   }
@@ -121,8 +116,7 @@ test("廃止したダッシュボードの旧 URL と未知の URL は既定の�
     await page.goto(path);
     await expect(page).toHaveURL(/\/upload$/);
   }
-  await openSidebarIfCollapsed(page);
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "ダッシュボード" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });

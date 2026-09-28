@@ -824,6 +824,44 @@ export function AppShell({ sidebar, children, style }) {
 }
 ```
 
+### md 未満のナビのドロワー（#367。案 A に決定）
+
+上の参照実装は md 以上の形です。`packages/ui` の `AppShell` は、md 未満（`NAV_DRAWER_QUERY` = `(max-width: 767px)`）で次の形に切り替えます。製品のコードは変えません（`sidebar` スロットの `Sidebar` をそのまま渡す）。
+
+```tsx
+<div data-nav-mode="drawer" className="flex h-screen flex-col">          {/* md 未満だけ縦並び */}
+  <a className="pr-skip-link" href="#pr-main" inert={open}>本文へスキップ</a>
+  <div data-surface="inverted" data-testid="nav-drawer-bar">              {/* 本文のスクロールの外。landmark にしない */}
+    <Button variant="ghost" iconOnly touchTarget icon={Menu}
+      aria-label="メニュー" aria-expanded={open} aria-controls={drawerId} />
+    {/* 製品名（Sidebar の title を context で受け取る） */}
+  </div>
+  <main id="pr-main" tabIndex={-1} inert={open}>{children}</main>
+  <div aria-hidden className="fixed inset-0 z-[var(--z-scrim)] bg-[var(--scrim)]" onClick={close} />
+  <div id={drawerId} role="dialog" aria-modal="true" aria-label="メニュー" inert={!open}
+    className="fixed inset-y-0 left-0 z-[var(--z-dialog)] …">                {/* Escape / Tab の閉じ込め / リンクのクリックで閉じる */}
+    {sidebar}                                                             {/* 展開して描き、折りたたみボタンの代わりに「メニューを閉じる」 */}
+  </div>
+</div>
+```
+
+| 振る舞い | 内容 |
+|---|---|
+| 開く | 「メニュー」ボタン。ドロワーの閉じるボタンへフォーカス |
+| 閉じる | 閉じるボタン・Escape・scrim のタップ・ナビのリンクの選択（今のページでも）・`currentPath` の変化。閉じたら「メニュー」ボタンへフォーカスを戻す（画面を移ったときは製品の画面遷移のフォーカスが本文へ移す）。離脱の確認をキャンセルしたときは開いたまま |
+| フォーカス | Tab / Shift+Tab はドロワーの中で回る。背面は `inert`（本文へスキップ・上端のバー・`<main>`） |
+| スクロール | 開いている間は `<main>` のスクロールを止め、scrim は `touch-action: none`、ドロワーのナビは `overscroll-behavior: contain` |
+| モーション | transform 200ms ease-out。`prefers-reduced-motion` では動かさない |
+| 状態 | ドロワーの開閉は保持しない（画面を開いた時は閉じている）。ui-store の `sidebarCollapsed`（md 以上の選好）は変えない |
+
+| props / export | 型 | 説明 |
+|---|---|---|
+| `navDrawerLabels` | `{ menu: string; close: string }` | 既定 `DEFAULT_NAV_DRAWER_LABELS`（「メニュー」「メニューを閉じる」）。翻訳済みの文言で上書きする |
+| `useSidebarCollapsed(collapsed)` | `(boolean) => boolean` | サイドバーの `footer` に置く部品が使う。ドロワーの中では `false`（展開）。`SidebarAccountFooter` と `SidebarAccountSection` は対応済み |
+| `NAV_DRAWER_QUERY` | `string` | ドロワーにする幅のメディアクエリ |
+
+Playwright では、`data-testid` の `nav-drawer-bar` / `nav-drawer-trigger` / `nav-drawer` / `nav-drawer-close` / `nav-drawer-scrim` か、role（`button` の「メニュー」、`dialog` の「メニュー」）で操作します。md 未満でサイドナビのリンクを押す spec は、先に「メニュー」を開きます（各製品の e2e の `openSidebarNav(page)`。RAG は `e2e/_helpers.ts`、NL2SQL は `tests/e2e/_helpers/sidebar-nav.ts`、Agent は `e2e/fixtures/nav.ts`）。
+
 ---
 
 ## SecretField — **新規**（#296）

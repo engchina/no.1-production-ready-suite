@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
+import { openSidebarNav } from "./fixtures/nav";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#215）。
 // production（`AGENT_AUTH_MODE=production`）の DB ユーザーでログインし、失敗・強制パスワード変更・
@@ -46,12 +47,9 @@ function sidebar(page: Page) {
   return page.getByRole("complementary", { name: "サイドナビゲーション" });
 }
 
-/** 375px ではサイドバーが icon 幅に折りたたまれる。展開して文言付きの操作を使う。 */
+/** 375px ではナビがドロワー（#367）。開いて文言付きの操作を使う。 */
 async function expandSidebarOnMobile(page: Page) {
-  const viewport = page.viewportSize();
-  if (viewport && viewport.width <= 640) {
-    await page.getByRole("button", { name: "サイドバーを展開" }).click();
-  }
+  await openSidebarNav(page);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -82,7 +80,7 @@ for (const viewport of VIEWPORTS) {
         login_user_id: "admin.user",
         password: "CorrectPass!123",
       });
-      await expect(sidebar(page)).toBeVisible();
+      await openSidebarNav(page);
       await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
     });
 

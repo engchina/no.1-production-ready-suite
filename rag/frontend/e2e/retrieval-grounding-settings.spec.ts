@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -45,10 +45,8 @@ for (const viewport of [
     await expect(page.getByTestId("docrag-unused-note")).toHaveCount(2);
     await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeEnabled();
     await expect(page.getByText("回答エンジンが DocRAG の業務ビューでも使われます。", { exact: false })).toBeVisible();
-    await expect(page.getByRole("link", { name: "検索方法" })).toHaveAttribute(
-      "aria-current",
-      "page"
-    );
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
+    await expect((await openSidebarNav(page)).getByRole("link", { name: "検索方法" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 
@@ -73,10 +71,8 @@ for (const viewport of [
       /回答エンジンが DocRAG の業務ビューでは使われません/
     );
     await expect(page.getByRole("radio", { name: /リーン/ })).toBeEnabled();
-    await expect(page.getByRole("link", { name: "根拠確認" })).toHaveAttribute(
-      "aria-current",
-      "page"
-    );
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
+    await expect((await openSidebarNav(page)).getByRole("link", { name: "根拠確認" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 }

@@ -1,5 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
@@ -2994,7 +2995,7 @@ test("未保存の変更があるときはブラウザの戻る操作でも破�
   await page.goto("/settings/upload-storage");
   await expect(page.locator("#upload-storage-local-dir")).toBeEditable();
   // 変更がなければ確認なしで移動できる（SPA 内の PUSH で履歴を 1 つ積む）。
-  await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "OCI 認証" }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "OCI 認証" }).click();
   await expect(page).toHaveURL(/settings\/oci$/);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 

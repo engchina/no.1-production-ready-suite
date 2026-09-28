@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -21,10 +21,8 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /構築しない/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /軽量/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フル/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "関係情報の構築" })).toHaveAttribute(
-      "aria-current",
-      "page"
-    );
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
+    await expect((await openSidebarNav(page)).getByRole("link", { name: "関係情報の構築" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 }
