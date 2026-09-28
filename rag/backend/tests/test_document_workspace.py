@@ -493,7 +493,10 @@ class FakeWorkspaceOracle:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
+        # lease を持たない実行(lease_owner なし)の経路だけを扱う(lease の条件は #359 のテスト)。
+        assert lease_owner is None
         # 実 Oracle の `WHERE status IN (...)` と同じく、遷移元の状態のときだけ書く。
         job = self.ingestion_jobs.get(job_id)
         if job is None or job.status not in from_statuses:

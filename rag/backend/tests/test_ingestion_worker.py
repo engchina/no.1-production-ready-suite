@@ -412,6 +412,8 @@ async def test_worker_marks_running_job_failed_when_runner_crashes(
     assert updates["status"] is IngestionJobStatus.FAILED
     assert updates["error_message"] == "child died"
     assert updates["document_status"] is FileStatus.ERROR
+    # FAILED は自分(この worker)の lease の job のときだけ書く(#359)。
+    assert updates["lease_owner"] == worker.worker_id
 
 
 class _CrashedJobOracle:
@@ -434,7 +436,10 @@ class _CrashedJobOracle:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
+        # lease を持たない実行(lease_owner なし)の経路だけを扱う(lease の条件は #359 のテスト)。
+        assert lease_owner is None
         if job_id != self.job.id or self.job.status not in from_statuses:
             return None
         self.job = self.job.model_copy(

@@ -1,13 +1,16 @@
-"""取込 job の lease / heartbeat と、worker の停止時の後始末のテスト(#357)。
+"""取込 job の lease / heartbeat と、worker の停止時の後始末のテスト(#357 / #359)。
 
 `rag_ingestion_jobs` の lease の意味(claim・heartbeat・stale の回復・停止時の戻し・
-dispatch の除外)を Oracle の SQL と同じ条件で持つ in-memory の store と、進め方を制御できる
-時計で、worker の挙動を決定論的に再現する。SQL そのものは tests/test_oracle_adapter.py で検査する。
+dispatch の除外・lease の条件付きの完了/失敗)を Oracle の SQL と同じ条件で持つ in-memory の
+store と、進め方を制御できる時計で、worker の挙動を決定論的に再現する。heartbeat と lease の TTL は
+Oracle と同じく store の時計(DB の時計)で判定する。SQL そのものは tests/test_oracle_adapter.py で
+検査する。
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import signal
@@ -15,13 +18,22 @@ import sys
 from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
+from app.api.routes import documents
 from app.config import BACKEND_ROOT, Settings, get_settings
 from app.rag import ingestion_job_runner, ingestion_worker
+from app.rag.ingestion import IngestionCancelledError
 from app.rag.ingestion_worker import IngestionQueueWorker
-from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
+from app.schemas.document import (
+    DocumentDetail,
+    FileStatus,
+    IngestionJob,
+    IngestionJobLease,
+    IngestionJobStatus,
+)
 
 _ACTIVE_DOCUMENT_STATUSES = {
     FileStatus.PREPROCESSING,
@@ -32,7 +44,7 @@ _ACTIVE_DOCUMENT_STATUSES = {
 
 
 class _Clock:
-    """テストが進める時計(worker の heartbeat と stale の判定が使う)。"""
+    """テストが進める時計(DB の時計と、worker の時計の両方に使う)。"""
 
     def __init__(self) -> None:
         self.now = datetime(2026, 9, 28, 0, 0, tzinfo=UTC)
@@ -53,8 +65,12 @@ class _Row:
 
 @dataclass
 class _LeaseQueueStore:
-    """`rag_ingestion_jobs` の lease の意味を Oracle の SQL と同じ条件で持つ in-memory の store。"""
+    """`rag_ingestion_jobs` の lease の意味を Oracle の SQL と同じ条件で持つ in-memory の store。
 
+    ``clock`` は DB の時計(``SYSTIMESTAMP``)。heartbeat の時刻と lease の TTL の判定に使う(#359)。
+    """
+
+    clock: _Clock = field(default_factory=_Clock)
     rows: dict[str, _Row] = field(default_factory=dict)
     documents: dict[str, FileStatus] = field(default_factory=dict)
     claims: list[tuple[str, str | None]] = field(default_factory=list)
@@ -164,17 +180,17 @@ class _LeaseQueueStore:
             }
         )
         row.lease_owner = lease_owner
-        row.heartbeat_at = started_at if lease_owner is not None else None
+        row.heartbeat_at = self.clock() if lease_owner is not None else None
         self.claims.append((job_id, lease_owner))
         # pipeline が文書の status を工程中にする。
         self.documents[row.job.document_id] = FileStatus.INGESTING
         return row.job
 
-    async def heartbeat_ingestion_jobs(self, *, lease_owner: str, heartbeat_at: datetime) -> int:
+    async def heartbeat_ingestion_jobs(self, *, lease_owner: str) -> int:
         count = 0
         for row in self.rows.values():
             if row.lease_owner == lease_owner and row.job.status == IngestionJobStatus.RUNNING:
-                row.heartbeat_at = heartbeat_at
+                row.heartbeat_at = self.clock()
                 count += 1
         return count
 
@@ -183,10 +199,10 @@ class _LeaseQueueStore:
         *,
         stale_before: datetime,
         limit: int,
-        heartbeat_stale_before: datetime | None = None,
+        lease_ttl_seconds: float | None = None,
         exclude_lease_owner: str | None = None,
     ) -> list[IngestionJob]:
-        heartbeat_cutoff = heartbeat_stale_before or stale_before
+        heartbeat_cutoff = self.clock() - timedelta(seconds=lease_ttl_seconds or 90.0)
         recovered: list[IngestionJob] = []
         for row in list(self.rows.values()):
             job = row.job
@@ -221,6 +237,21 @@ class _LeaseQueueStore:
         row = self.rows.get(job_id)
         return None if row is None else row.job
 
+    async def get_ingestion_job_lease(self, job_id: str) -> IngestionJobLease | None:
+        row = self.rows.get(job_id)
+        if row is None:
+            return None
+        return IngestionJobLease(status=row.job.status, lease_owner=row.lease_owner)
+
+    async def list_document_ingestion_jobs(
+        self, document_id: str, *, status: IngestionJobStatus | None = None
+    ) -> list[IngestionJob]:
+        return [
+            row.job
+            for row in self.rows.values()
+            if row.job.document_id == document_id and (status is None or row.job.status == status)
+        ]
+
     async def transition_ingestion_job(
         self,
         job_id: str,
@@ -229,9 +260,13 @@ class _LeaseQueueStore:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
         row = self.rows.get(job_id)
         if row is None or row.job.status not in from_statuses:
+            return None
+        # lease を持つ実行は、自分の lease の行だけを遷移する(#359)。
+        if lease_owner is not None and row.lease_owner != lease_owner:
             return None
         row.job = row.job.model_copy(
             update={
@@ -333,8 +368,8 @@ def clock() -> _Clock:
 
 
 @pytest.fixture
-def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[_LeaseQueueStore]:
-    store = _LeaseQueueStore()
+def store(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> Iterator[_LeaseQueueStore]:
+    store = _LeaseQueueStore(clock=clock)
     monkeypatch.setattr(ingestion_worker, "OracleClient", lambda: store)
     ingestion_worker._WAKEUP.clear()
     yield store
@@ -427,6 +462,32 @@ async def test_job_with_stopped_heartbeat_is_recovered_after_ttl(
         task.cancel()
     await asyncio.gather(*worker_a._tasks, return_exceptions=True)
     await _finish(worker_b, runner_b)
+
+
+async def test_worker_clock_skew_does_not_recover_heartbeating_job(
+    store: _LeaseQueueStore, clock: _Clock
+) -> None:
+    """heartbeat と lease の TTL は DB の時計で判定し、worker の時計のずれに左右されない(#359)。
+
+    修正前は heartbeat の時刻と TTL の基準を worker の時計で渡していたため、時計が進んだ別の host の
+    worker が、heartbeat の続く job を stale として回復していた。
+    """
+    store.add("job-skew", document_id="doc-skew", queued_at=clock())
+    worker_a, runner_a = _worker("worker-a", store, clock)
+    skewed = _Clock()
+    skewed.now = clock.now + timedelta(minutes=10)
+    worker_b, _ = _worker("worker-b", store, skewed)
+
+    await worker_a._dispatch_available()
+    await asyncio.wait_for(runner_a.started_event("job-skew").wait(), timeout=5)
+    clock.advance(15)
+    skewed.advance(15)
+    await worker_a._heartbeat_safely()
+    await worker_b._recover_stale_safely()
+
+    assert store.job("job-skew").status == IngestionJobStatus.RUNNING
+    assert store.rows["job-skew"].lease_owner == "worker-a"
+    await _finish(worker_a, runner_a)
 
 
 async def test_legacy_running_row_without_heartbeat_uses_elapsed_time(
@@ -801,3 +862,306 @@ def test_job_runner_stops_on_sigterm_without_writing_job_state(
     assert exit_code == 128 + signal.SIGTERM
     assert captured == {"job_id": "job-term", "lease_owner": "w-2"}
     assert closed == [True]
+
+
+# --- 完了・失敗の遷移の lease の条件(#359) ---
+
+
+class _Pipeline:
+    """``_ingest_existing_document`` の代わり: release まで待ち、成功するか ``error`` を投げる。"""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.error: Exception | None = None
+        self.check_cancel = False
+        self.cancel_results: list[bool] = []
+        self.auto_advanced: list[str] = []
+        self.dispatched: list[str] = []
+
+    async def __call__(
+        self,
+        document_id: str,
+        *,
+        force: bool,
+        use_prepared_artifact: bool,
+        cancel_checker: object = None,
+    ) -> DocumentDetail:
+        _ = document_id, force, use_prepared_artifact
+        self.started.set()
+        await self.release.wait()
+        if self.check_cancel and callable(cancel_checker):
+            cancelled = bool(await cancel_checker())
+            self.cancel_results.append(cancelled)
+            if cancelled:
+                raise IngestionCancelledError("取り消されました。")
+        if self.error is not None:
+            raise self.error
+        # 自動進行(次工程の投入)は差し替えるため、中身は使わない。
+        return cast(DocumentDetail, object())
+
+    async def auto_advance(self, job: IngestionJob, detail: DocumentDetail) -> None:
+        _ = detail
+        self.auto_advanced.append(job.id)
+
+    def dispatch(self, job_id: str, *, force: bool = False) -> None:
+        _ = force
+        self.dispatched.append(job_id)
+
+
+@pytest.fixture
+def pipeline(monkeypatch: pytest.MonkeyPatch, store: _LeaseQueueStore) -> _Pipeline:
+    pipeline = _Pipeline()
+
+    async def reset_outputs(*args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+
+    monkeypatch.setattr(documents, "OracleClient", lambda: store)
+    monkeypatch.setattr(documents, "_ingest_existing_document", pipeline)
+    monkeypatch.setattr(documents, "_reset_document_outputs_for_extract", reset_outputs)
+    monkeypatch.setattr(documents, "_enqueue_auto_advance_job", pipeline.auto_advance)
+    monkeypatch.setattr(documents, "_dispatch_ingestion_job", pipeline.dispatch)
+    return pipeline
+
+
+async def _expire_lease_and_reclaim(
+    store: _LeaseQueueStore, clock: _Clock, job_id: str, *, new_owner: str = "worker-b"
+) -> None:
+    """worker-a の heartbeat が TTL を超えて途絶え、別の worker が回復して claim し直す。"""
+    other, _ = _worker(new_owner, store, clock)
+    clock.advance(91)
+    await other._recover_stale_safely()
+    assert store.job(job_id).status == IngestionJobStatus.QUEUED
+    reclaimed = await store.claim_ingestion_job(job_id, started_at=clock(), lease_owner=new_owner)
+    assert reclaimed is not None
+
+
+def _stale_result_discarded(
+    caplog: pytest.LogCaptureFixture, *, job_id: str, lease_owner: str
+) -> bool:
+    return any(
+        record.getMessage() == "ingestion_job_stale_result_discarded"
+        and getattr(record, "job_id", None) == job_id
+        and getattr(record, "lease_owner", None) == lease_owner
+        for record in caplog.records
+    )
+
+
+def _assert_reclaimed_job_untouched(store: _LeaseQueueStore, job_id: str, document_id: str) -> None:
+    job = store.job(job_id)
+    assert job.status == IngestionJobStatus.RUNNING
+    assert job.attempt_count == 2
+    assert job.finished_at is None
+    assert store.rows[job_id].lease_owner == "worker-b"
+    # 新しい実行が工程中にした文書の status も変えない。
+    assert store.documents[document_id] == FileStatus.INGESTING
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "transient"])
+async def test_stale_run_result_does_not_overwrite_reclaimed_job(
+    store: _LeaseQueueStore,
+    clock: _Clock,
+    pipeline: _Pipeline,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    """heartbeat が途絶えて別の worker が再 claim した後の、古い実行の完了・失敗・再キューは捨てる。
+
+    修正前は遷移の条件が ``status = 'RUNNING'`` だけで、古い実行の SUCCEEDED / FAILED / QUEUED が
+    新しい実行の RUNNING を上書きし、文書の status も戻していた。
+    """
+    store.add("job-stale", document_id="doc-stale", queued_at=clock())
+    if outcome == "failure":
+        pipeline.error = RuntimeError("parser down")
+    elif outcome == "transient":
+        pipeline.error = RuntimeError("DPY-4011: connection closed")
+        monkeypatch.setattr(documents, "is_transient_oracle_error", lambda _exc: True)
+    run_a = asyncio.create_task(documents._run_ingestion_job("job-stale", lease_owner="worker-a"))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+
+    await _expire_lease_and_reclaim(store, clock, "job-stale")
+    with caplog.at_level(logging.INFO):
+        pipeline.release.set()
+        await asyncio.wait_for(run_a, timeout=5)
+
+    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale")
+    assert pipeline.auto_advanced == []
+    assert pipeline.dispatched == []
+    assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
+
+
+async def test_stale_run_stops_at_cancel_check_after_lease_is_lost(
+    store: _LeaseQueueStore,
+    clock: _Clock,
+    pipeline: _Pipeline,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """lease を失った実行は、工程の途中の取り消しの確認で止まり、以後の書き込みをしない。"""
+    store.add("job-stale", document_id="doc-stale", queued_at=clock())
+    pipeline.check_cancel = True
+    run_a = asyncio.create_task(documents._run_ingestion_job("job-stale", lease_owner="worker-a"))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+
+    await _expire_lease_and_reclaim(store, clock, "job-stale")
+    with caplog.at_level(logging.INFO):
+        pipeline.release.set()
+        await asyncio.wait_for(run_a, timeout=5)
+
+    assert pipeline.cancel_results == [True]
+    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale")
+    assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
+
+
+async def test_stale_run_does_not_restore_statuses_when_new_run_is_cancelled(
+    store: _LeaseQueueStore,
+    clock: _Clock,
+    pipeline: _Pipeline,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """再 claim された実行が取り消されても、古い実行は取り消しの後始末(status の戻し)をしない。
+
+    後始末は取り消された実行(lease の持ち主)が行う。
+    """
+    store.add("job-stale", document_id="doc-stale", queued_at=clock())
+    pipeline.check_cancel = True
+    run_a = asyncio.create_task(documents._run_ingestion_job("job-stale", lease_owner="worker-a"))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+    await _expire_lease_and_reclaim(store, clock, "job-stale")
+    await store.transition_ingestion_job(
+        "job-stale",
+        from_statuses=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+        to_status=IngestionJobStatus.CANCELLED,
+    )
+
+    with caplog.at_level(logging.INFO):
+        pipeline.release.set()
+        await asyncio.wait_for(run_a, timeout=5)
+
+    assert store.job("job-stale").status == IngestionJobStatus.CANCELLED
+    assert store.documents["doc-stale"] == FileStatus.INGESTING
+    assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
+
+
+async def test_worker_does_not_fail_job_reclaimed_after_child_crash(
+    store: _LeaseQueueStore, clock: _Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """子が異常終了したとき、job が既に別の worker に再 claim されていれば FAILED にしない。"""
+    store.add("job-crash", document_id="doc-crash", queued_at=clock())
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def runner(job_id: str) -> None:
+        await store.claim_ingestion_job(job_id, started_at=clock(), lease_owner="worker-a")
+        started.set()
+        await release.wait()
+        raise ingestion_worker.IngestionJobSubprocessError("ingestion job subprocess timed out")
+
+    worker = IngestionQueueWorker(
+        settings=_settings(),
+        job_runner=runner,
+        schema_ready=_schema_ready,
+        concurrency=1,
+        poll_interval_seconds=0.01,
+        worker_id="worker-a",
+        clock=clock,
+    )
+    assert await worker._dispatch_available() == 1
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await _expire_lease_and_reclaim(store, clock, "job-crash")
+
+    with caplog.at_level(logging.INFO):
+        release.set()
+        for task in list(worker._tasks):
+            await asyncio.wait_for(task, timeout=5)
+
+    _assert_reclaimed_job_untouched(store, "job-crash", "doc-crash")
+    assert _stale_result_discarded(caplog, job_id="job-crash", lease_owner="worker-a")
+
+
+async def test_worker_fails_own_leased_job_after_child_crash(
+    store: _LeaseQueueStore, clock: _Clock
+) -> None:
+    """自分の lease の job の子が異常終了したら、従来どおり FAILED にし文書を ERROR にする。"""
+    store.add("job-crash", document_id="doc-crash", queued_at=clock())
+
+    async def runner(job_id: str) -> None:
+        await store.claim_ingestion_job(job_id, started_at=clock(), lease_owner="worker-a")
+        raise ingestion_worker.IngestionJobSubprocessError("child died")
+
+    worker = IngestionQueueWorker(
+        settings=_settings(),
+        job_runner=runner,
+        schema_ready=_schema_ready,
+        concurrency=1,
+        poll_interval_seconds=0.01,
+        worker_id="worker-a",
+        clock=clock,
+    )
+    assert await worker._dispatch_available() == 1
+    for task in list(worker._tasks):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert store.job("job-crash").status == IngestionJobStatus.FAILED
+    assert store.documents["doc-crash"] == FileStatus.ERROR
+
+
+@pytest.mark.parametrize("lease_owner", [None, "worker-a"])
+async def test_run_finishes_job_it_still_holds(
+    store: _LeaseQueueStore,
+    clock: _Clock,
+    pipeline: _Pipeline,
+    lease_owner: str | None,
+) -> None:
+    """lease を持ち続けた実行と、lease を持たない実行(従来の経路)は、従来どおり完了を書く。"""
+    store.add("job-ok", document_id="doc-ok", queued_at=clock())
+    run = asyncio.create_task(documents._run_ingestion_job("job-ok", lease_owner=lease_owner))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+    clock.advance(30)
+    pipeline.release.set()
+    await asyncio.wait_for(run, timeout=5)
+
+    assert store.job("job-ok").status == IngestionJobStatus.SUCCEEDED
+    assert pipeline.auto_advanced == ["job-ok"]
+
+
+async def test_run_without_lease_fails_job_as_before(
+    store: _LeaseQueueStore, clock: _Clock, pipeline: _Pipeline
+) -> None:
+    """lease を持たない実行(lease 導入前の経路)は、従来どおり lease を条件にせず FAILED を書く。"""
+    store.add("job-legacy", document_id="doc-legacy", queued_at=clock())
+    pipeline.error = RuntimeError("parser down")
+    run = asyncio.create_task(documents._run_ingestion_job("job-legacy"))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+    pipeline.release.set()
+    await asyncio.wait_for(run, timeout=5)
+
+    job = store.job("job-legacy")
+    assert job.status == IngestionJobStatus.FAILED
+    assert store.rows["job-legacy"].heartbeat_at is None
+
+
+async def test_own_run_restores_statuses_when_cancelled(
+    store: _LeaseQueueStore,
+    clock: _Clock,
+    pipeline: _Pipeline,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """自分の lease の実行が取り消されたら、従来どおり文書の status を工程の前へ戻す。"""
+    store.add("job-cancel", document_id="doc-cancel", queued_at=clock())
+    pipeline.check_cancel = True
+    run = asyncio.create_task(documents._run_ingestion_job("job-cancel", lease_owner="worker-a"))
+    await asyncio.wait_for(pipeline.started.wait(), timeout=5)
+    await store.transition_ingestion_job(
+        "job-cancel",
+        from_statuses=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+        to_status=IngestionJobStatus.CANCELLED,
+    )
+
+    with caplog.at_level(logging.INFO):
+        pipeline.release.set()
+        await asyncio.wait_for(run, timeout=5)
+
+    assert store.job("job-cancel").status == IngestionJobStatus.CANCELLED
+    assert store.documents["doc-cancel"] == FileStatus.UPLOADED
+    assert not _stale_result_discarded(caplog, job_id="job-cancel", lease_owner="worker-a")

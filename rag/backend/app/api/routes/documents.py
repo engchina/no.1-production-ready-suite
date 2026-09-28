@@ -123,6 +123,7 @@ from app.schemas.document import (
     DuplicateDocumentRef,
     FileStatus,
     IngestionJob,
+    IngestionJobLease,
     IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
@@ -167,6 +168,12 @@ CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 # cancel API が CANCELLED へ遷移できる状態。
 _CANCELLABLE_INGESTION_JOB_STATUSES = (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
+# lease を持つ実行が、自分の実行として結果を書ける・後始末できる job の状態(#359)。RUNNING は
+# 実行中、CANCELLED は実行中に利用者が取り消した job(取り消しの API は lease を変えない)。
+# stale の回復は job を QUEUED(lease を外す)か FAILED に戻すため、どちらも自分の実行ではない。
+_LEASE_HELD_INGESTION_JOB_STATUSES = frozenset(
+    {IngestionJobStatus.RUNNING, IngestionJobStatus.CANCELLED}
+)
 # ブラウザが開くとスクリプトを実行しうる形式。原本配信では CSP sandbox を付ける。
 SCRIPTABLE_CONTENT_TYPES = frozenset(
     {
@@ -4832,7 +4839,10 @@ async def _run_ingestion_job(
     (pipeline の途中でも、完了・失敗を書く直前でも)、文書・レシピの status を取り消し後の
     状態へ戻し、次工程は投入しない(#305)。
     ``lease_owner`` は job を実行する取込 worker の識別子。claim で lease を取り、worker が
-    heartbeat を打つ(#357)。
+    heartbeat を打つ(#357)。lease を持つ実行は、完了・失敗・再キュー・取り消しの後始末を
+    自分の lease のときだけ行う。heartbeat が途絶えて別の worker が claim し直した後の古い実行の
+    結果は捨て、新しい実行の状態・文書・レシピを変えない。工程の途中の取り消しの確認でも lease を
+    確かめ、lease を失った実行はそこで止める(#359)。
     """
     oracle = OracleClient()
     job = await oracle.claim_ingestion_job(
@@ -4842,6 +4852,13 @@ async def _run_ingestion_job(
         return
 
     async def is_cancelled() -> bool:
+        if lease_owner is not None:
+            lease = await oracle.get_ingestion_job_lease(job_id)
+            # lease を失った実行も取り消しと同じく止め、後始末で結果を捨てる(#359)。
+            return lease is None or (
+                not _holds_ingestion_lease(lease, lease_owner)
+                or lease.status == IngestionJobStatus.CANCELLED
+            )
         current = await oracle.get_ingestion_job(job_id)
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
@@ -4905,7 +4922,7 @@ async def _run_ingestion_job(
                 cancel_checker=is_cancelled,
             )
     except HTTPException as exc:
-        await _fail_ingestion_job(oracle, job, str(exc.detail))
+        await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(
             "ingestion_job_user_error",
             extra={
@@ -4917,7 +4934,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionCancelledError:
-        await _restore_statuses_after_cancel(oracle, job)
+        await _restore_statuses_after_cancel(oracle, job, lease_owner=lease_owner)
         logger.info(
             "ingestion_job_cancelled",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4925,7 +4942,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionTimeoutError as exc:
-        await _fail_ingestion_job(oracle, job, str(exc))
+        await _fail_ingestion_job(oracle, job, str(exc), lease_owner=lease_owner)
         logger.info(
             "ingestion_job_timeout",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4933,7 +4950,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionUserError as exc:
-        await _fail_ingestion_job(oracle, job, str(exc))
+        await _fail_ingestion_job(oracle, job, str(exc), lease_owner=lease_owner)
         logger.info(
             "ingestion_job_validation_error",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -4944,13 +4961,15 @@ async def _run_ingestion_job(
         if (
             is_transient_oracle_error(exc)
             and job.attempt_count < job.max_attempts
-            and await _requeue_ingestion_job_after_transient_error(oracle, job, exc)
+            and await _requeue_ingestion_job_after_transient_error(
+                oracle, job, exc, lease_owner=lease_owner
+            )
         ):
             if propagate_errors:
                 raise
             return
         safe_error = _safe_ingestion_job_error_message(exc)
-        await _fail_ingestion_job(oracle, job, safe_error)
+        await _fail_ingestion_job(oracle, job, safe_error, lease_owner=lease_owner)
         logger.exception(
             "ingestion_job_failed",
             extra={
@@ -4968,11 +4987,17 @@ async def _run_ingestion_job(
             oracle,
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
+            lease_owner=lease_owner,
         )
         if succeeded is None:
             # SUCCEEDED を書く直前に取り消された。取り消しを検知した側として status を戻し、
-            # 次工程は投入しない。
-            await _restore_statuses_after_cancel(oracle, job)
+            # 次工程は投入しない。lease を失っていたら(別の worker が claim し直した)何も戻さない。
+            await _restore_statuses_after_cancel(
+                oracle,
+                job,
+                lease_owner=lease_owner,
+                discarded_status=IngestionJobStatus.SUCCEEDED,
+            )
             return
         if finished_detail is not None:
             await _enqueue_auto_advance_job(job, finished_detail)
@@ -5000,6 +5025,8 @@ async def _requeue_ingestion_job_after_transient_error(
     oracle: OracleClient,
     job: IngestionJob,
     error: Exception,
+    *,
+    lease_owner: str | None = None,
 ) -> bool:
     """一時的な DB エラー(接続断)の job を QUEUED に戻す。戻せたら True(#341)。
 
@@ -5009,8 +5036,14 @@ async def _requeue_ingestion_job_after_transient_error(
     この順にする。
     戻す途中でまた DB が失敗したら False を返し、呼び出し側は今までどおり FAILED にする
     (FAILED も書けなければ、stale の回復が拾う)。
+    lease を持つ実行は、lease を失っていたら(別の worker が claim し直した)文書・レシピを戻さず、
+    job も戻さずに True を返す(結果を捨てる。#359)。
     """
     try:
+        if await _discard_if_ingestion_lease_lost(
+            oracle, job, lease_owner=lease_owner, discarded_status=IngestionJobStatus.QUEUED
+        ):
+            return True
         await _restore_statuses_before_job_phase(oracle, job)
         requeued = await oracle.transition_ingestion_job(
             job.id,
@@ -5018,6 +5051,7 @@ async def _requeue_ingestion_job_after_transient_error(
             to_status=IngestionJobStatus.QUEUED,
             error_message=None,
             finished_at=None,
+            lease_owner=lease_owner,
         )
     except Exception as requeue_error:
         logger.warning(
@@ -5031,7 +5065,9 @@ async def _requeue_ingestion_job_after_transient_error(
         return False
     if requeued is None:
         # 戻す前に取り消された(または stale の回復が戻した)。取り消しとして扱う。
-        await _restore_statuses_after_cancel(oracle, job)
+        await _restore_statuses_after_cancel(
+            oracle, job, lease_owner=lease_owner, discarded_status=IngestionJobStatus.QUEUED
+        )
         return True
     logger.warning(
         "ingestion_job_requeued_transient_db_error",
@@ -5066,20 +5102,26 @@ async def _fail_ingestion_job(
     oracle: OracleClient,
     job: IngestionJob,
     error_message: str,
+    *,
+    lease_owner: str | None = None,
 ) -> bool:
     """RUNNING の job を FAILED にし、レシピの job はレシピ行だけを ERROR にする。
 
     文書単位の job の文書は pipeline(または異常終了を検知した worker)が ERROR にする。
     FAILED を書く前に取り消されていたら、取り消しとして status を戻す。FAILED を書けたら True。
+    ``lease_owner`` を渡すと自分の lease のときだけ書き、lease を失っていたら何も変えない(#359)。
     """
     failed = await _finish_ingestion_job_unless_cancelled(
         oracle,
         job.id,
         status=IngestionJobStatus.FAILED,
         error_message=error_message,
+        lease_owner=lease_owner,
     )
     if failed is None:
-        await _restore_statuses_after_cancel(oracle, job)
+        await _restore_statuses_after_cancel(
+            oracle, job, lease_owner=lease_owner, discarded_status=IngestionJobStatus.FAILED
+        )
         return False
     await _mark_recipe_job_failed(oracle, job, error_message)
     return True
@@ -5088,6 +5130,9 @@ async def _fail_ingestion_job(
 async def _restore_statuses_after_cancel(
     oracle: OracleClient,
     job: IngestionJob,
+    *,
+    lease_owner: str | None = None,
+    discarded_status: IngestionJobStatus = IngestionJobStatus.CANCELLED,
 ) -> None:
     """取り消しを検知した側(worker)が、job の対象の status を取り消し後の状態へ戻す。
 
@@ -5096,7 +5141,14 @@ async def _restore_statuses_after_cancel(
 
     job が CANCELLED でない(stale の回復で QUEUED に戻された等)場合と、同じ文書の別の job が
     RUNNING の場合(その job が status を書いている)は戻さない。
+    lease を持つ実行(``lease_owner``)は、lease を失っていたら(別の worker が claim し直した)
+    戻さず、書けなかった結果(``discarded_status``)を捨てたことをログに残す(#359)。
+    取り消しの後始末は、取り消された実行(lease の持ち主)が行う。
     """
+    if await _discard_if_ingestion_lease_lost(
+        oracle, job, lease_owner=lease_owner, discarded_status=discarded_status
+    ):
+        return
     current = await oracle.get_ingestion_job(job.id)
     if current is None or current.status != IngestionJobStatus.CANCELLED:
         logger.info(
@@ -5122,6 +5174,50 @@ async def _restore_statuses_after_cancel(
     await oracle.update_document_status(
         job.document_id, _restore_status_for_cancelled_phase(job.phase)
     )
+
+
+def _holds_ingestion_lease(lease: IngestionJobLease | None, lease_owner: str) -> bool:
+    """job がまだ ``lease_owner`` の実行(RUNNING か、実行中に取り消された)なら True(#359)。"""
+    return (
+        lease is not None
+        and lease.lease_owner == lease_owner
+        and lease.status in _LEASE_HELD_INGESTION_JOB_STATUSES
+    )
+
+
+async def _discard_if_ingestion_lease_lost(
+    oracle: OracleClient,
+    job: IngestionJob,
+    *,
+    lease_owner: str | None,
+    discarded_status: IngestionJobStatus,
+) -> bool:
+    """lease を持つ実行が lease を失っていたら、結果を捨てたことをログに残して True を返す(#359)。
+
+    heartbeat が TTL を超えて途絶えると、別の worker の stale の回復が job を QUEUED(lease を外す)
+    か FAILED に戻し、別の worker が claim し直す(lease の持ち主が変わる)。その後の古い実行の
+    完了・失敗・再キュー・取り消しの後始末は、新しい実行の状態・文書・レシピを上書きしうるため
+    捨てる。lease を持たない実行(``lease_owner`` なし)は従来どおり False を返す。
+    """
+    if lease_owner is None:
+        return False
+    lease = await oracle.get_ingestion_job_lease(job.id)
+    if _holds_ingestion_lease(lease, lease_owner):
+        return False
+    logger.warning(
+        "ingestion_job_stale_result_discarded",
+        extra={
+            "job_id": job.id,
+            "document_id": job.document_id,
+            "recipe_id": job.recipe_id,
+            "phase": job.phase.value,
+            "lease_owner": lease_owner,
+            "discarded_status": discarded_status.value,
+            "current_status": lease.status.value if lease is not None else None,
+            "current_lease_owner": lease.lease_owner if lease is not None else None,
+        },
+    )
+    return True
 
 
 async def _mark_recipe_job_failed(
@@ -5217,11 +5313,13 @@ async def _finish_ingestion_job_unless_cancelled(
     *,
     status: IngestionJobStatus,
     error_message: str | None = None,
+    lease_owner: str | None = None,
 ) -> IngestionJob | None:
     """RUNNING の job だけを完了・失敗にする。取り消し済みなどで書けなければ None を返す。
 
     状態の確認と書き込みは 1 回の条件付き UPDATE で行い、確認と書き込みの間に cancel API が
-    割り込んでも CANCELLED を上書きしない(#305)。
+    割り込んでも CANCELLED を上書きしない(#305)。``lease_owner`` を渡すと自分の lease の行だけを
+    書き、別の worker が claim し直した job を上書きしない(#359)。
     """
     finished = await oracle.transition_ingestion_job(
         job_id,
@@ -5229,6 +5327,7 @@ async def _finish_ingestion_job_unless_cancelled(
         to_status=status,
         error_message=error_message,
         finished_at=datetime.now(UTC),
+        lease_owner=lease_owner,
     )
     if finished is None:
         logger.info(
