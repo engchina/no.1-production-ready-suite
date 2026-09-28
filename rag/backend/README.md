@@ -163,6 +163,8 @@ uv run python -m app.rag.oracle_schema --migration \
   --manifest-output ../artifacts/oracle-schema-migration.manifest.json
 ```
 
+アプリからの適用（状態の確認・作成 / 更新・全再作成）は `app.rag.system_schema`（CLI は `app.rag.system_schema_cli`、画面は「システム設定 > データベース > RAG システムテーブル」）が行います。lease・migration の台帳・状態の分類・確認語の検証は 3 製品共通の `pr_system_settings.system_schema` の骨格を使い（#325）、RAG は manifest（`MANAGED_TABLES` / `MANAGED_INDEXES` / Oracle Text の object / 廃止した object）、`oracle_schema` の DDL の正本、共通認証の `PLATFORM_*` の先行作成、取込ジョブの実行中の確認、確認語 `RECREATE_RAG_SYSTEM_TABLES` を持ちます。
+
 監査 table は query 本文や OCR 原文を保存せず、`query_hash`、`source_sha256`、件数、guardrail code、trace id、error type などの運用メタデータだけを永続化する設計です。
 
 ## アップロード制限

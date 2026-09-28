@@ -152,7 +152,15 @@ export function floatingLayerZIndex(ancestorZIndexes: readonly number[], dropdow
   return top >= dropdownZIndex ? top + 1 : undefined;
 }
 
-function resolveFloatingLayerZIndex(trigger: HTMLElement) {
+/**
+ * トリガーの祖先の z-index を読んで、Portal で描く層の重なり順を決める（`floatingLayerZIndex` の DOM 側）。
+ * `baseVariable` は層の外で使う z-index のトークン（メニューは `--z-dropdown`、Tooltip は `--z-popover`）。
+ */
+export function resolveFloatingLayerZIndex(
+  trigger: HTMLElement,
+  baseVariable = "--z-dropdown",
+  fallback = DEFAULT_DROPDOWN_Z_INDEX
+) {
   const zIndexes: number[] = [];
   let current = trigger.parentElement;
   while (current && current !== document.documentElement) {
@@ -161,14 +169,11 @@ function resolveFloatingLayerZIndex(trigger: HTMLElement) {
     if (style.position !== "static" && Number.isFinite(zIndex)) zIndexes.push(zIndex);
     current = current.parentElement;
   }
-  const dropdownZIndex = Number.parseInt(
-    window.getComputedStyle(document.documentElement).getPropertyValue("--z-dropdown"),
+  const baseZIndex = Number.parseInt(
+    window.getComputedStyle(document.documentElement).getPropertyValue(baseVariable),
     10
   );
-  return floatingLayerZIndex(
-    zIndexes,
-    Number.isFinite(dropdownZIndex) ? dropdownZIndex : DEFAULT_DROPDOWN_Z_INDEX
-  );
+  return floatingLayerZIndex(zIndexes, Number.isFinite(baseZIndex) ? baseZIndex : fallback);
 }
 
 /**

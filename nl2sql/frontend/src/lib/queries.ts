@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   DATABASE_STATUS_QUERY_KEY,
+  SYSTEM_TABLES_QUERY_KEY,
   useDatabaseStatus as useSharedDatabaseStatus,
 } from "@engchina/production-ready-system-settings";
 
 import {
   api,
   type SelectAiCredentialCreateRequest,
-  type SystemTablesInitializeRequest,
 } from "@/lib/api";
 
 export const queryKeys = {
@@ -16,13 +16,11 @@ export const queryKeys = {
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   selectAiCredential: ["settings", "database", "select-ai-credential"] as const,
-  systemTables: ["settings", "database", "system-tables"] as const,
+  systemTables: SYSTEM_TABLES_QUERY_KEY,
   schemaOwners: ["schema", "owners"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
 };
-
-const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
 /** 接続先が変わったら、前の接続先の業務データ（NL2SQL・スキーマ）の cache を捨てる。 */
 export async function clearDatabaseContextQueries(qc: QueryClient) {
@@ -80,38 +78,6 @@ export function useCreateSelectAiCredential() {
     onSuccess: (data) => qc.setQueryData(queryKeys.selectAiCredential, data),
     onError: () =>
       qc.invalidateQueries({ queryKey: queryKeys.selectAiCredential }),
-  });
-}
-
-export function useSystemTablesStatus() {
-  return useQuery({
-    queryKey: queryKeys.systemTables,
-    queryFn: ({ signal }) => api.getSystemTablesStatus({ signal }),
-    retry: false,
-    refetchInterval: (query) =>
-      query.state.data?.operation_state.status === "running"
-        ? ACTIVE_REFETCH_INTERVAL_MS
-        : false,
-  });
-}
-
-export function useInitializeSystemTables() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: SystemTablesInitializeRequest) =>
-      api.initializeSystemTables(payload),
-    onMutate: () => qc.cancelQueries({ queryKey: queryKeys.systemTables }),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.systemTables, data);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-      qc.invalidateQueries({ queryKey: queryKeys.persistenceStatus });
-      qc.invalidateQueries({ queryKey: queryKeys.schemaOwners });
-      qc.invalidateQueries({ queryKey: ["schema"] });
-      qc.invalidateQueries({ queryKey: ["nl2sql"] });
-    },
-    onError: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.systemTables });
-    },
   });
 }
 

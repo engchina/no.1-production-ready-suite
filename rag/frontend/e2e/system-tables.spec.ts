@@ -160,19 +160,18 @@ async function mockSettings(
 test("状態取得中は loading feedback を表示する", async ({ page }) => {
   await mockSettings(page, { statusDelayMs: 600 });
   await page.goto("/settings/database#system-tables");
+  // 3 製品共通のカード（#325）: 経過時間付きの読み込み表示と Skeleton。
   await expect(
-    page.getByRole("status", {
-      name: "システムテーブルの状態を確認しています。",
-    })
+    page.getByRole("region", { name: "システムテーブルの状態を読み込んでいます" })
   ).toBeVisible();
-  await expect(page.locator("#system-tables").getByText("未作成").first()).toBeVisible();
+  await expect(page.locator("#system-tables").getByText("未初期化").first()).toBeVisible();
 });
 
 const statusLabels: Record<SchemaStatus, string> = {
-  missing: "未作成",
+  missing: "未初期化",
   partial: "一部不足",
-  outdated: "更新が必要",
-  ready: "準備完了",
+  outdated: "更新必要",
+  ready: "初期化済み",
 };
 
 for (const status of Object.keys(statusLabels) as SchemaStatus[]) {
@@ -191,7 +190,7 @@ test("作成・更新で missing から ready になる", async ({ page }) => {
   await page.goto("/settings/database#system-tables");
   const card = page.locator("#system-tables");
   await card.getByRole("button", { name: "作成・更新" }).click();
-  await expect(card.getByText("準備完了", { exact: true })).toBeVisible();
+  await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   expect(mock.initializeCalls()).toBe(1);
 });
 
@@ -203,7 +202,7 @@ test("システムテーブル管理の権限が無い利用者は状態だけ�
   await mockAuthUser(page, { permissions: ["menu.settings_database"] });
   await page.goto("/settings/database#system-tables");
   const card = page.locator("#system-tables");
-  await expect(card.getByText("未作成", { exact: true }).first()).toBeVisible();
+  await expect(card.getByText("未初期化", { exact: true }).first()).toBeVisible();
   await expect(
     card.getByText("システムテーブルの作成・更新と全再作成には「システムテーブル管理」の権限が必要です。", {
       exact: false,
@@ -224,7 +223,7 @@ test("全再作成は確認語と ConfirmDialog の二段階で保護する", as
   const recreate = card.getByRole("button", { name: "すべて再作成" });
   await expect(recreate).toBeDisabled();
 
-  await card.getByLabel("確認文字列").fill("RECREATE_RAG_SYSTEM_TABLES");
+  await card.getByRole("textbox", { name: "実行確認語" }).fill("RECREATE_RAG_SYSTEM_TABLES");
   await expect(recreate).toBeEnabled();
   await recreate.click();
 
@@ -233,7 +232,7 @@ test("全再作成は確認語と ConfirmDialog の二段階で保護する", as
   await dialog.getByRole("button", { name: "すべて再作成" }).click();
 
   await expect(dialog).toHaveCount(0);
-  await expect(card.getByText("準備完了", { exact: true })).toBeVisible();
+  await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   expect(mock.recreatePayload()).toEqual({
     recreate: true,
     confirmation: "RECREATE_RAG_SYSTEM_TABLES",

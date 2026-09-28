@@ -451,7 +451,11 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & Button
   icon?: LucideIcon;
   /** 方向・開閉・外部リンクのみ（ChevronRight / ChevronDown / ExternalLink）。 */
   trailingIcon?: LucideIcon;
+  /** アイコンだけのボタン。aria-label 必須。既定で aria-label と同じ文言の Tooltip を出す（#372）。 */
   iconOnly?: boolean;
+  /** ホバーとキーボードのフォーカスで出す説明。iconOnly の既定は aria-label、false で出さない。出すときは title を無視する。 */
+  tooltip?: string | false;
+  tooltipPlacement?: "top" | "bottom";
   touchTarget?: boolean;
   /** true で先頭アイコンがスピナーに置き換わる。ラベルは変えない。aria-disabled でフォーカスを保つ。 */
   loading?: boolean;
@@ -1082,6 +1086,59 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 - 純粋関数 `tabsScrollEdges` / `revealTabScrollLeft` は `packages/ui/tests/touch-target-tabs.test.tsx` が確かめます。パッケージのルートからは export しません。
 
 ---
+
+## Tooltip — **新規**（#372）
+
+アイコンだけのボタンの説明に使う吹き出しです。WAI-ARIA APG の Tooltip パターンに従います（振る舞いの表は README §4「`Tooltip`」）。**`iconOnly` の `Button` は既定で `aria-label` と同じ文言を出す**ので、通常は `Tooltip` を直接書きません。
+
+```tsx
+import { Button, Tooltip } from "@engchina/production-ready-ui";
+import { ChevronLeft, X } from "lucide-react";
+
+// 既定: aria-label と同じ文言を出す（aria-describedby は付けない。二重に読み上げない）
+<Button variant="ghost" iconOnly icon={X} aria-label={t("common.dismiss")} />
+
+// 文言を変える: ショートカットキーを添える（aria-label と違うので aria-describedby で説明になる）
+<Button variant="ghost" iconOnly icon={ChevronLeft} aria-label={t("preview.viewer.previousPage")}
+  tooltip={`${t("preview.viewer.previousPage")} (PageUp)`} />
+
+// 出さない（同じ場所に名前が見えている等）
+<Button variant="ghost" iconOnly icon={X} aria-label={t("common.dismiss")} tooltip={false} />
+
+// 見た目を変えずに title を置き換える（iconOnly でない、実質アイコンだけのボタン）
+<Button size="sm" variant="ghost" icon={Plus} aria-label={t("graph.zoomIn")} tooltip={t("graph.zoomIn")} />
+
+// Button 以外のフォーカスできる要素 1 つに説明を足す
+<Tooltip content={t("legend.toggleHint")}>
+  <button type="button" aria-pressed={enabled}>…</button>
+</Tooltip>
+```
+
+### Tooltip の props
+
+```ts
+export interface TooltipProps {
+  /** 翻訳済みの短い文。操作できる要素や書式は入れない。 */
+  content: string;
+  /** トリガー（フォーカスできる要素 1 つ）。ref とイベントを受け取れること。 */
+  children: React.ReactElement;
+  /** 空きがあれば出す側（既定は上）。入らなければ反転する。 */
+  placement?: "top" | "bottom";
+  /** true で出さず、aria-describedby の結び付けも外す。 */
+  disabled?: boolean;
+}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 吹き出しは `role="tooltip"`。文言がトリガーの `aria-label` と違うときだけ `aria-describedby` で結び付け、閉じている間も `hidden` で置いておく。同じときは結び付けず `aria-hidden` | APG は説明（description）として結び付ける。名前と同じ文言を説明にすると二重に読み上げる。フォーカスした時点で説明が読めるように、説明の要素は先に置く |
+| 開閉は `createTooltipController`（タイマーだけを使う状態機械）、位置は `computeTooltipLayout`（純粋関数）に分ける | 遅延・Escape・hoverable・タッチ端末・反転を DOM なしの単体テストで確かめる |
+| Portal の描く先は `SelectField` と同じ（モーダルの中ならモーダル、それ以外は body）。重なり順は `resolveFloatingLayerZIndex(trigger, "--z-popover")`（操作メニューと共有） | `<dialog>` の top layer・`aria-modal` の外に出さない。固定ヘッダー・モーダルの中で隠れない |
+| 開いている間の Escape は `window` の capture で受けて握りつぶす | 1 回目の Escape で囲むモーダル（`ConfirmDialog` は document で Escape を受ける）まで閉じない |
+| ボタンを押したら閉じ、ポインタが離れるまで出さない。フォーカスで開いた吹き出しは `pointer-events: none` | 押した結果（メニュー・ダイアログ）を隠さない。キーボードで開いた吹き出しが、隣の要素のマウス操作を塞がない |
+
+- E2E で吹き出しを引くときは、`page.locator('[role="tooltip"]:not([hidden])')` で引きます（説明用の吹き出しは閉じている間も `hidden` で body にあり、名前と同じ文言の吹き出しは `aria-hidden` なので `getByRole("tooltip")` では引けません）。説明は `toHaveAccessibleDescription` で確かめます。
+- 単体テストは `packages/ui/tests/tooltip.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/tooltip.spec.ts`（desktop のホバー・キーボード・Escape・反転、mobile-375 のタッチ端末）。
 
 ## 読み込み中と一覧の表示密度 — **新規**（#265）
 

@@ -544,13 +544,18 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   let status: SchemaStatus = "missing";
   let requestCount = 0;
   let requestBody: unknown = null;
+  // 実行中の表示を確かめ終えるまで応答を止める（固定の待ち時間だと、負荷が高いと確認の前に完了して flaky になる）。
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables(status))
   );
   await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
     requestCount += 1;
     requestBody = route.request().postDataJSON();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await pending;
     status = "ready";
     await fulfill(route, {
       ...systemTables("ready"),
@@ -568,6 +573,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(initialize).toBeDisabled();
   await expect(card.getByRole("button", { name: "すべて再作成" })).toBeDisabled();
   await expect(card.getByRole("button", { name: "状態を再取得" })).toBeDisabled();
+  release();
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();

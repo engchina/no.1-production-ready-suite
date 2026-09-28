@@ -398,7 +398,7 @@ export function PreviewViewer({
               iconOnly
               icon={ChevronLeft}
               aria-label={t("preview.viewer.previousPage")}
-              title={`${t("preview.viewer.previousPage")} (PageUp)`}
+              tooltip={`${t("preview.viewer.previousPage")} (PageUp)`}
               disabled={pageIndex <= 0}
               onClick={() => goToPage(pageNumbers[pageIndex - 1] ?? pageNumber)}
             />
@@ -419,7 +419,7 @@ export function PreviewViewer({
               iconOnly
               icon={ChevronRight}
               aria-label={t("preview.viewer.nextPage")}
-              title={`${t("preview.viewer.nextPage")} (PageDown)`}
+              tooltip={`${t("preview.viewer.nextPage")} (PageDown)`}
               disabled={pageIndex >= pageNumbers.length - 1}
               onClick={() => goToPage(pageNumbers[pageIndex + 1] ?? pageNumber)}
             />
@@ -434,7 +434,7 @@ export function PreviewViewer({
             iconOnly
             icon={ZoomOut}
             aria-label={t("preview.viewer.zoomOut")}
-            title={`${t("preview.viewer.zoomOut")} (-)`}
+            tooltip={`${t("preview.viewer.zoomOut")} (-)`}
             disabled={!canZoomOut}
             onClick={() => zoomStep("out")}
           />
@@ -452,7 +452,7 @@ export function PreviewViewer({
             iconOnly
             icon={ZoomIn}
             aria-label={t("preview.viewer.zoomIn")}
-            title={`${t("preview.viewer.zoomIn")} (+)`}
+            tooltip={`${t("preview.viewer.zoomIn")} (+)`}
             disabled={!canZoomIn}
             onClick={() => zoomStep("in")}
           />
@@ -466,7 +466,7 @@ export function PreviewViewer({
             iconOnly
             icon={MoveHorizontal}
             aria-label={t("preview.viewer.fitWidth")}
-            title={`${t("preview.viewer.fitWidth")} (W)`}
+            tooltip={`${t("preview.viewer.fitWidth")} (W)`}
             pressed={mode === "fit-width"}
             onClick={() => fit("fit-width")}
           />
@@ -477,7 +477,7 @@ export function PreviewViewer({
             iconOnly
             icon={Maximize}
             aria-label={t("preview.viewer.fitPage")}
-            title={`${t("preview.viewer.fitPage")} (0)`}
+            tooltip={`${t("preview.viewer.fitPage")} (0)`}
             pressed={mode === "fit-page"}
             onClick={() => fit("fit-page")}
           />
@@ -488,7 +488,7 @@ export function PreviewViewer({
             iconOnly
             icon={RotateCcw}
             aria-label={t("preview.viewer.rotateLeft")}
-            title={`${t("preview.viewer.rotateLeft")} (Shift+R)`}
+            tooltip={`${t("preview.viewer.rotateLeft")} (Shift+R)`}
             onClick={() => rotate(-90)}
           />
           <Button
@@ -498,7 +498,7 @@ export function PreviewViewer({
             iconOnly
             icon={RotateCw}
             aria-label={t("preview.viewer.rotateRight")}
-            title={`${t("preview.viewer.rotateRight")} (R)`}
+            tooltip={`${t("preview.viewer.rotateRight")} (R)`}
             onClick={() => rotate(90)}
           />
           {highlights.length > 0 ? (
@@ -509,7 +509,7 @@ export function PreviewViewer({
               iconOnly
               icon={LocateFixed}
               aria-label={t("preview.viewer.focusHighlight")}
-              title={`${t("preview.viewer.focusHighlight")} (H)`}
+              tooltip={`${t("preview.viewer.focusHighlight")} (H)`}
               disabled={rects.length === 0}
               onClick={scrollToHighlight}
             />
