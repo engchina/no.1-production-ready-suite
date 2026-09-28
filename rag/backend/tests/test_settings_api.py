@@ -1321,6 +1321,32 @@ def test_update_grounding_settings_rejects_inverted_crag_thresholds() -> None:
     assert resp.status_code == 422
 
 
+def test_update_grounding_settings_rejects_partial_update_that_inverts_thresholds(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """片方の閾値だけの部分更新でも、保存済みの他方と逆転する値は保存しない(#275)。"""
+    settings = get_settings()
+    _patch_grounding_crag_fields(monkeypatch, settings)
+    monkeypatch.setattr(settings, "rag_grounding_crag_confidence_threshold", 0.35)
+    monkeypatch.setattr(settings, "rag_crag_high_confidence_threshold", 0.7)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+
+    low_resp = client.patch("/api/settings/grounding", json={"crag_low_confidence_threshold": 0.9})
+    high_resp = client.patch(
+        "/api/settings/grounding", json={"crag_high_confidence_threshold": 0.2}
+    )
+
+    assert low_resp.status_code == 422
+    assert high_resp.status_code == 422
+    assert "高しきい値は低しきい値以上" in low_resp.text
+    assert settings.rag_grounding_crag_confidence_threshold == 0.35
+    assert settings.rag_crag_high_confidence_threshold == 0.7
+    after = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+    assert after == before
+
+
 def test_update_grounding_settings_rejects_unknown_pipeline() -> None:
     resp = client.patch("/api/settings/grounding", json={"pipeline": "agentic_loop"})
     assert resp.status_code == 422
