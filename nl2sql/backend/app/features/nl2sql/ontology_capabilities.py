@@ -286,7 +286,8 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
         )["objects"]
         if not any(
             f"{object_match_key(str(obj.get('owner', '')))}."
-            f"{object_match_key(str(obj.get('object_name', '')))}" == table
+            f"{object_match_key(str(obj.get('object_name', '')))}"
+            == table
             and obj.get("object_type") == "table"
             for obj in source_objects
         ):

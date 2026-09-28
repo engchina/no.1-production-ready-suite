@@ -107,12 +107,8 @@ def _oracle_runtime_service(
     def _agent_down(**_kwargs: Any) -> tuple[str, str]:
         raise OracleAdapterError("Select AI Agent: team execution failed")
 
-    monkeypatch.setattr(
-        service._oracle_adapter, "generate_select_ai_sql", _select_ai_down
-    )  # noqa: SLF001
-    monkeypatch.setattr(
-        service._oracle_adapter, "run_select_ai_agent_team", _agent_down
-    )  # noqa: SLF001
+    monkeypatch.setattr(service._oracle_adapter, "generate_select_ai_sql", _select_ai_down)  # noqa: SLF001
+    monkeypatch.setattr(service._oracle_adapter, "run_select_ai_agent_team", _agent_down)  # noqa: SLF001
     return service
 
 

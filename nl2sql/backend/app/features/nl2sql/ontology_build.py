@@ -322,8 +322,7 @@ def build_schema_context_from_catalog(
             ):
                 continue
             target = (
-                f"{_context_name(catalog_target_owner)}."
-                f"{_context_name(detail.referenced_table)}"
+                f"{_context_name(catalog_target_owner)}.{_context_name(detail.referenced_table)}"
             )
             relationships.append(
                 {
@@ -3751,7 +3750,7 @@ class OntologyBuildService:
         source = OntologySourceDocument.model_validate(document["payload"])
         if profile_id and source.profile_id != profile_id:
             raise RuntimeError(
-                "Ontology source document の profile が構築 job と一致しません: " f"{source_id}"
+                f"Ontology source document の profile が構築 job と一致しません: {source_id}"
             )
         return source
 
@@ -5092,8 +5091,7 @@ class OntologyBuildService:
             rejected_count=len(proposal_rejections),
         )
         registered_note = (
-            f"Markdown 下書き v{draft_ontology.revision.version} を生成しました"
-            f"({result_counts})。"
+            f"Markdown 下書き v{draft_ontology.revision.version} を生成しました({result_counts})。"
         )
         self._set_step(
             job_id,

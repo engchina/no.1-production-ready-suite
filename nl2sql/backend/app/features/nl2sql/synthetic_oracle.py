@@ -126,7 +126,9 @@ def inspect_operation(adapter: OracleNl2SqlAdapter, run: SyntheticRun) -> Synthe
                 else (
                     "failed"
                     if "FAILED" in statuses
-                    else "skipped" if "SKIPPED" in statuses else "completed"
+                    else "skipped"
+                    if "SKIPPED" in statuses
+                    else "completed"
                 )
             )
             target.error = " ".join(

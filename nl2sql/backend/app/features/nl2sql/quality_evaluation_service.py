@@ -697,9 +697,8 @@ class QualityEvaluationService:
         if job.status == QualityEvaluationStatus.PENDING:
             self._dispatch(job.job_id)
             return True
-        if (
-            job.status == QualityEvaluationStatus.RUNNING
-            and self._quality_evaluation_lease_expired(job)
+        if job.status == QualityEvaluationStatus.RUNNING and self._quality_evaluation_lease_expired(
+            job
         ):
             self._dispatch(job.job_id)
             return True

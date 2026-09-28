@@ -563,7 +563,6 @@ def merge_definitions(
                 )
     values = list(merged.values())
     if remap:
-
         rewritten = []
         for d in values:
             value = d.model_dump(mode="json")

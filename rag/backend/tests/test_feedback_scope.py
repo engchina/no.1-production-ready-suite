@@ -233,8 +233,9 @@ def test_list_api_limits_non_admin_roles_to_their_own_feedback(monkeypatch: Monk
         for call in user_calls:
             assert OWNER_PREDICATE in call.statement
             assert call.parameters["feedback_owner_user_id_hash"] == expected_hash
-    assert viewer_calls[0].parameters["feedback_owner_user_id_hash"] != (
-        manager_calls[0].parameters["feedback_owner_user_id_hash"]
+    assert (
+        viewer_calls[0].parameters["feedback_owner_user_id_hash"]
+        != (manager_calls[0].parameters["feedback_owner_user_id_hash"])
     )
     for call in (*admin_calls, *configured_calls):
         assert "feedback_owner_user_id_hash" not in call.statement

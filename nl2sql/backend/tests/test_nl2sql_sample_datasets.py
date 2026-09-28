@@ -279,14 +279,14 @@ def test_sample_sql_supports_relations_and_example_queries(dataset: SampleDatase
         if dataset == SampleDataset.SALES:
             assert (
                 connection.execute(
-                    "SELECT SUM(SALES_AMOUNT) FROM V_SALES_DETAIL " "WHERE STATUS = '出荷済'"
+                    "SELECT SUM(SALES_AMOUNT) FROM V_SALES_DETAIL WHERE STATUS = '出荷済'"
                 ).fetchone()[0]
                 == 550000
             )
         else:
             assert (
                 connection.execute(
-                    "SELECT COUNT(*) FROM V_INQUIRY_DETAIL " "WHERE RESOLVED_DATE IS NULL"
+                    "SELECT COUNT(*) FROM V_INQUIRY_DETAIL WHERE RESOLVED_DATE IS NULL"
                 ).fetchone()[0]
                 == 3
             )

@@ -141,7 +141,7 @@ def main() -> int:
                 with temporary_connection() as locked_connection:
                     with locked_connection.cursor() as cursor:
                         cursor.execute(
-                            "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS " "IN ROW EXCLUSIVE MODE"
+                            "LOCK TABLE NL2SQL_ONTOLOGY_PROFILE_VIEWS IN ROW EXCLUSIVE MODE"
                         )
                     lock_ready.set()
                     time.sleep(0.25)
@@ -183,7 +183,7 @@ def main() -> int:
         migrated = manager.initialize()
         with temporary_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_PROFILES " "WHERE PROFILE_ID = 'integration-profile'"
+                "SELECT COUNT(*) FROM NL2SQL_PROFILES WHERE PROFILE_ID = 'integration-profile'"
             )
             profile_preserved = int(cursor.fetchone()[0]) == 1
         assert profile_preserved

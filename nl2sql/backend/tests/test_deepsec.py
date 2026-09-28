@@ -486,7 +486,9 @@ def test_verify_fails_when_predicate_table_grants_are_missing(
     assert status["objects"]["predicate_user_roles_grant"] == 0  # type: ignore[index]
     assert result["passed"] is False
     predicate_check = next(
-        item for item in result["checks"] if item["key"] == "predicate_table_grants"  # type: ignore[attr-defined]
+        item
+        for item in result["checks"]  # type: ignore[attr-defined]
+        if item["key"] == "predicate_table_grants"
     )
     assert predicate_check["passed"] is False
     assert "PLATFORM_USER_ROLES" in predicate_check["detail"]
@@ -575,7 +577,9 @@ def test_verify_requires_managed_data_grant_on_data_role(
 
     assert result["passed"] is expected_passed
     data_grant_check = next(
-        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"  # type: ignore[attr-defined]
+        item
+        for item in result["checks"]  # type: ignore[attr-defined]
+        if item["key"] == "data_grant:entitlement-sales"
     )
     assert data_grant_check["passed"] is expected_passed
     assert f"data_role_rows={1 if expected_passed else 0}" in data_grant_check["detail"]
@@ -661,12 +665,16 @@ def test_verify_fails_when_target_has_enabled_vpd_policy(
 
     assert result["passed"] is False
     vpd_check = next(
-        item for item in result["checks"] if item["key"] == "vpd_policy:entitlement-sales"  # type: ignore[attr-defined]
+        item
+        for item in result["checks"]  # type: ignore[attr-defined]
+        if item["key"] == "vpd_policy:entitlement-sales"
     )
     assert vpd_check["passed"] is False
     assert "SQL_ASSIST_VPD_LEGACY_POL" in vpd_check["detail"]
     data_grant_check = next(
-        item for item in result["checks"] if item["key"] == "data_grant:entitlement-sales"  # type: ignore[attr-defined]
+        item
+        for item in result["checks"]  # type: ignore[attr-defined]
+        if item["key"] == "data_grant:entitlement-sales"
     )
     assert data_grant_check["passed"] is True
 

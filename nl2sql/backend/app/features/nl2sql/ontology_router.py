@@ -916,8 +916,7 @@ class OntologyApiRuntime:
             # 無条件上書きすると並行編集の lost update になるため conflict にする。
             raise OntologyVersionConflictError(
                 "ONTOLOGY_MARKDOWN_ARTIFACT_MISSING",
-                "Markdown 成果物が見つからないため保存できません。"
-                "再読込して再実行してください。",
+                "Markdown 成果物が見つからないため保存できません。再読込して再実行してください。",
             )
         now = utc_now()
         resolved_profile_version = (
@@ -4356,8 +4355,7 @@ class OntologyApiRuntime:
             if len(base_fingerprints) != 1:
                 raise OntologyStateConflictError(
                     "ONTOLOGY_PROPOSAL_SCHEMA_MIXED",
-                    "異なるスキーマ世代の提案は同時に承認できません。"
-                    "AI 構築を再実行してください。",
+                    "異なるスキーマ世代の提案は同時に承認できません。AI 構築を再実行してください。",
                 )
             fingerprint = next(iter(base_fingerprints))
         else:

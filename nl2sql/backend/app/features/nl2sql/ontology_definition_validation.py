@@ -101,8 +101,10 @@ def definition_expressions(
         yield field, getattr(item, field, ""), local
     for index, mapping in enumerate(item.mappings):
         key = mapping_object_key(mapping)
-        yield f"mappings.{index}.expression_sql", mapping.expression_sql, (
-            {key: physical[key]} if key in physical else {}
+        yield (
+            f"mappings.{index}.expression_sql",
+            mapping.expression_sql,
+            ({key: physical[key]} if key in physical else {}),
         )
 
 

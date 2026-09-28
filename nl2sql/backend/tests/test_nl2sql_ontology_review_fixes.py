@@ -173,7 +173,7 @@ def test_metric_keys_are_compared_to_mapped_physical_columns(
             api_name="Total",
             name_ja="集計",
             expression_sql=(
-                f"SELECT {group}, COUNT(DISTINCT {distinct}) " f"FROM APP.ORDERS o GROUP BY {group}"
+                f"SELECT {group}, COUNT(DISTINCT {distinct}) FROM APP.ORDERS o GROUP BY {group}"
             ),
             aggregation="count",
             grain=["Order.id"],
@@ -309,8 +309,8 @@ async def test_outcome_api_enforces_profile_and_definition_ownership(
     app.include_router(create_capability_router(lambda: svc.runtime, _raise_domain_error))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         url = (
-            f'/profiles/sales/ontology-capabilities/{ids["approve"]}'
-            f'/previews/{preview["id"]}/outcome'
+            f"/profiles/sales/ontology-capabilities/{ids['approve']}"
+            f"/previews/{preview['id']}/outcome"
         )
         response = await client.get(url)
         assert response.status_code == 200

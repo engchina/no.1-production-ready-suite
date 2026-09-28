@@ -1321,8 +1321,7 @@ def build_database_router(
                 raise HTTPException(
                     status_code=404,
                     detail=(
-                        "保存済み DB パスワードがありません。"
-                        "パスワードを入力して保存してください。"
+                        "保存済み DB パスワードがありません。パスワードを入力して保存してください。"
                     ),
                     headers=SECRET_REVEAL_HEADERS,
                 )

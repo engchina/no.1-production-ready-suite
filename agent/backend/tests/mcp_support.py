@@ -196,9 +196,7 @@ class FakeProductMcp:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         body = json.loads(request.content or b"null")
-        product: Product | None = {"rag.test": "rag", "nl2sql.test": "nl2sql"}.get(
-            request.url.host
-        )  # type: ignore[assignment]
+        product: Product | None = {"rag.test": "rag", "nl2sql.test": "nl2sql"}.get(request.url.host)  # type: ignore[assignment]
         if product is None:
             self.other_calls.append(
                 {

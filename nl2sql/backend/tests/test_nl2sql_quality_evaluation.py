@@ -1438,7 +1438,7 @@ def test_oracle_repository_list_jobs_filters_profile_ids_before_paging() -> None
     count_sql, count_binds = cursor.executed[0]
     page_sql, page_binds = cursor.executed[1]
     expected_predicate = (
-        "COALESCE(NULLIF(PROFILE_ID, ''), 'default') " "IN (:profile_id_0, :profile_id_1)"
+        "COALESCE(NULLIF(PROFILE_ID, ''), 'default') IN (:profile_id_0, :profile_id_1)"
     )
     assert total_jobs == 1
     assert [item.job_id for item in jobs] == ["job-allowed"]

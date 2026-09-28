@@ -198,9 +198,9 @@ class Parser:
         )
 
 
-def prepared_workspace() -> (
-    tuple[OntologyApiRuntime, MarkdownOntologyWorkspace, Parser, dict[str, Any]]
-):
+def prepared_workspace() -> tuple[
+    OntologyApiRuntime, MarkdownOntologyWorkspace, Parser, dict[str, Any]
+]:
     rt, _ = runtime()
     base = rt.profile_view("sales")[1]
     rt.create_build_markdown_draft(
@@ -662,9 +662,9 @@ def test_build_content_notes_are_saved_without_becoming_conflicts_or_job_warning
     ]
     operational_warning = "資料の一部で抽出に失敗しました。"
     definitions = [d.model_dump(mode="json") for d in all_concepts()]
-    next(d for d in definitions if d["kind"] == "metric")[
-        "expression_sql"
-    ] = "COUNT(APP.ORDERS.MISSING_COLUMN)"
+    next(d for d in definitions if d["kind"] == "metric")["expression_sql"] = (
+        "COUNT(APP.ORDERS.MISSING_COLUMN)"
+    )
     rt, legacy = runtime()
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(
         json.dumps(

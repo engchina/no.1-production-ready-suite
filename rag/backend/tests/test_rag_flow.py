@@ -88,9 +88,7 @@ def _run_ingestion_and_get_job(
 def test_upload_ingest_search_flow() -> None:
     """アップロードから取込・検索までの最小フローを確認する。"""
     sample = (
-        "社内規程: 経費申請\n"
-        "部門長の承認後、経理部が確認します。\n"
-        "申請者は証憑を添付してください。"
+        "社内規程: 経費申請\n部門長の承認後、経理部が確認します。\n申請者は証憑を添付してください。"
     ).encode()
 
     upload_resp = client.post(

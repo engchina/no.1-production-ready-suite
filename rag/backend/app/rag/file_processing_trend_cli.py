@@ -95,13 +95,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--latency-increase-ratio",
         type=float,
         default=DEFAULT_LATENCY_INCREASE_RATIO,
-        help=("ingestion_p95_ms の許容増加率。" f"既定値: {DEFAULT_LATENCY_INCREASE_RATIO}"),
+        help=(f"ingestion_p95_ms の許容増加率。既定値: {DEFAULT_LATENCY_INCREASE_RATIO}"),
     )
     parser.add_argument(
         "--latency-increase-ms",
         type=float,
         default=DEFAULT_LATENCY_INCREASE_MS,
-        help=("ingestion_p95_ms の許容増加絶対値。" f"既定値: {DEFAULT_LATENCY_INCREASE_MS}"),
+        help=(f"ingestion_p95_ms の許容増加絶対値。既定値: {DEFAULT_LATENCY_INCREASE_MS}"),
     )
     parser.add_argument(
         "--require-promotion-ready",

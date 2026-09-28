@@ -379,7 +379,7 @@ def _prepare_profile(
             name="manual_profile",
             ok=True,
             message=(
-                f"{action}; profile_id={resolved_profile_id}; " f"tables={','.join(allowed_tables)}"
+                f"{action}; profile_id={resolved_profile_id}; tables={','.join(allowed_tables)}"
             ),
         ),
         resolved_profile_id,
@@ -437,7 +437,7 @@ def _cleanup_assets(
 
 def _cleanup_result(data: AssetCleanupData) -> StepResult:
     asset_names = ", ".join(f"{kind}={name}" for kind, name in sorted(data.asset_names.items()))
-    message = f"status={data.status}; executed={data.executed}; " f"{asset_names or 'assets=-'}"
+    message = f"status={data.status}; executed={data.executed}; {asset_names or 'assets=-'}"
     if data.warning:
         message = f"{message}; warning={data.warning}"
     return StepResult(
@@ -1503,8 +1503,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--require-oracle",
         action="store_true",
         help=(
-            "Fail if runtime is not Oracle or if an Oracle engine falls back to "
-            "deterministic mode."
+            "Fail if runtime is not Oracle or if an Oracle engine falls back to deterministic mode."
         ),
     )
     parser.add_argument(

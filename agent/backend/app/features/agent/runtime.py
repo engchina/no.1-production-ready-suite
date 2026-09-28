@@ -1728,8 +1728,7 @@ class AgentRuntimeRepository:
         safety = runtime_config_store.get_runtime_safety()
         if len(request.tool_calls) > safety.max_tool_calls_per_run:
             raise ValueError(
-                "tool call limit exceeded: "
-                f"max_tool_calls_per_run={safety.max_tool_calls_per_run}"
+                f"tool call limit exceeded: max_tool_calls_per_run={safety.max_tool_calls_per_run}"
             )
         allowed_tools = set(agent.tool_names)
         denied_tools = sorted(

@@ -1490,9 +1490,7 @@ class IngestionPipeline:
                 derived_bytes,
                 content_type=content_type or "application/octet-stream",
             )
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - 失敗は呼び出し側で致命扱い。原因を残して None を返す
+        except Exception as exc:  # noqa: BLE001 - 失敗は呼び出し側で致命扱い。原因を残して None を返す
             logger.warning(
                 "canonical_artifact_cache_failed",
                 extra={

@@ -219,8 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--preflight-only",
         action="store_true",
         help=(
-            "外部依存へ接続せず、file-processing staging 実行前の設定チェックだけを "
-            "JSON 出力する。"
+            "外部依存へ接続せず、file-processing staging 実行前の設定チェックだけを JSON 出力する。"
         ),
     )
     parser.add_argument(

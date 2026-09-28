@@ -68,7 +68,7 @@ def test_validate_structured_answer_accepts_plain_json() -> None:
 
 
 def test_validate_structured_answer_tolerates_fence_and_prose() -> None:
-    raw = '説明文\n```json\n{"answer": "A", "evidence": [], ' '"sources": ["s#1"]}\n```\n以上'
+    raw = '説明文\n```json\n{"answer": "A", "evidence": [], "sources": ["s#1"]}\n```\n以上'
     parsed = json.loads(validate_structured_answer(raw))
     # フェンス/前後文を剥がして検証する。
     assert parsed == {"answer": "A", "evidence": [], "sources": ["s#1"]}

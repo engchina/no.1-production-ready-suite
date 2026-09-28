@@ -1973,8 +1973,9 @@ def test_annotation_generation_ports_reference_prompt_and_filters_sample_annotat
     assert result.source == "oci_enterprise_ai"
     assert result.sql == "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'T, One');"
     assert "COMMENT: は入力メタデータ" in enterprise_ai.calls[0]["prompt"]
-    assert "sample_header / sample_data は Select AI が DDL から得るため生成しない" in (
-        enterprise_ai.calls[0]["prompt"]
+    assert (
+        "sample_header / sample_data は Select AI が DDL から得るため生成しない"
+        in (enterprise_ai.calls[0]["prompt"])
     )
     assert '"JOIN COLUMN": 外部キー情報から結合先' in enterprise_ai.calls[0]["prompt"]
     assert "サンプルが無いためコメントに根拠がある場合だけ付け" in enterprise_ai.calls[0]["prompt"]
@@ -2122,7 +2123,7 @@ def test_metadata_sql_uses_oracle_view_and_materialized_view_syntax() -> None:
                 {"object_name": "SALES_MV", "object_type": "view"},
             ],
             structure_text=(
-                "OBJECT: SALES_V\nTYPE: view\n\n" "OBJECT: SALES_MV\nTYPE: materialized view"
+                "OBJECT: SALES_V\nTYPE: view\n\nOBJECT: SALES_MV\nTYPE: materialized view"
             ),
         )
     )
@@ -2133,7 +2134,7 @@ def test_metadata_sql_uses_oracle_view_and_materialized_view_syntax() -> None:
                 {"object_name": "SALES_MV", "object_type": "view"},
             ],
             structure_text=(
-                "OBJECT: SALES_V\nTYPE: view\n\n" "OBJECT: SALES_MV\nTYPE: materialized view"
+                "OBJECT: SALES_V\nTYPE: view\n\nOBJECT: SALES_MV\nTYPE: materialized view"
             ),
         )
     )
@@ -5537,8 +5538,7 @@ def test_deterministic_domain_update_rebuild_and_delete() -> None:
         )
     )
     assert update.sql == (
-        'ALTER DOMAIN "APP"."CUSTOMER_ID_D" '
-        "ANNOTATIONS (ADD OR REPLACE \"DESCRIPTION\" '顧客ID');"
+        'ALTER DOMAIN "APP"."CUSTOMER_ID_D" ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" \'顧客ID\');'
     )
     assert any("再作成を使ってください" in warning for warning in update.warnings)
 
