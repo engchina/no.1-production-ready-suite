@@ -62,6 +62,7 @@ import {
   securityFilteredCount,
   selectedVisibleKey,
   unmappedErrorMessage,
+  useFocusAfterCommit,
   useValuesChanged,
   withoutFieldError,
 } from "./shared";
@@ -273,8 +274,10 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     setFormError("");
   };
 
+  // 送信中は欄が disabled のため、操作できる状態を commit した後に移す（#424）。
+  const scheduleFocus = useFocusAfterCommit(!inputReadOnly);
   const focusFirstFieldError = (errors: RoleFieldErrors) => {
-    window.requestAnimationFrame(() => {
+    scheduleFocus(() => {
       if (errors.roleCode) roleCodeRef.current?.focus();
       else if (errors.displayName) displayNameRef.current?.focus();
     });

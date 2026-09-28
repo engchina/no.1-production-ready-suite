@@ -1,6 +1,6 @@
 // ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧＋詳細レイアウトの部品と補助関数。
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
-import { Children, useId, useState, type ReactNode } from "react";
+import { Children, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Search, type LucideIcon } from "lucide-react";
 import {
   FixedSplitPane,
@@ -62,6 +62,26 @@ export function selectedVisibleKey<T, K extends string | number>(
 
 export function isAbortError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
+}
+
+/**
+ * 送信のエラーの後に、最初の不正な欄へフォーカスを移す（WCAG の focus management）。
+ * 送信中は欄が disabled のため、requestAnimationFrame で移すと、送信の終わり（busy = false）の commit より先に
+ * focus() が走り、disabled の欄への focus が無視されることがあった（#424）。
+ * 移す処理を予約し、欄が操作できる状態（ready）を commit した後の effect で実行する。
+ */
+export function useFocusAfterCommit(ready: boolean): (focus: () => void) => void {
+  const pending = useRef<(() => void) | null>(null);
+  // deps なし: 予約の後のどの commit でも、操作できる状態になっていれば一度だけ実行する。
+  useEffect(() => {
+    if (!ready || !pending.current) return;
+    const focus = pending.current;
+    pending.current = null;
+    focus();
+  });
+  return (focus) => {
+    pending.current = focus;
+  };
 }
 
 // ---- API の入力エラー ----
