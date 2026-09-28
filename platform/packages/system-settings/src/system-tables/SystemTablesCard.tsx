@@ -16,13 +16,14 @@ import {
   StatusBadge,
   TimedLoadingState,
   toast,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 import { formatMessage } from "../auth/messages";
 import { DatabaseUnavailableNotice } from "../database-gate/DatabaseUnavailableNotice";
 import type { DatabaseGateMessages } from "../database-gate/messages";
 import type { DatabaseGateRoutes } from "../database-gate/types";
-import { SECURITY_TABLE_ROW_CLASS, SECURITY_TABLE_VISIBLE_ROWS } from "../users-roles/shared";
 import {
   SYSTEM_TABLES_MESSAGES,
   systemObjectTypeMessageKey,
@@ -471,12 +472,12 @@ function SystemTablesDetails({
           ]}
           rows={objects}
           getRowKey={(object) => `${object.object_type}:${object.name}`}
-          rowProps={() => ({ className: SECURITY_TABLE_ROW_CLASS })}
+          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
           tableClassName="w-full min-w-[60rem]"
           scrollAriaLabel={text("settings.database.systemTables.table.scrollLabel", counts)}
           scrollTestId="system-tables-scroll-region"
           stickyHeader
-          visibleRows={SECURITY_TABLE_VISIBLE_ROWS}
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
       </div>
     </details>

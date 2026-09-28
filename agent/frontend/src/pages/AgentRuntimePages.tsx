@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Brain,
@@ -35,10 +35,22 @@ import {
   CardTitle,
   DataTable,
   ExecutionConfirmationField,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
-  ErrorState,
-  LoadingState,
+  FormSkeleton,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  ListSkeleton,
   ObjectActionBar,
+  offsetForPage,
+  offsetPagination,
+  Pagination,
+  Skeleton,
+  TableSkeleton,
+  TimedLoadingState,
+  usePagination,
   PageHeader,
   ProcessingIndicator,
   RowActionMenu,
@@ -91,6 +103,7 @@ import {
   MissingEditorTarget,
   RowTitleButton,
 } from "@/components/EntityLayout";
+import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
@@ -607,17 +620,18 @@ export function AgentsPage() {
           }
         />
         <PageBody wide>
-          <QueryState query={agents}>
-            {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
-            <Section title={t("agent.list")}>
+          {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
+          <Section title={t("agent.list")}>
+            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={6} />}>
               <AgentTable
                 agents={agentList}
                 bindings={bindingList}
+                bindingsLoading={bindings.isLoading}
                 onOpen={(agent) => editor.openItem(agent.id)}
                 actionsFor={agentActions}
               />
-            </Section>
-          </QueryState>
+            </QueryState>
+          </Section>
         </PageBody>
       </>
     );
@@ -635,7 +649,7 @@ export function AgentsPage() {
           }
         />
         <PageBody wide>
-          <QueryState query={agents}>
+          <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={3} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -648,8 +662,10 @@ export function AgentsPage() {
       key={agent?.id ?? "new"}
       agent={agent}
       availableSkills={skills.data?.skills ?? []}
+      skillsLoading={skills.isLoading}
       skillsError={skills.error}
       bindings={agent ? bindingList.filter((binding) => binding.agent_id === agent.id) : []}
+      bindingsLoading={bindings.isLoading || runtimes.isLoading}
       runtimes={runtimes.data?.runtimes ?? []}
       actions={agent ? agentActions(agent) : []}
       readOnly={!canManage}
@@ -662,11 +678,14 @@ export function AgentsPage() {
 function AgentTable({
   agents,
   bindings,
+  bindingsLoading,
   onOpen,
   actionsFor,
 }: {
   agents: AgentProfile[];
   bindings: RuntimeBinding[];
+  /** 実行先を取得中は「未設定」と誤って出さず、セルの形の Skeleton にする。 */
+  bindingsLoading: boolean;
   onOpen: (agent: AgentProfile) => void;
   actionsFor: (agent: AgentProfile) => EntityAction[];
 }) {
@@ -694,6 +713,7 @@ function AgentTable({
       key: "binding",
       header: t("agent.defaultBinding"),
       render: (agent) => {
+        if (bindingsLoading) return <Skeleton className="h-4 w-24" testId={`agent-binding-loading-${agent.id}`} />;
         const binding = bindings.find((candidate) => candidate.agent_id === agent.id && candidate.is_default);
         return binding ? (
           <span className="break-all text-xs text-fg">{binding.native_agent_ref}</span>
@@ -727,7 +747,8 @@ function AgentTable({
   ];
 
   return (
-    <DataTable
+    <PagedDataTable
+      pageKey="agents"
       rows={agents}
       columns={columns}
       getRowKey={(agent) => agent.id}
@@ -735,6 +756,7 @@ function AgentTable({
       rowProps={(agent) => ({ className: "align-top", "data-testid": `agent-row-${agent.id}` })}
       tableClassName="w-full min-w-[46rem]"
       ariaLabel={t("agent.list")}
+      paginationTestId="agent-list-pagination"
       empty={<EmptyState title={t("common.empty.title")} />}
     />
   );
@@ -806,7 +828,7 @@ export function RuntimesPage() {
       />
       <PageBody wide>
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
-        <QueryState query={runtimes}>
+        <QueryState query={runtimes} loadingLabel={t("loading.runtimes")} skeleton={<RuntimeCardsSkeleton />}>
           <div className="grid gap-4 xl:grid-cols-2">
             {(runtimes.data?.runtimes ?? []).map((runtime) => {
               const operation = runtimeOperation(runtime);
@@ -942,6 +964,16 @@ const RUNTIME_OPERATION_LABEL_KEYS = {
   restart: "runtime.processing.restart",
   remove: "runtime.processing.remove",
 } as const satisfies Record<RuntimeOperation, I18nKey>;
+
+/** Runtime のカード（2 列）の形。読み込み後のカードの高さを予約する。 */
+function RuntimeCardsSkeleton() {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2" aria-hidden="true">
+      <Skeleton className="h-64" />
+      <Skeleton className="h-64" />
+    </div>
+  );
+}
 
 const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
 
@@ -1179,7 +1211,10 @@ export function RunsPage() {
                         ))}
                       </select>
                     </Field>
-                    {!agentBindings.length ? <Banner severity="warning">{t("run.unbound")}</Banner> : null}
+                    {/* Agent・実行先を取得し終えるまでは「実行先がない」と判断できないため出さない。 */}
+                    {!agents.isLoading && !bindings.isLoading && !agentBindings.length ? (
+                      <Banner severity="warning">{t("run.unbound")}</Banner>
+                    ) : null}
                     {formError ? <Banner severity="danger">{formError}</Banner> : null}
                     {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
                     {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
@@ -1190,7 +1225,11 @@ export function RunsPage() {
                 </Card>
               ) : null}
 
-              <QueryState query={runs}>
+              <QueryState
+                query={runs}
+                loadingLabel={t("loading.runs")}
+                skeleton={<RunHistorySkeleton />}
+              >
                 {restoredSelection.missing ? (
                   <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
                 ) : null}
@@ -1207,7 +1246,14 @@ export function RunsPage() {
             </div>
           }
           right={
-            <QueryState query={runs}>
+            // 同じ取得の経過時間は実行履歴の側に出し、詳細は形だけにする（messaging.md §3.7）。
+            <QueryState
+              query={runs}
+              loadingLabel={t("loading.runs")}
+              skeleton={<FormSkeleton fields={4} />}
+              skeletonOnly
+              testId="run-detail-loading"
+            >
               {selectedRun ? (
                 <RunDetail
                   run={selectedRun}
@@ -1337,12 +1383,14 @@ export function ApprovalsPage() {
     <>
       <PageHeader wide title={t("nav.approvals")} subtitle={t("page.approvals.subtitle")} />
       <PageBody wide>
-        <QueryState query={runs}>
+        <QueryState query={runs} loadingLabel={t("loading.approvals")} skeleton={<TableSkeleton columns={3} />}>
           <AgentSplitPane
             splitId="approvals-list"
             left={
               <Section title={t("approval.list")}>
-                <DataTable
+                {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない。 */}
+                <PagedDataTable
+                  pageKey="approvals"
                   rows={approvals}
                   columns={columns}
                   getRowKey={({ approval }) => approval.id}
@@ -1350,6 +1398,7 @@ export function ApprovalsPage() {
                   onRowClick={({ approval }) => setSelectedId(approval.id)}
                   rowProps={() => ({ className: "align-top" })}
                   ariaLabel={t("approval.list")}
+                  paginationTestId="approval-list-pagination"
                   empty={<EmptyState title={t("common.empty.title")} />}
                 />
               </Section>
@@ -1421,7 +1470,8 @@ const DEFAULT_AUDIT_FILTER_FORM: AuditFilterForm = {
   approvalStatus: "",
   errorCode: "",
   warnings: "any",
-  limit: "100",
+  // 1 ページの件数（#265。以前は 1 度に取得する件数で、既定 100 件）。
+  limit: String(DEFAULT_PAGE_SIZE),
 };
 
 const isAuditFilterForm: WorkspaceValidator<AuditFilterForm> = (value): value is AuditFilterForm => {
@@ -1442,10 +1492,16 @@ function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
     approval_status: form.approvalStatus || undefined,
     error_code: form.errorCode.trim() || undefined,
     has_guardrail_warnings: form.warnings === "any" ? undefined : form.warnings === "true",
-    limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100,
+    limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, AUDIT_MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE,
     offset: 0,
   };
 }
+
+/** 1 ページの件数の上限（backend の `limit` の上限）。 */
+const AUDIT_MAX_PAGE_SIZE = 1000;
+
+const isAuditPage: WorkspaceValidator<number> = (value): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 1;
 
 export function AuditPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
@@ -1461,11 +1517,33 @@ export function AuditPage() {
     DEFAULT_AUDIT_FILTER_FORM,
     isAuditFilterForm
   );
-  const appliedFilters = useMemo(() => auditFiltersOf(appliedForm), [appliedForm]);
+  // ページ番号も作業状態に残す。ページは API の offset / limit に直して取得する（#265）。
+  const [auditPage, setAuditPage] = useWorkspaceState("audit", "page", 1, isAuditPage);
+  const appliedFilters = useMemo(() => {
+    const filters = auditFiltersOf(appliedForm);
+    return { ...filters, offset: offsetForPage(auditPage, filters.limit ?? DEFAULT_PAGE_SIZE) };
+  }, [appliedForm, auditPage]);
   const audit = useQuery({
     queryKey: ["audit", "tool-calls", appliedFilters],
     queryFn: () => agentApi.listToolCallAudit(appliedFilters),
+    // ページを送っている間は今のページを出したまま取り直す（表を Skeleton に戻さない）。
+    placeholderData: keepPreviousData,
   });
+  const auditPaging = audit.data
+    ? offsetPagination({
+        offset: audit.data.offset,
+        limit: audit.data.limit,
+        total: audit.data.total,
+        count: audit.data.records.length,
+      })
+    : null;
+  // 残していたページが記録の削除などで範囲外になったら、最後のページへ寄せる。
+  const lastAuditPage = auditPaging?.totalPages ?? null;
+  useEffect(() => {
+    if (lastAuditPage !== null && audit.data?.records.length === 0 && auditPage > lastAuditPage) {
+      setAuditPage(lastAuditPage);
+    }
+  }, [audit.data?.records.length, auditPage, lastAuditPage, setAuditPage]);
   const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
 
   function setFilter<K extends keyof AuditFilterForm>(key: K, value: AuditFilterForm[K]) {
@@ -1474,11 +1552,14 @@ export function AuditPage() {
 
   function applyFilters() {
     setAppliedForm(filterForm);
+    setAuditPage(1);
   }
 
   // CSV も Cookie セッションで取得し、401 / 403 は他の API と同じく扱う（#215）。
   const csvDownload = useMutation({
-    mutationFn: () => agentApi.downloadToolCallAuditCsv(auditFiltersOf(filterForm)),
+    // CSV は 1 ページではなく、条件に合う記録を backend の既定の件数（1,000 件）まで出力する。
+    mutationFn: () =>
+      agentApi.downloadToolCallAuditCsv({ ...auditFiltersOf(filterForm), limit: undefined, offset: undefined }),
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -1620,6 +1701,7 @@ export function AuditPage() {
                 testId="audit-csv-processing"
               />
             ) : null}
+            <p className="text-xs leading-5 text-fg-muted">{t("audit.csvHint")}</p>
             {tools.error ? <Banner severity="warning">{tools.error.message}</Banner> : null}
           </CardContent>
         </Card>
@@ -1633,9 +1715,28 @@ export function AuditPage() {
             {audit.data ? <StatusBadge variant="info" label={`${t("audit.total")}: ${audit.data.total}`} icon={false} /> : null}
           </CardHeader>
           <CardContent>
-            <QueryState query={audit}>
+            <QueryState
+              query={audit}
+              loadingLabel={t("loading.audit")}
+              skeleton={<TableSkeleton columns={9} />}
+            >
               {audit.data?.records.length ? (
-                <AuditRecordsTable records={audit.data.records} />
+                <div className="grid min-w-0 gap-2">
+                  <AuditRecordsTable records={audit.data.records} />
+                  {auditPaging ? (
+                    <Pagination
+                      page={auditPaging.page}
+                      totalPages={auditPaging.totalPages}
+                      onPageChange={setAuditPage}
+                      summary={agentPaginationLabels().summary(auditPaging.range)}
+                      pageIndicator={agentPaginationLabels().pageIndicator?.(auditPaging.page, auditPaging.totalPages)}
+                      prevLabel={t("pager.prev")}
+                      nextLabel={t("pager.next")}
+                      ariaLabel={t("audit.pagerLabel")}
+                      testId="audit-pagination"
+                    />
+                  ) : null}
+                </div>
               ) : (
                 <EmptyState title={t("audit.noRecords")} />
               )}
@@ -1751,9 +1852,12 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       rows={records}
       columns={columns}
       getRowKey={(record) => `${record.run_id}:${record.step_id}`}
-      rowProps={() => ({ className: "align-top" })}
+      rowProps={() => ({ className: `align-top ${INFORMATION_TABLE_ROW_CLASS}` })}
       tableClassName="w-full min-w-[980px]"
       ariaLabel={t("audit.records")}
+      scrollAriaLabel={listScrollLabel(t("audit.records"))}
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
     />
   );
 }
@@ -1816,12 +1920,13 @@ export function ToolsPage() {
     <>
       <PageHeader wide title={t("nav.tools")} subtitle={t("page.tools.subtitle")} />
       <PageBody wide>
-        <QueryState query={tools}>
+        <QueryState query={tools} loadingLabel={t("loading.tools")} skeleton={<TableSkeleton columns={2} />}>
           <AgentSplitPane
             splitId="tools-list"
             left={
               <Section title={t("tool.list")}>
-                <DataTable
+                <PagedDataTable
+                  pageKey="tools"
                   rows={list}
                   columns={columns}
                   getRowKey={(tool) => tool.name}
@@ -1846,6 +1951,9 @@ export function ToolsPage() {
   );
 }
 
+/** メモリの検索で取得する件数（backend の上限）。一覧は 10 件/ページで送る（#265。以前は 20 件で打ち切っていた）。 */
+const MEMORY_SEARCH_LIMIT = 100;
+
 export function MemoryPage() {
   const queryClient = useQueryClient();
   // メモリの登録は Run の実行・操作の権限（operator）が必要（backend の `POST /memory` と同じ。#215）。
@@ -1859,7 +1967,9 @@ export function MemoryPage() {
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const memory = useQuery({
     queryKey: ["memory", query],
-    queryFn: () => agentApi.searchMemory(query),
+    queryFn: () => agentApi.searchMemory(query, MEMORY_SEARCH_LIMIT),
+    // 検索語を変えている間は前の結果を出したまま取り直す（入力のたびに一覧を Skeleton に戻さない）。
+    placeholderData: keepPreviousData,
   });
   const addMemory = useMutation({
     mutationFn: agentApi.addMemory,
@@ -1974,8 +2084,12 @@ export function MemoryPage() {
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
-              <QueryState query={memory}>
-                <DataTable
+              <p className="text-xs leading-5 text-fg-muted">{t("memory.limitHint", { limit: MEMORY_SEARCH_LIMIT })}</p>
+              <QueryState query={memory} loadingLabel={t("loading.memory")} skeleton={<TableSkeleton columns={2} />}>
+                <PagedDataTable
+                  pageKey="memory"
+                  // 検索語を変えたら 1 ページ目へ戻す。
+                  resetKey={query}
                   rows={entries}
                   columns={memoryColumns}
                   getRowKey={(entry) => entry.id}
@@ -2094,7 +2208,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       <PageHeader wide title={title} subtitle={subtitle} />
       <PageBody wide>
 <div className="space-y-5">
-        <QueryState query={settings}>
+        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={3} />}>
           <ProductMcpNotice settings={settings.data} />
           <Card>
             <CardHeader>
@@ -2286,7 +2400,9 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
         ) : tools.error ? (
           <Banner severity="danger">{tools.error.message}</Banner>
         ) : tools.isLoading ? (
-          <LoadingState rows={3} label={t("common.loading")} />
+          <TimedLoadingState label={t("loading.mcpTools")} testId="mcp-tools-loading">
+            <TableSkeleton columns={5} />
+          </TimedLoadingState>
         ) : (tools.data?.tools ?? []).length ? (
           <McpToolsList tools={tools.data?.tools ?? []} />
         ) : (
@@ -2298,6 +2414,9 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
 }
 
 function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
+  // 絞り込み（server / trace）で取り直した一覧は別の結果なので、そのときだけ 1 ページ目へ戻す。
+  const { page, setPage, totalPages, pageItems, range } = usePagination(tools, DEFAULT_PAGE_SIZE, { resetKey: tools });
+  const labels = agentPaginationLabels();
   const mcpToolColumns: DataTableColumn<ExternalMcpToolInfo>[] = [
     { key: "name", header: t("settings.mcpDiscovery.tool"), className: "font-mono text-xs text-fg" },
     {
@@ -2327,18 +2446,27 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
   ];
 
   return (
-    <div className="min-w-0">
+    <div className="grid min-w-0 gap-2">
+      {/* md 以上は表、md 未満はカード。どちらも同じページ（10 件）を出し、Pagination は 1 つにする。 */}
       <DataTable
         className="hidden md:block"
-        rows={tools}
+        rows={pageItems}
         columns={mcpToolColumns}
         getRowKey={(tool) => `${tool.server_id ?? "default"}:${tool.name}`}
-        rowProps={() => ({ className: "align-top" })}
+        rowProps={() => ({ className: `align-top ${INFORMATION_TABLE_ROW_CLASS}` })}
         tableClassName="w-full min-w-[720px]"
         ariaLabel={t("settings.mcpDiscovery.title")}
+        scrollAriaLabel={listScrollLabel(t("settings.mcpDiscovery.title"))}
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       />
-      <div className="grid gap-3 md:hidden">
-        {tools.map((tool) => (
+      <div
+        className={`grid gap-3 md:hidden ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+        role="region"
+        aria-label={listScrollLabel(t("settings.mcpDiscovery.title"))}
+        tabIndex={0}
+      >
+        {pageItems.map((tool) => (
           <div key={`${tool.server_id ?? "default"}:${tool.name}`} className="rounded-md border border-border p-3">
             <div className="min-w-0 space-y-1">
               <p className="break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
@@ -2352,6 +2480,17 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
           </div>
         ))}
       </div>
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        summary={labels.summary(range)}
+        pageIndicator={labels.pageIndicator?.(page, totalPages)}
+        prevLabel={labels.prev}
+        nextLabel={labels.next}
+        ariaLabel={labels.ariaLabel}
+        testId="mcp-tools-pagination"
+      />
     </div>
   );
 }
@@ -2531,16 +2670,17 @@ export function McpServersPage() {
           }
         />
         <PageBody wide className="space-y-6">
-          <QueryState query={servers}>
-            <Section title={t("settings.mcpServers.title")} description={t("settings.mcpServers.description")}>
+          <Section title={t("settings.mcpServers.title")} description={t("settings.mcpServers.description")}>
+            <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
               <McpServerTable
                 servers={list}
                 onOpen={(server) => editor.openItem(server.server_id)}
                 actionsFor={serverActions}
               />
-            </Section>
-            {capabilities.viewRuns ? <McpDiscoveryPanel configured={anyConfigured} /> : null}
-          </QueryState>
+            </QueryState>
+          </Section>
+          {/* 接続先の一覧を取得し終えるまでは「未設定」と判断できないため、探索のパネルを出さない。 */}
+          {capabilities.viewRuns && servers.data ? <McpDiscoveryPanel configured={anyConfigured} /> : null}
         </PageBody>
       </>
     );
@@ -2558,7 +2698,7 @@ export function McpServersPage() {
           }
         />
         <PageBody wide>
-          <QueryState query={servers}>
+          <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<FormSkeleton fields={4} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -2858,7 +2998,8 @@ function McpServerTable({
   ];
 
   return (
-    <DataTable
+    <PagedDataTable
+      pageKey="mcpServers"
       rows={servers}
       columns={columns}
       getRowKey={(server) => server.server_id}
@@ -3015,15 +3156,15 @@ export function SkillsPage() {
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
-          <QueryState query={skills}>
-            <Section title={t("skills.list")} description={t("skills.description")}>
+          <Section title={t("skills.list")} description={t("skills.description")}>
+            <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<TableSkeleton columns={5} />}>
               <SkillTable
                 skills={list}
                 onOpen={(skill) => editor.openItem(skill.id)}
                 actionsFor={skillActions}
               />
-            </Section>
-          </QueryState>
+            </QueryState>
+          </Section>
         </PageBody>
       </>
     );
@@ -3039,7 +3180,7 @@ export function SkillsPage() {
           breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={target.id} />}
         />
         <PageBody wide>
-          <QueryState query={skills}>
+          <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<FormSkeleton fields={4} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -3347,7 +3488,8 @@ function SkillTable({
   ];
 
   return (
-    <DataTable
+    <PagedDataTable
+      pageKey="skills"
       rows={skills}
       columns={columns}
       getRowKey={(skill) => skill.id}
@@ -3487,15 +3629,15 @@ export function PluginsPage() {
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
-          <QueryState query={plugins}>
-            <Section title={t("plugins.title")} description={t("plugins.description")}>
+          <Section title={t("plugins.title")} description={t("plugins.description")}>
+            <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<TableSkeleton columns={5} />}>
               <PluginTable
                 plugins={list}
                 onOpen={(plugin) => editor.openItem(plugin.id)}
                 actionsFor={pluginActions}
               />
-            </Section>
-          </QueryState>
+            </QueryState>
+          </Section>
         </PageBody>
       </>
     );
@@ -3523,7 +3665,7 @@ export function PluginsPage() {
           breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={target.id} />}
         />
         <PageBody wide>
-          <QueryState query={plugins}>
+          <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<FormSkeleton fields={3} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -3688,7 +3830,17 @@ function PluginDetail({
           ))}
         </Section>
         <Section title={t("plugins.contents")}>
-          <QueryState query={record}>
+          <QueryState
+            query={record}
+            loadingLabel={t("loading.pluginContents")}
+            skeleton={
+              <div className="grid min-w-0 gap-4 xl:grid-cols-3" aria-hidden="true">
+                <Skeleton className="h-40" />
+                <Skeleton className="h-40" />
+                <Skeleton className="h-40" />
+              </div>
+            }
+          >
             {manifest ? (
               <Card className="min-w-0">
                 <CardContent className="grid min-w-0 gap-4 pt-5 xl:grid-cols-3">
@@ -3779,7 +3931,8 @@ function PluginTable({
   ];
 
   return (
-    <DataTable
+    <PagedDataTable
+      pageKey="plugins"
       rows={plugins}
       columns={columns}
       getRowKey={(plugin) => plugin.id}
@@ -3882,20 +4035,20 @@ export function PluginMarketplacesPage() {
           }
         />
         <PageBody wide>
-          <QueryState query={markets}>
-            <Section title={t("marketplaces.list")} description={t("marketplaces.description")}>
-              {refreshMutation.isPending ? (
-                // 取得元（Git / HTTP）からプラグイン一覧を読み直すため数秒以上かかる。
-                // スピナーは行メニューの loading が担う（messaging.md §3.7）。
-                <MarketplaceRefreshProcessing id={refreshMutation.variables} />
-              ) : null}
+          <Section title={t("marketplaces.list")} description={t("marketplaces.description")}>
+            {refreshMutation.isPending ? (
+              // 取得元（Git / HTTP）からプラグイン一覧を読み直すため数秒以上かかる。
+              // スピナーは行メニューの loading が担う（messaging.md §3.7）。
+              <MarketplaceRefreshProcessing id={refreshMutation.variables} />
+            ) : null}
+            <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<TableSkeleton columns={5} />}>
               <MarketplaceTable
                 sources={list}
                 onOpen={(source) => editor.openItem(source.id)}
                 actionsFor={marketplaceActions}
               />
-            </Section>
-          </QueryState>
+            </QueryState>
+          </Section>
         </PageBody>
       </>
     );
@@ -3925,7 +4078,7 @@ export function PluginMarketplacesPage() {
           }
         />
         <PageBody wide>
-          <QueryState query={markets}>
+          <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<FormSkeleton fields={3} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -4097,7 +4250,8 @@ function MarketplaceTable({
   ];
 
   return (
-    <DataTable
+    <PagedDataTable
+      pageKey="marketplaces"
       rows={sources}
       columns={columns}
       getRowKey={(source) => source.id}
@@ -4252,11 +4406,13 @@ function MarketplaceDetail({
             />
           ) : null}
           {listing.isLoading ? (
-            <LoadingState rows={3} label={t("common.loading")} />
+            <TimedLoadingState label={t("loading.marketplacePlugins")} testId="marketplace-plugins-loading">
+              <TableSkeleton columns={3} />
+            </TimedLoadingState>
           ) : listing.error ? (
             <Banner severity="danger">{(listing.error as Error).message}</Banner>
           ) : (
-            <DataTable
+            <PagedDataTable
               rows={plugins}
               columns={columns}
               getRowKey={(manifest) => manifest.id}
@@ -4397,7 +4553,7 @@ export function CommandPolicySettingsPage() {
       <PageHeader wide title={t("nav.settingsCommandPolicy")} subtitle={t("page.settings.commandPolicy.subtitle")} />
       <PageBody wide>
 <div className="space-y-5">
-        <QueryState query={settings}>
+        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={6} />}>
           <Banner severity="info">{t("settings.commandPolicy.enabledHint")}</Banner>
           <Card className="min-w-0">
             <CardHeader>
@@ -4610,7 +4766,7 @@ export function ToolPolicySettingsPage() {
       <PageHeader wide title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
       <PageBody wide>
 <div className="space-y-5">
-        <QueryState query={settings}>
+        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle>{t("nav.settingsToolPolicy")}</CardTitle>
@@ -4631,7 +4787,9 @@ export function ToolPolicySettingsPage() {
 
               {tools.error ? <Banner severity="danger">{tools.error.message}</Banner> : null}
               {tools.isLoading ? (
-                <LoadingState rows={4} label={t("common.loading")} />
+                <TimedLoadingState label={t("loading.tools")} testId="tool-policy-tools-loading">
+                  <ListSkeleton rows={4} rowClassName="h-20" />
+                </TimedLoadingState>
               ) : (tools.data?.tools ?? []).length ? (
                 <div className="grid gap-3" role="list" aria-label={t("nav.settingsToolPolicy")}>
                   {(tools.data?.tools ?? []).map((tool) => {
@@ -4759,7 +4917,7 @@ export function RuntimeSafetySettingsPage() {
       <PageHeader wide title={t("nav.settingsRuntimeSafety")} subtitle={t("page.settings.runtimeSafety.subtitle")} />
       <PageBody wide>
 <div className="space-y-5">
-        <QueryState query={settings}>
+        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
           <Banner severity="info">{t("settings.runtimeSafety.guardrail")}</Banner>
           <Card className="min-w-0">
             <CardHeader>
@@ -4936,7 +5094,7 @@ export function RuntimeSnapshotSettingsPage() {
         }
       />
       <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <QueryState query={snapshot}>
+        <QueryState query={snapshot} loadingLabel={t("loading.snapshot")} skeleton={<FormSkeleton fields={2} />}>
           <Card className="min-w-0">
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -5156,8 +5314,10 @@ function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void)
 function AgentEditorView({
   agent,
   availableSkills,
+  skillsLoading,
   skillsError,
   bindings,
+  bindingsLoading,
   runtimes,
   actions,
   readOnly,
@@ -5166,8 +5326,12 @@ function AgentEditorView({
 }: {
   agent?: AgentProfile;
   availableSkills: AgentSkill[];
+  /** Skill を取得中は「取得できません」と誤って出さず、読み込み中の表示にする。 */
+  skillsLoading: boolean;
   skillsError: Error | null;
   bindings: RuntimeBinding[];
+  /** 実行先（Binding / Runtime）を取得中は「未設定」と誤って出さず、読み込み中の表示にする。 */
+  bindingsLoading: boolean;
   runtimes: RuntimeDefinition[];
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存・Binding の操作を出さず、入力を無効にする）。 */
@@ -5369,7 +5533,11 @@ function AgentEditorView({
           </Section>
           <Section title={t("agent.skills")}>
             {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
-            {availableSkills.length ? (
+            {skillsLoading ? (
+              <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
+                <ListSkeleton rows={4} rowClassName="h-11" className="md:grid-cols-2" />
+              </TimedLoadingState>
+            ) : availableSkills.length ? (
               <div className="grid gap-2 md:grid-cols-2">
                 {availableSkills.map((skill) => (
                   <label
@@ -5401,7 +5569,7 @@ function AgentEditorView({
                   </label>
                 ))}
               </div>
-            ) : (
+            ) : skillsError ? null : (
               <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
             )}
           </Section>
@@ -5410,6 +5578,7 @@ function AgentEditorView({
           <RuntimeBindingsPanel
             agent={agent}
             bindings={bindings}
+            loading={bindingsLoading}
             runtimes={runtimes}
             readOnly={readOnly}
             onDirtyChange={(dirty) => dirtySources.report("binding", dirty)}
@@ -5430,12 +5599,14 @@ function bindingSyncVariant(status: string): StatusVariant {
 function RuntimeBindingsPanel({
   agent,
   bindings,
+  loading,
   runtimes,
   readOnly,
   onDirtyChange,
 }: {
   agent: AgentProfile;
   bindings: RuntimeBinding[];
+  loading: boolean;
   runtimes: RuntimeDefinition[];
   /** Binding の追加・既定の変更・同期・削除を出さない（Agent 管理の権限がない利用者）。 */
   readOnly: boolean;
@@ -5587,8 +5758,12 @@ function RuntimeBindingsPanel({
               testId="binding-sync-processing"
             />
           ) : null}
-          {bindings.length ? (
-            <DataTable
+          {loading ? (
+            <TimedLoadingState label={t("loading.bindings")} testId="agent-bindings-loading">
+              <TableSkeleton rows={2} columns={columns.length} />
+            </TimedLoadingState>
+          ) : bindings.length ? (
+            <PagedDataTable
               rows={bindings}
               columns={columns}
               getRowKey={(binding) => binding.id}
@@ -5713,7 +5888,9 @@ function RunHistoryList({
         <CardDescription>{t("run.historyDescription")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable
+        {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない。 */}
+        <PagedDataTable
+          pageKey="runs"
           rows={runs}
           columns={columns}
           getRowKey={(run) => run.id}
@@ -5721,8 +5898,24 @@ function RunHistoryList({
           onRowClick={(run) => onSelect(run.id)}
           rowProps={(run) => ({ className: "align-top", "data-testid": `run-row-${run.id}` })}
           ariaLabel={t("run.history")}
+          paginationTestId="run-history-pagination"
           empty={<EmptyState title={t("common.empty.title")} />}
         />
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 実行履歴のカード（見出し + 表）の形。 */
+function RunHistorySkeleton() {
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle>{t("run.history")}</CardTitle>
+        <CardDescription>{t("run.historyDescription")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <TableSkeleton columns={3} />
       </CardContent>
     </Card>
   );
@@ -5857,7 +6050,7 @@ function RunDetail({
       {/* Run の監査記録は監査の閲覧（auditor）か Agent 管理の権限が必要（#215）。 */}
       {capabilities.viewAudit ? <AuditPanel runId={run.id} /> : null}
 
-      {structured ? <StructuredResultTable result={structured} /> : null}
+      {structured ? <StructuredResultTable key={run.id} result={structured} /> : null}
     </section>
   );
 }
@@ -6382,7 +6575,11 @@ function AuditPanel({ runId }: { runId: string }) {
         <CardDescription>{t("run.auditDescription")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <QueryState query={audit}>
+        <QueryState
+          query={audit}
+          loadingLabel={t("loading.runAudit")}
+          skeleton={<ListSkeleton rows={3} rowClassName="h-24" />}
+        >
           {audit.data?.records.length ? (
             <div className="grid min-w-0 gap-3">
               {audit.data.records.map((record) => (
@@ -6645,6 +6842,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
   );
 }
 
+/** Run の構造化結果。別の Run に切り替えると呼び出し側の key で作り直し、1 ページ目から出す。 */
 function StructuredResultTable({ result }: { result: StructuredResult }) {
   return (
     <Card className="min-w-0">
@@ -6653,7 +6851,7 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
         <CardDescription>{result.sql ?? t("run.sqlHidden")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable
+        <PagedDataTable
           rows={result.rows}
           columns={result.columns.map((column): DataTableColumn<Record<string, unknown>> => ({
             key: column.name,
@@ -6706,22 +6904,6 @@ function JsonPreview({ value }: { value: unknown }) {
       {JSON.stringify(value, null, 2)}
     </pre>
   );
-}
-
-function QueryState<T>({
-  query,
-  children,
-}: {
-  query: { isLoading: boolean; error: Error | null; data?: T };
-  children: ReactNode;
-}) {
-  if (query.isLoading) {
-    return <LoadingState rows={4} label={t("common.loading")} />;
-  }
-  if (query.error) {
-    return <ErrorState message={query.error.message} retryLabel={t("common.retry")} />;
-  }
-  return <>{children}</>;
 }
 
 interface StructuredColumn {

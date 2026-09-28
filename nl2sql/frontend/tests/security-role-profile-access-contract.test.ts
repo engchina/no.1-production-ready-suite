@@ -95,18 +95,16 @@ test("permission editor saves profile access and supports bulk selection", () =>
 });
 
 test("permission editor uses the shared responsive height for an accessible profile scroll region", () => {
-  assert.match(
-    securityManagementSharedSource,
-    /SECURITY_LIST_SCROLL_CLASS = "max-h-\[17\.5rem\] overflow-auto md:max-h-\[28rem\]"/u
-  );
-  assert.match(permissionsPageSource, /SECURITY_LIST_SCROLL_CLASS/u);
+  // 5 / 8 行の高さは共有 UI の INFORMATION_LIST_SCROLL_CLASS が持つ（値は platform の ui のテストで確かめる。#265 で一本化）。
+  assert.doesNotMatch(securityManagementSharedSource, /SECURITY_LIST_SCROLL_CLASS/u);
+  assert.match(permissionsPageSource, /INFORMATION_LIST_SCROLL_CLASS/u);
   assert.match(permissionsPageSource, /id=\{`\$\{idPrefix\}-label`\}/u);
   assert.match(permissionsPageSource, /role="region"/u);
   assert.match(permissionsPageSource, /aria-labelledby=\{`\$\{idPrefix\}-label`\}/u);
   assert.match(permissionsPageSource, /tabIndex=\{0\}/u);
   assert.match(permissionsPageSource, /data-testid=\{`\$\{idPrefix\}-list`\}/u);
   assert.match(permissionsPageSource, /overflow-x-hidden/u);
-  assert.match(permissionsPageSource, /SECURITY_LIST_FOCUS_CLASS/u);
+  assert.match(permissionsPageSource, /INFORMATION_TABLE_FOCUS_CLASS/u);
 });
 
 test("permission editor handles system admin and empty profile states", () => {

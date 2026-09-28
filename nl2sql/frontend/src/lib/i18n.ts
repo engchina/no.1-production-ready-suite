@@ -1236,6 +1236,7 @@ const nl2sqlJa = {
   "nl2sql.result.columns": "参照列",
   "nl2sql.results.title": "検索結果（{count}件）",
   "nl2sql.results.empty": "該当するデータがありません。",
+  "nl2sql.results.scrollLabel": "検索結果。スクロールできます。",
   "nl2sql.feedback.good": "良い",
   "nl2sql.feedback.bad": "違う",
   "nl2sql.feedback.unrated": "未評価",
@@ -1502,7 +1503,7 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.savedFilesHintForProfile":
     "{profile}で過去にオントロジー構築へ使用したファイルです。",
   "profiles.ontologyBuild.savedFilesList": "保存済みファイル一覧",
-  "profiles.ontologyBuild.savedFilesLoading": "保存済みファイルを読み込んでいます…",
+  "profiles.ontologyBuild.savedFilesLoading": "保存済みファイルを読み込んでいます",
   "profiles.ontologyBuild.savedFilesEmpty": "保存済みファイルはまだありません。",
   "profiles.ontologyBuild.savedFileDelete": "削除",
   "profiles.ontologyBuild.savedFileDeleteAria": "{name} を保存済みファイルから削除",

@@ -7,15 +7,7 @@ import { FixedSplitPane, TextField, cn, type FixedSplitWidePane } from "@engchin
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
 
-// ---- 一覧の表示密度（NL2SQL の lib/list-density.ts と同じ値） ----
-
-/** 共有 DataTable の visibleRows に渡す一覧の表示行数（md 未満 5 行・md 以上 8 行）。 */
-export const SECURITY_TABLE_VISIBLE_ROWS = { base: 5, md: 8 } as const;
-/** 表の行の最小高さ。1 行セルでも行の高さをそろえる。 */
-export const SECURITY_TABLE_ROW_CLASS = "h-[3.5rem]";
-export const SECURITY_LIST_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto md:max-h-[28rem]";
-export const SECURITY_LIST_FOCUS_CLASS =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+// 一覧の表示密度（表示行数・行の高さ・スクロール）は @engchina/production-ready-ui の INFORMATION_* を使う（#265 で一本化）。
 
 // ---- ID と表示名 ----
 

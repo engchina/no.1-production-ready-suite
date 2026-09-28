@@ -58,6 +58,39 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760, maxHeightRem: 28 },
+  { name: "mobile", width: 375, height: 812, maxHeightRem: 17.5 },
+]) {
+  test(`版が多いときは一覧の中で縦スクロールし、10 件ごとにページを送る (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const versions = Array.from({ length: 23 }, (_, index) => ({
+      version_id: `v${index + 1}`,
+      name: `版 ${String(index + 1).padStart(2, "0")}`,
+      active: index === 0,
+    }));
+    await page.route("**/api/settings/prompts", (route) => route.fulfill({ json: promptsEnvelope(versions) }));
+
+    await page.goto("/settings/prompts");
+    const list = page.getByTestId("prompt-version-list");
+    await expect(list.getByRole("listitem")).toHaveCount(10);
+    // md 未満 5 行・md 以上 8 行ぶんの高さ（17.5rem / 28rem、ルート 14px）で止まり、中でスクロールする（#265）。
+    const metrics = await list.evaluate((element) => ({
+      maxHeight: getComputedStyle(element).maxHeight,
+      scrolls: element.scrollHeight > element.clientHeight,
+    }));
+    expect(metrics.maxHeight).toBe(`${viewport.maxHeightRem * 14}px`);
+    expect(metrics.scrolls).toBe(true);
+
+    const pager = page.getByTestId("prompt-version-pagination");
+    await expect(pager).toContainText("1 - 10 / 23 件");
+    await pager.getByRole("button", { name: "次へ" }).click();
+    await expect(pager).toContainText("11 - 20 / 23 件");
+    await expect(list.getByText("版 11")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
 test("回答プロンプト版を作成できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let created: unknown = null;

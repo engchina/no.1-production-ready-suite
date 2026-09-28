@@ -193,10 +193,6 @@ export {
 } from "./users-roles/RoleManagementPage";
 export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
 export {
-  SECURITY_LIST_FOCUS_CLASS,
-  SECURITY_LIST_SCROLL_CLASS,
-  SECURITY_TABLE_ROW_CLASS,
-  SECURITY_TABLE_VISIBLE_ROWS,
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityIdentityLines,

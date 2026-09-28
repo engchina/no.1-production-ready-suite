@@ -901,6 +901,7 @@ export const ja = {
   "settings.prompts.list.activeBadge": "有効",
   "settings.prompts.list.createdAt": "作成",
   "settings.prompts.list.empty": "まだ回答プロンプト版がありません。上のフォームから作成してください。",
+  "settings.prompts.list.scrollLabel": "回答プロンプト版の一覧。スクロールできます。",
   "settings.prompts.loadError": "回答プロンプト版を取得できませんでした。",
   "settings.guardrail.subtitle":
     "プロンプト攻撃、個人情報、根拠不足への安全チェックの厳しさを選択します。",
