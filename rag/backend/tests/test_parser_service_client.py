@@ -15,6 +15,7 @@ from rag_parser_core.result import ParseResponse
 from app.clients.parser_service import (
     ParserServiceClient,
     ParserServiceUnavailableError,
+    split_parser_warning,
     supported_formats_label,
 )
 from app.config import Settings
@@ -334,3 +335,79 @@ def test_source_unsupported_message_lists_supported_formats(
 
     assert exc_info.value.reason == "adapter_source_unsupported"
     assert f"対応形式: {supported_formats_label('docling')}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("warning", "expected"),
+    [
+        ("docling_adapter_failed", ("docling_adapter_failed", None)),
+        ("docling_adapter_failed: ImportError", ("docling_adapter_failed", "ImportError")),
+        ("docling_unavailable:  ImportError ", ("docling_unavailable", "ImportError")),
+        (
+            "docling_unavailable: 応答が\n途中で 終わりました",
+            ("docling_unavailable", "応答が 途中で 終わりました"),
+        ),
+        ("docling_adapter_failed:", ("docling_adapter_failed", None)),
+    ],
+)
+def test_split_parser_warning(warning: str, expected: tuple[str, str | None]) -> None:
+    assert split_parser_warning(warning) == expected
+
+
+def _raise_for_parse_warning(
+    monkeypatch: pytest.MonkeyPatch, warning: str
+) -> ParserServiceUnavailableError:
+    response = ParseResponse(
+        extraction=None,
+        parser_backend="docling",
+        parser_version="docling",
+        fallback_used=True,
+        template="docling_fallback",
+        warnings=[warning],
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
+    )
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("docling", b"%PDF", _profile(), "application/pdf", fail_fast=True)
+    return exc_info.value
+
+
+@pytest.mark.parametrize(
+    ("warning", "expected_code"),
+    [
+        # rag_parser_core の adapter 実行(unstructured など)が返す形式。
+        ("docling_adapter_failed: ImportError", "docling_adapter_failed"),
+        # parser-docling の service_failure_warning が返す形式。
+        ("docling_unavailable: ImportError", "docling_unavailable"),
+    ],
+)
+def test_runner_fail_fast_surfaces_exception_type(
+    monkeypatch: pytest.MonkeyPatch, warning: str, expected_code: str
+) -> None:
+    """解析失敗の warning に付いた例外の型名を、利用者向けの文言に添える(#310)。"""
+    error = _raise_for_parse_warning(monkeypatch, warning)
+
+    assert error.reason == "adapter_failed"
+    assert error.warning_code == expected_code
+    assert error.error_detail == "ImportError"
+    message = str(error)
+    assert "解析処理が失敗しました（原因: ImportError）。" in message
+    assert f"エラーコード: {expected_code}" in message
+    assert "parser-docling のログを確認" in message
+
+
+def test_runner_fail_fast_legacy_adapter_failed_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """型名の無い従来の warning も adapter_failed として扱う(原因は添えない)。"""
+    error = _raise_for_parse_warning(monkeypatch, "docling_adapter_failed")
+
+    assert error.reason == "adapter_failed"
+    assert error.warning_code == "docling_adapter_failed"
+    assert error.error_detail is None
+    assert "解析処理が失敗しました。" in str(error)
+    assert "原因:" not in str(error)

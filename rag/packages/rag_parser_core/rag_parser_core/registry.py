@@ -889,7 +889,7 @@ def run_external_adapter(
     parser マイクロサービスはこの関数を呼んで、その image に導入済みの adapter
     (docling/unstructured/mineru/dots_ocr)で parse し、結果を
     `ParseResponse` として返す。package 未導入なら `*_adapter_package_missing`、
-    parse 失敗なら `*_adapter_failed` の fallback を返す。
+    parse 失敗なら `*_adapter_failed: <例外の型名>` の fallback を返す。
     """
     return _external_adapter_result(
         backend,
@@ -964,7 +964,11 @@ def _external_adapter_result(
         )
         if invalid_input:
             return _adapter_fallback_result(backend, f"{backend}_adapter_invalid_input")
-        return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
+        # 例外の型名を添える(例: ``docling_adapter_failed: ImportError``。#310)。利用者が
+        # コンテナのログを開く前に失敗の種類(依存の import 失敗など)を切り分けられるようにする。
+        # メッセージは内部情報を含みうるため型名だけにする。
+        # backend は ``:`` の前を code として扱う。
+        return _adapter_fallback_result(backend, f"{backend}_adapter_failed: {type(exc).__name__}")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
 
 

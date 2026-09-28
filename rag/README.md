@@ -62,6 +62,9 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
   (`docker-compose.yml` の backend サービスにコメントで雛形を記載)。
 
 操作対象は `app/services/catalog.py` の allowlist に限定され、任意コマンドは実行できない。
+compose の project 名は `production-ready-rag` に固定している（`docker-compose.yml` の `name:`。#310）。
+対象の project にコンテナが無い場合、ログ・停止・再起動はエラーになる。旧 project（`no1-production-ready-rag` など）
+のコンテナが残っている環境は、[docs/deployment.md](./docs/deployment.md) の「既存環境の更新手順（#310）」で作り直す。
 
 詳細は [backend/README.md](./backend/README.md) / [frontend/README.md](./frontend/README.md) を参照。
 

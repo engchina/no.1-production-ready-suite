@@ -416,7 +416,9 @@ def _average_page_coverage(reports: Sequence[IngestionQualityReport]) -> float:
 
 
 def _risk_level(warnings: Sequence[str]) -> str:
-    warning_set = set(warnings)
+    # parser の warning は ``<code>: <例外の型名>`` の形で届くことがある(#310)。
+    # code(``:`` の前)だけで判定する。
+    warning_set = {warning.partition(":")[0].strip() for warning in warnings}
     if warning_set.intersection(HIGH_RISK_WARNING_CODES):
         return "high"
     if warning_set.intersection(MEDIUM_RISK_WARNING_CODES):
