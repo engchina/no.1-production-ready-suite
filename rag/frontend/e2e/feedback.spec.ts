@@ -264,6 +264,31 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   await expect(evidence.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 });
 
+test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけ", async ({ page }) => {
+  // 範囲は backend が SQL で絞る（#408）。画面は範囲の案内を、集計・一覧より前に出す。
+  await mockFeedback(page, []);
+  await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+  const allNotice = page.getByRole("status").filter({ hasText: "すべての利用者のフィードバックを表示しています" });
+  await expect(allNotice).toBeVisible();
+  await expect(page.getByText("自分が送ったフィードバックだけを表示しています")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // SYSTEM_ADMIN 以外のロール（承認 FAQ への反映の権限を持っていても同じ）。後の route が優先する。
+  await mockAuthUser(page, {
+    permissions: ["menu.feedback", "rag.feedback.manage"],
+    allowed_business_view_ids: ["bv-1"],
+  });
+  await page.reload();
+  const ownNotice = page.getByRole("status").filter({ hasText: "自分が送ったフィードバックだけを表示しています" });
+  await expect(ownNotice).toBeVisible();
+  await expect(ownNotice).toContainText("SYSTEM_ADMIN のロールの利用者だけが確認できます");
+  await expect(page.getByText("すべての利用者のフィードバックを表示しています")).toHaveCount(0);
+  const noticeBox = await ownNotice.boundingBox();
+  const summaryBox = await page.getByText("全体の有用率", { exact: true }).first().boundingBox();
+  expect(noticeBox !== null && summaryBox !== null && noticeBox.y < summaryBox.y).toBe(true);
+  await expectNoPageOverflow(page);
+});
+
 for (const width of [1280, 1920]) {
   test(`明細表の値は列の境界を超えず、次の列に重ならない (${width}px)`, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "desktop table contract");

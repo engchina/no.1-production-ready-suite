@@ -2645,6 +2645,12 @@ export const ja = {
   "feedback.reason.ambiguous_question": "質問が曖昧（意図や前提を特定できない）",
   "feedback.page.title": "利用者フィードバック",
   "feedback.page.subtitle": "回答と引用への評価を確認し、改善が必要な箇所を特定します。",
+  "feedback.scope.allTitle": "すべての利用者のフィードバックを表示しています",
+  "feedback.scope.allDescription":
+    "一覧と集計には、すべての利用者が送った評価が入ります。SYSTEM_ADMIN 以外のロールの利用者には、自分が送ったフィードバックだけが表示されます。",
+  "feedback.scope.ownTitle": "自分が送ったフィードバックだけを表示しています",
+  "feedback.scope.ownDescription":
+    "一覧と集計は、あなたが送った回答・引用の評価だけです。すべての利用者のフィードバックは、SYSTEM_ADMIN のロールの利用者だけが確認できます。",
   "feedback.page.loadError": "フィードバックを読み込めませんでした。",
   "feedback.filters.period": "期間",
   "feedback.filters.days": "{count}日",
