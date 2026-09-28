@@ -14,6 +14,7 @@ import {
   Power,
   PowerOff,
   RefreshCw,
+  RotateCw,
   Save,
   Server,
   ShieldAlert,
@@ -21,6 +22,7 @@ import {
   Trash2,
   Upload,
   X,
+  type LucideIcon,
 } from "lucide-react";
 
 import {
@@ -38,6 +40,7 @@ import {
   LoadingState,
   ObjectActionBar,
   PageHeader,
+  ProcessingIndicator,
   RowActionMenu,
   Section,
   StatusBadge,
@@ -89,7 +92,7 @@ import {
   RowTitleButton,
 } from "@/components/EntityLayout";
 import { useEditorRoute } from "@/lib/editor-route";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -776,6 +779,19 @@ export function RuntimesPage() {
   }
 
   const error = patchRuntime.error ?? probe.error ?? serviceAction.error;
+  // Runtime ごとに、いま実行中の操作（状態確認・サービス操作）を 1 つだけ求める。
+  // サービスの pull / 起動はイメージの取得やコンテナの起動待ちで数十秒以上かかる。
+  function runtimeOperation(runtime: RuntimeDefinition): RuntimeOperation | null {
+    if (probe.isPending && probe.variables === runtime.id) return "probe";
+    if (
+      serviceAction.isPending &&
+      runtime.managed_service_id &&
+      serviceAction.variables?.serviceId === runtime.managed_service_id
+    ) {
+      return serviceAction.variables.action;
+    }
+    return null;
+  }
   return (
     <>
       <PageHeader
@@ -792,7 +808,9 @@ export function RuntimesPage() {
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <QueryState query={runtimes}>
           <div className="grid gap-4 xl:grid-cols-2">
-            {(runtimes.data?.runtimes ?? []).map((runtime) => (
+            {(runtimes.data?.runtimes ?? []).map((runtime) => {
+              const operation = runtimeOperation(runtime);
+              return (
               <Card key={runtime.id} className="min-w-0">
                 <CardHeader className="flex-row items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -842,6 +860,8 @@ export function RuntimesPage() {
                         <Button
                           size="sm"
                           variant="secondary"
+                          loading={operation === "probe"}
+                          disabled={operation !== null && operation !== "probe"}
                           onClick={() => probe.mutate(runtime.id)} icon={RefreshCw}>
                           {t("runtime.probe")}
                         </Button>
@@ -854,6 +874,9 @@ export function RuntimesPage() {
                                 key={action}
                                 size="sm"
                                 variant={action === "remove" ? "danger" : "secondary"}
+                                icon={RUNTIME_SERVICE_ACTION_ICONS[action]}
+                                loading={operation === action}
+                                disabled={operation !== null && operation !== action}
                                 onClick={() =>
                                   serviceAction.mutate({
                                     serviceId: runtime.managed_service_id as string,
@@ -870,6 +893,18 @@ export function RuntimesPage() {
                           </Button>
                         </div>
                       ) : null}
+                      {operation ? (
+                        // スピナーは操作したボタンの loading が担う（messaging.md §3.7）。
+                        <ProcessingIndicator
+                          active
+                          label={t(RUNTIME_OPERATION_LABEL_KEYS[operation], { runtime: runtime.name })}
+                          operationKey={`${runtime.id}:${operation}`}
+                          placement="action"
+                          activityIcon="none"
+                          className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+                          testId={`runtime-processing-${runtime.id}`}
+                        />
+                      ) : null}
                     </>
                   ) : null}
                   {logs[runtime.id] ? (
@@ -879,13 +914,34 @@ export function RuntimesPage() {
                   ) : null}
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         </QueryState>
       </PageBody>
     </>
   );
 }
+
+type RuntimeOperation = "probe" | "pull" | "start" | "stop" | "restart" | "remove";
+
+// loading 中は先頭のアイコンがスピナーに置き換わるため、サービス操作のボタンにもアイコンを付ける（README §4 Button）。
+const RUNTIME_SERVICE_ACTION_ICONS = {
+  pull: Download,
+  start: Power,
+  stop: PowerOff,
+  restart: RotateCw,
+  remove: Trash2,
+} as const satisfies Record<Exclude<RuntimeOperation, "probe">, LucideIcon>;
+
+const RUNTIME_OPERATION_LABEL_KEYS = {
+  probe: "runtime.processing.probe",
+  pull: "runtime.processing.pull",
+  start: "runtime.processing.start",
+  stop: "runtime.processing.stop",
+  restart: "runtime.processing.restart",
+  remove: "runtime.processing.remove",
+} as const satisfies Record<RuntimeOperation, I18nKey>;
 
 const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
 
@@ -1553,6 +1609,17 @@ export function AuditPage() {
                 {t("audit.downloadCsv")}
               </Button>
             </div>
+            {csvDownload.isPending ? (
+              // 監査レコードが多いと CSV の作成に数秒以上かかる。スピナーはボタンの loading が担う。
+              <ProcessingIndicator
+                active
+                label={t("audit.progress.downloadingCsv")}
+                operationKey="audit-csv-download"
+                placement="action"
+                activityIcon="none"
+                testId="audit-csv-processing"
+              />
+            ) : null}
             {tools.error ? <Banner severity="warning">{tools.error.message}</Banner> : null}
           </CardContent>
         </Card>
@@ -3531,6 +3598,18 @@ function PluginInstallEditor({
       <PageBody wide className="space-y-6">
         {formError ? <Banner severity="danger">{formError}</Banner> : null}
         {installMutation.error ? <Banner severity="danger">{(installMutation.error as Error).message}</Banner> : null}
+        {installMutation.isPending ? (
+          // manifest の検証と Skill / MCP の登録を行うため数秒かかる。スピナーはヘッダーの install ボタンが担う。
+          <ProcessingIndicator
+            active
+            label={t("plugins.progress.installing")}
+            operationKey="plugin-manifest-install"
+            placement="action"
+            activityIcon="none"
+            className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+            testId="plugin-install-processing"
+          />
+        ) : null}
         <Section title={t("plugins.manifest")} description={t("plugins.manifestHint")}>
           <Card className="min-w-0">
             <CardContent className="pt-5">
@@ -3805,6 +3884,11 @@ export function PluginMarketplacesPage() {
         <PageBody wide>
           <QueryState query={markets}>
             <Section title={t("marketplaces.list")} description={t("marketplaces.description")}>
+              {refreshMutation.isPending ? (
+                // 取得元（Git / HTTP）からプラグイン一覧を読み直すため数秒以上かかる。
+                // スピナーは行メニューの loading が担う（messaging.md §3.7）。
+                <MarketplaceRefreshProcessing id={refreshMutation.variables} />
+              ) : null}
               <MarketplaceTable
                 sources={list}
                 onOpen={(source) => editor.openItem(source.id)}
@@ -3853,6 +3937,7 @@ export function PluginMarketplacesPage() {
     <MarketplaceDetail
       source={source}
       actions={marketplaceActions(source)}
+      refreshing={refreshMutation.isPending && refreshMutation.variables === source.id}
       canInstall={canManage}
       onBack={() => editor.backToList()}
       onInstalled={() => {
@@ -4026,15 +4111,31 @@ function MarketplaceTable({
 }
 
 /** マーケットプレイスの詳細（`?id=<marketplace id>`）。配布元の情報と、そこから install できる連携機能を出す。 */
+function MarketplaceRefreshProcessing({ id }: { id: string | undefined }) {
+  return (
+    <ProcessingIndicator
+      active
+      label={t("marketplaces.progress.refreshing", { id: id ?? "" })}
+      operationKey={`marketplace-refresh-${id ?? ""}`}
+      placement="action"
+      activityIcon="none"
+      className="mb-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
+      testId="marketplace-refresh-processing"
+    />
+  );
+}
+
 function MarketplaceDetail({
   source,
   actions,
+  refreshing,
   canInstall,
   onBack,
   onInstalled,
 }: {
   source: MarketplaceSource;
   actions: EntityAction[];
+  refreshing: boolean;
   /** プラグインの install（Agent 管理の権限）。無ければ行の操作を出さない。 */
   canInstall: boolean;
   onBack: () => void;
@@ -4135,8 +4236,21 @@ function MarketplaceDetail({
             <span className="break-all text-xs text-fg-muted">{source.url || "-"}</span>
           </div>
           {source.last_error ? <Banner severity="warning">{source.last_error}</Banner> : null}
+          {refreshing ? <MarketplaceRefreshProcessing id={source.id} /> : null}
         </Section>
         <Section title={t("marketplaces.available")}>
+          {installMutation.isPending ? (
+            // プラグインの取得と Skill / MCP の登録を行うため数秒以上かかる。
+            <ProcessingIndicator
+              active
+              label={t("marketplaces.progress.installing", { id: installMutation.variables ?? "" })}
+              operationKey={`marketplace-install-${installMutation.variables ?? ""}`}
+              placement="action"
+              activityIcon="none"
+              className="mb-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
+              testId="marketplace-install-processing"
+            />
+          ) : null}
           {listing.isLoading ? (
             <LoadingState rows={3} label={t("common.loading")} />
           ) : listing.error ? (
@@ -5399,6 +5513,7 @@ function RuntimeBindingsPanel({
       label: t("binding.sync"),
       icon: RefreshCw,
       disabled: rowBusy,
+      loading: syncBinding.isPending && syncBinding.variables === binding.id,
       onSelect: () => syncBinding.mutate(binding.id),
     },
     {
@@ -5447,6 +5562,7 @@ function RuntimeBindingsPanel({
         <RowActionMenu
           actions={bindingActions(binding)}
           ariaLabel={t("common.entityActions", { name: binding.native_agent_ref })}
+          loading={syncBinding.isPending && syncBinding.variables === binding.id}
           testId={`binding-row-actions-${binding.id}`}
         />
       ),
@@ -5457,6 +5573,20 @@ function RuntimeBindingsPanel({
     <Section title={t("binding.title")} description={t("binding.description")}>
       <Card className="min-w-0">
         <CardContent className="space-y-4 pt-5">
+          {syncBinding.isPending ? (
+            // 実行先の Runtime へ Agent の定義を同期するため数秒以上かかる。スピナーは行メニューの loading が担う。
+            <ProcessingIndicator
+              active
+              label={t("binding.progress.syncing", {
+                ref: bindings.find((binding) => binding.id === syncBinding.variables)?.native_agent_ref ?? "",
+              })}
+              operationKey={`binding-sync-${syncBinding.variables ?? ""}`}
+              placement="action"
+              activityIcon="none"
+              className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+              testId="binding-sync-processing"
+            />
+          ) : null}
           {bindings.length ? (
             <DataTable
               rows={bindings}
@@ -5647,6 +5777,7 @@ function RunDetail({
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm leading-6 text-fg">{run.goal}</p>
+          <RunProgressIndicator run={run} />
           <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
             <span>{`${t("run.form.agent")}: ${run.agent_id}`}</span>
             <span>{`${t("run.runtime")}: ${run.runtime_id}`}</span>
@@ -5728,6 +5859,37 @@ function RunDetail({
 
       {structured ? <StructuredResultTable result={structured} /> : null}
     </section>
+  );
+}
+
+/**
+ * 実行中の Run の経過時間（durable job。messaging.md §3.7 の placement="job"）。
+ * 開始時刻はサーバーの created_at を使い、Run を開き直しても経過時間が 0 に戻らない。
+ * 実行中の工程（tool / step）が分かるときは工程名も出す。承認待ちは人の操作を待つため遅延の案内を出さない。
+ */
+function RunProgressIndicator({ run }: { run: RunState }) {
+  if (!["queued", "running", "waiting_approval"].includes(run.status)) return null;
+  const currentStep = [...run.steps].reverse().find((step) => step.status === "running");
+  const stepName = currentStep ? (currentStep.tool_call?.name ?? currentStep.kind) : null;
+  const label =
+    run.status === "queued"
+      ? t("run.progress.queued")
+      : run.status === "waiting_approval"
+        ? t("run.progress.waitingApproval")
+        : stepName
+          ? t("run.progress.runningStep", { step: stepName })
+          : t("run.progress.running");
+  return (
+    <ProcessingIndicator
+      active
+      label={label}
+      operationKey={run.id}
+      startedAt={run.created_at}
+      placement="job"
+      showSlowMessage={run.status !== "waiting_approval"}
+      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+      testId="run-progress"
+    />
   );
 }
 

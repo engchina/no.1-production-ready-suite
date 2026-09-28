@@ -5,6 +5,7 @@ import {
   Button,
   EmptyState,
   FormStatus,
+  ProcessingIndicator,
   RowActionMenu,
   SelectField,
   TableSkeleton,
@@ -296,6 +297,16 @@ export function ApprovedFaqManager({
           >
             {t("businessViews.faq.import")}
           </Button>
+          {importFaq.isPending ? (
+            <ProcessingIndicator
+              active
+              label={t("businessViews.faq.importing")}
+              operationKey="approved-faq-import"
+              placement="action"
+              activityIcon="none"
+              testId="approved-faq-import-processing"
+            />
+          ) : null}
         </section>
       </div>
     </div>

@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ProcessingIndicator,
   Skeleton,
   SelectField,
   type SelectFieldOption,
@@ -282,6 +283,20 @@ export function SelectAiCredentialCard() {
               }
             />
 
+            {changeCredential.isPending ? (
+              <ProcessingIndicator
+                active
+                label={t(
+                  data.exists
+                    ? "settings.database.selectAiCredential.progress.recreating"
+                    : "settings.database.selectAiCredential.progress.creating",
+                )}
+                operationKey="select-ai-credential"
+                placement="action"
+                activityIcon="none"
+                testId="select-ai-credential-processing"
+              />
+            ) : null}
             {changeCredential.isError ? (
               <FormStatus tone="danger" message={errorMessage} />
             ) : null}

@@ -56,6 +56,42 @@ test("既定スイートのまま評価実行すると suite を送らず適用�
   await expect(page.getByText("適用スイート: バランス")).toBeVisible();
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`評価の実行中は経過時間と結果の Skeleton を出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    // 応答を止めて、実行中の表示（#376）を確かめてから返す。
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/evaluation/run", async (route) => {
+      await released;
+      await route.fulfill({
+        json: { data: evaluationMetrics("balanced"), error_messages: [], warning_messages: [] },
+      });
+    });
+
+    await page.goto("/evaluation");
+    await page.getByRole("button", { name: "評価実行" }).click();
+
+    const processing = page.getByTestId("evaluation-run-processing");
+    await expect(processing).toContainText("評価を実行しています");
+    await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+    // スピナーはボタンの loading だけにする（二重のスピナーにしない）。
+    await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+    await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
+    await expectNoPageOverflow(page);
+
+    release();
+    await expect(page.getByText("適用スイート: バランス")).toBeVisible();
+    await expect(processing).toHaveCount(0);
+    await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
+  });
+}
+
 test("スイートを選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
   let runPayload: Record<string, unknown> | null = null;
   await page.route("**/api/evaluation/run", async (route) => {

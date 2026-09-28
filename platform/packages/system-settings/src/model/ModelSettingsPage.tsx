@@ -10,6 +10,7 @@ import {
   FormActionBar,
   FormStatus,
   PageBody,
+  ProcessingIndicator,
   RequiredBadge,
   SecretField,
   Skeleton,
@@ -792,6 +793,8 @@ function ModelCatalogEditor({
               ></Button>
               <ModelTestResultPanel
                 result={testResults[testKey]}
+                testing={testingKey === testKey}
+                model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
                 className="md:col-span-5 md:col-start-2"
               />
             </div>
@@ -882,7 +885,11 @@ function TestableTextField({
           onClick: onTest,
         }}
       />
-      <ModelTestResultPanel result={testResult} />
+      <ModelTestResultPanel
+        result={testResult}
+        testing={testing}
+        model={value.trim() || label}
+      />
     </div>
   );
 }
@@ -922,11 +929,29 @@ function TestButton({
 
 function ModelTestResultPanel({
   result,
+  testing = false,
+  model,
   className,
 }: {
   result?: ModelSettingsTestResult;
+  /** テスト中は結果の位置に経過時間を出す（スピナーはテストのボタンが担う。messaging.md §3.7）。 */
+  testing?: boolean;
+  model?: string;
   className?: string;
 }) {
+  if (testing) {
+    return (
+      <ProcessingIndicator
+        active
+        label={t("settings.model.test.running", { model: model ?? "" })}
+        operationKey={model ?? null}
+        placement="action"
+        activityIcon="none"
+        className={className}
+        testId="settings-model-test-processing"
+      />
+    );
+  }
   if (!result) return null;
   return (
     <SettingsTestResultPanel

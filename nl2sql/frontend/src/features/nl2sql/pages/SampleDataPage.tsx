@@ -10,6 +10,7 @@ import {
   PageHeader,
   PageBody,
   ExecutionConfirmationField,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -549,6 +550,17 @@ export function SampleDataPage() {
                   </Button>
                 }
               />
+              {loading === "sample-import" || loading === "sample-delete" ? (
+                // 表の作成とデータの投入（または削除）を順に実行し、数十秒かかる（messaging.md §3.7）。
+                <ProcessingIndicator
+                  active
+                  label={t(loading === "sample-delete" ? "dataTools.sample.progress.deleting" : "dataTools.sample.progress.importing")}
+                  operationKey={loading}
+                  placement="action"
+                  activityIcon="none"
+                  testId="sample-data-processing"
+                />
+              ) : null}
             </section>
           )}
 

@@ -3,6 +3,7 @@ import {
   DataTable,
   type DataTableColumn,
   FormStatus,
+  ProcessingIndicator,
   StatusBadge,
 } from "@engchina/production-ready-ui";
 import { ClipboardCheck } from "lucide-react";
@@ -90,6 +91,17 @@ export function DocragAnswerEvaluation({
           />
         ) : null}
       </div>
+      {evaluate.isPending ? (
+        // LLM を複数回呼ぶため数十秒かかる。スピナーはボタンの loading が担う（messaging.md §3.7）。
+        <ProcessingIndicator
+          active
+          label={t("search.evaluation.running")}
+          operationKey={`docrag-evaluation-${traceId}`}
+          placement="action"
+          activityIcon="none"
+          testId="docrag-evaluation-processing"
+        />
+      ) : null}
       {evaluation ? <EvaluationResult evaluation={evaluation} /> : null}
     </section>
   );

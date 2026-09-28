@@ -19,6 +19,7 @@ import {
   FormActionBar,
   FormStatus,
   PageBody,
+  ProcessingIndicator,
   SelectField,
   StatusBadge,
   type SelectFieldOption,
@@ -595,7 +596,20 @@ function SectionActions({
 }
 
 function ConfigTestContent({ state }: { state: ConfigTestState }) {
-  if (state.phase === "idle" || state.phase === "loading") return null;
+  if (state.phase === "idle") return null;
+  if (state.phase === "loading") {
+    // OCI への認証の確認は通信を伴い数秒かかる。スピナーは接続テストのボタンが担う（messaging.md §3.7）。
+    return (
+      <ProcessingIndicator
+        active
+        label={t("settings.oci.configTest.running")}
+        operationKey="oci-config-test"
+        placement="action"
+        activityIcon="none"
+        testId="settings-oci-test-processing"
+      />
+    );
+  }
 
   if (state.phase === "error") {
     return (

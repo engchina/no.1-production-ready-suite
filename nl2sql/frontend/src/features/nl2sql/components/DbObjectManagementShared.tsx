@@ -21,6 +21,7 @@ import {
   StatusBadge,
   Tabs,
   ContentActionBar,
+  ProcessingIndicator,
   TimedLoadingState,
   Skeleton,
   type ProcessingActivityIcon,
@@ -1270,6 +1271,19 @@ export function DbObjectDetailPanel({
           testId={`${idPrefix}-detail-actions`}
         />
       </div>
+      {countingRows || exporting ? (
+        // 大きな表の COUNT(*) と Excel 出力は数十秒かかる。スピナーは操作の loading が担う（messaging.md §3.7）。
+        <ProcessingIndicator
+          active
+          label={t(countingRows ? "dbAdmin.detail.progress.counting" : "dbAdmin.detail.progress.exporting", {
+            name: detailQualifiedName,
+          })}
+          operationKey={`${countingRows ? "count" : "export"}:${detailQualifiedName}`}
+          placement="action"
+          activityIcon="none"
+          testId={`${idPrefix}-detail-processing`}
+        />
+      ) : null}
 
       {detail.warnings.map((warning) => (
         <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">

@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ProcessingIndicator,
   Skeleton,
   Tabs,
   toast,
@@ -193,6 +194,17 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
         <p className="text-xs leading-relaxed text-fg-muted">
           {t("businessViews.domainKeywords.suggestHelp")}
         </p>
+        {suggest.isPending ? (
+          // 参照ナレッジベースの配信中チャンクを走査するため、件数が多いと数秒以上かかる。
+          <ProcessingIndicator
+            active
+            label={t("businessViews.domainKeywords.suggesting")}
+            operationKey="domain-keywords-suggest"
+            placement="action"
+            activityIcon="none"
+            testId="domain-keywords-suggest-processing"
+          />
+        ) : null}
         {suggest.isError ? (
           <FormStatus
             tone="danger"

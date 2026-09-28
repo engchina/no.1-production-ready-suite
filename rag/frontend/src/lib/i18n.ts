@@ -230,7 +230,7 @@ export const ja = {
   "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
   "settings.parserAdapters.connection.configured": "設定済み",
   "settings.parserAdapters.connection.test": "接続を確認",
-  "settings.parserAdapters.connection.testing": "確認中",
+  "settings.parserAdapters.connection.testing": "{backend} への接続を確認しています",
   "settings.parserAdapters.connection.saveBeforeTest":
     "接続確認には保存済み設定を使います。先に変更を保存してください。",
   "settings.parserAdapters.connection.testFailed": "接続を確認できませんでした。",
@@ -253,7 +253,7 @@ export const ja = {
   "settings.parserAdapters.contract.description":
     "有効な外部解析方式が本プロジェクトの StructuredExtraction へ安全に戻せるかを確認します。",
   "settings.parserAdapters.contract.run": "互換性を確認",
-  "settings.parserAdapters.contract.running": "確認中",
+  "settings.parserAdapters.contract.running": "StructuredExtraction との互換性を確認しています",
   "settings.parserAdapters.contract.notRun": "StructuredExtraction 互換性確認は未実行です。",
   "settings.parserAdapters.contract.loadError":
     "文書解析の互換性確認を取得できませんでした。",
@@ -602,6 +602,9 @@ export const ja = {
   "settings.services.optionalStoppedHint.selectedAdapter":
     "停止中です。取込/解析設定でこのサービスを選択した場合のみ起動してください。",
   "settings.services.action.start": "起動",
+  "settings.services.processing.start": "{service} を起動しています",
+  "settings.services.processing.stop": "{service} を停止しています",
+  "settings.services.processing.restart": "{service} を再起動しています",
   "settings.services.action.stop": "停止",
   "settings.services.action.starting": "起動中",
   "settings.services.action.stopping": "停止中",
@@ -1313,6 +1316,7 @@ export const ja = {
   "businessViews.faq.previewCount": "取込対象 {count} 件（先頭 10 件を表示）",
   "businessViews.faq.previewError": "Excel を読み込めませんでした。",
   "businessViews.faq.import": "取込",
+  "businessViews.faq.importing": "FAQ を取り込んでいます",
   "businessViews.faq.imported": "取込みました（追加 {inserted} 件 / 置換で削除 {deleted} 件）",
   "businessViews.runtime.title": "用語・ルール",
   "businessViews.runtime.kind.terms": "用語",
@@ -1366,6 +1370,7 @@ export const ja = {
   "businessViews.domainKeywords.count": "{count} 件",
   "businessViews.domainKeywords.candidates": "キーワード候補",
   "businessViews.domainKeywords.suggest": "候補を生成",
+  "businessViews.domainKeywords.suggesting": "頻出語の候補を抽出しています",
   "businessViews.domainKeywords.suggestHelp":
     "参照ナレッジベースの配信中チャンクから頻出語を抽出します。選んだ候補は左の一覧に追加され、保存するまで反映されません。",
   "businessViews.domainKeywords.suggestError": "キーワード候補を生成できませんでした。",
@@ -2037,6 +2042,7 @@ export const ja = {
   "flow.chunkPreview.enabled": "有効",
   "flow.chunkPreview.disabled": "無効",
   "flow.chunkPreview.run": "プレビュー実行",
+  "flow.chunkPreview.running": "チャンク分割をプレビューしています",
   "flow.chunkPreview.rerun": "再プレビュー",
   "flow.chunkPreview.error": "分割プレビューを作成できませんでした。",
   "flow.chunkPreview.unsavedEdits":
@@ -2456,6 +2462,7 @@ export const ja = {
   "search.evaluation.standardAnswer": "標準回答",
   "search.evaluation.standardAnswerPlaceholder": "例：受注入力画面で受注番号を入力し、登録ボタンを押します。",
   "search.evaluation.run": "標準回答で評価",
+  "search.evaluation.running": "標準回答で回答を評価しています",
   "search.evaluation.error": "評価を実行できませんでした。時間をおいて再試行してください。",
   "search.evaluation.outcome.passed": "合格",
   "search.evaluation.outcome.failed": "不合格",
@@ -2852,9 +2859,9 @@ export const ja = {
   "evaluation.input.invalidJson": "JSON を確認してください。",
   "evaluation.input.noCases": "cases を 1 件以上入力してください。",
   "evaluation.actions.run": "評価実行",
-  "evaluation.actions.running": "評価中…",
+  "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
-  "evaluation.actions.comparing": "比較中…",
+  "evaluation.actions.comparing": "設定を比較しています",
   "evaluation.actions.loadSample": "サンプルを読み込む",
   "evaluation.status.passed": "合格",
   "evaluation.status.failed": "要改善",

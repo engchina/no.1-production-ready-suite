@@ -384,6 +384,18 @@ export function GuidedClarificationPanel({
           />
         </div>
       ) : null}
+      {busyAction === "answer" ? (
+        // 回答ごとに質問を解釈し直すため数秒以上かかる。スピナーは回答のボタンが担う（messaging.md §3.7）。
+        <ProcessingIndicator
+          active
+          operationKey="guided-clarification-answer"
+          label={t("nl2sql.clarification.loading.answer")}
+          placement="panel"
+          activityIcon="none"
+          className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+          testId="nl2sql-guided-answer-progress"
+        />
+      ) : null}
 
       {recommendation && !session ? (
         <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">

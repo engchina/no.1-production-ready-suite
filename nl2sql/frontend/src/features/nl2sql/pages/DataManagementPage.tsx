@@ -2006,6 +2006,17 @@ function CsvUploadWorkspace({
             </>
           }
         />
+        {loading ? (
+          // 行数が多い CSV は投入に数十秒かかる（messaging.md §3.7）。
+          <ProcessingIndicator
+            active
+            label={t("dataMgmt.csv.progress.uploading")}
+            operationKey="data-csv-upload"
+            placement="action"
+            activityIcon="none"
+            testId="data-csv-upload-processing"
+          />
+        ) : null}
       </fieldset>
 
       {result && (

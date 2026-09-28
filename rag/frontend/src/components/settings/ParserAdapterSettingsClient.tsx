@@ -10,6 +10,7 @@ import {
   Button,
   FieldError,
   FormStatus,
+  ProcessingIndicator,
   Skeleton,
   Switch,
   TimedLoadingState,
@@ -687,6 +688,17 @@ function ExternalConnectionCard({
           onClick={() => void statusQuery.refetch()} icon={Plug}>
           {t("settings.parserAdapters.connection.test")}
         </Button>
+        {statusQuery.isFetching ? (
+          // 外部の GPU parser へ実際に接続するため、起動直後や高負荷時は数秒以上かかる。
+          <ProcessingIndicator
+            active
+            label={t("settings.parserAdapters.connection.testing", { backend: backendLabel(backend) })}
+            operationKey={`external-parser-status-${backend}`}
+            placement="action"
+            activityIcon="none"
+            testId={`external-parser-status-processing-${backend}`}
+          />
+        ) : null}
         {dirty ? (
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.parserAdapters.connection.saveBeforeTest")}
@@ -810,12 +822,32 @@ function ParserAdapterContractCard({
           <FormStatus tone="info" message={t("settings.parserAdapters.contract.notRun")} />
         ) : null}
         {checking && !data ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            <Skeleton className="h-16 rounded-md" />
-            <Skeleton className="h-16 rounded-md" />
-            <Skeleton className="h-16 rounded-md" />
-            <Skeleton className="h-16 rounded-md" />
-          </div>
+          // 初回の確認は結果の形の Skeleton で寸法を予約し、その先頭に経過時間を出す。
+          <TimedLoadingState
+            label={t("settings.parserAdapters.contract.running")}
+            operationKey="parser-adapter-contract"
+            placement="result"
+            framed={false}
+            testId="parser-adapter-contract-loading"
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <Skeleton className="h-16 rounded-md" />
+              <Skeleton className="h-16 rounded-md" />
+              <Skeleton className="h-16 rounded-md" />
+              <Skeleton className="h-16 rounded-md" />
+            </div>
+          </TimedLoadingState>
+        ) : null}
+        {checking && data ? (
+          // 再確認は前の結果を残し、先頭に compact な表示を出す（messaging.md §3.7）。
+          <ProcessingIndicator
+            active
+            label={t("settings.parserAdapters.contract.running")}
+            operationKey="parser-adapter-contract"
+            placement="result"
+            activityIcon="none"
+            testId="parser-adapter-contract-processing"
+          />
         ) : null}
         {data ? <ParserAdapterContractResult data={data} /> : null}
       </CardContent>

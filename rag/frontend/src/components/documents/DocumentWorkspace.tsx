@@ -66,6 +66,7 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ProcessingIndicator,
   SelectField,
   type SelectFieldOption,
   Skeleton,
@@ -2456,6 +2457,17 @@ function ChunkPreviewControls({
           {t(result ? "flow.chunkPreview.rerun" : "flow.chunkPreview.run")}
         </Button>
       </div>
+      {pending ? (
+        // 分割のやり直しは文書の大きさに比例して数秒以上かかる。スピナーはボタンの loading が担う。
+        <ProcessingIndicator
+          active
+          label={t("flow.chunkPreview.running")}
+          operationKey="chunk-preview"
+          placement="action"
+          activityIcon="none"
+          testId="chunk-preview-processing"
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SelectField

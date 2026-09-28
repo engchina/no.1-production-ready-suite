@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ProcessingIndicator,
   RowActionMenu,
   Skeleton,
   type EntityAction,
@@ -119,6 +120,12 @@ export function serviceCanRestart(status: DisplayRuntimeStatus): boolean {
 }
 
 type ServiceControlAction = "start" | "stop" | "restart";
+
+const SERVICE_PROCESSING_LABEL_KEYS = {
+  start: "settings.services.processing.start",
+  stop: "settings.services.processing.stop",
+  restart: "settings.services.processing.restart",
+} as const satisfies Record<ServiceControlAction, I18nKey>;
 
 /** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
 export function ServicesManagementClient() {
@@ -641,6 +648,21 @@ function ServiceRow({
           ) : null}
         </div>
       </div>
+      {thisPending ? (
+        // 起動・停止・再起動はコンテナの起動待ちやモデルの読み込みで数十秒かかる。
+        // スピナーは操作したボタン（または行メニュー）の loading が担う（messaging.md §3.7）。
+        <ProcessingIndicator
+          active
+          label={t(SERVICE_PROCESSING_LABEL_KEYS[startPending ? "start" : stopPending ? "stop" : "restart"], {
+            service: serviceLabel(service),
+          })}
+          operationKey={pending}
+          placement="action"
+          activityIcon="none"
+          className="mt-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
+          testId={`service-processing-${service.service_id}`}
+        />
+      ) : null}
       {logsOpen ? (
         <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
       ) : null}

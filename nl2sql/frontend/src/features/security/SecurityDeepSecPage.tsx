@@ -1845,6 +1845,17 @@ export function SecurityDeepSecPage() {
                   {t("security.deepsec.config.sync")}
                 </Button>
               </div>
+              {configSaving || configSyncing ? (
+                // 保存と同期は Oracle のユーザーとパスワードを更新するため数秒かかる（messaging.md §3.7）。
+                <ProcessingIndicator
+                  active
+                  label={t(configSyncing ? "security.deepsec.progress.syncingConfig" : "security.deepsec.progress.savingConfig")}
+                  operationKey={configSyncing ? "security-deepsec-config-sync" : "security-deepsec-config-save"}
+                  placement="action"
+                  activityIcon="none"
+                  testId="security-deepsec-config-processing"
+                />
+              ) : null}
             </form>
           </ManagementPanelShell>
         ) : null}
@@ -1943,6 +1954,17 @@ export function SecurityDeepSecPage() {
                         </>
                       }
                     />
+                    {foundationApplying ? (
+                      // 基盤の適用は DDL とポリシーの作成を順に実行し、数十秒かかる（messaging.md §3.7）。
+                      <ProcessingIndicator
+                        active
+                        label={t("security.deepsec.progress.applyingFoundation")}
+                        operationKey="security-deepsec-apply-foundation"
+                        placement="action"
+                        activityIcon="none"
+                        testId="security-deepsec-apply-foundation-processing"
+                      />
+                    ) : null}
                   </div>
                 </WorkSection>
               ) : null}
@@ -2007,6 +2029,16 @@ export function SecurityDeepSecPage() {
                         </>
                       }
                     />
+                    {resetting ? (
+                      <ProcessingIndicator
+                        active
+                        label={t("security.deepsec.progress.resetting")}
+                        operationKey="security-deepsec-reset"
+                        placement="action"
+                        activityIcon="none"
+                        testId="security-deepsec-reset-processing"
+                      />
+                    ) : null}
                   </div>
                 </WorkSection>
               ) : null}
@@ -2672,6 +2704,16 @@ export function SecurityDeepSecPage() {
                               </Button>
                             }
                           />
+                          {entitlementApplying ? (
+                            <ProcessingIndicator
+                              active
+                              label={t("security.deepsec.progress.applyingEntitlements")}
+                              operationKey="security-deepsec-apply-entitlements"
+                              placement="action"
+                              activityIcon="none"
+                              testId="security-deepsec-apply-entitlements-processing"
+                            />
+                          ) : null}
                         </div>
                       </div>
                     )}
@@ -2710,6 +2752,16 @@ export function SecurityDeepSecPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-2">
+                  {verifying ? (
+                    <ProcessingIndicator
+                      active
+                      label={t("security.deepsec.progress.verifying")}
+                      operationKey="security-deepsec-verify"
+                      placement="result"
+                      activityIcon="none"
+                      testId="security-deepsec-verify-processing"
+                    />
+                  ) : null}
                   {verification ? (
                     <div
                       role="region"

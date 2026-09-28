@@ -281,6 +281,17 @@ function ImportWizard({
             </div>
           }
         />
+        {loading ? (
+          // 表の作成と行の投入を行うため、行数が多いと数十秒かかる（messaging.md §3.7）。
+          <ProcessingIndicator
+            active
+            label={t("tableMgmt.importWizard.progress.importing")}
+            operationKey="table-import"
+            placement="action"
+            activityIcon="none"
+            testId="table-import-processing"
+          />
+        ) : null}
         {result && <ImportResultPanel result={result} />}
         <SchemaRefreshProcessing placement="job" testId="table-import-schema-refresh-processing" />
         {schemaRefreshError && (

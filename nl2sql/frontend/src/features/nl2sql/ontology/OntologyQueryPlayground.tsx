@@ -20,6 +20,7 @@ import {
   StatusBadge,
   ClearActionButton,
   DisclosureChevron,
+  ProcessingIndicator,
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
@@ -979,6 +980,17 @@ export function OntologyQueryPlayground({
               />
             </div>
           </form>
+          {serverSearch.status === "loading" ? (
+            // 質問の embedding とベクトル検索を行うため数秒かかる。スピナーはボタンの loading が担う。
+            <ProcessingIndicator
+              active
+              label={t("ontologyPlayground.serverSearch.progress")}
+              operationKey="ontology-server-search"
+              placement="action"
+              activityIcon="none"
+              testId="ontology-playground-server-search-processing"
+            />
+          ) : null}
           {selectedEdgeId && (() => { const definition = graph?.edges.find(e=>e.id===selectedEdgeId)?.metadata?.definition; return definition && typeof definition === "object" && !Array.isArray(definition) ? <section aria-label={t("ontologyResults.kind.link_type")} className="rounded-md border border-border p-3"><h3 className="text-sm font-semibold">{t("ontologyResults.kind.link_type")}</h3><DefinitionFields definition={definition as Record<string, unknown>} /></section> : null; })()}
           {!result ? (
             <div
