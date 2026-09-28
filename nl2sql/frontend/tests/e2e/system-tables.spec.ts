@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route, type TestInfo } from "@playwright/
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { expectToastStackAtTop } from "./_helpers/toast";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
   return {
@@ -238,17 +239,6 @@ async function expectNoPageOverflow(page: Page) {
       )
     )
     .toBeTruthy();
-}
-
-async function expectToastStackBottomRight(page: Page) {
-  const region = page.getByRole("region", { name: "通知" });
-  const [box, viewport] = await Promise.all([region.boundingBox(), page.viewportSize()]);
-  expect(box).not.toBeNull();
-  expect(viewport).not.toBeNull();
-  expect(viewport!.width - (box!.x + box!.width)).toBeGreaterThanOrEqual(0);
-  expect(viewport!.width - (box!.x + box!.width)).toBeLessThanOrEqual(24);
-  expect(viewport!.height - (box!.y + box!.height)).toBeGreaterThanOrEqual(0);
-  expect(viewport!.height - (box!.y + box!.height)).toBeLessThanOrEqual(24);
 }
 
 function expectedInformationRows(testInfo: TestInfo) {
@@ -656,7 +646,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   await expect(region).toHaveAttribute("aria-live", "polite");
   const toastStatus = region.getByRole("status");
   await expect(toastStatus).toContainText("システムテーブルは最新です。変更はありません。");
-  await expectToastStackBottomRight(page);
+  await expectToastStackAtTop(page);
   expect(
     await page.evaluate(() => document.activeElement?.closest('[role="region"]') != null)
   ).toBe(false);

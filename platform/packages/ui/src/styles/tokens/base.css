@@ -89,10 +89,11 @@ body {
 
 /* メッセージ機構のアニメーション。transform/opacity のみ・enter 150–200ms。
  * prefers-reduced-motion は下部で一括無効化。 */
+/* 通知は上端に出すため、上から降りてくる（#411）。 */
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(0.5rem);
+    transform: translateY(-0.5rem);
   }
   to {
     opacity: 1;

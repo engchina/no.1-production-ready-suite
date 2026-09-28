@@ -549,6 +549,50 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  // #411: 通知は主操作を覆わない。以前は画面の右下に出ていたため、ページの末尾（スクロールしきると画面の下端）の
+  // 保存ボタンを覆い、ポインタが通知に乗ると自動の消去が止まって（#351）押せなくなっていた。
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 720 },
+    { name: "mobile", width: 375, height: 812 },
+  ]) {
+    test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page, mockApi }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/settings/command-policy");
+      await expect(page.getByRole("heading", { name: "Command Policy", level: 1 })).toBeVisible();
+      const saves = () =>
+        mockApi.requests.filter((request) => request.method === "PATCH" && request.path.endsWith("/settings/command-policy")).length;
+
+      await page.getByLabel("既定タイムアウト秒").fill("4");
+      const save = page.getByRole("button", { name: "保存", exact: true });
+      await save.click();
+      const notice = page.getByRole("region", { name: "通知" }).getByRole("status").filter({ hasText: "設定を保存しました" });
+      await expect(notice).toBeVisible();
+      await expect.poll(saves).toBe(1);
+
+      // ページの末尾までスクロールすると、保存ボタンは画面の下端に来る（以前の通知の位置）。
+      await page.getByLabel("既定タイムアウト秒").fill("5");
+      await page.locator("main").evaluate((main) => {
+        main.scrollTop = main.scrollHeight;
+      });
+      await expect(save).toBeInViewport();
+      const box = (await save.boundingBox())!;
+      expect(viewport.height - (box.y + box.height)).toBeLessThan(120);
+
+      // 通知にポインタを乗せて止めたまま（一時停止は維持）、覆われていない保存ボタンを押せる。
+      await notice.hover();
+      await expect(notice).toBeVisible();
+      const hit = await save.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return top !== null && element.contains(top);
+      });
+      expect(hit).toBe(true);
+      await save.click({ timeout: 5_000 });
+      await expect.poll(saves).toBe(2);
+      await expectNoHorizontalOverflow(page);
+    });
+  }
+
   test("Command Policy を保存してモバイル幅でも確認できる", async ({ page }) => {
     await page.goto("/settings/command-policy");
 
