@@ -21,7 +21,7 @@ for (const viewport of [
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockApi(page);
-    await page.goto("/dashboard");
+    await page.goto("/settings/appearance");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     await expect(sidebar).toContainText("ナレッジ構築");

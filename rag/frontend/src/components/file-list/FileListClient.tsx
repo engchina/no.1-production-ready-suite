@@ -183,7 +183,6 @@ export function FileListClient() {
     startGraceWindow();
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-    qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
   };
 
   const runBulkDelete = async () => {
@@ -220,7 +219,6 @@ export function FileListClient() {
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
     qc.invalidateQueries({ queryKey: ["documents", "stats"] });
-    qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
 
     if (failed === 0) {
       toast.success(t("fileList.bulkDelete.toast.deleted", { count: deleted }));

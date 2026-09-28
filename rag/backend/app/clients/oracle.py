@@ -3459,14 +3459,6 @@ class OracleClient:
             knowledge_base_id=knowledge_base_id,
         )
 
-    async def count_chunks(self) -> int:
-        """検索可能なチャンク行数を返す。"""
-        return await self._count_chunks_with_oracle()
-
-    async def list_chunk_metadata(self) -> list[dict[str, MetadataValue]]:
-        """検索対象 chunk の metadata JSON だけを返す。"""
-        return await self._list_chunk_metadata_with_oracle()
-
     async def count_document_chunks(self, document_id: str) -> int:
         """指定 document の検索可能なチャンク行数を返す。"""
         return await self._count_document_chunks_with_oracle(document_id)
@@ -7127,44 +7119,6 @@ class OracleClient:
             binds,
         )
         return _row_count_value(row)
-
-    async def _count_chunks_with_oracle(self) -> int:
-        """Oracle chunk/vector table の検索可能件数を取得する。"""
-        where_sql, binds = _oracle_retrieval_where({})
-        row = await self._fetch_one(
-            _render_sql(
-                """
-            SELECT COUNT(*) AS count_value
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return _row_count_value(row)
-
-    async def _list_chunk_metadata_with_oracle(self) -> list[dict[str, MetadataValue]]:
-        """Oracle chunk table から検索対象 chunk の metadata JSON だけを取得する。"""
-        where_sql, binds = _oracle_retrieval_where({})
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_index,
-                c.metadata_json
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return [_chunk_metadata_from_row(row) for row in rows]
 
     async def _count_document_chunks_with_oracle(self, document_id: str) -> int:
         """Oracle chunk/vector table の document 別検索可能件数を取得する。"""
@@ -11100,21 +11054,6 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
         category_name=_optional_str(row.get("category_name")),
         metadata=metadata,
     )
-
-
-def _chunk_metadata_from_row(row: Mapping[str, object]) -> dict[str, MetadataValue]:
-    """chunk metadata listing に traceable citation lineage を補う。"""
-    metadata = _metadata_from_json(row.get("metadata_json"))
-    document_id = row.get("document_id")
-    if document_id is not None:
-        metadata.setdefault("document_id", str(document_id))
-    chunk_id = row.get("chunk_id")
-    if chunk_id is not None:
-        metadata.setdefault("chunk_id", str(chunk_id))
-    chunk_index = row.get("chunk_index")
-    if "chunk_index" not in metadata and chunk_index is not None:
-        metadata["chunk_index"] = _int_value(chunk_index)
-    return metadata
 
 
 def _agent_memory_chunk_from_row(

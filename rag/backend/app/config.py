@@ -879,12 +879,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=4000,
         description="Agent Memory に保存する回答要約 text の最大文字数。",
     )
-    dashboard_query_timeout_seconds: float = Field(
-        default=8.0,
-        gt=0.0,
-        le=60.0,
-        description="ダッシュボード初期集計の DB 待機秒数。DB 停止時に Skeleton を長時間残さない。",
-    )
     db_read_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,

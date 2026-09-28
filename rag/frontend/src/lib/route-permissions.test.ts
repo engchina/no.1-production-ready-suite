@@ -102,7 +102,7 @@ describe("ルートの権限", () => {
   it("canOpenRoute は権限のない URL を拒否し、振り分けだけの URL は通す", () => {
     const hasPermission = allow(MENU_PERMISSIONS.chat);
     expect(canOpenRoute(APP_ROUTES.chat, hasPermission)).toBe(true);
-    expect(canOpenRoute(APP_ROUTES.dashboard, hasPermission)).toBe(false);
+    expect(canOpenRoute(APP_ROUTES.search, hasPermission)).toBe(false);
     expect(canOpenRoute(APP_ROUTES.securityUsers, hasPermission)).toBe(false);
     // 引用カードから開く文書の詳細は、チャットの権限でも開ける。
     expect(canOpenRoute("/documents/doc-1", hasPermission)).toBe(true);
@@ -110,15 +110,24 @@ describe("ルートの権限", () => {
     expect(canOpenRoute("/", hasPermission)).toBe(true);
   });
 
-  it("既定の入口はダッシュボード、無ければナビの並びで最初に開ける画面、どれも無ければ権限なし", () => {
-    expect(defaultEntryRoute(() => true)).toBe(APP_ROUTES.dashboard);
+  it("既定の入口は RAG 検索、開けなければ `/`（NL2SQL と同じ）", () => {
+    expect(defaultEntryRoute(() => true)).toBe(APP_ROUTES.search);
+    expect(defaultEntryRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.search);
     expect(defaultEntryRoute(allow(MENU_PERMISSIONS.upload, MENU_PERMISSIONS.chat))).toBe(
+      APP_ROUTES.home
+    );
+    expect(defaultEntryRoute(() => false)).toBe(APP_ROUTES.home);
+  });
+
+  it("`/` の移動先はナビの並びで最初に開ける画面、どれも無ければ権限なし", () => {
+    expect(firstAllowedRoute(() => true)).toBe(APP_ROUTES.search);
+    expect(firstAllowedRoute(allow(MENU_PERMISSIONS.upload, MENU_PERMISSIONS.chat))).toBe(
       APP_ROUTES.chat
     );
     expect(firstAllowedRoute(allow(MENU_PERMISSIONS.settingsAppearance))).toBe(
       APP_ROUTES.settingsAppearance
     );
-    expect(defaultEntryRoute(() => false)).toBe(APP_ROUTES.forbidden);
+    expect(firstAllowedRoute(() => false)).toBe(APP_ROUTES.forbidden);
   });
 
   it("/settings はシステム設定のうち最初に開ける画面、無ければ既定の入口", () => {

@@ -126,12 +126,6 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 - ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）、`rag_chat_send_message`（`menu.chat`。既定のモデル 1 系統で回答し、USER / ASSISTANT を保存。会話がなければ業務ビューで作る）、`rag_chat_get_conversation`（`menu.chat`）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットの送信は SSE（`POST /api/chat/conversations/{id}/messages/stream`）と MCP で同じ関数（`_prepare_chat_turn` → `_generate_chat_answer`）を使う。
 
-## ダッシュボード集計
-
-- API: `GET /api/dashboard/summary`
-- 文書件数、月次アップロード/索引済み件数、検索可能チャンク数、最近の活動、readiness check をまとめて返す。
-- Oracle document/chunk table の集計 SQL を使う。
-
 ## Oracle 26ai DDL 例
 
 `OracleClient.oracle_document_schema_sql()` / `OracleClient.oracle_vector_schema_sql()` / `OracleClient.oracle_audit_schema_sql()` が返す DDL をベースにする。

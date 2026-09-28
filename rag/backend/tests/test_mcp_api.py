@@ -118,7 +118,7 @@ def test_mcp_is_unavailable_without_secret(auth: ProductionAuth, monkeypatch: Mo
 def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth) -> None:
     searcher = auth.user_with_permissions("searcher", ["menu.search"])
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
-    viewer = auth.user_with_permissions("viewer", ["menu.dashboard"])
+    viewer = auth.user_with_permissions("viewer", ["menu.upload"])
     admin = auth.create_user("admin", system_admin=True)
 
     initialized = _rpc(
