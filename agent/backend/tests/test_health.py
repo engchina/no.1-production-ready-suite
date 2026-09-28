@@ -814,6 +814,8 @@ def test_ready() -> None:
 def _database_status_settings(wallet_dir: str = "", **overrides: object) -> SimpleNamespace:
     """DB の状態 API（#325）が読む属性だけを持つ Settings。"""
     values: dict[str, object] = {
+        # 共通認証（production）。ローカル認証は DB を使わないため状態 API が short circuit する。
+        "app_auth_enabled": True,
         "oracle_user": "AGENT_APP",
         "oracle_password": "db-secret-password",
         "oracle_dsn": "agentdb_high",
@@ -902,6 +904,60 @@ def test_database_status_unreachable_does_not_leak_connection_details(
     text = json.dumps(body)
     for secret in ("adb.example.oraclecloud.com", "AGENT_APP", "agentdb_high", str(tmp_path)):
         assert secret not in text
+
+
+def test_database_status_local_auth_is_ok_without_database(monkeypatch: MonkeyPatch) -> None:
+    """ローカル認証は共通 DB を使わないため、DB 未設定でも接続を試さず ok（ゲートを出さない）。"""
+    called: list[object] = []
+
+    async def must_not_connect(candidate: object) -> None:
+        called.append(candidate)
+
+    settings = _database_status_settings(
+        app_auth_enabled=False, oracle_user="", oracle_password="", oracle_dsn=""
+    )
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(agent_router, "_test_database_connection", must_not_connect)
+
+    resp = client.get("/api/ready/database")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "ok"
+    assert data["check"] == "ok"
+    assert data["detail"] == "local_auth"
+    assert len(data["context_id"]) == 64
+    assert called == []
+
+
+def test_database_status_production_auth_still_checks_database(monkeypatch: MonkeyPatch) -> None:
+    """共通認証（production）では、DB 未設定なら not_configured（short circuit しない）。"""
+    settings = _database_status_settings(oracle_user="", oracle_password="", oracle_dsn="")
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    data = client.get("/api/ready/database").json()["data"]
+
+    assert data["status"] == "not_configured"
+    assert data["check"] == "missing"
+
+
+def test_database_status_uses_real_settings_auth_mode(monkeypatch: MonkeyPatch) -> None:
+    """Settings の `auth_mode` から判定する（local は ok、production は DB を確かめる）。"""
+
+    def settings_for(auth_mode: str) -> Settings:
+        return Settings(
+            _env_file=None,
+            auth_mode=auth_mode,
+            oracle_user="",
+            oracle_dsn="",
+            oracle_password="",
+        )
+
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings_for("local"))
+    assert client.get("/api/ready/database").json()["data"]["status"] == "ok"
+
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings_for("production"))
+    assert client.get("/api/ready/database").json()["data"]["status"] == "not_configured"
 
 
 def test_oci_settings_defaults_match_rag_when_credentials_missing(

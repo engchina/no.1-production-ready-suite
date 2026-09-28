@@ -40,7 +40,11 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_system_settings.database import build_database_router
-from pr_system_settings.database_status import build_database_status_router
+from pr_system_settings.database_status import (
+    READINESS_OK,
+    DatabaseStatusData,
+    build_database_status_router,
+)
 from pr_system_settings.model import (
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -505,12 +509,29 @@ router.include_router(
 # DB の状態 API（`GET /api/ready/database`。3製品共通の判定と契約。#325）。画面の DB ゲートが使う。
 # ログイン不要の公開 path（`app.security.permissions.PUBLIC_API_PATHS`）。Agent は製品の
 # システムテーブルの確認（schema_probe）をまだ持たないため、設定の判定と接続確認だけを行う。
+# ローカル認証は共通 DB を使わないため、接続を試さず ok にする（`_local_auth_short_circuit`）。
 router.include_router(
     build_database_status_router(
         get_settings=lambda: get_settings(),
         test_connection=lambda settings: _test_database_connection(settings),
+        short_circuit=lambda settings: _local_auth_short_circuit(settings),
     )
 )
+
+
+def _local_auth_short_circuit(settings: object) -> DatabaseStatusData | None:
+    """ローカル認証（`AGENT_AUTH_MODE=local`）では、DB を確かめずに ok を返す（#325）。
+
+    Agent で共通 DB（`PLATFORM_ORACLE_*`）を使うのは、共通認証のユーザー・ロール・セッションと
+    ロールに付ける Agent の権限（`security.store`）だけで、ローカル認証ではどちらも in-memory。
+    Run 等の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`）は `AGENT_RUNTIME_ORACLE_*` を使い、
+    共通 DB とは独立している。DB 未設定の開発環境で、業務画面が DB ゲートで塞がれないようにする。
+    """
+    if getattr(settings, "app_auth_enabled", True):
+        return None
+    return DatabaseStatusData(status="ok", check=READINESS_OK, detail="local_auth")
+
+
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
 # 接続テストは外部へ通信するため管理者に限定する。
 router.include_router(
