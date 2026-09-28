@@ -4,8 +4,7 @@
 graphrag マイクロサービスが同一結果を返す。`rag_graph_service_enabled` が真のとき profile 解決を
 pipeline-graphrag サービスへ委譲する。無効時は in-process(同一ロジック)、有効時の
 未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は処理停止する。
-legacy `rag_graph_enabled=True` は full 相当(後方互換)。Temporal GraphRAG は
-`rag_graph_temporal_enabled`(full のとき timestamp 付与)。外部グラフ DB は導入しない。
+legacy `rag_graph_enabled=True` は full 相当(後方互換)。外部グラフ DB は導入しない。
 """
 
 from __future__ import annotations
@@ -69,7 +68,6 @@ class GraphAdapterParams:
     enabled: bool
     build_claims: bool
     build_community_summaries: bool
-    temporal: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,7 +91,6 @@ class GraphAdapterRuntimeSettings:
     enabled: bool
     build_claims: bool
     build_community_summaries: bool
-    temporal: bool
     profiles: tuple[GraphProfileStatus, ...]
 
 
@@ -113,22 +110,20 @@ def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
     """
     profile = normalize_graph_profile(getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE))
     legacy_enabled = bool(getattr(settings, "rag_graph_enabled", False))
-    temporal = bool(getattr(settings, "rag_graph_temporal_enabled", False))
-    remote = _resolve_remote(settings, profile, legacy_enabled, temporal)
+    remote = _resolve_remote(settings, profile, legacy_enabled)
     if remote is not None:
         return remote
-    resolved = resolve_graph_profile(profile, legacy_enabled=legacy_enabled, temporal=temporal)
+    resolved = resolve_graph_profile(profile, legacy_enabled=legacy_enabled)
     return GraphAdapterParams(
         profile=resolved.profile,  # type: ignore[arg-type]
         enabled=resolved.build_entities,
         build_claims=resolved.build_claims,
         build_community_summaries=resolved.build_community_summary,
-        temporal=resolved.temporal,
     )
 
 
 def _resolve_remote(
-    settings: Settings, profile: str, legacy_enabled: bool, temporal: bool
+    settings: Settings, profile: str, legacy_enabled: bool
 ) -> GraphAdapterParams | None:
     """サービス委譲が有効なら remote 解決する(未達/無効は None)。"""
     from rag_pipeline_core.stage import GraphStageRequest
@@ -146,8 +141,6 @@ def _resolve_remote(
         enabled=response.build_entities,
         build_claims=response.build_claims,
         build_community_summaries=response.build_community_summary,
-        # temporal はサービス未対応版でも backend 設定を尊重する。
-        temporal=bool(temporal and response.profile == "full"),
     )
 
 
@@ -171,6 +164,5 @@ def graph_adapter_runtime_settings(settings: Settings) -> GraphAdapterRuntimeSet
         enabled=params.enabled,
         build_claims=params.build_claims,
         build_community_summaries=params.build_community_summaries,
-        temporal=params.temporal,
         profiles=statuses,
     )

@@ -4,6 +4,13 @@
 # CPU parser(docling/unstructured)は既定起動、ローカル GPU は ASR だけを opt-in する。
 # MinerU / Dots.OCR は外部 API を文書解析設定で指定する。
 
+# compose の project 名を固定する(#310)。未指定だと compose ファイルのディレクトリ名(`rag`)から
+# 決まり、旧 repo(`no1-production-ready-rag`)や本番(`production-ready-rag`)と別の project になる。
+# 本番の init_script.sh の wrapper(--project-name)・サービス管理(backend/app/services/control.py)・
+# scripts/build-services.sh も同じ名前を使う。image 名は `production-ready-rag-<service>`、
+# volume 名は `production-ready-rag_<volume>` になる。
+name: production-ready-rag
+
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000

@@ -55,9 +55,6 @@ from app.config import (
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
 )
-from app.config import (
-    EvaluationSuite as EvaluationSuiteName,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +102,6 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "post_retrieval_pipeline": "rag_post_retrieval_pipeline",
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
-    "evaluation_suite": "rag_evaluation_suite",
     "answer_engine": "rag_answer_engine",
     "text_search_tokenizer": "rag_text_search_tokenizer",
     "docrag_query_strategy": "rag_docrag_query_strategy",
@@ -252,7 +248,10 @@ class KnowledgeBaseQueryConfig(BaseModel):
         exclude=True,
         description="legacy 読み取り専用。共有検索インデックスは Business View で上書きしない。",
     )
-    evaluation_suite: EvaluationSuiteName | None = None
+    # 品質評価(評価スイート)は業務ビューで上書きしない。評価 API は業務ビューを受け取らず、
+    # グローバル設定と request の suite だけで決まるため(#301)。保存済みの
+    # ``evaluation_suite`` は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
+
     # 回答エンジン(standard / docrag)。None はグローバル継承。
     answer_engine: Literal["standard", "docrag"] | None = None
     # 全文検索の分割方式(builtin / sudachi)。None はグローバル継承。

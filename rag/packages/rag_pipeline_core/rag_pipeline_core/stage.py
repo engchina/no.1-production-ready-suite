@@ -124,7 +124,6 @@ class GraphStageResponse(BaseModel):
     build_relationships: bool
     build_claims: bool
     build_community_summary: bool
-    temporal: bool
 
 
 class GenerationStageRequest(BaseModel):

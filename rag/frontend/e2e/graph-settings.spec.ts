@@ -16,11 +16,12 @@ for (const viewport of [
 
     await page.goto("/settings/graph");
 
-    await expect(page.getByRole("heading", { name: "関係情報の構築" })).toBeVisible();
+    // ナビ・画面タイトルは取込時の「関係情報の構築」(検索側の関係検索は検索方法。#301)。
+    await expect(page.getByRole("heading", { name: "関係情報の構築", level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構築しない/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /軽量/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フル/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "関係検索" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "関係情報の構築" })).toHaveAttribute(
       "aria-current",
       "page"
     );

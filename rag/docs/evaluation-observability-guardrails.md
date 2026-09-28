@@ -42,7 +42,7 @@ API: `POST /api/evaluation/run`
 - `recall_at_k`: relevant document をどれだけ取得できたか。
 - `mrr`: 最初の relevant document が何位に出たか。
 - `answer_keyword_hit_rate`: 回答が期待キーワードを含んだ割合。
-- `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。判定は安全チェックの方針に関係なく standard の閾値(一致数 3・一致率 0.12)で行う。no-results のように citation context がない case でも、回答が空でなければ(「見つかりませんでした」等の固定文言を含む)根拠なしとして `low_groundedness` に数える。
+- `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。判定は安全チェックの方針に関係なく standard の閾値(一致数 3・一致率 0.12)で行う。正解の document がある case で no-results になったときのように citation context がない case は、回答が空でなければ(「見つかりませんでした」等の固定文言を含む)根拠なしとして `low_groundedness` に数える。正解が no-results の否定 case は下記のとおり合格として数える。
 - `citation_traceability_coverage`: citation が `document_id` / `chunk_id` / page range と、`element_ids`・`bbox`・`section_path` のいずれかを持つ割合。RAGFlow / Docling 的な引用追跡品質の gate に使う。
 - `bbox_citation_coverage`: citation が原本 preview へ位置決めできる `bbox` を持つ割合。画像 OCR、PDF、レイアウト文書の bbox 回帰検知に使う。
 - `preview_addressability_coverage`: chunk bbox だけでなく、StructuredExtraction の `DocumentElement` / `ExtractionTableCell` / `ExtractionAsset` bbox が page number と page size / page rotation / coordinate unit metadata で preview 座標へ解決できる割合。staging gate では chunk bbox が正常でも table cell / asset bbox が定位不能、または page rotation が非法 / bbox metadata と矛盾する場合は失敗にし、RAGFlow 的な citation-to-preview 精度を cell-level まで退化検知する。
@@ -51,6 +51,8 @@ API: `POST /api/evaluation/run`
 - `content_kind_hit_rate`: golden case の `expected_content_kind` が citation metadata の `content_kind` と一致した割合。document-level recall は高いが表・図・コード・メール本文など別 block へ逸れた退化を検知する。
 - `section_coverage`: golden case の `expected_section_paths[]` が citation metadata の `section_path` / `section_title` で覆われた割合。RAGFlow / GraLC-RAG 的な structural section coverage を通常 evaluation gate に持ち込む。
 - `error_count`: 検索失敗または timeout になった evaluation case 数。
+
+**否定 case(正解が no-results)**: `relevant_document_ids` が空の case は「期待する回答がない」否定 case として扱う。検索が根拠を 1 件も返さず no-results で答えたときは期待どおりなので、`precision_at_k` / `recall_at_k` / `mrr` / `groundedness_pass_rate`(`faithfulness`)/ `context_precision` / `context_recall` / `response_relevancy` / citation 系 coverage を 1.0(合格)として数え、`low_groundedness` や no-results の `guardrail_warning` を失敗理由に入れない(#301)。否定 case で根拠を返したときは `unexpected_retrieval` とし、precision / recall / mrr を 0、groundedness は通常どおり判定する。否定 case を含む golden set でも `balanced` / `strict_ci` / `ragas_like` の閾値で不当に落ちない。`expected_answer_keywords` を指定した場合(例: 「見つかりません」)は通常どおり回答キーワードを判定する。
 - `passed`: 指定された `thresholds` をすべて満たし、`error_count=0` だったか。`thresholds` 未指定でも case error があれば `false`。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
 
@@ -67,7 +69,7 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 | `ragas_like` | faithfulness 0.8 / context_precision 0.7 / context_recall 0.8 / response_relevancy 0.7 |
 
 - **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`/api/evaluation/run` `…/compare` は golden-set JSON で `suite` を指定でき、`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定 suite を残す。
-- 評価 API は業務ビューを受け取らないため、業務ビューの「品質評価」上書きは評価の実行には反映されない(#277 で確認。扱いは未決定)。
+- 評価スイートはグローバル設定(と request の `suite`)だけで決まり、業務ビューでは上書きしない。評価 API は業務ビューを受け取らないため、業務ビューの「品質評価」上書きは #301 で画面・API・保存から削除した。保存済みの `view_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
 - 既定 `request_only` は閾値なしで現行どおり `error_count` だけで `passed` を判定する。外部評価 SaaS / LLM-as-judge の追加呼び出しは導入せず、決定論ヒューリスティック指標のみを使う。
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、citation traceability / bbox / element lineage coverage、content kind hit、section coverage、guardrail warning、diagnostics、elapsed ms、error type を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足・引用 lineage / content kind / section lineage 欠落のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。

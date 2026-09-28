@@ -178,6 +178,85 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    `compose_services.txt` から `parser-marker` を消してから `init_script.sh` を実行し直すか、stack を更新して Compute を作り直す。
    stack の入力 `rag_enable_parser_marker` は削除した。
 
+## 既存環境の更新手順（#310 compose の project 名の固定と parser image の作り直し）
+
+#310 で次の2点を変えた。既存のローカル環境は、旧 project のコンテナを止めてから新しい名前で作り直す。
+
+- **compose の project 名を `production-ready-rag` に固定した。** `docker-compose.yml` の top-level `name:`、
+  サービス管理（`backend/app/services/control.py` が `--project-name` / `--project-directory` を付ける）、
+  `scripts/build-services.sh`、本番の `init_script.sh` の wrapper（`rag-compose`）が同じ名前を使う。
+  以前は project 名が compose ファイルのディレクトリ名から決まり（monorepo では `rag`、archive 済みの旧 repo
+  `no.1-production-ready-rag` では `no1-production-ready-rag`）、サービス管理の「ログ」は別 project の
+  コンテナを探して空の結果を返していた。今は対象の project にコンテナが無ければ、ログ・停止・再起動は
+  エラー（HTTP 502）になる。
+- **parser-docling / parser-unstructured の cv2 を headless 版（`opencv-python-headless`）にした。**
+  GUI 版（`opencv-python`）は slim の base image に無い libxcb / libGL / glib を要し、Docling の
+  TableFormer の `import cv2` が `ImportError: libxcb.so.1` で失敗していた（全 PDF が `docling_adapter_failed`）。
+  image の作り直しが必要。parser-unstructured の apt の `libgl1` / `libglib2.0-0` も外した。
+
+### ローカル（dev: backend はホスト、parser / 前処理はコンテナ）
+
+1. 旧 project のコンテナを確認する。`com.docker.compose.project` label が `no1-production-ready-rag`（旧 repo）や
+   `rag`（#310 より前に monorepo の `rag/` で compose を使った場合）のものが対象。
+
+   ```bash
+   docker ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Status}}' \
+     | grep -E $'\t(no1-production-ready-rag|rag)\t'
+   ```
+
+2. 旧 project のコンテナを止めて削除する（dev port 18010〜18038 を新しいコンテナへ空ける）。
+   label で絞るので、別 project（例: 外部の MinerU API）のコンテナは消えない。
+
+   ```bash
+   for project in no1-production-ready-rag rag; do
+     docker ps -aq --filter "label=com.docker.compose.project=${project}" | xargs -r docker rm -f
+   done
+   ```
+
+3. 新しい project 名で image を作り、起動する（`rag/` で実行）。起動はサービス管理画面の「起動」でもよい。
+
+   ```bash
+   scripts/build-services.sh --cpu --preprocess      # image 名は production-ready-rag-<service>
+   docker compose --project-name production-ready-rag --project-directory "$PWD" \
+     -f docker-compose.yml -f docker-compose.dev.yml \
+     up -d --no-build parser-docling parser-unstructured \
+     preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-csv-to-json preprocess-excel-to-json
+   ```
+
+4. 確認する。
+   - サービス管理画面で parser-docling の「ログ」に起動ログが出る。
+   - `rag/evaluation/file-processing-fixtures/policy-ja.pdf` を Docling で解析すると成功する
+     （`curl -F file=@evaluation/file-processing-fixtures/policy-ja.pdf -F content_type=application/pdf http://127.0.0.1:18020/parse`
+     の `extraction` が `null` でなく、`warnings` に `docling_adapter_failed` / `docling_unavailable` が無い）。
+
+5. 旧 project の volume と image を片付ける（任意）。named volume と image は project 名が接頭辞になるため、
+   新しい project からは使われない。
+   - モデルキャッシュ（`no1-production-ready-rag_parser-*-model-cache`、`no1-production-ready-rag_hf-cache`）:
+     Docling のモデルは image に焼き込むため、新しい `production-ready-rag_parser-docling-model-cache` は
+     初回起動時に image の内容で初期化される（再ダウンロードは不要）。旧 volume は削除してよい。
+     MinerU / GLM-OCR などの volume は削除済みのエンジン（#270）のもの。
+   - `no1-production-ready-rag_backend-local-storage` / `no1-production-ready-rag_oci-config`: backend を
+     コンテナで動かしていた場合だけ中身がある。必要なら新しい volume へ写してから削除する。
+
+   ```bash
+   docker volume ls -q | grep '^no1-production-ready-rag_'           # 対象を確認する
+   # backend のローカル保存を引き継ぐ場合（例）
+   docker volume create production-ready-rag_backend-local-storage
+   docker run --rm -v no1-production-ready-rag_backend-local-storage:/from:ro \
+     -v production-ready-rag_backend-local-storage:/to python:3.12-slim cp -a /from/. /to/
+   docker volume ls -q | grep '^no1-production-ready-rag_' | xargs -r docker volume rm
+   docker images --format '{{.Repository}}:{{.Tag}}' | grep '^no1-production-ready-rag-' | xargs -r docker rmi
+   ```
+
+### OCI Compute（`init_script.sh` で配備した環境）
+
+project 名は以前から `production-ready-rag` なので、コンテナの作り直しは不要。parser の image だけ作り直す。
+
+```bash
+sudo rag-compose build parser-docling parser-unstructured
+sudo rag-compose up -d parser-docling parser-unstructured
+```
+
 ## 本番構成
 
 OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台で `docker-compose.yml`
@@ -302,7 +381,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 
 ## 運用パラメータ
 
-- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。DocRAG 親子階層はこの 2 つを使わず、`RAG_DOCRAG_CHILD_TARGET_CHARS` などの 5 項目で分割する([DocRAG 移植機能ガイド](./docrag-port.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
+- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。DocRAG 親子階層はこの 2 つを使わず、`RAG_DOCRAG_CHILD_TARGET_CHARS` などの 5 項目で分割する(解析結果が Docling でない文書は構造認識へ縮退し、この 2 つを使う。[DocRAG 移植機能ガイド](./docrag-port.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
 - 見出し単位・ページ単位では、見出し/ページを第一境界として保つため 32,000 / 0 を推奨する。32,000 文字は長大な単位だけを同じ境界内で再分割する安全上限であり、chunk を常に大きくする目標値ではない。[Cohere Rerank 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-rerank-4-0.htm) の context は 32,000 token だが、文字数上限と token 上限は同一ではない。
 - `RAG_CONTEXT_WINDOW_CHARS`: LLM の入力制限と citation 数のバランスで決める。レスポンスの citations は実際に context へ入った chunk だけになるため、golden set で必要な引用数を確認して調整する。
 - `RAG_CONTEXT_DIVERSITY_LAMBDA`: rerank anchor の MMR 風 diversity 重み。既定 1.0 は rerank 順を維持する。0.2-0.8 を golden set で比較し、`diagnostics.context_diversified_count`、recall、answer keyword hit、context window からの引用落ちを見て調整する。

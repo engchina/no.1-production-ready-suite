@@ -99,7 +99,6 @@ def create_graph_app(
             build_relationships=resolved.build_relationships,
             build_claims=resolved.build_claims,
             build_community_summary=resolved.build_community_summary,
-            temporal=resolved.temporal,
         )
 
     return app

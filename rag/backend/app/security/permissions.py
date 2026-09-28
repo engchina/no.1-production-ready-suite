@@ -122,7 +122,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
     _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
     _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "品質評価の設定"),
-    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係検索"),
+    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
     _menu_permission(MENU_SETTINGS_AGENTIC, _GROUP_PIPELINE, "高度な検索"),
     _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace 設定"),
     _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス管理"),

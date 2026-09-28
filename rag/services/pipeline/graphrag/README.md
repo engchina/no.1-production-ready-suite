@@ -12,8 +12,6 @@ GraphRAG プロファイル(off/entities/full)+ legacy フラグ → KG 構築�
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`GraphStageRequest{profile, legacy_enabled}` → `GraphStageResponse`)。
-- Temporal GraphRAG(full 時の timestamp 付与)は backend 設定 `RAG_GRAPH_TEMPORAL_ENABLED` で
-  制御し、build 側で適用する。
 - `GET /health` → `StageHealth`。
 
 backend は `RAG_GRAPH_SERVICE_ENABLED` 真かつ URL 設定時に委譲し、サービス未起動・未到達時は

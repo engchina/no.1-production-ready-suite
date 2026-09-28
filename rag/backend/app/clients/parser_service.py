@@ -84,6 +84,7 @@ class ParserServiceUnavailableError(RuntimeError):
         status_code: int | None = None,
         attempts: int = 1,
         warning_code: str | None = None,
+        error_detail: str | None = None,
     ) -> None:
         self.backend = backend
         self.reason = reason
@@ -91,6 +92,9 @@ class ParserServiceUnavailableError(RuntimeError):
         self.status_code = status_code
         self.attempts = attempts
         self.warning_code = warning_code
+        # parser サービスが warning の ``<code>: <detail>`` に添えた失敗の型名(または
+        # safe_for_user の説明)。利用者向けの文言に「原因」として添える(#310)。
+        self.error_detail = error_detail
         super().__init__(
             _service_unavailable_message(
                 backend,
@@ -99,6 +103,7 @@ class ParserServiceUnavailableError(RuntimeError):
                 status_code=status_code,
                 attempts=attempts,
                 warning_code=warning_code,
+                error_detail=error_detail,
             )
         )
 
@@ -289,13 +294,16 @@ class ParserServiceClient:
                 ) from exc
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
         if fail_fast and result.extraction is None:
-            warning_code = result.warnings[0] if result.warnings else None
+            warning_code, error_detail = (
+                split_parser_warning(result.warnings[0]) if result.warnings else (None, None)
+            )
             raise ParserServiceUnavailableError(
                 backend,
                 _parser_result_failure_reason(result),
                 service_url=url,
                 attempts=self._retry.attempts,
                 warning_code=warning_code,
+                error_detail=error_detail,
             )
         return result
 
@@ -426,9 +434,27 @@ def _fallback(backend: str, warning: str) -> ParserRegistryResult:
     )
 
 
+def split_parser_warning(warning: str) -> tuple[str, str | None]:
+    """parser の warning を ``(code, detail)`` に分ける。
+
+    parser サービスは失敗の warning に型名や説明を添えることがある(#310)。
+    - ``docling_adapter_failed: ImportError``(rag_parser_core の adapter 実行)
+    - ``docling_unavailable: ImportError``(``service_failure_warning``。
+      safe_for_user の例外は型名ではなく説明文)
+    - ``docling_adapter_failed``(従来の形式。detail なし)
+    detail は空白を畳み、長すぎる場合は切り詰める。
+    """
+    code, separator, detail = warning.partition(":")
+    code = code.strip()
+    if not separator:
+        return code, None
+    normalized = " ".join(detail.split())[:400]
+    return code, normalized or None
+
+
 def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
     """HTTP 200 でも parser が extraction を返せない理由を user-facing reason へ寄せる。"""
-    warnings = tuple(result.warnings)
+    warnings = tuple(split_parser_warning(warning)[0] for warning in result.warnings)
     if any(warning.endswith("_adapter_package_missing") for warning in warnings):
         return "adapter_package_missing"
     if any(warning.endswith("_adapter_source_unsupported") for warning in warnings):
@@ -445,6 +471,9 @@ def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
         return "adapter_invalid_input"
     if any(warning.endswith("_adapter_failed") for warning in warnings):
         return "adapter_failed"
+    # ``service_failure_warning`` の ``<backend>_unavailable: <detail>``(解析中の例外)。
+    if any(warning.endswith("_unavailable") for warning in warnings):
+        return "adapter_failed"
     if result.unsupported_reason:
         return "adapter_source_unsupported"
     return "adapter_empty_result"
@@ -458,12 +487,15 @@ def _service_unavailable_message(
     status_code: int | None = None,
     attempts: int = 1,
     warning_code: str | None = None,
+    error_detail: str | None = None,
 ) -> str:
     label = _SERVICE_LABELS.get(backend, backend)
     service_id = f"parser-{backend.replace('_', '-')}"
     external = backend in ENGINE_SPECS
     retry_suffix = f"{attempts} 回試行しました。" if attempts > 1 else ""
     warning_suffix = f" エラーコード: {warning_code}" if warning_code else ""
+    # 例外の型名(例: ImportError)。ログを開く前に失敗の種類が分かるようにする(#310)。
+    detail_suffix = f"（原因: {error_detail}）" if error_detail else ""
     if reason == "engine_removed":
         return (
             f"この文書レシピが参照する解析エンジン（{label}）は削除されました。"
@@ -545,13 +577,13 @@ def _service_unavailable_message(
         )
     if reason == "adapter_failed":
         return (
-            f"選択した文書解析サービス（{label}）で解析処理が失敗しました。"
+            f"選択した文書解析サービス（{label}）で解析処理が失敗しました{detail_suffix}。"
             f"サービス管理画面で {service_id} のログを確認し、原因を修正してから"
             f"再実行してください。{warning_suffix}"
         )
     if reason == "adapter_empty_result":
         return (
-            f"選択した文書解析サービス（{label}）が抽出結果を返しませんでした。"
+            f"選択した文書解析サービス（{label}）が抽出結果を返しませんでした{detail_suffix}。"
             f"サービス管理画面で {service_id} のログを確認してから再実行してください。"
             f"{warning_suffix}"
         )

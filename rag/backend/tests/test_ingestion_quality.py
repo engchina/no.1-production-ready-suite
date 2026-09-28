@@ -124,3 +124,12 @@ def test_legacy_quality_summary_infers_first_class_tables_assets_and_artifacts()
     }
     assert summary["risk_counts"] == {"low": 0, "medium": 1, "high": 0}
     assert summary["parser_profile_counts"] == {"legacy": 1}
+
+
+def test_risk_level_ignores_exception_type_suffix_on_warning_codes() -> None:
+    """``<code>: <例外の型名>`` の warning も code で判定する(#310)。"""
+    from app.rag.ingestion_quality import _risk_level
+
+    assert _risk_level(["docling_adapter_failed"]) == "medium"
+    assert _risk_level(["docling_adapter_failed: ImportError"]) == "medium"
+    assert _risk_level(["unknown_modality: detail"]) == "high"
