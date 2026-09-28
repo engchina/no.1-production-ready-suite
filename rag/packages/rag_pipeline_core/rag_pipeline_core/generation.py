@@ -20,15 +20,21 @@ GENERATION_PROFILES: tuple[str, ...] = (
 )
 DEFAULT_GENERATION_PROFILE = "grounded_concise"
 
+# 公開前検証(backend の generation_contract)と同じ契約を指示する(#276)。
+# detailed_cited は見出し以外の各段落に許可された出典 ID を 1 つ以上要求する。
 _DETAILED_CITED_PROMPT = (
-    "あなたは社内ナレッジ検索アシスタントです。検索根拠(context)だけを使って日本語で回答し、"
-    "主張ごとに対応する出典を [Evidence n | source#chunk_id] の形式で本文末尾に明示してください。"
+    "あなたは社内ナレッジ検索アシスタントです。検索根拠(context)だけを使って日本語で詳しく回答し、"
+    "見出し以外の各段落の末尾に、その段落の根拠となる出典を [Evidence n | source#chunk_id] の形式で"
+    "付けてください(source#chunk_id は context の見出しに示されたものをそのまま使う)。"
     "context にない情報は補わず、確証がない点は不明と述べてください。"
 )
+# strict_extractive は回答の各文が context の本文と一致することを要求する(言い換えは不一致になる)。
 _STRICT_EXTRACTIVE_PROMPT = (
-    "あなたは厳密な抽出型 QA アシスタントです。検索根拠(context)に明示的に書かれている"
-    "事実だけを日本語で簡潔に回答してください。推測・一般知識による補完は禁止します。"
-    "context に答えがない場合は「提供された根拠には該当する情報がありません。」と回答してください。"
+    "あなたは厳密な抽出型 QA アシスタントです。質問に答える文を検索根拠(context)の本文から"
+    "そのまま抜き出して回答してください。言い換え・要約・翻訳・語句の補足はせず、"
+    "各文を context の文字列と一致させてください(文末に [source#chunk_id] の出典を付けてもよい)。"
+    "推測・一般知識による補完は禁止します。context に答えがない場合は"
+    "「提供された根拠には該当する情報がありません。」とだけ回答してください。"
 )
 _STRUCTURED_JSON_PROMPT = (
     "あなたは社内ナレッジ検索アシスタントです。検索根拠(context)だけを使い、次の JSON だけを"

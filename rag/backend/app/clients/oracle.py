@@ -2864,7 +2864,7 @@ class OracleClient:
                 )
                 """,
                 {
-                    "generation_profile": profile,
+                    "generation_profile": _initial_generation_profile(profile, imported_active),
                     "active_prompt_version_id": imported_active,
                     "updated_at": now,
                     "updated_by_hash": current_audit_request_context().user_id_hash,
@@ -8625,7 +8625,11 @@ def _ensure_generation_settings_row(
     *,
     default_profile: str,
 ) -> StoredGenerationSettings:
-    """GLOBAL 行を一度だけ作成し、現在値を返す。"""
+    """GLOBAL 行を一度だけ作成し、現在値を返す。
+
+    新しい行は有効な Prompt 版を持たないため、deploy 既定が custom でも grounded_concise で
+    作る(custom は有効な版が必須。#276)。
+    """
 
     now = datetime.now(UTC)
     _execute(
@@ -8651,7 +8655,7 @@ def _ensure_generation_settings_row(
         )
         """,
         {
-            "generation_profile": default_profile,
+            "generation_profile": _initial_generation_profile(default_profile, None),
             "updated_at": now,
             "updated_by_hash": current_audit_request_context().user_id_hash,
         },
@@ -8672,6 +8676,14 @@ def _ensure_generation_settings_row(
     if row is None:  # pragma: no cover - MERGE/SELECT の DB invariant
         raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を初期化できませんでした。")
     return _stored_generation_settings_from_row(row)
+
+
+def _initial_generation_profile(profile: str, active_prompt_version_id: str | None) -> str:
+    """GLOBAL 行を新しく作るときの profile。有効な版がない custom は既定へ戻す。"""
+
+    if profile == "custom" and active_prompt_version_id is None:
+        return "grounded_concise"
+    return profile
 
 
 def _lock_generation_settings_row(

@@ -125,8 +125,15 @@ def compose_generation_system_prompt(
     language = (default_language or "").strip()
     if profile == "bilingual_ja_en":
         layers.append("【言語】\n単一言語の既定より日英バイリンガル形式を優先する。")
+    elif language and profile == "strict_extractive":
+        # 抽出型は context の原文との一致を公開前に検証するため、翻訳させない(#276)。
+        layers.append(f"【言語】\n抜き出す文は根拠の原文のまま示し、{language} へ翻訳しない。")
     elif language:
-        layers.append(f"【言語】\n回答は原則 {language} で行う。")
+        # 回答スタイルの指示は「日本語で」を含むため、既定言語を優先すると明示する(#276)。
+        layers.append(
+            f"【言語】\n回答は原則 {language} で行う。"
+            "後続の回答形式の指示にある言語の指定より、この指定を優先する。"
+        )
     normalized_profile = (profile_instructions or "").strip()
     if normalized_profile:
         layers.append(normalized_profile)

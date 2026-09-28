@@ -130,6 +130,60 @@ async def test_independent_oracle_clients_read_same_generation_settings() -> Non
 
 
 @pytest.mark.anyio
+async def test_generation_settings_row_is_not_initialized_as_custom_without_prompt() -> None:
+    """deploy 既定が custom でも、有効な版のない GLOBAL 行は grounded_concise で作る(#276)。"""
+    row: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 1,
+        "updated_at": datetime.now(UTC),
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[row]])
+
+    await OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="custom"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).get_generation_settings()
+
+    merge = next(
+        call
+        for call in pool.connection.calls
+        if "MERGE INTO rag_generation_settings" in call.statement
+    )
+    assert merge.parameters["generation_profile"] == "grounded_concise"
+
+
+@pytest.mark.anyio
+async def test_legacy_import_does_not_create_custom_without_active_prompt() -> None:
+    """旧 profile が custom でも取り込める有効版がなければ grounded_concise で作る(#276)。"""
+    row: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 1,
+        "updated_at": datetime.now(UTC),
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[], [row], [row], [{"count_value": 0}], []])
+
+    result = await OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).import_legacy_generation_settings(profile="custom", versions=[], active_version_id=None)
+
+    merges = [
+        call
+        for call in pool.connection.calls
+        if "MERGE INTO rag_generation_settings" in call.statement
+    ]
+    assert merges
+    assert all(call.parameters["generation_profile"] == "grounded_concise" for call in merges)
+    assert result["profile"] == "grounded_concise"
+
+
+@pytest.mark.anyio
 async def test_generation_settings_update_locks_and_increments_revision() -> None:
     now = datetime.now(UTC)
     current: dict[str, object] = {

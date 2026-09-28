@@ -1007,9 +1007,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_generation_profile: GenerationProfile = Field(
         default="grounded_concise",
         description=(
-            "回答生成の Generation アダプター。grounded_concise(既定)は現行 system prompt、"
-            "detailed_cited は出典 ID 明示、strict_extractive は抽出のみ・推測禁止、"
-            "structured_json は JSON 構造化出力、bilingual_ja_en は日本語+英語要約。"
+            "回答生成の Generation アダプター。grounded_concise(既定)は根拠に基づく簡潔な回答、"
+            "detailed_cited は段落ごとの出典 ID 明示、strict_extractive は context の文の抜き出し、"
+            "structured_json は JSON 構造化出力、bilingual_ja_en は日本語+英語要約、"
+            "inline_cited は文ごとの出典付与、custom は有効な回答プロンプト版。"
+            "Oracle の GLOBAL 行が未作成のときの初期値としてだけ使う。"
         ),
     )
     rag_generation_system_prompt_override: str | None = Field(
