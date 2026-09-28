@@ -108,6 +108,7 @@ import { parseStructuredExtraction, type SourceDerivationView } from "@/lib/extr
 import {
   documentWorkspaceShouldRefresh,
   ingestionJobIsActive,
+  initialLoadError,
   useDocument,
   useDocumentChunkSets,
   useDocumentRecipeChunks,
@@ -1069,7 +1070,7 @@ export function DocumentWorkspace({
           selectedRecipeId={selectedRecipeId}
           onSelect={selectRecipe}
           loading={recipesQuery.isPending}
-          error={recipesQuery.error}
+          error={initialLoadError(recipesQuery)}
           onRetry={() => void recipesQuery.refetch()}
           chunkSets={chunkSetsQuery.data}
           sourceModality={sourceProfile?.modality ?? null}
@@ -1411,7 +1412,7 @@ export function DocumentWorkspace({
                   onFormatChange={setExportFormat}
                   content={extractionExportQuery.data?.content ?? ""}
                   loading={hasSelectedRecipeExtraction && extractionExportQuery.isPending}
-                  error={extractionExportQuery.isError}
+                  error={initialLoadError(extractionExportQuery) != null}
                   pageCount={extractionExportQuery.data?.page_count ?? 0}
                   elementCount={extractionExportQuery.data?.element_count ?? 0}
                   chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
@@ -1444,7 +1445,7 @@ export function DocumentWorkspace({
               jobs={recipeJobs}
               segments={recipeSegments}
               loading={documentJobsQuery.isPending}
-              error={documentJobsQuery.isError}
+              error={initialLoadError(documentJobsQuery) != null}
               nowMs={elapsedNowMs}
               suppressMessage={documentFailure.primaryMessage}
               ingestionParser={ingestionParser}
@@ -1472,7 +1473,7 @@ export function DocumentWorkspace({
             <IngestionSegmentsPanel
               segments={recipeSegments}
               loading={segmentsQuery.isPending}
-              error={segmentsQuery.isError}
+              error={initialLoadError(segmentsQuery) != null}
               retrying={retryFailedSegments.isPending}
               visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
               retryStatus={

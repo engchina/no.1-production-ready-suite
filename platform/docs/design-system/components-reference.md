@@ -676,7 +676,7 @@ const reveal = (collapsed) => ({ opacity: collapsed ? 0 : 1, transition: "opacit
  * sections: [{ key, title, collapsed?, items: [{ href, label, sidebarLabel?, icon }] }]
  * account: { name, roles } — renders SidebarAccountFooter (PROPOSED shared footer).
  */
-export function Sidebar({ product, sections = [], currentPath, collapsed = false, onToggleCollapsed, onToggleSection, onNavigate, onOpenCommandPalette, account, theme = "light", onToggleTheme, onLogout }) {
+export function Sidebar({ product, sections = [], currentPath, collapsed = false, onToggleCollapsed, onToggleSection, onNavigate, account, theme = "light", onToggleTheme, onLogout }) {
   const isActive = (href) => currentPath === href || (currentPath || "").startsWith(href + "/");
   return (
     <aside
@@ -698,18 +698,6 @@ export function Sidebar({ product, sections = [], currentPath, collapsed = false
       </div>
 
       <nav style={{ flex: 1, minHeight: 0, overflowX: "hidden", overflowY: "auto", padding: collapsed ? "var(--space-3) var(--space-2)" : "var(--space-3)" }}>
-        {onOpenCommandPalette ? (
-          <button type="button" className="pr-nav-row" onClick={onOpenCommandPalette} aria-label="コマンドパレットを開く" style={{ display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "flex-start", gap: "var(--space-2)", width: "100%", height: "var(--command-button-height)", marginBottom: "var(--space-3)", padding: collapsed ? 0 : "0 var(--space-3)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-md)", background: "transparent", color: "var(--color-fg-muted)", font: "var(--text-body)", cursor: "pointer" }}>
-            <Icon name="Search" size={16} />
-            {collapsed ? null : (
-              <>
-                <span style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>コマンドパレットを開く</span>
-                <kbd style={{ flexShrink: 0, borderRadius: "var(--radius-sm)", border: "1px solid var(--color-border-strong)", padding: "0.125rem 0.375rem", fontFamily: "var(--font-sans)", fontSize: 10, fontWeight: 500, color: "var(--color-fg-subtle)" }}>⌘K</kbd>
-              </>
-            )}
-          </button>
-        ) : null}
-
         {sections.map((section) => {
           const expanded = collapsed || !section.collapsed;
           const containsActive = section.items.some((item) => isActive(item.href));

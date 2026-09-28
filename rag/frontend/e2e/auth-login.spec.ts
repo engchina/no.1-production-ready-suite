@@ -197,7 +197,7 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
   await expect(page.getByRole("heading", { name: "システムにログイン" })).toBeVisible();
 });
 
-test("アカウント欄のパスワード変更とログアウト（ローカル DEBUG ではアカウント欄を出さない）", async ({ page }) => {
+test("アカウント欄のパスワード変更とログアウト", async ({ page }) => {
   const auth = await mockAuthApi(page, loginTarget("admin.user"));
 
   await page.goto("/settings/appearance");
@@ -221,7 +221,7 @@ test("アカウント欄のパスワード変更とログアウト（ローカ�
   expect(auth.logoutCalls).toBe(1);
 });
 
-test("ローカル DEBUG はログインせずに全画面を使え、アカウント欄を出さない", async ({ page }) => {
+test("ローカル DEBUG はログインせずに全画面を使え、アカウント欄にログイン省略を示す（#307）", async ({ page }) => {
   await page.route("**/api/auth/me", (route) =>
     route.fulfill({
       json: apiEnvelope({
@@ -245,9 +245,14 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
   await page.goto("/");
   await expect(page).toHaveURL(/\/search$/);
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  if ((page.viewportSize()?.width ?? 1280) <= 640) {
+    await page.getByRole("button", { name: "サイドバーを展開" }).click();
+  }
+  // NL2SQL と同じく、利用者名とログイン省略の表示を出し、パスワード変更・ログアウトは出さない。
+  await expect(sidebar.getByText("ローカル利用者")).toBeVisible();
+  await expect(sidebar.getByRole("status", { name: "ログイン省略" })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
-  await expect(sidebar.getByText("ローカル利用者")).toHaveCount(0);
 
   // ログイン画面を開いても既定の入口（RAG 検索）へ戻す。
   await page.goto("/login");

@@ -186,15 +186,17 @@ for (const viewport of VIEWPORTS) {
       expect(mockApi.lastRequest("POST", "/api/auth/logout")?.headers["x-csrf-token"]).toBe(CSRF_TOKEN);
     });
 
-    test("ローカル（AGENT_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄を出さない", async ({ page }) => {
+    test("ローカル（AGENT_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄にログイン省略を示す（#307）", async ({ page }) => {
       // fixture の既定はローカルの全権限の利用者。`/` はナビの最初の画面（業務 Agent）へ移す（#262）。
       await page.goto("/");
       await expect(page).toHaveURL(/\/agents$/);
       await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
       await expandSidebarOnMobile(page);
+      // NL2SQL と同じく、利用者名とログイン省略の表示を出し、パスワード変更・ログアウトは出さない。
+      await expect(sidebar(page).getByText("ローカル利用者")).toBeVisible();
+      await expect(sidebar(page).getByRole("status", { name: "ログイン省略" })).toBeVisible();
       await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
-      await expect(sidebar(page).getByText("ローカル利用者")).toHaveCount(0);
 
       // ログイン画面を開いても既定の入口（主画面の Run）へ戻す。
       await page.goto("/login");

@@ -58,7 +58,7 @@ async function openSidebarIfCollapsed(page: Page) {
   if ((page.viewportSize()?.width ?? 1280) <= 640 && (await expand.isVisible())) await expand.click();
 }
 
-test("権限のある画面だけをナビとコマンドパレットに出し、空のセクションは隠す", async ({ page }) => {
+test("権限のある画面だけをナビに出し、空のセクションは隠す", async ({ page }) => {
   await mockApi(page);
   await mockAuthUser(page, {
     permissions: ["menu.search", "menu.chat", "menu.upload", "menu.security_users"],
@@ -78,13 +78,6 @@ test("権限のある画面だけをナビとコマンドパレットに出し�
     await expect(sidebar.getByText(section, { exact: true })).toHaveCount(0);
   }
   await expectNoPageOverflow(page);
-
-  await page.keyboard.press(`${modifier}+KeyK`);
-  const dialog = page.getByRole("dialog", { name: "ページへ移動" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("option")).toHaveCount(4);
-  await dialog.getByRole("combobox").fill("OCI");
-  await expect(dialog.getByText("一致するページがありません。")).toBeVisible();
 });
 
 test("権限のない URL を直接開くと権限なしの画面を出し、利用可能な画面へ戻れる", async ({ page }) => {
