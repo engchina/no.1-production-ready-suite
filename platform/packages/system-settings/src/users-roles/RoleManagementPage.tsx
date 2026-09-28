@@ -51,11 +51,11 @@ import { t } from "./messages";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
-  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
   describeErrorMessageOnly,
+  SecurityIdentityRowTitleButton,
   identitySecondaryName,
   isAbortError,
   mapFieldErrors,
@@ -516,21 +516,17 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       render: (role) => {
         const selected = visibleSelectedId === role.role_id;
         return (
-          <button
-            type="button"
-            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              selected ? "text-accent-fg" : "text-fg"
-            }`}
+          <SecurityIdentityRowTitleButton
+            id={role.role_code}
+            name={role.display_name}
+            current={selected}
             aria-label={t("security.roles.showRole", { name: role.role_code })}
-            aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
               selectRole(role.role_id);
             }}
-          >
-            <SecurityIdentityLines id={role.role_code} name={role.display_name} />
-          </button>
+          />
         );
       },
     },

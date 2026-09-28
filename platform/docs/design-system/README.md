@@ -500,6 +500,24 @@ import { Search } from "lucide-react";
 - 見出しセルは折り返さない。並べ替えボタンの高さは `--button-height-sm`（タッチ端末 44px）
 - 一覧用の optional props（platform #56）: `stickyHeader`、`visibleRows`（表頭 + 先頭 N 行の実測高さで内部スクロール）、`scrollAriaLabel`（キーボードでスクロールできる region）、`selectedRowKey` / `isRowSelected`、`rowProps`、`renderRowDetail`、列の `rowHeader`。詳細は `components-reference.md`。**アプリで `<table>` を手書きしない**（例外は、元の文書の表を再現して編集する見出しなしのグリッドだけ。#129）
 
+### `RowTitleButton`（新規）— ★ 一覧の行の題名のボタンは 1 つの実装（#421）
+
+一覧の行を選んで詳細を開く（B 型）・エディタを開く（A 型）ときの、先頭セルの対象名のボタンです。行のクリック（`DataTable` の `onRowClick`）はマウスの補助で、キーボード（Tab → Enter / Space）の導線はこのボタンが持ちます（UX 契約 page-archetypes §0-7）。RAG と Agent がそれぞれ `EntityLayout` に同じ部品を持ち、NL2SQL と system-settings は手書きしていたものを `packages/ui` に一本化しました。
+
+| 項目 | 決定 | 理由 |
+|---|---|---|
+| 選択の状態 | `current` で **`aria-current="true"`**。見た目の選択（淡アクセント面 + 左バー）は行（`selectedRowKey`）やカードが持ち、ボタンの見た目は変えない | APG: 押しても解除しない「詳細に表示中の項目」なので `aria-pressed`（トグル）ではない。開閉する領域を持たないので `aria-expanded` でもない。`aria-selected` は grid / listbox の役割が要る。`aria-current` は行（`DataTable`）と同じ意味で、Tab で届いたボタンでも「現在の項目」と読まれる。選択の見た目を行に 1 つだけ持たせ、アクセントを「現在の項目」の印に限る |
+| 見た目 | 文字だけのボタン。題名は 14px / 500 / `--color-fg`、ホバーで下線（`underline-offset-2`）。補足（`subtitle`）は 12px / `--color-fg-muted` | 3 製品の多数（RAG・Agent）の見た目。題名を常にアクセント色にすると、選択行のアクセントと区別しにくい。押せることは行の hover の地・pointer・下線で示す |
+| 長い題名 | 既定は切り詰めず、単語の途中でも折り返す（`overflow-wrap: anywhere`）。`maxLines`（1〜3）で切り詰めたときは、**実際に切り詰められているときだけ**ホバー（400ms）とキーボードのフォーカスで全文の `Tooltip` を出す。ただし先頭 120 文字まで（超えたら「…」） | 折り返しを優先し、省略するなら全文を見る手段を持たせる。Tooltip は短い文の部品なので、メモ・質問などの長い全文は詳細で見せる（吹き出しが一覧を覆わない）。読み上げ名には全文が入っているので、吹き出しは説明として結び付けない（`Tooltip` の `describe={false}`、`aria-hidden`） |
+| フォーカス | グローバルの `:focus-visible`（outline 2px、offset 2px）。部品は何も書かない | §4「フォーカスの表示」 |
+| タッチ端末 | `pr-touch-target` で、見た目の大きさを変えずに当たり判定を 44px 以上にする | §4「タッチ端末の当たり判定」。行全体も押せるが、カード一覧（375px）では題名が主な的になる |
+| 使えないとき | `disabled`（`--color-fg-disabled`、`cursor: not-allowed`、下線なし） | NL2SQL の対象の選択で、選べないオブジェクトを示す |
+
+- 製品は `current`・`aria-label`（「〜の詳細を表示」など、行の中で何が起きるかを含める）・`onClick` を渡すだけにする。`<button>` で題名を手書きしない。
+- 題名に識別子の表示部品（NL2SQL の `IdentifierText` / `DbObjectName`、system-settings の ID）を渡してよい。色は部品の既定（`--color-fg`）にそろえ、題名の中でアクセント色を付けない。
+- 一覧から別のページへ移る（ナレッジベース・文書の一覧など）ときはリンク（`<Link>`）のままにする（役割が違う）。
+- 分割ペイン（`FixedSplitPane`）は既に共有部品で、製品の `RagSplitPane` / `AgentSplitPane` は保存 key の接頭辞と文言を渡す薄いラッパーなので、`packages/ui` には上げない。
+
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
@@ -717,7 +735,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**42点あります。**
+QA に事前共有してください。**43点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -763,6 +781,7 @@ QA に事前共有してください。**42点あります。**
 | 40 | **その場の実行と停止が 1 つのボタンになる**（RAG。#413） | RAG 検索: 質問欄の右に「検索」、実行中は押せない「検索」（スピナー）の右に「停止」（`X`）→ 検索のボタンはフォームの最後（「詳細条件」の下の区切り線の下、左寄せ。375px は全幅）に移り、実行中は**同じ位置・同じ要素のまま** `secondary` の「停止」（`Square`）になる。質問欄は隣の lg のボタンが無くなったため 40px → 既定の 36px。進捗の表示（「回答を生成しています」）がスピナーを出す（以前はボタンのスピナーだけ）。ナレッジベースの検索テストも同じ 1 つのボタン（文言「中止」→「停止」、幅は「検索テスト」の幅を保つ）で、処理中は今の工程と経過時間を出す。チャットの送信 / 停止は同じ要素になり、高さの手書き（38.5px / 31.5px）→ `md`（36px、タッチ 44px）、送信できない間は `aria-disabled`、生成中も入力欄に書ける。NL2SQL・Agent は変わらない（止められる操作はバックグラウンドの job で、開始と別の「中止」のまま） | 実行中に押せる操作は停止だけにし、押した位置にそのまま停止を出す。フォーカスを保つ。詳細条件を変えた後に上へ戻らずに検索できる（UX 契約 buttons.md §3.1） |
 | 41 | **RAG の chunk・会話一覧、NL2SQL の評価・履歴・プロファイル・訓練データの一覧が、5 / 8 行と共通のページ送りになる** | RAG の文書詳細の chunk はページの高さで全件を表示、抽出セグメントは `bounded-scroll-area`（22rem）、チャットの会話一覧は 50 件で打ち切り（`max-h-56`）。NL2SQL の SQL生成評価は独自の「前へ / 次へ」だけ（件数なし、結果明細は 25 件/ページ）、読み込み中は文言だけ。実行履歴は 42rem、プロファイル一覧は 20rem / 30.5rem、質問分類の訓練データは 42rem の手書きの高さ → chunk（xl 未満）・抽出セグメント・会話一覧（lg 未満）・実行履歴は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）で中をスクロール。chunk は xl 以上ではプレビューと同じ高さのタブのパネルがスクロールし、選んだ chunk をそのスクロール領域の中だけで見せる。会話一覧は lg 以上で会話エリアの高さに合わせる。会話一覧は 10 件/ページの `Pagination`（offset / limit、ページは作業状態に残る）。プロファイル一覧・訓練データは `visibleRows`（実測で 5 / 8 行）。SQL生成評価は共通の `Pagination`（件数と「N / M ページ」、10 件/ページ）と、経過時間 + 形の Skeleton の読み込み中 | NL2SQL の基準にそろえる。基準から外す一覧（選択と連動する chunk、カーソル型の「さらに読み込む」、フィードバックの件数の切り替え、評価の結果明細の高さ）は UX 契約 `page-archetypes.md` に理由を書いた（#403） |
 | 42 | **通知が右下ではなく上端の見出しの面に出る** | 画面の右下（下 1rem・右 1rem、幅 `min(92vw, 22rem)`）に積み、下から上がってくる → md 以上は `PageHeader` に重ね、ページの操作のすぐ左（上端は `PageHeader` の上端 + 1rem、幅 22rem まで）。`PageHeader` が見えなければ画面の右上。md 未満は上端の全幅（上端のバーに重ね、メニューのボタンは覆わない）。上から降りてくる。`Toaster` の `placement` プロップは削除 | ページの末尾の操作（NL2SQL の「SQL 生成」など）は画面の下端に来るため、右下の通知が覆い、一時停止（#351）と重なって押せなかった。`PageHeader` の下の右上は内容の面の右上の操作を覆う（§4「Toaster」、#411） |
+| 43 | **一覧の行の題名のボタンが 3 製品で同じ見た目になる** | NL2SQL のプロファイル・DB オブジェクト（DB 管理の一覧と対象の選択）の名前は常にアクセント色（`text-accent-fg`）、フィードバック管理のエントリはホバーでアクセント色。ユーザー・ロール・ロール権限の一覧は選択中だけアクセント色。RAG / Agent は `--color-fg` + ホバーの下線。フォーカスの outline は画面ごとに offset が 0 / 2px、タッチ端末の当たり判定は NL2SQL の対象の選択が md 未満で `min-h-11`、ほかは文字の高さ → 共有 `RowTitleButton`: 題名は `--color-fg` / 500 + ホバーの下線、選択の見た目は行の淡アクセント面 + 左バーだけ、outline は 2px / offset 2px、タッチ端末（`pointer: coarse`）で当たり判定 44px 以上（見た目の大きさは変えない。NL2SQL の対象の選択は md 未満でも行の高さが 44px 固定でなくなる）。プロファイル名の太さは 600 → 500（DB オブジェクト名は等幅・600 のまま、色だけ `--color-fg`）。Agent のメモリの内容は 80 文字で「…」 → 2 行で切り詰め、Tooltip で先頭 120 文字まで（全文は詳細）。NL2SQL のフィードバックのエントリは 3 行の切り詰めのまま、全文を Tooltip で見せる | 3 製品で同じ役割の部品を 1 つにする。アクセントを「現在の項目」の印に限り、選択行と区別しやすくする（§4「`RowTitleButton`」、#421） |
 
 ### API の非互換
 
@@ -788,6 +807,9 @@ QA に事前共有してください。**42点あります。**
 | `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
 | `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
+| `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
+| `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
+| `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
 
 ---
 

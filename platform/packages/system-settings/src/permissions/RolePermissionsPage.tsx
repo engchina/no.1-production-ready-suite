@@ -42,10 +42,10 @@ import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
-  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
+  SecurityIdentityRowTitleButton,
   identitySecondaryName,
   isAbortError,
   securityFilteredCount,
@@ -540,21 +540,17 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       render: (role) => {
         const selected = visibleSelectedId === role.role_id;
         return (
-          <button
-            type="button"
-            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              selected ? "text-accent-fg" : "text-fg"
-            }`}
+          <SecurityIdentityRowTitleButton
+            id={role.role_code}
+            name={role.display_name}
+            current={selected}
             aria-label={formatMessage(m.showRole, { name: role.role_code })}
-            aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
               selectRole(role.role_id);
             }}
-          >
-            <SecurityIdentityLines id={role.role_code} name={role.display_name} />
-          </button>
+          />
         );
       },
     },

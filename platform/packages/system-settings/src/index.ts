@@ -196,6 +196,7 @@ export {
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityIdentityLines,
+  SecurityIdentityRowTitleButton,
   SecurityManagementPanelShell,
   SecurityManagementStatusBar,
   SecurityPanelHeader,

@@ -1179,6 +1179,8 @@ export interface TooltipProps {
   placement?: "top" | "bottom";
   /** true で出さず、aria-describedby の結び付けも外す。 */
   disabled?: boolean;
+  /** false で説明として結び付けない（吹き出しは aria-hidden）。読み上げ名に同じ内容が既に入っているとき（#421 の RowTitleButton）。 */
+  describe?: boolean;
 }
 ```
 
@@ -1570,3 +1572,72 @@ export interface DisclosureChevronProps extends Omit<LucideProps, "aria-hidden">
 
 - 折りたたみ = `-rotate-90`（右向き）、展開 = `rotate-0`（下向き）。`transition-transform duration-200 ease-out`、`motion-reduce:transition-none`。`aria-hidden` / `focusable="false"` で読み上げない（状態は `<details>` か `aria-expanded` が伝える）。
 - **button + region の開閉**（`Disclosure` で表せないもの）: `aria-expanded` と `aria-controls` を付けたボタンの中に `<DisclosureChevron expanded={open} size={16} />` を置きます（`Button` なら子の末尾。`icon` / `trailingIcon` は回らないので使わない）。共有 `Sidebar` のセクション、`FormActionBar` / `ObjectActionBar` の「その他の操作」も同じ部品です。
+
+## RowTitleButton — **新規**（#421）
+
+一覧の行の先頭セル（または 375px のカード）に置く対象名のボタンです。仕様と判断の理由は README §4「`RowTitleButton`」。
+
+```tsx
+import { DataTable, RowTitleButton } from "@engchina/production-ready-ui";
+
+<DataTable<Feedback>
+  columns={[
+    {
+      key: "question",
+      header: t("feedback.table.question"),
+      rowHeader: true,
+      render: (item) => (
+        <RowTitleButton
+          title={item.question}
+          subtitle={<QuestionMeta item={item} />}
+          current={item.id === selectedId}
+          aria-label={t("feedback.list.selectNamed", { name: item.question })}
+          onClick={() => onSelect(item.id)}
+        />
+      ),
+    },
+    // …
+  ]}
+  rows={items}
+  getRowKey={(item) => item.id}
+  selectedRowKey={selectedId}
+  onRowClick={(item) => onSelect(item.id)}
+/>
+
+// 長い内容は行数で切り詰め、切り詰めたときだけ全文の Tooltip を出す
+<RowTitleButton title={entry.content} maxLines={2} current={entry.id === selectedId} onClick={() => select(entry.id)} />
+
+// 識別子の表示部品を題名に渡す（色は部品の既定の --color-fg にそろえる）
+<RowTitleButton title={<DbObjectName value={name} size="xs" />} subtitle={<DbObjectCommentText id={commentId} comment={comment} />}
+  aria-describedby={commentId} current={name === selectedName} onClick={() => onSelect(name)} />
+```
+
+### RowTitleButton の props
+
+```ts
+export interface RowTitleButtonProps
+  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "title" | "children" | "type" | "aria-current"> {
+  /** 対象名。文字列のほか、製品の表示部品も渡せる。 */
+  title: React.ReactNode;
+  /** 対象名の下の補足（12px、--color-fg-muted）。 */
+  subtitle?: React.ReactNode;
+  /** 詳細に表示中の対象か。aria-current="true" を付ける。 */
+  current?: boolean;
+  /** 切り詰める最大行数（1〜3）。既定は切り詰めずに折り返す。 */
+  maxLines?: 1 | 2 | 3;
+  /** 切り詰めたときの Tooltip の全文。title が文字列なら省略できる。 */
+  fullTitle?: string;
+  ref?: React.Ref<HTMLButtonElement>;
+}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| `type="button"` の文字だけのボタン（共有 `Button` は使わない）。`aria-label`・`aria-describedby`・`data-*`・`disabled`・`ref` はそのまま渡す | 情報一覧の構造コントロールで、アクションボタンの枠・高さを持たせない。詳細を閉じたときのフォーカスの戻り先を `data-*` や `ref` で探せる |
+| 選択の状態は `aria-current="true"` だけ。見た目は行（`DataTable` の `selectedRowKey`）やカードが持つ | 行とボタンの両方が同じ意味の「現在の項目」を持つ（行は背景と左バー、ボタンは Tab で届いたときの読み上げ）。`DataTable` は行の中のボタンのクリックで `onRowClick` を重ねて呼ばない |
+| `maxLines` の切り詰めは `ResizeObserver` で `scrollHeight > clientHeight` を測り、切り詰めているときだけ `Tooltip`（`describe={false}`）を有効にする。文言は `rowTitleTooltipText`（先頭 120 文字 + 「…」） | 切り詰めていない題名に同じ文言の吹き出しを出さない。読み上げ名は全文なので説明として二重に結び付けない。長い全文の吹き出しで一覧を覆わない |
+| class は `pr-touch-target relative`（タッチ端末の当たり判定）と、題名の `group-hover/row-title:underline` | Button の `--button-height-*` と同じく入力方式で判定し、見た目は変えない |
+
+- 製品の置き換え（#421）: RAG（フィードバック・業務ビューの管理・業務ビューの用語 / ルール）、Agent（エージェント・承認・ツール・メモリ・MCP サーバー・Skill・Plugin・マーケットプレイス・Run）、NL2SQL（プロファイル・DB 管理のオブジェクト一覧・データ管理の対象の選択・フィードバック管理のエントリ）、system-settings（ユーザー・ロール・ロール権限。`SecurityIdentityRowTitleButton`）。
+- 置き換えないもの: 一覧から別ページへ移るリンク（RAG のナレッジベース・ファイル一覧）、カード全体が 1 つのボタンの履歴（NL2SQL のフィードバック履歴）、listbox の選択肢（NL2SQL の DeepSec の対象）、チェックボックスのラベル。
+- 単体テストは `packages/ui/tests/row-title-button.test.tsx`。実ブラウザは RAG `e2e/feedback.spec.ts`・Agent `e2e/entity-archetypes.spec.ts`・NL2SQL `tests/e2e/profile-archive-reset.spec.ts`（desktop / 375px、Tab・Enter・Space・`aria-current`・タッチ端末の当たり判定・切り詰めの Tooltip）。

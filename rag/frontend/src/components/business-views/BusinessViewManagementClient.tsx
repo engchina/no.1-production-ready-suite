@@ -28,6 +28,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   offsetForPage,
   offsetPagination,
+  RowTitleButton,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -42,7 +43,6 @@ import {
 import {
   EditorBreadcrumbs,
   MissingEditorTarget,
-  RowTitleButton,
 } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
@@ -563,7 +563,7 @@ function businessViewColumns({
           <RowTitleButton
             title={view.name}
             subtitle={view.description ?? undefined}
-            ariaLabel={t("businessViews.actions.editNamed", { name: view.name })}
+            aria-label={t("businessViews.actions.editNamed", { name: view.name })}
             onClick={() => onOpen(view.id)}
           />
         ),

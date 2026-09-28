@@ -5,6 +5,7 @@ import {
   Button,
   EmptyState,
   FormStatus,
+  RowTitleButton,
   SelectField,
   StatusBadge,
   Switch,
@@ -15,8 +16,6 @@ import {
   useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
-
-import { RowTitleButton } from "@/components/layout/EntityLayout";
 
 import {
   api,
@@ -209,7 +208,8 @@ export function RuntimeKnowledgeManager({
           render: (row) => (
             <RowTitleButton
               title={rowName(kind, row)}
-              ariaLabel={t("businessViews.runtime.editNamed", {
+              current={form.kind === kind && form.selected === rowKey(kind, row)}
+              aria-label={t("businessViews.runtime.editNamed", {
                 name: rowName(kind, row),
               })}
               onClick={() => load(formFromRow(kind, row))}

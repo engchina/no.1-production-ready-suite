@@ -995,7 +995,9 @@ for (const scenario of scenarios) {
       await expect(text).toHaveText(comment);
       await expect(button).toHaveAccessibleDescription(comment);
       const layout = await button.evaluate((node) => {
-        const [name, comment] = Array.from(node.querySelectorAll(":scope > span"));
+        // 共有 RowTitleButton（#421）: 題名と補足の枠の中に、名前とコメント（aria-describedby の先）を置く。
+        const name = node.querySelector(":scope > span")!;
+        const comment = document.getElementById(node.getAttribute("aria-describedby")!)!;
         const nameBox = name.getBoundingClientRect();
         const commentBox = comment.getBoundingClientRect();
         const cellBox = node.closest("td")!.getBoundingClientRect();
@@ -1068,7 +1070,9 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
     const button = previewList.getByRole("button", { name: `ADMIN.${name} を選択`, exact: true });
     await expect(button).toHaveAccessibleDescription(comment);
     const layout = await button.evaluate((node) => {
-      const [nameNode, commentNode] = Array.from(node.querySelectorAll(":scope > span"));
+      // 共有 RowTitleButton（#421）: 題名と補足の枠の中に、名前とコメント（aria-describedby の先）を置く。
+      const nameNode = node.querySelector(":scope > span")!;
+      const commentNode = document.getElementById(node.getAttribute("aria-describedby")!)!;
       const nameBox = nameNode.getBoundingClientRect();
       const commentBox = commentNode.getBoundingClientRect();
       const style = getComputedStyle(commentNode);
@@ -1085,7 +1089,8 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   await expectRowCellsDoNotOverlap(previewList.locator("tbody tr"));
   // 識別子は語の途中ではなく . / _ の位置で折り返す（1 行に収まる場合は折り返さない）。
   const nameBreaks = await previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })
-    .locator(":scope > span").first()
+    // 共有 RowTitleButton（#421）の題名の枠の中の識別子（DbObjectName）。
+    .locator(":scope > span > span").first()
     .evaluate((node) => Array.from(node.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent));
   expect(nameBreaks).toEqual(["ADMIN.", "DENPYO_", "ACTIVITY_", "LOG"]);
   await previewList.screenshot({ path: testInfo.outputPath("data-preview-name-comments.png") });

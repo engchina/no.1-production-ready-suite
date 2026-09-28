@@ -10,6 +10,7 @@ import {
   type EntityAction,
   FormStatus,
   ObjectActionBar,
+  RowTitleButton,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -40,7 +41,7 @@ import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "rea
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { RagSplitPane, RowTitleButton } from "@/components/layout/EntityLayout";
+import { RagSplitPane } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
   ApiError,
@@ -487,9 +488,10 @@ function FeedbackTable({
             <RowTitleButton
               title={questionSummary(item)}
               subtitle={<QuestionMeta item={item} />}
-              ariaLabel={t("feedback.list.selectNamed", { name: questionSummary(item) })}
+              current={item.feedback_id === selectedId}
+              aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
               onClick={() => onSelect(item.feedback_id)}
-              dataAttributes={{ "data-feedback-row-button": item.feedback_id }}
+              data-feedback-row-button={item.feedback_id}
             />
           ),
         },
@@ -561,9 +563,10 @@ function FeedbackCards({
             <div className="mt-2">
               <RowTitleButton
                 title={questionSummary(item)}
-                ariaLabel={t("feedback.list.selectNamed", { name: questionSummary(item) })}
+                current={current}
+                aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
                 onClick={() => onSelect(item.feedback_id)}
-                dataAttributes={{ "data-feedback-row-button": item.feedback_id }}
+                data-feedback-row-button={item.feedback_id}
               />
             </div>
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">

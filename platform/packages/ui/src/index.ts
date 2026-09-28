@@ -166,6 +166,11 @@ export {
   type PaginationLabels,
 } from "./components/data/paged-data-table";
 export {
+  RowTitleButton,
+  type RowTitleButtonProps,
+  type RowTitleButtonMaxLines,
+} from "./components/data/row-title-button";
+export {
   RowActionMenu,
   ObjectActionBar,
   splitObjectActions,

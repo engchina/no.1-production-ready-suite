@@ -266,5 +266,14 @@ describe("Tooltip の読み上げ（aria-describedby）", () => {
       )
     );
     expect(disabled).not.toContain("aria-describedby");
+    // describe={false}: 読み上げ名に同じ内容が入っているときは結び付けない（#421 の RowTitleButton の全文表示）。
+    const visualOnly = openTag(
+      renderToStaticMarkup(
+        <Tooltip content="候補の出現数: 3" describe={false}>
+          <button type="button">売上</button>
+        </Tooltip>
+      )
+    );
+    expect(visualOnly).not.toContain("aria-describedby");
   });
 });

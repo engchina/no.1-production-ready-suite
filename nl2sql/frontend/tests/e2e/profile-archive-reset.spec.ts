@@ -347,6 +347,43 @@ test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻�
   await expect(page.getByLabel("名称")).toHaveValue("経理プロファイル");
 });
 
+test("プロファイル名のボタン（共有 RowTitleButton）は Tab で届き、Enter / Space でエディタを開く", async ({ page }, testInfo) => {
+  // #421: 一覧の行の題名のボタンを packages/ui の共有部品にそろえた（NL2SQL の手書きを置き換え）。
+  await mockProfileManagement(page);
+  await page.goto("/profiles");
+
+  const salesButton = page.getByRole("button", { name: "営業プロファイル を編集", exact: true });
+  await expect(salesButton).toHaveAttribute("data-row-title-button", "");
+  // 題名の色は 3 製品で共通の本文色（押せることは行の hover と下線で示す）。
+  const titleColor = await salesButton.evaluate((node) => getComputedStyle(node.querySelector("span")!).color);
+  const fgColor = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.className = "text-fg";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  expect(titleColor).toBe(fgColor);
+
+  await salesButton.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(salesButton).toBeFocused();
+  await expect(salesButton).toHaveCSS("outline-style", "solid");
+  await expectProfileListNoHorizontalOverflow(page);
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/profiles\?profile=sales$/);
+  await expect(page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })).toBeVisible();
+
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  const financeButton = page.getByRole("button", { name: /^経理プロファイル を編集/ });
+  await financeButton.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath(`profile-row-title-${testInfo.project.name}.png`), fullPage: true });
+});
+
 test("URL 深リンクでエディタを直接開ける", async ({ page }) => {
   await mockProfileManagement(page);
 
