@@ -244,7 +244,7 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
 
-  // ログイン画面を開いても既定の入口（RAG 検索）へ戻す。
+  // ログイン画面を開いても既定の入口（チャット）へ戻す。
   await page.goto("/login");
-  await expect(page).toHaveURL(/\/search$/);
+  await expect(page).toHaveURL(/\/chat$/);
 });
