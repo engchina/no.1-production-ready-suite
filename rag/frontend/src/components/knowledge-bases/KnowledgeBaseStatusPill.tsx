@@ -1,6 +1,7 @@
+import { StatusBadge } from "@engchina/production-ready-ui";
+
 import { type KnowledgeBaseStatus } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 
 /** ナレッジベース状態の日本語ラベル。 */
 export function knowledgeBaseStatusLabel(status: KnowledgeBaseStatus) {
@@ -9,17 +10,16 @@ export function knowledgeBaseStatusLabel(status: KnowledgeBaseStatus) {
     : t("knowledgeBases.status.ARCHIVED");
 }
 
-/** ナレッジベース状態を表す共通ステータスピル(一覧・詳細で共有)。 */
+/**
+ * ナレッジベース状態のバッジ(一覧・詳細で共有)。
+ * 状態は色だけで表さないため、共有の StatusBadge(アイコン + ラベル)で出す。業務ビューの
+ * 状態と同じ対応(有効 = success / アーカイブ済み = neutral)にする(#282)。
+ */
 export function KnowledgeBaseStatusPill({ status }: { status: KnowledgeBaseStatus }) {
   return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-        status === "ACTIVE" && "bg-success-subtle text-success-fg",
-        status === "ARCHIVED" && "bg-surface-hover text-fg-muted"
-      )}
-    >
-      {knowledgeBaseStatusLabel(status)}
-    </span>
+    <StatusBadge
+      variant={status === "ARCHIVED" ? "neutral" : "success"}
+      label={knowledgeBaseStatusLabel(status)}
+    />
   );
 }

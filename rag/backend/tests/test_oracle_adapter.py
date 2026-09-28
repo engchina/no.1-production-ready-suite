@@ -1315,7 +1315,9 @@ async def test_oracle_client_persists_knowledge_bases_through_pool() -> None:
     assert detail.status == KnowledgeBaseStatus.ACTIVE
     assert detail.retrieval_config == {"top_k": 20}
     assert pool.connection.commits == 1
-    call = pool.connection.calls[0]
+    # 作成前に tenant 内の同名 KB を確かめてから INSERT する（#282）。
+    assert "LOWER(name) = :knowledge_base_name" in pool.connection.calls[0].statement
+    call = pool.connection.calls[-1]
     assert "INSERT INTO rag_knowledge_bases" in call.statement
     assert call.parameters["name"] == "社内規程"
     assert call.parameters["default_search_mode"] == "hybrid"

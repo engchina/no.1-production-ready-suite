@@ -1490,6 +1490,10 @@ export const ja = {
     "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.search": "追加する文書を検索",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
+  "knowledgeBases.assignment.truncated":
+    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
@@ -1535,7 +1539,7 @@ export const ja = {
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
-    "「{fileName}」を「{name}」から外します。文書自体は削除されません。",
+    "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",
