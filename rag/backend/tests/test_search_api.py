@@ -116,6 +116,34 @@ def test_stream_generation_contract_failure_emits_only_error(
     assert "event: citations" not in response.text
 
 
+def test_stream_unexpected_failure_logs_traceback_and_hides_detail(
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """stream 中の予期しない失敗は traceback をログに残し、利用者へは定型文だけを返す（#285）。"""
+
+    class BrokenPipeline:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+            raise RuntimeError("oracle dsn=secret-host")
+
+    monkeypatch.setattr(search_route, "RagPipeline", BrokenPipeline)
+
+    with caplog.at_level(logging.ERROR, logger=search_route.__name__):
+        response = client.post("/api/search/stream", json={"query": "承認条件"})
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert search_route.STREAM_ERROR_MESSAGE in response.text
+    assert "secret-host" not in response.text
+    records = [r for r in caplog.records if r.getMessage() == "rag_search_stream_failed"]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].__dict__["exception_type"] == "RuntimeError"
+
+
 def test_stream_search_api_buffers_answer_even_when_realtime_flag_is_enabled(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -262,6 +290,22 @@ def test_citation_feedback_api_saves_low_sensitivity_payload(
     assert "根拠" not in str(fake.saved_payloads)
     assert "tenant-a" not in str(fake.saved_payloads)
     assert "user@example.com" not in str(fake.saved_payloads)
+
+
+@pytest.mark.parametrize("field", ["trace_id", "document_id", "chunk_id"])
+def test_citation_feedback_rejects_blank_identifiers(field: str) -> None:
+    """空白だけの ID を空文字として保存しない（#285）。"""
+    payload = {
+        "trace_id": "trace-1",
+        "document_id": "doc-1",
+        "chunk_id": "doc-1:0",
+        "rating": "helpful",
+    }
+    payload[field] = "   "
+
+    response = client.post("/api/search/citation-feedback", json=payload)
+
+    assert response.status_code == 422
 
 
 def test_search_request_accepts_chunk_metadata_filters() -> None:

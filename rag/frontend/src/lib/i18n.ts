@@ -2275,6 +2275,9 @@ export const ja = {
   "search.searching": "検索中…",
   "search.cancel": "停止",
   "search.cancelled": "検索ストリームを停止しました。",
+  "search.stream.incomplete":
+    "回答の受信が途中で途切れました。通信状態を確認して、もう一度検索してください。",
+  "search.stream.failed": "検索処理中にエラーが発生しました。時間をおいて再度お試しください。",
   "search.cancelledHint": "検索は途中で停止されました。必要に応じて再検索してください。",
   "search.mode.hybrid": "ハイブリッド",
   "search.mode.vector": "ベクトル",
@@ -2380,7 +2383,8 @@ export const ja = {
   "search.history.savedAt": "保存日時: {value}",
   "search.history.deleteTitle": "保存された回答を削除しますか？",
   "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
-  "search.history.deleteError": "回答を削除できませんでした。",
+  "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
+  "search.history.deleted": "保存された回答を削除しました。",
   "settings.docragPrompts.vlm_answer.title": "DocRAG の回答生成テンプレート",
   "settings.docragPrompts.vlm_answer.description":
     "回答エンジンが DocRAG のとき、根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
@@ -2652,6 +2656,7 @@ export const ja = {
     "RAG 検索は業務ビュー単位で行います。知識ベースを束ねた業務ビューを作成すると検索できます。",
   "search.businessViewRequired.cta": "業務ビューを作成",
   "search.businessViewError": "業務ビューを読み込めませんでした。",
+  "search.businessViewLoading": "業務ビューを読み込んでいます。",
   "search.guardrail": "安全チェック警告",
   "search.meta.trace": "トレースID",
   "search.meta.elapsed": "処理時間",

@@ -309,7 +309,11 @@ class CitationFeedbackRequest(BaseModel):
     @field_validator("trace_id", "document_id", "chunk_id")
     @classmethod
     def validate_identifier(cls, value: str) -> str:
-        return _clean_identifier(value) or ""
+        cleaned = _clean_identifier(value)
+        if not cleaned:
+            # 空白だけの ID を空文字として保存しない。
+            raise ValueError("ID を入力してください。")
+        return cleaned
 
     @field_validator("comment")
     @classmethod
