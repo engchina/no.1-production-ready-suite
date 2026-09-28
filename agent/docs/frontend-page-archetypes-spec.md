@@ -12,7 +12,13 @@
 | A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ 外部 MCP（`/settings/external-mcp`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
 | B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ メモリ（`/memory`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
 | C. ツール / ワークフロー | 監査（`/audit`）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | ダッシュボード（`/`）/ Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ 外部 RAG（`/settings/external-rag`）/ 外部 NL2SQL（`/settings/external-nl2sql`）/ ツール権限（`/settings/tool-policy`）/ Command Policy（`/settings/command-policy`）/ Runtime Safety（`/settings/runtime-safety`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
+| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ 外部 RAG（`/settings/external-rag`）/ 外部 NL2SQL（`/settings/external-nl2sql`）/ ツール権限（`/settings/tool-policy`）/ Command Policy（`/settings/command-policy`）/ Runtime Safety（`/settings/runtime-safety`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+
+`/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
+
+- `/` → ナビの並び順で最初に開ける画面（`firstAllowedRoute`。どれも開けなければ権限なしの画面）。
+- 未知の URL・ログイン後・権限なしの画面の「利用可能な画面へ戻る」→ 既定入口（`defaultEntryRoute`）。主画面の Run（`/runs`）を開ければ Run、開けなければ `/` を経て最初に開ける画面。
+- どちらも `Navigate replace` で移し、履歴に `/` や未知の URL を残さない。
 
 ### 1.1 A 型（一覧 → 全画面エディタ）
 

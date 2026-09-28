@@ -187,18 +187,19 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("ローカル（AGENT_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄を出さない", async ({ page }) => {
-      // fixture の既定はローカルの全権限の利用者。
+      // fixture の既定はローカルの全権限の利用者。`/` はナビの最初の画面（業務 Agent）へ移す（#262）。
       await page.goto("/");
-      await expect(page.getByRole("heading", { name: "ダッシュボード", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/agents$/);
+      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
       await expandSidebarOnMobile(page);
       await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
       await expect(sidebar(page).getByText("ローカル利用者")).toHaveCount(0);
 
-      // ログイン画面を開いても既定の画面へ戻す。
+      // ログイン画面を開いても既定の入口（主画面の Run）へ戻す。
       await page.goto("/login");
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByRole("heading", { name: "ダッシュボード", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/runs$/);
+      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
     });
   });
 }

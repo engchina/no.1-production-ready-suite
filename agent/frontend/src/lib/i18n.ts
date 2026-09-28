@@ -12,7 +12,6 @@ const agentJa = {
   "nav.command.open": "コマンドパレットを開く",
   "nav.section.containsActive": "現在地を含む",
 
-  "nav.section.overview": "概要",
   "nav.section.runtime": "実行",
   "nav.section.controlPlane": "Control Plane",
   "nav.section.operations": "運用設定",
@@ -25,7 +24,6 @@ const agentJa = {
   "appearance.theme.dark": "ダーク",
   "appearance.theme.system": "自動（OS 設定）",
 
-  "nav.dashboard": "ダッシュボード",
   "nav.agents": "業務 Agent",
   "nav.runtimes": "Runtime",
   "nav.runs": "Run",
@@ -120,7 +118,6 @@ const agentJa = {
   "workspace.selectionMissing": "前回選択していた項目が見つかりません。削除されたか、参照できなくなった可能性があります。一覧から選び直してください。",
   "workspace.draftNotSaved": "入力中の内容をこのタブに一時保存できませんでした。移動や再読込の前に確認します。",
 
-  "page.dashboard.subtitle": "Business Agent を定義し、選択した Runtime で実行する",
   "page.agents.subtitle": "業務指示と Skill を定義し、実行先は Binding で分離する",
   "page.runtimes.subtitle": "OpenClaw / Hermes / DeerFlow の状態・能力・サービスを管理する",
   "page.runs.subtitle": "固定した Runtime Binding で Agent を実行・監視する",
@@ -190,9 +187,7 @@ const agentJa = {
   "run.unbound": "この Agent には実行可能な Binding がありません。Agent 詳細で実行先を追加してください。",
   "run.form.tool": "ツール",
   "run.form.arguments": "引数 JSON",
-  "run.form.noTool": "ツールなし",
   "run.form.submit": "実行を作成",
-  "run.latest": "最新実行",
   "run.detail": "実行詳細",
   "run.history": "実行履歴",
   "run.historyDescription": "過去の Run を選択してイベントと成果物を確認",
@@ -348,11 +343,6 @@ const agentJa = {
   "memory.kind.toolLearning": "ツール経験",
   "memory.kind.note": "ノート",
 
-  "observability.title": "観測性",
-  "observability.prometheus": "Prometheus",
-  "observability.langfuse": "Langfuse",
-  "observability.opentelemetry": "OpenTelemetry",
-  "observability.metricsPath": "メトリクス",
 
   "settings.baseUrl": "Base URL",
   "settings.productMcp.description":

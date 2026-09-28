@@ -5,7 +5,6 @@ import {
   ClipboardList,
   DatabaseBackup,
   KeyRound,
-  LayoutDashboard,
   LockKeyhole,
   PlayCircle,
   Server,
@@ -61,12 +60,6 @@ const USER_ROLE_MENU_PERMISSIONS = {
  * （製品のセクション → 製品固有のセキュリティ → 運用設定 → 共通のユーザーとロール → 共通のシステム設定）。
  */
 export const NAV_SECTIONS: NavSection[] = [
-  {
-    titleKey: "nav.section.overview",
-    items: [
-      { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard, permission: MENU_PERMISSIONS.dashboard },
-    ],
-  },
   {
     titleKey: "nav.section.controlPlane",
     items: [
