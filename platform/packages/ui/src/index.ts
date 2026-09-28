@@ -100,6 +100,10 @@ export {
   type OperationTimestamp,
 } from "./lib/operation-timing";
 export {
+  BlockedPageNotice,
+  type BlockedPageNoticeProps,
+} from "./components/feedback/blocked-page-notice";
+export {
   ActionResultRegion,
   type ActionResultRegionProps,
 } from "./components/feedback/action-result-region";

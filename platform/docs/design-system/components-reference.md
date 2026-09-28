@@ -875,3 +875,58 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 - 保存の操作行は `FormActionBar`（UX 契約 buttons §5.2.1）に置きます。`<form>` の中の保存は、`FormActionDescriptor` の `type: "submit"` で form の送信（Enter による暗黙の送信と `onSubmit` の検証）をそのまま使えます（既定は `type="button"`）。
 
 ---
+
+## BlockedPageNotice — **新規**（#325）
+
+ページ全体が使えない（ブロック状態）ときに、業務画面の代わりに主領域の中央へ出す案内カードです。RAG と NL2SQL の DB ゲートが別々に手書きしていた見た目を `packages/ui` にまとめました（3製品の DB ゲートは `@engchina/production-ready-system-settings` の `DatabaseGate` がこれを使います）。製品で全画面の案内カードを再実装しないでください。
+
+| 決めたこと | 理由 |
+|---|---|
+| カードは `section` + `aria-labelledby`（見出しの `h1` の id）。見出しの id は呼び出し側が固定値で渡す | 支援技術がカードを見出しの名前で読み上げる。E2E が `aria-labelledby` でカードを引く |
+| 見出しの上に 24px のアイコンを丸（トーンの `*-subtle` の面 + `*-fg` の色）で出し、`aria-hidden` にする。既定のトーンは `warning` | 色だけで意味を伝えない（状況は見出しと本文で書く）。エラー画面（danger）にせず、落ち着いた案内にする |
+| 本文 → 補足（診断コードなど）→ 操作 → 区切り線の下の補足の順。渡したものだけを描く | 原因 + 次の行動を上に置く（UX 契約 messaging §0 / §9）。空の面を描かない |
+| 操作の行は中央ぞろえで折り返す。主操作（設定を開くリンク等）を先頭に置く | 375px でも横にはみ出さない。Tab 順が見た目の順と同じ |
+| 文言はすべて翻訳済みの文字列で渡す | `packages/ui` は i18n を持たない |
+
+```tsx
+<BlockedPageNotice
+  title="データベースを起動してください"
+  titleId="database-unavailable-title"
+  icon={Database}
+  message="データベースを起動してから再試行してください。"
+  details={<p role="status">診断コード: wallet_not_found</p>}
+  actions={
+    <>
+      <Link to="/settings/database#adb-management" className={buttonVariants({ variant: "primary" })}>…</Link>
+      <Button variant="secondary" icon={RefreshCw} onClick={retry}>再試行</Button>
+    </>
+  }
+  footer="OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。"
+/>
+```
+
+### BlockedPageNotice の props
+
+```ts
+import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
+
+export interface BlockedPageNoticeProps {
+  title: string;
+  titleId: string;
+  icon: LucideIcon;
+  /** 既定は "warning"。 */
+  tone?: "success" | "info" | "warning" | "danger";
+  message?: ReactNode;
+  details?: ReactNode;
+  actions?: ReactNode;
+  footer?: ReactNode;
+  testId?: string;
+  className?: string;
+}
+
+/** @dsComponent */
+export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.Element;
+```
+
+---

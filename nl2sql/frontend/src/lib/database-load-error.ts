@@ -1,7 +1,11 @@
+import { DATABASE_UNAVAILABLE_EVENT } from "@engchina/production-ready-system-settings";
+
+// 通知の event 名は3製品共通の DB ゲートが持つ（#325）。
+export { DATABASE_UNAVAILABLE_EVENT };
+
 export const DATABASE_READINESS_PATH = "/api/ready/database";
 export const PERSISTENCE_STATUS_PATH = "/api/nl2sql/persistence";
 export const PERSISTENCE_RECOVERY_PATH = "/api/nl2sql/persistence/recover";
-export const DATABASE_UNAVAILABLE_EVENT = "app-database-unavailable";
 
 export type DatabaseReadinessStatus =
   | "ok"

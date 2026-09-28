@@ -8,7 +8,11 @@ import {
 } from "./database-load-error.ts";
 import { t } from "./i18n";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220）。
-import { csrfHeader, notifyAuthResponse } from "@engchina/production-ready-system-settings";
+import {
+  csrfHeader,
+  notifyAuthResponse,
+  type DatabaseStatusData as SharedDatabaseStatusData,
+} from "@engchina/production-ready-system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
@@ -429,12 +433,8 @@ export async function apiDelete<T>(
 export type JsonValue =
   string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-export interface DatabaseStatusData {
-  context_id?: string;
-  status: "ok" | "not_configured" | "setup_required" | "unreachable";
-  check: string;
-  detail: string | null;
-}
+/** DB の状態 API（`GET /api/ready/database`）の応答。契約は3製品共通（#325）。 */
+export type DatabaseStatusData = SharedDatabaseStatusData;
 
 export interface PersistenceStatusData {
   mode: "memory" | "oracle";
