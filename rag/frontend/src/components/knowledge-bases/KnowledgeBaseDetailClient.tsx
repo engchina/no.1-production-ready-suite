@@ -11,11 +11,14 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DEFAULT_PAGE_SIZE,
   FormStatus,
   ObjectActionBar,
+  Pagination,
   RowActionMenu,
   SelectField,
   type SelectFieldOption,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -38,6 +41,9 @@ import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 import { useKnowledgeBaseActions } from "./knowledge-base-actions";
+
+// 追加候補として一度に取得する文書数（API の上限 200 以内）。これを超える文書は名前で検索して選ぶ。
+const CANDIDATE_LIMIT = 100;
 
 /** ナレッジベース詳細ページ。概要・所属文書・構築設定(構築フロー + フォーム)を全幅で扱う。 */
 export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId: string }) {
@@ -144,7 +150,16 @@ function Metric({ label, value }: { label: string; value: number }) {
 }
 
 function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDetail }) {
-  const allDocuments = useDocuments({ limit: 100, offset: 0 });
+  // 候補は新しい順に CANDIDATE_LIMIT 件まで。それより古い文書も選べるよう、文書名で検索して絞り込む。
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const allDocuments = useDocuments({
+    q: candidateQuery || undefined,
+    limit: CANDIDATE_LIMIT,
+    offset: 0,
+  });
+  const candidatesTruncated = (allDocuments.data?.total ?? 0) > CANDIDATE_LIMIT;
+  const applyCandidateSearch = () => setCandidateQuery(candidateSearch.trim());
   const assign = useAssignDocumentsToKnowledgeBase();
   const [documentId, setDocumentId] = useState("");
 
@@ -188,6 +203,19 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
     <div className="space-y-2">
       {/* 追加ツールバー: コンボボックスは幅制約し、追加ボタンを入力のすぐ隣へ左寄せ(右端に孤立させない)。 */}
       <div className="flex flex-wrap items-end gap-2">
+        <TextField
+          id="knowledge-base-add-document-search"
+          type="search"
+          label={t("knowledgeBases.assignment.search")}
+          placeholder={t("knowledgeBases.assignment.searchPlaceholder")}
+          value={candidateSearch}
+          onValueChange={setCandidateSearch}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") applyCandidateSearch();
+          }}
+          onBlur={applyCandidateSearch}
+          className="w-full min-w-0 sm:w-64"
+        />
         <SelectField
           id="knowledge-base-add-document"
           label={t("knowledgeBases.assignment.title")}
@@ -209,6 +237,11 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           {t("knowledgeBases.actions.assign")}
         </Button>
       </div>
+      {candidatesTruncated ? (
+        <p className="text-xs text-fg-muted">
+          {t("knowledgeBases.assignment.truncated", { count: formatNumber(CANDIDATE_LIMIT) })}
+        </p>
+      ) : null}
       {allDocuments.isError ? (
         <FormStatus
           tone="danger"
@@ -225,8 +258,23 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
 
 function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDetail }) {
   const confirm = useConfirm();
-  const documents = useDocuments({ knowledge_base_id: knowledgeBase.id, limit: 50, offset: 0 });
+  // 所属文書はサーバー側でページングする（件数の上限で打ち切らない）。
+  const [offset, setOffset] = useState(0);
+  const documents = useDocuments({
+    knowledge_base_id: knowledgeBase.id,
+    limit: DEFAULT_PAGE_SIZE,
+    offset,
+  });
   const remove = useRemoveDocumentFromKnowledgeBase();
+  const page = documents.data;
+  // 外した結果いまのページが空になったら、最後のページへ戻す（空の案内を出さない）。
+  const outOfRange = Boolean(page && page.offset === offset && page.items.length === 0 && offset > 0);
+  const lastPageOffset =
+    page && page.total > 0 ? Math.floor((page.total - 1) / DEFAULT_PAGE_SIZE) * DEFAULT_PAGE_SIZE : 0;
+  const movingToLastPage = outOfRange && lastPageOffset !== offset;
+  if (movingToLastPage) setOffset(lastPageOffset);
+  const total = page?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE));
 
   const handleRemove = async (document: DocumentSummary) => {
     const ok = await confirm({
@@ -260,19 +308,34 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
           }
           onRetry={() => void documents.refetch()}
         />
-      ) : documents.isPending ? (
+      ) : documents.isPending || movingToLastPage ? (
         <KnowledgeBaseDocumentsSkeleton />
       ) : documents.data.items.length > 0 ? (
-        <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border">
-          {documents.data.items.map((document) => (
-            <KnowledgeBaseDocumentRow
-              key={document.id}
-              document={document}
-              onRemove={() => void handleRemove(document)}
-              removing={remove.isPending && remove.variables?.documentId === document.id}
-            />
-          ))}
-        </ul>
+        <>
+          <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border">
+            {documents.data.items.map((document) => (
+              <KnowledgeBaseDocumentRow
+                key={document.id}
+                document={document}
+                onRemove={() => void handleRemove(document)}
+                removing={remove.isPending && remove.variables?.documentId === document.id}
+              />
+            ))}
+          </ul>
+          <Pagination
+            page={Math.floor(offset / DEFAULT_PAGE_SIZE) + 1}
+            totalPages={totalPages}
+            onPageChange={(next) => setOffset((next - 1) * DEFAULT_PAGE_SIZE)}
+            summary={t("pager.range", {
+              start: formatNumber(offset + 1),
+              end: formatNumber(offset + documents.data.items.length),
+              total: formatNumber(total),
+            })}
+            prevLabel={t("pager.prev")}
+            nextLabel={t("pager.next")}
+            testId="knowledge-base-documents-pagination"
+          />
+        </>
       ) : (
         <EmptyState
           title={t("knowledgeBases.documents.empty.title")}

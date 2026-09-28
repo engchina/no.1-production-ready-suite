@@ -7,6 +7,7 @@ import pytest
 
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
+from app.clients.oracle import KnowledgeBaseNameConflictError
 from app.main import app
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
@@ -46,6 +47,8 @@ class FakeKnowledgeBaseOracle:
         default_search_mode: SearchMode = SearchMode.HYBRID,
         retrieval_config: dict[str, object] | None = None,
     ) -> KnowledgeBaseDetail:
+        if any(item.name.casefold() == name.casefold() for item in self.knowledge_bases.values()):
+            raise KnowledgeBaseNameConflictError()
         adapter_config = parse_adapter_config(retrieval_config)
         detail = KnowledgeBaseDetail(
             id=f"kb-{uuid4().hex[:8]}",
@@ -536,3 +539,111 @@ def test_create_knowledge_base_rejects_invalid_adapter_config(
     )
 
     assert resp.status_code == 422
+
+
+def test_create_knowledge_base_with_duplicate_name_returns_409(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """同じ名前の KB があると 500 ではなく 409 と日本語の理由を返す（#282）。"""
+    assert client.post("/api/knowledge-bases", json={"name": "社内規程"}).status_code == 200
+
+    resp = client.post("/api/knowledge-bases", json={"name": "社内規程"})
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == [
+        "同じ名前のナレッジベース（アーカイブ済みを含む）がすでにあります。別の名前を指定してください。"
+    ]
+
+
+def test_rename_to_duplicate_name_returns_409(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """改名先の名前が使われているときも 409 にする。"""
+    created = client.post("/api/knowledge-bases", json={"name": "設計資料"}).json()["data"]
+
+    async def conflicting_update(*_args: object, **_kwargs: object) -> KnowledgeBaseDetail:
+        raise KnowledgeBaseNameConflictError()
+
+    monkeypatch.setattr(fake_oracle, "update_knowledge_base", conflicting_update)
+
+    resp = client.patch(f"/api/knowledge-bases/{created['id']}", json={"name": "社内規程"})
+
+    assert resp.status_code == 409
+
+
+def test_mutation_responses_include_refreshed_counts(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """変更系 API の応答は、集計列を 0 で返す Oracle 操作の結果ではなく取り直した詳細を返す。"""
+    created = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    stored = fake_oracle.knowledge_bases[created["id"]]
+    fake_oracle.knowledge_bases[created["id"]] = stored.model_copy(
+        update={"document_count": 5, "indexed_document_count": 4, "error_document_count": 1}
+    )
+
+    async def zero_count_update(knowledge_base_id: str, **_kwargs: object) -> KnowledgeBaseDetail:
+        # Oracle の変更操作は KB の行だけを読むので集計列は 0 になる。
+        return fake_oracle.knowledge_bases[knowledge_base_id].model_copy(
+            update={
+                "description": "更新後",
+                "document_count": 0,
+                "indexed_document_count": 0,
+                "error_document_count": 0,
+            }
+        )
+
+    monkeypatch.setattr(fake_oracle, "update_knowledge_base", zero_count_update)
+
+    resp = client.patch(f"/api/knowledge-bases/{created['id']}", json={"description": "更新後"})
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["document_count"] == 5
+    assert data["indexed_document_count"] == 4
+    assert data["error_document_count"] == 1
+
+
+def test_remove_default_only_membership_returns_409(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DEFAULT にだけ所属する文書を外す操作は 409 と理由を返す。"""
+    created = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+
+    async def reject_remove(*_args: object, **_kwargs: object) -> KnowledgeBaseDetail:
+        raise ValueError("DEFAULT にだけ所属する文書は外せません。")
+
+    monkeypatch.setattr(fake_oracle, "remove_document_from_knowledge_base", reject_remove)
+
+    resp = client.delete(f"/api/knowledge-bases/{created['id']}/documents/doc-1")
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == ["DEFAULT にだけ所属する文書は外せません。"]
+
+
+def test_effective_adapter_config_ignores_legacy_knowledge_base_overrides(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """KB の legacy 構築上書きは取込で使わないため、effective は global 既定だけを返す。"""
+    from app.config import get_settings
+
+    created = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "Legacy 構築設定",
+            "adapter_config": {
+                "ingestion": {"chunking_strategy": "page_level", "chunk_size": 1200}
+            },
+        },
+    ).json()["data"]
+
+    # 保存値は読み取り互換として返す。
+    assert created["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
+    effective = client.get(f"/api/knowledge-bases/{created['id']}").json()["data"][
+        "effective_adapter_config"
+    ]
+    settings = get_settings()
+    assert effective["ingestion"]["chunking_strategy"] == settings.rag_chunking_strategy
+    assert effective["ingestion"]["chunk_size"] == settings.rag_chunk_size
