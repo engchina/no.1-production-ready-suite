@@ -1032,3 +1032,45 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 - E2E でメニューを引くときは、ヘッダーの中ではなく `page.getByRole("menu", { name: "その他の操作" })` で引きます（メニューは body の直下にあります）。
 
 ---
+
+## ToggleChip / Switch — 変更（#364）
+
+タッチ端末（`pointer: coarse`）でだけ、当たり判定を 44px（`--control-height-touch`）以上に広げました。見た目の大きさ・props・aria は変えていません。仕様は README §4「タッチ端末の当たり判定」。
+
+| 決めたこと | 理由 |
+|---|---|
+| 両部品の class に `pr-touch-target relative` を付け、`structure/touch-target.css` の `@media (pointer: coarse)` の中だけで擬似要素を作る | Button（`--button-height-*`）と同じく、画面幅ではなく入力方式で判定する。マウス環境は変えない（#338 のレビューで見送り） |
+| `::before` を `inset: min(0px, (100% - 44px) / 2)` で見た目の中心から広げる（縦は高さ、横は幅に対する %）。44px 以上の辺は広げない | チップ（約 26px）は縦に約 9px ずつ、スイッチ（44 × 24px）は縦に 10px ずつ広がる。「ON」のような短いチップだけ横にも数 px 広がる |
+| `::after`（`inset: -1px`・`z-index: 1`）で自分の見た目の範囲を、隣の部品の `::before` より上に置く | 後ろの部品の `::before` が前の部品の見た目を覆うと、見た目の端を押したのに隣が切り替わる。部品自体は重なり順の文脈を作らないので、`::after` はスティッキーな表頭（z-10）やメニュー（`--z-dropdown` 以上）より下にある |
+| 擬似要素は背景・枠・影を持たない | 見た目も強制カラーモードも変わらない |
+
+```tsx
+// 製品は何も書かない。これまでどおり使えば、タッチ端末で当たり判定が広がる。
+<div className="flex flex-wrap gap-1" role="group" aria-label="再ランキング">
+  <ToggleChip selected={value === null} onClick={() => onChange(null)}>継承</ToggleChip>
+  <ToggleChip selected={value === true} onClick={() => onChange(true)}>ON</ToggleChip>
+  <ToggleChip selected={value === false} onClick={() => onChange(false)}>OFF</ToggleChip>
+</div>
+<Switch checked={enabled} onCheckedChange={setEnabled} aria-labelledby="history-label" />
+```
+
+- E2E で当たり判定の実寸を測るときは、`hasTouch` のプロジェクト（Pixel 5 など。Chromium では `(pointer: coarse)` が一致する）で `document.elementFromPoint` を見た目の外側に向けて探るか、`page.touchscreen.tap` で見た目の外側を押します（NL2SQL の `tests/e2e/touch-targets-tabs.spec.ts`）。
+
+---
+
+## Tabs — 変更（#364）
+
+入りきらずに横へスクロールするとき、スクロールできる方向の端だけをフェードし、選んだタブをフェードの外まで見せるようにしました。props・id・aria・キー操作は変えていません。
+
+| 決めたこと | 理由 |
+|---|---|
+| タブの列に `pr-tabs-scroll`（`structure/tabs.css`）を付け、続きがある側に `data-scroll-start` / `data-scroll-end` を付ける。付いているときだけ `mask-image` の線形グラデーションで端の `--tab-fade-width`（2rem）を透かす | 色を重ねる方式は、ヘッダー・カード・面スコープごとに背景色を合わせ直す必要がある。mask はどの背景でも同じに見える。入りきるときは何も付けない（見た目は変わらない） |
+| 出し分けはスクロールのイベント・`ResizeObserver`（タブの列と各タブ）・`items` の変更で判定する（純粋関数 `tabsScrollEdges`、1px 未満の誤差は無視） | 画面の resize・サイドバーの開閉・件数バッジの変化でも正しい側だけにフェードが出る |
+| 選択中のタブ（キーボード・クリック・呼び出し側の変更、初回の表示）は、タブの列の `scrollLeft` だけを動かしてフェードの外まで見せる（純粋関数 `revealTabScrollLeft`。余白は `scroll-padding-inline` = フェードの幅）。キーボードでは `focus({ preventScroll: true })` にする | ブラウザの既定のスクロールでは、タブがフェードの下に残ったり、ページ全体まで動いたりする |
+| スクロールバーを隠す指定を utility から `pr-tabs-scroll` に移した。強制カラーモードでは mask を外し、`scrollbar-width: thin` でスクロールバーを出す | 強制カラーモードで文字を透かさない。utilities レイヤーの `[scrollbar-width:none]` は components レイヤーの上書きに勝つため |
+| 動き（transition / animation）を持たない | 出し分けは即時。`prefers-reduced-motion` でも同じ |
+
+- タブの列は `relative` になりました（`offsetLeft` をスクロールの内容の左端からの距離にするため）。
+- 純粋関数 `tabsScrollEdges` / `revealTabScrollLeft` は `packages/ui/tests/touch-target-tabs.test.tsx` が確かめます。パッケージのルートからは export しません。
+
+---

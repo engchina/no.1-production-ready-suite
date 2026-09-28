@@ -8,6 +8,11 @@ export interface SwitchProps
   onCheckedChange?: (checked: boolean) => void;
 }
 
+/**
+ * オン / オフの切り替え（role="switch"）。見た目は 44 × 24px。
+ * タッチ端末（pointer: coarse）では、見た目の大きさを変えずに当たり判定だけを縦 44px 以上に広げる
+ * （`pr-touch-target`。structure/touch-target.css、#364）。
+ */
 export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(
   ({ checked, disabled, className, onCheckedChange, onClick, type = "button", ...props }, ref) => {
     const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
@@ -26,7 +31,7 @@ export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(
         disabled={disabled}
         onClick={handleClick}
         className={cn(
-          "relative inline-flex h-[24px] min-h-[24px] w-[44px] min-w-[44px] shrink-0 cursor-pointer appearance-none items-center rounded-full border border-transparent p-0 leading-none transition-colors duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-50",
+          "pr-touch-target relative inline-flex h-[24px] min-h-[24px] w-[44px] min-w-[44px] shrink-0 cursor-pointer appearance-none items-center rounded-full border border-transparent p-0 leading-none transition-colors duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-50",
           checked ? "bg-accent-emphasis" : "bg-border-control",
           className
         )}
