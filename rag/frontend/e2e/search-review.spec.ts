@@ -57,7 +57,9 @@ async function mockSearchPage(
       envelope({ items: VIEWS, total: VIEWS.length, limit: 50, offset: 0, has_next: false })
     );
   });
-  await page.route("**/api/search/answers**", (route) => route.fulfill(envelope([])));
+  await page.route("**/api/search/answers**", (route) =>
+    route.fulfill(envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }))
+  );
   await page.route("**/api/settings/answer-records", (route) =>
     route.fulfill(envelope({ retention_days: 30 }))
   );
@@ -289,7 +291,9 @@ test("回答履歴で別の回答を開くと、前の回答の削除エラー�
         envelope({ ...item, answer: `${item?.question} の回答`, citations: [], docrag: {} })
       );
     }
-    return route.fulfill(envelope(answers));
+    return route.fulfill(
+      envelope({ items: answers, total: answers.length, limit: 10, offset: 0, has_next: false })
+    );
   });
 
   await page.goto("/search");

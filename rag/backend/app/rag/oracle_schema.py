@@ -487,6 +487,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_role_permissions",
             sql=_retire_dashboard_permission_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260928_002_answer_record_owner",
+            table_name="rag_answer_records",
+            sql=_answer_record_owner_migration_sql(),
+        ),
     ]
 
 
@@ -1196,6 +1201,71 @@ DECLARE
 BEGIN
     add_json_column('evaluation_input_json');
     add_json_column('evaluation_json');
+END;
+/
+""".strip()
+
+
+def _answer_record_owner_migration_sql() -> str:
+    """rag_answer_records に持ち主（`user_id_hash`）の列と index を足し、既存の行を補う（#304）。
+
+    冪等（列・index は無ければ足し、持ち主は NULL の行だけ補う）。
+
+    既存の行は持ち主を持たない。同じ trace_id のチャットの回答（`rag_messages`）と検索の監査
+    （`rag_search_audit`。監査を Oracle に保存している環境だけ）から利用者が 1 人に決まる行だけ
+    持ち主を補う。補えなかった行は持ち主なし（NULL）のまま残し、SYSTEM_ADMIN と
+    `rag.feedback.manage` を持つ利用者だけが一覧・詳細・評価・削除できる。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_ANSWER_RECORDS'
+      AND column_name = 'USER_ID_HASH';
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_answer_records ADD (user_id_hash CHAR(64))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_ANSWER_RECORDS_OWNER_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_answer_records_owner_idx '
+            || 'ON rag_answer_records (user_id_hash, business_view_id, created_at DESC)';
+    END IF;
+
+    -- 列を足した後の文なので動的 SQL で実行する。表が無い環境（ORA-00942）は補わない。
+    BEGIN
+        EXECUTE IMMEDIATE
+            'UPDATE rag_answer_records r SET r.user_id_hash = ('
+            || 'SELECT MIN(m.user_id_hash) FROM rag_messages m '
+            || 'WHERE m.trace_id = r.trace_id AND m.role = ''ASSISTANT'' '
+            || 'AND m.user_id_hash IS NOT NULL '
+            || 'HAVING COUNT(DISTINCT m.user_id_hash) = 1) '
+            || 'WHERE r.user_id_hash IS NULL';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -942 THEN
+                RAISE;
+            END IF;
+    END;
+    BEGIN
+        EXECUTE IMMEDIATE
+            'UPDATE rag_answer_records r SET r.user_id_hash = ('
+            || 'SELECT MIN(a.user_id_hash) FROM rag_search_audit a '
+            || 'WHERE a.trace_id = r.trace_id AND a.user_id_hash IS NOT NULL '
+            || 'HAVING COUNT(DISTINCT a.user_id_hash) = 1) '
+            || 'WHERE r.user_id_hash IS NULL';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -942 THEN
+                RAISE;
+            END IF;
+    END;
 END;
 /
 """.strip()

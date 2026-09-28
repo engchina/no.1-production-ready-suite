@@ -610,3 +610,37 @@ def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) 
     _stub_stream(monkeypatch, fake, ["m1"])
     resp = client.post("/api/chat/conversations/conv-z/messages/stream", json={"content": "送信"})
     assert resp.status_code == 409
+
+
+def test_stream_message_rejects_business_view_without_knowledge_bases(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """参照 KB が 0 件の業務ビューではチャットせず、生成の前に理由を 409 で返す（#304）。"""
+    from types import SimpleNamespace
+
+    from app.api.routes import search as search_route
+    from app.rag.business_view_config import BusinessViewConfig
+
+    fake = FakeChatOracle()
+
+    async def empty_view(business_view_id: str) -> object:
+        return SimpleNamespace(id=business_view_id, status="ACTIVE", config=BusinessViewConfig())
+
+    monkeypatch.setattr(fake, "get_business_view", empty_view)
+    fake.conversations["conv-empty"] = StoredConversation(
+        id="conv-empty",
+        business_view_id="bv-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake.messages["conv-empty"] = []
+    _stub_stream(monkeypatch, fake, ["m1"])
+
+    resp = client.post(
+        "/api/chat/conversations/conv-empty/messages/stream", json={"content": "送信"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == [search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE]
+    assert fake.messages["conv-empty"] == []

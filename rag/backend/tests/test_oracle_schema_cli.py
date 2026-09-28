@@ -280,7 +280,13 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "REFERENCES platform_roles (role_id) ON DELETE CASCADE" in sql
     assert "-- migration: 20260928_001_retire_dashboard_permission" in sql
     assert "DELETE FROM rag_role_permissions WHERE permission_code = ''menu.dashboard''" in sql
-    assert len(statements) == 64
+    # 保存済みの回答の持ち主（#304）。既存の行はチャットの回答・検索の監査から補う。
+    assert "-- migration: 20260928_002_answer_record_owner" in sql
+    assert "ALTER TABLE rag_answer_records ADD (user_id_hash CHAR(64))" in sql
+    assert "rag_answer_records_owner_idx" in sql
+    assert "HAVING COUNT(DISTINCT m.user_id_hash) = 1" in sql
+    assert "HAVING COUNT(DISTINCT a.user_id_hash) = 1" in sql
+    assert len(statements) == 65
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -340,6 +346,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260926_005_query_history",
         "20260927_001_role_access",
         "20260928_001_retire_dashboard_permission",
+        "20260928_002_answer_record_owner",
     ]
 
 

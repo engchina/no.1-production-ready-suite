@@ -95,9 +95,9 @@ test("権限のない URL を直接開くと権限なしの画面を出し、利
   await page.getByRole("button", { name: "利用可能な画面へ戻る" }).click();
   await expect(page).toHaveURL(/\/chat$/);
 
-  // 引用カードから開く文書の詳細は、チャットの権限でも開ける。
+  // 文書の詳細はワークスペース専用の API を使うため、チャットの権限だけでは開けない（#303）。
   await page.goto("/documents/doc-1");
-  await expect(page).toHaveURL(/\/documents\/doc-1$/);
+  await expect(page).toHaveURL(/\/forbidden$/);
 });
 
 test("廃止したダッシュボードの旧 URL と未知の URL は既定の入口へ置き換えて移す（#261）", async ({ page }) => {

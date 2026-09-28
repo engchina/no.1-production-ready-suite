@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextvars import Token
+from dataclasses import replace
 from typing import Any
 
 from fastapi import Request
@@ -35,6 +36,7 @@ from .domain import LOCAL_DEBUG_USER_UUID, SYSTEM_ADMIN_ROLE_CODE, Principal, as
 from .permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
+    FEEDBACK_MANAGE,
     PUBLIC_API_PATHS,
     SERVICE_TOKEN_API_PATHS,
     SERVICE_TOKEN_AUDIENCE,
@@ -75,12 +77,16 @@ def audit_context_for_request(
     settings = get_settings()
     request_id = str(getattr(request.state, "request_id", "") or "")
     if settings.local_debug_enabled:
-        return audit_request_context_from_headers(
-            request.headers,
-            request_id=request_id,
-            settings=settings,
-            default_user_id=LOCAL_DEFAULT_USER_ID,
-            allow_user_header=True,
+        # local の利用者は SYSTEM_ADMIN（全権限）なので、保存済みの回答も全件を扱う（#304）。
+        return replace(
+            audit_request_context_from_headers(
+                request.headers,
+                request_id=request_id,
+                settings=settings,
+                default_user_id=LOCAL_DEFAULT_USER_ID,
+                allow_user_header=True,
+            ),
+            answer_records_unrestricted=True,
         )
     rag_principal = as_principal(principal)
     # MCP（サービストークン。#232）では token の利用者に加えて、Agent の agent_id / run_id を
@@ -94,6 +100,8 @@ def audit_context_for_request(
         allowed_business_view_ids=rag_principal.allowed_business_view_ids,
         allowed_knowledge_base_ids=rag_principal.allowed_knowledge_base_ids,
         service_token_claims=claims if isinstance(claims, dict) else None,
+        # 保存済みの回答は持ち主だけが扱う。SYSTEM_ADMIN と rag.feedback.manage は全件（#304）。
+        answer_records_unrestricted=rag_principal.has_permission(FEEDBACK_MANAGE),
     )
 
 

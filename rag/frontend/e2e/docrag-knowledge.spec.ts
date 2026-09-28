@@ -338,7 +338,7 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
       deleted = true;
       return route.fulfill({ json: envelope({ trace_id: "trace-old" }) });
     }
-    if (deleted) return route.fulfill({ json: envelope([]) });
+    if (deleted) return route.fulfill({ json: envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }) });
     if (path.endsWith("/answers/trace-old")) {
       return route.fulfill({
         json: envelope({
@@ -362,7 +362,12 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
       });
     }
     return route.fulfill({
-      json: envelope([
+      json: envelope({
+        total: 1,
+        limit: 10,
+        offset: 0,
+        has_next: false,
+        items: [
         {
           trace_id: "trace-old",
           business_view_id: "bv-1",
@@ -373,7 +378,8 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
           confidence: "medium",
           created_at: "2026-09-25T01:00:00Z",
         },
-      ]),
+        ],
+      }),
     });
   });
 
