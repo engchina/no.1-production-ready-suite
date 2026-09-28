@@ -11,6 +11,10 @@ const agentJa = {
   "nav.sidebar.collapse": "サイドバーを折りたたむ",
   "nav.section.containsActive": "現在地を含む",
 
+  // DB ゲート（3製品共通の部品。#325）。既定の文言は platform が持ち、製品名の入る文言だけを上書きする。
+  "dbGate.notConfigured.message":
+    "Agent の機能（業務 Agent・Run・承認・監査など）を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+
   "nav.section.runtime": "実行",
   "nav.section.controlPlane": "Control Plane",
   "nav.section.operations": "運用設定",
@@ -608,6 +612,11 @@ const ja = {
 } as const;
 
 export type I18nKey = keyof typeof ja;
+
+/** 辞書にある key か（共通部品の既定の文言を、Agent の辞書にある値だけ上書きするため）。 */
+export function isI18nKey(key: string): key is I18nKey {
+  return Object.prototype.hasOwnProperty.call(ja, key);
+}
 
 /** 文言を取得する。`{name}` プレースホルダを params で置換する。 */
 export function t(key: I18nKey, params?: Record<string, string | number>): string {

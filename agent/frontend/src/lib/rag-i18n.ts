@@ -10,22 +10,6 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
-  "common.degraded.title": "データベースに接続できません",
-  "common.degraded.fallback":
-    "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
-  "common.degraded.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.checking": "データベースの状態を確認しています…",
-  "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
-  "dbGate.notConfigured.message":
-    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
-  "dbGate.unreachable.title": "データベースを起動してください",
-  "dbGate.unreachable.message":
-    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
-  "dbGate.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
-  "dbGate.checkFailed.title": "データベースの状態を確認できません",
-  "dbGate.checkFailed.message":
-    "バックエンドの起動状態を確認して再試行してください。",
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",

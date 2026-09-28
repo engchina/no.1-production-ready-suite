@@ -122,6 +122,15 @@ function createState() {
     adbInfo: d.adbInfo as Json,
     uploadStorage: d.uploadStorage as Json,
     ociSettings: d.ociSettings as Json,
+    // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
+    databaseStatus: {
+      status: "ok",
+      check: "ok",
+      detail: null,
+      context_id: "e2e-context",
+      schema_status: null,
+      adb_lifecycle_state: null,
+    } as Json,
     // 認証（#215）。既定はローカルの全権限の利用者（ログインなし）。null は未ログイン（me が 401）。
     auth: {
       currentUser: clone(LOCAL_CURRENT_USER) as CurrentUserPayload | null,
@@ -331,6 +340,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- health ---
   if (method === "GET" && at("health")) return state.health;
+  if (method === "GET" && at("ready", "database")) return state.databaseStatus;
 
   // --- Runtime / Binding ---
   if (head === "runtimes") {

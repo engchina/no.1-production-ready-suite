@@ -16,6 +16,7 @@ import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
+import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
@@ -202,7 +203,10 @@ function AuthorizedLayout() {
       mainClassName="[contain:layout]"
       skipLinkLabel={t("common.skipToMain")}
     >
-      <Outlet />
+      {/* DB が使えるまで本文だけを案内に替える（サイドナビは残し、システム設定の 5 画面は開ける。#325）。 */}
+      <DatabaseGate>
+        <Outlet />
+      </DatabaseGate>
     </AppShell>
   );
 }

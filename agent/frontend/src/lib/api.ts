@@ -11,6 +11,7 @@ export type {
   DatabasePasswordRevealData,
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
+  DatabaseStatusData,
   DatabaseWalletDownloadData,
 } from "@engchina/production-ready-system-settings";
 import type {
@@ -19,6 +20,7 @@ import type {
   DatabaseConnectionTestResult,
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
+  DatabaseStatusData,
   DatabaseWalletDownloadData,
 } from "@engchina/production-ready-system-settings";
 export type {
@@ -1112,6 +1114,10 @@ export const agentApi = {
 };
 
 export const api = {
+  // DB の状態（画面の DB ゲートが使う。3製品共通の判定と契約。ログイン不要。#325）。
+  getDatabaseStatus: (options?: { signal?: AbortSignal }) =>
+    request<DatabaseStatusData>("/api/ready/database", { signal: options?.signal }),
+
   getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
   updateModelSettings: (body: ModelSettingsPayload) =>
     request<ModelSettingsData>("/api/settings/model", {

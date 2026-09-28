@@ -28,7 +28,12 @@ from fastapi import (
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
-from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
+from app.clients.oracle import (
+    DocumentDeleteBlockedByRunningIngestionError,
+    OracleClient,
+    is_transient_oracle_error,
+    oracle_error_log_fields,
+)
 from app.config import (
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
@@ -731,7 +736,7 @@ async def list_document_ingestion_jobs(
 ) -> ApiResponse[list[IngestionJob]]:
     """文書 workspace 用に、この文書の取込 job 履歴を新しい順で返す。"""
     oracle = OracleClient()
-    if await oracle.get_document(document_id) is None:
+    if not await oracle.document_exists(document_id):
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_ingestion_jobs(document_id))
 
@@ -758,7 +763,7 @@ async def retry_failed_document_ingestion_segments(
 async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChunkView]]:
     """文書 preview workspace 用に chunk/citation metadata を返す。"""
     oracle = OracleClient()
-    if await oracle.get_document(document_id) is None:
+    if not await oracle.document_exists(document_id):
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_chunks(document_id))
 
@@ -1406,7 +1411,8 @@ async def reject_document_recipe(
 async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[DocumentChunkSet]]:
     """文書の chunk_set(variant)一覧を返す。KB 詳細での variant 可視化に使う。"""
     oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
+    # 状態・ハッシュだけを使う。抽出結果などの JSON 列は読まない(#341)。
+    detail = await oracle.get_document_summary(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     rows = await oracle.list_document_chunk_sets(document_id)
@@ -1916,7 +1922,7 @@ async def _materialize_experiment_candidate(
 
 async def _materialization_plan_for_document(
     oracle: OracleClient,
-    detail: DocumentDetail,
+    detail: DocumentSummary,
     *,
     global_settings: Settings | None = None,
 ) -> tuple[MaterializationPlan | None, dict[str, KnowledgeBaseAdapterConfig]]:
@@ -2387,8 +2393,9 @@ async def list_document_ingestion_segments(
 ) -> ApiResponse[list[IngestionSegment]]:
     """文書 preview workspace 用に取込 segment/checkpoint 状態を返す。"""
     oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
+    # 取込中にポーリングされるため、保存済みの segment があれば JSON 列を読まない(#341)。
+    summary = await oracle.get_document_summary(document_id)
+    if summary is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     try:
         persisted_segments = await oracle.list_ingestion_segments(document_id)
@@ -2397,9 +2404,13 @@ async def list_document_ingestion_segments(
     if persisted_segments:
         return ApiResponse(
             data=[
-                _segment_with_progress_defaults(segment, detail) for segment in persisted_segments
+                _segment_with_progress_defaults(segment, summary) for segment in persisted_segments
             ]
         )
+    # 保存済みの segment が無い旧データだけ、抽出結果のページ範囲から segment を組み立てる。
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
     jobs = await oracle.list_document_ingestion_jobs(document_id)
     return ApiResponse(data=_document_ingestion_segments(detail, jobs, effective_settings))
@@ -2407,7 +2418,7 @@ async def list_document_ingestion_segments(
 
 def _segment_with_progress_defaults(
     segment: IngestionSegment,
-    detail: DocumentDetail,
+    detail: DocumentSummary,
 ) -> IngestionSegment:
     """旧 checkpoint row に progress 表示用の単位を補う。"""
     if segment.progress_unit != "source":
@@ -2454,7 +2465,8 @@ async def _attach_duplicate_source(
     duplicate_id = detail.duplicate_of_document_id
     if duplicate_id is None:
         return detail
-    duplicate = await oracle.get_document(duplicate_id)
+    # 表示用の摘要だけを使うため、重複元の JSON 列は読まない(#341)。
+    duplicate = await oracle.get_document_summary(duplicate_id)
     if duplicate is None:
         return detail
     return detail.model_copy(
@@ -2572,7 +2584,7 @@ async def list_document_knowledge_bases(
 ) -> ApiResponse[list[KnowledgeBaseRef]]:
     """ドキュメントの所属ナレッジベース一覧を返す。"""
     oracle = OracleClient()
-    if await oracle.get_document(document_id) is None:
+    if not await oracle.document_exists(document_id):
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_knowledge_bases(document_id))
 
@@ -4868,11 +4880,25 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except Exception as exc:
+        if (
+            is_transient_oracle_error(exc)
+            and job.attempt_count < job.max_attempts
+            and await _requeue_ingestion_job_after_transient_error(oracle, job, exc)
+        ):
+            if propagate_errors:
+                raise
+            return
         safe_error = _safe_ingestion_job_error_message(exc)
         await _fail_ingestion_job(oracle, job, safe_error)
         logger.exception(
             "ingestion_job_failed",
-            extra={"job_id": job_id, "document_id": job.document_id},
+            extra={
+                "job_id": job_id,
+                "document_id": job.document_id,
+                "attempt_count": job.attempt_count,
+                "max_attempts": job.max_attempts,
+                **oracle_error_log_fields(exc),
+            },
         )
         if propagate_errors:
             raise
@@ -4907,6 +4933,72 @@ async def _run_ingestion_job(
                     },
                     exc_info=True,
                 )
+
+
+async def _requeue_ingestion_job_after_transient_error(
+    oracle: OracleClient,
+    job: IngestionJob,
+    error: Exception,
+) -> bool:
+    """一時的な DB エラー(接続断)の job を QUEUED に戻す。戻せたら True(#341)。
+
+    試行回数(``attempt_count < max_attempts``)が残っている場合だけ呼ぶ。文書・レシピの status を
+    工程を始める前の状態へ戻してから、job を RUNNING のときだけ QUEUED に戻す(条件付きの状態遷移)。
+    先に job を戻すと、別の worker が claim して書いた status を後から上書きしうるため、
+    この順にする。
+    戻す途中でまた DB が失敗したら False を返し、呼び出し側は今までどおり FAILED にする
+    (FAILED も書けなければ、stale の回復が拾う)。
+    """
+    try:
+        await _restore_statuses_before_job_phase(oracle, job)
+        requeued = await oracle.transition_ingestion_job(
+            job.id,
+            from_statuses=(IngestionJobStatus.RUNNING,),
+            to_status=IngestionJobStatus.QUEUED,
+            error_message=None,
+            finished_at=None,
+        )
+    except Exception as requeue_error:
+        logger.warning(
+            "ingestion_job_requeue_failed",
+            extra={
+                "job_id": job.id,
+                "document_id": job.document_id,
+                **oracle_error_log_fields(requeue_error),
+            },
+        )
+        return False
+    if requeued is None:
+        # 戻す前に取り消された(または stale の回復が戻した)。取り消しとして扱う。
+        await _restore_statuses_after_cancel(oracle, job)
+        return True
+    logger.warning(
+        "ingestion_job_requeued_transient_db_error",
+        extra={
+            "job_id": job.id,
+            "document_id": job.document_id,
+            "recipe_id": job.recipe_id,
+            "phase": job.phase.value,
+            "attempt_count": job.attempt_count,
+            "max_attempts": job.max_attempts,
+            **oracle_error_log_fields(error),
+        },
+    )
+    _dispatch_ingestion_job(job.id)
+    return True
+
+
+async def _restore_statuses_before_job_phase(
+    oracle: OracleClient,
+    job: IngestionJob,
+) -> None:
+    """再実行の前に、文書(文書単位の job)またはレシピ行(レシピの job)を工程の前の状態へ戻す。"""
+    if job.recipe_id is not None:
+        await _restore_recipe_status_after_cancel(oracle, job)
+        return
+    await oracle.update_document_status(
+        job.document_id, _restore_status_for_cancelled_phase(job.phase)
+    )
 
 
 async def _fail_ingestion_job(
