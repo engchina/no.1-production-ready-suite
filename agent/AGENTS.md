@@ -41,13 +41,15 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 - 初期 adapter は OpenClaw Gateway WebSocket、Hermes Runs/Responses API、DeerFlow
   LangGraph-compatible API。
 - Runtime は公式 Docker image を `image@sha256` で固定する。派生 image と source vendoring は
-  行わない。
-- Compose profile は `openclaw / hermes / deerflow / dispatcher`。各 Runtime は独立 volume、
-  healthcheck、内部 network を持つ。
+  行わない。Docker を使うのはこの第三者の Runtime だけで、Control Plane（backend・frontend）と
+  runtime-dispatcher は自前のコードなので Docker を使わずネイティブで動かす（開発は `uv run`、
+  本番は systemd。Dockerfile は作らない。#286 / #356）。
+- `docker-compose.yml` は Runtime だけを持ち、profile は `openclaw / hermes / deerflow`。各 Runtime は独立 volume と
+  healthcheck を持ち、Control Plane の Binding の書き出し（`AGENT_RUNTIME_BINDINGS_DIR`）を読み取り専用で mount する。
 - service action は静的 allowlist の `pull/start/stop/restart/remove/logs` のみ。
 - Docker socket は既定で mount しない。service control は明示的な管理者運用時だけ有効化する。
 - 開発時 dispatcher は in-process。本番は Oracle checkpoint の row lock と Run lease を使う
-  `runtime-dispatcher` service。新しい queue 製品は追加しない。
+  runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher` の別プロセス）。新しい queue 製品は追加しない。
 
 ## MCP 境界
 
@@ -132,7 +134,8 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 
 - 機能変更と同時に pytest / Playwright を追加・更新する。
 - 完了前に `scripts/check-all.sh`（backend の black/ruff/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
-  frontend の lint/build）と、`docker compose config`、secret/socket/digest security check を実行する。
+  frontend の lint/build）と、Runtime の compose を変えたときは `docker compose --profile openclaw --profile hermes --profile deerflow config --quiet`、
+  secret/socket/digest security check を実行する。
   - `check-all.sh` のローカルの既定は Playwright e2e と pip-audit を省く（#339）。関係する spec だけ
     `SKIP_E2E=0 E2E_ARGS="e2e/<対象>.spec.ts" scripts/check-all.sh` で実行する。全部を実行するときは `FULL=1`。
   - PR の CI は `Agent / Backend`・`Agent / Frontend`・`Agent / E2E smoke`（約 1 分の smoke）の 3 job。Playwright の
@@ -159,6 +162,6 @@ backend/app/cli/agent_security_migrate.py  PLATFORM_* と AGENT_ROLE_* の冪等
 frontend/src/
   pages/AgentRuntimePages.tsx
   lib/api.ts, lib/i18n.ts, lib/routes.ts
-docker-compose.yml          Control Plane + Runtime profiles
+docker-compose.yml          第三者の Runtime（OpenClaw・Hermes・DeerFlow）の profile だけ
 docs/agent-control-plane-design.md
 ```

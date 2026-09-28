@@ -77,9 +77,7 @@ def test_runner_returns_extraction_on_success(monkeypatch: pytest.MonkeyPatch) -
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(
-        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
-    )
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://127.0.0.1:18020"))
     result = client.runner("docling", b"abc", _profile(), "application/pdf")
 
     assert isinstance(result, ParserRegistryResult)
@@ -97,7 +95,7 @@ def test_runner_falls_back_when_service_unreachable(
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
         Settings(
-            rag_parser_docling_service_url="http://parser-docling:8000",
+            rag_parser_docling_service_url="http://127.0.0.1:18020",
             rag_http_service_retry_attempts=1,
         )
     )
@@ -117,7 +115,7 @@ def test_runner_fail_fast_raises_when_service_unreachable(
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
         Settings(
-            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
             rag_http_service_retry_attempts=1,
         )
     )
@@ -175,7 +173,7 @@ def test_runner_retries_retryable_status_then_returns_success(
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
         Settings(
-            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
             rag_http_service_retry_attempts=3,
             rag_http_service_retry_initial_delay_seconds=0,
         )
@@ -202,7 +200,7 @@ def test_runner_does_not_retry_non_retryable_status(
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
         Settings(
-            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
             rag_http_service_retry_attempts=3,
             rag_http_service_retry_initial_delay_seconds=0,
         )
@@ -228,7 +226,7 @@ def test_runner_fail_fast_reports_http_status_after_retries(
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
         Settings(
-            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
             rag_http_service_retry_attempts=2,
             rag_http_service_retry_initial_delay_seconds=0,
         )
@@ -298,9 +296,7 @@ def test_runner_fail_fast_classifies_invalid_input(
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(
-        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
-    )
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://127.0.0.1:18020"))
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner("docling", b"not-a-pdf", _profile(), "application/pdf", fail_fast=True)
@@ -326,9 +322,7 @@ def test_source_unsupported_message_lists_supported_formats(
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(
-        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
-    )
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://127.0.0.1:18020"))
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner("docling", b"abc", _profile(), "text/markdown", fail_fast=True)
@@ -370,9 +364,7 @@ def _raise_for_parse_warning(
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(
-        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
-    )
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://127.0.0.1:18020"))
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner("docling", b"%PDF", _profile(), "application/pdf", fail_fast=True)
     return exc_info.value

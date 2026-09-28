@@ -2,7 +2,7 @@
  * バックエンド API クライアント。
  *
  * - レスポンスは共通エンベロープ `ApiResponse<T>`（snake_case）。
- * - `/api/*` は Vite dev/preview proxy または Docker nginx proxy でバックエンドへ転送される。
+ * - `/api/*` は Vite dev/preview proxy または本番の Nginx(host)でバックエンドへ転送される。
  * - 型はバックエンドの Pydantic スキーマ（snake_case）にそのまま対応させる。
  */
 

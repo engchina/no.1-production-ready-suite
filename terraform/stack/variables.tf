@@ -472,7 +472,7 @@ variable "rag_instance_flex_shape_memory" {
 }
 
 variable "rag_instance_boot_volume_size" {
-  description = "Boot volume size in GB of the RAG Compute instance. The parser Docker images are large."
+  description = "Boot volume size in GB of the RAG Compute instance. The per-service Python environments and models of the parsers are large."
   type        = number
   default     = 200
 

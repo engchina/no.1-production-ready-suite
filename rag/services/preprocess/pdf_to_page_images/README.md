@@ -14,13 +14,13 @@ parse の **前** に PDF の各ページを PyMuPDF でラスタライズし、
 ```bash
 # repo root から(共有 package の path source を解決するため)
 uv run --directory services/preprocess/pdf_to_page_images \
-  uvicorn app.main:app --host 0.0.0.0 --port 8011
+  uvicorn app.main:app --host 127.0.0.1 --port 18011
 ```
 
 ## 起動(uv の venv + systemd。#286)
 
 サービスごとの uv の venv(`uv sync --locked --no-dev --python 3.12`)で動き、本番・開発とも systemd の unit
-(`production-ready-rag-preprocess-pdf-to-page-images.service`)で起動 / 停止する。Docker は使わない(`Dockerfile` は後続の PR で削除する)。
+(`production-ready-rag-preprocess-pdf-to-page-images.service`)で起動 / 停止する。Docker は使わない(Dockerfile は #356 で削除した)。
 
 ```bash
 # rag/ で実行する

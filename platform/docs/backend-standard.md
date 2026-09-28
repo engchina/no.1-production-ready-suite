@@ -48,8 +48,10 @@ backend/
   pyproject.toml
   uv.lock
   .env.example
-  Dockerfile           # 本番 Gunicorn + UvicornWorker
 ```
+
+Dockerfile は持たない（自前のコードは Docker イメージを作らない。#286 / #356）。本番は各製品の `init_script.sh` が
+作る systemd の unit で、uv の venv（`uv sync --locked --no-dev`）の Gunicorn + UvicornWorker として動かす。
 
 共通エンドポイント: `GET /api/health` `GET /api/ready` `GET /metrics`。
 業務エンドポイントは `features/<domain>` 配下に置く。

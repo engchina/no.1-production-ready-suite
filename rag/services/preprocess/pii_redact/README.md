@@ -9,7 +9,7 @@
 |---|---|
 | profile | `pii_redact` |
 | 主依存 | presidio-analyzer / presidio-anonymizer / spaCy(ja モデル) |
-| 既定 URL | `http://preprocess-pii-redact:8000` |
+| 既定 URL | `http://127.0.0.1:18016` |
 | dev port | 8016 |
 | profile 種別 | CPU(dev は uv プロセス) |
 
@@ -31,7 +31,7 @@
 
 ```bash
 # dev(ホストの uv プロセス。事前に `python -m spacy download ja_core_news_lg` が必要)
-uv run --directory services/preprocess/pii_redact uvicorn app.main:app --port 8016
+uv run --directory services/preprocess/pii_redact uvicorn app.main:app --port 18016
 
 # rag-services.sh(サービスの venv を作り、日本語 NER モデルも入れてから 127.0.0.1:18016 で起動)
 scripts/rag-services.sh run preprocess-pii-redact   # rag/ で実行(uv の venv。systemd は install)

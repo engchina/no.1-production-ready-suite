@@ -106,5 +106,5 @@ OCI Compute（Terraform で配備した環境）での手順を示す。パス�
 
 - 新規の Resource Manager 適用では、cloud-init が `/u01/aipoc/props/platform.env` を `platform/.env`
   （`0600`）へ、`/u01/aipoc/props/backend.env` を `nl2sql/backend/.env` へ配置するため、この手順は不要。
-- Docker Compose では手順 2〜3 のあと `docker compose up -d --build` で再起動する。共通 `.env` は
-  `PLATFORM_ENV_DIR`（既定 `../platform`）のディレクトリをマウントして読む。
+- ローカル開発では手順 2〜3 のあと backend（`uv run`）と worker を起動し直す。共通 `.env` の場所は
+  `PLATFORM_ENV_FILE`（既定はリポジトリの `platform/.env`）。Docker Compose は #356 で削除した。

@@ -123,8 +123,7 @@ class ParserServiceClient:
         field = _SERVICE_URL_FIELDS.get(backend)
         if field is None:
             return None
-        # 既定は 127.0.0.1:<port>(ネイティブ配備)。dev では以前の docker 名の設定も
-        # catalog の port へ読み替える。prod は設定値そのまま。
+        # 既定は 127.0.0.1:<port>(ネイティブ配備)。稼働プローブと同じ解決を使う。
         from app.services.catalog import resolve_service_base_url
 
         url = resolve_service_base_url(self._settings, field)

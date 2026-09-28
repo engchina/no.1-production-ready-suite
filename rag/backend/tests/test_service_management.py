@@ -1036,7 +1036,7 @@ def test_control_failures_map_to_http_status(
     assert expected_text in resp.text
 
 
-# --- URL の解決(dev の旧 docker 名の読み替え) -----------------------------------
+# --- URL の解決 -----------------------------------------------------------------
 
 
 def test_is_dev_mode_maps_environment() -> None:
@@ -1055,23 +1055,16 @@ def test_is_dev_mode_maps_environment() -> None:
             object.__setattr__(settings, "environment", "dev")
 
 
-def test_resolve_service_base_url_dev_rewrites_legacy_docker_name(
+def test_resolve_service_base_url_does_not_rewrite_legacy_docker_name(
     monkeypatch: MonkeyPatch,
 ) -> None:
+    """以前の Docker Compose の service 名は読み替えない(#356)。設定値をそのまま使う。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
-    # 以前の Docker Compose 時代の backend/.env に残った docker 名 → 127.0.0.1:<port>。
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
-    monkeypatch.setattr(
-        settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
-    )
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
-        == "http://127.0.0.1:18020"
-    )
-    assert (
-        resolve_service_base_url(settings, "rag_preprocess_csv_to_json_service_url")
-        == "http://127.0.0.1:18012"
+        == "http://parser-docling:8000"
     )
 
 
@@ -1099,21 +1092,22 @@ def test_resolve_service_base_url_prod_uses_setting(monkeypatch: MonkeyPatch) ->
     )
 
 
-def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
+def test_parser_client_service_url_uses_resolved_setting(monkeypatch: MonkeyPatch) -> None:
+    """取込の委譲先は稼働プローブと同じ解決(設定値、末尾スラッシュ除去)を使う。"""
     from app.clients.parser_service import ParserServiceClient
 
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
-    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://127.0.0.1:18020/")
     assert ParserServiceClient(settings).service_url("docling") == "http://127.0.0.1:18020"
 
 
-def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
+def test_preprocess_service_url_uses_resolved_setting(monkeypatch: MonkeyPatch) -> None:
     from app.rag.preprocess_strategy import preprocess_service_url
 
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(
-        settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
+        settings, "rag_preprocess_csv_to_json_service_url", "http://127.0.0.1:18012/"
     )
     assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:18012"

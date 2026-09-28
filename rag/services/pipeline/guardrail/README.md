@@ -9,7 +9,7 @@ OCI Generative AI Guardrails backend(`rag_guardrail_backend`)は別レイヤー�
 | 項目 | 値 |
 |---|---|
 | stage | `guardrail` |
-| 既定 URL | `http://pipeline-guardrail:8000` / dev port 8034 |
+| 既定 URL | `http://127.0.0.1:18034` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`GuardrailStageRequest{policy}` → `GuardrailStageResponse`)。

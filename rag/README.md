@@ -84,7 +84,7 @@ Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提�
 
 3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database 26ai は NL2SQL / Agent と共有し、
 RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。Docker は使わない。#286）を作ります
-（CPU の parser だけを配備する）。Docker Compose で配備した既存環境の移行は [docs/deployment.md](./docs/deployment.md) を参照してください。
+（CPU の parser だけを配備する）。以前の Docker Compose で配備した環境の移行は [docs/deployment.md](./docs/deployment.md) を参照してください。
 「配備する製品」で RAG を選び、入力・配備方式・instance 上の構成・制約は [terraform/README.md](../terraform/README.md) を参照してください。
 
 ## ドキュメント
@@ -117,10 +117,10 @@ CI(`secret-scan` ジョブ)でも同じ `.gitleaks.toml` で full history を走
 
 ## CI
 
-`.github/workflows/ci.yml` で secret-scan(gitleaks)/ backend / frontend / Docker Compose の品質門を固定している。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security/dependency audit、frontend の unit test・build、`docker compose config` を実行する。
+monorepo root の `.github/workflows/ci.yml`(統合 CI)で secret-scan(gitleaks)と RAG の job(`RAG / Backend`・`RAG / DocRAG core`・`RAG / Frontend`・`RAG / E2E smoke`・`RAG / Compute init script`)を実行する。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security audit(依存が変わったときは dependency audit)、frontend の unit test・build、Playwright の smoke、配備スクリプト(`init_script.sh`・`scripts/rag-systemd.sh`・`scripts/rag-services.sh`)のテストを実行する。Docker Compose の検証は自前の compose を削除したため無い(#356)。
 
-frontend の lint(`npm run lint`)、dependency audit(`npm audit`)、Playwright E2E(`npm run test:e2e`)は `../nl2sql/` と同じく CI では実行せず、ローカル検証と PR review で確認する。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
+frontend の lint(`npm run lint`)と dependency audit(`npm audit`)は CI では実行せず、ローカル検証と PR review で確認する。Playwright は PR では smoke だけを実行し、全件は `e2e-nightly.yml` が毎晩実行する(#184)。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
 
-`main` の branch protection では `Backend` / `Frontend` / `Docker Compose` / `Secret scan (gitleaks)` を required check にし、branch を最新化してから merge する(strict)設定にしている。
+`main` の ruleset の必須 check は `CI OK` の 1 つだけ(変更のあった製品の job の結果を集約する。root の [AGENTS.md](../AGENTS.md) の「CI」)。
 
 `.github/workflows/dependabot-auto-merge.yml` は Dependabot PR の patch / minor 更新だけを required checks 成功後に自動 merge する。major 更新と、major を含む grouped PR は自動 merge せず手動レビューで判断する。人間が作成した PR には作用しない。

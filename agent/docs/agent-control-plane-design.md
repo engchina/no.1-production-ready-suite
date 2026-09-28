@@ -176,17 +176,20 @@ row を `SELECT ... FOR UPDATE` し、queued Run に期限付き lease を付け
 外部 dispatcher は `AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint|oracle_normalized` が前提。
 memory backend は process 間共有されないため production dispatcher に使用しない。
 
-## 6. Docker services
+## 6. Runtime services（第三者の構築済みイメージ）
 
-`docker-compose.yml` は Control Plane と次の opt-in profile を持つ。
+Control Plane（backend・frontend）と runtime-dispatcher は自前のコードなので Docker を使わず、開発は `uv run`、
+本番は systemd で動かす（#286 / #356）。`docker-compose.yml` は第三者の Runtime だけを opt-in profile で持つ。
 
 | Profile | Service | State | Health |
 |---|---|---|---|
-| `dispatcher` | `runtime-dispatcher` | Oracle + control-plane volume | process |
 | `openclaw` | `runtime-openclaw` | `openclaw-state/auth` | `/readyz` |
 | `hermes` | `runtime-hermes` | `hermes-state` | `/health` |
 | `deerflow` | `runtime-deerflow` | `deerflow-state` | `/api/models` |
 
+外部 dispatcher（`AGENT_RUNTIME_DISPATCH_MODE=external`）は Oracle を使う別プロセス
+（`python -m app.features.agent.runtime_dispatcher`）で、compose の service ではない。
+各 Runtime は Control Plane の Binding の書き出し（`AGENT_RUNTIME_BINDINGS_DIR`）を読み取り専用で mount する。
 Runtime image はすべて公式 registry の multi-arch digest を固定する。Docker socket は mount しない。
 管理 API は `AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=true` の管理者 host 運用でのみ有効。
 
@@ -224,5 +227,5 @@ Cookie のないリクエストは `AGENT_RBAC_ENABLED=true` のときだけ hea
 - Control Plane 内の新しい Agent Runtime / planner / workflow engine
 - Runtime 自動 failover
 - 外部 archive の Marketplace install
-- OKE / Container Instances driver（Compose 成立後に追加）
+- OKE / Container Instances driver
 - 別 LLM provider、外部 vector DB、新規 queue product

@@ -24,7 +24,7 @@ Business Agent ───────────────→ Skill → MCP / 
 - Runtime adapter: OpenClaw Gateway WS、Hermes Runs API、DeerFlow LangGraph API。
 - Binding MCP: 既存 RAG/NL2SQL tool を選択 Skill の閉包だけに限定して公開。
 - Dispatcher: 開発は in-process、本番は Oracle row lock + claim/lease worker。
-- Docker service management: 固定 digest、profile、healthcheck、volume、静的操作 allowlist。
+- Runtime service management: 第三者の Runtime イメージ（固定 digest）の profile・healthcheck・volume・静的操作 allowlist（`docker-compose.yml`）。
 - Snapshot v2: Runtime/Binding を含む Control Plane backup。v1 snapshot/manifest を移行。
 - ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
   エージェント・業務ビュー単位の対象範囲（「Agent セキュリティ > 権限管理」）。詳細は
@@ -85,50 +85,71 @@ SKIP_E2E=0 E2E_ARGS="e2e/auth-login.spec.ts" scripts/check-all.sh   # 関係す�
 FULL=1 scripts/check-all.sh                                 # CI と同じく全部を実行
 ```
 
-## Docker Compose
+## Runtime（第三者の構築済みイメージ）と dispatcher
 
-Runtime は必要な profile だけ起動します。Docker socket は mount されません。
+Control Plane（backend・frontend）と runtime-dispatcher は自前のコードなので、Docker を使わずネイティブで動かします
+（開発は上の `uv run` / `scripts/start-all.sh`、本番は systemd。#286 / #356）。Docker を使うのは、
+第三者が構築済みのイメージを配る Agent Runtime（OpenClaw・Hermes・DeerFlow）だけです。`docker-compose.yml` は
+この 3 つだけを持ち、イメージは公式 registry の `@sha256` で固定しています（派生イメージは作りません）。
+必要な profile だけ起動します。Docker socket は mount されません。
 
-設定は次の 3 つです（#211）。
-
-- `../platform/.env`（3製品共通の `PLATFORM_*`）: `../platform/` を書き込み可能で `/app/platform` にマウントし、
-  `PLATFORM_ENV_FILE=/app/platform/.env` で読みます。システム設定画面の保存先なので env_file では渡しません
-  （環境変数は `.env` より優先されるため、画面で保存した値が反映されなくなります）。
-- `backend/.env`（Agent 固有の `AGENT_*`）: `env_file` で渡します（無くても起動します）。
-- `agent/.env`（`.env.runtime.example` から作る）: compose の `${...}` 補間用です。ここに書いた値は
-  `backend/.env` より優先されます。Runtime API の認証値は `AGENT_OPENCLAW_GATEWAY_TOKEN` /
-  `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` に書き、compose が各 Runtime の
-  期待する名前（`OPENCLAW_GATEWAY_TOKEN` / `API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN`）へ渡します。
-
-compose の `control-plane` は既定で `AGENT_AUTH_MODE=production`（共通認証のログインが必要）です。
-初回は `docker compose exec control-plane python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
-開発で全権限のローカル利用者にするときだけ `agent/.env` に `AGENT_AUTH_MODE=local` を書きます。
+- `agent/.env`（`.env.runtime.example` から作る）: compose の `${...}` 補間用です。Runtime API の認証値を
+  `AGENT_OPENCLAW_GATEWAY_TOKEN` / `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` に書き、
+  compose が各 Runtime の期待する名前（`OPENCLAW_GATEWAY_TOKEN` / `API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN`）へ
+  渡します。Control Plane の backend にも同じ名前・同じ値を設定します（Runtime 定義の `auth_secret_ref` が参照します）。
+- Control Plane が Binding ごとに書き出す Skill / MCP（`AGENT_RUNTIME_BINDINGS_DIR`、開発の既定は
+  `backend/.agent-runtime-bindings`）を、各 Runtime へ読み取り専用で渡します。場所を変えたときは `agent/.env` の
+  `AGENT_RUNTIME_BINDINGS_HOST_DIR` も合わせます。
+- Runtime から Control Plane の Binding MCP を呼ぶ場合は、backend の `AGENT_CONTROL_PLANE_PUBLIC_BASE_URL` を
+  `http://host.docker.internal:8020/api` にします（compose が `host.docker.internal` を host へ向けます。
+  `scripts/start-backend.sh` は既定で `0.0.0.0:8020` で listen します）。
 
 ```bash
-cp ../platform/.env.example ../platform/.env
 cp .env.runtime.example .env
-docker compose up -d control-plane
 docker compose --profile openclaw up -d runtime-openclaw
 docker compose --profile hermes up -d runtime-hermes
 docker compose --profile deerflow up -d runtime-deerflow
 ```
 
-本番 dispatcher を使う場合は Oracle 設定を入れ、Control Plane と worker の
-`AGENT_RUNTIME_DISPATCH_MODE=external` を有効にします。
+本番 dispatcher を使う場合は Oracle 設定を入れ、backend の `AGENT_RUNTIME_DISPATCH_MODE=external` を有効にして、
+dispatcher を別のプロセスで起動します（`backend/.env` と共通 `.env` を読みます）。
 
 ```bash
-docker compose --profile dispatcher up -d control-plane runtime-dispatcher
+cd backend
+AGENT_RUNTIME_DISPATCH_MODE=external uv run python -m app.features.agent.runtime_dispatcher
 ```
 
 公式 Runtime image は `docker-compose.yml` で `@sha256` 固定しています。更新時は公式 release と
 manifest を検証して digest を明示更新してください。
+
+### Control Plane を Docker Compose で動かしていた環境の移行（#356）
+
+#356 で、Control Plane の Dockerfile と compose の `control-plane` / `runtime-dispatcher` を削除しました。
+compose の project 名（`production-ready-agent-control-plane`）は変えていないので、Runtime の volume はそのまま使えます。
+
+1. 以前のコンテナを止めて消します（`agent/` で実行。Runtime の volume は残ります）。
+
+   ```bash
+   for service in control-plane runtime-dispatcher; do
+     docker ps -aq --filter label=com.docker.compose.project=production-ready-agent-control-plane \
+       --filter "label=com.docker.compose.service=${service}" | xargs -r docker rm -f
+   done
+   ```
+
+2. 以前の `agent/.env` に書いていた Control Plane の設定（`AGENT_AUTH_MODE` / `AGENT_RUNTIME_*` /
+   `AGENT_CONTROL_PLANE_*` など）は `backend/.env` へ移します（`agent/.env` は Runtime の補間だけに使います）。
+3. Control Plane の状態を named volume（`production-ready-agent-control-plane_control-plane-state`）に置いていた場合、
+   Binding の書き出し（`bindings/`）は次の同期で作り直されます。`AGENT_RUNTIME_REPOSITORY_BACKEND=file` などで
+   volume に保存していた状態を引き継ぐときは、中身を backend の保存先へ写してから volume を消します。
+4. backend を `uv run`（開発）または systemd の `production-ready-agent-backend`（Resource Manager の stack）で起動し、
+   初回は `cd backend && uv run python -m app.cli.agent_security_migrate` でテーブルを作ります。
 
 ## 既存環境の更新手順（#211）
 
 #211 で設定を共通 `.env`（`platform/.env`、`PLATFORM_*`）と Agent の `backend/.env`（`AGENT_*`）に分けました。
 旧名は読まないため、既存環境では更新後に 1 回だけ次を行います。
 
-1. backend（systemd の `production-ready-agent-backend` または compose の `control-plane` / `runtime-dispatcher`）を停止する。
+1. backend（systemd の `production-ready-agent-backend`、または開発の `uv run`）と、使っている場合は runtime-dispatcher を停止する。
 2. 移行内容を確認する（書き換えない）。monorepo root で実行します。
 
    ```bash
@@ -156,7 +177,7 @@ manifest を検証して digest を明示更新してください。
    - Resource Manager の stack で配備した instance: 手順 1〜4 を instance 上の
      `/u01/aipoc/no.1-production-ready-suite` で（`git pull` と `agent/backend` の `uv sync --locked --no-dev` の後に）
      行い、`sudo systemctl restart production-ready-agent-backend` を実行する。新しく配備する stack は最初から新構成で作られる。
-   - Docker Compose: `docker compose up -d control-plane`（dispatcher を使う場合は `--profile dispatcher` も）で作り直す。
+   - 開発: backend（と dispatcher）を `uv run` で起動し直す。
 
 ## 既存環境の更新手順（#215）
 
@@ -229,6 +250,5 @@ npm run build
 npm run test:e2e
 
 cd ..
-docker compose config
-docker compose --profile openclaw --profile hermes --profile deerflow config
+docker compose --profile openclaw --profile hermes --profile deerflow config --quiet   # 第三者 Runtime の compose
 ```

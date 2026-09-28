@@ -146,7 +146,7 @@ Control Plane の読み取りメニュー（業務 Agent・スキル・Runtime�
    `auth_basic` / `auth_basic_user_file` を削除し、`location /api/` の `proxy_set_header Host` を `$http_host` にして
    `sudo nginx -t && sudo systemctl reload nginx`。`/etc/nginx/production-ready-agent.htpasswd` と
    `/u01/aipoc/props/basic_auth_*` は削除してよい（`init_script.sh` を再実行しても同じ設定になる）。
-5. `sudo systemctl restart production-ready-agent-backend`（compose は `docker compose up -d control-plane`）。
+5. `sudo systemctl restart production-ready-agent-backend`（開発は backend の `uv run` を起動し直す）。
 6. `system_admin` でログインし、ロール管理でロールを作り、権限管理で Agent の権限・エージェント・業務ビューを割り当て、ユーザーに付ける。
 7. （#262 以降に更新する環境）手順 3 の `agent_security_migrate` を再実行し、既存ロールに残る廃止した権限コード
    `menu.dashboard` を削除する（何度実行してもよい。出力の `retired_permission_rows` が削除した行数）。削除しないと、RAG / NL2SQL の

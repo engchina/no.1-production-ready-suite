@@ -64,7 +64,7 @@
 ### 横断
 - 観測性: **Langfuse**(LLM トレース/コスト)+ Prometheus + OpenTelemetry。
 - 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: Docker Compose(開発)→ OKE / Container Instances(本番)、Terraform(OCI Resource Manager。monorepo root の統合 stack `terraform/stack/`、#217)。
+- インフラ: 自前のコードは Docker を使わずネイティブで動かす(開発は `uv run` / `npm run dev`、本番は Compute 上の systemd + Nginx。Dockerfile・compose は持たない。#286 / #356)。配備は Terraform(OCI Resource Manager。monorepo root の統合 stack `terraform/stack/`、#217)と `init_script.sh`。
 
 ## UI/UX 開発ルール
 
@@ -146,10 +146,10 @@ packages/
                           (extraction/source schema・routing・registry remap・
                            ParseResponse・FastAPI app factory)。依存は pydantic +
                            charset-normalizer のみ(重い parser 依存・oci/oracle は持たない)
-services/parsers/         外部 parser の独立 FastAPI マイクロサービス(各々独自依存/Dockerfile)
+services/parsers/         外部 parser の独立 FastAPI マイクロサービス(各々独自依存/uv の venv)
   docling/ marker/        CPU(既定起動)
   unstructured/
-  mineru/ dots_ocr/       GPU(CUDA、docker compose --profile gpu で opt-in)
+  mineru/ dots_ocr/       GPU(CUDA、opt-in)
   glm_ocr/                GPU(HuggingFace zai-org/GLM-OCR を transformers でロード)
 frontend/                 Vite + React Router + Tailwind v4 + shadcn/ui
   src/main.tsx            Vite エントリ
@@ -157,14 +157,13 @@ frontend/                 Vite + React Router + Tailwind v4 + shadcn/ui
   src/globals.css         Tailwind v4 / shadcn/ui theme tokens
   src/components/         layout/Sidebar, StatusBadge, PageHeader, providers
   src/lib/                routes / i18n(ja) / utils
-docker-compose.yml        backend + ingestion-worker + parser サービス群 + frontend
 ```
 
 ## Parser マイクロサービス(重要)
 
 外部 parser(docling / marker / unstructured / mineru / dots_ocr / glm_ocr)は **backend と同居
 させず、それぞれ独立した FastAPI マイクロサービス**(`services/parsers/<name>`)で動かす。各サービスは
-独自 Dockerfile・独自依存で **独立して upgrade でき、相互・backend に非干渉**(torch 等の共有
+独自の uv の venv・独自依存で **独立して upgrade でき、相互・backend に非干渉**(torch 等の共有
 依存衝突を回避)。
 
 - 出力契約は共有 package `rag_parser_core` の `StructuredExtraction`(`POST /parse`)で統一し、
@@ -175,14 +174,14 @@ docker-compose.yml        backend + ingestion-worker + parser サービス群 + 
 - 選択は従来どおり `RAG_PARSER_ADAPTER_BACKEND` と `RAG_PARSER_<name>_ENABLED`。サービス URL は
   `RAG_PARSER_<name>_SERVICE_URL`、timeout は `RAG_PARSER_SERVICE_TIMEOUT_SECONDS`。
 - **mineru / dots_ocr / glm_ocr は GPU(CUDA)で実 OCR を行う実 parser**(従来の「実 OCR は
-  Enterprise AI VLM へ再マップ」方針からの逸脱。ユーザ明示要望による)。GPU 必須のため compose は
-  `--profile gpu` で opt-in、CI は GPU 非搭載のため remap 層を fixture でテストし実 GPU は手動検証。
+  Enterprise AI VLM へ再マップ」方針からの逸脱。ユーザ明示要望による)。GPU 必須のため
+  opt-in、CI は GPU 非搭載のため remap 層を fixture でテストし実 GPU は手動検証。
   **glm_ocr は専用 pip package を持たず HuggingFace `zai-org/GLM-OCR` を transformers でロード**する
   (`GLM_OCR_MODEL_ID` で上書き可)。別 LLM provider・外部ベクトル DB は導入しない確定スタックは不変。
 - 確定スタックは不変: embedding/rerank=OCI GenAI、回答/構造化 LLM・通常 VLM=Enterprise AI、
   ベクトル DB=Oracle 26ai。**外部ベクトル DB・別 LLM provider は導入しない。**
 - monorepo の path 依存(`rag-parser-core`)を使うため、依存追加時は **`uv lock` の再生成が必要**
-  (Docker は build context = リポジトリ root)。
+  (lock はサービスごと)。
 
 ### service 系 parser backend(OCI クラウドサービス直呼び)
 
@@ -231,7 +230,7 @@ BACKEND_URL=http://127.0.0.1:8010 npm run dev   # BACKEND_URL 未指定なら /a
 npm run lint && npm run build
 ```
 
-取込 API は HTTP リクエスト内で Docling/OCR/embedding/indexing を実行しない。`POST /api/documents/{id}/ingest` と `/ingestion-jobs` は永続 job を投入して即時に返し、既定のローカル開発では in-process dispatcher が `python -m app.rag.ingestion_job_runner <job_id>` subprocess へ job 本体を隔離する。Docker Compose / 本番では `ingestion-worker` service がキューを消費し、API service は job 投入と閲覧系 API に専念する。
+取込 API は HTTP リクエスト内で Docling/OCR/embedding/indexing を実行しない。`POST /api/documents/{id}/ingest` と `/ingestion-jobs` は永続 job を投入して即時に返し、既定のローカル開発では in-process dispatcher が `python -m app.rag.ingestion_job_runner <job_id>` subprocess へ job 本体を隔離する。本番では `ingestion-worker`(systemd の unit)がキューを消費し、API service は job 投入と閲覧系 API に専念する。
 
 ## 横断的な保守・セキュリティ契約
 
@@ -274,5 +273,5 @@ npm run lint && npm run build
 15. UI/UX に関わる変更は Playwright で画面確認とテストを実施してから完了とする。
 16. このスタックから外れる提案(別 LLM プロバイダ、別 DB 等)をする場合は、必ず理由を添えてユーザに確認する。
 17. **Backend の ASGI event loop 上で同期 I/O を直接実行しない。** 詳細は [docs/backend-concurrency-contract.md](./docs/backend-concurrency-contract.md) を正とする。同期 domain service / Oracle repository / file・CLOB・Excel 処理 / OCI SDK 呼び出しは sync FastAPI route(`def`)、CLI/worker、または `backend/app/api/concurrency.py` の `run_sync_io(...)` 内だけで実行する。`async def` route は `UploadFile`・SSE/WebSocket・async client など本当に `await` が必要な場合に限定する。
-18. **parse 前の原本変換は前処理アダプター(`rag_preprocess_profile`)で手動選択**する。passthrough(既定・変換なし=現行挙動)/ text_normalize(文字コード・Unicode・空白の正規化、in-process)/ office_to_pdf(LibreOffice)/ pdf_to_page_images(PDF をページ画像 PDF へラスタライズ)/ csv_to_json(CSV をヘッダ列キーのレコード配列 JSON へ変換、engchina/No.1 系 csv2json の再マップ)/ excel_to_json(Excel `.xls`/`.xlsx` をシート単位のレコード配列 JSON へ変換、openpyxl + xlrd)。**原本は必ず保全し、変換物(正規化原本)から原本へ追跡できる派生系譜(`SourceDerivation`)を残す**(溯源)。サービス必須の変換(office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json)は **`services/parsers/<name>` と同じく 1 変換 = 1 独立マイクロサービス**(`services/preprocess/<name>`、各々独自依存・独自 Dockerfile で独立 upgrade/スケール)へ HTTP 委譲し、profile ごとに専用 URL(`RAG_PREPROCESS_<PROFILE>_SERVICE_URL`)を引く。未達/失敗/無効時は warning を付けて passthrough へ安全に縮退する。設定 API `GET/PATCH /api/settings/preprocess` と専用設定画面(パイプラインの Parser の前)で切替し、KB 単位上書きは取込時スナップショット。**本番は各サービスを Docker イメージ化し OKE / Container Instances へ独立デプロイ**(build context = リポジトリ root)。外部 LLM provider / 外部ベクトル DB は導入しない。`fixed_size` 固定長 chunking を Chunking アダプターに追加し、KB 単位で chunk_size/overlap を固定設定できる。
+18. **parse 前の原本変換は前処理アダプター(`rag_preprocess_profile`)で手動選択**する。passthrough(既定・変換なし=現行挙動)/ text_normalize(文字コード・Unicode・空白の正規化、in-process)/ office_to_pdf(LibreOffice)/ pdf_to_page_images(PDF をページ画像 PDF へラスタライズ)/ csv_to_json(CSV をヘッダ列キーのレコード配列 JSON へ変換、engchina/No.1 系 csv2json の再マップ)/ excel_to_json(Excel `.xls`/`.xlsx` をシート単位のレコード配列 JSON へ変換、openpyxl + xlrd)。**原本は必ず保全し、変換物(正規化原本)から原本へ追跡できる派生系譜(`SourceDerivation`)を残す**(溯源)。サービス必須の変換(office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json)は **`services/parsers/<name>` と同じく 1 変換 = 1 独立マイクロサービス**(`services/preprocess/<name>`、各々独自依存・独自の uv の venv で独立 upgrade/スケール)へ HTTP 委譲し、profile ごとに専用 URL(`RAG_PREPROCESS_<PROFILE>_SERVICE_URL`)を引く。未達/失敗/無効時は warning を付けて passthrough へ安全に縮退する。設定 API `GET/PATCH /api/settings/preprocess` と専用設定画面(パイプラインの Parser の前)で切替し、KB 単位上書きは取込時スナップショット。**本番は各サービスをサービスごとの uv の venv と systemd の unit で独立して動かす**(Docker イメージは作らない。#286 / #356)。外部 LLM provider / 外部ベクトル DB は導入しない。`fixed_size` 固定長 chunking を Chunking アダプターに追加し、KB 単位で chunk_size/overlap を固定設定できる。
 19. **質問の「業務(利用者)視点」は業務アシスタント(Business View, `rag_business_view`)で束ねる**。KB が「文書をどう加工して索引するか(作る側視点)」を司るのに対し、業務アシスタントは「どの **KB 群(多対多)** を、どんな **query 方針**(Retrieval/Grounding/Generation/Guardrail/Vector Index/Evaluation の上書き、KB の `KnowledgeBaseQueryConfig` を再利用)・**persona**(system prompt/既定言語)で束ねて回答するか(利用する側視点)」を司る別レイヤー。検索 API は `business_view_id` を受けると参照 KB 群を検索対象へ展開し、業務アシスタント 1 枚の query 設定・persona を適用する(**複数 KB の query 設定競合をここで解消**。persona は `rag_generation_system_prompt_override` で Generation profile より優先注入)。取込系(Preprocess/Parser/Chunking/Vector Index build)は物理索引方法なので業務アシスタントでは触らず KB 側のまま。解決順は **request 明示 > 業務アシスタント >(単一 KB 指定時のみ)KB > グローバル既定**。永続化は `rag_business_views.view_config JSON`(参照 KB ids も同梱、link table 無しで DDL 最小)。設定 API `GET/POST/PATCH /api/business-views` `…/{id}/archive` と RAG セクションの専用管理画面/RAG 検索のビュー選択で切替する。**アクセス制御(ビュー単位の利用者制限)は現スタックに認証/RBAC が無いため別途設計**。外部 LLM provider / 外部ベクトル DB は導入しない。

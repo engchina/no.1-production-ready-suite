@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlparse
 
 from app.config import Settings
 
@@ -316,9 +315,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {
     entry.service_id: entry for entry in SERVICE_CATALOG
 }
-_CATALOG_BY_URL_FIELD: dict[str, ServiceCatalogEntry] = {
-    entry.url_field: entry for entry in SERVICE_CATALOG
-}
 # 画面から操作してよい systemd の unit(カタログの deployable なサービスだけ)。
 ALLOWED_SYSTEMD_UNITS: frozenset[str] = frozenset(
     unit for entry in SERVICE_CATALOG if (unit := entry.systemd_unit) is not None
@@ -340,7 +336,7 @@ def is_dev_mode(settings: Settings) -> bool:
 
     ``RAG_ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
     (readiness の production 判定と整合)。dev/prod とも systemd の unit で起動/停止する(#286)。
-    dev は起動/停止を自動で有効にし、旧 docker 名の URL 設定を ``127.0.0.1:<port>`` へ読み替える。
+    dev は起動/停止を自動で有効にする。
     """
     return settings.environment.strip().lower() not in {"prod", "production"}
 
@@ -348,23 +344,14 @@ def is_dev_mode(settings: Settings) -> bool:
 def resolve_service_base_url(settings: Settings, url_field: str) -> str:
     """設定 ``url_field`` のサービス base URL を解決する(末尾スラッシュ除去)。
 
-    既定値はネイティブ配備の ``http://127.0.0.1:<port>``(#286)。dev では、以前の Docker Compose
-    時代の ``backend/.env`` に残った docker 既定(host が service 名、例 ``http://parser-docling:8000``)
-    を ``http://127.0.0.1:<port>`` に読み替える。空欄(=未設定)や明示上書きはそのまま尊重する。
-    prod は常に設定値そのまま。
+    既定値はネイティブ配備の ``http://127.0.0.1:<port>``(#286)。設定値をそのまま使い、空欄(=未設定)は
+    空文字を返す。以前の Docker Compose の service 名(例 ``http://parser-docling:8000``)の読み替えは
+    #356 で削除した(``backend/.env`` の値を ``127.0.0.1:<port>`` に直す。rag/docs/deployment.md)。
 
     稼働プローブ(/health)と取込の HTTP 委譲(/parse・/convert)で **同じ解決**を使い、
     「画面では到達できるのに取込では失敗」という不整合を防ぐ。
     """
-    raw = str(getattr(settings, url_field, "") or "").strip().rstrip("/")
-    entry = _CATALOG_BY_URL_FIELD.get(url_field)
-    if entry is None or not is_dev_mode(settings) or not raw:
-        return raw
-    # 旧 docker 既定(host == service 名)のみ 127.0.0.1:<port> へ。明示上書きは尊重。
-    host = urlparse(raw).hostname
-    if host == entry.service_id:
-        return entry.default_url
-    return raw
+    return str(getattr(settings, url_field, "") or "").strip().rstrip("/")
 
 
 def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:

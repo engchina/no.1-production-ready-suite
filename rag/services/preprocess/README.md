@@ -2,17 +2,17 @@
 
 parse の **前** に原本を一度だけ canonical な中間物へ変換する前処理ステージ。
 `services/parsers/<name>` と同じく **1 変換 = 1 独立マイクロサービス**で、各々独自依存・
-独自 Dockerfile で独立 upgrade / 独立スケールでき、相互・backend に非干渉。
+独自の依存と uv の venv で独立 upgrade / 独立スケールでき、相互・backend に非干渉。
 
 | サービス | profile | 変換 | 主依存 | 既定 URL |
 |---|---|---|---|---|
-| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office → PDF | LibreOffice | `http://preprocess-office-to-pdf:8000` |
-| [pdf_to_page_images](./pdf_to_page_images) | `pdf_to_page_images` | PDF → 画像PDF | PyMuPDF | `http://preprocess-pdf-to-page-images:8000` |
-| [csv_to_json](./csv_to_json) | `csv_to_json` | CSV → 構造化 JSON | (純 Python) | `http://preprocess-csv-to-json:8000` |
-| [excel_to_json](./excel_to_json) | `excel_to_json` | Excel(.xls/.xlsx) → 構造化 JSON | openpyxl + xlrd | `http://preprocess-excel-to-json:8000` |
-| [url_to_markdown](./url_to_markdown) | `url_to_markdown` | URL → クリーン Markdown | httpx + trafilatura | `http://preprocess-url-to-markdown:8000` |
-| [image_enhance](./image_enhance) | `image_enhance` | 画像 → OCR 向け補正画像 | OpenCV | `http://preprocess-image-enhance:8000` |
-| [pii_redact](./pii_redact) | `pii_redact` | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://preprocess-pii-redact:8000` |
+| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office → PDF | LibreOffice | `http://127.0.0.1:18010` |
+| [pdf_to_page_images](./pdf_to_page_images) | `pdf_to_page_images` | PDF → 画像PDF | PyMuPDF | `http://127.0.0.1:18011` |
+| [csv_to_json](./csv_to_json) | `csv_to_json` | CSV → 構造化 JSON | (純 Python) | `http://127.0.0.1:18012` |
+| [excel_to_json](./excel_to_json) | `excel_to_json` | Excel(.xls/.xlsx) → 構造化 JSON | openpyxl + xlrd | `http://127.0.0.1:18013` |
+| [url_to_markdown](./url_to_markdown) | `url_to_markdown` | URL → クリーン Markdown | httpx + trafilatura | `http://127.0.0.1:18014` |
+| [image_enhance](./image_enhance) | `image_enhance` | 画像 → OCR 向け補正画像 | OpenCV | `http://127.0.0.1:18015` |
+| [pii_redact](./pii_redact) | `pii_redact` | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://127.0.0.1:18016` |
 
 `passthrough` / `text_normalize` は backend in-process で処理するため、サービスは呼ばれない。
 

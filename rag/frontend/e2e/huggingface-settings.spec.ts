@@ -133,7 +133,7 @@ test("保存に成功すると Toast で知らせ、送った値と token の状
 
   await page.goto("/settings/huggingface");
   await expect(page.getByText("未設定", { exact: true })).toBeVisible();
-  await expect(page.getByText("Docker named volume")).toBeVisible();
+  await expect(page.getByText("~/.cache", { exact: false })).toBeVisible();
 
   await page.locator("#hf-endpoint").fill("https://hf-mirror.com");
   await page.locator("#hf-token").fill("hf_secret_token");

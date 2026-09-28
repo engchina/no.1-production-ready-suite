@@ -8,7 +8,7 @@
 | 項目 | 値 |
 |---|---|
 | stage | `agentic` |
-| 既定 URL | `http://pipeline-agentic:8000` / dev port 8035 |
+| 既定 URL | `http://127.0.0.1:18035` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`AgenticStageRequest{profile}` → `AgenticStageResponse`)。

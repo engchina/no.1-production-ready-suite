@@ -1,7 +1,7 @@
 # parser マイクロサービス群
 
 外部 parser を **backend から切り離した独立 FastAPI サービス**として動かす。各サービスは
-独自の依存・Dockerfile を持ち、**単独で upgrade しても他 parser / backend に影響しない**。
+独自の依存と uv の venv を持ち、**単独で upgrade しても他 parser / backend に影響しない**。
 
 | サービス | 実行 | 既定で配備 | 備考 |
 |---|---|---|---|
@@ -45,7 +45,7 @@ MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
 > (配備は `uv sync --locked` で lock どおりに入れる)。
 
 > cv2 は headless 版(`opencv-python-headless`)だけを入れる(#310)。GUI 版(`opencv-python`)は
-> slim の base image に無い libxcb / libGL / glib を要し、`import cv2` が失敗する。依存が GUI 版を
+> libxcb / libGL / glib(GUI の共有ライブラリ)を要し、それらの無いサーバーでは`import cv2` が失敗する。依存が GUI 版を
 > 要求する parser(docling の rapidocr、unstructured の unstructured-inference)は pyproject の
 > `[tool.uv] exclude-dependencies = ["opencv-python"]` で外し、`uv.lock` に GUI 版を残さない。
 > 配備は `uv sync --locked` で lock どおりに入れる。

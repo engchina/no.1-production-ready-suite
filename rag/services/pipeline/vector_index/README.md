@@ -7,7 +7,7 @@ target accuracy + HNSW 推奨ビルド値へ解決するステージマイクロ
 | 項目 | 値 |
 |---|---|
 | stage | `vector_index` |
-| 既定 URL | `http://pipeline-vector-index:8000` / dev port 8031 |
+| 既定 URL | `http://127.0.0.1:18031` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`VectorIndexStageRequest{profile, settings_target_accuracy}` → `VectorIndexStageResponse`)。
