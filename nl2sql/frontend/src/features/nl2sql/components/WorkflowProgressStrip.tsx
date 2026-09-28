@@ -214,7 +214,6 @@ export function WorkflowProgressStrip({
               aria-label={toggleLabel}
               aria-expanded={!collapsed}
               aria-controls={bodyId}
-              title={toggleLabel}
               onClick={() => collapsible.onCollapsedChange(!collapsed)}
               data-testid={collapsible.toggleTestId}
             >

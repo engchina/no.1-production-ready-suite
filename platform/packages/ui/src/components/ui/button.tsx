@@ -4,6 +4,7 @@ import type { ButtonHTMLAttributes, KeyboardEvent, MouseEvent, Ref } from "react
 
 import { cn } from "../../lib/utils";
 import { Spinner } from "./spinner";
+import { Tooltip, type TooltipPlacement } from "./tooltip";
 
 /*
  * 枠線の方針（docs/design-system/README.md §6 罫線）:
@@ -72,8 +73,20 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
     icon?: LucideIcon;
     /** 方向・開閉・外部リンクのみ（ChevronRight / ChevronDown / ExternalLink）。アイコンを 2 つ持たせない。 */
     trailingIcon?: LucideIcon;
-    /** アイコンだけのボタン。`aria-label` を必ず付ける。 */
+    /**
+     * アイコンだけのボタン。`aria-label` を必ず付ける。
+     * 既定で `aria-label` と同じ文言の Tooltip をホバーとキーボードのフォーカスで出す（`tooltip` を参照）。
+     */
     iconOnly?: boolean;
+    /**
+     * ホバーとキーボードのフォーカスで出す短い説明（翻訳済み）。`iconOnly` のときの既定は `aria-label` と同じ文言、
+     * それ以外の既定は出さない。`false` で出さない。`aria-label` と違う文言（ショートカットキーを添える等）は
+     * `aria-describedby` で説明として結び付き、同じ文言なら結び付けない（二重に読み上げない）。
+     * HTML の `title` 属性は使わない（キーボード・タッチで出ず、表示まで長く待つ）。Tooltip を出すときは `title` を無視する。
+     */
+    tooltip?: string | false;
+    /** Tooltip を出す側（既定は上。入らなければ反転する）。 */
+    tooltipPlacement?: TooltipPlacement;
     /** マウス環境でも 44px の高さにする場合だけ true（タッチ端末では --button-height-* が 44px になる）。 */
     touchTarget?: boolean;
     /**
@@ -127,6 +140,8 @@ export function Button({
   icon: Icon,
   trailingIcon: TrailingIcon,
   iconOnly = false,
+  tooltip,
+  tooltipPlacement,
   touchTarget = false,
   loading,
   pressed,
@@ -141,7 +156,12 @@ export function Button({
 }: ButtonProps) {
   // disabled が優先。loading だけのときはフォーカスを保つため aria-disabled にする。
   const busy = Boolean(loading) && !disabled;
-  return (
+  const ariaLabel = props["aria-label"];
+  const tooltipText =
+    tooltip === false
+      ? undefined
+      : tooltip || (iconOnly && typeof ariaLabel === "string" && ariaLabel.trim() ? ariaLabel : undefined);
+  const button = (
     <button
       ref={ref}
       className={cn(
@@ -153,6 +173,8 @@ export function Button({
       aria-busy={loading || undefined}
       aria-pressed={pressed}
       {...props}
+      // Tooltip を出すときは title を付けない（ブラウザの吹き出しと二重に出る）。
+      title={tooltipText ? undefined : props.title}
       disabled={disabled || undefined}
       aria-disabled={busy ? true : props["aria-disabled"]}
       onClick={busy ? suppressLoadingClick : onClick}
@@ -166,5 +188,12 @@ export function Button({
       {children}
       {TrailingIcon && !loading ? <TrailingIcon size={16} aria-hidden /> : null}
     </button>
+  );
+  return tooltipText ? (
+    <Tooltip content={tooltipText} placement={tooltipPlacement}>
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 }

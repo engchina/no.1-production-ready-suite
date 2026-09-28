@@ -311,7 +311,7 @@ function FlowControls({
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphZoomIn")}
-        title={t("nl2sql.ontology.graphZoomIn")}
+        tooltip={t("nl2sql.ontology.graphZoomIn")}
         onClick={() => void flow.zoomIn({ duration: 0 })} icon={Plus}>
         </Button>
       <Button
@@ -319,7 +319,7 @@ function FlowControls({
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphZoomOut")}
-        title={t("nl2sql.ontology.graphZoomOut")}
+        tooltip={t("nl2sql.ontology.graphZoomOut")}
         onClick={() => void flow.zoomOut({ duration: 0 })} icon={Minus}>
         </Button>
       <Button
@@ -327,7 +327,7 @@ function FlowControls({
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphFit")}
-        title={t("nl2sql.ontology.graphFit")}
+        tooltip={t("nl2sql.ontology.graphFit")}
         onClick={onFitAll} icon={Maximize2}>
         </Button>
       <Button
@@ -335,7 +335,7 @@ function FlowControls({
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphResetLayout")}
-        title={t("nl2sql.ontology.graphResetLayout")}
+        tooltip={t("nl2sql.ontology.graphResetLayout")}
         disabled={resetDisabled}
         onClick={onResetLayout}
         data-testid="ontology-graph-reset-layout" icon={RotateCcw}>
@@ -1096,7 +1096,7 @@ function OntologyFlow({
                 size="sm"
                 variant="ghost"
                 aria-label={t("nl2sql.ontology.graphSearchPrev")}
-                title={t("nl2sql.ontology.graphSearchPrev")}
+                tooltip={t("nl2sql.ontology.graphSearchPrev")}
                 disabled={orderedSearchMatches.length === 0}
                 onClick={() => jumpToSearchMatch(-1)}
                 data-testid="ontology-graph-search-prev" icon={ChevronLeft}>
@@ -1106,7 +1106,7 @@ function OntologyFlow({
                 size="sm"
                 variant="ghost"
                 aria-label={t("nl2sql.ontology.graphSearchNext")}
-                title={t("nl2sql.ontology.graphSearchNext")}
+                tooltip={t("nl2sql.ontology.graphSearchNext")}
                 disabled={orderedSearchMatches.length === 0}
                 onClick={() => jumpToSearchMatch(1)}
                 data-testid="ontology-graph-search-next" icon={ChevronRight}>
