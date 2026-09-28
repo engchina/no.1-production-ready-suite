@@ -17,10 +17,9 @@ import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
-import { canOpenRoute, defaultEntryRoute } from "@/lib/route-permissions";
+import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
-import { DashboardPage } from "@/pages/DashboardPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import {
   AgentsPage,
@@ -58,14 +57,8 @@ export function App() {
       <Route path={APP_ROUTES.passwordChange} element={<PasswordChangePage />} />
       <Route path={APP_ROUTES.forbidden} element={<ForbiddenPage />} />
       <Route element={<ProtectedLayout />}>
-        <Route
-          path={APP_ROUTES.dashboard}
-          element={
-            <Capability need="viewRuns" titleKey="nav.dashboard">
-              <DashboardPage />
-            </Capability>
-          }
-        />
+        {/* `/` は画面を持たず、ナビの並び順で最初に開ける画面へ移す（ダッシュボードは廃止。#262）。 */}
+        <Route path={APP_ROUTES.home} element={<HomeRedirect />} />
         <Route
           path={APP_ROUTES.agents}
           element={
@@ -164,7 +157,13 @@ export function App() {
   );
 }
 
-/** 未知の URL は、権限のある既定の画面へ（ナビの並び順で最初に開ける画面。#215）。 */
+/** `/` は、ナビの並び順で最初に開ける画面へ（NL2SQL と同じ。#262）。 */
+function HomeRedirect() {
+  const { hasPermission } = useAuth();
+  return <Navigate to={firstAllowedRoute(hasPermission)} replace />;
+}
+
+/** 未知の URL は既定入口（Run を開ければ Run、開けなければ `/` 経由で最初に開ける画面。#215 / #262）。 */
 function EntryRedirect() {
   const { hasPermission } = useAuth();
   return <Navigate to={defaultEntryRoute(hasPermission)} replace />;
@@ -188,9 +187,7 @@ function RoutePermissionGuard({ children }: { children: ReactNode }) {
   const { hasPermission } = useAuth();
   const { pathname } = useLocation();
   if (!canOpenRoute(pathname, hasPermission)) {
-    // `/`（ダッシュボード）を開けない利用者は、権限なしの画面ではなく開ける最初の画面へ移す。
-    const target = pathname === APP_ROUTES.dashboard ? defaultEntryRoute(hasPermission) : APP_ROUTES.forbidden;
-    return <Navigate to={target} replace />;
+    return <Navigate to={APP_ROUTES.forbidden} replace />;
   }
   return <>{children}</>;
 }

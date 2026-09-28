@@ -51,7 +51,6 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
 
 # ---- メニュー権限（agent/frontend の nav-config.ts と同じ並び） ----
 
-MENU_DASHBOARD = "menu.dashboard"
 MENU_AGENTS = "menu.agents"
 MENU_SKILLS = "menu.skills"
 MENU_RUNTIMES = "menu.runtimes"
@@ -91,7 +90,6 @@ CAPABILITY_ROLES: dict[str, str] = {
 }
 ROLE_CAPABILITIES: dict[str, str] = {role: code for code, role in CAPABILITY_ROLES.items()}
 
-_GROUP_OVERVIEW = "概要"
 _GROUP_CONTROL_PLANE = "Control Plane"
 _GROUP_OPERATIONS = "運用設定"
 _GROUP_SETTINGS = "システム設定"
@@ -108,7 +106,6 @@ _SYSTEM_SETTINGS_MENUS = (
 )
 # agent.admin が暗黙に含むメニュー（ユーザーとロール・権限管理は含まない）。
 _ADMIN_MENUS = (
-    MENU_DASHBOARD,
     MENU_AGENTS,
     MENU_SKILLS,
     MENU_RUNTIMES,
@@ -126,7 +123,6 @@ _ADMIN_MENUS = (
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _menu_permission(MENU_DASHBOARD, _GROUP_OVERVIEW, "ダッシュボード"),
     _menu_permission(MENU_AGENTS, _GROUP_CONTROL_PLANE, "業務 Agent"),
     _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル"),
     _menu_permission(MENU_RUNTIMES, _GROUP_CONTROL_PLANE, "Runtime"),
@@ -155,7 +151,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_CAPABILITIES,
         "Run の閲覧（viewer）",
         "利用できるエージェント・業務ビューの Run・イベント・成果物を表示できます。",
-        implies=(MENU_DASHBOARD, MENU_RUNS),
+        implies=(MENU_RUNS,),
     ),
     _permission(
         RUNS_OPERATE,
@@ -163,14 +159,14 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "Run の実行・操作（operator）",
         "利用できるエージェント・業務ビューで Run の作成・取消・再開・再実行ができます"
         "（Run の閲覧を含みます）。",
-        implies=(MENU_DASHBOARD, MENU_RUNS),
+        implies=(MENU_RUNS,),
     ),
     _permission(
         APPROVALS_DECIDE,
         _GROUP_CAPABILITIES,
         "承認の判断（approver）",
         "利用できるエージェント・業務ビューの Run の承認・却下ができます（Run の閲覧を含みます）。",
-        implies=(MENU_DASHBOARD, MENU_APPROVALS),
+        implies=(MENU_APPROVALS,),
     ),
     _permission(
         AUDIT_VIEW,
@@ -178,7 +174,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "監査の閲覧（auditor）",
         "利用できるエージェント・業務ビューの Run の監査記録・ツール呼出し履歴を表示できます"
         "（Run の閲覧を含みます）。",
-        implies=(MENU_DASHBOARD, MENU_AUDIT),
+        implies=(MENU_AUDIT,),
     ),
     _permission(
         ADMIN,
@@ -191,6 +187,11 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
 )
 
 ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
+
+# 廃止した権限コード。既存ロールに残る行は `security.migrations` が冪等に削除する。
+# 削除前でも `normalize_permission_codes` が捨てるため、実効権限・権限管理の表示と保存には現れない。
+# - `menu.dashboard`: ダッシュボード機能の廃止（#262）。
+RETIRED_PERMISSION_CODES: tuple[str, ...] = ("menu.dashboard",)
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)
 
@@ -238,7 +239,6 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 # （admin は implies で運用設定・システム設定を得る）。
 EXTERNAL_ROLE_READ_MENUS = frozenset(
     {
-        MENU_DASHBOARD,
         MENU_AGENTS,
         MENU_SKILLS,
         MENU_RUNTIMES,
@@ -282,11 +282,11 @@ _ADMIN_ONLY = _any(ADMIN)
 _OPERATE = _any(RUNS_OPERATE, ADMIN)
 _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 # 画面の読み取り（メニュー権限。capability は関連メニューを暗黙に含む）。
-_RUN_LIST = _any(MENU_DASHBOARD, MENU_RUNS, MENU_APPROVALS)
+_RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
 _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
 _AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_SETTINGS_RUNTIME_SNAPSHOT)
 _BINDING_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_RUNTIMES, MENU_SETTINGS_RUNTIME_SNAPSHOT)
-_TOOL_READ = _any(MENU_DASHBOARD, MENU_AUDIT, ADMIN)
+_TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
 _EXTERNAL_SETTINGS_READ = _any(
     MENU_SETTINGS_EXTERNAL_RAG, MENU_SETTINGS_EXTERNAL_NL2SQL, MENU_SETTINGS_EXTERNAL_MCP
@@ -297,13 +297,13 @@ _RUN = "/runs/{run_id}"
 
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
-    # ---- 概要: ダッシュボード ----
-    ("GET", "/observability/status"): _any(MENU_DASHBOARD),
+    # ---- 観測性（画面からは使わない。運用スクリプトの確認と監査の閲覧者向け） ----
+    ("GET", "/observability/status"): _any(MENU_AUDIT),
     ("GET", "/observability/events"): _any(MENU_AUDIT),
     ("POST", "/observability/export-retry/flush"): _ADMIN_ONLY,
-    ("GET", "/settings/trace-policy"): _any(MENU_DASHBOARD, MENU_AUDIT),
+    ("GET", "/settings/trace-policy"): _any(MENU_AUDIT),
     ("PATCH", "/settings/trace-policy"): _ADMIN_ONLY,
-    # ツール定義はダッシュボード・監査・ツール権限（管理者だけの非表示画面）が読む。
+    # ツール定義は監査・ツール一覧・ツール権限（管理者だけの非表示画面）が読む。
     ("GET", "/tools"): _TOOL_READ,
     ("GET", "/agent/tools"): _TOOL_READ,
     ("GET", "/tools/external-mcp"): _EXTERNAL_SETTINGS_READ,
@@ -366,9 +366,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/plugins/marketplaces/{marketplace_id}"): _ADMIN_ONLY,
     ("POST", "/plugins/marketplaces/{marketplace_id}/refresh"): _ADMIN_ONLY,
     # ---- 運用設定 ----
-    ("GET", "/settings/external-rag"): _any(MENU_DASHBOARD, MENU_SETTINGS_EXTERNAL_RAG),
+    ("GET", "/settings/external-rag"): _any(MENU_SETTINGS_EXTERNAL_RAG),
     ("PATCH", "/settings/external-rag"): _ADMIN_ONLY,
-    ("GET", "/settings/external-nl2sql"): _any(MENU_DASHBOARD, MENU_SETTINGS_EXTERNAL_NL2SQL),
+    ("GET", "/settings/external-nl2sql"): _any(MENU_SETTINGS_EXTERNAL_NL2SQL),
     ("PATCH", "/settings/external-nl2sql"): _ADMIN_ONLY,
     ("GET", "/settings/external-mcp"): _any(MENU_SETTINGS_EXTERNAL_MCP),
     ("PATCH", "/settings/external-mcp"): _ADMIN_ONLY,

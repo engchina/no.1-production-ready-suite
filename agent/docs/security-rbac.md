@@ -47,17 +47,16 @@ Cookie のセッションの利用者からは `ActorPolicy(roles, business_view
 
 | capability | 従来のロール | 内容 | 暗黙に含むメニュー |
 |---|---|---|---|
-| `agent.runs.view` | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | ダッシュボード・Run |
-| `agent.runs.operate` | operator | Run の作成・取消・再開・再実行（閲覧を含む） | ダッシュボード・Run |
-| `agent.approvals.decide` | approver | 承認・却下（閲覧を含む） | ダッシュボード・承認・監査 |
-| `agent.audit.view` | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | ダッシュボード・監査 |
+| `agent.runs.view` | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | Run |
+| `agent.runs.operate` | operator | Run の作成・取消・再開・再実行（閲覧を含む） | Run |
+| `agent.approvals.decide` | approver | 承認・却下（閲覧を含む） | 承認・監査 |
+| `agent.audit.view` | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査 |
 | `agent.admin` | admin | 業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
 
 | グループ | コード |
 |---|---|
-| 概要 | `menu.dashboard` |
 | Control Plane | `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
 | 運用設定 | `menu.settings_connection` / `menu.settings_external_rag` / `menu.settings_external_nl2sql` / `menu.settings_external_mcp` / `menu.settings_runtime_snapshot` |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
@@ -68,11 +67,15 @@ Cookie のセッションの利用者からは `ActorPolicy(roles, business_view
 Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit / admin）がないと 403 です。capability は関連メニューを
 暗黙に含むため、capability だけを付けたロールでも画面を開けます。
 
+ダッシュボード（`menu.dashboard`・グループ「概要」）は廃止しました（#262）。`/` は画面を持たず、ナビの並び順で最初に開ける画面へ移します
+（未知の URL・ログイン後は Run を開ければ Run）。既存ロールに残る `menu.dashboard` は `agent_security_migrate` が削除します（§8）。
+削除前でも、カタログにないコードは実効権限・権限管理の表示から除かれ、権限管理で保存すると消えます。
+
 ### manifest（抜粋。正本は `backend/app/security/permissions.py`）
 
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
-| `GET /runs` | `menu.dashboard` / `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
+| `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
 | `GET /runs/{id}`・`/audit`・`/artifacts*` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は 403 |
 | `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は close 1008 |
@@ -83,7 +86,9 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 | `GET /runtime-bindings` | `menu.agents` / `menu.runs` / `menu.runtimes` / `menu.settings_runtime_snapshot` | viewer 以上・利用できるエージェントの Binding だけ |
 | 業務 Agent・スキル・Runtime・Binding・プラグイン・Agent 固有の設定（外部 RAG / NL2SQL / MCP・snapshot）の変更 | `agent.admin` | admin |
 | システム設定（OCI 認証・アップロード保存先・モデル・データベース）の保存・接続テスト・ADB 操作 | 各メニュー（`menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database`。RAG / NL2SQL と同じ割り当て） | Cookie のセッションは同じメニュー権限、header / JWT の経路は admin（`require_system_settings_write`） |
-| 設定の GET（外部 RAG / NL2SQL / MCP、システム設定） | 各メニュー（外部 RAG / NL2SQL はダッシュボードも） | — |
+| 設定の GET（外部 RAG / NL2SQL / MCP、システム設定） | 各メニュー | — |
+| `GET /tools` | `menu.audit` / `agent.admin` | — |
+| `GET /observability/status`・`GET /settings/trace-policy` | `menu.audit`（画面からは使わない。運用スクリプトの確認用） | — |
 | ナビに出さない設定（ツール権限・Command Policy・Runtime Safety・Planner） | `agent.admin` | — |
 | legacy Memory の検索 | `agent.audit.view` / `agent.admin` | — |
 | `/security/users*` | `menu.security_users` | 共通の昇格防止 |
@@ -127,7 +132,7 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 （サービス間連携・運用スクリプト）向けに残します。production で使うには `AGENT_RBAC_ENABLED=true` にし、
 信頼できる identity（JWT・署名 header・外部 policy）を**必ず**設定してください（ないと 401 で、起動時に警告ログを出します）。
 local では従来どおり、信頼できる identity がなくても `X-Agent-Roles` などの header で判定します（開発・CI 用）。ロールから作る権限は capability（implies を含む）と
-Control Plane の読み取りメニュー（ダッシュボード・業務 Agent・スキル・Runtime・Run・承認・監査・マーケットプレイス）で、
+Control Plane の読み取りメニュー（業務 Agent・スキル・Runtime・Run・承認・監査・マーケットプレイス）で、
 ユーザーとロール・権限管理は含みません。`scripts/agent_runtime_gateway_jwks_check.py --backend-status` などの JWT の確認も同じ条件です。
 
 ## 8. 既存環境の更新手順（#215）
@@ -143,7 +148,10 @@ Control Plane の読み取りメニュー（ダッシュボード・業務 Agent
    `/u01/aipoc/props/basic_auth_*` は削除してよい（`init_script.sh` を再実行しても同じ設定になる）。
 5. `sudo systemctl restart production-ready-agent-backend`（compose は `docker compose up -d control-plane`）。
 6. `system_admin` でログインし、ロール管理でロールを作り、権限管理で Agent の権限・エージェント・業務ビューを割り当て、ユーザーに付ける。
-7. 外部連携で header / JWT を使っているクライアントがあれば、`AGENT_RBAC_ENABLED=true` と信頼できる identity（JWT・HMAC 署名 header・外部 policy）で
+7. （#262 以降に更新する環境）手順 3 の `agent_security_migrate` を再実行し、既存ロールに残る廃止した権限コード
+   `menu.dashboard` を削除する（何度実行してもよい。出力の `retired_permission_rows` が削除した行数）。削除しないと、RAG / NL2SQL の
+   ユーザー管理から非 SYSTEM_ADMIN の管理者がそのロールを割り当てるとき、他製品の権限の判定（生のコードで比べる）で 403 になることがあります。
+8. 外部連携で header / JWT を使っているクライアントがあれば、`AGENT_RBAC_ENABLED=true` と信頼できる identity（JWT・HMAC 署名 header・外部 policy）で
    使えます（Cookie を送らないこと）。`X-Agent-Roles` / `X-Agent-Actor` だけで認可していたクライアントは、production では 401 になるため、
    JWT か署名 header に移すか、画面のログインを使ってください。
 

@@ -109,7 +109,6 @@ function createState() {
     memory: [] as Json[],
     plugins: [] as Json[],
     marketplaces: [] as Json[],
-    observabilityStatus: d.observabilityStatus as Json,
     tracePolicy: d.tracePolicy as Json,
     runtimeSafety: d.runtimeSafety as Json,
     toolPolicy: d.toolPolicy as Json,
@@ -330,9 +329,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
 
-  // --- health / observability ---
+  // --- health ---
   if (method === "GET" && at("health")) return state.health;
-  if (method === "GET" && at("observability", "status")) return state.observabilityStatus;
 
   // --- Runtime / Binding ---
   if (head === "runtimes") {

@@ -45,9 +45,16 @@ export function canOpenRoute(pathname: string, hasPermission: HasPermission): bo
 }
 
 /**
- * ログイン後・`/`・未知の URL の移動先。ナビの並び順で最初に開ける画面（ダッシュボードを開ければ `/`）。
- * どれも開けなければ権限なしの画面。
+ * `/` の移動先。ナビの並び順で最初に開ける画面。どれも開けなければ権限なしの画面（NL2SQL と同じ。#262）。
+ */
+export function firstAllowedRoute(hasPermission: HasPermission): string {
+  return sharedFirstAllowedRoute(NAV_ITEMS, hasPermission, APP_ROUTES.forbidden);
+}
+
+/**
+ * ログイン後・未知の URL・権限なしの画面から戻るときの既定入口。主画面の Run を開ければ Run、
+ * 開けなければ `/` に戻し、`/` のルートが `firstAllowedRoute` で開ける画面へ振り分ける（NL2SQL と同じ形。#262）。
  */
 export function defaultEntryRoute(hasPermission: HasPermission): string {
-  return sharedFirstAllowedRoute(NAV_ITEMS, hasPermission, APP_ROUTES.forbidden);
+  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.runs]) ? APP_ROUTES.runs : APP_ROUTES.home;
 }
