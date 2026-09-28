@@ -499,6 +499,20 @@ async def update_grounding_settings(
     if payload.crag_low_evidence_abstain is not None:
         updates["rag_crag_low_evidence_abstain_enabled"] = payload.crag_low_evidence_abstain
     candidate = settings.model_copy(update=updates)
+    # payload の検証は両閾値を同時に送ったときの逆転しか見られない。片方だけの部分更新でも
+    # 保存済みの他方と逆転しないよう、合成後の値で検証してから .env へ書く(#275)。
+    if (
+        candidate.rag_crag_high_confidence_threshold
+        < candidate.rag_grounding_crag_confidence_threshold
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "CRAG の高しきい値は低しきい値以上にしてください"
+                f"(低しきい値 {candidate.rag_grounding_crag_confidence_threshold}、"
+                f"高しきい値 {candidate.rag_crag_high_confidence_threshold})。"
+            ),
+        )
     _persist_grounding_settings(candidate)
     _apply_grounding_settings(settings, candidate)
     return ApiResponse(data=_grounding_settings_data(settings))
