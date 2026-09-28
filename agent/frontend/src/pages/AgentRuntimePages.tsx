@@ -4968,6 +4968,9 @@ export function RuntimeSafetySettingsPage() {
 
 /** 実行時スナップショットの置換の確認語（入力の完全一致で置換を許す）。 */
 const SNAPSHOT_REPLACE_CONFIRMATION = "REPLACE";
+/** 確認語欄の入力欄の id と、その説明（置換を使えない理由）の id（`${id}-helper` は ExecutionConfirmationField の決まり）。 */
+const SNAPSHOT_REPLACE_CONFIRM_ID = "runtime-snapshot-confirm";
+const SNAPSHOT_REPLACE_HELPER_ID = `${SNAPSHOT_REPLACE_CONFIRM_ID}-helper`;
 
 export function RuntimeSnapshotSettingsPage() {
   const queryClient = useQueryClient();
@@ -5164,7 +5167,7 @@ export function RuntimeSnapshotSettingsPage() {
             </div>
             {validationResult ? <SnapshotValidationPanel result={validationResult} /> : null}
             <ExecutionConfirmationField
-              id="runtime-snapshot-confirm"
+              id={SNAPSHOT_REPLACE_CONFIRM_ID}
               value={confirmText}
               onChange={setConfirmText}
               confirmed={confirmText === SNAPSHOT_REPLACE_CONFIRMATION}
@@ -5181,6 +5184,9 @@ export function RuntimeSnapshotSettingsPage() {
                   onClick={() => void replaceRuntimeSnapshot()}
                   loading={importSnapshot.isPending}
                   disabled={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION}
+                  // 使えない間は、理由（確認語欄の説明。id は ExecutionConfirmationField の `${id}-helper`）を
+                  // ボタンの説明として読み上げる。一致したら外す（#426。#379 の置き換えで外れていた）。
+                  aria-describedby={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION ? SNAPSHOT_REPLACE_HELPER_ID : undefined}
                   icon={Upload}>
                   {t("common.replace")}
                 </Button>

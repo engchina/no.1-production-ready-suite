@@ -54,9 +54,40 @@ test.describe("md 未満のナビのドロワー", () => {
     for (let index = 0; index < 40; index += 1) await page.keyboard.press("Tab");
     expect(await focusedInsideDrawer(page)).toBe(true);
 
+    // Tab の回数で止まる位置はナビの項目数で変わる（#412 で「改善・運用」が増え、40 回でちょうど閉じるボタンへ戻るようになった）。
+    // 閉じるボタンはアイコンだけのボタンで、キーボードのフォーカスで Tooltip が出て、1 回目の Escape は吹き出しだけを閉じる（#372）。
+    // ここではナビのリンク（Tooltip なし）から Escape で閉じることを確かめる。閉じるボタンの場合は下のテストで確かめる。
+    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "外観" }).focus();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toBeFocused();
+  });
+
+  test("閉じるボタンの Tooltip が出ている間は、1 回目の Escape で吹き出しだけを閉じ、2 回目でドロワーを閉じる", async ({
+    page,
+    hasTouch,
+  }) => {
+    test.skip(hasTouch, "タッチ端末（pointer: coarse）では Tooltip を出さない（#372）");
+    const trigger = page.getByRole("button", { name: "メニュー", exact: true });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "メニュー" });
+    const close = page.getByRole("button", { name: "メニューを閉じる" });
+    await expect(close).toBeFocused();
+    // キーボードで閉じるボタンへ戻ると Tooltip が出る（読み上げ名と同じ文言なので aria-hidden。role では引けない）
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    const tooltip = page.locator('[role="tooltip"]', { hasText: "メニューを閉じる" });
+    await expect(tooltip).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await expect(close).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();
   });
 

@@ -289,7 +289,8 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "処理レシピ" });
+  // 読み込み中は中に「処理レシピを読み込んでいます」の region があり、部分一致だと 2 つに当たる（strict mode violation）。
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await expect(panel).toContainText("Office→PDF");
   await expect(panel).toContainText("Docling");
   for (const label of [
@@ -391,7 +392,7 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await mockWorkspace(page, { putFails: true });
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "処理レシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
@@ -501,7 +502,7 @@ test("派生レイヤー状態チップ・項目定義未設定の警告・抽�
   await expect(fieldsSection).toContainText("INV-1");
 
   // 項目抽出を上書きで有効にすると、スキーマ未設定の警告を出す。
-  const panel = page.getByRole("region", { name: "処理レシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const fieldGroup = panel
     .getByText("メタデータ/項目抽出", { exact: true })
@@ -516,7 +517,7 @@ test("処理途中の文書は設定を編集できない", async ({ page }) => 
   await mockWorkspace(page, { documentStatus: "REVIEW" });
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "処理レシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
 
   await expect(panel).toContainText("処理途中または文書処理の実行中は設定を変更できません");

@@ -234,9 +234,9 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
     })
   );
 
-  // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
+  // `/` はナビの並びで最初に開ける画面（チャット。#399 でナビの先頭をチャットにした）へ。
   await page.goto("/");
-  await expect(page).toHaveURL(/\/search$/);
+  await expect(page).toHaveURL(/\/chat$/);
   const sidebar = await openSidebarNav(page);
   // NL2SQL と同じく、利用者名とログイン省略の表示を出し、パスワード変更・ログアウトは出さない。
   await expect(sidebar.getByText("ローカル利用者")).toBeVisible();

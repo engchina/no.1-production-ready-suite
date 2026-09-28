@@ -1356,6 +1356,7 @@ export declare function ExecutionConfirmationField(props: ExecutionConfirmationF
 ```
 
 - ルート要素は `data-testid="execution-confirmation-field"` と `data-confirmation-status`（`pending` / `mismatch` / `confirmed`）を持ちます。3 製品の E2E はこの testid で確認語欄を引きます。
+- `actions` の実行ボタンを一致するまで無効にし、使えない理由として説明（`helper`）を読み上げるときは、`id` を渡し、ボタンの `aria-describedby` に `${id}-helper` を一致しない間だけ指定します（例: Agent の実行時スナップショットの置換。#426）。
 - 確認語はページを離れる・戻るとき、対象や入力が変わったときに呼び出し側で空に戻します（UX 契約 workspace-state.md）。
 
 ## TextField — 変更（#384）

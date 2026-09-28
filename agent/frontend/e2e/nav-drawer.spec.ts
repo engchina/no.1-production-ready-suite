@@ -35,6 +35,9 @@ test.describe("md 未満のナビのドロワー (mobile-375)", () => {
     for (let index = 0; index < 5; index += 1) await page.keyboard.press("Shift+Tab");
     expect(await focusedInsideDrawer(page)).toBe(true);
 
+    // Tab の回数で止まる位置はナビの項目数で変わる。閉じるボタン（アイコンだけ）に止まると Tooltip が出て、
+    // 1 回目の Escape は吹き出しだけを閉じる（#372）。項目数に左右されないよう、ナビのリンクから閉じる（#426）。
+    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "監査", exact: true }).focus();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();

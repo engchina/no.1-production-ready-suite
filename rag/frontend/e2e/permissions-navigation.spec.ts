@@ -61,9 +61,9 @@ test("権限のある画面だけをナビに出し、空のセクションは�
     permissions: ["menu.search", "menu.chat", "menu.upload", "menu.security_users"],
   });
 
-  // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
+  // `/` はナビの並びで最初に開ける画面（チャット。#399 でナビの先頭をチャットにした）へ。
   await page.goto("/");
-  await expect(page).toHaveURL(/\/search$/);
+  await expect(page).toHaveURL(/\/chat$/);
   const sidebar = await openSidebarNav(page);
   for (const name of ["RAG 検索", "チャット", "文書アップロード", "ユーザー管理"]) {
     await expect(sidebar.getByRole("link", { name })).toBeVisible();
