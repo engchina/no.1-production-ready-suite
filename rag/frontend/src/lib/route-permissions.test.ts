@@ -43,6 +43,23 @@ describe("権限コードの対応表", () => {
     expect([...navPermissions].sort()).toEqual(Object.values(MENU_PERMISSIONS).sort());
   });
 
+  // Issue 399 / 402 / 409（テスト名に「#」付きの番号を書くと、lint が生の hex 色として検出するため、ここに書く）。
+  it("利用の画面はチャット → RAG 検索、業務ビューはナレッジベースの直下、品質評価とフィードバックは「改善・運用」", () => {
+    const hrefs = (key: string) => NAV_SECTIONS.find((section) => section.titleKey === key)?.items.map((item) => item.href);
+    expect(hrefs("nav.section.rag")).toEqual([APP_ROUTES.chat, APP_ROUTES.search]);
+    expect(hrefs("nav.section.ingestion")).toEqual([
+      APP_ROUTES.upload,
+      APP_ROUTES.fileList,
+      APP_ROUTES.knowledgeBases,
+      APP_ROUTES.businessViews,
+    ]);
+    expect(hrefs("nav.section.improve")).toEqual([APP_ROUTES.evaluation, APP_ROUTES.feedback]);
+    // NL2SQL と同じ位置: 検索・回答設定（準備）の後、RAG セキュリティの前。
+    const keys = NAV_SECTIONS.map((section) => section.titleKey);
+    expect(keys.indexOf("nav.section.improve")).toBe(keys.indexOf("nav.section.pipeline") + 1);
+    expect(keys.indexOf("nav.section.security")).toBe(keys.indexOf("nav.section.improve") + 1);
+  });
+
   it("ナビの並びは NL2SQL と同じ（RAG セキュリティ → 運用設定 → ユーザーとロール → システム設定）", () => {
     expect(NAV_SECTIONS.map((section) => section.titleKey).slice(-4)).toEqual([
       "nav.section.security",
@@ -138,7 +155,9 @@ describe("ルートの権限", () => {
   });
 
   it("`/` の移動先はナビの並びで最初に開ける画面、どれも無ければ権限なし", () => {
-    expect(firstAllowedRoute(() => true)).toBe(APP_ROUTES.search);
+    // チャットをナビの先頭に置いたので、すべて開ける利用者の `/` はチャット（#399）。
+    expect(firstAllowedRoute(() => true)).toBe(APP_ROUTES.chat);
+    expect(firstAllowedRoute(allow(MENU_PERMISSIONS.search, MENU_PERMISSIONS.evaluation))).toBe(APP_ROUTES.search);
     expect(firstAllowedRoute(allow(MENU_PERMISSIONS.upload, MENU_PERMISSIONS.chat))).toBe(
       APP_ROUTES.chat
     );
