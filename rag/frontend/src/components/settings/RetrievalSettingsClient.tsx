@@ -27,7 +27,6 @@ import {
   type TextSearchTokenizerName,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -87,10 +86,14 @@ export function RetrievalSettingsClient() {
   const [form, setForm] = useState<RetrievalForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
-    setForm(formFromSettings(query.data));
+  // server 値が変わったレンダーで、フォームを server 値に合わせる。ただし利用者が前の server 値から
+  // 変えた選択(未保存の編集)は上書きしない。保存に失敗したときも編集を残し、再試行できるようにする(#275)。
+  const [syncedFrom, setSyncedFrom] = useState<RetrievalSettingsData | null>(null);
+  if (query.data && query.data !== syncedFrom) {
+    if (!form || !syncedFrom || !formChanged(form, syncedFrom)) {
+      setForm(formFromSettings(query.data));
+    }
+    setSyncedFrom(query.data);
   }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。

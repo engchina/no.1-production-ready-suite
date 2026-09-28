@@ -3894,6 +3894,52 @@ async def test_crag_disabled_by_zero_low_threshold() -> None:
     assert response.answer == "回答本文。"
 
 
+class EmptyRewriteLlm(GroundedLlm):
+    """CRAG の書き換えが空応答(LLM 失敗時の縮退)になる LLM。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.plan_calls = 0
+
+    async def plan_query(self, query: str, *, mode: str, max_subqueries: int = 3) -> list[str]:
+        del query, mode, max_subqueries
+        self.plan_calls += 1
+        return []
+
+
+@pytest.mark.parametrize(
+    ("max_hops", "llm_factory"),
+    [(0, GroundedLlm), (1, EmptyRewriteLlm)],
+    ids=["max_hops_zero", "rewrite_empty"],
+)
+async def test_crag_without_research_still_runs_relaxed_corrective_retrieval(
+    max_hops: int, llm_factory: type[OciEnterpriseAiClient]
+) -> None:
+    """CRAG の精緻化で再検索しなかったとき(hop 上限 0 / 書き換え失敗)も、根拠 0 件なら
+    検索方法の「補正検索」の条件緩和再検索を行う(#275)。
+
+    以前は CRAG が発火した時点で条件緩和の分岐を丸ごと飛ばしていたため、根拠 0 件のまま回答した。
+    """
+    genai = SequencedRerankGenAiClient([0.5, 0.99])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=TopKCorrectiveOracleClient(),
+        llm=llm_factory(),
+        settings=_grounding_test_settings(
+            rag_retrieval_corrective_enabled=True,
+            rag_grounding_crag_confidence_threshold=0.35,
+            rag_crag_high_confidence_threshold=0.7,
+            rag_crag_max_hops=max_hops,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.citations[0].chunk_id == "doc-corrected:0"
+    assert response.diagnostics.corrective_retried is True
+    assert genai.rerank_calls == 2
+
+
 class TreeSearchOracleClient(OracleClient):
     """navigation 要約と section 配下 chunk を返すツリー検索用 Oracle stub。"""
 

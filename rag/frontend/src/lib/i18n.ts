@@ -786,13 +786,13 @@ export const ja = {
     "検索方法の補正検索、または補正付き処理方式が有効なときの evidence grade 判定を調整します。",
   "settings.grounding.crag.lowThreshold": "低しきい値",
   "settings.grounding.crag.lowThreshold.helper":
-    "この値未満は低 grade(棄権の対象)。0 で補正検索全体を無効化します。",
+    "この値未満は低 grade(棄権の対象)。0 で信頼度による判定と精緻化の再検索を無効にします(根拠 0 件のときの補正は残ります)。",
   "settings.grounding.crag.highThreshold": "高しきい値",
   "settings.grounding.crag.highThreshold.helper":
     "この値以上は再検索せずそのまま回答します。低しきい値以上にしてください。",
   "settings.grounding.crag.maxHops": "再検索の上限回数",
   "settings.grounding.crag.maxHops.helper":
-    "中間帯でのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみ。",
+    "信頼度が高しきい値未満のときのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみで、根拠 0 件のときは検索方法の補正検索(条件緩和)を行います。",
   "settings.grounding.crag.abstain": "低 grade で回答を保留する",
   "settings.grounding.crag.abstain.helper":
     "再検索後も低しきい値未満のとき、回答せず保留メッセージを返します(既定 OFF)。",
@@ -1502,6 +1502,10 @@ export const ja = {
     "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.search": "追加する文書を検索",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
+  "knowledgeBases.assignment.truncated":
+    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
@@ -1547,7 +1551,7 @@ export const ja = {
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
-    "「{fileName}」を「{name}」から外します。文書自体は削除されません。",
+    "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",

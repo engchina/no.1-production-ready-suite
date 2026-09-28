@@ -5,7 +5,11 @@ from fastapi import APIRouter, HTTPException, Query
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.db_degradation import load_or_degrade
-from app.rag.kb_adapter_config import dump_adapter_config, resolve_effective_adapter_config
+from app.rag.kb_adapter_config import (
+    KnowledgeBaseAdapterConfig,
+    dump_adapter_config,
+    resolve_effective_adapter_config,
+)
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
@@ -24,9 +28,27 @@ router = APIRouter()
 
 
 def _detail_response(detail: KnowledgeBaseDetail) -> ApiResponse[KnowledgeBaseDetail]:
-    """詳細に解決済み構築設定(継承値表示用)を埋めて返す。"""
-    effective = resolve_effective_adapter_config(get_settings(), detail.adapter_config)
+    """詳細に、文書レシピが継承する構築設定の既定(表示用)を埋めて返す。
+
+    3 層モデルでは文書レシピの既定は global から解決し、KB の legacy 構築上書き
+    (`adapter_config.ingestion`)は取込で使わない。実際に効く値を示すため、KB の上書きは
+    重ねず global 既定だけで解決する(#282)。
+    """
+    effective = resolve_effective_adapter_config(get_settings(), KnowledgeBaseAdapterConfig())
     return ApiResponse(data=detail.model_copy(update={"effective_adapter_config": effective}))
+
+
+async def _refreshed_detail_response(
+    oracle: OracleClient,
+    detail: KnowledgeBaseDetail,
+) -> ApiResponse[KnowledgeBaseDetail]:
+    """変更後の詳細を集計列(文書数・索引済み数など)込みで取り直して返す。
+
+    変更系の Oracle 操作は KB の行だけを読むため、集計列が 0 のまま返る。取り直せない
+    (範囲外になった等)ときは変更結果をそのまま返す(#282)。
+    """
+    refreshed = await oracle.get_knowledge_base(detail.id)
+    return _detail_response(refreshed or detail)
 
 
 @router.get("", response_model=ApiResponse[Page[KnowledgeBaseSummary]])
@@ -78,12 +100,15 @@ async def create_knowledge_base(
         if request.adapter_config is not None
         else request.retrieval_config
     )
-    detail = await OracleClient().create_knowledge_base(
-        name=request.name,
-        description=request.description,
-        default_search_mode=request.default_search_mode,
-        retrieval_config=retrieval_config,
-    )
+    try:
+        detail = await OracleClient().create_knowledge_base(
+            name=request.name,
+            description=request.description,
+            default_search_mode=request.default_search_mode,
+            retrieval_config=retrieval_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _detail_response(detail)
 
 
@@ -147,8 +172,9 @@ async def update_knowledge_base(
         )
         update_fields.discard("adapter_config")
         update_fields.add("retrieval_config")
+    oracle = OracleClient()
     try:
-        detail = await OracleClient().update_knowledge_base(
+        detail = await oracle.update_knowledge_base(
             knowledge_base_id,
             name=request.name,
             description=request.description,
@@ -160,7 +186,7 @@ async def update_knowledge_base(
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _detail_response(detail)
+    return await _refreshed_detail_response(oracle, detail)
 
 
 @router.post("/{knowledge_base_id}/archive", response_model=ApiResponse[KnowledgeBaseDetail])
@@ -168,13 +194,14 @@ async def archive_knowledge_base(
     knowledge_base_id: str,
 ) -> ApiResponse[KnowledgeBaseDetail]:
     """ナレッジベースをアーカイブする。"""
+    oracle = OracleClient()
     try:
-        detail = await OracleClient().archive_knowledge_base(knowledge_base_id)
+        detail = await oracle.archive_knowledge_base(knowledge_base_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _detail_response(detail)
+    return await _refreshed_detail_response(oracle, detail)
 
 
 @router.get("/{knowledge_base_id}/documents", response_model=ApiResponse[Page[DocumentSummary]])
@@ -218,8 +245,9 @@ async def assign_documents_to_knowledge_base(
     request: KnowledgeBaseDocumentAssignmentRequest,
 ) -> ApiResponse[KnowledgeBaseDetail]:
     """既存文書をナレッジベースへ追加する。"""
+    oracle = OracleClient()
     try:
-        detail = await OracleClient().assign_documents_to_knowledge_base(
+        detail = await oracle.assign_documents_to_knowledge_base(
             knowledge_base_id,
             request.document_ids,
         )
@@ -230,7 +258,7 @@ async def assign_documents_to_knowledge_base(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _detail_response(detail)
+    return await _refreshed_detail_response(oracle, detail)
 
 
 @router.delete(
@@ -241,9 +269,14 @@ async def remove_document_from_knowledge_base(
     knowledge_base_id: str,
     document_id: str,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """文書をナレッジベースから外す。文書自体は削除しない。"""
+    """文書をナレッジベースから外す。文書自体は削除しない。
+
+    最後の所属を外すときは DEFAULT へ移す(未所属の文書を作らない)。DEFAULT にだけ
+    所属する文書は外せない(409)。
+    """
+    oracle = OracleClient()
     try:
-        detail = await OracleClient().remove_document_from_knowledge_base(
+        detail = await oracle.remove_document_from_knowledge_base(
             knowledge_base_id,
             document_id,
         )
@@ -252,4 +285,6 @@ async def remove_document_from_knowledge_base(
             status_code=404,
             detail="ナレッジベースまたは文書が見つかりません。",
         ) from exc
-    return _detail_response(detail)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await _refreshed_detail_response(oracle, detail)
