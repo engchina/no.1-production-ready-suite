@@ -82,6 +82,7 @@ export function KnowledgeBasePickerGrid({
         selectedCount: (count) => t("knowledgeBasePicker.selectedCount", { count }),
         selectAllVisible: t("knowledgeBasePicker.selectAllVisible"),
         clear: t("knowledgeBasePicker.clear"),
+        done: t("knowledgeBasePicker.done"),
         hideEmpty: t("knowledgeBasePicker.hideEmpty"),
         hiddenEmptyCount: (count) => t("knowledgeBasePicker.hiddenEmptyCount", { count }),
       }}

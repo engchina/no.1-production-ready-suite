@@ -86,6 +86,37 @@ async function selectView(page: Page, name: RegExp) {
   await page.keyboard.press("Escape");
 }
 
+test("業務ビューの選択も、選んでも開いたままで「完了」・Esc で閉じて入力欄に戻る（#316）", async ({
+  page,
+}) => {
+  await mockAnswerHistory(page, 0);
+  await page.goto("/search");
+
+  const combobox = page.getByRole("combobox", { name: /対象の業務ビュー/ });
+  const listbox = page.getByRole("listbox", { name: /対象の業務ビュー/ });
+  await combobox.click();
+  await listbox.getByRole("option", { name: /経理ビュー/ }).click();
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option", { name: /経理ビュー/ })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+
+  await page.getByRole("button", { name: "完了" }).click();
+  await expect(listbox).toHaveCount(0);
+  await expect(combobox).toBeFocused();
+  await expect(page.getByLabel("経理ビュー を選択から外す")).toBeVisible();
+
+  // 一覧の中のチェックボックスにフォーカスがあっても Esc で閉じて入力欄へ戻る。
+  await combobox.press("ArrowDown");
+  const hideEmpty = page.getByRole("checkbox", { name: "参照 KB なしを隠す" });
+  await hideEmpty.focus();
+  await page.keyboard.press("Escape");
+  await expect(listbox).toHaveCount(0);
+  await expect(combobox).toBeFocused();
+  await expectNoPageOverflow(page);
+});
+
 test("参照 KB が 0 件の業務ビューでは理由を示し、検索を送らない", async ({ page }) => {
   let streamRequests = 0;
   await mockAnswerHistory(page, 0);
