@@ -240,7 +240,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 
 ```bash
 cd backend
-uv run black --check .
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy .
 uv run pytest -q

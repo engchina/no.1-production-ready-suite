@@ -146,7 +146,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - OCI Resource Manager の Terraform stack は root の `terraform/stack/` に1つだけ置く（#217）。ADB を1つ（新規 / 既存）作り、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低1つ）ごとに Compute を1台作る。製品固有の入力は `rag_` / `nl2sql_` / `agent_` の接頭辞を付ける。Compute 上の配備手順は各製品の `init_script.sh` が持つ。CI は `Suite / Terraform` job が `terraform/scripts/package_stack.py` と `verify_stack_contract.py` を実行する。
 - Terraform stack の release tag は `suite-v*`（例: `suite-v0.1.0`）。`.github/workflows/terraform-release.yml` が zip と sha256 を公開する。製品ごとの release（`<製品>-v*`、#94）は作らない（既存の `nl2sql-v0.1.32` 等は残す）。README 等では `releases/latest` ではなく tag を固定して参照する。
 - Dependabot（`.github/dependabot.yml`）の patch / minor 更新は `CI OK` 成功後に自動 merge される（`dependabot-auto-merge.yml`）。失敗し続ける major は `ignore` に理由付きで書き、peer dependency で結び付く一式（eslint 等）は major も 1 本の PR にまとめる。group PR が失敗したときの扱いは `dependabot.yml` の冒頭に書く。
-- pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend の Python ファイルだけへの `ruff check`（その backend の uv 環境と設定）を実行する。整形の検査は CI の black。
+- pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend の Python ファイルだけへの `ruff format --check` と `ruff check`（その backend の uv 環境と設定）を実行する。
+- Python の整形は `ruff format`（#345。black から置き換えた）。設定は各 backend の `pyproject.toml` の `[tool.ruff.format]`（black と同じ既定。行の長さは `[tool.ruff]` の 100 を共有）で、CI の `Format check` は `uv run ruff format --check .`。black は使わない。整形だけの commit は `.git-blame-ignore-revs` に載せる。
 
 ## デザインシステム / UI（platform が正本）
 
@@ -234,7 +235,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービス検証は手動 / ステージングで行う。
 - 実装と同時に対応するテストを追加・更新し、変更後は該当範囲の lint・型チェック・テストを実行して結果を報告する。
 - **ローカルの検証の範囲（#339）**：ローカルでは変更した範囲だけを検査し、全件は CI に任せる。
-  - backend: 変更したファイルの `ruff check` / `black --check`、関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と、直前に失敗したもの（`uv run pytest --lf -x`）。`mypy` は変更したパッケージを渡してよい。全テスト・全体の `mypy`・`pip-audit` は CI が実行する。ローカルで全テストを流すときは `uv run pytest -n auto`（または `-n 4`）で並列にしてよい（既定は直列のまま）。
+  - backend: 変更したファイルの `ruff check` / `ruff format --check`（直すときは `uv run ruff format <ファイル>`）、関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と、直前に失敗したもの（`uv run pytest --lf -x`）。`mypy` は変更したパッケージを渡してよい。全テスト・全体の `mypy`・`pip-audit` は CI が実行する。ローカルで全テストを流すときは `uv run pytest -n auto`（または `-n 4`）で並列にしてよい（既定は直列のまま）。
   - frontend: `npm run lint` と `npm run build`（型検査を兼ねる）。単体テストは関係するものだけ（Vitest は `npx vitest related <変更したファイル>` か `npx vitest --changed`、NL2SQL のロジックテストは `node --import jiti/register --test tests/<対象>.test.ts`）。
   - e2e: 変更に関係する Playwright の spec だけ（「UI 変更の検証」の e2e の量）。
   - PR の `検証結果` には、ローカルで実行した command と、CI の job 結果（全件の検査）を分けて書く。

@@ -63,7 +63,7 @@
 
 ### 横断
 - 観測性: **Langfuse**(LLM トレース/コスト)+ Prometheus + OpenTelemetry。
-- 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
+- 品質: pytest / pytest-cov / ruff（lint・整形）/ mypy / bandit / pip-audit / Vitest / Playwright。
 - インフラ: 自前のコードは Docker を使わずネイティブで動かす(開発は `uv run` / `npm run dev`、本番は Compute 上の systemd + Nginx。Dockerfile・compose は持たない。#286 / #356)。配備は Terraform(OCI Resource Manager。monorepo root の統合 stack `terraform/stack/`、#217)と `init_script.sh`。
 
 ## UI/UX 開発ルール
@@ -140,7 +140,7 @@ backend/                  FastAPI アプリ
     rag/                  chunking / ingestion / pipeline
     schemas/              common / document / search
   tests/                  pytest
-  pyproject.toml          uv 管理、ruff/black/mypy/pytest 設定
+  pyproject.toml          uv 管理、ruff（lint・整形）/mypy/pytest 設定
 packages/
   rag_parser_core/        backend と parser サービスが共有する parser 契約 package
                           (extraction/source schema・routing・registry remap・
@@ -222,7 +222,7 @@ npm run dev                            # http://localhost:3000（/api は BACKEN
 uv sync                      # 依存解決
 uv run uvicorn app.main:app --reload
 uv run pytest                # テスト
-uv run ruff check . && uv run mypy .   # lint/型
+uv run ruff format --check . && uv run ruff check . && uv run mypy .   # 整形/lint/型
 
 # frontend
 cd frontend && npm install

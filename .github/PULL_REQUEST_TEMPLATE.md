@@ -32,7 +32,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 <!--
 - 実行した正確な command と結果を書く。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。
-- backend: `uv run pytest` / `uv run ruff check .` / `uv run mypy .`
+- backend: `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`
   frontend: `npm run lint` / `npm run build` / `npm run test`
 - UI/UX 変更では、対象 Playwright spec、desktop / 375px viewport、主要導線と
   空 / 読込 / エラー / ブロック状態の結果を記載する。

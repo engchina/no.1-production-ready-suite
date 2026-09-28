@@ -8,7 +8,7 @@
 - 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
 - ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
 - 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
-- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
+- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
 
 ## プロジェクト概要
 
@@ -58,7 +58,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 ### 横断
 
 - 観測性: Langfuse + Prometheus + OpenTelemetry。
-- 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
+- 品質: pytest / pytest-cov / ruff（lint・整形）/ mypy / bandit / pip-audit / Vitest / Playwright。
 - インフラ: 自前のコードは Docker を使わずネイティブで動かす(#286)。backend・取込 worker・前処理・parser はサービスごとの uv の venv(Python 3.12、`uv sync --locked --no-dev --python 3.12`)と systemd の unit で動かし、unit の定義は `scripts/rag-systemd.sh`(本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う)に置く。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB、CPU parser のみ)で配備する。自前のコードの `docker-compose*.yml`・Dockerfile は #356 で削除した(作り直さない)。開発の起動は backend が `uv run uvicorn`、前処理 / parser が `scripts/rag-services.sh`、frontend が `npm run dev`(docs/deployment.md の「ローカル開発」)。以前の Docker の環境からの移行は docs/deployment.md の #286 の手順。
 - サービス管理画面は systemd の unit を操作する(起動 = `enable --now`、停止 = `disable --now` で最後に操作した状態を保つ)。backend が実行してよいのは、sudoers で許可した allowlist の unit の `systemctl` / `journalctl` だけ(argv 固定・shell を通さない。`app/services/systemd.py`)。前処理 / parser を足すときは、catalog・`scripts/rag-systemd.sh` の `RAG_MICROSERVICES`・URL 設定の既定値(`127.0.0.1:<port>`)をそろえる(テストで照合する)。
 
@@ -173,6 +173,7 @@ services/                 parser / preprocess / retrieval / generation などの
 # backend
 cd backend && uv sync
 uv run pytest
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy .
 uv run uvicorn app.main:app --reload

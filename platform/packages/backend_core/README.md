@@ -51,7 +51,7 @@ MetricsMiddleware / configure_logging を import）。
 ```bash
 uv sync --dev
 uv run pytest          # 純インフラなので Oracle 不要で全テスト実行可
-uv run ruff check . && uv run mypy src
+uv run ruff format --check . && uv run ruff check . && uv run mypy src
 ```
 
 ## 配布 / 依存方法
