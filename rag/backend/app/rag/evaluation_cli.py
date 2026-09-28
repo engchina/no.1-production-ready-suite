@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -22,12 +23,18 @@ from app.schemas.evaluation import (
     EvaluationRunRequest,
 )
 
-DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/run"
-DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/compare"
+# 評価は job の API（投入 → 状態のポーリング → 結果。#390）で実行する。
+DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/jobs/run"
+DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/jobs/compare"
 DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
-# 評価 API は評価全体を 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`）で打ち切り、残りのケースを
-# 失敗として結果を返す（#383）。その結果を受け取れるよう、画面と同じくそれより 30 秒長く待つ。
-DEFAULT_TIMEOUT_SECONDS = 630.0
+# job の終わりを待つ時間の上限（秒）。backend の job の上限（`RAG_EVALUATION_JOB_TIMEOUT_SECONDS`、
+# 既定 3600 秒）で打ち切った結果を受け取れるよう、それより長くする。超えたら job を取り消す。
+DEFAULT_TIMEOUT_SECONDS = 3900.0
+# 状態を取得する間隔（秒）と、1 回の HTTP の呼び出しの timeout（秒）。
+DEFAULT_POLL_INTERVAL_SECONDS = 5.0
+REQUEST_TIMEOUT_SECONDS = 60.0
+_JOB_RUNNING_STATUS = "RUNNING"
+_JOB_SUCCEEDED_STATUS = "SUCCEEDED"
 EvaluationRequestKind = Literal["run", "compare"]
 logger = logging.getLogger(__name__)
 
@@ -68,6 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload=request.payload,
             timeout=args.timeout,
             headers=_request_headers(args.tenant_id, args.user_id),
+            poll_interval=args.poll_interval,
         )
         gate = _extract_gate_evaluation(response_payload)
         _write_json(response_payload, args.output)
@@ -98,24 +106,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--api-url",
         default=None,
         help=(
-            "評価 API URL。明示した場合は --api-base-url より優先します。"
+            "評価 job の投入 API の URL。明示した場合は --api-base-url より優先します。"
             "未指定時は入力形式に応じて "
-            f"{DEFAULT_EVALUATION_API_URL} または {DEFAULT_EVALUATION_COMPARE_API_URL}"
+            f"{DEFAULT_EVALUATION_API_URL} または {DEFAULT_EVALUATION_COMPARE_API_URL}。"
+            "以前の同期 API の URL（/api/evaluation/run・/compare）は job の API に読み替えます。"
         ),
     )
     parser.add_argument(
         "--api-base-url",
         default=os.getenv("RAG_EVALUATION_API_BASE_URL"),
         help=(
-            "評価 API の base URL。入力形式に応じて /api/evaluation/run または "
-            "/api/evaluation/compare を付与します。"
+            "評価 API の base URL。入力形式に応じて /api/evaluation/jobs/run または "
+            "/api/evaluation/jobs/compare を付与します。"
         ),
     )
     parser.add_argument(
         "--timeout",
         type=float,
         default=_env_float("RAG_EVALUATION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
-        help=f"評価 API 呼び出し timeout 秒。既定値: {DEFAULT_TIMEOUT_SECONDS}",
+        help=(
+            "評価 job の終わりを待つ秒数。超えたら job を取り消して終了コード 3 を返します。"
+            f"既定値: {DEFAULT_TIMEOUT_SECONDS}"
+        ),
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=_env_float("RAG_EVALUATION_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
+        help=f"評価 job の状態を取得する間隔（秒）。既定値: {DEFAULT_POLL_INTERVAL_SECONDS}",
     )
     parser.add_argument(
         "--output",
@@ -188,9 +206,24 @@ def _resolve_api_url(
 
 
 def _evaluation_url_from_base(base_url: str, kind: EvaluationRequestKind) -> str:
-    """staging host の base URL から evaluation endpoint URL を作る。"""
-    suffix = "/api/evaluation/compare" if kind == "compare" else "/api/evaluation/run"
+    """staging host の base URL から評価 job の投入 URL を作る。"""
+    suffix = "/api/evaluation/jobs/compare" if kind == "compare" else "/api/evaluation/jobs/run"
     return f"{base_url.rstrip('/')}{suffix}"
+
+
+def _job_submit_url(api_url: str) -> str:
+    """以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を job の投入 URL に読み替える。"""
+    for kind in ("run", "compare"):
+        legacy_suffix = f"/api/evaluation/{kind}"
+        if api_url.rstrip("/").endswith(legacy_suffix):
+            prefix = api_url.rstrip("/")[: -len(legacy_suffix)]
+            return f"{prefix}/api/evaluation/jobs/{kind}"
+    return api_url
+
+
+def _job_status_url(submit_url: str, job_id: str) -> str:
+    """投入 URL（`.../jobs/run`）から状態の URL（`.../jobs/{job_id}`）を作る。"""
+    return f"{submit_url.rstrip('/').rsplit('/', 1)[0]}/{job_id}"
 
 
 def _post_evaluation_request(
@@ -199,25 +232,55 @@ def _post_evaluation_request(
     payload: Mapping[str, Any],
     timeout: float,
     headers: Mapping[str, str],
+    poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    transport: httpx.BaseTransport | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """評価 API へ JSON request を送る。"""
+    """評価 job を投入し、終わるまで状態を取得して、結果を `{"data": 結果, "job": 状態}` で返す。
+
+    `timeout` 秒を超えても終わらなければ、job を取り消して exit code 3 の失敗にする。
+    """
     if timeout <= 0:
         raise EvaluationGateError("timeout は 0 より大きい値にしてください。")
+    if poll_interval <= 0:
+        raise EvaluationGateError("poll-interval は 0 より大きい値にしてください。")
+    submit_url = _job_submit_url(api_url)
     request_headers = {"Accept": "application/json", **headers}
+    status_url: str | None = None
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-            response = request_with_retry(
-                client,
-                "POST",
-                api_url,
-                retry=HttpRetryConfig(),
-                logger=logger,
-                log_extra={"api_url": api_url},
-                json=payload,
-                headers=request_headers,
+        with httpx.Client(
+            timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False, transport=transport
+        ) as client:
+            job = _job_from_response(
+                _request_json(client, "POST", submit_url, json=payload, headers=request_headers)
             )
-            response.raise_for_status()
-            return _decode_json_response(response.content)
+            status_url = _job_status_url(submit_url, str(job["job_id"]))
+            deadline = clock() + timeout
+            last_progress: tuple[object, object] | None = None
+            try:
+                while job.get("status") == _JOB_RUNNING_STATUS:
+                    progress = (job.get("completed_cases"), job.get("total_cases"))
+                    if progress != last_progress:
+                        print(
+                            f"評価 job {job['job_id']}: {progress[0]} / {progress[1]} 件",
+                            file=sys.stderr,
+                        )
+                        last_progress = progress
+                    if clock() >= deadline:
+                        _cancel_job_quietly(client, status_url, request_headers)
+                        raise EvaluationGateError(
+                            f"評価 job が {timeout:g} 秒以内に終わらなかったため、取り消しました。"
+                            "--timeout を延ばすか、ケースを分けて評価してください。",
+                            exit_code=3,
+                        )
+                    sleep(poll_interval)
+                    job = _job_from_response(
+                        _request_json(client, "GET", status_url, headers=request_headers)
+                    )
+            except KeyboardInterrupt:
+                _cancel_job_quietly(client, status_url, request_headers)
+                raise
     except httpx.InvalidURL as exc:
         raise EvaluationGateError("評価 API URL が不正です。") from exc
     except httpx.HTTPStatusError as exc:
@@ -236,6 +299,50 @@ def _post_evaluation_request(
             f"評価 API に接続できませんでした: {type(exc).__name__}",
             exit_code=3,
         ) from exc
+    status = job.get("status")
+    if status != _JOB_SUCCEEDED_STATUS:
+        detail = job.get("error_message") or "理由は job の状態を確認してください。"
+        raise EvaluationGateError(f"評価 job が {status} で終わりました: {detail}", exit_code=3)
+    result = job.get("run_result") or job.get("compare_result")
+    if result is None:
+        raise EvaluationGateError("評価 job の結果がありません。", exit_code=3)
+    summary = {
+        key: value for key, value in job.items() if key not in {"run_result", "compare_result"}
+    }
+    return {"data": result, "job": summary}
+
+
+def _request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+    response = request_with_retry(
+        client,
+        method,
+        url,
+        retry=HttpRetryConfig(),
+        logger=logger,
+        log_extra={"api_url": url},
+        **kwargs,
+    )
+    response.raise_for_status()
+    return _decode_json_response(response.content)
+
+
+def _job_from_response(response_payload: Mapping[str, Any]) -> dict[str, Any]:
+    data = response_payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("job_id"), str):
+        raise EvaluationGateError("評価 job の応答に job_id がありません。", exit_code=3)
+    return data
+
+
+def _cancel_job_quietly(
+    client: httpx.Client, status_url: str | None, headers: Mapping[str, str]
+) -> None:
+    """CLI が待つのをやめた job を取り消す（失敗しても、元のエラーを優先する）。"""
+    if status_url is None:
+        return
+    try:
+        client.post(f"{status_url}/cancel", headers=dict(headers))
+    except httpx.HTTPError as exc:
+        logger.warning("evaluation_job_cancel_failed", extra={"error_type": type(exc).__name__})
 
 
 def _decode_json_response(raw_body: bytes) -> dict[str, Any]:

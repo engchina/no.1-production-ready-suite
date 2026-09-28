@@ -25,6 +25,7 @@ from app.clients.oracle import (
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
+    oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
     oracle_generation_settings_schema_sql,
@@ -264,6 +265,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_runs",
             sql=oracle_evaluation_artifact_schema_sql(),
         ),
+        # 品質評価の job（非同期の実行・進捗・取り消し。#390）。
+        OracleSchemaSection(
+            name="evaluation_jobs",
+            table_name="rag_evaluation_jobs",
+            sql=oracle_evaluation_job_schema_sql(),
+        ),
         # ロールの RAG 権限と対象範囲（#214）。PLATFORM_ROLES と業務ビュー・KB を参照する。
         OracleSchemaSection(
             name="role_access",
@@ -501,6 +508,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260928_004_ingestion_jobs_lease",
             table_name="rag_ingestion_jobs",
             sql=_ingestion_jobs_lease_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260928_005_evaluation_jobs",
+            table_name="rag_evaluation_jobs",
+            sql=_evaluation_jobs_migration_sql(),
         ),
     ]
 
@@ -1093,6 +1105,61 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_query_history_view_idx '
             || 'ON rag_query_history (business_view_id, created_at DESC)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _evaluation_jobs_migration_sql() -> str:
+    """品質評価の job の表と index を追加する(冪等。#390)。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_jobs ('
+            || 'job_id VARCHAR2(64) PRIMARY KEY,'
+            || 'kind VARCHAR2(16) NOT NULL,'
+            || 'status VARCHAR2(16) NOT NULL,'
+            || 'tenant_id_hash VARCHAR2(64),'
+            || 'user_id_hash VARCHAR2(64),'
+            || 'total_cases NUMBER(10) DEFAULT 0 NOT NULL,'
+            || 'completed_cases NUMBER(10) DEFAULT 0 NOT NULL,'
+            || 'current_case_id VARCHAR2(200 CHAR),'
+            || 'current_experiment_id VARCHAR2(80 CHAR),'
+            || 'current_case_started_at TIMESTAMP WITH TIME ZONE,'
+            || 'lease_owner VARCHAR2(128),'
+            || 'heartbeat_at TIMESTAMP WITH TIME ZONE,'
+            || 'time_limit_seconds NUMBER(10) NOT NULL,'
+            || 'error_message VARCHAR2(2000 CHAR),'
+            || 'result_json JSON,'
+            || 'evaluation_run_id VARCHAR2(64),'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'started_at TIMESTAMP WITH TIME ZONE,'
+            || 'finished_at TIMESTAMP WITH TIME ZONE,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_evaluation_jobs_kind_ck CHECK (kind IN (''run'', ''compare'')),'
+            || 'CONSTRAINT rag_evaluation_jobs_status_ck '
+            || 'CHECK (status IN (''RUNNING'', ''SUCCEEDED'', ''FAILED'', ''CANCELLED'')))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_STATUS_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_jobs_status_idx '
+            || 'ON rag_evaluation_jobs (status, heartbeat_at)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_jobs_owner_created_idx '
+            || 'ON rag_evaluation_jobs (tenant_id_hash, user_id_hash, created_at DESC)';
     END IF;
 END;
 /

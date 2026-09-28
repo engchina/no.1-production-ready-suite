@@ -1,4 +1,5 @@
 import { expect, type Locator, test } from "@playwright/test";
+import { mockEvaluationJobs } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const VIEWPORTS = [
@@ -102,10 +103,9 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
       },
     });
   });
-  await page.route("**/api/evaluation/run", async (route) => {
-    await route.fulfill({
-      json: { data: evaluationMetrics(CASE_COUNT), error_messages: [], warning_messages: [] },
-    });
+  await mockEvaluationJobs(page, {
+    runResult: () => evaluationMetrics(CASE_COUNT),
+    autoComplete: true,
   });
 
   await page.goto("/evaluation");

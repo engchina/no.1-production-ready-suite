@@ -37,7 +37,7 @@
 | 業務ビュー | 作成 / 編集の未保存の下書き | sessionStorage の `businessViews.draft:<?id= の値>`（`new` または業務ビューの ID）。同じ対象のエディタを開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す |
 | 文書インデックス | 状態の絞り込み・KB の絞り込み・検索・ページ | sessionStorage |
 | ナレッジベース | 状態の絞り込み・検索・ページ | sessionStorage |
-| 品質評価 | 評価 JSON、比較 JSON、ランキング指標、KB スコープ、評価スイート | sessionStorage |
+| 品質評価 | 評価 JSON、比較 JSON、ランキング指標、KB スコープ、評価スイート、評価・比較の job id（`evaluation.runJobId` / `evaluation.compareJobId`。戻ったらこの id でサーバーの状態を確かめる。#390） | sessionStorage |
 | フィードバック | 期間・絞り込み・検索・並べ替え・ページ・選んだ行（`feedback`） | URL の検索パラメータ。サイドナビでパラメータなしの URL に戻ったときは `RememberedSearchParams` が直前の URL を復元 |
 
 保存しないもの：回答・引用・評価結果などのサーバー応答、結果行、秘密情報（token・API key）、文書インデックスの行の選択（一括削除につながるため、ページを離れたら解除）、確認ダイアログと確認語。戻っただけで検索・チャット・評価を送り直さない。

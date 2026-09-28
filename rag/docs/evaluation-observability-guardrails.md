@@ -2,7 +2,7 @@
 
 ## 評価
 
-API: `POST /api/evaluation/run`
+API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run`・`/compare` は互換のため残す。
 
 設定比較 API: `POST /api/evaluation/compare`
 
@@ -74,7 +74,11 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、citation traceability / bbox / element lineage coverage、content kind hit、section coverage、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足・引用 lineage / content kind / section lineage 欠落のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 
-**時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 300 秒）で打ち切る。agentic（検索の計画・multi_hop の再分解）の業務ビューでは LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `agentic_planning`）と `error_message`（例:「評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。…」。query 本文は含めない）に残して、評価は次の case へ進む。`/run`・`/compare` は同期の HTTP のため、評価全体を 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。`/compare` は experiment の間で共有）で打ち切る。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。画面と評価 CLI は 630 秒、Nginx は 660 秒待つ。600 秒に収まらない golden set は分けて評価する（評価の job 化は follow-up）。
+**時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 300 秒）で打ち切る。agentic（検索の計画・multi_hop の再分解）の業務ビューでは LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `agentic_planning`）と `error_message`（例:「評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。…」。query 本文は含めない）に残して、評価は次の case へ進む。評価全体の上限は、job（#390）では `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒。compare は experiment の間で共有）、同期の `/run`・`/compare` では 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。Nginx は 660 秒待つ）。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。
+
+**評価の job（#390）**: 評価・比較は job で動く。投入（`202`）→ 状態の取得 → 結果の流れで、状態は `rag_evaluation_jobs`（`RUNNING` / `SUCCEEDED` / `FAILED` / `CANCELLED`）に保存する。進捗は終わった case の数 / 全体（compare は experiment × case の通しの数）と、実行中の case の id（compare は experiment の id も）。job は投入を受けた backend のプロセスで、投入した request の文脈（利用者・対象範囲）のまま動き、query の本文は保存しない。job は投入した利用者（tenant と user の hash）だけが取得・取り消しできる。実行中のプロセスは 10 秒ごとに heartbeat を DB の時刻で書き、取り消し（別のプロセスへの取り消しを含む）は heartbeat・進捗の更新で気づいて評価を止める。プロセスが止まって heartbeat が 120 秒途絶えた job は、状態の取得・投入のときに `FAILED` にする。同時に実行できる job は 2 件まで（`409`）。評価が例外で止まった job は `FAILED` にし、`error_message` には例外の型だけを出す（本文は出さない）。結果は成功したときだけ返し（`run_result` / `compare_result`）、評価 artifact（`rag_evaluation_runs`）にも保存する。
+
+**画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
 
 各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`、`partial_recall`、`unexpected_retrieval`、`answer_keyword_miss`、`low_groundedness`、`guardrail_warning`、`case_error` に固定する。AutoRAG / FlashRAG 的な比較では、この分布を見ることで chunking / filter / hybrid retrieval / rerank / prompt / guardrail のどこを次に調整すべきかを切り分ける。
 
