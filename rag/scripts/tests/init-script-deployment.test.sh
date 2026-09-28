@@ -331,6 +331,13 @@ grep -Fqx "ExecStart=${rag_dir}/backend/.venv/bin/python -m app.rag.ingestion_wo
   || fail "ingestion-worker の unit が app.rag.ingestion_worker を起動していない"
 grep -Fqx 'KillMode=mixed' "${worker_unit}" || fail "ingestion-worker の KillMode が mixed ではない（#305）"
 grep -Fqx 'TimeoutStopSec=90' "${worker_unit}" || fail "ingestion-worker の TimeoutStopSec が 90 秒ではない"
+grep -Fqx 'Environment=RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60' "${worker_unit}" \
+  || fail "ingestion-worker の停止の grace が unit で 60 秒になっていない（#357）"
+# 停止の grace + 子の停止待ち（SIGTERM から SIGKILL まで 10 秒）より TimeoutStopSec を長くする（#357）。
+worker_grace="$(sed -n 's/^Environment=RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=//p' "${worker_unit}")"
+worker_stop_timeout="$(sed -n 's/^TimeoutStopSec=//p' "${worker_unit}")"
+[ "${worker_stop_timeout}" -gt $((worker_grace + 10)) ] \
+  || fail "ingestion-worker の TimeoutStopSec が停止の grace + 10 秒より短い（job を QUEUED に戻す前に SIGKILL される）"
 grep -Fqx 'Restart=on-failure' "${worker_unit}" || fail "ingestion-worker の Restart が on-failure ではない"
 if grep -Fq 'INPROCESS_WORKER' "${worker_unit}"; then
   fail "ingestion-worker の unit が in-process worker の設定を持っている"

@@ -7,6 +7,16 @@ in-process dispatcher（lifespan で起動）でも、別プロセス
 ``python -m app.rag.ingestion_job_runner <job_id>`` subprocess へ隔離する。
 複数ワーカーで同時に動かしても
 ``claim_ingestion_job`` の row lock により同一ジョブの二重実行は起きない。
+
+lease と heartbeat(#357):
+- worker はプロセスごとに一意の ``worker_id`` を持ち、claim で job の lease を取る
+  (``rag_ingestion_jobs.lease_owner`` / ``heartbeat_at``)。
+- 実行中は ``heartbeat_interval`` ごとに自分の lease の RUNNING job の heartbeat を更新する。
+  stale の回復は heartbeat が TTL を超えて途絶えた job だけを戻し、自分の lease の job は戻さない。
+  job の長さの上限は job の timeout だけが持つ。
+- 停止(SIGTERM / lifespan の終了)では新しい job を取らず、``shutdown_grace_seconds`` まで
+  実行中の job を待つ。終わらなければ子を止め、自分の lease の job を QUEUED に戻す
+  (attempt は増やさない)。
 """
 
 from __future__ import annotations
@@ -14,8 +24,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
+import socket
 import sys
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
@@ -29,6 +42,15 @@ logger = logging.getLogger(__name__)
 JobRunner = Callable[[str], Awaitable[None]]
 QueuedJobFetcher = Callable[[int], Awaitable[Sequence[IngestionJob]]]
 SchemaReadinessChecker = Callable[[], Awaitable[bool]]
+LeaseHeartbeat = Callable[[], Awaitable[int]]
+LeasedJobRequeuer = Callable[[], Awaitable[Sequence[IngestionJob]]]
+Clock = Callable[[], datetime]
+
+# lease_owner 列(VARCHAR2(128))に収める。
+_WORKER_ID_HOST_MAX_CHARS = 80
+# 子プロセスに SIGTERM を送ってから SIGKILL するまでの秒数。systemd の TimeoutStopSec は
+# 停止の grace + これ + QUEUED に戻す DB の処理より長くする(init_script.sh。テストで照合する)。
+CHILD_TERMINATE_TIMEOUT_SECONDS = 10.0
 
 # enqueue 側（同一プロセス内）から即時起床させるための通知イベント。
 # 別プロセスのワーカーには届かないが、その場合は poll interval で拾う。
@@ -40,20 +62,21 @@ def request_ingestion_worker_wakeup() -> None:
     _WAKEUP.set()
 
 
-async def _default_fetch_queued(limit: int) -> Sequence[IngestionJob]:
-    return await OracleClient().list_ingestion_jobs(
-        status=IngestionJobStatus.QUEUED,
-        limit=limit,
-        offset=0,
-        oldest_first=True,  # FIFO: 滞留 job の starvation を避ける。
-    )
+def new_worker_id() -> str:
+    """lease_owner に使う、worker プロセスごとに一意な識別子(host:pid:乱数)。"""
+    host = (socket.gethostname() or "worker")[:_WORKER_ID_HOST_MAX_CHARS]
+    return f"{host}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
 
 
-async def _default_job_runner(job_id: str) -> None:
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+async def _default_job_runner(job_id: str, *, lease_owner: str | None = None) -> None:
     # 循環 import を避けるため遅延 import する。
     from app.api.routes.documents import _run_ingestion_job
 
-    await _run_ingestion_job(job_id)
+    await _run_ingestion_job(job_id, lease_owner=lease_owner)
 
 
 async def _default_schema_ready() -> bool:
@@ -66,13 +89,14 @@ class IngestionJobSubprocessError(RuntimeError):
     """subprocess runner が異常終了した。親 worker が job を失敗へ戻す。"""
 
 
-def _job_runner_for_settings(settings: Settings) -> JobRunner:
+def _job_runner_for_settings(settings: Settings, *, lease_owner: str | None = None) -> JobRunner:
     if settings.ingestion_queue_process_isolation_enabled:
         return lambda job_id: run_ingestion_job_subprocess(
             job_id,
             timeout_seconds=settings.ingestion_job_subprocess_timeout_seconds,
+            lease_owner=lease_owner,
         )
-    return _default_job_runner
+    return lambda job_id: _default_job_runner(job_id, lease_owner=lease_owner)
 
 
 async def _terminate_process(process: asyncio.subprocess.Process) -> None:
@@ -80,7 +104,7 @@ async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         return
     process.terminate()
     try:
-        await asyncio.wait_for(process.wait(), timeout=10)
+        await asyncio.wait_for(process.wait(), timeout=CHILD_TERMINATE_TIMEOUT_SECONDS)
     except TimeoutError:
         process.kill()
         await process.wait()
@@ -90,19 +114,21 @@ async def run_ingestion_job_subprocess(
     job_id: str,
     *,
     timeout_seconds: float | None = None,
+    lease_owner: str | None = None,
 ) -> None:
-    """1 job を別 Python process で実行し、API event loop / CUDA 初期化と隔離する。"""
+    """1 job を別 Python process で実行し、API event loop / CUDA 初期化と隔離する。
+
+    ``lease_owner`` は子の claim が取る lease の持ち主(この worker)。heartbeat は親が打つ。
+    """
     timeout = (
         timeout_seconds
         if timeout_seconds is not None
         else get_settings().rag_parser_service_timeout_seconds
     )
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "app.rag.ingestion_job_runner",
-        job_id,
-    )
+    command = [sys.executable, "-m", "app.rag.ingestion_job_runner", job_id]
+    if lease_owner is not None:
+        command += ["--lease-owner", lease_owner]
+    process = await asyncio.create_subprocess_exec(*command)
     try:
         return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
     except TimeoutError as exc:
@@ -132,15 +158,35 @@ class IngestionQueueWorker:
         schema_ready: SchemaReadinessChecker | None = None,
         concurrency: int | None = None,
         poll_interval_seconds: float | None = None,
+        worker_id: str | None = None,
+        heartbeat: LeaseHeartbeat | None = None,
+        requeue_leased: LeasedJobRequeuer | None = None,
+        heartbeat_interval_seconds: float | None = None,
+        shutdown_grace_seconds: float | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._settings = settings
-        self._job_runner = job_runner or _job_runner_for_settings(settings)
-        self._fetch_queued = fetch_queued or _default_fetch_queued
+        self.worker_id = worker_id or new_worker_id()
+        self._job_runner = job_runner or _job_runner_for_settings(
+            settings, lease_owner=self.worker_id
+        )
+        self._fetch_queued = fetch_queued or self._default_fetch_queued
         self._recover_stale = recover_stale or self._default_recover_stale
+        self._heartbeat = heartbeat or self._default_heartbeat
+        self._requeue_leased = requeue_leased or self._default_requeue_leased
         self._schema_ready = schema_ready or _default_schema_ready
+        self._clock = clock or _utc_now
         self._concurrency = max(1, concurrency or settings.ingestion_queue_worker_concurrency)
         self._poll_interval = (
             poll_interval_seconds or settings.ingestion_queue_poll_interval_seconds
+        )
+        self._heartbeat_interval = (
+            heartbeat_interval_seconds or settings.ingestion_queue_heartbeat_interval_seconds
+        )
+        self._shutdown_grace = (
+            shutdown_grace_seconds
+            if shutdown_grace_seconds is not None
+            else settings.ingestion_queue_shutdown_grace_seconds
         )
         self._recovery_interval = settings.ingestion_queue_recovery_interval_seconds
         self._last_recovery_at: float | None = None
@@ -148,14 +194,25 @@ class IngestionQueueWorker:
         self._tasks: set[asyncio.Task[None]] = set()
         self._last_schema_state: str | None = None
         self._recovery_initialized = False
+        self._stop_event: asyncio.Event | None = None
+        # 停止中に打ち切られた job がある(停止処理で自分の lease の job を QUEUED に戻す)。
+        self._interrupted_on_stop = False
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         """停止イベントが立つまでキューを消費し続ける。"""
         stop_event = stop_event or asyncio.Event()
+        self._stop_event = stop_event
         logger.info(
             "ingestion_worker_started",
-            extra={"concurrency": self._concurrency, "poll_interval": self._poll_interval},
+            extra={
+                "worker_id": self.worker_id,
+                "concurrency": self._concurrency,
+                "poll_interval": self._poll_interval,
+                "heartbeat_interval": self._heartbeat_interval,
+                "shutdown_grace_seconds": self._shutdown_grace,
+            },
         )
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
             while not stop_event.is_set():
                 if not await self._schema_is_ready():
@@ -165,17 +222,18 @@ class IngestionQueueWorker:
                     await self._recover_stale_safely()
                     self._last_recovery_at = asyncio.get_running_loop().time()
                     self._recovery_initialized = True
+                if stop_event.is_set():
+                    break
                 dispatched = await self._dispatch_available()
                 if dispatched == 0:
                     # アイドル時に、クラッシュで固着した文書/ジョブを定期回復する。
                     await self._recover_stale_if_due()
                     await self._wait_for_work(stop_event)
         finally:
-            if self._settings.ingestion_queue_process_isolation_enabled:
-                await self._cancel_inflight()
-            else:
-                await self._drain_inflight()
-            logger.info("ingestion_worker_stopped")
+            # 停止後は新しい job を取らない(このループを抜けた時点で dispatch しない)。
+            stop_event.set()
+            await self._shutdown(heartbeat_task)
+            logger.info("ingestion_worker_stopped", extra={"worker_id": self.worker_id})
 
     async def _schema_is_ready(self) -> bool:
         """schema 未作成/操作中は queue table へ触れず、状態変化だけを記録する。"""
@@ -207,14 +265,53 @@ class IngestionQueueWorker:
             self._last_schema_state = state
         return ready
 
+    async def _default_fetch_queued(self, limit: int) -> Sequence[IngestionJob]:
+        # FIFO で、claim できない job(同じ文書の job が RUNNING)と自分が実行中の job を除く。
+        # 除かないと、先頭の claim できない job が毎回 free 枠を埋め、後ろの job が流れない(#357)。
+        return await OracleClient().list_dispatchable_ingestion_jobs(
+            limit=limit,
+            exclude_job_ids=sorted(self._inflight),
+        )
+
     async def _default_recover_stale(self) -> Sequence[IngestionJob]:
-        stale_before = datetime.now(UTC) - timedelta(
-            seconds=self._settings.ingestion_queue_stale_running_seconds
-        )
+        now = self._clock()
         return await OracleClient().recover_stale_ingestion_jobs(
-            stale_before=stale_before,
+            stale_before=now
+            - timedelta(seconds=self._settings.ingestion_queue_stale_running_seconds),
+            heartbeat_stale_before=now
+            - timedelta(seconds=self._settings.ingestion_queue_lease_ttl_seconds),
             limit=self._settings.ingestion_queue_startup_drain_limit,
+            exclude_lease_owner=self.worker_id,
         )
+
+    async def _default_heartbeat(self) -> int:
+        return await OracleClient().heartbeat_ingestion_jobs(
+            lease_owner=self.worker_id,
+            heartbeat_at=self._clock(),
+        )
+
+    async def _default_requeue_leased(self) -> Sequence[IngestionJob]:
+        return await OracleClient().requeue_leased_ingestion_jobs(lease_owner=self.worker_id)
+
+    async def _heartbeat_loop(self) -> None:
+        """実行中の job がある間、heartbeat_interval ごとに自分の lease を延長する。"""
+        while True:
+            await asyncio.sleep(self._heartbeat_interval)
+            if self._inflight:
+                await self._heartbeat_safely()
+
+    async def _heartbeat_safely(self) -> None:
+        try:
+            await self._heartbeat()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # 1 回の失敗では lease は切れない(TTL は間隔の 3 倍以上)。次の間隔で再試行する。
+            logger.warning(
+                "ingestion_worker_heartbeat_failed",
+                extra={"worker_id": self.worker_id, **oracle_error_log_fields(exc)},
+                exc_info=True,
+            )
 
     async def _recover_stale_if_due(self) -> None:
         """前回の回復から recovery interval を超えていれば再度回復する。"""
@@ -274,6 +371,15 @@ class IngestionQueueWorker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if self._stop_event is not None and self._stop_event.is_set():
+                # 停止中に子が止まった(端末の Ctrl+C で子にも signal が届いた等)。失敗にせず、
+                # 停止処理が自分の lease の job として QUEUED に戻す(#357)。
+                logger.warning(
+                    "ingestion_worker_job_interrupted",
+                    extra={"job_id": job_id, "worker_id": self.worker_id},
+                )
+                self._interrupted_on_stop = True
+                return
             await _mark_running_job_failed(job_id, error=exc)
             logger.exception(
                 "ingestion_worker_job_failed",
@@ -301,21 +407,60 @@ class IngestionQueueWorker:
             await asyncio.gather(wakeup_waiter, stop_waiter, return_exceptions=True)
             _WAKEUP.clear()
 
-    async def _drain_inflight(self) -> None:
-        """シャットダウン時に実行中タスクの完了を待つ。"""
-        pending = list(self._tasks)
-        if pending:
-            logger.info("ingestion_worker_draining", extra={"inflight": len(pending)})
-            await asyncio.gather(*pending, return_exceptions=True)
+    async def _shutdown(self, heartbeat_task: asyncio.Task[None]) -> None:
+        """実行中の job を grace まで待ち、残りは止めて自分の lease の job を QUEUED に戻す。
 
-    async def _cancel_inflight(self) -> None:
-        """API プロセス内 dispatcher 停止時は subprocess job を待ち続けず終了させる。"""
-        pending = list(self._tasks)
-        if pending:
-            logger.info("ingestion_worker_cancelling", extra={"inflight": len(pending)})
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+        grace の間も heartbeat を打ち続け、他の worker に回復されないようにする。子プロセスは
+        ``run_ingestion_job_subprocess`` の取り消しで SIGTERM(10 秒で SIGKILL)を送って止める。
+        """
+        pending = [task for task in self._tasks if not task.done()]
+        had_inflight = bool(pending)
+        try:
+            if pending and self._shutdown_grace > 0:
+                logger.info(
+                    "ingestion_worker_draining",
+                    extra={
+                        "worker_id": self.worker_id,
+                        "inflight": len(pending),
+                        "grace_seconds": self._shutdown_grace,
+                    },
+                )
+                _, still_running = await asyncio.wait(pending, timeout=self._shutdown_grace)
+                pending = list(still_running)
+            if pending:
+                logger.warning(
+                    "ingestion_worker_cancelling",
+                    extra={"worker_id": self.worker_id, "inflight": len(pending)},
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        finally:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            if had_inflight or self._interrupted_on_stop:
+                await self._requeue_leased_safely()
+
+    async def _requeue_leased_safely(self) -> None:
+        """止めた job を QUEUED に戻す。失敗したら lease の TTL 後に他の worker が回復する。"""
+        try:
+            requeued = await self._requeue_leased()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "ingestion_worker_requeue_leased_failed",
+                extra={"worker_id": self.worker_id, **oracle_error_log_fields(exc)},
+            )
+            return
+        if requeued:
+            logger.warning(
+                "ingestion_worker_requeued_leased_jobs",
+                extra={
+                    "worker_id": self.worker_id,
+                    "job_ids": [job.id for job in requeued],
+                },
+            )
 
 
 async def _mark_running_job_failed(job_id: str, *, error: Exception) -> None:

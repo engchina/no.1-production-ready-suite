@@ -88,7 +88,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ),
             },
         )
-        worker = IngestionQueueWorker(settings=settings)
+        # API プロセスの停止(uvicorn --reload・gunicorn の再起動)は待たせず、実行中の job の子を
+        # 止めて自分の lease の job を QUEUED に戻す(grace 0。#357)。専用 worker は grace まで待つ。
+        worker = IngestionQueueWorker(settings=settings, shutdown_grace_seconds=0.0)
         worker_stop = asyncio.Event()
         worker_task = asyncio.create_task(worker.run_forever(stop_event=worker_stop))
     elif (
