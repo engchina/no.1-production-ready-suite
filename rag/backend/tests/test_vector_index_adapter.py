@@ -55,5 +55,6 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
 
 
 def test_normalize_vector_index_profile_defaults() -> None:
-    assert normalize_vector_index_profile("nope") == "balanced"
+    # 未知の値は既定（高精度。#272）に倒す。
+    assert normalize_vector_index_profile("nope") == "accurate"
     assert normalize_vector_index_profile("fast") == "fast"

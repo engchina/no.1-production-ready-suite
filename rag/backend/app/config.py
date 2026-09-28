@@ -1035,10 +1035,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="Agentic アダプターが query variant へ注入する sub-question の上限。",
     )
     rag_vector_index_profile: VectorIndexProfile = Field(
-        default="balanced",
+        default="accurate",
         description=(
-            "索引/検索精度の Vector Index アダプター。balanced(既定)は"
-            "RAG_ORACLE_VECTOR_TARGET_ACCURACY をそのまま使い、accurate は高再現(98)、"
+            "索引/検索精度の Vector Index アダプター。balanced は"
+            "RAG_ORACLE_VECTOR_TARGET_ACCURACY をそのまま使い、accurate(既定。#272)は高再現(98)、"
             "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
             "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
         ),

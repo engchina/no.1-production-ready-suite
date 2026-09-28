@@ -3631,6 +3631,8 @@ def _oci_settings() -> Settings:
         oci_genai_embedding_dim=3,
         rag_min_similarity=0.05,
         oracle_vector_target_accuracy=90,
+        # 設定の target accuracy をそのまま使う balanced に固定する（既定は高精度。#272）。
+        rag_vector_index_profile="balanced",
         oracle_user="rag_app",
         oracle_password="oracle-password",
         oracle_dsn="adb.example.com/rag",

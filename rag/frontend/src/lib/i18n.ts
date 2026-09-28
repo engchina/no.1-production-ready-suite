@@ -950,9 +950,9 @@ export const ja = {
   "settings.vectorIndex.reprovisionBadge": "索引再作成が必要",
   "settings.vectorIndex.profile.balanced": "バランス",
   "settings.vectorIndex.profile.balanced.description":
-    "現行設定の target accuracy を使用(既定)",
+    "現行設定の target accuracy を使用",
   "settings.vectorIndex.profile.accurate": "高精度",
-  "settings.vectorIndex.profile.accurate.description": "target accuracy 98。高再現・やや低速",
+  "settings.vectorIndex.profile.accurate.description": "target accuracy 98。高再現・やや低速(既定)",
   "settings.vectorIndex.profile.fast": "高速",
   "settings.vectorIndex.profile.fast.description": "target accuracy 85。低レイテンシ",
   "settings.vectorIndex.actions.save": "保存",
