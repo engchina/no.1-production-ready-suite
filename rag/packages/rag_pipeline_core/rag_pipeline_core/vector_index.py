@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 VECTOR_INDEX_PROFILES: tuple[str, ...] = ("balanced", "accurate", "fast")
-DEFAULT_VECTOR_INDEX_PROFILE = "balanced"
+DEFAULT_VECTOR_INDEX_PROFILE = "accurate"
 
 # 現行 schema DDL のビルドパラメータ(balanced 基準)。
 CURRENT_NEIGHBORS = 32

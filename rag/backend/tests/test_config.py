@@ -84,9 +84,9 @@ def test_unknown_guardrail_policy_is_rejected() -> None:
         Settings(rag_guardrail_policy="paranoid")
 
 
-def test_vector_index_profile_defaults_to_balanced() -> None:
-    """Vector Index アダプターの既定 balanced は現行挙動と一致させる。"""
-    assert Settings().rag_vector_index_profile == "balanced"
+def test_vector_index_profile_defaults_to_accurate() -> None:
+    """Vector Index アダプターの既定は高精度（accurate。検索時 target accuracy 98。#272）。"""
+    assert Settings().rag_vector_index_profile == "accurate"
 
 
 def test_unknown_vector_index_profile_is_rejected() -> None:
