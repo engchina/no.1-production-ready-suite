@@ -1079,6 +1079,68 @@ _DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
     }
 )
 _DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実行では使用できません。"
+# SELECT 実行で使える関数の allowlist(sqlglot が型付きで解析しない Oracle 組込み関数)。
+# sqlglot が型付きで解析する標準関数(COUNT / UPPER / CAST など)はここに無くても通る。
+# 利用者定義の関数・package 関数・object method(`APP.FN()` / `PKG.FN()` / `x.m()`)は、
+# 表スコープ判定を経ずに任意のデータを読めるため、NL2SQL_ALLOWED_USER_FUNCTIONS に
+# 登録したものだけ通す。
+_ORACLE_BUILTIN_FUNCTIONS = frozenset(
+    {
+        # 数値
+        "ABS", "ACOS", "ASIN", "ATAN", "ATAN2", "BITAND", "CEIL", "COS", "COSH", "EXP",
+        "FLOOR", "LN", "LOG", "MOD", "NANVL", "POWER", "REMAINDER", "ROUND", "SIGN", "SIN",
+        "SINH", "SQRT", "TAN", "TANH", "TRUNC", "WIDTH_BUCKET",
+        # 文字
+        "ASCII", "ASCIISTR", "CHR", "CONCAT", "INITCAP", "INSTR", "INSTRB", "INSTRC", "LENGTH",
+        "LENGTHB", "LENGTHC", "LOWER", "LPAD", "LTRIM", "NCHR", "NLS_INITCAP", "NLS_LOWER",
+        "NLS_UPPER", "NLSSORT", "REGEXP_COUNT", "REGEXP_INSTR", "REGEXP_LIKE", "REGEXP_REPLACE",
+        "REGEXP_SUBSTR", "REPLACE", "REVERSE", "RPAD", "RTRIM", "SOUNDEX", "SUBSTR", "SUBSTRB",
+        "SUBSTRC", "TRANSLATE", "TRIM", "UNISTR", "UPPER",
+        # 日時
+        "ADD_MONTHS", "CURRENT_DATE", "CURRENT_TIMESTAMP", "DBTIMEZONE", "EXTRACT",
+        "FROM_TZ", "LAST_DAY", "LOCALTIMESTAMP", "MONTHS_BETWEEN", "NEW_TIME", "NEXT_DAY",
+        "NUMTODSINTERVAL", "NUMTOYMINTERVAL", "ROUND_DATE", "SESSIONTIMEZONE", "SYS_EXTRACT_UTC",
+        "SYSDATE", "SYSTIMESTAMP", "TO_DSINTERVAL", "TO_YMINTERVAL", "TZ_OFFSET",
+        # 変換
+        "BIN_TO_NUM", "CAST", "CHARTOROWID", "CONVERT", "HEXTORAW", "RAWTOHEX", "ROWIDTOCHAR",
+        "TO_BINARY_DOUBLE", "TO_BINARY_FLOAT", "TO_BLOB", "TO_CHAR", "TO_CLOB", "TO_DATE",
+        "TO_NCHAR", "TO_NCLOB", "TO_NUMBER", "TO_TIMESTAMP", "TO_TIMESTAMP_TZ",
+        "VALIDATE_CONVERSION",
+        # 比較・NULL・条件
+        "COALESCE", "DECODE", "GREATEST", "LEAST", "LNNVL", "NULLIF", "NVL", "NVL2",
+        # 集計・分析
+        "ANY_VALUE", "APPROX_COUNT_DISTINCT", "APPROX_MEDIAN", "APPROX_PERCENTILE", "AVG",
+        "BIT_AND_AGG", "BIT_OR_AGG", "BIT_XOR_AGG", "CORR", "COUNT", "COVAR_POP", "COVAR_SAMP",
+        "CUME_DIST", "DENSE_RANK", "FIRST_VALUE", "GROUPING", "GROUPING_ID", "LAG", "LAST_VALUE",
+        "LEAD", "LISTAGG", "MAX", "MEDIAN", "MIN", "NTH_VALUE", "NTILE", "PERCENT_RANK",
+        "PERCENTILE_CONT", "PERCENTILE_DISC", "RANK", "RATIO_TO_REPORT", "REGR_AVGX",
+        "REGR_AVGY", "REGR_COUNT", "REGR_INTERCEPT", "REGR_R2", "REGR_SLOPE", "REGR_SXX",
+        "REGR_SXY", "REGR_SYY", "ROW_NUMBER", "STATS_MODE", "STDDEV", "STDDEV_POP",
+        "STDDEV_SAMP", "SUM", "VAR_POP", "VAR_SAMP", "VARIANCE",
+        # JSON(SQL/JSON 標準関数。表関数 JSON_TABLE は型付きで解析される)
+        "JSON_ARRAY", "JSON_ARRAYAGG", "JSON_OBJECT", "JSON_OBJECTAGG", "JSON_QUERY",
+        "JSON_SERIALIZE", "JSON_VALUE",
+        # その他
+        "CARDINALITY", "EMPTY_BLOB", "EMPTY_CLOB", "ORA_HASH", "STANDARD_HASH", "SYS_CONTEXT",
+        "SYS_GUID", "TABLE", "UID", "USER", "USERENV", "VSIZE",
+        # collection 式・XML 生成(XQuery を評価する XMLQUERY / XMLEXISTS は含めない)
+        "MULTISET", "XMLAGG", "XMLCAST", "XMLCONCAT", "XMLELEMENT", "XMLFOREST",
+        "XMLSERIALIZE", "XMLTYPE",
+    }
+)
+# リテラルから一覧を作るだけの Oracle 提供の collection 型(TABLE(SYS.ODCINUMBERLIST(1, 2)) など)。
+_ORACLE_BUILTIN_COLLECTION_TYPES = frozenset(
+    {
+        f"{owner}{name}"
+        for owner in ("", "SYS.")
+        for name in ("ODCIDATELIST", "ODCINUMBERLIST", "ODCIRAWLIST", "ODCIVARCHAR2LIST")
+    }
+)
+_XQUERY_DATA_ACCESS_RE = re.compile(r"\b(?:uri-)?(?:collection|doc)\s*\(|oradb:", re.IGNORECASE)
+_UNAPPROVED_FUNCTION_MESSAGE = (
+    "許可されていない関数です。利用者定義・package の関数は "
+    "NL2SQL_ALLOWED_USER_FUNCTIONS に登録したものだけ使用できます。"
+)
 _SQL_OBJECT_REF = r'(?:"[^"]+"|[a-zA-Z_][\w$#]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][\w$#]*))?'
 _FROM_JOIN_TABLE = re.compile(rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})", re.IGNORECASE)
 _FROM_JOIN_WITH_ALIAS = re.compile(
@@ -2767,6 +2829,54 @@ def _dangerous_oracle_function_names(sql: str) -> list[str]:
                     seen.add(candidate)
                     dangerous.append(candidate)
     return dangerous
+
+
+def _unapproved_function_names(sql: str, allowed_user_functions: Iterable[str]) -> list[str]:
+    """allowlist に無い関数呼び出し(sqlglot が型付きで解析しない呼び出し)を返す。"""
+    try:
+        import sqlglot
+        from sqlglot import exp
+        from sqlglot.errors import ErrorLevel
+    except ImportError:
+        return []
+
+    try:
+        statements = sqlglot.parse(
+            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+        )
+    except Exception:
+        return []
+
+    registered = {
+        ".".join(_normalize_identifier(part) for part in name.split("."))
+        for name in allowed_user_functions
+        if name.strip()
+    }
+    unapproved: list[str] = []
+    for statement in [item for item in statements if item is not None]:
+        # XQuery の collection()/doc() は oradb: URI で任意の表を読めるため XMLTABLE でも拒否する。
+        for xml_table in statement.find_all(exp.XMLTable):
+            if any(
+                _XQUERY_DATA_ACCESS_RE.search(str(literal.this))
+                for literal in xml_table.find_all(exp.Literal)
+            ) and "XMLTABLE" not in unapproved:
+                unapproved.append("XMLTABLE")
+        for node in statement.find_all(exp.Anonymous):
+            parent = node.parent
+            if isinstance(parent, exp.Dot) and parent.expression is node:
+                # schema / package 修飾の関数と object method は登録制
+                name = ".".join(_sqlglot_dotted_name_parts(parent, exp.Dot))
+                allowed = name in registered or name in _ORACLE_BUILTIN_COLLECTION_TYPES
+            else:
+                name = _sqlglot_name(node)
+                allowed = (
+                    name in _ORACLE_BUILTIN_FUNCTIONS
+                    or name in _ORACLE_BUILTIN_COLLECTION_TYPES
+                    or name in registered
+                )
+            if not allowed and name and name not in unapproved:
+                unapproved.append(name)
+    return unapproved
 
 
 def _dangerous_oracle_function_blocked_message(names: Sequence[str]) -> str:
@@ -7514,6 +7624,13 @@ class Nl2SqlService:
         bind_placeholder_names = (
             _bind_placeholder_names(sql) if graph is not None and select_only else []
         )
+        unapproved_function_names = (
+            _unapproved_function_names(
+                sql, get_settings().nl2sql_allowed_user_functions.split(",")
+            )
+            if graph is not None and select_only
+            else []
+        )
         warnings: list[str] = []
         blocked_reason = ""
         if graph is None:
@@ -7526,6 +7643,10 @@ class Nl2SqlService:
             blocked_reason = _dangerous_oracle_function_blocked_message(dangerous_function_names)
         elif bind_placeholder_names:
             blocked_reason = _bind_placeholder_blocked_message(bind_placeholder_names)
+        elif unapproved_function_names:
+            blocked_reason = (
+                f"{', '.join(unapproved_function_names)}: {_UNAPPROVED_FUNCTION_MESSAGE}"
+            )
         hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
         if not blocked_reason and hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)

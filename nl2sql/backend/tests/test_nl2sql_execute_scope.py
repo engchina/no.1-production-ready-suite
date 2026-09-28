@@ -588,3 +588,58 @@ def test_colon_inside_literal_is_not_a_bind_variable() -> None:
     )
 
     assert analysis.safety.is_safe, analysis.safety.blocked_reason
+
+
+@pytest.mark.parametrize(
+    ("sql", "name"),
+    [
+        ("SELECT APP.FN(ID) FROM APP.ORDERS", "APP.FN"),
+        ("SELECT FN(ID) FROM APP.ORDERS", "FN"),
+        ("SELECT * FROM TABLE(APP.READ_SALARY())", "APP.READ_SALARY"),
+        ("SELECT o.NAME.getclobval() FROM APP.ORDERS o", "O.NAME.GETCLOBVAL"),
+        (
+            "SELECT x.v FROM APP.ORDERS o, XMLTABLE("
+            "'for $i in fn:collection(\"oradb:/APP/SALARY\") return $i' "
+            "COLUMNS v VARCHAR2(10) PATH 'v') x",
+            "XMLTABLE",
+        ),
+        ("SELECT XMLQUERY('1') FROM APP.ORDERS", "XMLQUERY"),
+    ],
+)
+def test_unregistered_user_functions_are_rejected(sql: str, name: str) -> None:
+    # 利用者定義・package の関数や XQuery の collection() は表スコープ判定を経ずにデータを読める。
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert analysis.safety.blocked_reason.startswith(f"{name}: 許可されていない関数です。")
+
+
+def test_oracle_builtin_functions_stay_allowed() -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+    sql = (
+        "SELECT LISTAGG(NAME, ',') WITHIN GROUP (ORDER BY NAME), REGEXP_SUBSTR(NAME, 'a'), "
+        "ADD_MONTHS(CREATED_AT, 1), NVL2(NAME, 1, 2), DECODE(ID, 1, 'a', 'b'), "
+        "TO_CHAR(CREATED_AT, 'YYYY'), SYS_CONTEXT('USERENV', 'LANG'), TRUNC(CREATED_AT), "
+        "NUMTODSINTERVAL(1, 'DAY'), MONTHS_BETWEEN(CREATED_AT, SYSDATE), COUNT(*) "
+        "FROM APP.ORDERS GROUP BY NAME, CREATED_AT, ID"
+    )
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+
+
+def test_registered_user_function_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "nl2sql_allowed_user_functions", " app.fn , UTIL.LABEL")
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    assert service.analyze_sql("SELECT APP.FN(ID) FROM APP.ORDERS", allowed, 10).safety.is_safe
+    blocked = service.analyze_sql("SELECT APP.OTHER(ID) FROM APP.ORDERS", allowed, 10)
+    assert blocked.safety.blocked_reason.startswith("APP.OTHER: 許可されていない関数です。")
