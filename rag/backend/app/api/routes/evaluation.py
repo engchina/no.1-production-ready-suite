@@ -97,6 +97,21 @@ async def compare_evaluation(
         ranking_metric=request.ranking_metric,
         thresholds=effective_thresholds,
     )
+    # /run と同じく、確定した評価スイートを各 experiment の metrics に残す。
+    comparison = comparison.model_copy(
+        update={
+            "results": [
+                result.model_copy(
+                    update={
+                        "metrics": result.metrics.model_copy(
+                            update={"evaluation_suite": suite_name}
+                        )
+                    }
+                )
+                for result in comparison.results
+            ]
+        }
+    )
     await _save_evaluation_artifact(
         request_summary=_compare_request_summary(request),
         result_summary=comparison.model_dump(mode="json"),

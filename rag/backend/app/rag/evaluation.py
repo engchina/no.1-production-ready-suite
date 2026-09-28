@@ -240,7 +240,10 @@ class EvaluationRunner:
             reciprocal_rank = 0.0
             if relevant:
                 hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
-                precision = len(hits) / evaluated_k
+                # precision@k は上位 evaluated_k 件の document だけで数える。隣接・同一 group の
+                # context 展開で citation が rerank_top_n より多くなっても 1.0 を超えない。
+                hits_at_k = [doc_id for doc_id in retrieved_ids[:evaluated_k] if doc_id in relevant]
+                precision = len(hits_at_k) / evaluated_k
                 recall = len(set(hits)) / len(relevant)
                 reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
             else:

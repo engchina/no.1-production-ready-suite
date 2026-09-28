@@ -968,6 +968,7 @@ class GuardrailSettingsData(BaseModel):
     policies: list[GuardrailPolicyStatusData] = Field(default_factory=list)
     backend: GuardrailBackendName = "local"
     oci_configured: bool = False
+    # OCI Guardrails を使う場合の readiness の問題(保存中の検査方式が local でも返す)。
     oci_warning_code: str | None = None
     config_source: Literal["runtime"]
 
