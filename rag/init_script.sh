@@ -57,6 +57,11 @@ NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
 UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/opt/uv/python}"
 BACKEND_UNIT="production-ready-rag-backend.service"
 WORKER_UNIT="production-ready-rag-ingestion-worker.service"
+# 取込 worker の停止: SIGTERM を受けたら実行中の job を grace まで待ち、終わらなければ子を止めて
+# （SIGTERM から 10 秒で SIGKILL）自分の lease の job を QUEUED に戻す（#357）。systemd の
+# TimeoutStopSec は grace + 子の停止待ち + 戻す DB の処理より長くする（テストで照合する）。
+WORKER_SHUTDOWN_GRACE_SECONDS=60
+WORKER_TIMEOUT_STOP_SEC=90
 # backend の RAG_MAX_UPLOAD_BYTES の既定値（rag/backend/app/config.py の max_upload_bytes。テストで照合する）。
 RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200
 # Nginx の client_max_body_size は backend の上限に multipart の境界・header の余白を足す（Refs #306）。
@@ -720,14 +725,15 @@ Restart=always
 RestartSec=5
 "
   # 取込キューの consumer はこの unit だけ（backend の in-process worker は上で無効にする）。
-  # SIGTERM は main process だけに送り、子プロセスは worker が後始末する（#305）。
+  # SIGTERM は main process だけに送り、子プロセスは worker が後始末する（#305 / #357）。
   write_backend_unit \
     "${SYSTEMD_UNIT_DIR}/${WORKER_UNIT}" \
     "Production Ready RAG ingestion worker" \
     "${BACKEND_DIR}/.venv/bin/python -m app.rag.ingestion_worker" \
-    "KillMode=mixed
+    "Environment=RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=${WORKER_SHUTDOWN_GRACE_SECONDS}
+KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=90
+TimeoutStopSec=${WORKER_TIMEOUT_STOP_SEC}
 Restart=on-failure
 RestartSec=5
 "

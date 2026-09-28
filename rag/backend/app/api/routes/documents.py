@@ -4824,15 +4824,20 @@ async def _run_ingestion_job(
     job_id: str,
     *,
     propagate_errors: bool = False,
+    lease_owner: str | None = None,
 ) -> None:
     """キュー投入済み取込 job を実行する。
 
     job の完了・失敗は RUNNING のときだけ書く(`transition_ingestion_job`)。cancel を検知したら
     (pipeline の途中でも、完了・失敗を書く直前でも)、文書・レシピの status を取り消し後の
     状態へ戻し、次工程は投入しない(#305)。
+    ``lease_owner`` は job を実行する取込 worker の識別子。claim で lease を取り、worker が
+    heartbeat を打つ(#357)。
     """
     oracle = OracleClient()
-    job = await oracle.claim_ingestion_job(job_id, started_at=datetime.now(UTC))
+    job = await oracle.claim_ingestion_job(
+        job_id, started_at=datetime.now(UTC), lease_owner=lease_owner
+    )
     if job is None:
         return
 

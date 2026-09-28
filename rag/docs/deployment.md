@@ -297,6 +297,22 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#357 取込 job の lease と heartbeat）
+
+取込 job（`rag_ingestion_jobs`）に lease の列（`lease_owner` / `heartbeat_at`）を追加し、実行中かどうかを
+「開始からの経過時間」ではなく worker の heartbeat で判定するようにした。長い job が実行中に再キューされる
+（worker が 1 つなら後ろの job が流れない・2 つ以上なら二重実行になる）ことと、worker の停止で job が
+`RUNNING` のまま残ることを防ぐ。
+
+1. システムテーブルを更新する（migration `20260928_004_ingestion_jobs_lease`。列と index
+   `rag_ingestion_jobs_lease_idx` を追加するだけで、既存の行は変えない）。更新するまで取込 worker は
+   「システムテーブルの作成・更新が必要」のログを出して待つ。
+2. 取込 worker を再起動する（Compute の stack では `init_script.sh` の再実行が unit を書き直して restart する）。
+   更新前から `RUNNING` の行は `heartbeat_at` が無いため、従来どおり `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS`
+   （開始から 300 秒）で回復する。
+3. `backend/.env` で `RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS` / `RAG_INGESTION_QUEUE_LEASE_TTL_SECONDS` を
+   変える場合は、TTL を間隔の 3 倍以上にする（満たさないと起動時にエラーになる）。
+
 ## 既存環境の更新手順（#341 文書のレシピ1の補完）
 
 以前は文書のレシピ1（`rag_document_recipes` の slot 1）を `GET /api/documents/{id}/recipes` の中で遅延して作っていた。
@@ -345,7 +361,7 @@ ADB（Oracle 26ai）と Wallet も stack が用意し（NL2SQL / Agent と共有
 | 実行ユーザー | 専用の system user `ragsvc`（home `/var/lib/production-ready-rag`）。リポジトリは `ubuntu` の所有で、`ubuntu` が git pull・uv sync・frontend の build を行う |
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
-| 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`TimeoutStopSec=90`） |
+| 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
 | 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 7 つ・parser-docling と、選べば parser-unstructured・OCI parser 2 つ）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
@@ -536,7 +552,19 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `rag-file-processing-staging` の promotion gate は、実測 metrics の合否に加えて中核閾値の弱体化も検査する。`table_qa_accuracy`、`page_hit_accuracy`、`retrieval_recall`、bbox / section / dependency / parser fallback 系の閾値が基準より緩い場合は `promotion_threshold_too_loose` で昇格を止める。
 - `rag-file-processing-staging` の metrics は staging gate の実測値に加えて、local contract で証明済みの `parser_routing_accuracy`、`parser_warning_taxonomy_coverage`、`reading_order_consistency`、`table_structure_fidelity`、`visual_chunk_metadata_completeness` などを同じ artifact に統合する。これにより OCI / Oracle が必要な gate と local parser/chunker で十分検証できる gate を分離しつつ、promotion 判定は 1 つの metrics payload で完結する。
 - file-processing staging の通常実行 payload には `chunk_template_scorecard` も含まれる。manifest の `expected_chunk_template` と staging/golden metrics を使い、`pdf_layout` / `office_slide` / `office_sheet` / `markdown_by_heading` / `html_semantic` / `email_thread` / `table_preserve_rows` / `ocr_page` などの template 健康度を評価する。`chunk_block_integrity`、`chunk_contextual_coherence`、`chunk_size_compliance` などの core 指標が低い場合は `chunk_template_scorecard_blocked` を promotion blocker として返す。さらに template ごとの expected / measured case count、covered / missing source kinds、covered / missing scenarios を artifact に残し、ある template の未測定を別 template の良好な aggregate 指標で隠さない。
-- `RAG_INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `RAG_INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` / `RAG_INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にできる。job の状態遷移（cancel・完了・失敗）は遷移元の status を条件にした UPDATE で行い、cancel 済み job を `SUCCEEDED` / `FAILED` で上書きせず、完了済み job を `CANCELLED` で上書きしない（後者は 409）。cancel API は job の状態だけを変え、文書・レシピの status は cancel を検知した worker が戻す（レシピの job はレシピ行だけを戻し、文書の status には触れない）。取り消した job の次工程は自動投入しない。`/api/documents/ingestion-jobs/{job_id}/retry` は、レシピの job なら同じレシピの job として再投入し、他のレシピの出力は初期化しない（#305）。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。取込中に Oracle の接続が一時的に切れた場合（python-oracledb の `is_session_dead` / `isrecoverable`。`DPY-4011` など）は、`attempt_count < RAG_INGESTION_JOB_MAX_ATTEMPTS` なら文書・レシピの status を工程の前に戻して job を `QUEUED` に戻し、再実行する（使い切ったら `FAILED`）。DB の transaction も、commit の前に接続が切れた場合だけ新しい接続で 1 回やり直す。ログ（`ingestion_job_failed` / `ingestion_job_requeued_transient_db_error` / `oracle_transaction_retry` / `oracle_rollback_failed`）には `oracle_error_code` と `full_code` を出す（#341）。
+- `RAG_INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `RAG_INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` / `RAG_INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にできる。job の状態遷移（cancel・完了・失敗）は遷移元の status を条件にした UPDATE で行い、cancel 済み job を `SUCCEEDED` / `FAILED` で上書きせず、完了済み job を `CANCELLED` で上書きしない（後者は 409）。cancel API は job の状態だけを変え、文書・レシピの status は cancel を検知した worker が戻す（レシピの job はレシピ行だけを戻し、文書の status には触れない）。取り消した job の次工程は自動投入しない。`/api/documents/ingestion-jobs/{job_id}/retry` は、レシピの job なら同じレシピの job として再投入し、他のレシピの出力は初期化しない（#305）。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。`RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` は heartbeat の無い `RUNNING` 行だけに使う（heartbeat のある行は下の lease の TTL。#357）。取込中に Oracle の接続が一時的に切れた場合（python-oracledb の `is_session_dead` / `isrecoverable`。`DPY-4011` など）は、`attempt_count < RAG_INGESTION_JOB_MAX_ATTEMPTS` なら文書・レシピの status を工程の前に戻して job を `QUEUED` に戻し、再実行する（使い切ったら `FAILED`）。DB の transaction も、commit の前に接続が切れた場合だけ新しい接続で 1 回やり直す。ログ（`ingestion_job_failed` / `ingestion_job_requeued_transient_db_error` / `oracle_transaction_retry` / `oracle_rollback_failed`）には `oracle_error_code` と `full_code` を出す（#341）。
+- `RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS` / `RAG_INGESTION_QUEUE_LEASE_TTL_SECONDS` / `RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS`（取込 worker の lease と停止。#357）:
+  - worker はプロセスごとに一意の識別子（`host:pid:乱数`）を持ち、job の claim で lease を取る（`rag_ingestion_jobs.lease_owner` / `heartbeat_at`）。
+    実行中は `HEARTBEAT_INTERVAL_SECONDS`（既定 15 秒）ごとに、自分の lease の `RUNNING` job の `heartbeat_at` を更新する。heartbeat は親の worker が打つ（process isolation の子は打たない）。
+  - stale の回復（worker の起動時と、アイドル時に `RAG_INGESTION_QUEUE_RECOVERY_INTERVAL_SECONDS` ごと）は、heartbeat が `LEASE_TTL_SECONDS`（既定 90 秒。間隔の 3 倍以上）を超えて途絶えた job だけを戻す。
+    自分の lease の job は戻さない。`heartbeat_at` の無い行（lease 導入前の行）は従来どおり `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` で判定する。job の長さの上限は job の timeout（`RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`）だけが持つ。
+    戻す UPDATE にも同じ条件を入れるため、回復の途中で heartbeat が打たれた job や完了した job は戻さない。
+  - dispatch は、同じ文書の別の job が `RUNNING` の `QUEUED` job（claim できない）と、自分が実行中の job を除いて古い順に取る。先頭の claim できない job で後ろの job が止まらない。
+  - 停止（SIGTERM / SIGINT）では新しい job を取らず、実行中の job の完了を `SHUTDOWN_GRACE_SECONDS`（既定 60 秒）まで待つ。終わらなければ子プロセスを止め（SIGTERM、10 秒で SIGKILL）、自分の lease の `RUNNING` job を `QUEUED` に戻す。
+    claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。
+  - API プロセス内の worker（`INPROCESS_WORKER_ENABLED=true`。ローカル開発の `uvicorn --reload` など）は停止を待たせないため grace 0 で、実行中の job の子をすぐ止めて `QUEUED` に戻す。
+  - systemd の worker unit は `KillMode=mixed`（SIGTERM は main process だけに送り、子は worker が止める）で、`TimeoutStopSec`（90 秒）を grace（unit で 60 秒に固定）+ 子の停止待ち 10 秒 + 戻す DB の処理より長くしている。grace を変えるときは `init_script.sh` の `WORKER_SHUTDOWN_GRACE_SECONDS` / `WORKER_TIMEOUT_STOP_SEC` を一緒に変える（テストで照合する）。
+  - worker が SIGKILL などで後始末できずに止まった場合は、lease の TTL 後に他の（または再起動した）worker が回復する。
 - `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一プロセスでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセスへ切り出す場合は `python -m app.rag.ingestion_worker` を別途起動する(本番は systemd の `production-ready-rag-ingestion-worker.service`)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、worker のプロセスを増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。

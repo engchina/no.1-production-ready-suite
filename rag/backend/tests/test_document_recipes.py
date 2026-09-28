@@ -529,7 +529,7 @@ class _FakeRecipeJobOracle:
         }
 
     async def claim_ingestion_job(
-        self, job_id: str, *, started_at: datetime
+        self, job_id: str, *, started_at: datetime, lease_owner: str | None = None
     ) -> IngestionJob | None:
         job = self.jobs.get(job_id)
         if job is None or job.status != IngestionJobStatus.QUEUED:

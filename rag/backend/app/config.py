@@ -521,7 +521,41 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="起動時に永続化済み QUEUED job と stale RUNNING job を自動回復する。",
     )
     ingestion_queue_startup_drain_limit: int = Field(default=50, ge=1, le=500)
-    ingestion_queue_stale_running_seconds: float = Field(default=300.0, gt=0.0, le=86400.0)
+    ingestion_queue_stale_running_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        le=86400.0,
+        description=(
+            "heartbeat の無い RUNNING job(lease 導入前の行・lease を持たない実行)を"
+            "stale とみなすまでの秒数。heartbeat のある job は"
+            "RAG_INGESTION_QUEUE_LEASE_TTL_SECONDS で判定する(#357)。"
+        ),
+    )
+    ingestion_queue_heartbeat_interval_seconds: float = Field(
+        default=15.0,
+        gt=0.0,
+        le=600.0,
+        description="取込 worker が自分の lease の RUNNING job に heartbeat を打つ間隔(秒)。#357",
+    )
+    ingestion_queue_lease_ttl_seconds: float = Field(
+        default=90.0,
+        gt=0.0,
+        le=3600.0,
+        description=(
+            "heartbeat がこの秒数途絶えた RUNNING job を、worker が止まったとみなして回復する。"
+            "heartbeat 間隔の 3 倍以上にする。job の長さの上限は job の timeout だけが持つ(#357)。"
+        ),
+    )
+    ingestion_queue_shutdown_grace_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=3600.0,
+        description=(
+            "取込 worker が停止(SIGTERM)を受けてから、実行中の job の完了を待つ上限(秒)。"
+            "超えたら子プロセスを止め、自分の lease の job を QUEUED に戻す(attempt は増やさない)。"
+            "systemd の TimeoutStopSec はこれより長くする(#357)。"
+        ),
+    )
     ingestion_queue_recovery_interval_seconds: float = Field(
         default=60.0,
         gt=0.0,
@@ -1781,6 +1815,22 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             if self.rag_graph_profile == "off":
                 self.rag_graph_profile = "full"
             self.rag_graph_enabled = False
+        return self
+
+    @model_validator(mode="after")
+    def validate_ingestion_queue_lease(self) -> Self:
+        """lease の TTL は heartbeat 間隔の 3 倍以上にする。
+
+        heartbeat が 1〜2 回失敗しただけで、他の worker に実行中の job を回復させないため(#357)。
+        """
+        if (
+            self.ingestion_queue_lease_ttl_seconds
+            < self.ingestion_queue_heartbeat_interval_seconds * 3
+        ):
+            raise ValueError(
+                "RAG_INGESTION_QUEUE_LEASE_TTL_SECONDS は "
+                "RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS の 3 倍以上にしてください。"
+            )
         return self
 
     @model_validator(mode="after")
