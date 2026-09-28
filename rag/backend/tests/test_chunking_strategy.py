@@ -7,6 +7,7 @@ from app.config import Settings
 from app.rag.chunking import CHUNKING_STRATEGIES, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import (
     CHUNKING_STRATEGY_ORDER,
+    DocragChunkingParams,
     chunking_runtime_settings,
     normalize_chunking_strategy,
     resolve_chunking_params,
@@ -46,7 +47,6 @@ def test_all_strategies_stamp_chunk_strategy_metadata() -> None:
             strategy=strategy,
             chunk_size=60,
             overlap=10,
-            child_size=30,
         )
         assert chunks, strategy
         assert all(chunk.metadata["chunk_strategy"] == strategy for chunk in chunks), strategy
@@ -73,24 +73,6 @@ def test_legacy_sentence_window_aliases_to_recursive_character() -> None:
     )
     assert chunks
     assert all(chunk.metadata["chunk_strategy"] == "recursive_character" for chunk in chunks)
-
-
-def test_hierarchical_parent_child_links_children_to_parent() -> None:
-    """hierarchical 戦略は子 chunk を親へ連結し、子は child_size に収まる。"""
-    extraction = _sample_extraction()
-    chunks = chunk_extraction_with_strategy(
-        extraction,
-        strategy="hierarchical_parent_child",
-        chunk_size=200,
-        overlap=0,
-        child_size=30,
-    )
-    assert chunks
-    assert all(chunk.metadata.get("chunk_level") == "child" for chunk in chunks)
-    assert all(chunk.metadata.get("chunk_group_kind") == "parent_child" for chunk in chunks)
-    assert all(chunk.metadata.get("parent_chunk_id") for chunk in chunks)
-    # 子 chunk は overlap を除いて child_size を大きく超えない。
-    assert all(len(chunk.text) <= 30 for chunk in chunks)
 
 
 def test_page_level_groups_by_page() -> None:
@@ -224,41 +206,6 @@ def test_structure_overlap_stays_inside_element_group_and_skips_table_boundary()
     assert not tables[1].text.startswith(tables[0].text[-2:].strip())
 
 
-def test_hierarchical_overlap_stays_inside_parent_group() -> None:
-    """子 chunk の overlap は同じ parent に限定し、次 parent へ持ち越さない。"""
-    extraction = StructuredExtraction(
-        elements=[
-            DocumentElement(
-                kind="text",
-                text="AAAA。BBBB。CCCC。",
-                section_path=["第一章"],
-            ),
-            DocumentElement(
-                kind="text",
-                text="DDDD。EEEE。FFFF。",
-                section_path=["第二章"],
-            ),
-        ]
-    )
-
-    chunks = chunk_extraction_with_strategy(
-        extraction,
-        strategy="hierarchical_parent_child",
-        chunk_size=200,
-        overlap=2,
-        child_size=10,
-    )
-    by_parent: dict[str, list[core_chunking.Chunk]] = {}
-    for chunk in chunks:
-        by_parent.setdefault(str(chunk.metadata["parent_chunk_id"]), []).append(chunk)
-
-    parents = list(by_parent.values())
-    assert len(parents) == 2
-    assert all(len(parent) >= 2 for parent in parents)
-    assert parents[0][1].text.startswith(parents[0][0].text[-2:].strip())
-    assert not parents[1][0].text.startswith(parents[0][-1].text[-2:].strip())
-
-
 def test_min_chars_absorbs_small_chunks() -> None:
     """min_chars 未満の微小 chunk は同一 group 内の隣接 chunk へ吸収する。"""
     extraction = _sample_extraction()
@@ -321,7 +268,6 @@ def test_resolve_chunking_params_reads_settings() -> None:
         rag_chunking_strategy="recursive_character",
         rag_chunk_size=1000,
         rag_chunk_overlap=80,
-        rag_chunk_child_size=250,
         rag_chunk_min_chars=30,
         rag_chunk_delimiter="---",
     )
@@ -329,9 +275,46 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.strategy == "recursive_character"
     assert params.chunk_size == 1000
     assert params.overlap == 80
-    assert params.child_size == 250
     assert params.min_chars == 30
     assert params.delimiter == "---"
+
+
+def test_chunking_strategy_order_puts_docrag_where_parent_child_was() -> None:
+    """DocRAG 親子階層は、削除した親子階層の位置(再帰文字分割の次)に並ぶ。"""
+    assert CHUNKING_STRATEGY_ORDER == (
+        "structure_aware",
+        "recursive_character",
+        "docrag_small_to_big",
+        "markdown_heading",
+        "page_level",
+        "fixed_size",
+        "fixed_delimiter",
+    )
+    assert "hierarchical_parent_child" not in CHUNKING_STRATEGIES
+
+
+def test_resolve_chunking_params_reads_docrag_params() -> None:
+    """DocRAG 親子階層の 5 項目を Settings から解決する。既定は rag_poc と同じ。"""
+    defaults = resolve_chunking_params(Settings(rag_chunking_strategy="docrag_small_to_big"))
+    assert defaults.strategy == "docrag_small_to_big"
+    assert defaults.docrag == DocragChunkingParams(
+        child_target_chars=1000,
+        table_child_target_chars=3000,
+        parent_target_chars=6000,
+        parent_max_pages=3,
+        parent_max_children=12,
+    )
+    custom = resolve_chunking_params(
+        Settings(
+            rag_chunking_strategy="docrag_small_to_big",
+            rag_docrag_child_target_chars=600,
+            rag_docrag_table_child_target_chars=1200,
+            rag_docrag_parent_target_chars=3000,
+            rag_docrag_parent_max_pages=2,
+            rag_docrag_parent_max_children=6,
+        )
+    )
+    assert custom.docrag == DocragChunkingParams(600, 1200, 3000, 2, 6)
 
 
 def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
@@ -348,3 +331,6 @@ def test_normalize_chunking_strategy_defaults_to_structure_aware() -> None:
     assert normalize_chunking_strategy("page_level") == "page_level"
     # 撤去済み戦略は後継へ読み替える。
     assert normalize_chunking_strategy("sentence_window") == "recursive_character"
+    # 削除した親子階層は DocRAG 親子階層として扱う(#271)。
+    assert normalize_chunking_strategy("hierarchical_parent_child") == "docrag_small_to_big"
+    assert normalize_chunking_strategy("docrag_small_to_big") == "docrag_small_to_big"

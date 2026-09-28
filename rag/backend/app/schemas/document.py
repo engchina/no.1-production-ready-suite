@@ -10,6 +10,16 @@ from app.config import (
     CHUNK_OVERLAP_MAX_CHARS,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
+    DOCRAG_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_CHILD_TARGET_CHARS_MIN,
+    DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    DOCRAG_PARENT_MAX_CHILDREN_MIN,
+    DOCRAG_PARENT_MAX_PAGES_MAX,
+    DOCRAG_PARENT_MAX_PAGES_MIN,
+    DOCRAG_PARENT_TARGET_CHARS_MAX,
+    DOCRAG_PARENT_TARGET_CHARS_MIN,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     ChunkingStrategy,
     ParserAdapterBackend,
     PreprocessProfile,
@@ -300,17 +310,37 @@ class ChunkSetExperimentRequest(BaseModel):
         le=CHUNK_SIZE_MAX_CHARS,
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    docrag_child_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
+    )
+    docrag_table_child_target_chars: int | None = Field(
+        default=None,
+        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    )
+    docrag_parent_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
+    )
+    docrag_parent_max_pages: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
+    )
+    docrag_parent_max_children: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
+    )
 
     _FIELD_TO_SETTING = {
         "chunking_strategy": "rag_chunking_strategy",
         "chunk_size": "rag_chunk_size",
         "chunk_overlap": "rag_chunk_overlap",
-        "chunk_child_size": "rag_chunk_child_size",
         "chunk_min_chars": "rag_chunk_min_chars",
         "chunk_delimiter": "rag_chunk_delimiter",
+        "docrag_child_target_chars": "rag_docrag_child_target_chars",
+        "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
+        "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
+        "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
+        "docrag_parent_max_children": "rag_docrag_parent_max_children",
     }
 
     @model_validator(mode="after")
@@ -338,18 +368,38 @@ class DocumentChunkPreviewRequest(BaseModel):
         le=CHUNK_SIZE_MAX_CHARS,
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    docrag_child_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
+    )
+    docrag_table_child_target_chars: int | None = Field(
+        default=None,
+        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    )
+    docrag_parent_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
+    )
+    docrag_parent_max_pages: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
+    )
+    docrag_parent_max_children: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
+    )
     chunk_context_header_enabled: bool | None = None
 
     _FIELD_TO_SETTING = {
         "chunking_strategy": "rag_chunking_strategy",
         "chunk_size": "rag_chunk_size",
         "chunk_overlap": "rag_chunk_overlap",
-        "chunk_child_size": "rag_chunk_child_size",
         "chunk_min_chars": "rag_chunk_min_chars",
         "chunk_delimiter": "rag_chunk_delimiter",
+        "docrag_child_target_chars": "rag_docrag_child_target_chars",
+        "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
+        "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
+        "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
+        "docrag_parent_max_children": "rag_docrag_parent_max_children",
         "chunk_context_header_enabled": "rag_chunk_context_header_enabled",
     }
 

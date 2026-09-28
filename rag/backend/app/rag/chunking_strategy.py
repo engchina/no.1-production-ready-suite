@@ -10,20 +10,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.config import ChunkingStrategy, Settings
+from app.config import (
+    DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
+    DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
+    DOCRAG_PARENT_MAX_PAGES_DEFAULT,
+    DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+    LEGACY_CHUNKING_STRATEGY_ALIASES,
+    ChunkingStrategy,
+    Settings,
+)
 from app.rag.chunking import CHUNKING_STRATEGIES
 
 ChunkingStrategyName = ChunkingStrategy
 DEFAULT_CHUNKING_STRATEGY: ChunkingStrategyName = "structure_aware"
+DOCRAG_CHUNKING_STRATEGY_NAME: ChunkingStrategyName = "docrag_small_to_big"
+# 画面の並び順。DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
 CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "structure_aware",
     "recursive_character",
-    "hierarchical_parent_child",
+    "docrag_small_to_big",
     "markdown_heading",
     "page_level",
     "fixed_size",
     "fixed_delimiter",
-    "docrag_small_to_big",
 )
 
 
@@ -34,7 +44,6 @@ class ChunkingStrategySpec:
     name: ChunkingStrategyName
     origin: str
     recommended_for: tuple[str, ...]
-    uses_child_size: bool = False
 
 
 CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
@@ -48,11 +57,11 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         origin="langchain_recursive_character",
         recommended_for=("text", "markdown"),
     ),
-    "hierarchical_parent_child": ChunkingStrategySpec(
-        name="hierarchical_parent_child",
-        origin="llamaindex_auto_merging",
-        recommended_for=("long_document", "report"),
-        uses_child_size=True,
+    # rag_poc(DocRAG)の Small-to-Big 親子分割。docling(DocRAG)の解析結果が必要。
+    "docrag_small_to_big": ChunkingStrategySpec(
+        name="docrag_small_to_big",
+        origin="docrag_small_to_big",
+        recommended_for=("pdf", "manual", "table", "screenshot"),
     ),
     "markdown_heading": ChunkingStrategySpec(
         name="markdown_heading",
@@ -74,13 +83,18 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         origin="fixed_delimiter_split",
         recommended_for=("text", "custom_separator"),
     ),
-    # rag_poc(DocRAG)の Small-to-Big。docling(DocRAG)の解析結果が必要。
-    "docrag_small_to_big": ChunkingStrategySpec(
-        name="docrag_small_to_big",
-        origin="docrag_small_to_big",
-        recommended_for=("pdf", "manual", "table", "screenshot"),
-    ),
 }
+
+
+@dataclass(frozen=True)
+class DocragChunkingParams:
+    """DocRAG 親子階層の分割パラメータ(docrag.chunking.constants.ChunkingConfig の 5 項目)。"""
+
+    child_target_chars: int = DOCRAG_CHILD_TARGET_CHARS_DEFAULT
+    table_child_target_chars: int = DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT
+    parent_target_chars: int = DOCRAG_PARENT_TARGET_CHARS_DEFAULT
+    parent_max_pages: int = DOCRAG_PARENT_MAX_PAGES_DEFAULT
+    parent_max_children: int = DOCRAG_PARENT_MAX_CHILDREN_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -90,9 +104,9 @@ class ChunkingStrategyParams:
     strategy: ChunkingStrategyName
     chunk_size: int
     overlap: int
-    child_size: int
     min_chars: int
     delimiter: str
+    docrag: DocragChunkingParams = DocragChunkingParams()
 
 
 @dataclass(frozen=True)
@@ -103,7 +117,6 @@ class ChunkingStrategyStatus:
     origin: str
     recommended_for: tuple[str, ...]
     selected: bool
-    uses_child_size: bool
 
 
 @dataclass(frozen=True)
@@ -113,25 +126,44 @@ class ChunkingRuntimeSettings:
     strategy: ChunkingStrategyName
     chunk_size: int
     overlap: int
-    child_size: int
     min_chars: int
     delimiter: str
+    docrag: DocragChunkingParams
     strategies: tuple[ChunkingStrategyStatus, ...]
 
 
-# 撤去済み戦略の既存設定は後継戦略へ読み替える
-_LEGACY_STRATEGY_ALIASES: dict[str, ChunkingStrategyName] = {
-    "sentence_window": "recursive_character",
-}
-
-
 def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
-    """未知の戦略名は既定 structure_aware へ寄せる。撤去済み戦略は後継へ読み替える。"""
-    normalized = str(value).casefold()
-    normalized = _LEGACY_STRATEGY_ALIASES.get(normalized, normalized)
-    if normalized in CHUNKING_STRATEGIES or normalized == "docrag_small_to_big":
+    """未知の戦略名は既定 structure_aware へ寄せる。削除した戦略は後継へ読み替える。"""
+    normalized = str(value).strip().casefold()
+    normalized = LEGACY_CHUNKING_STRATEGY_ALIASES.get(normalized, normalized)
+    if normalized in CHUNKING_STRATEGIES or normalized == DOCRAG_CHUNKING_STRATEGY_NAME:
         return normalized  # type: ignore[return-value]
     return DEFAULT_CHUNKING_STRATEGY
+
+
+def resolve_docrag_chunking_params(settings: Settings) -> DocragChunkingParams:
+    """Settings から DocRAG 親子階層の分割パラメータを解決する。"""
+    return DocragChunkingParams(
+        child_target_chars=int(
+            getattr(settings, "rag_docrag_child_target_chars", DOCRAG_CHILD_TARGET_CHARS_DEFAULT)
+        ),
+        table_child_target_chars=int(
+            getattr(
+                settings,
+                "rag_docrag_table_child_target_chars",
+                DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+            )
+        ),
+        parent_target_chars=int(
+            getattr(settings, "rag_docrag_parent_target_chars", DOCRAG_PARENT_TARGET_CHARS_DEFAULT)
+        ),
+        parent_max_pages=int(
+            getattr(settings, "rag_docrag_parent_max_pages", DOCRAG_PARENT_MAX_PAGES_DEFAULT)
+        ),
+        parent_max_children=int(
+            getattr(settings, "rag_docrag_parent_max_children", DOCRAG_PARENT_MAX_CHILDREN_DEFAULT)
+        ),
+    )
 
 
 def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
@@ -142,9 +174,9 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
         ),
         chunk_size=int(getattr(settings, "rag_chunk_size", 800)),
         overlap=int(getattr(settings, "rag_chunk_overlap", 120)),
-        child_size=int(getattr(settings, "rag_chunk_child_size", 320)),
         min_chars=int(getattr(settings, "rag_chunk_min_chars", 120)),
         delimiter=str(getattr(settings, "rag_chunk_delimiter", "\\n\\n")).strip(),
+        docrag=resolve_docrag_chunking_params(settings),
     )
 
 
@@ -157,7 +189,6 @@ def chunking_runtime_settings(settings: Settings) -> ChunkingRuntimeSettings:
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.strategy,
-            uses_child_size=spec.uses_child_size,
         )
         for spec in (CHUNKING_STRATEGY_SPECS[name] for name in CHUNKING_STRATEGY_ORDER)
     )
@@ -165,8 +196,8 @@ def chunking_runtime_settings(settings: Settings) -> ChunkingRuntimeSettings:
         strategy=params.strategy,
         chunk_size=params.chunk_size,
         overlap=params.overlap,
-        child_size=params.child_size,
         min_chars=params.min_chars,
         delimiter=params.delimiter,
+        docrag=params.docrag,
         strategies=statuses,
     )
