@@ -10,7 +10,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, field_validator
 
 from app.rag.business_view_config import BusinessViewConfig
-from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.knowledge_base import KnowledgeBaseRef, KnowledgeBaseStatus
 
 DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT"
 
@@ -29,12 +29,26 @@ class BusinessViewRef(BaseModel):
     name: str
 
 
+class BusinessViewKnowledgeBaseRef(KnowledgeBaseRef):
+    """業務ビューが参照する KB の {id, name, status}(アーカイブ済みを含む)。"""
+
+    status: KnowledgeBaseStatus
+
+
 class BusinessViewSummary(BusinessViewRef):
     """一覧表示用の業務ビュー要約。"""
 
     description: str | None = None
     status: BusinessViewStatus
     knowledge_base_count: int = 0
+    archived_knowledge_base_count: int = Field(
+        default=0,
+        description="参照 KB のうちアーカイブ済みの件数(検索対象にならない。#302)。",
+    )
+    missing_knowledge_base_count: int = Field(
+        default=0,
+        description="参照 KB のうち tenant に存在しない件数(検索対象にならない。#302)。",
+    )
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None = None
@@ -44,9 +58,15 @@ class BusinessViewDetail(BusinessViewSummary):
     """詳細表示用の業務ビュー情報。"""
 
     config: BusinessViewConfig = Field(default_factory=BusinessViewConfig)
-    knowledge_bases: list[KnowledgeBaseRef] = Field(
+    knowledge_bases: list[BusinessViewKnowledgeBaseRef] = Field(
         default_factory=list,
-        description="参照 KB の解決済み一覧(存在する KB のみ。名前表示用)。",
+        description=(
+            "参照 KB の解決済み一覧(存在する KB のみ。アーカイブ済みを含み、status で見分ける)。"
+        ),
+    )
+    missing_knowledge_base_ids: list[str] = Field(
+        default_factory=list,
+        description="参照 KB のうち tenant に存在しない ID(#302)。",
     )
 
 
