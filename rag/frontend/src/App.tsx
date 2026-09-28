@@ -28,7 +28,6 @@ import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/Know
 import { KnowledgeBaseDetailClient } from "@/components/knowledge-bases/KnowledgeBaseDetailClient";
 import { BusinessViewManagementClient } from "@/components/business-views/BusinessViewManagementClient";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
@@ -204,10 +203,7 @@ function AppLayout() {
       mainClassName="min-h-0"
       skipLinkLabel={t("common.skipToMain")}
       sidebar={
-        <>
-          <Sidebar />
-          <CommandPalette />
-        </>
+        <Sidebar />
       }
     >
       <DatabaseGate>

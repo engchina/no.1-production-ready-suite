@@ -34,6 +34,7 @@ export const AUTH_MESSAGES = {
   sidebarPassword: "パスワード変更",
   sidebarLogout: "ログアウト",
   sidebarRoles: "ロール: {roles}",
+  sidebarDebugMode: "ログイン省略",
 };
 
 export type AuthMessages = typeof AUTH_MESSAGES;

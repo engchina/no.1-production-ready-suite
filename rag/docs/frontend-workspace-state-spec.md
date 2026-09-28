@@ -4,7 +4,7 @@
 
 ## 未保存変更の離脱ガード
 
-共有パッケージ `@engchina/production-ready-system-settings` の `useSettingsDraftGuard` / `useUnsavedChangesGuard` を、`src/lib/leave-guard.ts` の `useLeaveGuard` / `useCustomLeaveGuard` 経由で使う。dirty のときだけ、内部リンク（サイドナビを含む）・再読込・タブを閉じる操作を確認する。`navigate()` で移動するコマンドパレットとログアウトは、先に `confirmPendingLeave()` で同じ確認を通す。保存に成功したら、サーバーの値（または保存後の入力）を基準に dirty を判定し直す。
+共有パッケージ `@engchina/production-ready-system-settings` の `useSettingsDraftGuard` / `useUnsavedChangesGuard` を、`src/lib/leave-guard.ts` の `useLeaveGuard` / `useCustomLeaveGuard` 経由で使う。dirty のときだけ、内部リンク（サイドナビを含む）・再読込・タブを閉じる操作を確認する。`navigate()` で移動するログアウトは、先に `confirmPendingLeave()` で同じ確認を通す。保存に成功したら、サーバーの値（または保存後の入力）を基準に dirty を判定し直す。
 
 | 画面 | dirty の判定 |
 |---|---|
