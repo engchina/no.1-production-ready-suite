@@ -40,6 +40,7 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_system_settings.database import build_database_router
+from pr_system_settings.database_status import build_database_status_router
 from pr_system_settings.model import (
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -500,6 +501,15 @@ router.include_router(
         action_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
+)
+# DB の状態 API（`GET /api/ready/database`。3製品共通の判定と契約。#325）。画面の DB ゲートが使う。
+# ログイン不要の公開 path（`app.security.permissions.PUBLIC_API_PATHS`）。Agent は製品の
+# システムテーブルの確認（schema_probe）をまだ持たないため、設定の判定と接続確認だけを行う。
+router.include_router(
+    build_database_status_router(
+        get_settings=lambda: get_settings(),
+        test_connection=lambda settings: _test_database_connection(settings),
+    )
 )
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
 # 接続テストは外部へ通信するため管理者に限定する。

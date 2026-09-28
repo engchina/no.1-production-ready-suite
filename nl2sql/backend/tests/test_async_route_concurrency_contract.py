@@ -18,7 +18,6 @@ from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import DbAdminObjectsData, SchemaObjectPage
 from app.features.schema import router as schema_router
 from app.main import app
-from app.readiness import READINESS_OK
 from app.settings import get_settings
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -302,11 +301,12 @@ def test_blocked_database_ready_route_does_not_block_security_api(
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "oracle")
-    monkeypatch.setattr(
-        health_routes,
-        "oracle_readiness_check",
-        lambda _settings: READINESS_OK,
-    )
+    # platform の database_readiness（#325）が ok になる Walletless TLS の設定。
+    monkeypatch.setattr(settings, "oracle_user", "APP")
+    monkeypatch.setattr(settings, "oracle_password", "secret")
+    monkeypatch.setattr(settings, "oracle_dsn", "adb.example.oraclecloud.com:1522/service_high")
+    monkeypatch.setattr(settings, "oracle_connection_security", "walletless_tls")
+    monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
 
     async def async_oracle_probe(_settings: object) -> None:
         return None

@@ -56,8 +56,19 @@ class _ControllableStore:
         return (not self.fail_load, "ok" if not self.fail_load else "unreachable")
 
 
+# Walletless TLS の DSN は Wallet の別名ではなく TCPS 接続文字列 / Easy Connect にする（#325）。
+WALLETLESS_DSN = "adb.example.oraclecloud.com:1522/service_high"
+
+
 def _settings(**updates: Any) -> Any:
     return get_settings().model_copy(update=updates)
+
+
+def _status_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """3製品共通の応答（#325）のうち、NL2SQL が値を返す項目だけを取り出す。"""
+    assert data["schema_status"] is None
+    assert data["adb_lifecycle_state"] is None
+    return {key: data[key] for key in ("status", "check", "detail")}
 
 
 async def _get_database_status() -> httpx.Response:
@@ -91,9 +102,11 @@ async def test_database_ready_allows_deterministic_memory_without_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {"status": "ok", "check": "ok", "detail": "memory"}
+    assert _status_fields(response.json()["data"]) == {
+        "status": "ok",
+        "check": "ok",
+        "detail": "memory",
+    }
     assert called is False
 
 
@@ -122,9 +135,7 @@ async def test_database_ready_reports_not_configured_without_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {
+    assert _status_fields(response.json()["data"]) == {
         "status": "not_configured",
         "check": "missing",
         "detail": None,
@@ -207,11 +218,64 @@ async def test_database_ready_wallet_mtls_missing_files_skips_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {
+    assert _status_fields(response.json()["data"]) == {
         "status": "not_configured",
         "check": READINESS_WALLET_NOT_FOUND,
+        "detail": None,
+    }
+    assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("updates", "check"),
+    [
+        # システム設定画面と同じ判定（#325）: Walletless TLS で Wallet の別名は使えない。
+        (
+            {"oracle_connection_security": "walletless_tls", "oracle_dsn": "service_high"},
+            "walletless_tls_dsn_required",
+        ),
+        # DeepSec は Thin mode だけ対応する（NL2SQL 固有の判定を注入している）。
+        (
+            {
+                "oracle_connection_security": "walletless_tls",
+                "oracle_dsn": WALLETLESS_DSN,
+                "oracle_deepsec_enabled": True,
+                "oracle_driver_mode": "thick",
+            },
+            "invalid_configuration",
+        ),
+    ],
+)
+async def test_database_ready_uses_system_settings_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    updates: dict[str, Any],
+    check: str,
+) -> None:
+    called = False
+
+    async def probe(_settings: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        health_routes,
+        "get_settings",
+        lambda: _settings(
+            nl2sql_runtime_mode="oracle",
+            nl2sql_persistence_mode="oracle",
+            oracle_user="APP",
+            oracle_password="secret",
+            **updates,
+        ),
+    )
+    monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
+
+    response = await _get_database_status()
+
+    assert _status_fields(response.json()["data"]) == {
+        "status": "not_configured",
+        "check": check,
         "detail": None,
     }
     assert called is False
@@ -248,7 +312,7 @@ async def test_database_ready_redacts_probe_failures(
             nl2sql_persistence_mode="oracle",
             oracle_user="APP",
             oracle_password="secret",
-            oracle_dsn="service_high",
+            oracle_dsn=WALLETLESS_DSN,
             oracle_connection_security="walletless_tls",
         ),
     )
@@ -257,9 +321,7 @@ async def test_database_ready_redacts_probe_failures(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {
+    assert _status_fields(response.json()["data"]) == {
         "status": "unreachable",
         "check": "ok",
         "detail": detail,
@@ -286,7 +348,7 @@ async def test_database_ready_reports_successful_oracle_probe(
             nl2sql_persistence_mode="oracle",
             oracle_user="APP",
             oracle_password="secret",
-            oracle_dsn="service_high",
+            oracle_dsn=WALLETLESS_DSN,
             oracle_connection_security="walletless_tls",
         ),
     )
@@ -300,9 +362,11 @@ async def test_database_ready_reports_successful_oracle_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {"status": "ok", "check": "ok", "detail": None}
+    assert _status_fields(response.json()["data"]) == {
+        "status": "ok",
+        "check": "ok",
+        "detail": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -320,7 +384,7 @@ async def test_database_ready_distinguishes_pending_migration_from_connection_se
             nl2sql_persistence_mode="oracle",
             oracle_user="APP",
             oracle_password="secret",
-            oracle_dsn="service_high",
+            oracle_dsn=WALLETLESS_DSN,
             oracle_connection_security="walletless_tls",
         ),
     )
@@ -337,9 +401,7 @@ async def test_database_ready_distinguishes_pending_migration_from_connection_se
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json()["data"].items() if key != "context_id"
-    } == {
+    assert _status_fields(response.json()["data"]) == {
         "status": "setup_required",
         "check": "migration_required",
         "detail": "migration 3 is required",

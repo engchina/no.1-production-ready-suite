@@ -42,6 +42,7 @@ uv run bandit -r app          # セキュリティ
 |---|---|
 | `GET /api/health` | 稼働確認。OCI 前提の稼働 message を返す |
 | `GET /api/ready` | 依存設定を含む readiness。未設定時は 503 |
+| `GET /api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要） |
 | `POST /api/documents/upload` | ドキュメントファイルを Object Storage 境界へ保存 |
 | `GET /api/documents?status=UPLOADED&q=manual&limit=50&offset=0` | 文書一覧をページング・状態・ファイル名で絞り込み |
 | `GET /api/documents/stats` | 状態別ドキュメント件数を取得 |
@@ -124,7 +125,20 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 `GET /api/ready` は外部 API へ ping せず、デプロイ時に注入される設定を依存グループ単位で検証します。
 
-checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
+checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`ok` 以外の値が含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle の判定はシステム設定 > データベースと同じ platform の `database_readiness` です（#325）。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に接続用の Wallet ファイル（Thin: `tnsnames.ora` / `ewallet.pem`、Thick: `tnsnames.ora` / `sqlnet.ora` / `cwallet.sso`）がそろい、暗号化された `ewallet.pem` を `PLATFORM_ORACLE_WALLET_PASSWORD`（無ければ `PLATFORM_ORACLE_PASSWORD`）で復号でき、DSN が Wallet の別名なら `tnsnames.ora` にあることを要求します。値は `ok` / `missing` / `wallet_not_found` / `wallet_password_invalid` / `invalid` です。
+以前の RAG は DB パスワードがあれば Wallet を見ずに `ok` としていましたが、#325 からは **DB パスワードがあっても Wallet が不備なら `wallet_not_found`（DB の状態 API では `not_configured`）** になります。既存環境で `/api/ready` が 503 になった場合は、システム設定 > データベースで Wallet を登録し直してください。
+レスポンスには設定値や secret は含めません。
+
+## DB の状態（`GET /api/ready/database`）
+
+画面の DB ゲートが「設定画面以外」を開く前に参照します。3製品共通の部品（`pr_system_settings.database_status`。#325）で、常に HTTP 200 を返し、`status` で `ok` / `not_configured` / `unreachable` / `setup_required` を区別します。応答は `{status, check, detail, context_id, schema_status, adb_lifecycle_state}` です。
+
+1. 設定の判定（上の Readiness の `oracle` と同じ）が `ok` でなければ `not_configured`（接続は試さない）
+2. `test_oracle_connection` の bounded な接続確認に失敗すれば `unreachable`
+3. RAG の system schema が `ready` でない（または作成・更新の実行中）なら `setup_required`（`schema_status` に `missing` / `partial` / `outdated`）。状態を読めなければ `setup_required`（`check=schema_check_failed`）
+4. それ以外は `ok`
+
+ログイン不要の path なので、`detail` には接続先・資格情報・Wallet の path を含めず、ORA / DPY / DPI のコードだけを返します（#320）。
 
 ## Oracle 26ai schema
 

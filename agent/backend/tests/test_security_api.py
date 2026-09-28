@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -251,9 +252,20 @@ def test_production_without_cookie_and_rbac_disabled_is_401(auth: ProductionAuth
     assert client.get("/api/runs").json()["error_messages"] == ["ログインしてください。"]
 
 
-def test_production_public_paths_do_not_require_login(auth: ProductionAuth) -> None:
+def test_production_public_paths_do_not_require_login(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/ready").status_code == 200
+    # DB の状態 API は画面の DB ゲートがログイン前に使う（#325）。接続設定が無ければ接続を試さない。
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(oracle_user="", oracle_dsn="", oracle_wallet_dir=""),
+    )
+    response = client.get("/api/ready/database")
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "not_configured"
     # 未定義の path は認証の前に 404。
     assert client.get("/api/not-defined").status_code == 404
 

@@ -806,6 +806,99 @@ def test_ready() -> None:
     assert resp.json()["data"]["status"] == "ok"
 
 
+def _database_status_settings(wallet_dir: str = "", **overrides: object) -> SimpleNamespace:
+    """DB の状態 API（#325）が読む属性だけを持つ Settings。"""
+    values: dict[str, object] = {
+        "oracle_user": "AGENT_APP",
+        "oracle_password": "db-secret-password",
+        "oracle_dsn": "agentdb_high",
+        "oracle_wallet_dir": wallet_dir,
+        "resolved_oracle_wallet_dir": wallet_dir,
+        "oracle_wallet_password": "",
+        "oracle_driver_mode": "thin",
+        "oracle_connection_security": "wallet_mtls",
+        "oracle_tcp_connect_timeout_seconds": 1.0,
+        "oracle_db_test_timeout_seconds": 1.0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _write_agent_wallet(wallet_dir: Path) -> str:
+    wallet_dir.mkdir(parents=True, exist_ok=True)
+    (wallet_dir / "tnsnames.ora").write_text(
+        "agentdb_high = (description=(address=(protocol=tcps)(port=1522)(host=adb)))\n",
+        encoding="utf-8",
+    )
+    (wallet_dir / "ewallet.pem").write_text(
+        "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n", encoding="utf-8"
+    )
+    return str(wallet_dir)
+
+
+def test_database_status_not_configured_skips_connection(monkeypatch: MonkeyPatch) -> None:
+    """Wallet が無ければ、パスワードがあっても接続を試さず not_configured（共通の判定）。"""
+    called: list[object] = []
+
+    async def must_not_connect(candidate: object) -> None:
+        called.append(candidate)
+
+    monkeypatch.setattr(agent_router, "get_settings", lambda: _database_status_settings())
+    monkeypatch.setattr(agent_router, "_test_database_connection", must_not_connect)
+
+    resp = client.get("/api/ready/database")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "not_configured"
+    assert data["check"] == "wallet_not_found"
+    assert data["schema_status"] is None
+    assert called == []
+
+
+def test_database_status_ok_after_connection(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """設定がそろい接続できれば ok（Agent は schema_probe をまだ持たない）。"""
+    settings = _database_status_settings(_write_agent_wallet(tmp_path / "wallet"))
+    called: list[object] = []
+
+    async def connect(candidate: object) -> None:
+        called.append(candidate)
+
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(agent_router, "_test_database_connection", connect)
+
+    data = client.get("/api/ready/database").json()["data"]
+
+    assert data["status"] == "ok"
+    assert data["check"] == "ok"
+    assert len(data["context_id"]) == 64
+    assert called == [settings]
+
+
+def test_database_status_unreachable_does_not_leak_connection_details(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _database_status_settings(_write_agent_wallet(tmp_path / "wallet"))
+
+    async def fail(_candidate: object) -> None:
+        raise RuntimeError(
+            "ORA-12506: listener at adb.example.oraclecloud.com:1522 rejected AGENT_APP "
+            "for service agentdb_high"
+        )
+
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(agent_router, "_test_database_connection", fail)
+
+    body = client.get("/api/ready/database").json()
+
+    assert body["data"]["status"] == "unreachable"
+    assert body["data"]["detail"] == "Oracle connection probe failed (ORA-12506)."
+    text = json.dumps(body)
+    for secret in ("adb.example.oraclecloud.com", "AGENT_APP", "agentdb_high", str(tmp_path)):
+        assert secret not in text
+
+
 def test_oci_settings_defaults_match_rag_when_credentials_missing(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
