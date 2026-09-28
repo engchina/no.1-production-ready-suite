@@ -19,7 +19,7 @@ import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
-from app.clients.oracle import OracleClient, close_oracle_pool
+from app.clients.oracle import OracleClient, close_oracle_pool, oracle_error_log_fields
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
 from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
@@ -232,8 +232,10 @@ class IngestionQueueWorker:
             recovered = await self._recover_stale()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("ingestion_worker_stale_recovery_failed")
+        except Exception as exc:
+            logger.exception(
+                "ingestion_worker_stale_recovery_failed", extra=oracle_error_log_fields(exc)
+            )
             return
         if recovered:
             logger.info(
@@ -250,8 +252,8 @@ class IngestionQueueWorker:
             jobs = await self._fetch_queued(free)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("ingestion_worker_fetch_failed")
+        except Exception as exc:
+            logger.exception("ingestion_worker_fetch_failed", extra=oracle_error_log_fields(exc))
             return 0
         dispatched = 0
         for job in jobs:
@@ -273,7 +275,10 @@ class IngestionQueueWorker:
             raise
         except Exception as exc:
             await _mark_running_job_failed(job_id, error=exc)
-            logger.exception("ingestion_worker_job_failed", extra={"job_id": job_id})
+            logger.exception(
+                "ingestion_worker_job_failed",
+                extra={"job_id": job_id, **oracle_error_log_fields(exc)},
+            )
         finally:
             self._inflight.discard(job_id)
             # スロットが空いたので次サイクルを即座に回す。

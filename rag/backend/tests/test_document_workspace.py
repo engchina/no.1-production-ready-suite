@@ -223,6 +223,13 @@ class FakeWorkspaceOracle:
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
 
+    async def document_exists(self, document_id: str) -> bool:
+        return document_id in self.documents
+
+    async def get_document_summary(self, document_id: str) -> DocumentDetail | None:
+        # 実装は JSON 列を読まない DocumentSummary を返す。fake は詳細(その上位型)で代用する。
+        return self.documents.get(document_id)
+
     async def save_review_extraction(
         self,
         document_id: str,

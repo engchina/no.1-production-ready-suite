@@ -25,7 +25,7 @@ Agent Control Plane の画面は、RAG / NL2SQL と同じ共通認証（platform
 `/api` の全 route は `app.security.dependencies.authorize_api_request` を通ります。
 
 1. local: ローカル利用者として通す（router の RBAC は従来の header / JWT 判定のまま。ローカル利用者は使わない）。
-2. production の公開 path: `/health`・`/ready`・`/auth/login`・`POST /mcp/{binding_id}`。
+2. production の公開 path: `/health`・`/ready`・`/ready/database`（画面の DB ゲート。#325）・`/auth/login`・`POST /mcp/{binding_id}`。
    `POST /mcp/{binding_id}` は Runtime からの呼出し境界で、従来どおり Binding 固有 token（Bearer）で認証します（Cookie・manifest の対象外）。
 3. production で session Cookie あり: セッションを検証し、更新系（GET / HEAD / OPTIONS 以外）は `X-CSRF-Token` header と CSRF Cookie を照合し、
    強制パスワード変更中は `/auth/me`・`/auth/logout`・`/auth/password/change` 以外を 403 にし、権限 manifest の権限を確認します

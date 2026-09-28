@@ -176,7 +176,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | Method | Path | 用途 |
 |---|---|---|
 | `GET` | `/api/health` / `/api/ready` | 稼働確認・readiness（ログイン不要） |
-| `GET` | `/api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要。#325）。`ok` / `not_configured` / `unreachable` を返す（Agent はシステムテーブルの確認をまだ持たないため `setup_required` は返さない） |
+| `GET` | `/api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要。#325）。`ok` / `not_configured` / `unreachable` を返す（Agent はシステムテーブルの確認をまだ持たないため `setup_required` は返さない）。ローカル認証（`AGENT_AUTH_MODE=local`）は共通 DB を使わないため、接続を試さず `ok`（`detail=local_auth`）を返し、画面のゲートは出ない。画面はシステム設定の 5 画面以外で、DB が使えるまで本文を案内に替える |
 | `POST` | `/api/auth/login` / `/api/auth/logout` / `/api/auth/password/change` | ログイン・ログアウト・パスワード変更（共通認証） |
 | `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids` / `allowed_business_view_ids`） |
 | `GET/POST/PATCH/DELETE` | `/api/security/users*` / `/api/security/roles*` | ユーザー管理・ロール管理（3製品共通） |

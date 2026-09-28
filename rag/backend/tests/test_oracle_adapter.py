@@ -714,7 +714,8 @@ async def test_oracle_read_retries_one_recoverable_disconnect(
     assert pool.acquire_calls == 2
     record = next(item for item in caplog.records if item.message == "oracle_read_retry")
     assert record.__dict__["error_type"] == "RuntimeError"
-    assert record.__dict__["oracle_error_code"] == "DPY-4011"
+    assert record.__dict__["full_code"] == "DPY-4011"
+    assert "oracle_error_code" in record.__dict__
 
 
 @pytest.mark.parametrize(("recoverable", "expected_attempts"), [(True, 2), (False, 1)])
