@@ -5,12 +5,16 @@ import {
   PageHeader,
   Button,
   Banner,
+  buttonVariants,
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   FieldError,
+  ProcessingIndicator,
   RequiredBadge,
+  Skeleton,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import {
   AlertTriangle,
@@ -45,16 +49,19 @@ import {
   type UploadStorageSettingsData,
 } from "@/lib/api";
 import {
+  uploadErrorMessage,
+  useAllKnowledgeBases,
   useBatchUploadDocuments,
   useCancelIngestionJob,
   useDrainIngestionJobs,
   useIngestionJobs,
-  useKnowledgeBases,
   useRetryIngestionJob,
   useUploadDocument,
   useUploadStorageSettings,
 } from "@/lib/queries";
 import { t, type I18nKey } from "@/lib/i18n";
+import { MENU_PERMISSIONS } from "@/lib/permissions";
+import { DEFAULT_MAX_UPLOAD_BYTES } from "@/lib/upload-requests";
 import { canSubmitUpload, uploadKnowledgeBaseRequired } from "@/lib/upload-scope";
 import { APP_ROUTES } from "@/lib/routes";
 import {
@@ -72,11 +79,15 @@ export function UploadWorkspace() {
   const [batchItems, setBatchItems] = useState<UploadResult[]>([]);
   const [batchFailedItems, setBatchFailedItems] = useState<BatchUploadFailedItem[]>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  const { user, hasPermission } = useAuth();
   // KB が制限された利用者は、登録先の KB を選ばないとアップロードできない（#214）。
-  const knowledgeBaseRequired = uploadKnowledgeBaseRequired(useAuth().user);
+  const knowledgeBaseRequired = uploadKnowledgeBaseRequired(user);
   const [knowledgeBaseMissing, setKnowledgeBaseMissing] = useState(false);
+  const [sendingCount, setSendingCount] = useState(0);
   const upload = useUploadDocument();
   const batchUpload = useBatchUploadDocuments();
+  // 1 ファイルの上限。送信前の確認と、一括アップロードを分けて送る基準に使う（#280）。
+  const maxUploadBytes = useUploadStorageSettings().data?.max_upload_bytes ?? DEFAULT_MAX_UPLOAD_BYTES;
   const isBusy = upload.isPending || batchUpload.isPending;
   const mutationError = upload.error ?? batchUpload.error;
 
@@ -107,7 +118,9 @@ export function UploadWorkspace() {
     setBatchFailedItems([]);
     upload.reset();
     batchUpload.reset();
-    if (files.length === 1) {
+    setSendingCount(files.length);
+    // 上限を超える 1 ファイルは、一括アップロードの経路で送らずに失敗として示す。
+    if (files.length === 1 && files[0].size <= maxUploadBytes) {
       upload.mutate(
         { file: files[0], knowledgeBaseIds },
         {
@@ -121,7 +134,7 @@ export function UploadWorkspace() {
       return;
     }
     batchUpload.mutate(
-      { files, knowledgeBaseIds },
+      { files, knowledgeBaseIds, maxUploadBytes },
       {
         onSuccess: (result) => {
           setBatchItems(result.items);
@@ -138,29 +151,27 @@ export function UploadWorkspace() {
       <PageBody wide>
         {!uploaded ? (
           <>
-            <UploadStorageNotice />
+            <UploadStorageNotice
+              canOpenSettings={hasPermission(MENU_PERMISSIONS.settingsUploadStorage)}
+            />
             <UploadKnowledgeBasePicker
               selectedIds={knowledgeBaseIds}
               onChange={handleKnowledgeBaseChange}
               disabled={isBusy}
               required={knowledgeBaseRequired}
               missing={knowledgeBaseMissing}
+              canManageKnowledgeBases={hasPermission(MENU_PERMISSIONS.knowledgeBases)}
             />
-            <Dropzone onFiles={handleFiles} disabled={isBusy} />
+            <Dropzone onFiles={handleFiles} disabled={isBusy} maxUploadBytes={maxUploadBytes} />
             {isBusy ? (
-              <p className="text-sm text-fg-muted" role="status">
-                {t("upload.uploading")}
-              </p>
-            ) : null}
-            {mutationError ? (
-              <ErrorState
-                message={
-                  mutationError instanceof ApiError
-                    ? mutationError.message
-                    : "アップロードに失敗しました。"
-                }
+              <ProcessingIndicator
+                active
+                placement="action"
+                label={t("upload.uploading", { count: sendingCount })}
+                testId="upload-processing"
               />
             ) : null}
+            {mutationError ? <ErrorState message={uploadErrorMessage(mutationError)} /> : null}
             {batchFailedItems.length > 0 ? (
               <BatchUploadFailureList failedItems={batchFailedItems} />
             ) : null}
@@ -168,7 +179,8 @@ export function UploadWorkspace() {
           </>
         ) : (
           <>
-            {batchItems.length > 1 ? (
+            {/* 1 件だけ保存できて残りが失敗したときも、失敗したファイルを示す（#280）。 */}
+            {batchItems.length > 1 || batchFailedItems.length > 0 ? (
               <BatchUploadSummary
                 items={batchItems}
                 failedItems={batchFailedItems}
@@ -244,8 +256,9 @@ function BatchUploadSummary({
   selectedId: string;
   onSelect: (item: UploadResult) => void;
 }) {
-  const queuedCount = items.filter((item) => item.ingestion_job?.status === "QUEUED").length;
-  const skippedCount = items.filter((item) => item.ingestion_job?.status === "SKIPPED").length;
+  // アップロードは取込ジョブを作らない（取込は文書ごとに明示して始める）。
+  // そのため「処理待ち」「スキップ」ではなく、保存できた件数と重複の可能性を示す（#280）。
+  const duplicateCount = items.filter((item) => item.duplicate_of_document_id).length;
   return (
     <Card>
       <CardHeader>
@@ -257,8 +270,8 @@ function BatchUploadSummary({
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-4">
           <BatchMetric label={t("upload.batch.total")} value={items.length + failedItems.length} />
-          <BatchMetric label={t("upload.batch.queued")} value={queuedCount} />
-          <BatchMetric label={t("upload.batch.skipped")} value={skippedCount} />
+          <BatchMetric label={t("upload.batch.uploaded")} value={items.length} />
+          <BatchMetric label={t("upload.batch.duplicates")} value={duplicateCount} />
           <BatchMetric label={t("upload.batch.failed")} value={failedItems.length} />
         </div>
         <div className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-surface-sunken">
@@ -313,8 +326,9 @@ function BatchUploadFailureList({
   return (
     <Banner severity="warning" title={t("upload.batch.failedTitle")}>
       <ul className="bounded-scroll-area space-y-2 pr-1 text-sm">
-        {failedItems.map((item) => (
-          <li key={`${item.file_name}-${item.status_code}`} className="min-w-0">
+        {failedItems.map((item, index) => (
+          // 同じ名前・同じ理由で失敗したファイルが並んでも key が重ならないよう、位置を含める。
+          <li key={`${index}-${item.file_name}`} className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-medium">{item.file_name}</span>
               <span className="tnum text-fg-muted">{item.status_code}</span>
@@ -559,6 +573,7 @@ function UploadKnowledgeBasePicker({
   disabled,
   required,
   missing,
+  canManageKnowledgeBases,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -567,22 +582,13 @@ function UploadKnowledgeBasePicker({
   required: boolean;
   /** 必須なのに未選択のままファイルを選んだ。 */
   missing: boolean;
+  /** 知識ベース管理の画面を開けるか（開けない利用者には導線を出さない）。 */
+  canManageKnowledgeBases: boolean;
 }) {
-  const query = useKnowledgeBases({ status: "ACTIVE", limit: 50, offset: 0 });
-  const items = query.data?.items ?? [];
+  // 先頭のページだけだと 51 件目以降の KB を選べないため、ACTIVE をすべて取得する（#280）。
+  const query = useAllKnowledgeBases({ status: "ACTIVE" });
+  const items = query.data ?? [];
   const errorId = useId();
-
-  if (query.isError) {
-    return (
-      <Banner severity="warning" title={t("upload.knowledgeBases.loadWarning")}>
-        <p>
-          {required
-            ? t("upload.knowledgeBases.loadWarningRequiredHint")
-            : t("upload.knowledgeBases.loadWarningHint")}
-        </p>
-      </Banner>
-    );
-  }
 
   return (
     <Card id={UPLOAD_KNOWLEDGE_BASE_PICKER_ID} data-testid="upload-knowledge-base-picker">
@@ -594,9 +600,34 @@ function UploadKnowledgeBasePicker({
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-fg-muted" role="status">
-            {t("upload.knowledgeBases.loading")}
-          </p>
+          <TimedLoadingState
+            label={t("upload.knowledgeBases.loading")}
+            placement="panel"
+            testId="upload-knowledge-base-loading"
+          >
+            <Skeleton className="h-8 w-full" />
+          </TimedLoadingState>
+        ) : query.isError ? (
+          // 取得に失敗したまま（必須の利用者は）送れないため、案内とその場の再読み込みを出す。
+          <Banner severity="warning" title={t("upload.knowledgeBases.loadWarning")}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p>
+                {required
+                  ? t("upload.knowledgeBases.loadWarningRequiredHint")
+                  : t("upload.knowledgeBases.loadWarningHint")}
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                loading={query.isFetching}
+                onClick={() => void query.refetch()}
+              >
+                {t("upload.knowledgeBases.reload")}
+              </Button>
+            </div>
+          </Banner>
         ) : items.length > 0 ? (
           <div aria-describedby={missing ? errorId : undefined}>
             <KnowledgeBasePickerGrid
@@ -614,13 +645,15 @@ function UploadKnowledgeBasePicker({
         ) : (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted sm:flex-row sm:items-center sm:justify-between">
             <span>{t("upload.knowledgeBases.emptyHint")}</span>
-            <Link
-              to={APP_ROUTES.knowledgeBases}
-              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-info-subtle"
-            >
-              <Database size={14} aria-hidden />
-              {t("upload.knowledgeBases.manage")}
-            </Link>
+            {canManageKnowledgeBases ? (
+              <Link
+                to={APP_ROUTES.knowledgeBases}
+                className={buttonVariants({ variant: "secondary", size: "sm" })}
+              >
+                <Database size={14} aria-hidden />
+                <span>{t("upload.knowledgeBases.manage")}</span>
+              </Link>
+            ) : null}
           </div>
         )}
         {items.length > 0 ? (
@@ -644,7 +677,7 @@ function UploadKnowledgeBasePicker({
   );
 }
 
-function UploadStorageNotice() {
+function UploadStorageNotice({ canOpenSettings }: { canOpenSettings: boolean }) {
   const query = useUploadStorageSettings();
 
   if (query.isPending || query.isError || !query.data) return null;
@@ -668,13 +701,16 @@ function UploadStorageNotice() {
           </p>
         </div>
       </div>
-      <Link
-        to={APP_ROUTES.settingsUploadStorage}
-        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface-sunken px-3 text-sm font-medium text-fg transition-colors hover:bg-info-subtle"
-      >
-        <Settings size={14} aria-hidden />
-        {t("upload.storageNotice.settings")}
-      </Link>
+      {/* 保存先の設定画面を開けない利用者（アップロードだけ許可）には導線を出さない。 */}
+      {canOpenSettings ? (
+        <Link
+          to={APP_ROUTES.settingsUploadStorage}
+          className={buttonVariants({ variant: "secondary", size: "sm" })}
+        >
+          <Settings size={14} aria-hidden />
+          <span>{t("upload.storageNotice.settings")}</span>
+        </Link>
+      ) : null}
     </div>
   );
 }

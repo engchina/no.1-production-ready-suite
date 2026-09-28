@@ -225,6 +225,10 @@ grep -Fq 'root /' "${site}" || fail "frontend の静的 build を配信してい
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
 grep -Fq 'client_max_body_size 210M;' "${site}" || fail "upload の上限が backend の RAG_MAX_UPLOAD_BYTES に合っていない"
+# docker compose の frontend（nginx.conf.template）も同じ上限にする。既定の 1m だと 1 MB 超を送れない（#280）。
+frontend_nginx="${REPO_DIR}/frontend/nginx.conf.template"
+grep -Fq 'client_max_body_size 210M;' "${frontend_nginx}" || fail "frontend の nginx の upload 上限が init_script.sh と合っていない"
+grep -Fq 'proxy_read_timeout 600s;' "${frontend_nginx}" || fail "frontend の nginx が大きな upload の保存を待てない"
 awk '/location = \/health \{/,/\}/' "${site}" | grep -Fq '/api/health;' || fail "/health が backend の /api/health を返していない"
 if grep -Fq 'auth_basic' "${site}"; then
   fail "RAG は backend の login を使う（Nginx の Basic 認証は置かない）"

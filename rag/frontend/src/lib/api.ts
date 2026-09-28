@@ -97,6 +97,9 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   30_000,
 );
 
+/** アップロードの送信は時間で打ち切らない（0 = タイムアウトなし。#280）。 */
+export const UPLOAD_REQUEST_TIMEOUT_MS = 0;
+
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
 export type JsonValue =
@@ -2627,10 +2630,13 @@ export const api = {
       form.append("knowledge_base_ids", id);
     }
     form.append("ingestion_mode", ingestionMode);
-    return request<UploadResult>("/api/documents/upload", {
-      method: "POST",
-      body: form,
-    });
+    return request<UploadResult>(
+      "/api/documents/upload",
+      { method: "POST", body: form },
+      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
+      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
+      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
   },
   batchUploadDocuments: (
     files: File[],
@@ -2645,10 +2651,13 @@ export const api = {
       form.append("knowledge_base_ids", id);
     }
     form.append("ingestion_mode", ingestionMode);
-    return request<BatchUploadResult>("/api/documents/batch-upload", {
-      method: "POST",
-      body: form,
-    });
+    return request<BatchUploadResult>(
+      "/api/documents/batch-upload",
+      { method: "POST", body: form },
+      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
+      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
+      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
   },
   ingestDocument: (
     id: string,

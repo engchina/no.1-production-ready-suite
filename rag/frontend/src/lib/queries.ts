@@ -14,6 +14,9 @@ import {
 import {
   api,
   ApiError,
+  type BatchUploadFailedItem,
+  type BatchUploadResult,
+  type KnowledgeBaseSummary,
   type ChunkSetExperimentRequest,
   type ParserExtractionExperimentRequest,
   type HuggingFaceSettingsUpdate,
@@ -82,6 +85,14 @@ import {
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
 } from "./api";
+import { t } from "./i18n";
+import {
+  DEFAULT_MAX_UPLOAD_BYTES,
+  failedUploadItem,
+  formatUploadLimit,
+  mergeBatchUploadResults,
+  planUploadRequests,
+} from "./upload-requests";
 
 export const queryKeys = {
   databaseStatus: ["system", "database-status"] as const,
@@ -809,25 +820,69 @@ export function useUploadDocument() {
   });
 }
 
-/** 複数ファイルアップロード。 */
+/**
+ * 複数ファイルアップロード。
+ *
+ * 1 リクエストの合計が 1 ファイルの上限以内になるよう分けて送り（前段 nginx の body 上限で一括全体が
+ * 413 にならないように）、上限を超えるファイルは送らずに失敗として返す（#280）。途中のまとまりが
+ * 失敗しても、それまでに保存できたファイルの結果は残す。認証切れ・権限なしは中断して投げ直す。
+ */
 export function useBatchUploadDocuments() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       files,
       knowledgeBaseIds = [],
       ingestionMode = "manual",
+      maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
     }: {
       files: File[];
       knowledgeBaseIds?: string[];
       ingestionMode?: UploadIngestionMode;
-    }) => api.batchUploadDocuments(files, knowledgeBaseIds, ingestionMode),
+      /** 1 ファイルの上限（upload-storage 設定の `max_upload_bytes`）。 */
+      maxUploadBytes?: number;
+    }): Promise<BatchUploadResult> => {
+      const { groups, oversized } = planUploadRequests(files, maxUploadBytes);
+      const results: BatchUploadResult[] = [];
+      const failed: BatchUploadFailedItem[] = oversized.map((file) =>
+        failedUploadItem(
+          file,
+          413,
+          t("upload.error.fileTooLarge", { size: formatUploadLimit(maxUploadBytes) }),
+        ),
+      );
+      for (const group of groups) {
+        try {
+          results.push(await api.batchUploadDocuments(group, knowledgeBaseIds, ingestionMode));
+        } catch (error) {
+          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+            throw error;
+          }
+          const status = error instanceof ApiError ? error.status : 0;
+          const message = uploadErrorMessage(error);
+          failed.push(...group.map((file) => failedUploadItem(file, status, message)));
+        }
+      }
+      return mergeBatchUploadResults(results, failed);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     },
   });
+}
+
+/** アップロード / 一括アップロードの失敗を、利用者に示す文言にする（#280）。 */
+export function uploadErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    // 前段の proxy が返す 413 は ApiResponse の本文を持たないため、既定の「APIエラー (413)」を言い換える。
+    if (error.status === 413 && error.message === `APIエラー (${error.status})`) {
+      return t("upload.error.requestTooLarge");
+    }
+    return error.message;
+  }
+  return t("upload.error.failed");
 }
 
 /** 取込 job 一覧。 */
@@ -866,6 +921,31 @@ export function useKnowledgeBases(params: {
   return useQuery({
     queryKey: queryKeys.knowledgeBases(params),
     queryFn: () => api.listKnowledgeBases(params),
+  });
+}
+
+/** 一覧 API の 1 ページの上限（backend の `limit` の最大値）。 */
+const KNOWLEDGE_BASE_PAGE_LIMIT = 200;
+
+/**
+ * 条件に合うナレッジベースをすべて取得する（ページを順にたどる）。
+ * 選択肢に使う一覧は、先頭のページだけだと 51 件目以降の KB を選べなくなる（#280）。
+ */
+export function useAllKnowledgeBases(params: { status?: KnowledgeBaseStatus } = {}) {
+  return useQuery({
+    queryKey: ["knowledge-bases", "all", params] as const,
+    queryFn: async (): Promise<KnowledgeBaseSummary[]> => {
+      const items: KnowledgeBaseSummary[] = [];
+      for (let offset = 0; ; offset += KNOWLEDGE_BASE_PAGE_LIMIT) {
+        const page = await api.listKnowledgeBases({
+          ...params,
+          limit: KNOWLEDGE_BASE_PAGE_LIMIT,
+          offset,
+        });
+        items.push(...page.items);
+        if (!page.has_next || page.items.length === 0) return items;
+      }
+    },
   });
 }
 

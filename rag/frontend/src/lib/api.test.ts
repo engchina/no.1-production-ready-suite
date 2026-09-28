@@ -131,6 +131,32 @@ describe("api.request envelope", () => {
     expect(page.warning_messages).toEqual([]);
   });
 
+  it.each([
+    ["uploadDocument", () => api.uploadDocument(new File(["test"], "policy.txt"))],
+    ["batchUploadDocuments", () => api.batchUploadDocuments([new File(["test"], "policy.txt")])],
+  ])("%s は既定の API タイムアウトで送信を打ち切らない", async (_name, send) => {
+    vi.useFakeTimers();
+    let aborted = false;
+    let resolveFetch: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+      });
+      return new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = send();
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS * 4);
+    expect(aborted).toBe(false);
+
+    resolveFetch(jsonResponse({ data: { items: [] }, error_messages: [], warning_messages: [] }));
+    await expect(pending).resolves.toBeTruthy();
+  });
+
   it("uploadDocument は knowledge_base_ids と ingestion_mode を multipart に含める", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

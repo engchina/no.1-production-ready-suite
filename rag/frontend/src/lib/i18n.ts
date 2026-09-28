@@ -1666,9 +1666,14 @@ export const ja = {
   "upload.dropzone":
     "PDF・画像・テキスト・HTML・メール・Office をここにドラッグ＆ドロップ",
   "upload.dropzoneHint":
-    "複数ファイルをまとめて選択できます（最大 200 MB / ファイル）。音声は保存のみで取込はスキップされます。",
+    "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。音声は保存のみで取込はスキップされます。",
   "upload.selectFile": "ファイルを選択",
-  "upload.uploading": "アップロード中…",
+  "upload.uploading": "{count} 件のファイルをアップロードしています",
+  "upload.error.failed": "アップロードに失敗しました。時間をおいて、もう一度お試しください。",
+  "upload.error.fileTooLarge":
+    "ファイルサイズが上限（{size} / ファイル）を超えるため、送信しませんでした。",
+  "upload.error.requestTooLarge":
+    "送信サイズが上限を超えたため、アップロードできませんでした。ファイルを分けてアップロードするか、管理者にアップロード上限の設定を確認してください。",
   "upload.duplicate": "同一内容のドキュメントが既に登録されています（重複の可能性）。",
   "upload.duplicateDetail":
     "同一内容の文書が既に登録されています。重複元: {name} / {status} / アップロード {uploadedAt}",
@@ -1676,9 +1681,9 @@ export const ja = {
     "内容が同じでも別文書として処理したい場合は、重複を無視して取込できます。",
   "upload.uploadAnother": "別のドキュメントをアップロード",
   "upload.batch.title": "アップロード結果",
-  "upload.batch.total": "アップロード",
-  "upload.batch.queued": "処理待ち",
-  "upload.batch.skipped": "スキップ",
+  "upload.batch.total": "選択したファイル",
+  "upload.batch.uploaded": "保存済み",
+  "upload.batch.duplicates": "重複の可能性",
   "upload.batch.failed": "失敗",
   "upload.batch.failedTitle": "一部のファイルをアップロードできませんでした",
   "upload.batch.open": "{name} を表示",
@@ -1721,6 +1726,7 @@ export const ja = {
     "登録先にできる知識ベースがありません。管理者に知識ベースの利用権限を依頼してください。",
   "upload.knowledgeBases.loadWarningRequiredHint":
     "登録先の知識ベースを選択できないため、アップロードできません。再読み込みしてください。",
+  "upload.knowledgeBases.reload": "再読み込み",
 
   "sourceProfile.title": "原本の処理情報",
   "sourceProfile.documentWorkspaceTitle": "原本情報",
