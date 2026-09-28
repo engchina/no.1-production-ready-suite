@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
+from pr_backend_core.oracle_session import init_oracle_session
+
 from app.config import Settings, get_settings
 from app.rag.business_view_config import (
     BusinessViewConfig,
@@ -8677,6 +8679,8 @@ class OracleClient:
                 "min": 1,
                 "max": 4,
                 "increment": 1,
+                # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+                "session_callback": init_oracle_session,
             },
         )
         _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)

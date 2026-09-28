@@ -11,6 +11,8 @@ from contextlib import contextmanager, suppress
 from functools import lru_cache
 from typing import Any
 
+from pr_backend_core.oracle_session import init_oracle_session
+
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
     ensure_deepsec_thin_mode,
@@ -68,7 +70,7 @@ class OraclePoolManager:
                     user=self.settings.oracle_deepsec_data_user,
                     password=self.settings.oracle_deepsec_data_user_password,
                 )
-                kwargs.update(min=1, max=1, increment=1)
+                kwargs.update(min=1, max=1, increment=1, session_callback=init_oracle_session)
                 pool = oracledb.create_pool(**kwargs)
             connection = pool.acquire()
         except Exception as exc:
@@ -153,7 +155,8 @@ class OraclePoolManager:
                 )
             else:
                 kwargs = oracle_connect_kwargs(self.settings)
-            kwargs.update(min=1, max=4, increment=1)
+            # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+            kwargs.update(min=1, max=4, increment=1, session_callback=init_oracle_session)
             try:
                 pool = oracledb.create_pool(**kwargs)
             except Exception as exc:
