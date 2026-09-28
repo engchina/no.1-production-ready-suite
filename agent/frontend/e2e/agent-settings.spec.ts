@@ -636,6 +636,25 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText(/unsupported snapshot version/)).toBeVisible();
     await expect(page.getByText(/duplicate agent id/)).toBeVisible();
 
+    // 置換の確認語は共有の実行確認語欄（#379）。一致するまで置換を押せない。
+    const confirmation = page.getByTestId("execution-confirmation-field");
+    const confirmInput = confirmation.getByRole("textbox", { name: "確認入力" });
+    const replace = confirmation.getByRole("button", { name: "置換" });
+    await expect(confirmInput).toHaveAttribute("aria-required", "true");
+    await expect(confirmInput).toHaveAccessibleDescription("置換するには REPLACE と入力してください");
+    await expect(confirmation.getByText("入力条件: REPLACE")).toBeVisible();
+    await expect(confirmation.getByText("未入力", { exact: true })).toBeVisible();
+    await confirmInput.fill("replace");
+    await expect(confirmation.getByText("不一致", { exact: true })).toBeVisible();
+    await expect(confirmInput).toHaveAttribute("aria-invalid", "true");
+    await expect(replace).toBeDisabled();
+    await confirmInput.fill("REPLACE");
+    await expect(confirmation.getByText("確認済み", { exact: true })).toBeVisible();
+    await expect(confirmInput).not.toHaveAttribute("aria-invalid", "true");
+    await expect(replace).toBeEnabled();
+    await confirmInput.fill("");
+    await expect(replace).toBeDisabled();
+
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);
   });

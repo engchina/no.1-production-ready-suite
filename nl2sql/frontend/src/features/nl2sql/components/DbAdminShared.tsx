@@ -1,4 +1,3 @@
-import { IdentifierText } from "@/components/IdentifierText";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
   Button,
@@ -15,7 +14,6 @@ import {
   usePagination,
   StatusBadge,
   Tabs,
-  cn,
   ClearActionButton,
   ActionResultRegion,
   ContentActionBar,
@@ -25,10 +23,10 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -52,7 +50,6 @@ import {
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { downloadBlob } from "@/lib/download";
@@ -276,105 +273,6 @@ export function ManagementTabs<TView extends string>({
         badgeTestId: tab.metaTestId,
       }))}
     />
-  );
-}
-
-const PHRASE_PLACEHOLDER = "\u0000";
-
-export function ExecutionConfirmationField({
-  value,
-  onChange,
-  confirmed,
-  placeholder,
-  expectedLabel,
-  helper,
-  disabled = false,
-  actions,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  confirmed: boolean;
-  placeholder: string;
-  expectedLabel: string;
-  helper: string;
-  disabled?: boolean;
-  /** 確認語入力の直下に描画する実行/キャンセル等のアクションバー。primary/danger → secondary の順で渡す。 */
-  actions?: ReactNode;
-}) {
-  const id = useId();
-  const helperId = `${id}-helper`;
-  const statusLabel = confirmed
-    ? t("dbAdmin.confirmation.status.confirmed")
-    : value.trim()
-      ? t("dbAdmin.confirmation.status.mismatch")
-      : t("dbAdmin.confirmation.status.pending");
-  const [expectedPrefix, expectedSuffix = ""] = t("dbAdmin.confirmation.expected", {
-    phrase: PHRASE_PLACEHOLDER,
-  }).split(PHRASE_PLACEHOLDER);
-  const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3";
-  const inputClass = [
-    "h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
-    "focus:border-danger-fg",
-  ].join(" ");
-  const statusClass = [
-    "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
-    confirmed
-      ? "border-success-border bg-success-subtle text-success-fg"
-      : value.trim()
-        ? "border-danger-border bg-danger-subtle text-danger-fg"
-        : "border-border bg-surface text-fg-muted",
-  ].join(" ");
-
-  return (
-    <div className={containerClass} data-testid="execution-confirmation-field">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <FieldLabel
-          htmlFor={id}
-          label={t("dbAdmin.confirmation.label")}
-          required
-          // 入力前から danger 色にしない（操作前のエラー表示に見えるため）。確認語欄の強調は状態バッジと入力欄のフォーカス色で行う。
-          className="font-semibold text-fg"
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
-            {expectedPrefix}
-            {/* 確認語は識別子（ADMIN_EXECUTE・OWNER.OBJECT）なので、入力する文字を読み違えないよう等幅で示す。 */}
-            <IdentifierText value={expectedLabel} className="font-mono font-semibold" />
-            {expectedSuffix}
-          </span>
-          <span className={statusClass} aria-live="polite">
-            {statusLabel}
-          </span>
-        </div>
-      </div>
-      <div className="grid gap-2">
-        <input
-          id={id}
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          className={inputClass}
-          placeholder={placeholder}
-          disabled={disabled}
-          required
-          aria-required="true"
-          aria-describedby={helperId}
-          aria-invalid={value.trim() && !confirmed ? "true" : undefined}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-        />
-      </div>
-      <p id={helperId} className={cn("break-words text-xs leading-5", value.trim() && !confirmed ? "text-danger-fg" : "text-fg-muted")}>
-        {helper}
-      </p>
-      {actions && (
-        <div
-          className="flex min-w-0 flex-col gap-[8px] border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center"
-        >
-          {actions}
-        </div>
-      )}
-    </div>
   );
 }
 

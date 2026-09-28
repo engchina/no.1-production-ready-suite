@@ -340,6 +340,13 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 一致しない語を入力したとき（`aria-invalid="true"`）だけ、説明文と状態バッジを danger 色にする。
 - 確認語欄であることは、見出し・状態バッジ（未入力 / 不一致 / 確認済み）・入力欄のフォーカス色で示す。
 
+### `ExecutionConfirmationField`（新規）— ★ 確認語欄は 1 つの実装（#379）
+
+破壊的な操作の実行確認語（type-to-confirm）の入力欄を `packages/ui` に置きました。NL2SQL の製品のコードと system-settings のコピーの 2 つに分かれていた実装を一本化し、Agent のスナップショットの置換の確認語も置き換えました。見た目と振る舞いは NL2SQL の実装が基準です（上の「確認語欄（実行確認語）の色」）。
+
+- 一致の判定（`confirmed`）・確認語（`expectedLabel`）・説明（`helper`）・操作（`actions`）は製品が渡す。文言は `labels` で差し替え、未指定は既定（実行確認語 / 必須 / 入力条件: {phrase} / 未入力 / 不一致 / 確認済み）
+- 製品で確認語の入力欄を手書きしない。props と実装の参照は `components-reference.md`「ExecutionConfirmationField」
+
 ### `StatusBadge`（変更）
 
 - **アイコンを必須化**（`icon` 既定 `true`）。success / danger の輝度がほぼ同じで色覚型によって見分けられないため、**形で冗長に符号化**します。強制カラーモードでも意味が残ります
@@ -576,7 +583,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**29点あります。**
+QA に事前共有してください。**30点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -609,6 +616,7 @@ QA に事前共有してください。**29点あります。**
 | 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・業務ビューは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。承認済み FAQ・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
 | 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
 | 29 | **md 未満のナビがドロワーになる**（#367。案 A に決定） | 375px などで 56px のアイコン列（展開すると本文を押し出す）→ **上端のバーの「メニュー」ボタンで開くドロワー**（scrim・フォーカスの閉じ込め・Escape / scrim / ナビの選択で閉じる）。本文は画面の全幅（375 − 56 = 319px → 375px）。md 以上は変わらない | 狭い画面で本文の幅を削らない。Material の modal navigation drawer と同じ型（§4 `AppShell`。2026-09-28 に案 A に決定） |
+| 30 | **確認語欄が 1 つの実装になる** | Agent の実行時スナップショットの置換の確認語は `danger` の枠線の区画に素の入力欄（`h-10`・`bg-surface-sunken`）と説明だけ、置換ボタンは区画の下（`md`）→ 共有の `ExecutionConfirmationField`（中立の面・「入力条件: REPLACE」と状態のバッジ・44px の入力欄・区切り線の下に `lg` の置換ボタン、375px では全幅）。見出しの「確認入力」と説明の文言は変えない。system-settings のシステムテーブルの確認語欄は、確認語が `_` の直後で折り返すようになる（旧: 任意の位置）。NL2SQL は変わらない | 製品のコードと system-settings のコピーを `packages/ui` に一本化し、3 製品の確認語欄を同じ見た目・振る舞いにする。破壊的な操作の確認面を中立にする（UX 契約 buttons.md / messaging §3.5、§4「`ExecutionConfirmationField`」、#379） |
 
 ### API の非互換
 
@@ -625,6 +633,7 @@ QA に事前共有してください。**29点あります。**
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
+| `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 
 ---
 
