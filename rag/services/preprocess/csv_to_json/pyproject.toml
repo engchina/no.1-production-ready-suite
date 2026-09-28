@@ -2,7 +2,7 @@
 name = "preprocess-csv-to-json-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: CSV→構造化 JSON(csv2json 再マップ)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
 ]

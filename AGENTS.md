@@ -198,7 +198,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ## 共通の技術方針
 
 - AI / DB は OCI / Oracle に集約する（回答生成・構造化抽出 = OCI Enterprise AI、embedding / rerank = OCI Generative AI の Cohere Embed v4 / Rerank v4 fast、ベクトル検索・データの正本 = Oracle 26ai）。外部ベクトル DB、別 LLM provider、別 SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
-- Backend は Python 3.12 + FastAPI + Pydantic v2 + uv、共通基盤は `pr_backend_core`。Frontend は Vite + React Router + TypeScript + Tailwind + `@engchina/production-ready-ui` + TanStack Query + Zustand。
+- Backend は Python 3.12 + FastAPI + Pydantic v2 + uv、共通基盤は `pr_backend_core`。
+- **Python の版は 3.12 に固定する（#286）。** すべての `pyproject.toml` の `requires-python` は `">=3.12,<3.13"`、リポジトリ直下の `.python-version` は `3.12`。uv は project の中では直下の `.python-version` を読まないため、上限は `requires-python` で掛ける。版を変えるときは、全 `pyproject.toml`・`uv.lock`（`uv lock`）・CI の `python-version`・各製品の `init_script.sh` の `uv python install` / `--python` を同じ PR でそろえる。Frontend は Vite + React Router + TypeScript + Tailwind + `@engchina/production-ready-ui` + TanStack Query + Zustand。
 - シークレット（OCI 認証・DB 接続・ADB wallet 等）は `.env` / secret store 経由。ハードコード・commit・API 応答への展開を禁止する。
 - LLM 出力は Pydantic スキーマで検証してから保存・利用する。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービス検証は手動 / ステージングで行う。

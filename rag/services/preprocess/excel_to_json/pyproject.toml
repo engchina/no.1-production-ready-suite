@@ -2,7 +2,7 @@
 name = "preprocess-excel-to-json-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: Excel(.xls/.xlsx)→構造化 JSON"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
     "openpyxl>=3.1,<4",

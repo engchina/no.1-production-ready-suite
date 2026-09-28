@@ -2,7 +2,7 @@
 name = "parser-docling"
 version = "0.1.0"
 description = "Docling parser microservice (independent dependency boundary)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
     # rag_poc(DocRAG)の解析実装(読み順・表補修・Vision 図説明)。
