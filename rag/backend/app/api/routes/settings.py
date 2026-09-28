@@ -42,6 +42,7 @@ from app.clients.oracle import (
     test_oracle_connection,
 )
 from app.config import (
+    DOCRAG_CHUNKING_SETTING_FIELDS,
     MODEL_SETTINGS_STORE,
     Settings,
     get_settings,
@@ -1717,17 +1718,20 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
         strategy=runtime.strategy,
         chunk_size=runtime.chunk_size,
         overlap=runtime.overlap,
-        child_size=runtime.child_size,
         min_chars=runtime.min_chars,
         delimiter=runtime.delimiter,
         context_header_enabled=settings.rag_chunk_context_header_enabled,
+        docrag_child_target_chars=runtime.docrag.child_target_chars,
+        docrag_table_child_target_chars=runtime.docrag.table_child_target_chars,
+        docrag_parent_target_chars=runtime.docrag.parent_target_chars,
+        docrag_parent_max_pages=runtime.docrag.parent_max_pages,
+        docrag_parent_max_children=runtime.docrag.parent_max_children,
         strategies=[
             ChunkingStrategyStatusData(
                 name=status.name,
                 origin=status.origin,
                 recommended_for=list(status.recommended_for),
                 selected=status.selected,
-                uses_child_size=status.uses_child_size,
             )
             for status in runtime.strategies
         ],
@@ -1745,10 +1749,14 @@ def _chunking_settings_candidate(
             "rag_chunking_strategy": normalize_chunking_strategy(payload.strategy),
             "rag_chunk_size": payload.chunk_size,
             "rag_chunk_overlap": payload.overlap,
-            "rag_chunk_child_size": payload.child_size,
             "rag_chunk_min_chars": payload.min_chars,
             "rag_chunk_delimiter": payload.delimiter,
             "rag_chunk_context_header_enabled": payload.context_header_enabled,
+            "rag_docrag_child_target_chars": payload.docrag_child_target_chars,
+            "rag_docrag_table_child_target_chars": payload.docrag_table_child_target_chars,
+            "rag_docrag_parent_target_chars": payload.docrag_parent_target_chars,
+            "rag_docrag_parent_max_pages": payload.docrag_parent_max_pages,
+            "rag_docrag_parent_max_children": payload.docrag_parent_max_children,
         }
     )
 
@@ -1758,10 +1766,11 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunking_strategy = source.rag_chunking_strategy
     target.rag_chunk_size = source.rag_chunk_size
     target.rag_chunk_overlap = source.rag_chunk_overlap
-    target.rag_chunk_child_size = source.rag_chunk_child_size
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
     target.rag_chunk_delimiter = source.rag_chunk_delimiter
     target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
+    for name in DOCRAG_CHUNKING_SETTING_FIELDS:
+        setattr(target, name, getattr(source, name))
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
@@ -1772,12 +1781,17 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNKING_STRATEGY": settings.rag_chunking_strategy,
             "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
-            "RAG_CHUNK_CHILD_SIZE": str(settings.rag_chunk_child_size),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
             "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
             "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
                 settings.rag_chunk_context_header_enabled
             ),
+            **{
+                name.upper(): str(getattr(settings, name))
+                for name in DOCRAG_CHUNKING_SETTING_FIELDS
+            },
+            # 削除した親子階層(#271)の子 chunk サイズ。読まない値なので保存時に消す。
+            "RAG_CHUNK_CHILD_SIZE": None,
         },
         section_comment="# Chunking アダプター",
         error_detail="文書分割設定を backend/.env へ保存できませんでした。",

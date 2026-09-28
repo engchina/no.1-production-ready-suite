@@ -76,20 +76,59 @@ PreprocessProfile = Literal[
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
-    "hierarchical_parent_child",
+    "docrag_small_to_big",
     "markdown_heading",
     "page_level",
     "fixed_size",
     "fixed_delimiter",
-    "docrag_small_to_big",
 ]
 CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "structure_aware",
     "recursive_character",
-    "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
 }
+# 削除した分割方式の保存値を後継の方式へ読み替える(.env / 文書レシピ / KB の保存値)。
+# 親子階層(hierarchical_parent_child)は DocRAG 親子階層へ置き換えた(#271)。
+LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, ChunkingStrategy] = {
+    "sentence_window": "recursive_character",
+    "hierarchical_parent_child": "docrag_small_to_big",
+}
+
+
+def normalize_legacy_chunking_strategy_value(value: object) -> object:
+    """削除した分割方式の保存値を後継へ読み替える(pydantic の before validator 用)。"""
+    if isinstance(value, str):
+        return LEGACY_CHUNKING_STRATEGY_ALIASES.get(value.strip().casefold(), value)
+    return value
+
+
+# DocRAG 親子階層(docrag_small_to_big)の分割パラメータ。既定値と範囲は rag_poc の
+# docrag.chunking.constants(DEFAULT_* / *_RANGE)と同じ(テストで一致を確認する)。
+# docrag.chunking は import すると分割実装一式を読み込むため、ここでは値を複製して持つ。
+DOCRAG_CHILD_TARGET_CHARS_DEFAULT = 1000
+DOCRAG_CHILD_TARGET_CHARS_MIN = 300
+DOCRAG_CHILD_TARGET_CHARS_MAX = 1600
+DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT = 3000
+DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN = 300
+DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX = 8000
+DOCRAG_PARENT_TARGET_CHARS_DEFAULT = 6000
+DOCRAG_PARENT_TARGET_CHARS_MIN = 1200
+DOCRAG_PARENT_TARGET_CHARS_MAX = 10000
+DOCRAG_PARENT_MAX_PAGES_DEFAULT = 3
+DOCRAG_PARENT_MAX_PAGES_MIN = 1
+DOCRAG_PARENT_MAX_PAGES_MAX = 5
+DOCRAG_PARENT_MAX_CHILDREN_DEFAULT = 12
+DOCRAG_PARENT_MAX_CHILDREN_MIN = 3
+DOCRAG_PARENT_MAX_CHILDREN_MAX = 20
+# DocRAG 親子階層の分割パラメータの Settings 属性名(保存・受け渡し・chunk_set の hash で使う)。
+DOCRAG_CHUNKING_SETTING_FIELDS: tuple[str, ...] = (
+    "rag_docrag_child_target_chars",
+    "rag_docrag_table_child_target_chars",
+    "rag_docrag_parent_target_chars",
+    "rag_docrag_parent_max_pages",
+    "rag_docrag_parent_max_children",
+)
 # 検索モード(排他選択)。設定 API の保存はこの5値のみ。
 RetrievalMode = Literal[
     "hybrid_rrf",
@@ -516,7 +555,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
-            "hierarchical_parent_child は親子、"
+            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果が必要)、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"
             "fixed_delimiter は指定文字列での固定分割。"
@@ -528,14 +567,43 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         max_length=256,
         description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
     )
-    rag_chunk_child_size: int = Field(
-        default=320,
-        ge=80,
-        le=4000,
+    # DocRAG 親子階層(docrag_small_to_big)の分割パラメータ。
+    # rag_poc の「チャンキング」tab と同じ 5 項目。
+    rag_docrag_child_target_chars: int = Field(
+        default=DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_CHILD_TARGET_CHARS_MAX,
         description=(
-            "hierarchical_parent_child 戦略で親 chunk を再分割する子 chunk の目標文字数。"
-            "rag_chunk_size より小さくする。"
+            "DocRAG 親子階層で、検索に使う子 chunk の目標文字数。"
+            "超える Text / List-item は文末で複数の子へ分ける。"
         ),
+    )
+    rag_docrag_table_child_target_chars: int = Field(
+        default=DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+        description=(
+            "DocRAG 親子階層で、表を行グループへ分ける閾値と各グループの目標文字数。"
+            "各グループには列見出しと関連見出しを繰り返し付ける。"
+        ),
+    )
+    rag_docrag_parent_target_chars: int = Field(
+        default=DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_PARENT_TARGET_CHARS_MIN,
+        le=DOCRAG_PARENT_TARGET_CHARS_MAX,
+        description="DocRAG 親子階層で、回答文脈に使う親 chunk の目標文字数。",
+    )
+    rag_docrag_parent_max_pages: int = Field(
+        default=DOCRAG_PARENT_MAX_PAGES_DEFAULT,
+        ge=DOCRAG_PARENT_MAX_PAGES_MIN,
+        le=DOCRAG_PARENT_MAX_PAGES_MAX,
+        description="DocRAG 親子階層で、1 つの親 chunk がまたげる最大ページ数。",
+    )
+    rag_docrag_parent_max_children: int = Field(
+        default=DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
+        ge=DOCRAG_PARENT_MAX_CHILDREN_MIN,
+        le=DOCRAG_PARENT_MAX_CHILDREN_MAX,
+        description="DocRAG 親子階層で、1 つの親 chunk に入れる子 chunk の最大数。",
     )
     rag_chunk_min_chars: int = Field(
         default=120,
@@ -1701,10 +1769,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     @field_validator("rag_chunking_strategy", mode="before")
     @classmethod
     def normalize_legacy_chunking_strategy(cls, value: object) -> object:
-        """撤去済み sentence_window は起動互換のため recursive_character へ寄せる。"""
-        if str(value).strip().casefold() == "sentence_window":
-            return "recursive_character"
-        return value
+        """削除した分割方式(sentence_window / hierarchical_parent_child)を後継へ寄せる。"""
+        return normalize_legacy_chunking_strategy_value(value)
 
     @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")
     @classmethod
@@ -1724,11 +1790,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             return self
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP は RAG_CHUNK_SIZE より小さくしてください。")
-        if (
-            self.rag_chunking_strategy == "hierarchical_parent_child"
-            and self.rag_chunk_child_size >= self.rag_chunk_size
-        ):
-            raise ValueError("RAG_CHUNK_CHILD_SIZE は RAG_CHUNK_SIZE より小さくしてください。")
         if (
             self.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
             and self.rag_chunk_min_chars >= self.rag_chunk_size
