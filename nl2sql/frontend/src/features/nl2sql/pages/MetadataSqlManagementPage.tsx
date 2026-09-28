@@ -421,6 +421,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setSchemaRefreshNeedsFull(true);
     }
     void refreshObjects();
+    // 実行で列のコメント・annotation・ドメインが変わるため、構造と既存ドメインを取り直す。
+    // 古いままだと続けて更新/削除を生成したときに実行前の関連付けを材料にしてしまう。
+    if (selectedTargets.length > 0) void fetchDetails(true);
   };
 
   const toggleTarget = (target: MetadataSqlTarget) => {

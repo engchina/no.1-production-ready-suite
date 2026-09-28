@@ -50,6 +50,7 @@ from .object_visibility import (
     is_user_visible_owner_name,
     is_user_visible_schema_object,
 )
+from .sql_lexing import _tokens as sql_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,10 @@ def _domain_column_type(row: Sequence[Any]) -> str:
     data_type = str(row[0] or "").upper()
     data_length, char_length, precision, scale = row[1], row[2], row[3], row[4]
     if data_type in {"VARCHAR2", "VARCHAR", "CHAR"} and data_length:
+        # ALL_DOMAIN_COLS に CHAR_USED が無いため、文字長とバイト長の違いで CHAR 長の宣言を見分ける
+        # (VARCHAR2(20 CHAR) は AL32UTF8 で DATA_LENGTH=80 / CHAR_LENGTH=20)。
+        if char_length and int(char_length) != int(data_length):
+            return f"{data_type}({int(char_length)} CHAR)"
         return f"{data_type}({int(data_length)})"
     if data_type in {"NVARCHAR2", "NCHAR"} and (char_length or data_length):
         return f"{data_type}({int(char_length or data_length)})"
@@ -326,7 +331,13 @@ def _normalize_statement_candidate(candidate: str) -> str:
     error_match = re.search(r"\bException encountered\s*:", candidate, flags=re.IGNORECASE)
     if error_match:
         candidate = candidate[: error_match.start()]
-    return candidate.split(";", 1)[0].strip()
+    # 文字列リテラル・引用識別子・コメント内の `;` では切らない（`WHERE NAME = 'a;b'` 等）。
+    offset = 0
+    for kind, text in sql_tokens(candidate):
+        if kind == "code" and text == ";":
+            return candidate[:offset].strip()
+        offset += len(text)
+    return candidate.strip()
 
 
 def _mask_sql_quoted_regions(statement: str) -> str:
@@ -1485,12 +1496,16 @@ class OracleNl2SqlAdapter:
                     has_more = len(fetched_rows) > max_rows
                     fetched_rows = fetched_rows[:max_rows]
                 else:
+                    # 件数未指定でも全件をメモリ・job 結果・応答へ載せないよう、安全上限で打ち切る。
+                    cap = self.settings.nl2sql_max_result_rows
                     fetched_rows = []
-                    while True:
+                    while len(fetched_rows) <= cap:
                         batch = cursor.fetchmany(SELECT_FETCH_BATCH_SIZE)
                         if not batch:
                             break
                         fetched_rows.extend(batch)
+                    has_more = len(fetched_rows) > cap
+                    fetched_rows = fetched_rows[:cap]
                 for row in fetched_rows:
                     rows.append(
                         {

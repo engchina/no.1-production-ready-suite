@@ -545,6 +545,28 @@ def _display_qualified_name(owner: str, object_name: str) -> str:
         return ""
 
 
+def _is_named_table_reference(table: SqlTableReference) -> bool:
+    """名前を持つ表参照（schema object）かを返す。
+
+    `JSON_TABLE(...)` / `XMLTABLE(...)` / `TABLE(...)` のような表関数は表名を持たないため、
+    表スコープ判定の対象外にする。中のサブクエリの表は別の表参照として判定され、
+    関数は `_dangerous_oracle_function_names` で判定される。
+    """
+
+    return bool(table.name.strip())
+
+
+def _is_dual_table_reference(table: SqlTableReference) -> bool:
+    """owner 省略の `DUAL` と `SYS.DUAL` を返す（`APP.DUAL` のような他 schema の表は含めない）。"""
+
+    def _token(value: str, quoted: bool) -> str:
+        return value if quoted else value.upper()
+
+    if table.catalog or _token(table.name, table.name_quoted) != "DUAL":
+        return False
+    return not table.owner or _token(table.owner, table.owner_quoted) == "SYS"
+
+
 def _sql_table_reference_parts(table: SqlTableReference, current_owner: str) -> tuple[str, str]:
     """SQL の表参照を owner / 表名の canonical token にする（owner 省略時は current schema）。
 
@@ -572,7 +594,7 @@ def _graph_with_resolved_table_owners(
         return None
     tables = []
     for table in graph.tables:
-        if table.is_cte:
+        if table.is_cte or not _is_named_table_reference(table):
             tables.append(table)
             continue
         owner, name = _sql_table_reference_parts(table, current_owner)
@@ -1022,8 +1044,18 @@ _FORBIDDEN_PREFIXES = (
     "declare",
     "call",
 )
+# 外部通信・動的 SQL・任意の表やファイルを読む関数/型。関数の中で読まれる表は SQL の表参照に
+# 現れないため、業務プロファイルの表スコープをすり抜けないよう SELECT 実行では拒否する。
+# `SYS.` 修飾やメソッド呼び出し（`DBURITYPE(...).getclob()`）も `_dangerous_oracle_function_names`
+# が名前の各部分で判定する。
 _DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
     {
+        "APEX_WEB_SERVICE",
+        "DBMS_CLOUD",
+        "DBMS_CLOUD_AI",
+        "DBMS_CLOUD_NOTIFICATION",
+        "DBMS_CLOUD_PIPELINE",
+        "DBMS_CLOUD_REPO",
         "DBMS_JAVA",
         "DBMS_LDAP",
         "DBMS_METADATA",
@@ -1033,12 +1065,17 @@ _DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
         "DBMS_XMLQUERY",
         "DBMS_XMLSAVE",
         "DBMS_XMLSTORE",
+        "DBMS_XSLPROCESSOR",
+        "DBURITYPE",
         "HTTPURITYPE",
+        "URIFACTORY",
         "UTL_FILE",
         "UTL_HTTP",
         "UTL_INADDR",
+        "UTL_MAIL",
         "UTL_SMTP",
         "UTL_TCP",
+        "XDBURITYPE",
     }
 )
 _DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実行では使用できません。"
@@ -2739,13 +2776,49 @@ def _dangerous_oracle_function_blocked_message(names: Sequence[str]) -> str:
     return f"{', '.join(unique)}: {_DANGEROUS_ORACLE_FUNCTION_MESSAGE}"
 
 
+def _bind_placeholder_names(sql: str) -> list[str]:
+    """SQL に含まれるバインド変数（`:name` / `?`）を返す。
+
+    SELECT 実行は値をバインドしないため、含まれていると実行時に ORA-01008 になる。
+    """
+
+    try:
+        import sqlglot
+        from sqlglot import exp
+        from sqlglot.errors import ErrorLevel
+    except ImportError:
+        return []
+
+    try:
+        statements = sqlglot.parse(
+            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+        )
+    except Exception:
+        return []
+
+    names: list[str] = []
+    for statement in [item for item in statements if item is not None]:
+        for placeholder in statement.find_all(exp.Placeholder):
+            name = f":{placeholder.name}" if placeholder.name else "?"
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _bind_placeholder_blocked_message(names: Sequence[str]) -> str:
+    return (
+        f"{', '.join(names)}: バインド変数を含む SQL は実行できません。"
+        "値を SQL に直接記述してください。"
+    )
+
+
 def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str]:
     semantic = parse_oracle_sql(sql)
     if semantic.graph is not None:
         seen: set[str] = set()
         tables: list[str] = []
         for table in semantic.graph.tables:
-            if table.is_cte:
+            if table.is_cte or not _is_named_table_reference(table):
                 continue
             owner, name = _sql_table_reference_parts(table, current_owner)
             normalized = f"{owner}.{name}" if owner else name
@@ -7393,7 +7466,10 @@ class Nl2SqlService:
         table_name_candidates: dict[str, list[str]] = {}
         if graph:
             for table_ref in graph.tables:
-                if table_ref.is_cte:
+                if table_ref.is_cte or not _is_named_table_reference(table_ref):
+                    continue
+                # DUAL（owner 省略 / SYS.DUAL）は業務表ではないため表スコープ判定の対象外。
+                if _is_dual_table_reference(table_ref):
                     continue
                 owner_token, name_token = _sql_table_reference_parts(table_ref, current_owner)
                 qualified = f"{owner_token}.{name_token}"
@@ -7427,12 +7503,16 @@ class Nl2SqlService:
                 value = f"{table_name}.{column_token}" if table_name else column_token
                 if value and value not in referenced_columns:
                     referenced_columns.append(value)
+        # `COUNT(*)` や `AMOUNT * 1.1` は列展開ではないため、parser の判定を使う。
         has_wildcard = bool(
-            graph and any("*" in projection.expression_sql for projection in graph.projections)
+            graph and any(projection.contains_wildcard for projection in graph.projections)
         )
         select_only = graph is not None and is_select_only(sql)
         dangerous_function_names = (
             _dangerous_oracle_function_names(sql) if graph is not None and select_only else []
+        )
+        bind_placeholder_names = (
+            _bind_placeholder_names(sql) if graph is not None and select_only else []
         )
         warnings: list[str] = []
         blocked_reason = ""
@@ -7444,6 +7524,8 @@ class Nl2SqlService:
             )
         elif dangerous_function_names:
             blocked_reason = _dangerous_oracle_function_blocked_message(dangerous_function_names)
+        elif bind_placeholder_names:
+            blocked_reason = _bind_placeholder_blocked_message(bind_placeholder_names)
         hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
         if not blocked_reason and hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)
@@ -18729,8 +18811,10 @@ class Nl2SqlService:
                         object_match_key(name): {_column_identifier_token(col) for col in cols}
                         for name, cols in allowed.columns.items()
                     }
+                    # 列指定の無い表は全列を許可する(schema context の組み立てと同じ意味)。
                     columns = {
-                        name: cols & column_scope.get(name, set()) for name, cols in columns.items()
+                        name: cols & column_scope[name] if name in column_scope else cols
+                        for name, cols in columns.items()
                     }
             return published_context(
                 ontology_runtime,
@@ -18841,10 +18925,28 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
+        # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
+        # 含む result と履歴を残したうえで ERROR として公開する。
+        execution_error: str | None = None
         if analysis.safety.is_safe:
-            safety, executable, results = self.execute_sql(
-                generated.generated_sql, allowed, row_limit, analysis=analysis
-            )
+            try:
+                safety, executable, results = self.execute_sql(
+                    generated.generated_sql, allowed, row_limit, analysis=analysis
+                )
+            except OracleAdapterError as exc:
+                logger.warning(
+                    "nl2sql_job_execute_sql_failed",
+                    extra={
+                        "job_id": job_id,
+                        "engine": request.engine.value,
+                        "profile_id": request.profile_id or "",
+                        "oracle_error_code": _safe_oracle_error_code(exc),
+                    },
+                )
+                execution_error = f"生成した SQL の実行に失敗しました: {exc}"
+                safety = analysis.safety
+                executable = analysis.executable_sql
+                results = QueryResults(columns=[], rows=[], total=0)
         else:
             safety = analysis.safety
             executable = analysis.executable_sql
@@ -18856,7 +18958,7 @@ class Nl2SqlService:
             completed_stage="execute_sql",
             completed_status=(
                 JobStepStatus.DONE
-                if safety.is_safe
+                if safety.is_safe and execution_error is None
                 else (JobStepStatus.SKIPPED if not analysis.safety.is_safe else JobStepStatus.ERROR)
             ),
             elapsed_ms=stage_elapsed,
@@ -18974,8 +19076,10 @@ class Nl2SqlService:
                 for step in job.steps
             ]
             actor_user_uuid = job.actor_user_uuid
-        final_status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
-        final_error_message = None if safety.is_safe else safety.blocked_reason
+        final_status = (
+            JobStatus.DONE if safety.is_safe and execution_error is None else JobStatus.ERROR
+        )
+        final_error_message = safety.blocked_reason if not safety.is_safe else execution_error
         history_item = HistoryItem(
             business_release_id=job.business_release_id,
             id=history_id,

@@ -379,3 +379,212 @@ def test_pivot_alias_does_not_hide_unauthorized_physical_table(
         )
     assert denied.value.status_code == 400
     execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT DBURITYPE('/APP/SALARY').getclob() FROM APP.ORDERS",
+        "SELECT SYS.DBURITYPE('/APP/SALARY').getclob() x FROM APP.ORDERS",
+        "SELECT XDBURITYPE('/APP/SALARY').getclob() FROM APP.ORDERS",
+        "SELECT sys.xdburitype('/APP/SALARY').getClob() FROM APP.ORDERS",
+        "SELECT URIFACTORY.GETURI('/APP/SALARY').getclob() FROM APP.ORDERS",
+        "SELECT DBMS_CLOUD_AI.GENERATE(prompt => 'list salary', "
+        "profile_name => 'NL2SQL_FINANCE', action => 'runsql') FROM APP.ORDERS",
+        "SELECT DBMS_CLOUD.SEND_REQUEST('c', 'http://x', 'GET') FROM APP.ORDERS",
+        "SELECT C##X.DBMS_CLOUD_PIPELINE.GET_PIPELINE_STATUS('p') FROM APP.ORDERS",
+        "SELECT APEX_WEB_SERVICE.MAKE_REST_REQUEST(p_url => 'http://x', "
+        "p_http_method => 'GET') FROM APP.ORDERS",
+        "SELECT UTL_MAIL.SEND('a', 'b') FROM APP.ORDERS",
+        "SELECT * FROM XMLTABLE('/a' PASSING XMLTYPE(DBURITYPE('/APP/SALARY').getclob()))",
+        "SELECT * FROM JSON_TABLE(UTL_HTTP.REQUEST('http://x'), '$' COLUMNS (a PATH '$'))",
+    ],
+)
+def test_dangerous_functions_cannot_bypass_profile_table_scope(sql: str) -> None:
+    # 関数の中で読む表は SQL の表参照に現れないため、denylist で拒否する。
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert "危険な Oracle 関数" in analysis.safety.blocked_reason
+
+
+@pytest.mark.parametrize(
+    ("sql", "referenced"),
+    [
+        (
+            "SELECT j.a FROM APP.ORDERS o, JSON_TABLE(o.NAME, '$' COLUMNS (a PATH '$.a')) j",
+            ["APP.ORDERS"],
+        ),
+        ("SELECT COLUMN_VALUE FROM TABLE(SYS.ODCINUMBERLIST(1, 2, 3))", []),
+        (
+            "SELECT x.v FROM APP.ORDERS o, "
+            "XMLTABLE('/r' PASSING XMLTYPE('<r/>') COLUMNS v VARCHAR2(10) PATH 'v') x",
+            ["APP.ORDERS"],
+        ),
+    ],
+)
+def test_table_functions_are_not_scope_checked_as_named_tables(
+    sql: str, referenced: list[str]
+) -> None:
+    # 名前の無い表参照（表関数）で識別子エラーにせず、名前のある表だけをスコープ判定する。
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+    assert analysis.safety.referenced_tables == referenced
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM TABLE(SELECT ID FROM APP.SALARY)",
+        "SELECT * FROM TABLE(CAST(MULTISET(SELECT ID FROM APP.SALARY) AS SYS.ODCINUMBERLIST))",
+        "SELECT j.a FROM APP.SALARY s, JSON_TABLE(s.NAME, '$' COLUMNS (a PATH '$.a')) j",
+    ],
+)
+def test_tables_inside_table_functions_are_still_scope_checked(sql: str) -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert "許可されていない表" in analysis.safety.blocked_reason
+    assert "APP.SALARY" in analysis.safety.referenced_tables
+
+
+def test_execute_route_accepts_json_table_within_profile_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(_repository())
+    sql = "SELECT j.a FROM APP.ORDERS o, JSON_TABLE(o.NAME, '$' COLUMNS (a PATH '$.a')) j"
+    execute = Mock(return_value=QueryResults(columns=[], rows=[], total=0))
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+    monkeypatch.setattr(service._oracle_adapter, "execute_select", execute)
+
+    nl2sql_router.execute(
+        ExecuteRequest(sql=sql, row_limit=100),
+        _request(_principal({"sales"})),  # type: ignore[arg-type]
+    )
+
+    execute.assert_called_once_with(sql, 100)
+
+
+def test_analyze_route_returns_400_for_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service(_repository())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    def invalid_identifier(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(": Oracle 識別子が不正です。")
+
+    monkeypatch.setattr(service, "analyze_sql", invalid_identifier)
+    with pytest.raises(HTTPException) as invalid:
+        nl2sql_router.analyze(
+            AnalyzeRequest(sql="SELECT ID FROM APP.ORDERS"),
+            _request(_principal({"sales"})),  # type: ignore[arg-type]
+        )
+    assert invalid.value.status_code == 400
+    assert "Oracle 識別子が不正" in str(invalid.value.detail)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT COUNT(*) FROM APP.ORDERS",
+        "SELECT ID, AMOUNT * 1.1 FROM APP.ORDERS",
+        "SELECT ID FROM APP.ORDERS WHERE AMOUNT * 2 > 10",
+    ],
+)
+def test_column_scope_does_not_treat_asterisk_expressions_as_select_star(sql: str) -> None:
+    service = _service(_repository())
+    allowed = AllowedObjects(
+        table_names=["APP.ORDERS"],
+        columns={"APP.ORDERS": ["ID", "AMOUNT"]},
+        enforce_table_scope=True,
+    )
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+    assert not any("SELECT *" in warning for warning in analysis.safety.warnings)
+
+
+@pytest.mark.parametrize("sql", ["SELECT * FROM APP.ORDERS", "SELECT o.* FROM APP.ORDERS o"])
+def test_column_scope_still_blocks_select_star(sql: str) -> None:
+    service = _service(_repository())
+    allowed = AllowedObjects(
+        table_names=["APP.ORDERS"],
+        columns={"APP.ORDERS": ["ID", "AMOUNT"]},
+        enforce_table_scope=True,
+    )
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert "許可されていない列" in analysis.safety.blocked_reason
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT SYSDATE FROM DUAL",
+        "SELECT 1 FROM SYS.DUAL",
+        "select sysdate from dual",
+        "SELECT o.ID FROM APP.ORDERS o CROSS JOIN DUAL",
+    ],
+)
+def test_dual_is_always_allowed_under_profile_scope(sql: str) -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+    assert "APP.DUAL" not in analysis.safety.referenced_tables
+
+
+def test_dual_in_other_schema_is_still_scope_checked() -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql("SELECT 1 FROM APP.DUAL", allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert "許可されていない表" in analysis.safety.blocked_reason
+
+
+@pytest.mark.parametrize(
+    ("sql", "name"),
+    [
+        ("SELECT ID FROM APP.ORDERS WHERE NAME = :name", ":name"),
+        ("SELECT ID FROM APP.ORDERS WHERE ID = :ID AND AMOUNT > :min_amount", ":min_amount"),
+    ],
+)
+def test_bind_variables_are_rejected_before_execution(sql: str, name: str) -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(sql, allowed, 10)
+
+    assert analysis.safety.is_safe is False
+    assert "バインド変数" in analysis.safety.blocked_reason
+    assert name in analysis.safety.blocked_reason
+
+
+def test_colon_inside_literal_is_not_a_bind_variable() -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+
+    analysis = service.analyze_sql(
+        "SELECT TO_CHAR(CREATED_AT, 'HH24:MI') FROM APP.ORDERS WHERE NAME = ':name'",
+        allowed,
+        10,
+    )
+
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason

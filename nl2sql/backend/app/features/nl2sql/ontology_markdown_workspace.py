@@ -44,6 +44,23 @@ from .ontology_unified_model import (
     resolve_concept_name,
 )
 
+# 公開版を無効にするのは、定義の検証結果が変わりうる変更(対象 object・列・型・制約・関係)だけ。
+# 統計(row_count)・コメント・業務名や Profile の用語集・etag の更新では SQL 生成を止めない。
+_SCHEMA_SCOPE_VOLATILE_KEYS = frozenset({"row_count", "comment", "logical_name"})
+
+
+def _schema_scope_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _schema_scope_value(item)
+            for key, item in value.items()
+            if key not in _SCHEMA_SCOPE_VOLATILE_KEYS
+        }
+    if isinstance(value, list):
+        return [_schema_scope_value(item) for item in value]
+    return value
+
+
 GENERATED = "ontology_markdown_generated"
 PREPARATION = "ontology_markdown_preparation"
 SNAPSHOT = "ontology_markdown_snapshot"
@@ -159,10 +176,30 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             )
         schema = str(prepared.schema_context)
         return (
-            definition_fingerprint(profile.model_dump(mode="json")),
-            definition_fingerprint(schema),
+            definition_fingerprint(
+                {
+                    "allowed_tables": sorted(profile.allowed_tables),
+                    "allowed_views": sorted(profile.allowed_views),
+                }
+            ),
+            definition_fingerprint(_schema_scope_value(json.loads(schema))),
             schema,
         )
+
+    def scope_is_current(self, profile_id: str, profile_hash: str, schema_hash: str) -> str:
+        """保存時の指紋が現在の scope と一致すれば schema context を返す(不一致は空文字)。
+
+        指紋の対象を絞る前(Profile 全体・schema context 全体)に作った準備・公開版も照合する。
+        """
+        current_profile, current_schema, schema = self._scope(profile_id)
+        if (profile_hash, schema_hash) == (current_profile, current_schema):
+            return schema
+        profile = self.runtime._strict_profile(profile_id)
+        legacy = (
+            definition_fingerprint(profile.model_dump(mode="json")),
+            definition_fingerprint(schema),
+        )
+        return schema if (profile_hash, schema_hash) == legacy else ""
 
     def _write(
         self, profile_id: str, identity: str, kind: str, value: dict[str, Any]
@@ -680,12 +717,11 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
 
     def _validate_confirmation(self, profile_id: str, value: dict[str, Any], etag: str) -> None:
         self._draft(profile_id, etag)
-        profile_hash, schema_hash, _ = self._scope(profile_id)
         if (
             value["status"] != "ready"
             or value["draft_etag"] != etag
             or value["expected_head"] != self.head(profile_id)["snapshot_id"]
-            or (profile_hash, schema_hash) != (value["profile_hash"], value["schema_hash"])
+            or not self.scope_is_current(profile_id, value["profile_hash"], value["schema_hash"])
         ):
             raise OntologyVersionConflictError(
                 "MARKDOWN_CONFIRMATION_STALE",

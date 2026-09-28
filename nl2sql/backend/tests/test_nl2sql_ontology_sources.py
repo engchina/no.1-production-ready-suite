@@ -276,6 +276,35 @@ async def test_streaming_upload_keeps_untrusted_profile_id_inside_storage_root(
     assert stored.read_text() == "受注"
 
 
+@pytest.mark.asyncio
+async def test_oci_upload_failure_removes_local_temporary_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OCI への put_object が失敗しても、ローカルの一時ファイルを残さない。"""
+
+    storage = OntologySourceStorage(
+        Settings(
+            local_storage_dir=str(tmp_path),
+            max_upload_bytes=1024,
+            upload_storage_backend="oci",
+        )
+    )
+
+    def failing_put_object(*_args: object) -> str:
+        raise RuntimeError("object storage unavailable")
+
+    monkeypatch.setattr(storage, "_put_object", failing_put_object)
+    with tempfile.SpooledTemporaryFile() as stream:
+        stream.write("受注".encode())
+        stream.seek(0)
+        upload = UploadFile(filename="business.txt", file=cast(BinaryIO, stream))
+        with pytest.raises(RuntimeError, match="object storage unavailable"):
+            await storage.save_upload(profile_id="sales", upload=upload)
+
+    assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+
+
 def test_pdf_page_level_failures_skip_with_warning_and_all_empty_raises() -> None:
     """1 ページの抽出失敗は警告+スキップで縮退し、全ページ空のときだけ失敗する。"""
 

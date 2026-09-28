@@ -12,6 +12,9 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+# 実行前に失敗した job を即時に再 claim できる回数。超えたら claim 期限切れの回収に任せる。
+_MAX_IMMEDIATE_RECLAIMS = 3
+
 
 class OntologyWorker:
     """queued job を ETag 付き更新で 1 件だけ claim して処理する。"""
@@ -70,6 +73,16 @@ class OntologyWorker:
         job_id = str(document["job_id"])
         job_type = str(document.get("job_type") or "")
         logger.info("ontology_job_started", extra={"job_id": job_id, "job_type": job_type})
+        try:
+            self._dispatch(document, job_id, job_type)
+        except Exception:
+            # 実行側が状態を進める前に落ちた job を claim のまま残さない(claim 期限まで固まるため)
+            self._release_claim(job_id)
+            raise
+        logger.info("ontology_job_finished", extra={"job_id": job_id, "job_type": job_type})
+        return True
+
+    def _dispatch(self, document: dict[str, Any], job_id: str, job_type: str) -> None:
         if job_type == "build":
             self.build_service.run_persisted(job_id)
         elif job_type == "markdown_prepare":
@@ -88,8 +101,50 @@ class OntologyWorker:
             self.profile_sync_service.run_persisted(job_id)
         else:
             raise RuntimeError(f"未対応の Ontology job type です: {job_type}")
-        logger.info("ontology_job_finished", extra={"job_id": job_id, "job_type": job_type})
-        return True
+
+    def _release_claim(self, job_id: str) -> None:
+        """自分の claim のまま残った job を claim 前の状態へ戻す(best-effort)。
+
+        実行側(run_persisted 等)が running 等へ進めた job は、各 job type の回復処理に任せる。
+        同じ job で連続して失敗する場合は即時の再 claim を繰り返さず、claim 期限切れの
+        回収(claim_next の stale 判定)に任せる。
+        """
+
+        for _attempt in range(3):
+            try:
+                current = self.runtime.store.get_job(job_id)
+                if (
+                    current is None
+                    or current.get("status") != "claimed"
+                    or current.get("claimed_by") != self.worker_id
+                ):
+                    return
+                failures = int(current.get("claim_failures") or 0) + 1
+                if failures >= _MAX_IMMEDIATE_RECLAIMS:
+                    logger.warning(
+                        "ontology_job_claim_kept_after_failures",
+                        extra={"job_id": job_id, "claim_failures": failures},
+                    )
+                    return
+                self.runtime.store.save_job(
+                    {
+                        **{
+                            key: value
+                            for key, value in current.items()
+                            if key not in {"etag", "created_at", "updated_at"}
+                        },
+                        "status": str(current.get("claimed_from_status") or "queued"),
+                        "claimed_by": "",
+                        "claimed_at": 0.0,
+                        "claim_failures": failures,
+                    },
+                    expected_etag=str(current["etag"]),
+                )
+                return
+            except Exception:
+                logger.warning(
+                    "ontology_job_claim_release_failed", exc_info=True, extra={"job_id": job_id}
+                )
 
 
 def main() -> None:
@@ -116,7 +171,13 @@ def main() -> None:
         return
     poll_seconds = max(0.2, get_settings().nl2sql_ontology_worker_poll_seconds)
     while True:
-        if not worker.process_one():
+        try:
+            processed = worker.process_one()
+        except Exception:
+            # 1 件の異常(DB 瞬断等)で worker プロセスを落とさない
+            logger.exception("ontology_worker_iteration_failed")
+            processed = False
+        if not processed:
             time.sleep(poll_seconds)
 
 

@@ -188,6 +188,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_tcp_connect_timeout_seconds: float = 10.0
     nl2sql_oracle_connect_timeout_seconds: int = 5
     nl2sql_csv_import_max_rows: int = 5000
+    # 件数未指定の SELECT 実行で読み込む行数の安全上限(超えた分は読まず truncated にする)。
+    nl2sql_max_result_rows: int = Field(default=100000, ge=1)
     nl2sql_csv_import_max_columns: int = 200
     nl2sql_feedback_embedding_enabled: bool = False
     nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"

@@ -11019,6 +11019,30 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await expect(sqlTextarea).toHaveValue(generatedSql);
 });
 
+test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り直す", async ({ page }) => {
+  // 実行前の関連付けのまま更新/削除を生成しないよう、実行後に inventory を再取得する。
+  const api = await mockNl2SqlApi(page);
+  let inventoryCount = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/nl2sql/domains/inventory")) inventoryCount += 1;
+  });
+  await page.goto("/domain-management");
+  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const inputPanel = page.locator("#domain-management-panel-input");
+  await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+  await expect.poll(() => inventoryCount).toBe(1);
+  await dismissToasts(page);
+  await inputPanel.getByRole("button", { name: "SQL 生成", exact: true }).click();
+  const executePanel = page.locator("#domain-management-panel-execute");
+  await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/CREATE DOMAIN/);
+  await executePanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await executePanel.getByRole("button", { name: "SQL 実行" }).click();
+  await expect.poll(() => api.statementsPayload?.policy).toBe("domain_sql");
+  await expect.poll(() => inventoryCount).toBe(2);
+  await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/CREATE DOMAIN/);
+});
+
 test("コメント管理は画面遷移後も生成 SQL と実行結果を保持する", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });

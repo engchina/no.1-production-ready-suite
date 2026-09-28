@@ -566,7 +566,7 @@ const nl2sqlJa = {
   "markdownOntology.noFindings": "公開時のエラー・警告はありません。",
   "markdownOntology.diagnosticsUnavailable": "この旧公開版には参照できる検証記録がありません。",
   "markdownOntology.checkOutcome": "公開結果を確認",
-  "markdownOntology.unknownOutcome": "公開結果はまだ確認できません。時間をおいて結果を確認してください。操作は再送していません。",
+  "markdownOntology.notPublished": "公開は完了していません。内容を確認して、もう一度公開してください。",
   "markdownOntology.mainConcepts": "主要概念（6種類）",
   "markdownOntology.auxConcepts": "補助概念（7種類）",
   "markdownOntology.allConcepts": "すべての種類",
@@ -1472,9 +1472,9 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.qaFilePick": "Q/A ファイルを選択",
   "profiles.ontologyBuild.sourceFiles": "構築資料",
   "profiles.ontologyBuild.sourceFilesHint":
-    "PDF / DOCX / TXT / MD / CSV / XLSX / XLS / XLSM を最大 {count} 件まで選択できます。原本と証拠位置を保持します。",
+    "PDF / DOCX / TXT / MD / CSV / XLSX / XLS / XLSM を Q/A ファイルと合わせて最大 {count} 件まで選択できます。原本と証拠位置を保持します。",
   "profiles.ontologyBuild.sourceFilesMaxExceeded":
-    "構築資料は最大 {count} 件までアップロードできます。ファイルを減らして再度選択してください。",
+    "構築資料は Q/A ファイルと合わせて最大 {count} 件までアップロードできます。ファイルを減らして再度選択してください。",
   "profiles.ontologyBuild.sourceFilesList": "選択した構築資料",
   "profiles.ontologyBuild.sourceFileRemove": "{name} を資料一覧から削除",
   "profiles.ontologyBuild.sourceProgress": "資料ごとの抽出状況",

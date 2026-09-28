@@ -741,3 +741,207 @@ def test_content_notes_can_be_published_as_context_without_losing_definitions() 
     snapshot = svc.snapshot("sales")
     assert snapshot is not None
     assert len(snapshot["definitions"]) == len(parser.definitions)
+
+
+def test_guided_confirmation_uses_the_profile_markdown_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """推薦 → 確認 → session 作成が Markdown 公開版の revision で一貫する(422 にしない)。"""
+    from app.features.nl2sql.models import AllowedObjects
+    from app.features.nl2sql.ontology_router import (
+        OntologyProfileRecommendationRequest,
+        ProfileRecommendationConfirmationRequest,
+        QuerySessionApiCreate,
+    )
+
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", True)
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-guided",
+        None,
+    )
+    monkeypatch.setattr(rt.legacy_service, "_enterprise_ai_client", None)
+    monkeypatch.setattr(
+        rt.legacy_service,
+        "resolve_allowed_objects",
+        lambda *_: AllowedObjects(table_names=["APP.ORDERS"], enforce_table_scope=True),
+        raising=False,
+    )
+    question = "受注の一覧"
+    recommendation = rt.recommend_profiles(
+        OntologyProfileRecommendationRequest(question=question, limit=3)
+    )
+    candidate = next(item for item in recommendation.candidates if item.profile_id == "sales")
+    assert candidate.ontology_revision_id == job.revision_id
+    _confirmed, token = rt.confirm_profile_recommendation(
+        recommendation.id,
+        ProfileRecommendationConfirmationRequest(
+            selected_profile_id="sales", selected_revision_id=candidate.ontology_revision_id
+        ),
+    )
+    created = rt.create_session(
+        QuerySessionApiCreate(
+            profile_id="sales",
+            question=question,
+            clarification_mode="guided",
+            profile_confirmation_token=token,
+        )
+    )
+    assert created.session.ontology_revision_id == job.revision_id
+
+
+def test_context_search_reads_inferred_closure_from_markdown_snapshot() -> None:
+    """Markdown 公開版は推論結果を snapshot に固定しており、検索拡張もそれを使う。"""
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-inferred",
+        None,
+    )
+    graph = rt._query_ontology("sales")
+    assert graph.revision.id == job.revision_id
+    from urllib.parse import unquote
+
+    from rdflib import Graph, URIRef
+    from rdflib.namespace import RDF, RDFS
+
+    inferred = Graph().parse(
+        data=svc.snapshot("sales", job.id)["artifacts"]["inferred_turtle"], format="turtle"
+    )
+    prefix = "urn:nl2sql:ontology:node:"
+    edges = [
+        (unquote(str(left).removeprefix(prefix)), unquote(str(right).removeprefix(prefix)))
+        for left, predicate, right in inferred
+        if predicate in {RDF.type, RDFS.subClassOf, RDFS.domain, RDFS.range}
+        and isinstance(left, URIRef)
+        and isinstance(right, URIRef)
+        and str(left).startswith(prefix)
+        and str(right).startswith(prefix)
+    ]
+    node_ids = {node.id for node in graph.nodes}
+    seed = next(
+        (left for left, right in edges if left in node_ids and right in node_ids), None
+    )
+    assert seed is not None, "推論結果に Profile 内の node 間の意味関係が無い"
+    expanded = rt._inferred_context_node_ids(
+        "sales", graph.revision.id, {seed}, allowed_node_ids=node_ids, max_hops=2
+    )
+    assert expanded
+
+
+def test_column_scope_on_one_table_keeps_published_definitions_of_other_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """列を絞っていない許可表は全列扱い。他表だけ列を絞っても公開定義を prompt から落とさない。"""
+    from app.features.nl2sql import ontology_router
+    from app.features.nl2sql.models import AllowedObjects, JobCreateRequest
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-scope",
+        None,
+    )
+    monkeypatch.setattr(ontology_router, "ontology_runtime", rt)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = JobCreateRequest(profile_id="sales", question="q", use_ontology_context=True)
+    profile = rt._strict_profile("sales")
+
+    def render(allowed: AllowedObjects) -> str | None:
+        return service._job_published_ontology_markdown(
+            request=request, profile=profile, business_release_id=job.id, allowed=allowed
+        )
+
+    tables = ["APP.ORDERS", "APP.CUSTOMERS"]
+    partial = render(AllowedObjects(table_names=tables, columns={"APP.CUSTOMERS": ["ID"]}))
+    assert partial and "(`Order`)" in partial and "(`Order.id`)" in partial
+
+
+@pytest.mark.parametrize("change", ["row_count", "comment", "glossary", "allowed_tables"])
+def test_published_context_survives_statistics_and_profile_edits_outside_scope(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """統計・コメント・用語集の更新では公開版を止めず、対象 object の変更だけ再公開を求める。"""
+    from app.features.nl2sql import ontology_router
+    from app.features.nl2sql.models import AllowedObjects, JobCreateRequest
+    from app.features.nl2sql.ontology_service import OntologyGateBlockedError
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-stats",
+        None,
+    )
+    monkeypatch.setattr(ontology_router, "ontology_runtime", rt)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = JobCreateRequest(profile_id="sales", question="q", use_ontology_context=True)
+    allowed = AllowedObjects(table_names=["APP.ORDERS", "APP.CUSTOMERS"])
+    legacy = rt.legacy_service
+    if change == "row_count":
+        legacy.catalog.tables[0].row_count = 12345
+    elif change == "comment":
+        legacy.catalog.tables[0].comment = "統計更新後のコメント"
+    elif change == "glossary":
+        legacy.profile = legacy.profile.model_copy(
+            update={"glossary": {"売上": "受注金額"}, "etag": "changed"}
+        )
+    else:
+        legacy.profile = legacy.profile.model_copy(
+            update={"allowed_tables": [*legacy.profile.allowed_tables, "APP.EXTRA"]}
+        )
+
+    def render() -> str | None:
+        return service._job_published_ontology_markdown(
+            request=request,
+            profile=rt._strict_profile("sales"),
+            business_release_id=job.id,
+            allowed=allowed,
+        )
+
+    if change == "allowed_tables":
+        with pytest.raises(OntologyGateBlockedError):
+            render()
+    else:
+        assert render()
+
+
+def test_publication_with_legacy_full_scope_fingerprint_stays_usable() -> None:
+    """指紋の対象を絞る前(Profile 全体・schema context 全体)の公開版も参照できる。"""
+    from app.features.nl2sql.ontology_definition_service import definition_fingerprint
+    from app.features.nl2sql.ontology_markdown_workspace import SNAPSHOT
+
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-legacy",
+        None,
+    )
+    snapshot = svc.snapshot("sales", job.id)
+    assert snapshot is not None
+    schema = str(rt.prepare_build_schema_context("sales").schema_context)
+    snapshot["profile_hash"] = definition_fingerprint(
+        rt._strict_profile("sales").model_dump(mode="json")
+    )
+    snapshot["schema_hash"] = definition_fingerprint(schema)
+    svc._write("sales", job.id, SNAPSHOT, snapshot)
+    assert published_context(rt, "sales", job.revision_id) == preparation["markdown"]

@@ -26,6 +26,7 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaTable,
 )
+from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.features.nl2sql.service import (
     _NL2SQL_JOB_STAGES,
     JOB_CANCELLED_ERROR_CODE,
@@ -459,3 +460,37 @@ def test_run_job_safely_tolerates_missing_job_record() -> None:
 
     # 旧実装は self._jobs[job_id] の KeyError で worker スレッドごと落ちていた。
     service._run_job_safely("missing-job")  # noqa: SLF001
+
+
+def test_execute_sql_oracle_error_keeps_generated_sql_result_and_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 生成 SQL の実行時エラー（ORA-00904 等）でも生成 SQL・safety・履歴を失わない。
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    owner = _worker(repository)
+
+    def failing_execute(*_args: object, **_kwargs: object) -> None:
+        raise OracleAdapterError('ORA-00904: "ORDER_NAME2": invalid identifier')
+
+    monkeypatch.setattr(owner, "execute_sql", failing_execute)
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+
+    assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-owner") is True
+    job = owner.get_job(created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.ERROR
+    assert job.error_message is not None and "ORA-00904" in job.error_message
+    assert job.result is not None
+    assert job.result.generated_sql == "SELECT ID FROM APP.ORDERS"
+    assert job.result.safety.is_safe is True
+    assert job.result.results.total == 0
+    steps = {step.stage: step.status for step in job.steps}
+    assert steps["safety_check"] == JobStepStatus.DONE
+    assert steps["execute_sql"] == JobStepStatus.ERROR
+    assert steps["format_results"] == JobStepStatus.DONE
+    history = owner._history_by_id(job.result.history_id)  # noqa: SLF001
+    assert history is not None
+    assert history.generated_sql == "SELECT ID FROM APP.ORDERS"
+    assert history.safety_is_safe is True

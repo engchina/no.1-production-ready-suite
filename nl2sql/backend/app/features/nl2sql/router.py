@@ -1863,18 +1863,23 @@ def rewrite(req: RewriteRequest, request: Request) -> ApiResponse[RewriteData]:
 @router.post("/analyze", response_model=ApiResponse[AnalyzeData])
 def analyze(req: AnalyzeRequest, request: Request) -> ApiResponse[AnalyzeData]:
     """SQL の安全性・参照表・推奨修正を返す。"""
-    allowed = nl2sql_service.resolve_direct_sql_allowed_objects(
-        req.allowed_objects,
-        profile_ids=_allowed_profile_ids_for_request(request),
-    )
-    return ApiResponse(
-        data=nl2sql_service.analyze_sql(
+    try:
+        allowed = nl2sql_service.resolve_direct_sql_allowed_objects(
+            req.allowed_objects,
+            profile_ids=_allowed_profile_ids_for_request(request),
+        )
+        data = nl2sql_service.analyze_sql(
             req.sql,
             allowed,
             req.row_limit,
             use_llm=req.use_llm,
         )
-    )
+    except SchemaCatalogEmptyError:
+        raise
+    except ValueError as exc:
+        # 入力 SQL に起因する解析失敗（不正な識別子など）は 500 ではなく 400 で返す。
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=data)
 
 
 @router.get(

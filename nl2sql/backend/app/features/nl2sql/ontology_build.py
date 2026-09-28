@@ -2747,6 +2747,14 @@ class OntologyBuildExecutionLost(RuntimeError):
     """失効した実行が新しい状態・成果物を更新するのを止める。"""
 
 
+class OntologySourceDocumentGone(RuntimeError):
+    """構築 job が参照する保存済み資料が、実行中に削除されていた。"""
+
+    def __init__(self, source_document_id: str) -> None:
+        super().__init__("保存済みファイルが削除されたため、この資料は利用しません。")
+        self.source_document_id = source_document_id
+
+
 class OntologyBuildService:
     """永続 job。local は thread、production は独立 worker から同じ run を呼ぶ。"""
 
@@ -3232,14 +3240,29 @@ class OntologyBuildService:
 
         cancelled = 0
         documents = self._runtime.store.list_documents("jobs", {"profile_id": profile_id})
-        for document in documents:
-            if document.get("job_type") != "build":
+        for listed in documents:
+            if listed.get("job_type") != "build":
                 continue
-            job = OntologyBuildJob.model_validate(document["payload"])
-            if job.status in _TERMINAL_STATUSES:
-                continue
-            self._save_cancelled(document, job, "業務 Profile が削除されたため構築を中止しました。")
-            cancelled += 1
+            job_id = str(listed.get("job_id") or listed["payload"].get("id") or "")
+            document: dict[str, Any] | None = listed
+            # 実行中 job の進捗書込と ETag が競合しても、cancel() と同様に再読して再判定する
+            for attempt in range(3):
+                if document is None:
+                    break
+                job = OntologyBuildJob.model_validate(document["payload"])
+                if job.status in _TERMINAL_STATUSES:
+                    break
+                try:
+                    self._save_cancelled(
+                        document, job, "業務 Profile が削除されたため構築を中止しました。"
+                    )
+                    cancelled += 1
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    logger.info("ontology_build_profile_cancel_conflict job_id=%s", job_id)
+                    document = self._runtime.store.get_document("jobs", {"job_id": job_id})
         return cancelled
 
     def _save_cancelled(
@@ -3690,10 +3713,18 @@ class OntologyBuildService:
                     if attempt == 2:
                         raise
 
-    def _save_source_document(self, source: OntologySourceDocument) -> None:
+    def _save_source_document(
+        self,
+        source: OntologySourceDocument,
+        *,
+        create: bool = True,
+    ) -> None:
         current = self._runtime.store.get_document(
             "source_documents", {"source_document_id": source.id}
         )
+        if current is None and not create:
+            # 実行中に利用者が資料を削除した場合、進捗更新で行を復活させない
+            raise OntologySourceDocumentGone(source.id)
         self._runtime.store.save_document(
             "source_documents",
             {
@@ -3716,7 +3747,7 @@ class OntologyBuildService:
             "source_documents", {"source_document_id": source_id}
         )
         if document is None:
-            raise RuntimeError(f"Ontology source document が見つかりません: {source_id}")
+            raise OntologySourceDocumentGone(source_id)
         source = OntologySourceDocument.model_validate(document["payload"])
         if profile_id and source.profile_id != profile_id:
             raise RuntimeError(
@@ -3730,7 +3761,8 @@ class OntologyBuildService:
         **updates: Any,
     ) -> OntologySourceDocument:
         updated = source.model_copy(update={**updates, "updated_at": utc_now()}, deep=True)
-        self._save_source_document(updated)
+        # job 実行中の状態更新は既存行だけを対象にする(削除済み資料を復活させない)
+        self._save_source_document(updated, create=False)
         return updated
 
     def _update_source_progress(
@@ -4119,11 +4151,11 @@ class OntologyBuildService:
             if current is not None and current.status == OntologyBuildStatus.CANCELLED:
                 return
             message = f"オントロジー構築に失敗しました: {exc}"
+            now = utc_now()
 
             def mutate(job: OntologyBuildJob) -> None:
-                job.status = OntologyBuildStatus.FAILED
-                job.error_message_ja = message
-                job.finished_at = utc_now()
+                # _fail と同じく running/pending の step・phase も終端化する
+                self._mark_failed(job, message, now)
 
             self._update(job_id, mutate)
             record_job(job_type="build", status="failed", error_code="unexpected")
@@ -4146,38 +4178,61 @@ class OntologyBuildService:
         now = utc_now()
 
         def mutate(job: OntologyBuildJob) -> None:
-            job.status = OntologyBuildStatus.FAILED
-            job.error_message_ja = message_ja
-            for phase in job.definition_phases:
-                if phase.status == "running":
-                    phase.status = "failed"
-                    phase.detail_ja = message_ja
-                elif phase.status == "pending":
-                    phase.status = "skipped"
-            if error_code:
-                job.error_code = error_code
-            job.finished_at = now
-            for step in job.steps:
-                if failed_step is not None and step.name == failed_step:
-                    step.status = OntologyBuildStepStatus.FAILED
-                    if failed_step_detail_ja:
-                        step.detail_ja = failed_step_detail_ja
-                    if error_code:
-                        step.code = error_code
-                    if step.started_at is None:
-                        step.started_at = now
-                    step.finished_at = now
-                    continue
-                if skip_pending_steps and step.status in {
-                    OntologyBuildStepStatus.PENDING,
-                    OntologyBuildStepStatus.RUNNING,
-                }:
-                    step.status = OntologyBuildStepStatus.SKIPPED
-                    step.finished_at = now
+            self._mark_failed(
+                job,
+                message_ja,
+                now,
+                skip_pending_steps=skip_pending_steps,
+                failed_step=failed_step,
+                failed_step_detail_ja=failed_step_detail_ja,
+                error_code=error_code,
+            )
 
         self._update(job_id, mutate)
         self._emit(job_id, message_ja)
         record_job(job_type="build", status="failed", error_code="build_failed")
+
+    @staticmethod
+    def _mark_failed(
+        job: OntologyBuildJob,
+        message_ja: str,
+        now: datetime,
+        *,
+        skip_pending_steps: bool = True,
+        failed_step: OntologyBuildStepName | None = None,
+        failed_step_detail_ja: str = "",
+        error_code: str = "",
+    ) -> None:
+        """job を FAILED に終端化し、running/pending の phase・step も閉じる。"""
+
+        job.status = OntologyBuildStatus.FAILED
+        job.error_message_ja = message_ja
+        for phase in job.definition_phases:
+            if phase.status == "running":
+                phase.status = "failed"
+                phase.detail_ja = message_ja
+            elif phase.status == "pending":
+                phase.status = "skipped"
+        if error_code:
+            job.error_code = error_code
+        job.finished_at = now
+        for step in job.steps:
+            if failed_step is not None and step.name == failed_step:
+                step.status = OntologyBuildStepStatus.FAILED
+                if failed_step_detail_ja:
+                    step.detail_ja = failed_step_detail_ja
+                if error_code:
+                    step.code = error_code
+                if step.started_at is None:
+                    step.started_at = now
+                step.finished_at = now
+                continue
+            if skip_pending_steps and step.status in {
+                OntologyBuildStepStatus.PENDING,
+                OntologyBuildStepStatus.RUNNING,
+            }:
+                step.status = OntologyBuildStepStatus.SKIPPED
+                step.finished_at = now
 
     def _run(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
         if self._is_cancelled(job_id):
@@ -4234,28 +4289,34 @@ class OntologyBuildService:
             )
             extracted_pairs: list[QaPair] = []
             seen_hashes: set[str] = set()
+            source_filenames = {
+                progress.source_document_id: progress.filename for progress in job.sources
+            }
             for source_id in job.source_document_ids:
-                source = self._get_source_document(source_id, profile_id=job.profile_id)
-                if source.sha256 in seen_hashes:
-                    warning = f"{source.filename}: 同一内容の資料は 1 回だけ利用します。"
-                    self._update_source_progress(
-                        job_id,
-                        source.id,
-                        status=OntologySourceStatus.EXTRACTED,
-                        warnings_ja=[warning],
-                    )
-                    record_source_extraction(
-                        file_format=Path(source.filename).suffix, status="duplicate"
-                    )
-                    continue
-                seen_hashes.add(source.sha256)
-                self._update_source_progress(
-                    job_id, source.id, status=OntologySourceStatus.EXTRACTING
-                )
-                source = self._update_source_document(
-                    source, status=OntologySourceStatus.EXTRACTING
-                )
+                # 資料の取得・状態更新も含めて 1 資料単位で失敗を閉じ込める
+                # (実行中に資料が削除されてもジョブ全体は止めない)
+                source: OntologySourceDocument | None = None
                 try:
+                    source = self._get_source_document(source_id, profile_id=job.profile_id)
+                    if source.sha256 in seen_hashes:
+                        warning = f"{source.filename}: 同一内容の資料は 1 回だけ利用します。"
+                        self._update_source_progress(
+                            job_id,
+                            source.id,
+                            status=OntologySourceStatus.EXTRACTED,
+                            warnings_ja=[warning],
+                        )
+                        record_source_extraction(
+                            file_format=Path(source.filename).suffix, status="duplicate"
+                        )
+                        continue
+                    seen_hashes.add(source.sha256)
+                    self._update_source_progress(
+                        job_id, source.id, status=OntologySourceStatus.EXTRACTING
+                    )
+                    source = self._update_source_document(
+                        source, status=OntologySourceStatus.EXTRACTING
+                    )
                     image_runner = None
                     generate_image = getattr(client, "generate_from_image", None)
                     if callable(configured) and configured() and callable(generate_image):
@@ -4289,6 +4350,15 @@ class OntologyBuildService:
                                 else ""
                             )
                         )
+                    # 先に資料の状態を保存する(抽出中に削除されていたらここで失敗扱いにし、
+                    # 削除済み資料の証拠を構築へ混ぜない)
+                    extracting_source = source
+                    source = self._update_source_document(
+                        source,
+                        status=OntologySourceStatus.EXTRACTED,
+                        extracted_chunk_count=len(extracted.chunks),
+                        warnings_ja=extracted.warnings_ja,
+                    )
                     if extracted.warnings_ja:
                         # ページ単位のスキップ等は警告として残し、資料全体は成功扱いにする
                         self._add_warnings(
@@ -4300,7 +4370,7 @@ class OntologyBuildService:
                             continue
                         text_units.append(
                             _BuildTextUnit(
-                                source_document=source,
+                                source_document=extracting_source,
                                 source_label=source.filename,
                                 locator_kind=chunk.locator_kind,
                                 locator=chunk.locator,
@@ -4309,12 +4379,6 @@ class OntologyBuildService:
                         )
                     source_evidence_count += len(extracted.chunks)
                     extracted_pairs.extend(extracted.qa_pairs)
-                    source = self._update_source_document(
-                        source,
-                        status=OntologySourceStatus.EXTRACTED,
-                        extracted_chunk_count=len(extracted.chunks),
-                        warnings_ja=extracted.warnings_ja,
-                    )
                     self._update_source_progress(
                         job_id,
                         source.id,
@@ -4325,29 +4389,44 @@ class OntologyBuildService:
                     record_source_extraction(
                         file_format=Path(source.filename).suffix, status="extracted"
                     )
+                except OntologyBuildExecutionLost:
+                    raise
                 except Exception as exc:
-                    error_message = f"{source.filename}: {exc}"
-                    source = self._update_source_document(
-                        source,
-                        status=OntologySourceStatus.FAILED,
-                        error_message_ja=error_message,
+                    source_name = (
+                        source.filename
+                        if source is not None
+                        else source_filenames.get(source_id) or source_id
                     )
+                    error_message = f"{source_name}: {exc}"
+                    if source is not None and not isinstance(exc, OntologySourceDocumentGone):
+                        try:
+                            source = self._update_source_document(
+                                source,
+                                status=OntologySourceStatus.FAILED,
+                                error_message_ja=error_message,
+                            )
+                        except Exception:
+                            # 失敗記録の直前に削除された資料は行を復活させない。
+                            # 記録自体の失敗でも残りの資料の処理は継続する
+                            logger.warning(
+                                "ontology_source_failure_record_failed",
+                                exc_info=True,
+                                extra={"job_id": job_id, "source_document_id": source_id},
+                            )
                     self._update_source_progress(
                         job_id,
-                        source.id,
+                        source_id,
                         status=OntologySourceStatus.FAILED,
                         error_message_ja=error_message,
                     )
-                    record_source_extraction(
-                        file_format=Path(source.filename).suffix, status="failed"
-                    )
+                    record_source_extraction(file_format=Path(source_name).suffix, status="failed")
                     # 1 資料の失敗でジョブ全体を止めず、警告として残りの入力で継続する
-                    failed_source_names.append(source.filename)
+                    failed_source_names.append(source_name)
                     failed_source_errors.append(error_message)
                     self._add_warnings(job_id, [error_message])
                     self._emit(
                         job_id,
-                        f"{source.filename}: 抽出に失敗しました(他の入力で処理を継続します)。",
+                        f"{source_name}: 抽出に失敗しました(他の入力で処理を継続します)。",
                         code="SOURCE_EXTRACTION_FAILED",
                         step=OntologyBuildStepName.SOURCE_EXTRACTION,
                     )

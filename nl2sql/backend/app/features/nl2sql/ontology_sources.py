@@ -277,16 +277,19 @@ class OntologySourceStorage:
             raise
         storage_uri = str(target)
         if self.settings.upload_storage_backend.strip().lower() == "oci":
-            storage_uri = await asyncio.to_thread(
-                self._put_object,
-                profile_storage_key,
-                source_id,
-                filename,
-                target,
-            )
-            # OCI へ移した後のローカルコピーは残さない(最大 200MiB×5/build のディスクリーク防止)
-            await asyncio.to_thread(_unlink_missing_ok, target)
-            await asyncio.to_thread(_rmdir_if_empty, target.parent)
+            try:
+                storage_uri = await asyncio.to_thread(
+                    self._put_object,
+                    profile_storage_key,
+                    source_id,
+                    filename,
+                    target,
+                )
+            finally:
+                # OCI へ移した後(アップロード失敗時も)ローカルコピーは残さない
+                # (最大 200MiB×5/build のディスクリーク防止)
+                await asyncio.to_thread(_unlink_missing_ok, target)
+                await asyncio.to_thread(_rmdir_if_empty, target.parent)
         return OntologySourceDocument(
             id=source_id,
             profile_id=profile_id,
