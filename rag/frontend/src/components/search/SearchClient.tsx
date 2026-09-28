@@ -51,7 +51,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { useNowMs } from "@/lib/use-now-ms";
-import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
+import { isOneOf, removeWorkspace, useWorkspaceState } from "@/lib/workspace-state";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { QuerySuggestions } from "./QuerySuggestions";
@@ -201,6 +201,13 @@ export function SearchClient() {
       ? businessViewIds.filter((id) => !businessViews.some((view) => view.id === id))
       : [];
   const staleBusinessViewKey = staleBusinessViewIds.join(",");
+  // 選んだ業務ビューがどれも参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
+  // backend も 409 で理由を返すが、送信する前にこの場で理由を示す。
+  const selectedBusinessViews = businessViews.filter((view) => businessViewIds.includes(view.id));
+  const selectedWithoutKnowledgeBases =
+    selectedBusinessViews.length > 0 &&
+    selectedBusinessViews.length === businessViewIds.length &&
+    selectedBusinessViews.every((view) => view.knowledge_base_count === 0);
   // 画面を離れたら生成中の検索を止める（backend の pipeline と LLM を無駄に動かし続けない。#285）。
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
@@ -231,6 +238,7 @@ export function SearchClient() {
       setScopeError(t("businessViews.scope.required"));
       return;
     }
+    if (selectedWithoutKnowledgeBases) return;
     setScopeError("");
     setSubmittedQuery(trimmed);
     setLastSkipFaq(skipFaq);
@@ -292,6 +300,8 @@ export function SearchClient() {
                 : current
             ),
           onMetadata: (m) => {
+            // 新しい回答は回答履歴の先頭に入るため、履歴を 1 ページ目に戻す（#304）。
+            removeWorkspace("search.historyPage");
             setMeta({
               trace_id: m.trace_id,
               elapsed_ms: m.elapsed_ms,
@@ -421,7 +431,10 @@ export function SearchClient() {
                   if (next.length > 0) setScopeError("");
                 }}
                 disabled={isStreaming}
-                error={scopeError}
+                error={
+                  scopeError ||
+                  (selectedWithoutKnowledgeBases ? t("businessViews.scope.noKnowledgeBases") : "")
+                }
               />
 
               <div className="flex flex-col gap-2 sm:flex-row">

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { API_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
+import { ANSWER_EVALUATION_TIMEOUT_MS, API_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
 import { t } from "./i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -71,6 +71,63 @@ describe("api.request envelope", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/ready/database",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
+
+  it("保存済みの回答の評価は通常の timeout で打ち切らず、評価用の長い timeout を使う", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    let settled = false;
+    const requestPromise = api.evaluateDocragAnswer("trace-1", "標準回答").catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+
+    // backend の上限（600 秒）より長く待つ。通常の API の 30 秒では失敗にしない。
+    expect(ANSWER_EVALUATION_TIMEOUT_MS).toBeGreaterThan(600_000);
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS + 1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(ANSWER_EVALUATION_TIMEOUT_MS);
+
+    await expect(requestPromise).resolves.toMatchObject({
+      status: 408,
+      messages: [
+        t("common.api.timeout", { seconds: Math.ceil(ANSWER_EVALUATION_TIMEOUT_MS / 1000) }),
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/search/answers/trace-1/evaluation",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("listDocragAnswers はページングと trace_id の絞り込みを query string にする", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: { items: [], total: 0, limit: 10, offset: 20, has_next: false },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await api.listDocragAnswers({ businessViewId: "bv-1", limit: 10, offset: 20 });
+    await api.listDocragAnswers({ businessViewId: "bv-1", limit: 2, traceIds: ["t-1", "t-2"] });
+
+    expect(page.total).toBe(0);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/search/answers?business_view_id=bv-1&limit=10&offset=20"
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/search/answers?business_view_id=bv-1&limit=2&offset=0&trace_id=t-1&trace_id=t-2"
     );
   });
 
