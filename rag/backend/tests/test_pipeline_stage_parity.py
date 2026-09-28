@@ -75,7 +75,6 @@ def test_chunking_service_matches_local_core() -> None:
         strategy=request.strategy,
         chunk_size=request.chunk_size,
         overlap=request.overlap,
-        child_size=request.child_size,
         min_chars=request.min_chars,
         delimiter=request.delimiter,
     )
