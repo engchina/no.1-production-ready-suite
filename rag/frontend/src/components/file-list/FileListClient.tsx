@@ -29,6 +29,7 @@ import {
   ApiError,
   type DocumentSummary,
   type FileStatus,
+  type IngestionJob,
   type KnowledgeBaseRef,
 } from "@/lib/api";
 import {
@@ -43,42 +44,21 @@ import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
+import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
+
+import {
+  classifyEnqueuedJob,
+  FILE_LIST_FILTERS as FILTERS,
+  FILE_LIST_QUERY_MAX_LENGTH,
+  INITIAL_FILE_LIST_VIEW as INITIAL_VIEW,
+  isFileListView,
+  outOfRangeOffset,
+  summarizeEnqueueOutcomes,
+  type EnqueueOutcome,
+} from "./FileListClient.logic";
 
 const LIMIT = 20;
-const FILTERS: (FileStatus | "ALL")[] = [
-  "ALL",
-  "UPLOADED",
-  "PREPROCESSING",
-  "INGESTING",
-  "REVIEW",
-  "CHUNKING",
-  "CHUNKED",
-  "INDEXING",
-  "INDEXED",
-  "ERROR",
-];
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
-
-interface FileListView {
-  filter: FileStatus | "ALL";
-  q: string;
-  knowledgeBaseId: string;
-  offset: number;
-}
-const INITIAL_VIEW: FileListView = { filter: "ALL", q: "", knowledgeBaseId: "ALL", offset: 0 };
-
-function isFileListView(value: unknown): value is FileListView {
-  const view = value as FileListView;
-  return (
-    typeof view === "object" &&
-    view !== null &&
-    (FILTERS as unknown[]).includes(view.filter) &&
-    typeof view.q === "string" &&
-    typeof view.knowledgeBaseId === "string" &&
-    Number.isInteger(view.offset) &&
-    view.offset >= 0
-  );
-}
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
@@ -142,8 +122,23 @@ export function FileListClient() {
   const page = query.data;
   const items = page?.items ?? [];
   const pageIds = items.map((d) => d.id);
-  const allSelected = pageIds.length > 0 && selection.count === pageIds.length;
+  // 再取得で一覧から消えた行（他の画面で削除・状態の絞り込みから外れた）は選択に数えない。
   const selectedDocuments = items.filter((d) => selection.isSelected(d.id));
+  const selectedCount = selectedDocuments.length;
+  const allSelected = pageIds.length > 0 && selectedCount === pageIds.length;
+
+  // 表示中のページが範囲外になったら（最後のページの最後の行を削除した等）、残っている最後の
+  // ページへ移す。空のページに「該当なし」とだけ出してページ送りも消える状態にしない（#281）。
+  // DB の縮退応答（warning 付きの空一覧）ではページ位置を保つ。
+  const correctedOffset =
+    page && !query.isPlaceholderData && (page.warning_messages?.length ?? 0) === 0
+      ? outOfRangeOffset({ offset, total: page.total, limit: LIMIT })
+      : null;
+  useEffect(() => {
+    if (correctedOffset !== null) {
+      setView((current) => ({ ...current, offset: correctedOffset }));
+    }
+  }, [correctedOffset, setView]);
   const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
   const bulkBusy = bulkIngest !== null || bulkDelete !== null;
   const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
@@ -166,15 +161,47 @@ export function FileListClient() {
     selection.clear();
   };
 
+  // 検索語が変わったときだけ先頭ページへ戻し選択を解除する。入力欄から focus を外しただけで
+  // ページ位置と選択を失わない（一括操作のボタンを押す直前の blur で選択が消えていた。#281）。
+  const commitSearch = () => {
+    const next = search.trim();
+    if (next === q) return;
+    resetView(() => setQ(next));
+  };
+
+  const runRowIngest = (doc: DocumentSummary) => {
+    enqueueIngestion.mutate(
+      { id: doc.id, force: false },
+      {
+        onSuccess: (job) => {
+          startGraceWindow();
+          notifyRowEnqueued(doc, job);
+        },
+        onError: (error) => {
+          toast.error(t("fileList.ingest.toast.failed", { name: doc.file_name }), {
+            description:
+              error instanceof ApiError ? error.message : t("fileList.ingest.toast.failedHint"),
+          });
+        },
+      }
+    );
+  };
+
   const runBulkIngest = async () => {
     const targets = ingestibleSelected.map((d) => d.id);
     if (targets.length === 0 || bulkBusy) return;
     setBulkIngest({ done: 0, total: targets.length });
+    const outcomes: EnqueueOutcome[] = [];
     for (const [index, id] of targets.entries()) {
       try {
-        await api.enqueueDocumentIngestionJob(id);
-      } catch {
-        // 個別失敗は継続。状態は再取得で反映される。
+        outcomes.push(classifyEnqueuedJob(await api.enqueueDocumentIngestionJob(id)));
+      } catch (error) {
+        // 個別失敗は継続し、最後にまとめて知らせる。
+        outcomes.push({
+          kind: "failed",
+          message:
+            error instanceof ApiError ? error.message : t("fileList.ingest.toast.failedHint"),
+        });
       }
       setBulkIngest({ done: index + 1, total: targets.length });
     }
@@ -183,6 +210,7 @@ export function FileListClient() {
     startGraceWindow();
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+    notifyBulkEnqueued(summarizeEnqueueOutcomes(outcomes), targets.length);
   };
 
   const runBulkDelete = async () => {
@@ -245,7 +273,15 @@ export function FileListClient() {
     try {
       const result = await deleteDocument.mutateAsync(doc.id);
       selection.clear();
-      toast.success(t("fileList.delete.toast.deleted", { name: result.file_name }));
+      // 文書は消えたが原本・artifact の削除に失敗した警告は、成功として黙らせない（#281）。
+      const warnings = result.warning_messages ?? [];
+      if (warnings.length > 0) {
+        toast.warning(t("fileList.delete.toast.deletedWithWarning", { name: result.file_name }), {
+          description: warnings.join(" "),
+        });
+      } else {
+        toast.success(t("fileList.delete.toast.deleted", { name: result.file_name }));
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError
@@ -300,9 +336,10 @@ export function FileListClient() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") resetView(() => setQ(search.trim()));
+                  if (e.key === "Enter") commitSearch();
                 }}
-                onBlur={() => resetView(() => setQ(search.trim()))}
+                onBlur={commitSearch}
+                maxLength={FILE_LIST_QUERY_MAX_LENGTH}
                 placeholder={t("fileList.searchPlaceholder")}
                 aria-label={t("fileList.searchPlaceholder")}
                 className="h-10 w-56 rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring"
@@ -322,23 +359,26 @@ export function FileListClient() {
         ) : null}
 
         {/* 一括操作バー */}
-        {selection.count > 0 ? (
+        {selectedCount > 0 || bulkBusy ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-info-subtle px-4 py-2.5">
-            <span className="text-sm font-medium text-fg">
-              {t("fileList.selected", { count: selection.count })}
+            {/* 進み具合はボタンのラベルではなくここに出す（loading 中にラベルを差し替えない）。 */}
+            <span className="text-sm font-medium text-fg" role="status">
+              {bulkIngest
+                ? t("fileList.bulkQueueRunning", { done: bulkIngest.done, total: bulkIngest.total })
+                : bulkDelete
+                  ? t("fileList.bulkDeleteRunning", {
+                      done: bulkDelete.done,
+                      total: bulkDelete.total,
+                    })
+                  : t("fileList.selected", { count: selectedCount })}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
                 onClick={() => void runBulkIngest()}
                 loading={bulkIngest !== null}
                 disabled={bulkBusy || ingestibleSelected.length === 0} icon={Sparkles}>
-                {bulkIngest
-                  ? t("fileList.bulkQueueRunning", {
-                      done: bulkIngest.done,
-                      total: bulkIngest.total,
-                    })
-                  : `${t("fileList.bulkQueue")} (${ingestibleSelected.length})`}
+                {`${t("fileList.bulkQueue")} (${ingestibleSelected.length})`}
               </Button>
               <Button
                 variant="danger"
@@ -346,12 +386,7 @@ export function FileListClient() {
                 onClick={() => void runBulkDelete()}
                 loading={bulkDelete !== null}
                 disabled={bulkBusy || selectedDocuments.length === 0} icon={Trash2}>
-                {bulkDelete
-                  ? t("fileList.bulkDeleteRunning", {
-                      done: bulkDelete.done,
-                      total: bulkDelete.total,
-                    })
-                  : `${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
+                {`${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
               </Button>
               <Button variant="ghost" size="sm" onClick={selection.clear} disabled={bulkBusy} icon={X}>
                 {t("fileList.clearSelection")}
@@ -362,7 +397,7 @@ export function FileListClient() {
 
         {query.isError ? (
           <ErrorState
-            message={query.error instanceof ApiError ? query.error.message : "一覧の取得に失敗しました。"}
+            message={query.error instanceof ApiError ? query.error.message : t("fileList.loadError")}
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending ? (
@@ -375,11 +410,7 @@ export function FileListClient() {
                 onToggleAll: () => selection.toggleAll(pageIds),
                 isSelected: (doc) => selection.isSelected(doc.id),
                 onToggle: (doc) => selection.toggle(doc.id),
-                onIngest: (doc, force) =>
-                  enqueueIngestion.mutate(
-                    { id: doc.id, force },
-                    { onSuccess: startGraceWindow }
-                  ),
+                onIngest: runRowIngest,
                 onDelete: (doc) => void runDelete(doc),
                 isIngesting: (doc) =>
                   enqueueIngestion.isPending &&
@@ -387,7 +418,7 @@ export function FileListClient() {
                 isDeleting: (doc) =>
                   deleteDocument.isPending && deleteDocument.variables === doc.id,
                 // 一括選択中は行の操作を止め、一括操作のバーに集める（buttons.md §5.1）。
-                actionsDisabled: bulkBusy || selection.count > 0,
+                actionsDisabled: bulkBusy || selectedCount > 0,
               })}
               rows={items}
               getRowKey={(doc) => doc.id}
@@ -444,6 +475,43 @@ export function FileListClient() {
   );
 }
 
+/** 行の「ファイル準備を実行」の結果を知らせる。SKIPPED は状態が変わらないため理由を出す。 */
+function notifyRowEnqueued(doc: DocumentSummary, job: IngestionJob) {
+  const outcome = classifyEnqueuedJob(job);
+  if (outcome.kind === "skipped") {
+    toast.warning(t("fileList.ingest.toast.skipped", { name: doc.file_name }), {
+      description: ingestionSkipReasonLabel(outcome.job.skip_reason),
+    });
+    return;
+  }
+  toast.info(t("fileList.ingest.toast.queued", { name: doc.file_name }));
+}
+
+/** 一括投入の結果を 1 回だけ知らせる。部分失敗・スキップを成功として黙らせない。 */
+function notifyBulkEnqueued(summary: ReturnType<typeof summarizeEnqueueOutcomes>, total: number) {
+  if (summary.skipped === 0 && summary.failed === 0) {
+    toast.info(t("fileList.bulkQueue.toast.queued", { count: summary.queued }));
+    return;
+  }
+  const reason =
+    summary.firstError ??
+    (summary.firstSkipReason !== null || summary.skipped > 0
+      ? ingestionSkipReasonLabel(summary.firstSkipReason)
+      : "");
+  const description = t("fileList.bulkQueue.toast.detail", {
+    skipped: summary.skipped,
+    failed: summary.failed,
+    reason,
+  });
+  if (summary.queued === 0) {
+    toast.error(t("fileList.bulkQueue.toast.failed"), { description });
+    return;
+  }
+  toast.warning(t("fileList.bulkQueue.toast.partial", { queued: summary.queued, total }), {
+    description,
+  });
+}
+
 /** 一覧の列定義。先頭列は一括選択のチェックボックス、ファイル名列を行見出しにする。 */
 function documentColumns({
   allSelected,
@@ -460,7 +528,7 @@ function documentColumns({
   onToggleAll: () => void;
   isSelected: (doc: DocumentSummary) => boolean;
   onToggle: (doc: DocumentSummary) => void;
-  onIngest: (doc: DocumentSummary, force: boolean) => void;
+  onIngest: (doc: DocumentSummary) => void;
   onDelete: (doc: DocumentSummary) => void;
   isIngesting: (doc: DocumentSummary) => boolean;
   isDeleting: (doc: DocumentSummary) => boolean;
@@ -563,7 +631,7 @@ function documentActions(
     isIngesting,
     isDeleting,
   }: {
-    onIngest: (doc: DocumentSummary, force: boolean) => void;
+    onIngest: (doc: DocumentSummary) => void;
     onDelete: (doc: DocumentSummary) => void;
     isIngesting: (doc: DocumentSummary) => boolean;
     isDeleting: (doc: DocumentSummary) => boolean;
@@ -579,7 +647,7 @@ function documentActions(
       visible: INGESTIBLE.has(doc.status),
       loading: ingesting,
       disabled: deleting,
-      onSelect: () => onIngest(doc, false),
+      onSelect: () => onIngest(doc),
     },
     {
       id: "delete",

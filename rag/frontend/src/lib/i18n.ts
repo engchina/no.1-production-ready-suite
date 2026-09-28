@@ -1252,6 +1252,18 @@ export const ja = {
   "fileList.delete.confirm.confirm": "削除",
   "fileList.delete.toast.deleted": "「{name}」を削除しました。",
   "fileList.delete.toast.failed": "ドキュメントの削除に失敗しました。",
+  "fileList.delete.toast.deletedWithWarning":
+    "「{name}」を削除しましたが、保存先のファイルの後始末に一部失敗しました。",
+  "fileList.loadError": "文書の一覧を取得できませんでした。接続を確認して再試行してください。",
+  "fileList.ingest.toast.queued": "「{name}」のファイル準備を開始しました。状態は一覧に反映されます。",
+  "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",
+  "fileList.ingest.toast.failed": "「{name}」のファイル準備を開始できませんでした。",
+  "fileList.ingest.toast.failedHint": "文書の状態を確認してから再試行してください。",
+  "fileList.bulkQueue.toast.queued": "{count} 件のファイル準備を開始しました。状態は一覧に反映されます。",
+  "fileList.bulkQueue.toast.partial":
+    "{total} 件中 {queued} 件のファイル準備を開始しました。開始できなかった文書があります。",
+  "fileList.bulkQueue.toast.failed": "選択した文書のファイル準備を開始できませんでした。",
+  "fileList.bulkQueue.toast.detail": "スキップ {skipped} 件・失敗 {failed} 件。{reason}",
   "pager.prev": "前へ",
   "pager.next": "次へ",
   "pager.range": "{start} - {end} / {total} 件",
@@ -2012,6 +2024,8 @@ export const ja = {
   "documents.recipes.create": "追加する",
   "documents.recipes.delete": "レシピを削除",
   "documents.recipes.deleteDisabledMin": "レシピを削除（少なくとも1件必要です）",
+  "documents.recipes.deleteFailed":
+    "レシピを削除できませんでした。処理中でないことを確認して再試行してください。",
   "documents.recipes.deleteTitle": "この処理レシピを削除しますか？",
   "documents.recipes.deleteDescription":
     "このレシピの処理結果と検索索引を削除します。この操作は元に戻せません。",

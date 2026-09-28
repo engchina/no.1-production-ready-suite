@@ -19,8 +19,12 @@ export function useSelection<T extends string>() {
     });
   }, []);
 
+  // 件数ではなく「表示中の ids がすべて選ばれているか」で判定する。再取得で一覧から消えた
+  // id が選択に残っていても、全選択 / 全解除が逆にならないようにする（#281）。
   const toggleAll = useCallback((ids: T[]) => {
-    setSelected((prev) => (prev.size === ids.length ? new Set<T>() : new Set(ids)));
+    setSelected((prev) =>
+      ids.length > 0 && ids.every((id) => prev.has(id)) ? new Set<T>() : new Set(ids)
+    );
   }, []);
 
   const clear = useCallback(() => setSelected(new Set<T>()), []);
