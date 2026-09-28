@@ -383,7 +383,6 @@ describe("api.request envelope", () => {
       chunking_strategy: null,
       chunk_size: 512,
       chunk_overlap: null,
-      chunk_child_size: null,
       chunk_min_chars: null,
       chunk_context_header_enabled: null,
       graph_profile: null,

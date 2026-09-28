@@ -30,9 +30,15 @@ from fastapi import (
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
-from app.config import CHUNKING_STRATEGIES_WITH_MIN_CHARS, Settings, get_settings
+from app.config import (
+    CHUNKING_STRATEGIES_WITH_MIN_CHARS,
+    LEGACY_CHUNKING_STRATEGY_ALIASES,
+    Settings,
+    get_settings,
+)
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
+from app.rag.chunking_strategy import resolve_docrag_chunking_params
 from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY, build_docrag_chunks
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.extraction_field_adapter import load_field_schema
@@ -129,6 +135,15 @@ DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
     {FileStatus.UPLOADED, FileStatus.INDEXED, FileStatus.ERROR}
 )
+# DocRAG 親子階層の分割パラメータ(文書レシピの項目名)。分割方式が docrag_small_to_big の
+# ときだけ分割結果に効くので、差分(drift)の判定もそのときだけ比べる。
+DOCRAG_PROCESSING_CONFIG_FIELDS: tuple[str, ...] = (
+    "docrag_child_target_chars",
+    "docrag_table_child_target_chars",
+    "docrag_parent_target_chars",
+    "docrag_parent_max_pages",
+    "docrag_parent_max_children",
+)
 DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     "preprocess_profile": ("preprocess_profile",),
     "parser_adapter_backend": (
@@ -146,9 +161,9 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunking_strategy",
         "chunk_size",
         "chunk_overlap",
-        "chunk_child_size",
         "chunk_min_chars",
         "chunk_context_header_enabled",
+        *DOCRAG_PROCESSING_CONFIG_FIELDS,
     ),
     "graph_profile": ("graph_profile",),
     "field_extraction_enabled": ("field_extraction_enabled",),
@@ -954,14 +969,17 @@ async def preview_document_recipe_chunks(
     extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
     try:
         if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY:
-            chunks = build_docrag_chunks(extraction, source_name=detail.file_name)
+            chunks = build_docrag_chunks(
+                extraction,
+                source_name=detail.file_name,
+                params=resolve_docrag_chunking_params(candidate),
+            )
         else:
             chunks = chunk_extraction_with_strategy(
                 extraction,
                 strategy=candidate.rag_chunking_strategy,
                 chunk_size=candidate.rag_chunk_size,
                 overlap=candidate.rag_chunk_overlap,
-                child_size=candidate.rag_chunk_child_size,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
             )
@@ -1285,13 +1303,6 @@ def _candidate_chunking_settings(base: Settings, overrides: Mapping[str, object]
     if candidate.rag_chunk_overlap >= candidate.rag_chunk_size:
         raise HTTPException(
             status_code=422, detail="overlap は chunk_size より小さくしてください。"
-        )
-    if (
-        candidate.rag_chunking_strategy == "hierarchical_parent_child"
-        and candidate.rag_chunk_child_size >= candidate.rag_chunk_size
-    ):
-        raise HTTPException(
-            status_code=422, detail="child_size は chunk_size より小さくしてください。"
         )
     if (
         candidate.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
@@ -1955,6 +1966,46 @@ def _processing_recipe_snapshot(
     }
 
 
+def _processing_config_drift_groups(
+    observed: Mapping[str, object],
+    effective: Mapping[str, object],
+) -> list[str]:
+    """配信中レシピの snapshot と現在の有効設定を比べ、出力が変わる設定群を返す。
+
+    DocRAG 親子階層の分割パラメータは、その方式を使うときだけ比べる。追加前の snapshot は
+    値を持たないため、そのときは rag_poc の既定値(Settings の既定)で分割したものとして扱う。
+    """
+    docrag_in_use = effective.get("chunking_strategy") == DOCRAG_CHUNKING_STRATEGY
+
+    def _observed_value(field: str) -> object:
+        value = observed.get(field)
+        if value is None and field in DOCRAG_PROCESSING_CONFIG_FIELDS:
+            return Settings.model_fields[f"rag_{field}"].default
+        return value
+
+    def _compared_fields(fields: tuple[str, ...]) -> tuple[str, ...]:
+        if docrag_in_use:
+            return fields
+        return tuple(field for field in fields if field not in DOCRAG_PROCESSING_CONFIG_FIELDS)
+
+    return [
+        group
+        for group, fields in DOCUMENT_PROCESSING_OUTPUT_GROUPS.items()
+        if any(_observed_value(field) != effective.get(field) for field in _compared_fields(fields))
+    ]
+
+
+def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -> bool:
+    """chunk_set の snapshot が削除した分割方式(親子階層など)で作られたかを返す。"""
+    raw = row.get("recipe_subset") if row else None
+    effective = raw.get("effective_processing_config") if isinstance(raw, Mapping) else None
+    strategy = effective.get("chunking_strategy") if isinstance(effective, Mapping) else None
+    return (
+        isinstance(strategy, str)
+        and strategy.strip().casefold() in LEGACY_CHUNKING_STRATEGY_ALIASES
+    )
+
+
 def _processing_snapshot_config(
     row: Mapping[str, object] | None,
 ) -> DocumentProcessingConfig | None:
@@ -2001,11 +2052,12 @@ async def _document_ingestion_config_data(
     if observed_config is not None:
         observed_values = observed_config.model_dump(mode="json")
         effective_values = effective_config.model_dump(mode="json")
-        drift_fields = [
-            group
-            for group, fields in DOCUMENT_PROCESSING_OUTPUT_GROUPS.items()
-            if any(observed_values.get(field) != effective_values.get(field) for field in fields)
-        ]
+        drift_fields = _processing_config_drift_groups(observed_values, effective_values)
+        if "chunking_strategy" not in drift_fields and _snapshot_used_removed_chunking_strategy(
+            serving
+        ):
+            # 読み込み時に後継へ読み替えるが、配信中の chunk は削除した方式で作られている。
+            drift_fields.append("chunking_strategy")
     elif is_indexed:
         if (
             detail.preprocess_artifact is not None

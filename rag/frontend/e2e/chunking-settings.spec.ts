@@ -28,10 +28,21 @@ for (const viewport of [
       page.getByText("backend 内処理または pipeline-chunking へ渡す方式")
     ).toBeVisible();
     await expect(page.getByText("ここで選ぶ 7 個は分割方式です。", { exact: false })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /構造認識/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /親子階層/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /ページ単位/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /固定分割符/ })).toBeVisible();
+    // DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に並ぶ(#271)。
+    const radios = page.getByRole("radio");
+    await expect(radios).toHaveCount(7);
+    for (const [index, name] of [
+      "構造認識",
+      "再帰文字分割",
+      "DocRAG 親子階層",
+      "見出し単位",
+      "ページ単位",
+      "固定長",
+      "固定分割符",
+    ].entries()) {
+      await expect(radios.nth(index)).toContainText(name);
+    }
+    await expect(page.getByRole("radio", { name: /親子分割|AutoMerging/ })).toHaveCount(0);
     // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
     await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(7);
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
@@ -51,12 +62,21 @@ for (const viewport of [
       "overlap(文字)",
       "最小 chunk 文字数",
     ]);
-    await expectStrategyParams(page, /親子階層/, [
-      "chunk サイズ(文字)",
-      "overlap(文字)",
-      "子 chunk サイズ(文字)",
-      "最小 chunk 文字数",
-    ]);
+    await expectStrategyParams(page, /DocRAG 親子階層/, DOCRAG_LABELS);
+    await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toHaveCount(0);
+    await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("1000");
+    await expect(page.getByLabel("表の子チャンク目標文字数", { exact: true })).toHaveValue("3000");
+    await expect(page.getByLabel("親チャンク目標文字数", { exact: true })).toHaveValue("6000");
+    await expect(page.getByLabel("親チャンク最大ページ数", { exact: true })).toHaveValue("3");
+    await expect(page.getByLabel("親チャンク最大 child 数", { exact: true })).toHaveValue("12");
+    // 「有効パラメータ」に DocRAG の 5 項目が出る(空にならない)。
+    const activeParams = page.locator("dl > div").filter({ hasText: "有効パラメータ" });
+    await expect(activeParams).toContainText("子チャンク目標文字数: 1,000");
+    await expect(activeParams).toContainText("表の子チャンク目標文字数: 3,000");
+    await expect(activeParams).toContainText("親チャンク目標文字数: 6,000");
+    await expect(activeParams).toContainText("親チャンク最大ページ数: 3");
+    await expect(activeParams).toContainText("親チャンク最大 child 数: 12");
+    await expectNoHorizontalOverflow(page);
     await expectSemanticStrategyParams(
       page,
       /見出し単位/,
@@ -78,7 +98,7 @@ for (const viewport of [
     await expect(page.getByLabel("固定分割符文字列")).toHaveValue("\\n\\n");
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("overlap(文字)")).toHaveCount(0);
-    await expect(page.getByLabel("子 chunk サイズ(文字)")).toHaveCount(0);
+    await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("最小 chunk 文字数")).toHaveCount(0);
 
     const navLink = page.getByRole("link", { name: "文書分割" });
@@ -107,6 +127,62 @@ test("文書分割設定取得に失敗したら再試行できる", async ({ pa
   await expectNoHorizontalOverflow(page);
 });
 
+test("文書分割設定は DocRAG 親子階層のパラメータを保存できる", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  let savedPayload: unknown = null;
+  await page.route("**/api/settings/chunking", async (route) => {
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON();
+      await route.fulfill({
+        json: chunkingEnvelope({
+          strategy: "docrag_small_to_big",
+          docrag_child_target_chars: 600,
+          docrag_parent_max_pages: 2,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ json: chunkingEnvelope() });
+  });
+
+  await page.goto("/settings/chunking");
+
+  const docrag = page.getByRole("radio", { name: /DocRAG 親子階層/ });
+  await docrag.click();
+  await expect(docrag).toHaveAttribute("aria-checked", "true");
+
+  const childTarget = page.getByLabel("子チャンク目標文字数", { exact: true });
+  await childTarget.fill("2000");
+  await expect(page.getByText("子チャンク目標文字数: 300〜1,600").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+
+  await childTarget.fill("600");
+  await page.getByLabel("親チャンク最大ページ数", { exact: true }).fill("2");
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(page.locator("dl > div").filter({ hasText: "有効パラメータ" })).toContainText(
+    "子チャンク目標文字数: 600"
+  );
+
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
+  expect(savedPayload).toEqual({
+    strategy: "docrag_small_to_big",
+    chunk_size: 800,
+    overlap: 120,
+    min_chars: 120,
+    delimiter: "\\n\\n",
+    context_header_enabled: true,
+    docrag_child_target_chars: 600,
+    docrag_table_child_target_chars: 3000,
+    docrag_parent_target_chars: 6000,
+    docrag_parent_max_pages: 2,
+    docrag_parent_max_children: 12,
+  });
+  await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("600");
+  await expectNoHorizontalOverflow(page);
+});
+
 test("文書分割設定は方式とパラメータを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
@@ -115,10 +191,9 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
       savedPayload = route.request().postDataJSON();
       await route.fulfill({
         json: chunkingEnvelope({
-          strategy: "hierarchical_parent_child",
+          strategy: "recursive_character",
           chunk_size: 1000,
           overlap: 120,
-          child_size: 300,
           min_chars: 40,
           delimiter: "\\n\\n",
           context_header_enabled: false,
@@ -131,12 +206,10 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 
   await page.goto("/settings/chunking");
 
-  const hierarchical = page.getByRole("radio", { name: /親子階層/ });
-  await hierarchical.click();
-  await expect(hierarchical).toHaveAttribute("aria-checked", "true");
+  const recursive = page.getByRole("radio", { name: /再帰文字分割/ });
+  await recursive.click();
+  await expect(recursive).toHaveAttribute("aria-checked", "true");
 
-  const childSize = page.getByLabel("子 chunk サイズ(文字)");
-  await childSize.fill("300");
   const minChars = page.getByLabel("最小 chunk 文字数");
   await minChars.fill("40");
   const chunkSize = page.getByLabel("chunk サイズ(文字)", { exact: true });
@@ -148,13 +221,13 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 
   await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
-    strategy: "hierarchical_parent_child",
+    strategy: "recursive_character",
     chunk_size: 1000,
     overlap: 120,
-    child_size: 300,
     min_chars: 40,
     delimiter: "\\n\\n",
     context_header_enabled: false,
+    ...DOCRAG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -186,23 +259,38 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
     strategy: "fixed_delimiter",
     chunk_size: 800,
     overlap: 120,
-    child_size: 320,
     min_chars: 120,
     delimiter: "---SECTION---",
     context_header_enabled: true,
+    ...DOCRAG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
 });
+
+const DOCRAG_LABELS = [
+  "子チャンク目標文字数",
+  "表の子チャンク目標文字数",
+  "親チャンク目標文字数",
+  "親チャンク最大ページ数",
+  "親チャンク最大 child 数",
+];
+
+const DOCRAG_DEFAULTS = {
+  docrag_child_target_chars: 1000,
+  docrag_table_child_target_chars: 3000,
+  docrag_parent_target_chars: 6000,
+  docrag_parent_max_pages: 3,
+  docrag_parent_max_children: 12,
+};
 
 type ChunkingOverrides = {
   strategy?: string;
   chunk_size?: number;
   overlap?: number;
-  child_size?: number;
   min_chars?: number;
   delimiter?: string;
   context_header_enabled?: boolean;
-};
+} & Partial<typeof DOCRAG_DEFAULTS>;
 
 function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
   const strategy = overrides.strategy ?? "structure_aware";
@@ -210,9 +298,9 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
     { name: "structure_aware", origin: "ragflow_docling_marker", recommended_for: ["pdf", "office"] },
     { name: "recursive_character", origin: "langchain_recursive_character", recommended_for: ["text"] },
     {
-      name: "hierarchical_parent_child",
-      origin: "llamaindex_auto_merging",
-      recommended_for: ["long_document"],
+      name: "docrag_small_to_big",
+      origin: "docrag_small_to_big",
+      recommended_for: ["pdf", "manual", "table", "screenshot"],
     },
     { name: "markdown_heading", origin: "markdown_header_splitter", recommended_for: ["markdown"] },
     { name: "page_level", origin: "pageindex_coarse", recommended_for: ["pdf"] },
@@ -224,14 +312,23 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
       strategy,
       chunk_size: overrides.chunk_size ?? 800,
       overlap: overrides.overlap ?? 120,
-      child_size: overrides.child_size ?? 320,
       min_chars: overrides.min_chars ?? 120,
       delimiter: overrides.delimiter ?? "\\n\\n",
       context_header_enabled: overrides.context_header_enabled ?? true,
+      docrag_child_target_chars:
+        overrides.docrag_child_target_chars ?? DOCRAG_DEFAULTS.docrag_child_target_chars,
+      docrag_table_child_target_chars:
+        overrides.docrag_table_child_target_chars ??
+        DOCRAG_DEFAULTS.docrag_table_child_target_chars,
+      docrag_parent_target_chars:
+        overrides.docrag_parent_target_chars ?? DOCRAG_DEFAULTS.docrag_parent_target_chars,
+      docrag_parent_max_pages:
+        overrides.docrag_parent_max_pages ?? DOCRAG_DEFAULTS.docrag_parent_max_pages,
+      docrag_parent_max_children:
+        overrides.docrag_parent_max_children ?? DOCRAG_DEFAULTS.docrag_parent_max_children,
       strategies: specs.map((spec) => ({
         ...spec,
         selected: spec.name === strategy,
-        uses_child_size: spec.name === "hierarchical_parent_child",
       })),
       config_source: "runtime",
     },
@@ -250,9 +347,9 @@ async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels
   const allLabels = [
     "chunk サイズ(文字)",
     "overlap(文字)",
-    "子 chunk サイズ(文字)",
     "最小 chunk 文字数",
     "固定分割符文字列",
+    ...DOCRAG_LABELS,
     "見出し内の再分割上限(文字)",
     "ページ内の再分割上限(文字)",
     "再分割時の重複文字数",

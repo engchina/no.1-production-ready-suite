@@ -35,8 +35,11 @@ import {
   CHUNK_OVERLAP_MAX_CHARS,
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
+  DOCRAG_CHUNKING_PARAMS,
+  type DocragChunkingParamField,
   chunkSizeLabelKey,
   chunkingStrategyPreset,
+  invalidDocragChunkingParam,
   isSemanticBoundaryStrategy,
   overlapLabelKey,
 } from "@/lib/chunking";
@@ -50,31 +53,34 @@ type ChunkingForm = ChunkingSettingsUpdate;
 type ChunkingParamField =
   | "chunk_size"
   | "overlap"
-  | "child_size"
   | "min_chars"
-  | "delimiter";
+  | "delimiter"
+  | DocragChunkingParamField;
 
+// DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
 const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "structure_aware",
   "recursive_character",
-  "hierarchical_parent_child",
+  "docrag_small_to_big",
   "markdown_heading",
   "page_level",
   "fixed_size",
   "fixed_delimiter",
-  "docrag_small_to_big",
 ];
+
+const DOCRAG_PARAM_FIELDS: DocragChunkingParamField[] = DOCRAG_CHUNKING_PARAMS.map(
+  (spec) => spec.field
+);
 
 const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> = {
   structure_aware: ["chunk_size", "overlap", "min_chars"],
   recursive_character: ["chunk_size", "overlap", "min_chars"],
-  hierarchical_parent_child: ["chunk_size", "overlap", "child_size", "min_chars"],
+  // rag_poc の「チャンキング」tab と同じ 5 項目(子・表の子・親の文字数、親の最大ページ数・child 数)。
+  docrag_small_to_big: DOCRAG_PARAM_FIELDS,
   markdown_heading: ["chunk_size", "overlap", "min_chars"],
   page_level: ["chunk_size", "overlap", "min_chars"],
   fixed_size: ["chunk_size", "overlap"],
   fixed_delimiter: ["delimiter"],
-  // 親子サイズは rag_poc の既定(子 1000 字・親 6000 字)で固定する。
-  docrag_small_to_big: [],
 };
 
 /** 文書分割方式の現在設定とパラメータを管理する設定画面。 */
@@ -332,6 +338,8 @@ function ParamsCard({
   const fields = STRATEGY_PARAM_FIELDS[form.strategy];
   const hasField = (field: ChunkingParamField) => fields.includes(field);
   const semanticBoundary = isSemanticBoundaryStrategy(form.strategy);
+  // DocRAG 親子階層は検索用テキストを docrag 自身が組み立てるため、文脈ヘッダは効かない。
+  const docrag = form.strategy === "docrag_small_to_big";
   const chunkSizeField = hasField("chunk_size") ? (
     <NumberField
       label={t(chunkSizeLabelKey(form.strategy))}
@@ -379,22 +387,39 @@ function ParamsCard({
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 md:col-span-2">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-fg">
-                {t("settings.chunking.params.contextHeader")}
+          {!docrag ? (
+            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 md:col-span-2">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-fg">
+                  {t("settings.chunking.params.contextHeader")}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                  {t("settings.chunking.params.contextHeaderHint")}
+                </p>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                {t("settings.chunking.params.contextHeaderHint")}
-              </p>
+              <Switch
+                checked={form.context_header_enabled}
+                disabled={saving}
+                aria-label={t("settings.chunking.params.contextHeader")}
+                onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
+              />
             </div>
-            <Switch
-              checked={form.context_header_enabled}
-              disabled={saving}
-              aria-label={t("settings.chunking.params.contextHeader")}
-              onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
-            />
-          </div>
+          ) : null}
+          {docrag
+            ? DOCRAG_CHUNKING_PARAMS.map((spec) => (
+                <NumberField
+                  key={spec.field}
+                  label={t(spec.labelKey)}
+                  value={form[spec.field]}
+                  min={spec.min}
+                  max={spec.max}
+                  step={spec.step}
+                  disabled={saving}
+                  helper={t(spec.hintKey)}
+                  onChange={(value) => onChange({ [spec.field]: value })}
+                />
+              ))
+            : null}
           {hasField("delimiter") ? (
             <TextField
               id="chunking-delimiter"
@@ -434,17 +459,6 @@ function ParamsCard({
               {overlapField}
             </>
           )}
-          {hasField("child_size") ? (
-            <NumberField
-              label={t("settings.chunking.params.childSize")}
-              value={form.child_size}
-              min={80}
-              max={4000}
-              disabled={saving}
-              helper={t("settings.chunking.params.childSizeHint")}
-              onChange={(value) => onChange({ child_size: value })}
-            />
-          ) : null}
           {!semanticBoundary ? minCharsField : null}
         </div>
         {validationError ? (
@@ -462,6 +476,7 @@ function NumberField({
   value,
   min,
   max,
+  step,
   disabled,
   helper,
   onChange,
@@ -470,6 +485,7 @@ function NumberField({
   value: number;
   min: number;
   max: number;
+  step?: number;
   disabled: boolean;
   helper?: string;
   onChange: (value: number) => void;
@@ -483,6 +499,7 @@ function NumberField({
         value={Number.isFinite(value) ? value : ""}
         min={min}
         max={max}
+        step={step}
         aria-label={label}
         disabled={disabled}
         onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
@@ -546,7 +563,6 @@ function chunkStrategyDiagramShapes(strategy: ChunkingStrategyName) {
           <rect x="4" y="24" width="34" height="6" rx="2" opacity="0.85" />
         </>
       );
-    case "hierarchical_parent_child":
     case "docrag_small_to_big":
       // 親ブロックの中に子チャンク
       return (
@@ -666,6 +682,9 @@ function paramsDescription(strategy: ChunkingStrategyName) {
   if (strategy === "fixed_size") {
     return t("settings.chunking.params.fixedSizeDescription");
   }
+  if (strategy === "docrag_small_to_big") {
+    return t("settings.chunking.params.docragDescription");
+  }
   return t("settings.chunking.params.description");
 }
 
@@ -673,15 +692,16 @@ function paramLabel(field: ChunkingParamField) {
   const keyByField: Record<ChunkingParamField, I18nKey> = {
     chunk_size: "settings.chunking.params.chunkSize",
     overlap: "settings.chunking.params.overlap",
-    child_size: "settings.chunking.params.childSize",
     min_chars: "settings.chunking.params.minChars",
     delimiter: "settings.chunking.params.delimiter",
-  };
+    ...Object.fromEntries(DOCRAG_CHUNKING_PARAMS.map((spec) => [spec.field, spec.labelKey])),
+  } as Record<ChunkingParamField, I18nKey>;
   return t(keyByField[field]);
 }
 
 function paramValue(form: ChunkingForm, field: ChunkingParamField) {
-  return String(form[field]);
+  const value = form[field];
+  return typeof value === "number" ? value.toLocaleString("ja-JP") : String(value);
 }
 
 function paramSummary(form: ChunkingForm) {
@@ -726,16 +746,11 @@ function validateForm(form: ChunkingForm): string | null {
   if (hasField("overlap") && form.overlap >= form.chunk_size) {
     return t(overlapLabelKey(form.strategy)) + " < " + t(chunkSizeLabelKey(form.strategy));
   }
-  if (
-    hasField("child_size") &&
-    (!Number.isFinite(form.child_size) || form.child_size < 80 || form.child_size > 4000)
-  ) {
-    return t("settings.chunking.params.childSize");
-  }
-  if (hasField("child_size") && form.child_size >= form.chunk_size) {
-    return (
-      t("settings.chunking.params.childSize") + " < " + t("settings.chunking.params.chunkSize")
-    );
+  if (form.strategy === "docrag_small_to_big") {
+    const invalid = invalidDocragChunkingParam(form);
+    if (invalid) {
+      return `${t(invalid.labelKey)}: ${invalid.min.toLocaleString("ja-JP")}〜${invalid.max.toLocaleString("ja-JP")}`;
+    }
   }
   if (
     hasField("min_chars") &&
@@ -754,10 +769,14 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     strategy: settings.strategy,
     chunk_size: settings.chunk_size,
     overlap: settings.overlap,
-    child_size: settings.child_size,
     min_chars: settings.min_chars,
     delimiter: settings.delimiter || "\\n\\n",
     context_header_enabled: settings.context_header_enabled,
+    docrag_child_target_chars: settings.docrag_child_target_chars,
+    docrag_table_child_target_chars: settings.docrag_table_child_target_chars,
+    docrag_parent_target_chars: settings.docrag_parent_target_chars,
+    docrag_parent_max_pages: settings.docrag_parent_max_pages,
+    docrag_parent_max_children: settings.docrag_parent_max_children,
   };
 }
 
@@ -766,9 +785,13 @@ function serializeForm(form: ChunkingForm) {
     strategy: form.strategy,
     chunk_size: form.chunk_size,
     overlap: form.overlap,
-    child_size: form.child_size,
     min_chars: form.min_chars,
     delimiter: form.delimiter,
     context_header_enabled: form.context_header_enabled,
+    docrag_child_target_chars: form.docrag_child_target_chars,
+    docrag_table_child_target_chars: form.docrag_table_child_target_chars,
+    docrag_parent_target_chars: form.docrag_parent_target_chars,
+    docrag_parent_max_pages: form.docrag_parent_max_pages,
+    docrag_parent_max_children: form.docrag_parent_max_children,
   });
 }
