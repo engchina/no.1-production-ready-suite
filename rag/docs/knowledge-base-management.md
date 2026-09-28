@@ -183,15 +183,21 @@ Phase 1 では必須にしない。
 
 | Method | Path | 用途 |
 |---|---|---|
-| `GET` | `/api/knowledge-bases?status=ACTIVE&q=&limit=50&offset=0` | 一覧。文書数・索引済み数・エラー数も返す。 |
+| `GET` | `/api/knowledge-bases?status=ACTIVE&q=&limit=50&offset=0&ids=` | 一覧。文書数・索引済み数・エラー数も返す。`ids`（繰り返し、最大 200）を渡すとその ID の KB だけを返す（status を省くとアーカイブ済みも返す。#302）。 |
 | `POST` | `/api/knowledge-bases` | 作成。 |
 | `GET` | `/api/knowledge-bases/{knowledge_base_id}` | 詳細。 |
-| `PATCH` | `/api/knowledge-bases/{knowledge_base_id}` | 名前、説明、既定検索モード、構築設定を更新。 |
+| `PATCH` | `/api/knowledge-bases/{knowledge_base_id}` | 名前、説明、既定検索モードを更新。 |
 | `POST` | `/api/knowledge-bases/{knowledge_base_id}/archive` | アーカイブ。文書と chunk は削除しない。 |
 
 - 名前は tenant 内で一意（大文字小文字を区別せず、アーカイブ済みを含む）。作成・改名で重複すると 409 と理由を返す（#282）。
 - 変更系（`PATCH` / `archive` / 文書の追加・外す）の応答は、文書数・索引済み数などの集計列を取り直した詳細を返す（#282）。
 - アーカイブ済みの KB でも所属文書の一覧（`GET /api/knowledge-bases/{id}/documents`、`GET /api/documents?knowledge_base_id=`）は所属を返す。検索対象から外すのは検索の SQL だけ（#282）。
+- **API の互換の変更（#302）**：`POST` / `PATCH` の `adapter_config` は受け付けない。指定すると（`null` や `{}` でも）422
+  「adapter_config は指定できません。…」を返し、何も保存しない。以前は `retrieval_config` カラムへ正規化して保存していたが、
+  3 層モデルでは取込・検索のどちらでも使わない（`rag/AGENTS.md`「KB の legacy adapter/query config は読み取りのみ許容」）。
+  応答の `adapter_config`（保存値の読み取り互換）と `effective_adapter_config`（表示専用）はこれまでどおり返す。
+  旧クライアントは `adapter_config` を送らないように直す（名前・説明・既定検索モードは従来どおり更新できる）。
+  なお free-form の `retrieval_config` の書き込みは互換のため残している（未整理。読み取り互換の保存値と同じカラム）。
 
 作成 payload:
 
@@ -199,20 +205,13 @@ Phase 1 では必須にしない。
 {
   "name": "社内規程",
   "description": "就業規則、情報セキュリティ規程、申請手順を含む",
-  "default_search_mode": "hybrid",
-  "adapter_config": {
-    "ingestion": {
-      "chunking_strategy": "structure_aware",
-      "chunk_size": 800,
-      "parser_adapter_backend": "local"
-    }
-  }
+  "default_search_mode": "hybrid"
 }
 ```
 
-KB が持つのはナレッジ構築設定だけとする。検索方法、根拠確認、回答スタイル、安全チェックは
-業務ビューの検索・回答設定で扱い、品質評価はグローバル設定だけで扱う(#301)。旧 `retrieval_config` / `query` 系の値は
-後方互換の読み取り対象に留め、runtime では使わない。
+KB が持つのは所属（スコープ）と名前・説明だけとする。文書の処理（文書解析・文書分割など）は文書のレシピ、
+検索方法、根拠確認、回答スタイル、安全チェックは業務ビューの検索・回答設定で扱い、品質評価はグローバル設定だけで扱う(#301)。
+旧 `retrieval_config` / `adapter_config`（`ingestion` / `query`）の保存値は後方互換の読み取り対象に留め、runtime では使わない。
 
 > 3 層モデル（`rag/AGENTS.md`「RAG 設定責務」）以降、文書レシピの既定は global から解決し、KB の
 > `adapter_config.ingestion` も取込では使わない（保存値の読み取り互換だけ）。詳細の
@@ -473,7 +472,15 @@ UI 方針:
 
 ### 8.3 作成・編集
 
-作成/編集は dialog または dedicated page のどちらでもよいが、Phase 1 は dialog を推奨する。
+作成は一覧の上のフォーム、編集は詳細の概要でその場の編集にする（#302）。詳細の「編集」（`ObjectActionBar`。
+アーカイブ済みには出さない）で概要の名前・説明がフォームに変わり、`保存`（primary）/ `キャンセル` で閉じる。
+
+- 名前は必須・最大 256 文字、説明は最大 2000 文字（作成と同じ）。DEFAULT は名前を読み取り専用にし、説明だけを送る。
+- 同名（大文字小文字を区別せず、アーカイブ済みを含む）の 409 は、名前の欄の下に理由を出す。その他の失敗はフォームの下の `FormStatus`。
+- 変更があるときは離脱ガードで確認する。変更がなければ Esc でも閉じる。
+- 構築設定（`adapter_config`）は API でも受け付けない（§6.1）。
+
+以下は当初の設計案（参考）。
 
 フィールド:
 
@@ -526,6 +533,28 @@ UX 要件:
 
 - 名前、説明、既定検索モード、retrieval config。
 - アーカイブ状態の説明。
+
+### 8.4.1 KB を選ぶ UI（#302）
+
+業務ビュー・品質評価・文書詳細の KB の選択（`KnowledgeBaseScopePicker`）は、候補をサーバー側で検索する
+（`GET /api/knowledge-bases?status=ACTIVE&q=`。名前・説明の部分一致、入力から 300ms 後）。1 回 50 件を取り、
+「さらに表示」で次のページを足す（件数の上限なし）。選択済みの KB は `ids` で引き、候補のページに無くてもチップに
+名前を出す。アーカイブ済みの KB は「アーカイブ済み」、見つからない ID（存在しない・範囲外）は「見つかりません」を
+チップに添える（色だけに頼らない）。候補の並びはサーバーの順（DEFAULT → 更新の新しい順）で、全件を持たないため
+「最多」の目印と「空の KB を隠す」は出さない。文書インデックスの絞り込み（`SelectField`）は、有効な KB を
+200 件ずつたどってすべて取る（`useAllKnowledgeBases`。アップロードの KB 選択も同じ取得。#280）。
+
+### 8.4.2 アーカイブした KB と業務ビューの参照（#302）
+
+KB をアーカイブしても業務ビューの `knowledge_base_ids` からは外さない（業務ビューの設定を黙って変えない）。
+アーカイブ済み・存在しない KB は検索されないため、業務ビューの画面で警告する。
+
+- API：業務ビューの詳細は `knowledge_bases`（アーカイブ済みを含み `status` 付き）と `missing_knowledge_base_ids`、
+  一覧・詳細は `archived_knowledge_base_count` / `missing_knowledge_base_count` を返す（tenant 内で解決。利用者の KB 範囲では絞らない）。
+- 一覧：該当する業務ビューがあれば `Banner`（warning）を出し、「参照 KB」列に `StatusBadge`（warning）「要確認」を付ける（アーカイブ済みの業務ビューは除く）。
+- 編集画面：`Banner` にアーカイブ済みの KB の名前と見つからない KB の ID を並べ、外して保存するよう案内する。すべてが該当するときは
+  「結果が 0 件になる」ことも伝える。警告は下書き（選択中の KB）に合わせて更新し、外すと消える。
+- アーカイブの確認ダイアログにも「参照している業務ビューでも検索されなくなる」ことを書く。
 
 ### 8.5 アップロード画面
 

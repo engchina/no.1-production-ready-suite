@@ -1,5 +1,7 @@
 """ナレッジベース API。作成・一覧・詳細・membership 管理。"""
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.clients.oracle import OracleClient
@@ -7,7 +9,6 @@ from app.config import get_settings
 from app.db_degradation import load_or_degrade
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
-    dump_adapter_config,
     resolve_effective_adapter_config,
 )
 from app.schemas.common import ApiResponse, Page
@@ -25,6 +26,20 @@ from app.schemas.knowledge_base import (
 )
 
 router = APIRouter()
+
+# KB は所属(スコープ)だけを持つ。構築設定の書き込みは受け付けない(rag/AGENTS.md「RAG 設定責務」)。
+ADAPTER_CONFIG_REJECTED_MESSAGE = (
+    "adapter_config は指定できません。ナレッジベースは文書の所属だけを持ちます。"
+    "文書の処理は文書のレシピ、検索・回答の設定は業務ビューで指定してください。"
+)
+# ID で絞るときの上限(業務ビュー・評価の参照 KB の上限と同じ)。
+MAX_KNOWLEDGE_BASE_ID_FILTER = 200
+
+
+def _reject_adapter_config(fields_set: set[str]) -> None:
+    """`adapter_config` を含む作成・更新を 422 で拒否する(#302。旧 API との互換を変更)。"""
+    if "adapter_config" in fields_set:
+        raise HTTPException(status_code=422, detail=ADAPTER_CONFIG_REJECTED_MESSAGE)
 
 
 def _detail_response(detail: KnowledgeBaseDetail) -> ApiResponse[KnowledgeBaseDetail]:
@@ -57,6 +72,16 @@ async def list_knowledge_bases(
     q: str | None = Query(default=None, min_length=1, max_length=200),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    ids: Annotated[
+        list[str] | None,
+        Query(
+            max_length=MAX_KNOWLEDGE_BASE_ID_FILTER,
+            description=(
+                "指定した ID の KB だけを返す(選択済みの名前・状態の解決用。#302)。"
+                "status を省くとアーカイブ済みも返す。"
+            ),
+        ),
+    ] = None,
 ) -> ApiResponse[Page[KnowledgeBaseSummary]]:
     """ナレッジベース一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
@@ -64,9 +89,9 @@ async def list_knowledge_bases(
 
     async def _load() -> Page[KnowledgeBaseSummary]:
         items = await oracle.list_knowledge_bases(
-            status=status, query=q, limit=limit, offset=offset
+            status=status, query=q, limit=limit, offset=offset, knowledge_base_ids=ids
         )
-        total = await oracle.count_knowledge_bases(status=status, query=q)
+        total = await oracle.count_knowledge_bases(status=status, query=q, knowledge_base_ids=ids)
         return Page(
             items=items,
             total=total,
@@ -94,18 +119,14 @@ async def list_knowledge_bases(
 async def create_knowledge_base(
     request: KnowledgeBaseCreateRequest,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """ナレッジベースを作成する。"""
-    retrieval_config = (
-        dump_adapter_config(request.adapter_config)
-        if request.adapter_config is not None
-        else request.retrieval_config
-    )
+    """ナレッジベースを作成する。`adapter_config` は 422 で拒否する。"""
+    _reject_adapter_config(request.model_fields_set)
     try:
         detail = await OracleClient().create_knowledge_base(
             name=request.name,
             description=request.description,
             default_search_mode=request.default_search_mode,
-            retrieval_config=retrieval_config,
+            retrieval_config=request.retrieval_config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -160,18 +181,9 @@ async def update_knowledge_base(
     knowledge_base_id: str,
     request: KnowledgeBaseUpdateRequest,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """ナレッジベースを更新する。"""
+    """ナレッジベースを更新する。`adapter_config` は 422 で拒否する。"""
+    _reject_adapter_config(request.model_fields_set)
     update_fields = set(request.model_fields_set)
-    retrieval_config = request.retrieval_config
-    # adapter_config は既存 retrieval_config カラムへ正規化して保存する。
-    if "adapter_config" in update_fields:
-        retrieval_config = (
-            dump_adapter_config(request.adapter_config)
-            if request.adapter_config is not None
-            else {}
-        )
-        update_fields.discard("adapter_config")
-        update_fields.add("retrieval_config")
     oracle = OracleClient()
     try:
         detail = await oracle.update_knowledge_base(
@@ -179,7 +191,7 @@ async def update_knowledge_base(
             name=request.name,
             description=request.description,
             default_search_mode=request.default_search_mode,
-            retrieval_config=retrieval_config,
+            retrieval_config=request.retrieval_config,
             update_fields=update_fields,
         )
     except KeyError as exc:

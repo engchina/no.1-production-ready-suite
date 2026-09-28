@@ -3,6 +3,8 @@
  */
 
 import {
+  keepPreviousData,
+  useInfiniteQuery,
   useMutation,
   useQueries,
   useQuery,
@@ -146,7 +148,10 @@ export const queryKeys = {
     q?: string;
     limit?: number;
     offset?: number;
+    ids?: string[];
   }) => ["knowledge-bases", params] as const,
+  knowledgeBaseSearch: (params: { status?: KnowledgeBaseStatus; q?: string }) =>
+    ["knowledge-bases", "search", params] as const,
   knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
   knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
   businessViews: (params: {
@@ -1022,6 +1027,47 @@ export function useArchiveKnowledgeBase() {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents"] });
     },
+  });
+}
+
+/** 選択肢として 1 回に取得する KB の件数。これを超える分は「さらに表示」で次のページを取る。 */
+export const KNOWLEDGE_BASE_SEARCH_PAGE_SIZE = 50;
+
+/**
+ * KB を選ぶ UI 用のサーバー側検索（名前・説明の部分一致 + ページング。#302）。
+ * 先頭のページだけで打ち切らず、`fetchNextPage` で続きを取れる。検索語を変えている間は
+ * 直前の結果を出したままにする（一覧が空に戻ってちらつかないように）。
+ */
+export function useKnowledgeBaseSearch(params: { status?: KnowledgeBaseStatus; q?: string }) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.knowledgeBaseSearch(params),
+    queryFn: ({ pageParam }) =>
+      api.listKnowledgeBases({
+        ...params,
+        limit: KNOWLEDGE_BASE_SEARCH_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_next ? lastPage.offset + lastPage.items.length : undefined,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 一覧 API の `ids` の上限（backend の `MAX_KNOWLEDGE_BASE_ID_FILTER`）。 */
+const KNOWLEDGE_BASE_ID_LOOKUP_LIMIT = 200;
+
+/**
+ * 選択済みの KB を ID で引く（アーカイブ済みを含む。#302）。検索結果のページに無い選択済みの
+ * KB もチップに名前と状態を出すために使う。返らない ID は、存在しないか利用者の範囲外。
+ */
+export function useKnowledgeBasesByIds(ids: string[]) {
+  const sorted = [...new Set(ids)].sort().slice(0, KNOWLEDGE_BASE_ID_LOOKUP_LIMIT);
+  return useQuery({
+    queryKey: queryKeys.knowledgeBases({ ids: sorted, limit: KNOWLEDGE_BASE_ID_LOOKUP_LIMIT }),
+    queryFn: () => api.listKnowledgeBases({ ids: sorted, limit: KNOWLEDGE_BASE_ID_LOOKUP_LIMIT }),
+    enabled: sorted.length > 0,
+    placeholderData: keepPreviousData,
   });
 }
 

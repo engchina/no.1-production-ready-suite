@@ -76,8 +76,11 @@ class FakeKnowledgeBaseOracle:
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        knowledge_base_ids: list[str] | None = None,
     ) -> list[KnowledgeBaseDetail]:
         items = list(self.knowledge_bases.values())
+        if knowledge_base_ids is not None:
+            items = [item for item in items if item.id in knowledge_base_ids]
         if status is not None:
             items = [item for item in items if item.status == status]
         if query:
@@ -95,9 +98,16 @@ class FakeKnowledgeBaseOracle:
         *,
         status: KnowledgeBaseStatus | None = None,
         query: str | None = None,
+        knowledge_base_ids: list[str] | None = None,
     ) -> int:
         return len(
-            await self.list_knowledge_bases(status=status, query=query, limit=None, offset=0)
+            await self.list_knowledge_bases(
+                status=status,
+                query=query,
+                limit=None,
+                offset=0,
+                knowledge_base_ids=knowledge_base_ids,
+            )
         )
 
     async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
@@ -443,62 +453,56 @@ def test_archived_knowledge_base_rejects_assignment(
     assert resp.json()["error_messages"] == ["アーカイブ済みナレッジベースは変更できません。"]
 
 
-def test_create_knowledge_base_with_adapter_config(
+def test_create_knowledge_base_rejects_adapter_config(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
-    """adapter_config を指定して作成すると構築設定だけが detail に型付きで戻る。"""
+    """KB は所属だけを持つ。作成で adapter_config を指定すると 422 で拒否し、保存しない(#302)。"""
     resp = client.post(
         "/api/knowledge-bases",
         json={
             "name": "Markdown FAQ",
             "adapter_config": {
                 "ingestion": {"chunking_strategy": "markdown_heading", "chunk_size": 1200},
-                "query": {"generation_profile": "detailed_cited"},
             },
         },
     )
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["adapter_config"]["ingestion"]["chunking_strategy"] == "markdown_heading"
-    assert data["adapter_config"]["ingestion"]["chunk_size"] == 1200
-    assert data["adapter_config"]["query"]["generation_profile"] is None
-    assert data["legacy_query_config_ignored"] is False
-    # 未指定フィールドはグローバル継承を表す None で戻る。
-    assert data["adapter_config"]["ingestion"]["parser_adapter_backend"] is None
-    assert data["adapter_config"]["query"]["retrieval_strategy"] is None
+    assert resp.status_code == 422
+    assert resp.json()["error_messages"] == [knowledge_bases_route.ADAPTER_CONFIG_REJECTED_MESSAGE]
+    assert fake_oracle.knowledge_bases == {}
 
 
-def test_patch_knowledge_base_replaces_adapter_config(
+@pytest.mark.parametrize(
+    "adapter_config",
+    [
+        {"ingestion": {"chunking_strategy": "page_level"}},
+        {"ingestion": {"chunking_strategy": "does_not_exist"}},
+        {},
+        None,
+    ],
+)
+def test_patch_knowledge_base_rejects_adapter_config(
     fake_oracle: FakeKnowledgeBaseOracle,
+    adapter_config: object,
 ) -> None:
-    """adapter_config を PATCH すると置換され、detail へ反映される。"""
-    created = client.post("/api/knowledge-bases", json={"name": "Scanned PDF"}).json()["data"]
-    assert created["adapter_config"]["ingestion"]["chunking_strategy"] is None
-
-    patch_resp = client.patch(
-        f"/api/knowledge-bases/{created['id']}",
+    """PATCH で adapter_config を指定すると(null・空でも)422 にし、保存値を変えない(#302)。"""
+    created = client.post(
+        "/api/knowledge-bases",
         json={
-            "adapter_config": {
-                "ingestion": {
-                    "parser_adapter_backend": "docling",
-                    "parser_docling_enabled": True,
-                    "chunking_strategy": "page_level",
-                }
-            }
+            "name": "Legacy KB",
+            "retrieval_config": {"ingestion": {"chunking_strategy": "structure_aware"}},
         },
+    ).json()["data"]
+
+    resp = client.patch(
+        f"/api/knowledge-bases/{created['id']}",
+        json={"description": "更新", "adapter_config": adapter_config},
     )
 
-    assert patch_resp.status_code == 200
-    data = patch_resp.json()["data"]
-    assert data["adapter_config"]["ingestion"]["parser_adapter_backend"] == "docling"
-    assert data["adapter_config"]["ingestion"]["parser_docling_enabled"] is True
-    assert data["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
-
-    # 取得し直しても保持される。
-    get_resp = client.get(f"/api/knowledge-bases/{created['id']}")
-    reloaded = get_resp.json()["data"]["adapter_config"]
-    assert reloaded["ingestion"]["chunking_strategy"] == "page_level"
+    assert resp.status_code == 422
+    reloaded = client.get(f"/api/knowledge-bases/{created['id']}").json()["data"]
+    assert reloaded["description"] is None
+    assert reloaded["adapter_config"]["ingestion"]["chunking_strategy"] == "structure_aware"
 
 
 def test_knowledge_base_legacy_query_config_is_flagged(
@@ -516,29 +520,43 @@ def test_knowledge_base_legacy_query_config_is_flagged(
     assert created["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
     assert created["legacy_query_config_ignored"] is True
 
+    # 名前・説明の更新では legacy の保存値を書き換えない(読み取りのみ)。
     patched = client.patch(
         f"/api/knowledge-bases/{created['id']}",
-        json={"adapter_config": {"ingestion": {"chunking_strategy": "page_level"}}},
+        json={"description": "更新後"},
     ).json()["data"]
 
-    assert patched["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
-    assert patched["adapter_config"]["query"]["generation_profile"] is None
-    assert patched["legacy_query_config_ignored"] is False
+    assert patched["description"] == "更新後"
+    assert patched["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
 
 
-def test_create_knowledge_base_rejects_invalid_adapter_config(
+def test_list_knowledge_bases_filters_by_ids_including_archived(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
-    """allowlist 外の戦略値は 422 で拒否する。"""
-    resp = client.post(
+    """ids を指定すると、その ID の KB だけを(status 省略時はアーカイブ済みも)返す(#302)。"""
+    first = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    second = client.post("/api/knowledge-bases", json={"name": "製品 FAQ"}).json()["data"]
+    client.post("/api/knowledge-bases", json={"name": "設計資料"})
+    assert client.post(f"/api/knowledge-bases/{second['id']}/archive").status_code == 200
+
+    resp = client.get(
         "/api/knowledge-bases",
-        json={
-            "name": "壊れた設定",
-            "adapter_config": {"ingestion": {"chunking_strategy": "does_not_exist"}},
-        },
+        params=[("ids", first["id"]), ("ids", second["id"]), ("ids", "kb-missing")],
     )
 
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    page = resp.json()["data"]
+    assert page["total"] == 2
+    assert {(item["id"], item["status"]) for item in page["items"]} == {
+        (first["id"], "ACTIVE"),
+        (second["id"], "ARCHIVED"),
+    }
+
+    active_only = client.get(
+        "/api/knowledge-bases",
+        params=[("ids", first["id"]), ("ids", second["id"]), ("status", "ACTIVE")],
+    ).json()["data"]
+    assert [item["id"] for item in active_only["items"]] == [first["id"]]
 
 
 def test_create_knowledge_base_with_duplicate_name_returns_409(
@@ -633,7 +651,8 @@ def test_effective_adapter_config_ignores_legacy_knowledge_base_overrides(
         "/api/knowledge-bases",
         json={
             "name": "Legacy 構築設定",
-            "adapter_config": {
+            # 旧 API で保存された legacy 構築上書き(retrieval_config カラムの保存値)。
+            "retrieval_config": {
                 "ingestion": {"chunking_strategy": "page_level", "chunk_size": 1200}
             },
         },

@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, ChevronDown, Search, X } from "lucide-react";
+import { Button } from "@engchina/production-ready-ui";
+import { Check, ChevronDown, ChevronsDown, Search, X } from "lucide-react";
 import {
   type KeyboardEvent,
   useCallback,
@@ -28,6 +29,24 @@ interface MultiSelectComboboxStrings {
   hiddenEmptyCount?: (count: number) => string;
 }
 
+/**
+ * サーバー側で検索・ページングするときの設定（#302）。渡すと、`items` を画面側で絞り込み・
+ * 並べ替え・空項目の抑制をせず、サーバーが返した順のまま出す。
+ */
+export interface MultiSelectComboboxRemote {
+  /** 入力した検索語（debounce は呼び出し側で行う）。 */
+  onFilterChange: (filter: string) => void;
+  /** 条件に一致する全件数。 */
+  total: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  /** 検索語を変えて取り直している間。 */
+  searching: boolean;
+  onLoadMore: () => void;
+  loadMoreLabel: string;
+  searchingLabel: string;
+}
+
 export function MultiSelectCombobox<T>({
   items,
   selectedIds,
@@ -44,6 +63,8 @@ export function MultiSelectCombobox<T>({
   getOptionBadge,
   strings,
   triggerClassName,
+  remote,
+  selectedItems,
 }: {
   items: T[];
   selectedIds: string[];
@@ -60,6 +81,9 @@ export function MultiSelectCombobox<T>({
   getOptionBadge?: (item: T) => string | null;
   strings: MultiSelectComboboxStrings;
   triggerClassName?: string;
+  remote?: MultiSelectComboboxRemote;
+  /** チップに出す選択済みの項目。`items`（検索結果のページ）に無い選択済みも名前で出すために渡す。 */
+  selectedItems?: T[];
 }) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -72,21 +96,26 @@ export function MultiSelectCombobox<T>({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const normalized = filter.trim().toLowerCase();
+  // サーバー側で検索するときは、画面側で絞り込まない（返った結果をそのまま出す）。
+  const normalized = remote ? "" : filter.trim().toLowerCase();
+  // 空項目の抑制と並べ替えは全件を持つときだけ意味がある（ページの途中では誤解を招く）。
+  const localIsEmptyItem = remote ? undefined : isEmptyItem;
 
-  const hasScoped = isEmptyItem ? items.some((item) => !isEmptyItem(item)) : false;
-  const emptyCount = isEmptyItem ? items.filter(isEmptyItem).length : 0;
-  const showEmptyToggle = Boolean(isEmptyItem && strings.hideEmpty && hasScoped && emptyCount > 0);
-  const effectiveHideEmpty = Boolean(isEmptyItem && hideEmpty && hasScoped);
+  const hasScoped = localIsEmptyItem ? items.some((item) => !localIsEmptyItem(item)) : false;
+  const emptyCount = localIsEmptyItem ? items.filter(localIsEmptyItem).length : 0;
+  const showEmptyToggle = Boolean(
+    localIsEmptyItem && strings.hideEmpty && hasScoped && emptyCount > 0
+  );
+  const effectiveHideEmpty = Boolean(localIsEmptyItem && hideEmpty && hasScoped);
 
   const sorted = useMemo(() => {
-    return sortItems ? sortItems(items) : [...items];
-  }, [items, sortItems]);
+    return sortItems && !remote ? sortItems(items) : [...items];
+  }, [items, sortItems, remote]);
 
   const filtered = useMemo(() => {
     let next = sorted;
-    if (effectiveHideEmpty && isEmptyItem) {
-      next = next.filter((item) => !isEmptyItem(item) || selected.has(getId(item)));
+    if (effectiveHideEmpty && localIsEmptyItem) {
+      next = next.filter((item) => !localIsEmptyItem(item) || selected.has(getId(item)));
     }
     if (normalized) {
       next = next.filter((item) => {
@@ -95,16 +124,34 @@ export function MultiSelectCombobox<T>({
       });
     }
     return next;
-  }, [sorted, effectiveHideEmpty, isEmptyItem, normalized, selected, getId, getName, getSearchText]);
+  }, [
+    sorted,
+    effectiveHideEmpty,
+    localIsEmptyItem,
+    normalized,
+    selected,
+    getId,
+    getName,
+    getSearchText,
+  ]);
 
   const hiddenEmptyCount =
-    effectiveHideEmpty && isEmptyItem
-      ? items.filter((item) => isEmptyItem(item) && !selected.has(getId(item))).length
+    effectiveHideEmpty && localIsEmptyItem
+      ? items.filter((item) => localIsEmptyItem(item) && !selected.has(getId(item))).length
       : 0;
 
   const chips = selectedIds
-    .map((id) => items.find((item) => getId(item) === id))
+    .map(
+      (id) =>
+        selectedItems?.find((item) => getId(item) === id) ??
+        items.find((item) => getId(item) === id)
+    )
     .filter((item): item is T => Boolean(item));
+
+  const updateFilter = (value: string) => {
+    setFilter(value);
+    remote?.onFilterChange(value);
+  };
 
   // 候補数が変わったレンダーで、選択位置を候補の範囲に収める。
   const filteredCountChanged = useValuesChanged([filtered.length]);
@@ -256,7 +303,7 @@ export function MultiSelectCombobox<T>({
           aria-label={ariaLabel}
           value={filter}
           onChange={(event) => {
-            setFilter(event.target.value);
+            updateFilter(event.target.value);
             setOpen(true);
           }}
           onFocus={openList}
@@ -287,7 +334,13 @@ export function MultiSelectCombobox<T>({
 
       {open ? (
         <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
-          {showEmptyToggle ? (
+          {remote ? (
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+              <span className="tnum text-xs text-fg-muted" aria-live="polite">
+                {remote.searching ? remote.searchingLabel : strings.count(items.length, remote.total)}
+              </span>
+            </div>
+          ) : showEmptyToggle ? (
             <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
               <span className="text-xs text-fg-muted">
                 {strings.count(filtered.length, items.length)}
@@ -310,6 +363,7 @@ export function MultiSelectCombobox<T>({
               role="listbox"
               aria-label={ariaLabel}
               aria-multiselectable
+              aria-busy={remote?.searching || undefined}
               className="bounded-scroll-area py-1"
             >
               {filtered.map((item, index) => {
@@ -368,10 +422,31 @@ export function MultiSelectCombobox<T>({
               })}
             </ul>
           ) : (
-            <p className="px-3 py-6 text-center text-xs text-fg-muted">
-              {normalized ? strings.noMatch(filter.trim()) : strings.emptyList}
+            <p className="px-3 py-6 text-center text-xs text-fg-muted" role="status">
+              {remote?.searching
+                ? remote.searchingLabel
+                : filter.trim()
+                  ? strings.noMatch(filter.trim())
+                  : strings.emptyList}
             </p>
           )}
+
+          {remote?.hasMore ? (
+            <div className="border-t border-border px-3 py-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={ChevronsDown}
+                loading={remote.loadingMore}
+                disabled={disabled}
+                onClick={remote.onLoadMore}
+                className="w-full"
+              >
+                {remote.loadMoreLabel}
+              </Button>
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-1.5 border-t border-border bg-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:py-1.5">
             <span className="tnum text-xs text-fg-muted">
@@ -383,7 +458,8 @@ export function MultiSelectCombobox<T>({
               <button
                 type="button"
                 onClick={selectAllVisible}
-                disabled={disabled || filtered.length === 0}
+                // 検索語を変えている間は古い結果が出ているため、まとめて選ばせない。
+                disabled={disabled || filtered.length === 0 || Boolean(remote?.searching)}
                 className="text-xs font-medium text-accent-fg transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
               >
                 {strings.selectAllVisible}

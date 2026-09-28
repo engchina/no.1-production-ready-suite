@@ -30,7 +30,7 @@
 | 画面 | 対象 | 行（`RowActionMenu`） | 詳細（`ObjectActionBar`） | 定義の場所 |
 |---|---|---|---|---|
 | 文書インデックス | 文書 | ファイル準備を実行 / 再実行（`UPLOADED` / `ERROR` のみ）、削除（danger） | —（文書詳細は工程の操作が中心。§3） | `FileListClient.tsx` の `documentActions` |
-| ナレッジベース / 詳細 | ナレッジベース | アーカイブ（danger。DEFAULT は理由付きで無効） | 同じ定義。危険な操作だけなので「その他の操作」に入る | `knowledge-bases/knowledge-base-actions.ts` の `useKnowledgeBaseActions` |
+| ナレッジベース / 詳細 | ナレッジベース | アーカイブ（danger。DEFAULT は理由付きで無効） | 同じ定義に「編集」（詳細だけ。`onEdit` を渡したときに出す。アーカイブ済みには出さない。#302）を加える。編集はバーに、アーカイブは「その他の操作」に入る | `knowledge-bases/knowledge-base-actions.ts` の `useKnowledgeBaseActions` |
 | ナレッジベース詳細 | 所属文書 | 外す（確認は warning。所属の行だけを消し、chunk へ波及しない） | — | `KnowledgeBaseDetailClient.tsx` |
 | 業務ビュー | 業務ビュー | アーカイブ（danger。DEFAULT は理由付きで無効） | エディタの「基本情報と検索・回答設定」の見出しに同じ定義 | `BusinessViewManagementClient.tsx` の `useBusinessViewActions` |
 | 業務ビュー（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
