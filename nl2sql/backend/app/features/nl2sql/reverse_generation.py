@@ -10,6 +10,8 @@ from .enterprise_ai_client import EnterpriseAiDirectClient, EnterpriseAiDirectEr
 from .structured_outputs import QuestionOutput, StructureOutput, response_format
 
 logger = logging.getLogger(__name__)
+# 段階 retry の間の待ち。テストは conftest で待たない関数に差し替える（#344）。
+_retry_sleep: Callable[[float], None] = time.sleep
 STAGE_LABELS = {
     "structure_analysis": "SQL 構造分析",
     "logical_structure": "SQL 論理構造の生成",
@@ -97,7 +99,7 @@ def generate_stage[T](
             if not retryable or attempt == limit:
                 raise ReverseStageError(stage, reason, attempt) from exc
             delay = min(2 ** (attempt - 1), max(0, deadline - time.monotonic()))
-            time.sleep(delay)
+            _retry_sleep(delay)
             if reason == "response_format":
                 system_prompt += (
                     "\n前回は応答形式を検証できませんでした。"

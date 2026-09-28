@@ -3008,6 +3008,12 @@ def test_source_deleted_before_its_turn_is_skipped_and_job_continues(
     }
     assert any("second.md" in warning for warning in finished.warnings_ja)
     assert store.get_document("source_documents", {"source_document_id": second.id}) is None
+    # ジョブは終了の状態を保存してから profile のロックを外すため、終了を見た直後はまだ
+    # ロックが残っていることがある（負荷が高いと並列実行で起きる。#344）。外れるまで待つ。
+    for _ in range(500):
+        if store.get_idempotency("build_ontology_profile_active", "sales") is None:
+            break
+        time.sleep(0.01)
     assert store.get_idempotency("build_ontology_profile_active", "sales") is None
 
 

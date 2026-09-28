@@ -54,6 +54,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "pytest-cov>=6.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.9",
     "black>=25.1",
     "mypy>=1.14",
@@ -87,7 +88,9 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q"
+# --dist loadgroup: `-n` で並列にしたとき、実 Oracle のテスト（xdist_group "oracle"）を
+# 1 つの worker にまとめる（tests/conftest.py。#344）。`-n` なしの直列では何もしない。
+addopts = "-q --dist loadgroup"
 
 [tool.bandit]
 # 偽陽性/本コードベースで許容済みのチェックを除外する(High の B324 はコード側で

@@ -14,11 +14,6 @@ from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import ReverseSqlRequest
 
 
-@pytest.fixture(autouse=True)
-def no_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.features.nl2sql.reverse_generation.time.sleep", lambda _: None)
-
-
 class RawClient(StagedClient):
     def generate(self, **kwargs: Any) -> str:
         self.calls.append(kwargs)

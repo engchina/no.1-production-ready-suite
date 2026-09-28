@@ -29,6 +29,11 @@ os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
 os.environ["NL2SQL_APP_AUTH_ENABLED"] = "false"
 os.environ["PLATFORM_ORACLE_USER"] = "APP"
 os.environ["NL2SQL_ORACLE_DEEPSEC_ENABLED"] = "false"
+# 本番の Argon2 のコスト（time_cost=3・64 MiB・並列 4）は 1 回のハッシュに約 70ms かかる。
+# テストは RAG / Agent のテスト（security_support.py）と同じ軽い値にする（#344）。
+os.environ["PLATFORM_AUTH_ARGON2_TIME_COST"] = "1"
+os.environ["PLATFORM_AUTH_ARGON2_MEMORY_KIB"] = "8192"
+os.environ["PLATFORM_AUTH_ARGON2_PARALLELISM"] = "1"
 
 
 async def _run_sync_in_test_thread[T](
@@ -90,3 +95,15 @@ def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", tmp_path / "backend.env")
     monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
     monkeypatch.setattr(deepsec_module, "_BACKEND_ENV_FILE", tmp_path / "backend.env")
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """retry の間の待ちを実時間で待たない（#344）。
+
+    逆生成の段階 retry は 1 秒 → 2 秒待つため、失敗の経路を通るテストが 1 件 3 秒かかっていた。
+    待ち時間そのものを確かめるテストは、テストの中で `_retry_sleep` を差し替え直してよい。
+    """
+    import app.features.nl2sql.reverse_generation as reverse_generation
+
+    monkeypatch.setattr(reverse_generation, "_retry_sleep", lambda _seconds: None)
