@@ -94,8 +94,6 @@ RAG_BASE_COMPOSE_SERVICES = [
     "preprocess-image-enhance",
     "preprocess-pii-redact",
     "parser-unstructured",
-    "pipeline-generation",
-    "pipeline-retrieval",
 ]
 RAG_OPTIONAL_COMPOSE_SERVICES = [
     "parser-docling",

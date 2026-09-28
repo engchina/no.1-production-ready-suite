@@ -56,8 +56,6 @@ locals {
       "preprocess-image-enhance",
       "preprocess-pii-redact",
       "parser-unstructured",
-      "pipeline-generation",
-      "pipeline-retrieval",
     ],
     var.rag_enable_parser_docling ? ["parser-docling"] : [],
     var.rag_enable_parser_marker ? ["parser-marker"] : [],
