@@ -97,6 +97,7 @@ import {
   CHUNK_OVERLAP_MAX_CHARS,
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
+  DOCRAG_CHUNKING_PARAMS,
   chunkSizeLabelKey,
   chunkingStrategyPreset,
   isSemanticBoundaryStrategy,
@@ -246,12 +247,11 @@ type UrlFallbackFocus = {
 const CHUNK_PREVIEW_STRATEGIES: SelectFieldOption<ChunkingStrategyName>[] = [
   "structure_aware",
   "recursive_character",
-  "hierarchical_parent_child",
+  "docrag_small_to_big",
   "markdown_heading",
   "page_level",
   "fixed_size",
   "fixed_delimiter",
-  "docrag_small_to_big",
 ].map((value) => ({
   value: value as ChunkingStrategyName,
   label: t(`settings.chunking.strategy.${value}` as I18nKey),
@@ -2381,6 +2381,20 @@ function ChunkPreviewControls({
               className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
             />
           </label>
+        ) : form.chunking_strategy === "docrag_small_to_big" ? (
+          // DocRAG 親子階層は chunk サイズ等を使わず、rag_poc と同じ 5 項目で分割する。
+          DOCRAG_CHUNKING_PARAMS.map((spec) => (
+            <PreviewNumberField
+              key={spec.field}
+              label={t(spec.labelKey)}
+              value={form[spec.field]}
+              min={spec.min}
+              max={spec.max}
+              step={spec.step}
+              disabled={pending}
+              onChange={(value) => onChange({ [spec.field]: value })}
+            />
+          ))
         ) : (
           <>
             {semanticBoundary ? (
@@ -2415,16 +2429,6 @@ function ChunkPreviewControls({
                 {overlapField}
               </>
             )}
-            {form.chunking_strategy === "hierarchical_parent_child" ? (
-              <PreviewNumberField
-                label={t("settings.chunking.params.childSize")}
-                value={form.chunk_child_size}
-                min={80}
-                max={4000}
-                disabled={pending}
-                onChange={(value) => onChange({ chunk_child_size: value })}
-              />
-            ) : null}
             {!semanticBoundary ? minCharsField : null}
           </>
         )}
@@ -2480,6 +2484,7 @@ function PreviewNumberField({
   value,
   min,
   max,
+  step,
   disabled,
   onChange,
 }: {
@@ -2487,6 +2492,7 @@ function PreviewNumberField({
   value: number;
   min: number;
   max: number;
+  step?: number;
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
@@ -2499,6 +2505,7 @@ function PreviewNumberField({
         value={Number.isFinite(value) ? value : ""}
         min={min}
         max={max}
+        step={step}
         disabled={disabled}
         onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
         className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"

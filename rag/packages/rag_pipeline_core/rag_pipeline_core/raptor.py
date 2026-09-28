@@ -7,7 +7,7 @@ leaf chunk を再帰的に cluster + 要約して多層级の summary node を�
 ``summarizer``(OCI Enterprise AI 等)を注入する。要約が得られない/失敗した cluster は安全に
 skip し、最低でも leaf chunk はそのまま残す(opt-in・安全縮退)。
 
-`hierarchical_parent_child` chunking の build 時拡張として ingestion 側から呼ぶ。
+chunking の build 時拡張として ingestion 側から呼ぶ(``rag_raptor_enabled`` のとき)。
 """
 
 from __future__ import annotations

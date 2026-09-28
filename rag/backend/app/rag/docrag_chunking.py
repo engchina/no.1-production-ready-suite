@@ -1,4 +1,4 @@
-"""DocRAG(rag_poc)の Small-to-Big 親子分割を backend の Chunk へ写す。
+"""DocRAG 親子階層(rag_poc の Small-to-Big 親子分割)を backend の Chunk へ写す。
 
 docling サービスが ``parser_artifacts["docrag_layout"]`` に保持した LayoutRecord から
 ``docrag.chunking.build_small_to_big_chunks`` で親子チャンクを作り、子だけを索引単位として返す。
@@ -19,6 +19,8 @@ from rag_pipeline_core.chunking import Chunk
 if TYPE_CHECKING:
     from docrag.chunking.constants import ChunkingConfig, DocumentChunk
 
+    from app.rag.chunking_strategy import DocragChunkingParams
+
 DOCRAG_CHUNKING_STRATEGY = "docrag_small_to_big"
 DOCRAG_LAYOUT_ARTIFACT = "docrag_layout"
 DOCRAG_SOURCE_PARSER = "docling_docrag"
@@ -27,7 +29,13 @@ DOCRAG_SEARCH_TEXT_KEY = "docrag_search_text"
 
 
 class DocragLayoutMissingError(ValueError):
-    """DocRAG 分割に必要な docling レイアウトが抽出結果にない。"""
+    """DocRAG 分割に必要な docling レイアウトが抽出結果にない。
+
+    文書解析が Docling 以外の文書で DocRAG 親子階層を選んだときに起きる。取込ジョブの
+    失敗理由として、そのまま利用者へ表示してよい文言にする(``safe_for_user``)。
+    """
+
+    safe_for_user = True
 
 
 def has_docrag_layout(extraction: StructuredExtraction) -> bool:
@@ -35,22 +43,43 @@ def has_docrag_layout(extraction: StructuredExtraction) -> bool:
     return isinstance(layout, Mapping) and bool(layout.get("records"))
 
 
+def docrag_chunking_config(params: DocragChunkingParams | None = None) -> ChunkingConfig:
+    """設定の 5 項目を docrag の ChunkingConfig へ写す。
+
+    検索用テキストの 3 項目(contextual search text)は rag_poc と同じく既定値のまま使う。
+    """
+    from docrag.chunking.constants import ChunkingConfig
+
+    if params is None:
+        return ChunkingConfig().validate()
+    return ChunkingConfig(
+        child_target_chars=params.child_target_chars,
+        table_child_target_chars=params.table_child_target_chars,
+        parent_target_chars=params.parent_target_chars,
+        parent_max_pages=params.parent_max_pages,
+        parent_max_children=params.parent_max_children,
+    ).validate()
+
+
 def build_docrag_chunks(
     extraction: StructuredExtraction,
     *,
     source_name: str = "",
-    config: ChunkingConfig | None = None,
+    params: DocragChunkingParams | None = None,
 ) -> list[Chunk]:
-    """docrag_layout から親子分割し、子チャンクを索引用 Chunk として返す。"""
+    """docrag_layout から親子分割し、子チャンクを索引用 Chunk として返す。
+
+    ``params`` は文書分割の設定(DocRAG 親子階層の 5 項目)。None は rag_poc の既定値。
+    """
     # oracle client からも search_text 判定で import されるため、分割実装は使用時に読む。
     from docrag.chunking.builder import build_small_to_big_chunks
-    from docrag.chunking.constants import CHILD_CHUNK_LEVEL, ChunkingConfig
+    from docrag.chunking.constants import CHILD_CHUNK_LEVEL
 
     layout = extraction.parser_artifacts.get(DOCRAG_LAYOUT_ARTIFACT)
     if not isinstance(layout, Mapping) or not layout.get("records"):
         raise DocragLayoutMissingError(
-            "DocRAG 分割には docling(DocRAG)の解析結果が必要です。"
-            "文書解析を docling にして再解析してください。"
+            "DocRAG 親子階層には Docling の解析結果が必要です。"
+            "文書解析を Docling にして再解析するか、別の分割方式を選んでください。"
         )
     records = [dict(record) for record in _items(layout.get("records")) if isinstance(record, dict)]
     pages = [dict(page) for page in _items(layout.get("pages")) if isinstance(page, dict)]
@@ -67,7 +96,7 @@ def build_docrag_chunks(
         payload,
         source_run_id=_source_run_id(records),
         selected_engine_ids=engines,
-        config=(config or ChunkingConfig()).validate(),
+        config=docrag_chunking_config(params),
         source_page_count=len(pages),
     )
     parents = {chunk.chunk_id: chunk for chunk in chunks if chunk.chunk_level != CHILD_CHUNK_LEVEL}
