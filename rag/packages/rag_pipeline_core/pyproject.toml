@@ -3,7 +3,7 @@ name = "rag-pipeline-core"
 version = "0.1.0"
 description = "Shared pipeline-stage plugin contract (schemas + deterministic logic + app factory) for backend and pipeline microservices"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.11",
     "rag-parser-core",

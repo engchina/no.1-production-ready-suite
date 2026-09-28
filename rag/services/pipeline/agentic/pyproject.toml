@@ -2,7 +2,7 @@
 name = "pipeline-agentic-service"
 version = "0.1.0"
 description = "pipeline ステージ microservice: agentic profile 解決(決定論・外部依存なし)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-pipeline-core[service]",
 ]

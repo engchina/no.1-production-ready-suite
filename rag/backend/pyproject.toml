@@ -3,7 +3,7 @@ name = "production-ready-rag-backend"
 version = "0.1.0"
 description = "Production-ready RAG backend (FastAPI + OCI Enterprise AI + Oracle 26ai)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.121,<1.0",
     "starlette>=1.0.1,<2.0",

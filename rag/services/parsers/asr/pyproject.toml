@@ -2,7 +2,7 @@
 name = "parser-asr-service"
 version = "0.1.0"
 description = "parser microservice: 音声/動画の文字起こし(faster-whisper, GPU、外部 SaaS 非使用)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
     "faster-whisper>=1.0,<2.0",

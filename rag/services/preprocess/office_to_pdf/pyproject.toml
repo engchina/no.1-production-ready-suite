@@ -2,7 +2,7 @@
 name = "preprocess-office-to-pdf-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: Office→PDF(LibreOffice headless)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
 ]
