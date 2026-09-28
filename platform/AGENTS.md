@@ -3,7 +3,7 @@
 > **共通基盤（`platform/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
 > Claude Code と Codex の両方が参照します。`CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
 > 共有パッケージの運用ルール（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
-> Issue には `platform` label を付け、PR title の scope は `platform` にする。`platform/` の変更は統合 CI で全製品の job を実行する。
+> Issue には `platform` label を付け、PR title の scope は `platform` にする。`platform/` の変更は統合 CI で全製品の job を実行する（frontend 側（`packages/ui`・`packages/system-settings`・`docs/design-system/`）の変更は各製品の frontend / e2e の job、backend 側（`packages/backend_core`・`packages/system_settings_backend`）の変更は各製品の backend の job。#339）。
 
 ## デザインシステム / UI
 
@@ -90,7 +90,7 @@ export default [
 
 ## CI / 検証コマンド
 
-PR の CI は suite root の `.github/workflows/ci.yml`（`Platform / UI`・`Platform / backend_core` job と、影響を受ける全製品の job）で実行される。変更範囲に応じて merge 前にローカルでも同じ command を実行し、結果を PR の `検証結果` に記載する。
+PR の CI は suite root の `.github/workflows/ci.yml`（`Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` job と、影響を受ける全製品の job）で実行される。ローカルでは変更した package の command を実行し、影響を受ける製品の全件の検査は CI の job 結果を PR の `検証結果` に引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。pip-audit は PR では lock / pyproject の変更時だけ CI が実行し、全件は `dependency-audit-nightly.yml` が毎晩実行する。
 
 ```bash
 # frontend (@engchina/production-ready-ui) — platform/ で実行

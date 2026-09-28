@@ -2,8 +2,13 @@ name: CI
 
 # monorepo（platform / rag / nl2sql / agent）の統合 CI（#71）。
 # changes job で変更パスを判定し、変更のあった製品の job だけを実行する。
-# platform/ と本 workflow の変更は全製品に影響するため、全 job を実行する。
+# platform/ は frontend（共有 UI・システム設定画面・デザインシステム）と backend（backend_core・system_settings_backend）に
+# 分けて判定し、製品の frontend / backend の job はそれぞれの側の変更だけで動く（#339）。
+# 本 workflow・.github/actions/ と、どちらにも属さない platform のファイル（.env.example・contracts/ 等）の変更は両方に効く。
+# platform の Markdown（AGENTS.md・README・docs/ux-contracts 等）だけの変更では製品の job を動かさない
+# （docs/design-system/ は lint 設定を含むため frontend に数える）。
 # branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
+# main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
 
 on:
   pull_request:
@@ -19,15 +24,32 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      platform: ${{ steps.filter.outputs.platform }}
       rag: ${{ steps.filter.outputs.rag }}
       nl2sql: ${{ steps.filter.outputs.nl2sql }}
       agent: ${{ steps.filter.outputs.agent }}
       terraform: ${{ steps.filter.outputs.terraform }}
+      platform_frontend: >-
+        ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.ci == 'true'
+        || steps.filter.outputs.platform_other == 'true' }}
+      platform_backend: >-
+        ${{ steps.filter.outputs.platform_backend == 'true' || steps.filter.outputs.ci == 'true'
+        || steps.filter.outputs.platform_other == 'true' }}
+      # platform のどこか（Markdown だけの変更を除く）。compose・配備スクリプト・Terraform の検証が使う。
+      platform: >-
+        ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.platform_backend == 'true'
+        || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
+      nl2sql_frontend_contract: ${{ steps.filter.outputs.nl2sql_frontend_contract }}
+      # pip-audit は依存（uv.lock / pyproject.toml）が変わったときだけ実行する。全件は dependency-audit-nightly.yml。
+      platform_backend_core_deps: ${{ steps.filter.outputs.platform_backend_core_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      platform_system_settings_deps: ${{ steps.filter.outputs.platform_system_settings_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      rag_deps: ${{ steps.filter.outputs.rag_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      nl2sql_deps: ${{ steps.filter.outputs.nl2sql_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      agent_deps: ${{ steps.filter.outputs.agent_deps == 'true' || steps.filter.outputs.ci == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -36,10 +58,25 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v4
         with:
+          # `!` の除外は、その filter の中で含めたファイルから除く（除外の無い filter は従来の some と同じ。v4.0.3 以降）。
+          predicate-quantifier: some-with-excludes
           filters: |
-            platform:
-              - "platform/**"
+            ci:
               - ".github/workflows/ci.yml"
+              - ".github/actions/**"
+            platform_frontend:
+              - "platform/packages/ui/**"
+              - "platform/packages/system-settings/**"
+              - "platform/docs/design-system/**"
+              - "platform/package.json"
+              - "platform/package-lock.json"
+            platform_backend:
+              - "platform/packages/backend_core/**"
+              - "platform/packages/system_settings_backend/**"
+            # NL2SQL / Frontend のロジックテスト（tests/*-contract.test.ts）が読む、共通設定 API の backend の定義。
+            nl2sql_frontend_contract:
+              - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
             rag:
               - "rag/**"
             nl2sql:
@@ -48,10 +85,37 @@ jobs:
               - "agent/**"
             terraform:
               - "terraform/**"
+            platform_backend_core_deps:
+              - "platform/packages/backend_core/uv.lock"
+              - "platform/packages/backend_core/pyproject.toml"
+            platform_system_settings_deps:
+              - "platform/packages/system_settings_backend/uv.lock"
+              - "platform/packages/system_settings_backend/pyproject.toml"
+            rag_deps:
+              - "rag/backend/uv.lock"
+              - "rag/backend/pyproject.toml"
+            nl2sql_deps:
+              - "nl2sql/backend/uv.lock"
+              - "nl2sql/backend/pyproject.toml"
+            agent_deps:
+              - "agent/backend/uv.lock"
+              - "agent/backend/pyproject.toml"
+            # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
+            platform_other:
+              - "platform/**"
+              - "!platform/packages/ui/**"
+              - "!platform/packages/system-settings/**"
+              - "!platform/packages/backend_core/**"
+              - "!platform/packages/system_settings_backend/**"
+              - "!platform/docs/design-system/**"
+              - "!platform/package.json"
+              - "!platform/package-lock.json"
+              - "!platform/**/*.md"
 
   secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -70,12 +134,19 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
   # ---------------------------------------------------------------- platform
+  #
+  # キャッシュの方針（#339）:
+  #   - uv の cache は main の push だけが保存し、PR は main の cache を復元するだけにする
+  #     （PR ごとに約 120 MB の cache を保存すると、repo の上限 10 GB を超えて main の cache が追い出される）。
+  #   - mypy の .mypy_cache は lock とブランチを key にし、無ければ main（同じ lock → 別の lock）から復元する。
+  #   - 共有 UI の dist と Playwright のブラウザは .github/actions/ の composite action がキャッシュする。
 
   platform-ui:
     name: Platform / UI (@engchina/production-ready-ui)
     needs: changes
-    if: needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: platform
@@ -91,16 +162,25 @@ jobs:
           cache-dependency-path: platform/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
+
+      # root の typecheck / test / build はそれぞれ ui を build し直す（ローカルの単発実行のため）。
+      # CI では ui を 1 回だけ build し、system-settings の型検査・テストはその dist を使う。
+      - name: Build UI (dist/index.js + d.ts + tokens.css)
+        run: npm run build -w @engchina/production-ready-ui
 
       - name: Type check
-        run: npm run typecheck
+        run: |
+          npm run typecheck -w @engchina/production-ready-ui
+          npm run typecheck -w @engchina/production-ready-system-settings
 
       - name: Unit tests
-        run: npm test
+        run: |
+          npm run test -w @engchina/production-ready-ui
+          npm run test -w @engchina/production-ready-system-settings
 
-      - name: Build (dist/index.js + d.ts + tokens.css)
-        run: npm run build
+      - name: Build system settings
+        run: npm run build -w @engchina/production-ready-system-settings
 
       # dist が公開契約どおり生成されたことを確認する。
       - name: Verify dist artifacts
@@ -113,8 +193,9 @@ jobs:
   platform-backend-core:
     name: Platform / backend_core (production-ready-backend-core)
     needs: changes
-    if: needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.platform_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: platform/packages/backend_core
@@ -127,6 +208,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: platform/packages/backend_core/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -142,6 +224,15 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Restore mypy cache
+        uses: actions/cache@v6
+        with:
+          path: platform/packages/backend_core/.mypy_cache
+          key: mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-${{ github.head_ref || github.ref_name }}
+          restore-keys: |
+            mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-
+            mypy-platform-backend-core-
+
       - name: Type check
         run: uv run mypy src
 
@@ -152,13 +243,15 @@ jobs:
         run: uv run bandit -r src
 
       - name: Dependency audit
+        if: needs.changes.outputs.platform_backend_core_deps == 'true'
         run: uv run pip-audit
 
   platform-system-settings-backend:
     name: Platform / system_settings_backend (pr_system_settings)
     needs: changes
-    if: needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.platform_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: platform/packages/system_settings_backend
@@ -171,6 +264,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: platform/packages/system_settings_backend/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -186,6 +280,15 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Restore mypy cache
+        uses: actions/cache@v6
+        with:
+          path: platform/packages/system_settings_backend/.mypy_cache
+          key: mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
+          restore-keys: |
+            mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-
+            mypy-platform-system-settings-
+
       - name: Type check
         run: uv run mypy src
 
@@ -196,6 +299,7 @@ jobs:
         run: uv run bandit -r src
 
       - name: Dependency audit
+        if: needs.changes.outputs.platform_system_settings_deps == 'true'
         run: uv run pip-audit
 
   # ---------------------------------------------------------------- rag
@@ -203,8 +307,9 @@ jobs:
   rag-backend:
     name: RAG / Backend
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: rag/backend
@@ -218,6 +323,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: rag/backend/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -233,6 +339,15 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Restore mypy cache
+        uses: actions/cache@v6
+        with:
+          path: rag/backend/.mypy_cache
+          key: mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
+          restore-keys: |
+            mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-
+            mypy-rag-backend-
+
       - name: Type check
         run: uv run mypy .
 
@@ -244,6 +359,7 @@ jobs:
         run: uv run bandit -c pyproject.toml -r app
 
       - name: Dependency audit
+        if: needs.changes.outputs.rag_deps == 'true'
         # oci 2.185.1 が cryptography<51.0.0 へ制約を緩和したため cryptography 50 系へ更新でき、
         # GHSA-537c-gmf6-5ccf の ignore は不要になった。ignore を戻す場合は理由をここへ明記する。
         run: uv run pip-audit
@@ -253,6 +369,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: rag/packages/docrag_core
@@ -260,8 +377,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # lock を持たないため pyproject.toml を key にする。
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: rag/packages/docrag_core/pyproject.toml
+          cache-suffix: docrag-core
+          save-cache: ${{ github.event_name == 'push' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -279,8 +402,9 @@ jobs:
   rag-frontend:
     name: RAG / Frontend
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: rag/frontend
@@ -299,13 +423,10 @@ jobs:
             platform/package-lock.json
 
       - name: Build shared UI package
-        working-directory: platform
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/platform-ui
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       # 型検査は build の `tsc --noEmit` が兼ねる。Playwright E2E は rag-e2e job（#133）。
       # lint / audit はローカル検証と PR review で確認する。
@@ -318,9 +439,10 @@ jobs:
   rag-e2e:
     name: RAG / E2E smoke
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 実測は 1〜2 分（2026-09）。
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: rag/frontend
@@ -338,16 +460,15 @@ jobs:
             platform/package-lock.json
 
       - name: Build shared UI package
-        working-directory: platform
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/platform-ui
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: rag/frontend
 
       # PR では約 1 分の smoke だけを実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
@@ -370,6 +491,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: rag
@@ -386,6 +508,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: rag
@@ -411,6 +534,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: nl2sql
@@ -437,8 +561,11 @@ jobs:
   nl2sql-frontend:
     name: NL2SQL / Frontend
     needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    if: >-
+      needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
+      || needs.changes.outputs.nl2sql_frontend_contract == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: nl2sql/frontend
@@ -457,31 +584,32 @@ jobs:
             platform/package-lock.json
 
       - name: Build shared UI package
-        working-directory: platform
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/platform-ui
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       # デザインシステム遵守ルール（frontend/.oxlintrc.json が ../../platform の
       # docs/design-system/adherence.oxlintrc.json を extends）と oxlint 既定の correctness ルール。
       - name: Lint
         run: npm run lint
 
+      # `tsc -p tsconfig.test.json`（tsconfig.json を extends し、src と tests を含む）で型検査してから node --test を実行する。
       - name: Logic tests
         run: npm run test:logic
 
+      # 型検査は Logic tests の tsc が src も含めて済ませているため、`npm run build`（tsc --noEmit && vite build）の
+      # tsc を二重に実行せず、vite build だけを行う（#339）。
       - name: Build
-        run: npm run build
+        run: npx --no-install vite build
 
   nl2sql-e2e:
     name: NL2SQL / E2E smoke
     needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 実測は 1.5〜2 分（2026-09）。
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: nl2sql/frontend
@@ -499,16 +627,15 @@ jobs:
             platform/package-lock.json
 
       - name: Build shared UI package
-        working-directory: platform
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/platform-ui
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: nl2sql/frontend
 
       # PR では約 1 分の smoke だけを実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2、負荷対策で 1 worker（#175）。
@@ -528,8 +655,9 @@ jobs:
   nl2sql-backend:
     name: NL2SQL / Backend
     needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       NL2SQL_RUNTIME_MODE: memory
       NL2SQL_FEEDBACK_EMBEDDING_ENABLED: "false"
@@ -546,6 +674,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: nl2sql/backend/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -561,6 +690,15 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Restore mypy cache
+        uses: actions/cache@v6
+        with:
+          path: nl2sql/backend/.mypy_cache
+          key: mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
+          restore-keys: |
+            mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-
+            mypy-nl2sql-backend-
+
       - name: Type check
         run: uv run mypy .
 
@@ -571,22 +709,71 @@ jobs:
         run: uv run bandit -r app
 
       - name: Dependency audit
+        if: needs.changes.outputs.nl2sql_deps == 'true'
         # OCI SDK currently constrains cryptography to <47.0.0, while GHSA-537c-gmf6-5ccf
         # lists 48.0.1 as the first fixed version. Keep auditing all other findings.
+        # dependency-audit-nightly.yml にも同じ ignore を書く。
         run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
 
   # ---------------------------------------------------------------- agent
+  #
+  # 旧 `Agent / Full Checks`（1 job で backend・frontend・Playwright 全件を直列に実行）を 3 job に分けた（#339）。
+  # PR の e2e は RAG / NL2SQL と同じく約 1 分の smoke にし、全件は e2e-nightly.yml が実行する。
 
-  agent-checks:
-    name: Agent / Full Checks
+  agent-backend:
+    name: Agent / Backend
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: agent
     steps:
-      # backend / frontend は ../../platform の共有パッケージに path 依存する。
+      # backend は ../../platform の共有パッケージに path 依存する。
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: agent/backend/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Restore mypy cache
+        uses: actions/cache@v6
+        with:
+          path: agent/backend/.mypy_cache
+          key: mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
+          restore-keys: |
+            mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-
+            mypy-agent-backend-
+
+      # black / ruff / mypy / pytest / 検証 evidence の dry-run / release chain の rehearsal / bandit / pip-audit。
+      - name: Run backend checks
+        run: scripts/check-all.sh
+        env:
+          SKIP_FRONTEND: "1"
+          SKIP_AUDIT: ${{ needs.changes.outputs.agent_deps == 'true' && '0' || '1' }}
+          UV_SYNC_ARGS: "--locked --dev"
+
+  agent-frontend:
+    name: Agent / Frontend
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent/frontend
+    steps:
+      # frontend は file:../../platform/packages/ui に依存するため、先に共有 UI を build する。
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -599,35 +786,69 @@ jobs:
             agent/frontend/package-lock.json
             platform/package-lock.json
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: agent/backend/uv.lock
+      - name: Build shared UI package
+        uses: ./.github/actions/platform-ui
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      # 型検査は build の `tsc --noEmit` が兼ねる。
+      - name: Build
+        run: npm run build
+
+  agent-e2e:
+    name: Agent / E2E smoke
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
-          python-version: "3.12"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            agent/frontend/package-lock.json
+            platform/package-lock.json
 
       - name: Build shared UI package
-        working-directory: platform
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/platform-ui
 
-      - name: Install frontend dependencies
-        working-directory: agent/frontend
-        run: npm ci
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
 
       - name: Install Playwright browsers
-        working-directory: agent/frontend
-        run: npx playwright install --with-deps chromium
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: agent/frontend
 
-      - name: Run standard checks
-        run: scripts/check-all.sh
-        env:
-          UV_SYNC_ARGS: "--locked --dev"
+      # PR では約 1 分の smoke だけを実行する（RAG / NL2SQL の #184 と同じ。#339）。
+      # ログイン・認証・Run の stream・Runtime の主導線・セキュリティ管理・外観・フォント・設定の契約。
+      # 全件（約 100 件）は e2e-nightly.yml が毎晩実行する。CI=true で retries 2、1 worker。
+      - name: Playwright E2E (smoke)
+        run: >-
+          npx playwright test
+          e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
+          e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
+          e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-playwright-smoke
+          path: agent/frontend/test-results
+          retention-days: 7
 
   # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ Agent の init_script.sh を検証する（#217）。
   agent-init-script:
@@ -635,6 +856,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: agent
@@ -664,6 +886,7 @@ jobs:
       needs.changes.outputs.terraform == 'true' || needs.changes.outputs.platform == 'true'
       || needs.changes.outputs.rag == 'true' || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: terraform
@@ -722,10 +945,13 @@ jobs:
       - nl2sql-frontend
       - nl2sql-e2e
       - nl2sql-backend
-      - agent-checks
+      - agent-backend
+      - agent-frontend
+      - agent-e2e
       - agent-init-script
       - suite-terraform
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。
       - name: Check results

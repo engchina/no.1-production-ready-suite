@@ -1,0 +1,34 @@
+name: Build shared platform UI
+description: >-
+  platform の npm ci と、共有 UI（@engchina/production-ready-ui / production-ready-system-settings）の dist を用意する。
+  dist は platform の frontend のソースと lock の hash でキャッシュし、hit したら build を飛ばす（#339）。
+
+# 製品の frontend は file:../../platform/packages/{ui,system-settings} に依存する。dist が hit しても
+# platform の npm ci は省けない（ui の dependencies（clsx 等）を製品の build が platform/node_modules から解決するため）。
+# Node の版は key に含めない（vite / tsc の出力は Node 22 / 24 で変わらない）。
+
+runs:
+  using: composite
+  steps:
+    - name: Restore platform dist
+      id: dist
+      uses: actions/cache@v6
+      with:
+        path: |
+          platform/packages/ui/dist
+          platform/packages/system-settings/dist
+        key: >-
+          platform-dist-${{ runner.os }}-${{ hashFiles('platform/package.json', 'platform/package-lock.json',
+          'platform/packages/ui/**', 'platform/packages/system-settings/**',
+          '!platform/packages/*/dist/**', '!platform/**/node_modules/**') }}
+
+    - name: Install platform dependencies
+      shell: bash
+      working-directory: platform
+      run: npm ci --no-audit --no-fund
+
+    - name: Build platform packages
+      if: steps.dist.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: platform
+      run: npm run build

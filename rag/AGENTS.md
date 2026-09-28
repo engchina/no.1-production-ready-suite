@@ -8,7 +8,7 @@
 - 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
 - ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
 - 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
-- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。
+- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
 
 ## プロジェクト概要
 
@@ -189,6 +189,7 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 - 実装と同時に対応するテストを追加・更新する。backend は pytest、frontend ロジックは Vitest、UI/UX は Playwright。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ/録画応答でテストする。実サービス検証は手動/ステージングとする。
 - 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。
+- ローカルは変更範囲の検査にする（#339）。backend は関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`、frontend は `npm run lint` / `npm run build` と `npx vitest related <変更したファイル>`（または `npx vitest --changed`）、e2e は関係する spec だけ（`npx playwright test e2e/<対象>.spec.ts`）。backend の全テスト・`mypy .`・`pip-audit`、Playwright の smoke / 全件は CI と nightly に任せる。
 - UI/UX 変更は Playwright で desktop と mobile 幅を確認する。空/読込/エラー/ブロック状態も必要に応じて確認する。
 
 ## コーディング規約・重要ルール

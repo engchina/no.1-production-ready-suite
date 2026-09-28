@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # 変更後の標準チェックを一括実行する。
-# 既定: backend format/lint/type/test/security/audit + frontend build/e2e。
-# 必要に応じて SKIP_BACKEND=1 / SKIP_FRONTEND=1 / SKIP_E2E=1
-# SKIP_FORMAT=1 / SKIP_SECURITY=1 / SKIP_AUDIT=1 / SKIP_VALIDATION_EVIDENCE=1
-# SKIP_RELEASE_REHEARSAL=1 で一部を省略できる。
+# CI（CI=true）の既定: backend format/lint/type/test/security/audit + frontend lint/build/e2e（全件）。
+# ローカルの既定は軽くする（#339）: Playwright e2e と pip-audit を省く。e2e の全件は CI の nightly
+# （e2e-nightly.yml）、PR は CI の smoke（ci.yml の agent-e2e）、pip-audit の全件は dependency-audit-nightly.yml が実行する。
+#   - 関係する spec だけ e2e を実行: SKIP_E2E=0 E2E_ARGS="e2e/auth-login.spec.ts" scripts/check-all.sh
+#   - ローカルでも全部を実行: FULL=1 scripts/check-all.sh
+# 必要に応じて SKIP_BACKEND=1 / SKIP_FRONTEND=1 / SKIP_E2E=0|1
+# SKIP_FORMAT=1 / SKIP_SECURITY=1 / SKIP_AUDIT=0|1 / SKIP_VALIDATION_EVIDENCE=1
+# SKIP_RELEASE_REHEARSAL=1 で一部を省略・追加できる。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,12 +16,20 @@ BACKEND_DIR="${ROOT_DIR}/backend"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 PLATFORM_DIR="${ROOT_DIR}/../platform"
 
+# CI か FULL=1 なら全部、ローカルは e2e と pip-audit を既定で省く。
+if [ -n "${CI:-}" ] || [ "${FULL:-0}" = "1" ]; then
+  local_skip_default=0
+else
+  local_skip_default=1
+fi
+
 SKIP_BACKEND="${SKIP_BACKEND:-0}"
 SKIP_FRONTEND="${SKIP_FRONTEND:-0}"
-SKIP_E2E="${SKIP_E2E:-0}"
+SKIP_E2E="${SKIP_E2E:-${local_skip_default}}"
+E2E_ARGS="${E2E_ARGS:-}"
 SKIP_FORMAT="${SKIP_FORMAT:-0}"
 SKIP_SECURITY="${SKIP_SECURITY:-0}"
-SKIP_AUDIT="${SKIP_AUDIT:-0}"
+SKIP_AUDIT="${SKIP_AUDIT:-${local_skip_default}}"
 SKIP_VALIDATION_EVIDENCE="${SKIP_VALIDATION_EVIDENCE:-0}"
 SKIP_RELEASE_REHEARSAL="${SKIP_RELEASE_REHEARSAL:-0}"
 UV_SYNC_ARGS="${UV_SYNC_ARGS:---locked --dev}"
@@ -166,7 +178,7 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
       log "backend pip-audit"
       run_backend_tool pip-audit
     else
-      log "backend pip-audit skipped"
+      log "backend pip-audit skipped（SKIP_AUDIT=0 で実行。全件は dependency-audit-nightly.yml）"
     fi
   else
     log "backend security checks skipped"
@@ -185,10 +197,12 @@ if [ "${SKIP_FRONTEND}" != "1" ]; then
   (cd "${FRONTEND_DIR}" && npm run build)
 
   if [ "${SKIP_E2E}" != "1" ]; then
-    log "frontend Playwright e2e"
-    (cd "${FRONTEND_DIR}" && npm run test:e2e)
+    log "frontend Playwright e2e ${E2E_ARGS}"
+    # E2E_ARGS は spec のパスや -g を空白区切りで渡すため、意図して分割する。
+    # shellcheck disable=SC2086
+    (cd "${FRONTEND_DIR}" && npm run test:e2e -- ${E2E_ARGS})
   else
-    log "frontend Playwright e2e skipped"
+    log "frontend Playwright e2e skipped（SKIP_E2E=0 で実行。CI では常に実行）"
   fi
 else
   log "frontend checks skipped"

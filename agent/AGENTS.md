@@ -131,8 +131,15 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 ## 開発・検証
 
 - 機能変更と同時に pytest / Playwright を追加・更新する。
-- 完了前に backend の black/ruff/mypy/pytest、frontend build/Playwright、
-  `docker compose config`、secret/socket/digest security check を実行する。
+- 完了前に `scripts/check-all.sh`（backend の black/ruff/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
+  frontend の lint/build）と、`docker compose config`、secret/socket/digest security check を実行する。
+  - `check-all.sh` のローカルの既定は Playwright e2e と pip-audit を省く（#339）。関係する spec だけ
+    `SKIP_E2E=0 E2E_ARGS="e2e/<対象>.spec.ts" scripts/check-all.sh` で実行する。全部を実行するときは `FULL=1`。
+  - PR の CI は `Agent / Backend`・`Agent / Frontend`・`Agent / E2E smoke`（約 1 分の smoke）の 3 job。Playwright の
+    全件は `e2e-nightly.yml`、pip-audit の全件は `dependency-audit-nightly.yml` が毎晩実行する。PR の `検証結果` には
+    ローカルで実行した command と、CI の job 結果を分けて書く。
+  - smoke に入れる spec は `ci.yml` の `agent-e2e` に書く（ログイン・認証・Run の stream・Runtime の主導線など、壊れると
+    全体に響くもの。合計が CI でおおむね 1 分に収まる量）。
 - Runtime 実 image 起動は opt-in integration job。通常 CI は fixture server で adapter の
   再接続、重複 event、timeout、不正応答を検証する。
 - UI 作業以外でも既存ユーザー変更を尊重し、無関係な差分を戻さない。

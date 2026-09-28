@@ -2,7 +2,7 @@
 
 現在、`pip-audit` で無視している脆弱性はありません。
 
-例外を追加する場合は、対象 advisory・対象バージョン・解消できない理由・影響・対策・解除条件をこのファイルに記録し、`scripts/check-all.sh` の `--ignore-vuln` と対応させてください。
+例外を追加する場合は、対象 advisory・対象バージョン・解消できない理由・影響・対策・解除条件をこのファイルに記録し、`scripts/check-all.sh` と、毎晩の全件の検査（`.github/workflows/dependency-audit-nightly.yml` の Agent の `args`）の `--ignore-vuln` と対応させてください。
 
 ## 解除済み
 

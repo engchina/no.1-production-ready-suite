@@ -1,0 +1,38 @@
+name: Install Playwright browsers
+description: >-
+  Playwright の chromium（headless shell）を ~/.cache/ms-playwright にキャッシュする。key は Playwright の版。
+  hit したら OS の依存（install-deps）だけを入れる（#339）。
+
+inputs:
+  working-directory:
+    description: "@playwright/test を npm ci 済みの frontend のディレクトリ（例: rag/frontend）"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Playwright version
+      id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Playwright browsers
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
+
+    # headless の実行は chromium-headless-shell だけを使う（headed / channel 指定の spec は無い）。
+    - name: Install browsers and OS dependencies
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npx --no-install playwright install --with-deps --only-shell chromium
+
+    - name: Install OS dependencies
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npx --no-install playwright install-deps chromium

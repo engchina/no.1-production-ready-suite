@@ -1,4 +1,4 @@
-# pre-commit hook 設定 — コミット前にシークレット混入を検出して阻止する。
+# pre-commit hook 設定 — コミット前にシークレット混入と Python の lint 違反を検出して阻止する。
 #
 # セットアップ(各開発者が一度だけ実行):
 #   1. gitleaks バイナリを導入  https://github.com/gitleaks/gitleaks#installing
@@ -11,6 +11,10 @@
 #
 # gitleaks を Go からビルドせず、PATH 上の既存バイナリを使う(language: system)。
 # これにより古い Go 環境でもビルド失敗せず、CI と同一バイナリ挙動を再現できる。
+#
+# ruff check（#339）は commit する Python ファイルだけを、その backend の uv 環境の ruff と pyproject.toml の設定で
+# 検査する（CI の `uv run ruff check .` と同じ版・設定）。uv が必要。初回は backend の依存を同期するため時間がかかる。
+# 整形の検査は CI の black のまま（ruff format への置き換えは別の PR）。
 
 minimum_pre_commit_version: "3.0.0"
 
@@ -23,3 +27,11 @@ repos:
         entry: gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml
         language: system
         pass_filenames: false
+
+      - id: ruff-check
+        name: ruff check (backend の変更ファイル)
+        description: commit する backend の Python ファイルを、その backend の ruff 設定で検査する
+        entry: bash .github/scripts/pre-commit-ruff.sh
+        language: system
+        types: [python]
+        files: ^(rag/backend|nl2sql/backend|agent/backend|platform/packages/backend_core|platform/packages/system_settings_backend)/

@@ -76,8 +76,10 @@ concurrency:
 
 jobs:
   evaluation:
-    name: Golden Set And Search Load
+    # job 名の "RAG / " は ci-failure-issue.yml が Issue の製品 label を決めるのに使う。
+    name: RAG / Golden set and search load
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: rag/backend
