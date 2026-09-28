@@ -66,6 +66,62 @@ test("高度な検索設定は off 以外で LLM 追加呼び出し警告を出�
   await expectNoHorizontalOverflow(page);
 });
 
+test("高度な検索設定の保存に失敗しても未保存の選択と入力を残す (#274)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.route("**/api/settings/agentic", async (route) => {
+    if (route.request().method() === "PATCH") {
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["高度な検索設定を backend/.env へ保存できませんでした。"],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: agenticEnvelope("off") });
+  });
+
+  await page.goto("/settings/agentic");
+
+  const decompose = page.getByRole("radio", { name: /RRF 融合へ注入/ });
+  await decompose.click();
+  await page.getByLabel("最大 sub-question 数").fill("5");
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByText("高度な検索設定を backend/.env へ保存できませんでした。")).toBeVisible();
+  await expect(decompose).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByLabel("最大 sub-question 数")).toHaveValue("5");
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+});
+
+test("最大 sub-question 数の誤りは欄の直下に出して保存させない (#274)", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await collapseSidebar(page);
+  await mockAgentic(page, "decompose");
+
+  await page.goto("/settings/agentic");
+
+  const field = page.getByLabel("最大 sub-question 数");
+  await field.fill("9");
+
+  await expect(field).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("alert")).toHaveText("最大 sub-question 数は 1〜8 で入力してください。");
+  await expect(page.getByText("最大 sub-question 数は 1〜8 で入力してください。")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+
+  await field.fill("");
+  await expect(field).toHaveValue("");
+  await expect(field).toHaveAttribute("aria-invalid", "true");
+
+  await field.fill("4");
+  await expect(field).toHaveAttribute("aria-invalid", "false");
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("高度な検索設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/agentic", async (route) => {

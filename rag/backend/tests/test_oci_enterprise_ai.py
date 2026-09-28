@@ -1189,3 +1189,45 @@ def _oci_settings() -> Settings:
         oci_enterprise_ai_timeout_seconds=12.0,
         oci_enterprise_ai_max_retries=0,
     )
+
+
+class _PromptCapturingEnterpriseAiClient(OciEnterpriseAiClient):
+    """plan_query が generate へ渡す system prompt と context を記録する client。"""
+
+    def __init__(self) -> None:
+        super().__init__(settings=Settings.model_construct())
+        self.calls: list[tuple[str, str, str | None]] = []
+
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
+        self.calls.append((prompt, context, system_prompt))
+        return '["不足している情報 1", "不足している情報 2"]'
+
+
+async def test_plan_query_uses_followup_prompt_with_previous_evidence() -> None:
+    """multi-hop の追加分解は前の検索結果を evidence として渡し、別の指示で分解する(#274)。"""
+    client = _PromptCapturingEnterpriseAiClient()
+
+    first = await client.plan_query("承認条件", mode="decompose", max_subqueries=3)
+    followup = await client.plan_query(
+        "承認条件", mode="decompose", max_subqueries=3, context="[1] 承認は部長が行う。"
+    )
+
+    assert first == followup == ["不足している情報 1", "不足している情報 2"]
+    (_, first_context, first_prompt), (_, followup_context, followup_prompt) = client.calls
+    assert first_context == ""
+    assert followup_context == "[1] 承認は部長が行う。"
+    assert first_prompt is not None and followup_prompt is not None
+    assert first_prompt != followup_prompt
+    assert "evidence_context" in followup_prompt
+
+
+async def test_plan_query_ignores_context_for_rewrite_modes() -> None:
+    """書き換え系(1 件)の mode は context を使わない。"""
+    client = _PromptCapturingEnterpriseAiClient()
+
+    planned = await client.plan_query("承認条件", mode="query_rewrite", context="[1] 抜粋")
+
+    assert planned == ["不足している情報 1"]
+    assert client.calls[0][1] == ""

@@ -1057,7 +1057,7 @@ export const ja = {
     "最大 N 個の sub-question に分解し RRF 融合へ注入",
   "settings.agentic.profile.multi_hop": "multi-hop",
   "settings.agentic.profile.multi_hop.description":
-    "分解 + 根拠が弱い時に top context で 1 回追加分解(上限 1 hop)",
+    "分解 + 根拠が見つからない時に、上位の検索結果を踏まえて 1 回だけ追加分解(検索の補正が動いた時は行わない)",
   "settings.agentic.profile.smart_routing": "スマートルーティング",
   "settings.agentic.profile.smart_routing.description":
     "クエリの種別を見極めて検索向けに正規化(現状は書き換え相当の LLM 計画)",

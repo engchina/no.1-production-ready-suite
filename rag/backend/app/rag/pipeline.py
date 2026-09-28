@@ -450,9 +450,12 @@ class RagPipeline:
                     agentic_subquery_count = len(planned)
                     agentic_hops = 1
                     if agentic_params.hyde:
-                        # HyDE: 仮説文書を主検索クエリにし、元クエリも残す。
+                        # HyDE: 仮説文書は埋め込み検索の variant として足す。先頭の variant は
+                        # graph 検索・Agent Memory・ツリー検索の主クエリに使うため、質問のまま残す
+                        # (仮説文書を先頭にすると graph の語句一致が回答文で行われる)。
                         hyde_generated = True
-                    if agentic_params.rewrite:
+                        query_variants = _dedupe_strings([*query_variants, planned[0]])
+                    elif agentic_params.rewrite:
                         query_variants = _dedupe_strings([planned[0], *query_variants])
                     else:
                         query_variants = _dedupe_strings([*query_variants, *planned])
@@ -669,16 +672,20 @@ class RagPipeline:
                     grounded = corrective_grounded
                     selected_retrieval_result = corrective_result
             elif agentic_params.multi_hop and grounded.context_pack.evidence_count == 0:
-                corrective_retried = True
                 error_stage = "agentic_multi_hop"
+                # 1 回目と同じ入力(temperature 0)で分解し直しても同じ sub-question しか返らない。
+                # 上位の検索結果を context として渡し、不足している情報を探す追加の分解にする。
                 hop_queries = await self._llm.plan_query(
                     query_guardrail.sanitized_text,
                     mode="decompose",
                     max_subqueries=agentic_params.max_subqueries,
+                    context=_multi_hop_context(grounded.ranked or ranked),
                 )
-                if hop_queries:
+                hop_variants = _dedupe_strings([*query_variants, *hop_queries])
+                # 新しい variant が無い hop は同じ検索の繰り返しになるので実行しない。
+                if len(hop_variants) > len(query_variants):
+                    corrective_retried = True
                     agentic_hops += 1
-                    hop_variants = _dedupe_strings([*query_variants, *hop_queries])
                     hop_vectors = (
                         []
                         if resolved_strategy.mode == SearchMode.KEYWORD
@@ -2877,6 +2884,20 @@ def _leading_segment_indices(
         if len(selected) >= max_sentences:
             break
     return selected or [0]
+
+
+MULTI_HOP_CONTEXT_MAX_CHUNKS = 3
+MULTI_HOP_CONTEXT_MAX_CHARS_PER_CHUNK = 400
+
+
+def _multi_hop_context(chunks: list[RetrievedChunk]) -> str:
+    """multi-hop の追加分解へ渡す上位の検索結果の抜粋を作る(空なら空文字)。"""
+    excerpts = [
+        chunk.text.strip()[:MULTI_HOP_CONTEXT_MAX_CHARS_PER_CHUNK]
+        for chunk in chunks[:MULTI_HOP_CONTEXT_MAX_CHUNKS]
+        if chunk.text.strip()
+    ]
+    return "\n\n".join(f"[{index}] {text}" for index, text in enumerate(excerpts, start=1))
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:
