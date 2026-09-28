@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -378,6 +379,10 @@ def test_oracle_connection_applies_round_trip_timeout_and_closes(
         def rollback(self) -> None:
             self.rollbacks += 1
 
+        def cursor(self) -> Any:
+            # 接続ごとの初期化（ALTER SESSION）を受け流す。
+            return nullcontext(SimpleNamespace(execute=lambda _statement: None))
+
     connection = Connection()
 
     class Driver:
@@ -579,7 +584,6 @@ def test_profile_sync_concurrent_claim_only_mutates_oracle_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import threading
-    from typing import Any
 
     monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
     store = InMemoryOntologyStore()

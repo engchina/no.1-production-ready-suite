@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.oracle_session import init_oracle_session
 
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
@@ -528,6 +529,7 @@ def test_oracle_pool_initializes_instant_client_when_configured(
 
     def fake_create_pool(**kwargs: object) -> object:
         calls.append(("create_pool", kwargs["dsn"]))
+        calls.append(("session_callback", kwargs.get("session_callback")))
         return pool
 
     monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
@@ -553,6 +555,8 @@ def test_oracle_pool_initializes_instant_client_when_configured(
     assert client.connection_pool() is pool
     assert calls[0] == ("init", str(tmp_path / "instantclient_23_26"))
     assert calls[1] == ("create_pool", "ragdb_high")
+    # 新しい接続ごとに result cache を無効にする（ADB の内部エラーを避ける。#333）。
+    assert calls[2] == ("session_callback", init_oracle_session)
 
 
 def test_oracle_connection_uses_database_password_as_wallet_password(
