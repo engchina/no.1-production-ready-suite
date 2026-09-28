@@ -945,7 +945,12 @@ export function DataManagementPage() {
     setSyntheticDataResults(null);
     setSyntheticLoading((value) => value === "results" ? "" : value);
   }
+  // run が実際に変わったときだけ数える。同じ run で effect が再実行されたとき（StrictMode の mount 時の再実行など）に
+  // 数えると、同じ commit で下の自動表示が始めた読み込みの応答まで捨て、閲覧済みの preview が記録されない（#342）。
+  const resultRequestRunId = useRef<string | undefined>(undefined);
   useEffect(() => {
+    if (resultRequestRunId.current === selectedRun?.run_id) return;
+    resultRequestRunId.current = selectedRun?.run_id;
     resultRequest.current += 1;
   }, [selectedRun?.run_id]);
 
