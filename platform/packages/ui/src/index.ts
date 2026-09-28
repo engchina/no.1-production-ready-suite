@@ -82,6 +82,14 @@ export {
   type DisclosureChevronProps,
 } from "./components/ui/disclosure-chevron";
 export {
+  Disclosure,
+  type DisclosureProps,
+  type DisclosureSize,
+  type DisclosureSurface,
+  type DisclosureTone,
+  type DisclosureVariant,
+} from "./components/ui/disclosure";
+export {
   FloatingActionMenu,
   type FloatingMenuPlacement,
 } from "./components/ui/floating-menu";

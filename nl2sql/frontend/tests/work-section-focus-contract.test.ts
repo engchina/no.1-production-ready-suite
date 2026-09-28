@@ -25,27 +25,19 @@ const workSection = sliceBetween(
   "export function ManagementPanelShell"
 );
 
-test("WorkSection summary のフォーカスはグローバルの :focus-visible（outline）に任せる（#355）", () => {
-  assert.match(workSection, /list-none/u);
-  // ring を足すとグローバルの outline と二重に表示される。outline を消すとキーボードの位置が見えなくなる。
+test("WorkSection は共有の Disclosure で開閉し、フォーカスの表示は packages/ui に任せる（#355 / #397）", () => {
+  assert.match(workSection, /<Disclosure\b/u);
+  assert.match(workSection, /tone=\{tone\}/u);
+  // summary を手書きしない（Chevron・押せる領域・フォーカスの表示は Disclosure が持つ）。
+  assert.doesNotMatch(workSection, /<summary\b/u);
   assert.doesNotMatch(workSection, /focus(?:-visible)?:ring/u);
   assert.doesNotMatch(workSection, /focus(?:-visible)?:outline-none/u);
 });
 
-test("WorkSection は既存折りたたみ UI と同じ chevron 表現を使う", () => {
-  assert.match(workSection, /DisclosureChevron/u);
-  assert.match(workSection, /expanded="group"/u);
-  assert.match(workSection, /group\/disclosure/u);
-  assert.match(workSection, /\[&::-webkit-details-marker\]:hidden/u);
-});
-
-test("DbAdminShared の details summary は普通の focus ring を使わない", () => {
-  const summaryTags = source.match(/<summary\b[\s\S]*?>/gu) ?? [];
-  assert.ok(summaryTags.length > 0);
-  for (const summaryTag of summaryTags) {
-    assert.doesNotMatch(summaryTag, /focus(?:-visible)?:ring-/u);
-    assert.doesNotMatch(summaryTag, /focus(?:-visible)?:outline-none/u);
-  }
+test("DbAdminShared は details / summary を手書きしない（#397）", () => {
+  assert.doesNotMatch(source, /<details\b/u);
+  assert.doesNotMatch(source, /<summary\b/u);
+  assert.match(source, /<Disclosure\b/u);
 });
 
 test("管理画面のタブは共有 Tabs（WAI-ARIA Tabs のキー操作とフォーカス移動）に委ねる", () => {

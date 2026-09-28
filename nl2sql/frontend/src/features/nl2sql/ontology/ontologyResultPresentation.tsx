@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
+import { Disclosure } from "@engchina/production-ready-ui";
 
 export function TechnicalDetails({
   value,
@@ -9,16 +10,13 @@ export function TechnicalDetails({
   children?: ReactNode;
 }) {
   return (
-    <details className="min-w-0 rounded-md border border-border bg-surface-sunken p-3">
-      <summary className="cursor-pointer text-sm font-medium">
-        {t("ontologyUi.technicalDetails")}
-      </summary>
+    <Disclosure surface="sunken" summary={t("ontologyUi.technicalDetails")}>
       {children ?? (
-        <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
           {JSON.stringify(value, null, 2)}
         </pre>
       )}
-    </details>
+    </Disclosure>
   );
 }
 export function fieldLabel(field: string) {

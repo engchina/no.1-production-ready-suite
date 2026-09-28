@@ -6,12 +6,12 @@ import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import {
   Button,
   Banner,
+  Disclosure,
   toast,
   StatusBadge,
   useConfirm,
   ContentActionBar,
   TimedLoadingState,
-  DisclosureChevron,
   ListSkeleton,
 } from "@engchina/production-ready-ui";
 import {
@@ -1751,24 +1751,21 @@ export function OntologyBuildSection({
                   </Banner>
                 ) : null}
                 {buildWarnings.length > 0 ? (
-                  <details
-                    open={job.status === "failed"}
-                    className="group/disclosure rounded-md border border-warning-border bg-warning-subtle p-2 text-sm text-warning-fg"
+                  <Disclosure
+                    // 失敗したら開く（状態が変わったときに開き直す）。利用者の開閉はその間保つ。
+                    key={job.status === "failed" ? "failed" : "active"}
+                    defaultOpen={job.status === "failed"}
+                    tone="warning"
+                    summary={`${t("profiles.ontologyBuild.warningsTitle")} (${buildWarnings.length})`}
                   >
-                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold [&::-webkit-details-marker]:hidden">
-                      <span>
-                        {t("profiles.ontologyBuild.warningsTitle")} ({buildWarnings.length})
-                      </span>
-                      <DisclosureChevron expanded="group" size={16} />
-                    </summary>
-                    <ul className="mt-2 grid gap-1 pl-4">
+                    <ul className="grid gap-1 pl-4">
                       {buildWarnings.map((warning) => (
                         <li key={warning} className="list-disc">
                           {warning}
                         </li>
                       ))}
                     </ul>
-                  </details>
+                  </Disclosure>
                 ) : null}
                 {(job.sources?.length ?? 0) > 0 ? (
                   <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>

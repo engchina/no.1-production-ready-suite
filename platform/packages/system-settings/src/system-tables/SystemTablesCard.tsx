@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  DisclosureChevron,
+  Disclosure,
   ExecutionConfirmationField,
   Skeleton,
   StatusBadge,
@@ -397,12 +397,11 @@ function SystemTablesDetails({
   const notApplicable = text("settings.database.systemTables.table.notApplicable");
 
   return (
-    <details className="group/disclosure min-w-0 rounded-md border border-border">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
-        <span>{text("settings.database.systemTables.details.title", counts)}</span>
-        <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-      </summary>
-      <div className="min-w-0 border-t border-border p-4">
+    <Disclosure
+      summary={text("settings.database.systemTables.details.title", counts)}
+      summaryClassName="px-4 py-3 font-medium"
+      contentClassName="p-4"
+    >
         <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted">
           {text("settings.database.systemTables.details.versions", {
             applied: data.applied_versions.join(", ") || "-",
@@ -479,7 +478,6 @@ function SystemTablesDetails({
           stickyHeader
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
-      </div>
-    </details>
+    </Disclosure>
   );
 }

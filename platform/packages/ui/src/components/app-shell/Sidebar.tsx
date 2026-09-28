@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound, X } from "lucide-react";
+import { LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound, X } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 import type { NavLinkComponent, NavSection, SidebarLabels } from "../../navigation/types";
 import { Tooltip } from "../ui/tooltip";
+import { DisclosureChevron } from "../ui/disclosure-chevron";
 import { useNavDrawer, useSidebarCollapsed } from "./nav-drawer";
 
 export interface SidebarProps {
@@ -179,14 +180,7 @@ export function Sidebar({
                       />
                     ) : null}
                   </span>
-                  <ChevronDown
-                    size={14}
-                    aria-hidden
-                    className={cn(
-                      "shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none",
-                      sectionExpanded ? "rotate-0" : "-rotate-90"
-                    )}
-                  />
+                  <DisclosureChevron expanded={sectionExpanded} size={14} />
                 </button>
               ) : (
                 <div

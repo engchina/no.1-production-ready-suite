@@ -607,7 +607,7 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
     .filter({ visible: true })
     .first();
   const analysisChevron = analysisToggle.locator("svg");
-  await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
   await analysisToggle.click();
   await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
   const tableBox = await visibleBox(page.getByTestId("quality-evaluation-results-table"));
@@ -1022,7 +1022,7 @@ test("mobile restores completed results as cards without page overflow", async (
     .filter({ visible: true })
     .first();
   const mobileAnalysisChevron = mobileAnalysisToggle.locator("svg");
-  await expect.poll(() => mobileAnalysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  await expect.poll(() => mobileAnalysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
   await mobileAnalysisToggle.click();
   await expect.poll(() => mobileAnalysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
   await expect(

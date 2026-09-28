@@ -1,4 +1,5 @@
 import {
+  Disclosure,
   PageBody,
   PageHeader,
   Button,
@@ -14,7 +15,6 @@ import {
 } from "@engchina/production-ready-ui";
 import {
   Check,
-  ChevronDown,
   Pencil,
   Plus,
   RotateCcw,
@@ -198,12 +198,13 @@ function AssistantColumn({
       ) : null}
       {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} traceId={traceId} /> : null}
       {!streaming && !errorMessage && !docrag && savedDocrag && traceId ? (
-        <details className="border-t border-border pt-1">
-          <summary className="flex min-h-11 cursor-pointer items-center px-2 text-sm font-medium text-fg">
-            {t("chat.docrag.open")}
-          </summary>
+        <Disclosure
+          variant="plain"
+          summary={t("chat.docrag.open")}
+          className="border-t border-border px-2 pt-1"
+        >
           <SavedDocragAnswer traceId={traceId} businessViewId={businessViewId} showAnswer={false} />
-        </details>
+        </Disclosure>
       ) : null}
       {!streaming && !errorMessage ? (
         <FeedbackControls
@@ -215,15 +216,12 @@ function AssistantColumn({
         />
       ) : null}
       {citations.length > 0 ? (
-        <details className="group mt-auto border-t border-border pt-1">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
-            <span>{t("chat.citations.summary", { count: citations.length })}</span>
-            <ChevronDown
-              className="size-4 shrink-0 text-fg-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
-              aria-hidden
-            />
-          </summary>
-          <ul className="space-y-2 pt-2">
+        <Disclosure
+          variant="plain"
+          summary={t("chat.citations.summary", { count: citations.length })}
+          className="mt-auto border-t border-border px-2 pt-1"
+        >
+          <ul className="space-y-2">
             {citations.map((chunk, index) => (
               <CitationCard
                 key={chunk.chunk_id}
@@ -236,7 +234,7 @@ function AssistantColumn({
               />
             ))}
           </ul>
-        </details>
+        </Disclosure>
       ) : null}
     </div>
   );

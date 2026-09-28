@@ -252,6 +252,12 @@ export function WorkflowProgressStrip({
                 >
                   <StepIcon status={step.status} index={index} />
                 </span>
+                {/*
+                  工程の見出し（名前 + Chevron）と状態（右端、375px では次の行）を 1 行に並べる工程表の行。
+                  見出しと Chevron だけを持つ Disclosure では表せないため手書きし、状態は DisclosureChevron で示す（#397）。
+                  中の Disclosure（オントロジー構築の工程）は自分の状態で Chevron を回すので、入れ子でも向きは混ざらない。
+                */}
+                {/* oxlint-disable-next-line design-system/restricted-syntax -- 上の説明のとおり工程表の行。 */}
                 <details
                   className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-surface-sunken sm:px-2"
                   open={step.open}

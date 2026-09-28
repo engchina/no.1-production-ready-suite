@@ -1,4 +1,4 @@
-import { StatusBadge, DisclosureChevron } from "@engchina/production-ready-ui";
+import { Disclosure, StatusBadge } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { OntologyFinding } from "./types";
 
@@ -30,17 +30,13 @@ export function OntologyFindings({ findings, label }: {
           <span className="text-xs text-fg-muted">{t("markdownOntology.occurrences", { count: group.items.length })}</span>
         </div>
         <p className="whitespace-pre-wrap break-words text-sm">{group.message}</p>
-        <details className="group/disclosure min-w-0 text-xs">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
-            <span>{t("markdownOntology.findingTargets")}</span>
-            <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-          </summary>
-          <ul className="grid min-w-0 gap-1 pt-2">
+        <Disclosure variant="plain" size="sm" summary={t("markdownOntology.findingTargets")}>
+          <ul className="grid min-w-0 gap-1">
             {[...new Set(group.items.map(item => [item.definition_id, item.field, item.code].filter(Boolean).join(" / ") || t("markdownOntology.generalFinding")))].map(target =>
               <li key={target} className="break-all text-fg-muted">{target}</li>
             )}
           </ul>
-        </details>
+        </Disclosure>
       </li>)}
     </ul>
   </div>;

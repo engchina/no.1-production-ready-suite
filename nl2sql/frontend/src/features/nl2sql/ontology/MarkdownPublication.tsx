@@ -2,11 +2,11 @@ import { RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import {
   Banner,
   Button,
+  Disclosure,
   StatusBadge,
   FieldError,
   useConfirm,
   ContentActionBar,
-  DisclosureChevron,
   ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
@@ -147,24 +147,16 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
       {hasErrors && <Banner severity="danger">{t("markdownOntology.errorsBlockPublish")}</Banner>}
       {value.status === "ready" && hasWarnings && !hasErrors && !dataValidationFailed && <Banner severity="warning">{t("markdownOntology.warningsPublishable")}</Banner>}
       <OntologyFindings findings={findings} label={t("markdownOntology.findings")} />
-      {value.differences?.map(d=><details key={d.id} className="group/disclosure min-w-0 rounded-md border border-border bg-surface" data-testid="ontology-publication-difference">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
-          <span className="min-w-0 flex-1 break-words">{String((d.after || d.before)?.name_ja ?? d.id)}</span>
-          <StatusBadge variant={d.before ? d.after ? "info" : "danger" : "success"} label={t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")} />
-          <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-        </summary>
-        <div className="grid min-w-0 gap-4 border-t border-border p-4 md:grid-cols-2">
+      {value.differences?.map(d=><Disclosure key={d.id} data-testid="ontology-publication-difference"
+        summary={String((d.after || d.before)?.name_ja ?? d.id)}
+        meta={<StatusBadge variant={d.before ? d.after ? "info" : "danger" : "success"} label={t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")} />}
+        summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4 md:grid-cols-2">
           <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.before")}</h4><DefinitionFields definition={d.before ?? {}} /></div>
           <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.after")}</h4><DefinitionFields definition={d.after ?? {}} /></div>
-        </div>
-      </details>)}
+        </Disclosure>)}
       {value.status === "ready" && <>
-        <details className="group/disclosure min-w-0 rounded-md border border-border bg-surface" data-testid="ontology-publication-data-validation">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
-            <span className="flex min-w-0 items-center gap-2"><ShieldCheck size={16} className="shrink-0 text-fg-muted" aria-hidden="true" />{t("markdownOntology.dataValidation")}</span>
-            <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-          </summary>
-          <div className="grid min-w-0 gap-4 border-t border-border p-4">
+        <Disclosure data-testid="ontology-publication-data-validation" summary={t("markdownOntology.dataValidation")} icon={ShieldCheck}
+          summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">
             <div className="space-y-2">
               <label htmlFor="markdown-acceptance" className="block text-sm font-medium text-fg">{t("markdownOntology.acceptance")}</label>
               <textarea id="markdown-acceptance" rows={5} className="min-h-32 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
@@ -180,8 +172,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
               <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.sampledOnly")}</p>
               <TechnicalDetails value={value.data_report} />
             </div>}
-          </div>
-        </details>
+          </Disclosure>
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
         <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || hasErrors || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
         {busy === "publish" && <ProcessingIndicator active label={t("markdownOntology.progress.publishing")} operationKey="markdown-publish" placement="action" activityIcon="none" testId="markdown-publish-processing" />}

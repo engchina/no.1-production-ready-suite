@@ -35,25 +35,25 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   await expect(page.getByRole("tab", { name: "構造化要素" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /Chunk \/ Citation/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: "抽出エクスポート" })).toBeVisible();
-  await expect(page.getByRole("tabpanel").getByRole("button", { name: "本文をコピー" })).toBeVisible();
+  await expect(page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: "本文をコピー" })).toBeVisible();
   // 処理の詳細(診断)パネルは折りたたみに集約。
   await expect(page.getByText("処理の詳細(診断)")).toBeVisible();
 
   // エクスポートタブ: 形式を切替えると内容が変わる。
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
   await expect(page.getByText("<!-- page: 1 -->")).toBeVisible();
-  await page.getByRole("button", { name: "HTML" }).click();
+  await page.getByRole("tab", { name: "HTML" }).click();
   await expect(page.getByText("<article")).toBeVisible();
   await expect(page.getByText("<h1>経費申請</h1>")).toBeVisible();
   await expect(page.getByText('<table data-element-id="tbl-1"')).toBeVisible();
-  await page.getByRole("button", { name: "JSON" }).click();
+  await page.getByRole("tab", { name: "JSON" }).click();
   await expect(page.getByText('"document_type": "規程"')).toBeVisible();
-  await page.getByRole("button", { name: "Chunks" }).click();
+  await page.getByRole("tab", { name: "Chunks" }).click();
   await expect(page.getByText('"chunk_id": "doc-1:0"')).toBeVisible();
 
   // Chunk タブ: chunk を選ぶとプレビューに bbox がハイライトされる。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  const chunkButton = page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ });
+  const chunkButton = page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ });
   await chunkButton.focus();
   await page.keyboard.press("Enter");
   await expect(chunkButton).toHaveAttribute("aria-pressed", "true");
@@ -85,6 +85,7 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   );
   // 構造化要素(title)を選ぶと選択が移り、プレビュー bbox が更新される。
   const titleButton = page
+    .getByTestId("document-inspector-pane")
     .getByRole("tabpanel")
     .getByRole("button", { name: /経費申請[\s\S]*el-0000/ });
   await titleButton.click();
@@ -104,7 +105,7 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
 
   // 連動: Chunk タブへ戻ると紐づく chunk が選択され、元の chunk は外れている。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  const chunkPanelAfter = page.getByRole("tabpanel");
+  const chunkPanelAfter = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(
     chunkPanelAfter.getByRole("button", { name: /経費申請の概要/ })
   ).toHaveAttribute("aria-pressed", "true");
@@ -127,8 +128,8 @@ test("成果物の無い recipe は文書レベルの抽出・処理後ファイ
   const previewPanel = page
     .getByRole("heading", { name: "原本プレビュー" })
     .locator("xpath=ancestor::section[1]");
-  await expect(previewPanel.getByRole("button", { name: "処理後" })).toBeDisabled();
-  await expect(page.getByRole("tabpanel").getByText("交通費は1000円です。")).toHaveCount(0);
+  await expect(previewPanel.getByRole("tab", { name: "処理後" })).toBeDisabled();
+  await expect(page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByText("交通費は1000円です。")).toHaveCount(0);
   await expect.poll(() => state.extractionExportRequests).toBe(0);
 });
 
@@ -138,7 +139,7 @@ test("desktop の空の右ペイン上でも主ページをスクロールでき
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const panelMetrics = await panel.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -176,7 +177,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
   const previewPaneBox = await previewPane.boundingBox();
   expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(previewPaneBox!.height, 0);
   expect(previewPaneBox!.height).toBeCloseTo(640 - 28, 0);
-  const textPanel = page.getByRole("tabpanel");
+  const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const previewHeight = await textPanel.evaluate((element) => element.clientHeight);
   expect(previewHeight).toBeGreaterThan(400);
   const textPanelMetrics = await textPanel.evaluate((element) => {
@@ -195,7 +196,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
   expect(textPanelMetrics.scrollbarGutter).toContain("stable");
 
   await page.getByRole("tab", { name: "構造化要素" }).click();
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const panelMetrics = await panel.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -231,14 +232,18 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
 
   for (const tabName of ["Chunk / Citation", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
-    const tabPanelMetrics = await page.getByRole("tabpanel").evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        clientHeight: element.clientHeight,
-        overflowY: style.overflowY,
-        overscrollBehaviorY: style.overscrollBehaviorY,
-      };
-    });
+    // 抽出エクスポートのパネルの中には形式のタブのパネル（入れ子）もあるため、右ペインのタブの名前で引く。
+    const tabPanelMetrics = await page
+      .getByTestId("document-inspector-pane")
+      .getByRole("tabpanel", { name: tabName, exact: false })
+      .evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          clientHeight: element.clientHeight,
+          overflowY: style.overflowY,
+          overscrollBehaviorY: style.overscrollBehaviorY,
+        };
+      });
     expect(tabPanelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
     expect(tabPanelMetrics.overflowY).toBe("auto");
     expect(tabPanelMetrics.overscrollBehaviorY).toBe("auto");
@@ -269,6 +274,58 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   await expect(
     page.getByText("アップロード時の初期判定: OCI Enterprise AI / v1")
   ).toHaveCount(0);
+});
+
+test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true });
+
+  await page.goto("/documents/doc-1");
+
+  const diagnostics = page.getByTestId("document-diagnostics");
+  const summary = diagnostics.locator("summary");
+  const chevron = summary.locator("svg[data-state]");
+  const sourceHeading = diagnostics.getByRole("heading", { name: "原本情報" });
+  const rotate = () => chevron.evaluate((icon) => getComputedStyle(icon).rotate);
+
+  // 折りたたみ: Chevron は右向き（-90deg）。ブラウザ標準の三角は出さない。
+  await expect(summary).toContainText("処理の詳細(診断)");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+  await expect.poll(rotate).toBe("-90deg");
+  await expect(sourceHeading).toBeHidden();
+  expect(await summary.evaluate((node) => getComputedStyle(node).listStyleType)).toBe("none");
+  // 見出しの行全体が押せる（高さはトークン。タッチ端末では 44px）。
+  const box = await summary.boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
+  expect(box?.width ?? 0).toBeGreaterThan(((await diagnostics.boundingBox())?.width ?? 0) - 4);
+
+  // クリックで開く: 下向き（0deg）、内容が見える。
+  await summary.click({ position: { x: (box?.width ?? 200) - 12, y: (box?.height ?? 40) / 2 } });
+  await expect(diagnostics).toHaveAttribute("open", "");
+  await expect(chevron).toHaveAttribute("data-state", "expanded");
+  await expect.poll(rotate).toBe("0deg");
+  await expect(sourceHeading).toBeVisible();
+  await summary.click();
+  await expect(diagnostics).not.toHaveAttribute("open", "");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+
+  // キーボード: Enter で開き、Space で閉じる。フォーカスの表示は outline。
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(chevron).toHaveAttribute("data-state", "expanded");
+  await expect(sourceHeading).toBeVisible();
+  await page.keyboard.press("Space");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+  await expect(sourceHeading).toBeHidden();
+  expect(await summary.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+  expect(await summary.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe("none");
+
+  // reduced-motion では回転のアニメーションを止める（向きは変わる。base.css は 0.01ms に縮める）。
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const duration = await chevron.evaluate((icon) => parseFloat(getComputedStyle(icon).transitionDuration));
+  expect(duration).toBeLessThan(0.001);
+  await expectNoPageOverflow(page);
 });
 
 test("Chunk 作成と Embedding/索引の工程行に chunk 数・ベクトル数・embedding モデルを表示する", async ({
@@ -305,7 +362,7 @@ test("狭い画面幅(375px)でも文書 workspace がページを横スクロ�
     "true"
   );
   await expect(page.getByRole("tab", { name: /Chunk \/ Citation/ })).toBeVisible();
-  const panelScrollStyles = await page.getByRole("tabpanel").evaluate((element) => {
+  const panelScrollStyles = await page.getByTestId("document-inspector-pane").getByRole("tabpanel").evaluate((element) => {
     const style = getComputedStyle(element);
     return {
       overflowY: style.overflowY,
@@ -339,15 +396,15 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
   const previewPanel = page
     .getByRole("heading", { name: "原本プレビュー" })
     .locator("xpath=ancestor::section[1]");
-  await expect(previewPanel.getByRole("button", { name: "処理前" })).toBeVisible();
-  await expect(previewPanel.getByRole("button", { name: "処理後" })).toBeEnabled();
+  await expect(previewPanel.getByRole("tab", { name: "処理前" })).toBeVisible();
+  await expect(previewPanel.getByRole("tab", { name: "処理後" })).toBeEnabled();
   await expect(previewPanel.getByText("経費申請")).toBeVisible();
   await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
     "href",
     /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?disposition=attachment$/
   );
 
-  await previewPanel.getByRole("button", { name: "処理後" }).click();
+  await previewPanel.getByRole("tab", { name: "処理後" }).click();
 
   await expect(previewPanel.getByText("準備後ファイル")).toBeVisible();
   await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
@@ -364,6 +421,74 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
     force: null,
     phase: "PREPROCESS",
   });
+  await expectNoPageOverflow(page);
+});
+
+test("処理前/処理後と抽出エクスポートの形式は共有の Tabs で、選択が読み上げられ矢印キーで切り替わる", async ({
+  page,
+}) => {
+  // #396: 枠の中に Button を並べた手書きのセグメント（枠線が二重・隙間 0・選択状態を読み上げない）をやめた。
+  await mockDocumentWorkspace(page, { preparedArtifact: true });
+
+  await page.goto("/documents/doc-1");
+
+  const previewPane = page.getByTestId("document-preview-pane");
+  const previewTabs = previewPane.getByRole("tablist", { name: "原本プレビュー" });
+  const before = previewTabs.getByRole("tab", { name: "処理前" });
+  const after = previewTabs.getByRole("tab", { name: "処理後" });
+  const download = previewPane.getByRole("link", { name: "ダウンロード" });
+  await expect(before).toHaveAttribute("aria-selected", "true");
+  await expect(after).toHaveAttribute("aria-selected", "false");
+  await expect(previewPane.getByRole("tabpanel", { name: "処理前" })).toBeVisible();
+  await expect(previewPane.getByRole("group")).toHaveCount(0);
+
+  // 枠で囲まず（外枠なし）、タブは左右の枠線を持たず、間を空ける。
+  const geometry = await previewTabs.evaluate((list) => {
+    const tabs = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const [first, second] = tabs.map((tab) => tab.getBoundingClientRect());
+    const listStyle = getComputedStyle(list);
+    return {
+      listBorder: listStyle.borderTopWidth,
+      tabSideBorders: tabs.map((tab) => getComputedStyle(tab).borderLeftWidth),
+      gap: second.left - first.right,
+    };
+  });
+  expect(geometry.listBorder).toBe("0px");
+  expect(geometry.tabSideBorders).toEqual(["0px", "0px"]);
+  expect(geometry.gap).toBeGreaterThan(0);
+
+  // WAI-ARIA Tabs: ← → / Home / End で選択とフォーカスが移り、ダウンロードも選んだファイルに追従する。
+  await before.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(after).toBeFocused();
+  await expect(after).toHaveAttribute("aria-selected", "true");
+  await expect(previewPane.getByRole("tabpanel", { name: "処理後" })).toBeVisible();
+  await expect(previewPane.getByText("準備後ファイル")).toBeVisible();
+  await expect(download).toHaveAttribute("href", /variant=prepared&disposition=attachment$/);
+  await page.keyboard.press("Home");
+  await expect(before).toBeFocused();
+  await expect(before).toHaveAttribute("aria-selected", "true");
+  await expect(download).toHaveAttribute("href", /content\?disposition=attachment$/);
+  await page.keyboard.press("End");
+  await expect(after).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(before).toHaveAttribute("aria-selected", "true");
+
+  // 抽出エクスポートの形式も同じ Tabs（右ペインのタブの中の入れ子のタブ）。
+  await page.getByRole("tab", { name: "抽出エクスポート" }).click();
+  const formatTabs = page.getByRole("tablist", { name: "抽出エクスポート形式" });
+  const markdown = formatTabs.getByRole("tab", { name: "Markdown" });
+  await expect(markdown).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Markdown" })).toContainText("# 経費申請");
+  await markdown.focus();
+  await page.keyboard.press("ArrowRight");
+  const html = formatTabs.getByRole("tab", { name: "HTML" });
+  await expect(html).toBeFocused();
+  await expect(html).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "HTML" })).toContainText("<article>");
+  await page.keyboard.press("End");
+  await expect(formatTabs.getByRole("tab", { name: "Chunks" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Chunks" })).toContainText("経費申請の概要です。");
   await expectNoPageOverflow(page);
 });
 
@@ -452,7 +577,7 @@ test("PREPROCESSED で処理後ファイルが未保存なら危険バナーと�
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
   await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
   // 「処理後」プレビューは保存物が無いので無効。
-  await expect(page.getByRole("button", { name: "処理後" })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "処理後" })).toBeDisabled();
   await expectNoPageOverflow(page);
 });
 
@@ -496,6 +621,7 @@ test("画像 preview は同一 surface 上で bbox overlay を位置決めする
 
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
   const tableChunkButton = page
+    .getByTestId("document-inspector-pane")
     .getByRole("tabpanel")
     .getByRole("button", { name: /交通費は1000円/ });
   await tableChunkButton.click();
@@ -550,7 +676,7 @@ test("PDF はページ画像で表示し、DocRAG の表示領域を要素ごと
 
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+  await page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
 
   const viewer = page.getByTestId("preview-viewer");
   await expect(viewer).toBeVisible();
@@ -599,7 +725,7 @@ test("プレビューの回転・拡大の後も強調が同じ位置に重な�
 
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+  await page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
 
   const viewport = page.getByTestId("preview-viewport");
   const frame = page.getByTestId("preview-page-frame");
@@ -701,7 +827,7 @@ test("明示された xywh bbox mode で citation overlay を位置決めする"
   await page.goto("/documents/doc-1");
 
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+  await page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
 
   await expect(
     page.getByText(/位置: p\.1 \/ bbox x=25\.0% y=10\.0% w=50\.0% h=40\.0%/)
@@ -722,7 +848,7 @@ test("metadata の bbox unit を優先して citation overlay を位置決めす
   await page.goto("/documents/doc-1");
 
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+  await page.getByTestId("document-inspector-pane").getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
 
   await expect(
     page.getByText(/位置: p\.1 \/ bbox x=4\.1% y=1\.3% w=4\.1% h=3\.8%/)
@@ -742,7 +868,7 @@ test("element_id 深リンクは構造化 block をフォーカスして preview
 
   await page.goto("/documents/doc-1?element_id=tbl-1");
 
-  const extractionPanel = page.getByRole("tabpanel");
+  const extractionPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const tableElementButton = extractionPanel.getByRole("button", {
     name: /交通費は1000円[\s\S]*tbl-1/,
   });
@@ -760,7 +886,7 @@ test("formula cell 深リンクは表セルをフォーカスして cell bbox �
 
   await page.goto("/documents/doc-1?chunk_id=doc-1:1&table_id=tbl-1&formula_cell_ref=B2&page=1");
 
-  const extractionPanel = page.getByRole("tabpanel");
+  const extractionPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const targetCell = extractionPanel
     .getByTestId("extraction-table-cell")
     .filter({ hasText: "B2" });

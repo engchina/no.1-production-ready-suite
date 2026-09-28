@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  DisclosureChevron,
   PageBody,
   PageHeader,
   Banner,
@@ -19,7 +20,6 @@ import {
   ListSkeleton,
 } from "@engchina/production-ready-ui";
 import {
-  ChevronRight,
   Clock3,
   Plus,
   Search as SearchIcon,
@@ -480,6 +480,11 @@ export function SearchClient() {
                 >
                   <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
                   {t("search.filters.advanced")}
+                  <DisclosureChevron
+                    expanded={advancedOpen || hasAdvancedSettings}
+                    size={14}
+                    className="ml-auto text-fg-muted"
+                  />
                 </button>
                 {advancedOpen || hasAdvancedSettings ? (
                 <fieldset id="search-advanced-conditions" className="space-y-4 border-t border-border p-3">
@@ -536,7 +541,7 @@ export function SearchClient() {
                         className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         <span>{t("search.filters.sectionGroup")}</span>
-                        <span className="text-fg-muted" aria-hidden>{sectionFiltersVisible ? "−" : "+"}</span>
+                        <DisclosureChevron expanded={sectionFiltersVisible} size={14} className="text-fg-muted" />
                       </button>
                       {sectionFiltersVisible ? (
                         <div id="search-section-filters" className="space-y-3 border-t border-border p-3">
@@ -594,7 +599,7 @@ export function SearchClient() {
                       className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <span>{t("search.filters.classificationGroup")}</span>
-                      <span className="text-fg-muted" aria-hidden>{classificationVisible ? "−" : "+"}</span>
+                      <DisclosureChevron expanded={classificationVisible} size={14} className="text-fg-muted" />
                     </button>
                     {classificationVisible ? (
                       <div id="search-classification-filters" className="space-y-3 border-t border-border p-3">
@@ -1039,9 +1044,10 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
               event.preventDefault();
               setDiagnosticsOpen((open) => !open);
             }}
-            className="w-full cursor-pointer px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
-            {t("search.meta.diagnostics")}
+            <span>{t("search.meta.diagnostics")}</span>
+            <DisclosureChevron expanded={diagnosticsOpen} size={14} className="text-fg-muted" />
           </button>
           {diagnosticsOpen ? (
           <div id="search-diagnostics-panel" className="space-y-3 border-t border-border p-3">
@@ -1152,9 +1158,12 @@ function CandidateRow({
   candidate: NonNullable<SearchDiagnostics["retrieval_candidates"]>[number];
 }) {
   return (
+    // 表の行を開いて原文を見せる「展開できる行」。見出し行（role="row"）と列をそろえるため summary を行の grid にしており、
+    // 見出しと Chevron だけを持つ Disclosure では表せない。Chevron・reduced-motion は DisclosureChevron で共通にする（#397）。
+    // eslint-disable-next-line no-restricted-syntax -- 展開できる表の行（上の説明）。
     <details
       role="row"
-      className="group rounded-md border border-border bg-surface text-xs"
+      className="group/disclosure rounded-md border border-border bg-surface text-xs"
     >
       <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 transition-colors hover:bg-surface-hover motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
         <span
@@ -1162,11 +1171,7 @@ function CandidateRow({
           data-testid="candidate-file-name"
           className="flex min-w-0 items-center gap-2"
         >
-          <ChevronRight
-            size={14}
-            className="shrink-0 text-fg-muted transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
-            aria-hidden
-          />
+          <DisclosureChevron expanded="group" size={14} className="text-fg-muted" />
           <span
             className="min-w-0 truncate font-medium text-fg"
             title={candidate.file_name ?? candidate.document_id}

@@ -161,6 +161,14 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 > 意味が違うので、下線（タブ）と pill（チップ）で見た目を明確に分けています。**流用しないこと。**
 > 旧実装は `ToggleChip` をタブ代わりに使っており、「押したら内容が入れ替わるのか、減るだけなのか」が判別できませんでした。
 
+**ペイン・カードの中の見方の切り替えも `Tabs` + `TabPanel`（#396）。セグメントコントロールは作らない。**
+
+- 原本の処理前 / 処理後、同じ内容の表示形式（Markdown / HTML / JSON）のように、ページより小さい単位で同じ対象の見方を変えるときも `Tabs` を使い、中身を `TabPanel` で包む。タブの列は内容の直上に置き、関係する操作（ダウンロード等）は見出しの行に置く。1 画面に複数の `Tabs` を置くので `idPrefix` を分ける
+- **枠（`border` + `bg-surface-sunken` + `p-0.5`）の中に `Button` や素の `<button>` を並べた手書きのセグメントを作らない。** RAG の原本プレビューで実測した旧実装は、外枠 1px（`--color-border`）と選択中のボタンの枠 1px（`--color-border-control`）が 1.75px の間隔で二重に並び、ボタンの間は 0px、角丸は外 5.25px に対して内 6px（内側の方が大きく、同心でない）、選択は `variant` の違いだけで `aria-pressed` / `aria-selected` が無く、矢印キーでも動かなかった
+- 別の部品（セグメントコントロール）を足さなかった理由: 意味（同じ対象の別の見方）が `Tabs` と同じで、見た目だけが違う部品を足すと「下線＝見方、pill＝絞り込み」の区別がまた崩れる。WAI-ARIA APG に segmented control のパターンは無く、見方の切り替えの役割は `tablist` / `tab` / `tabpanel`（`radiogroup` はフォームの値の選択、`aria-pressed` はオン / オフのトグル）。キーボード（← → / Home / End、roving `tabIndex`）・強制カラーモード・入りきらないときのフェードは `Tabs` が既に持っている
+- 使えないタブは `disabled` にし、理由は `disabledReason`（無効のときだけ HTML の `title`）で渡す。無効のタブはフォーカスを受けず Tooltip を出せないため。同じ理由を画面の別の場所（バナー等）に書いているときは渡さない
+- 絞り込み・モード・オン / オフの切り替え（見方ではないもの）は従来どおり `ToggleChip` / `Button` の `pressed`（UX 契約 buttons.md §6）
+
 ### `PageBody` / `Section`（新規）
 
 readme が規定していた「左右ガター 2rem / セクション間 1.5rem」の**唯一の実装**。これが無かったため3アプリがそれぞれ `<div style={{padding:'1.5rem 2rem', …}}>` を手書きしていました。**design system で最も確実に壊れる場所が唯一未実装**という状態でした。
@@ -378,6 +386,38 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 - 一致の判定（`confirmed`）・確認語（`expectedLabel`）・説明（`helper`）・操作（`actions`）は製品が渡す。文言は `labels` で差し替え、未指定は既定（実行確認語 / 必須 / 入力条件: {phrase} / 未入力 / 不一致 / 確認済み）
 - 製品で確認語の入力欄を手書きしない。props と実装の参照は `components-reference.md`「ExecutionConfirmationField」
+
+### `Disclosure`（新規）/ `DisclosureChevron`（変更）— ★ 開閉できる領域は 1 つの実装（#397）
+
+開閉できる領域（「処理の詳細(診断)」・技術詳細・SQL・根拠の一覧など）を、製品が `<details>` / `<summary>` と CSS（`list-none` / `[&::-webkit-details-marker]:hidden`）と Chevron の組み合わせで手書きしていました。RAG の多くは `summary` に `display: flex` を当てたためブラウザの三角が消え、代わりの Chevron も無く、**押せる見出しなのか静的な枠なのか、いま開いているのか**が見分けられませんでした。Chevron の形・位置・向きも 3 種類（右端の `ChevronDown` を 180° 回す / 先頭の `ChevronRight` を 90° 回す / 右端の `DisclosureChevron`）に分かれていました。`<details>` を包む共有の `Disclosure` を入れ、製品の手書きを置き換えます。
+
+```jsx
+import { Wrench } from "lucide-react";
+
+// 枠付きの面（既定）。見出しの行全体が押せ、右端の Chevron が開閉の状態を示す。
+<Disclosure summary="処理の詳細(診断)" icon={Wrench} open={open} onOpenChange={setOpen}>…</Disclosure>
+// 件数・状態バッジは meta（Chevron の左）。補足は description（見出しの下）
+<Disclosure summary="見出し" meta={<span className="tnum text-xs text-fg-muted">12</span>} surface="sunken">…</Disclosure>
+// 枠なし（回答の根拠・表のセルの中）。Chevron は見出しの直後
+<Disclosure variant="plain" size="sm" summary="分析">…</Disclosure>
+// 状態色の区画（警告の一覧・危険な操作）
+<Disclosure tone="danger" summary="構成を解除" description="…">…</Disclosure>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| **ネイティブの `<details>` / `<summary>` を包む**（button + region を自作しない） | Enter / Space・読み上げの「展開 / 折りたたみ」の状態・ページ内検索での自動展開（Chromium の hidden until found）をブラウザが持つ。APG の Disclosure パターンと同じ状態が伝わり、`aria-expanded` / `aria-controls` を書き忘れる余地がない |
+| **開閉の状態は必ず `DisclosureChevron`**。折りたたみ = **右向き**、展開 = **下向き**（90° 回転、200ms ease-out、`prefers-reduced-motion` で止める） | 共有 `Sidebar` のセクション・ブラウザ標準の ▸ / ▾ と同じ向き。旧 `DisclosureChevron` は折りたたみが左向きで、Sidebar（右向き）と逆だった。回転の向きの変化で「その場で下に開く」ことを示す |
+| Chevron の向きは部品の状態（React）から決める（`group-open` の CSS に頼らない） | `group-open` は祖先のどの `<details>` にも反応するため、外側が開いているだけで内側の閉じた Chevron が下向きになっていた（NL2SQL のオントロジー構築の工程表の中の工程など） |
+| クリック・Enter / Space は部品が状態を切り替える（ブラウザの切り替えを止める）。受控（`open` + `onOpenChange`）/ 非受控（`defaultOpen`）のどちらも使える。ページ内検索でブラウザが開いたときは `toggle` で状態に戻す | React の状態を正本にし、受控の `open` と DOM の `open` をずらさない（ブラウザに切り替えさせると、親が `onToggle` で状態を戻さない限り DOM だけが開閉する） |
+| **見出しの行全体が押せる**。`card` は高さ `--button-height-lg`（40px。タッチ端末は 44px）、左右 `--space-3`、hover で `--color-surface-hover`（状態色の面では文字色を 5% 重ねる） | 押せることを hover でも示す。当たり判定は Button と同じトークン |
+| フォーカスは outline（`card` は枠の内側 `-outline-offset-2`）。ring を使わない | §4「フォーカスの表示」。枠線と輪郭を重ねない |
+| `card` は開くと見出しと内容の間に区切り線（`border-t`）。内容の余白は `p-3`（`contentClassName` で上書き） | どこまでがこの領域の内容かを示す |
+| 見出しに操作できる要素（ボタン・リンク）を置かない。`meta` は件数・バッジだけ | `<summary>` の中の操作は押し間違いと読み上げの混乱を招く（HTML の仕様でも対話的な内容は置けない） |
+
+- **製品で `<details>` を手書きしない。** adherence の lint が JSX の `<details>` を検出します（#397）。`Disclosure` で表せない所（見出しを表の列にそろえる「展開できる表の行」、工程名と状態を 1 行に並べる工程表の行）だけ、理由を添えて局所的に除外し、状態は `DisclosureChevron` で示します。
+- **button + region の開閉**（見出しの外に置くボタン・一覧の行の開閉・「全文表示」など）は `Disclosure` を使わず、`Button`（または `button`）に `aria-expanded`（と `aria-controls`）を付け、**`DisclosureChevron expanded={open}` を必ず置きます**。「＋ / −」の文字や、向きの変わらない `icon={ChevronDown}` で開閉を示さない。
+- メニューを開くボタン（「その他の操作」）の Chevron も同じ `DisclosureChevron` です（閉 = 右向き / 開 = 下向き）。
 
 ### `StatusBadge`（変更）
 
@@ -660,7 +700,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**37点あります。**
+QA に事前共有してください。**40点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -700,7 +740,10 @@ QA に事前共有してください。**37点あります。**
 | 34 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
 | 35 | **Agent の一覧が 10 件/ページになり、表の中で縦スクロールする** | Agent の 14 の表は全件をページの高さで表示（ページ送りなし）、読み込み中は 4 本の棒（`LoadingState`）、実行先・Skill を取得している間に「未設定」「Skill を取得できません」などの警告が出た。監査は「表示件数」（既定 100 件）を 1 度に表示、メモリは 20 件で打ち切り → 共有の `PagedDataTable`（表頭の固定、md 未満 5 行・md 以上 8 行の縦スクロール、直下に 10 件/ページの `Pagination`）。一覧のページは作業状態に残り、Run・承認の 5 秒ごとの再取得でも戻らない。監査は API の offset / limit で送る（「1 ページの件数」、既定 10 件。CSV は条件に合う記録を最大 1,000 件）、メモリは 100 件まで取得してページで送る。読み込み中は `TimedLoadingState` と画面の形の Skeleton、取得中は警告を出さない | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
 | 36 | **スピナーの線が太くなり、トラックが見えやすくなる。reduced-motion ではアークの濃さが変わる** | 線の実寸は 16px で 1.33px・14px で 1.17px（viewBox 24 に線幅 2 固定）、トラックは `currentColor` の 25%、reduced-motion では止まったまま（75% の進捗の円に見える）、ボタンの `loading` のスピナーは `fg-disabled`（ライトで地に 2.82:1）、RAG の状態バッジ 3 箇所は lucide の `Loader2` / `LoaderCircle` / `RefreshCw` を回していた → すべて共有 `Spinner`: 線は大きさによらず**実寸 2px**、トラックは `--color-spinner-track`（ライト 30% / ダーク 35%）、reduced-motion では回転を止めてアークの濃さを 1 ↔ 0.5 で変える、ボタンの `loading` のスピナーは `fg-muted`（4.39:1）。回転は等速のまま、ボタンのスピナーは sm / md / lg とも 16px のまま | 等倍の画面で線がかすれ、ダークでトラックが見えにくかった。アーク対トラックの境目 3:1 を保つ上限まで濃くした（§4「Spinner」、#395） |
-| 37 | **その場の実行と停止が 1 つのボタンになる**（RAG。#413） | RAG 検索: 質問欄の右に「検索」、実行中は押せない「検索」（スピナー）の右に「停止」（`X`）→ 検索のボタンはフォームの最後（「詳細条件」の下の区切り線の下、左寄せ。375px は全幅）に移り、実行中は**同じ位置・同じ要素のまま** `secondary` の「停止」（`Square`）になる。質問欄は隣の lg のボタンが無くなったため 40px → 既定の 36px。進捗の表示（「回答を生成しています」）がスピナーを出す（以前はボタンのスピナーだけ）。ナレッジベースの検索テストも同じ 1 つのボタン（文言「中止」→「停止」、幅は「検索テスト」の幅を保つ）で、処理中は今の工程と経過時間を出す。チャットの送信 / 停止は同じ要素になり、高さの手書き（38.5px / 31.5px）→ `md`（36px、タッチ 44px）、送信できない間は `aria-disabled`、生成中も入力欄に書ける。NL2SQL・Agent は変わらない（止められる操作はバックグラウンドの job で、開始と別の「中止」のまま） | 実行中に押せる操作は停止だけにし、押した位置にそのまま停止を出す。フォーカスを保つ。詳細条件を変えた後に上へ戻らずに検索できる（UX 契約 buttons.md §3.1） |
+| 37 | **RAG の原本プレビューの処理前 / 処理後と、抽出エクスポートの形式が下線のタブになる** | 枠（`border` + `bg-surface-sunken` + `p-0.5`）の中にボタンを並べた手書きのセグメント（外枠と選択中のボタンの枠が 1.75px の間隔で二重、ボタンの間 0px、角丸は外 5.25px・内 6px（形式は内 3.5px）、選択は塗りの違いだけ。処理前 / 処理後は `aria-pressed` も無く、矢印キーで動かない）→ 共有の `Tabs` + `TabPanel`（`tablist` / `aria-selected`、← → / Home / End）。処理前 / 処理後のタブの列は見出し（「原本プレビュー」とダウンロード）の下の行に移り、プレビューがその分（約 2.75rem）低くなる。形式のタブは件数の下に置き、375px で入りきらないときは横スクロールと端のフェード（折り返さない）。「処理後」が使えない理由は無効のタブの `title`（`disabledReason`）で、見た目は変えない | 同じ対象の別の見方は `Tabs`（§4「`Tabs`」）。枠線の二重・隙間 0・同心でない角丸・選択の読み上げの欠落を、部品を足さずに解消する（#396） |
+| 38 | **開閉できる領域に Chevron が付き、見た目がそろう** | RAG の「処理の詳細(診断)」・Vision の読み取り内容・DocRAG の根拠の構成 / 処理の手順・回答の評価の網羅 / 主張・プロンプトの工程・運用診断・チャットの DocRAG の根拠、NL2SQL の技術詳細・主要 / 補助の概念・オントロジー構築の工程は Chevron なし（ブラウザの三角か、`flex` で三角も消えて何もなし）。RAG の抽出の区分は先頭の `ChevronRight`、分割の詳細設定・チャットの引用は右端の `ChevronDown` の 180° 回転 → 共有 `Disclosure`: 右端（`plain` は見出しの直後）の `DisclosureChevron`、見出しの行全体に hover の地、`card` は開くと見出しと内容の間に区切り線、見出しの高さ 40px（タッチ端末 44px）。先頭のアイコンは `--color-fg-muted`（「処理の詳細(診断)」の `Wrench` はアクセント色だった）。RAG の検索の「診断」「詳細条件」・「見出しで絞り込む」「文書の分類で絞り込む」（「＋ / −」の文字）・サービス管理の実行コマンド・ナレッジグラフ / パイプライン構成の表示・「処理設定を編集」（向きの変わらない `ChevronDown`）のボタンにも `DisclosureChevron` | 押せる見出しであること（signifier）と、いま開いているか（システムの状態）を見て分かるようにする。3 製品で同じ意匠にする（§4「`Disclosure`」、#397） |
+| 39 | **Chevron の折りたたみの向きが右になる** | `DisclosureChevron`（NL2SQL の SQL 詳細・実行オプション・Show Prompt・全文表示・スキーマの表・評価の分析、system-settings のシステムテーブルの詳細、「その他の操作」メニューなど）: 閉じているとき**左向き** → **右向き**（開いているときの下向きは同じ）。共有 `Sidebar` のセクションは元から右向きで、同じ部品にした | 同じ「開閉」が画面ごとに逆を向いていた。ブラウザ標準の ▸ / ▾・APG の例と同じ向きにそろえる（#397） |
+| 40 | **その場の実行と停止が 1 つのボタンになる**（RAG。#413） | RAG 検索: 質問欄の右に「検索」、実行中は押せない「検索」（スピナー）の右に「停止」（`X`）→ 検索のボタンはフォームの最後（「詳細条件」の下の区切り線の下、左寄せ。375px は全幅）に移り、実行中は**同じ位置・同じ要素のまま** `secondary` の「停止」（`Square`）になる。質問欄は隣の lg のボタンが無くなったため 40px → 既定の 36px。進捗の表示（「回答を生成しています」）がスピナーを出す（以前はボタンのスピナーだけ）。ナレッジベースの検索テストも同じ 1 つのボタン（文言「中止」→「停止」、幅は「検索テスト」の幅を保つ）で、処理中は今の工程と経過時間を出す。チャットの送信 / 停止は同じ要素になり、高さの手書き（38.5px / 31.5px）→ `md`（36px、タッチ 44px）、送信できない間は `aria-disabled`、生成中も入力欄に書ける。NL2SQL・Agent は変わらない（止められる操作はバックグラウンドの job で、開始と別の「中止」のまま） | 実行中に押せる操作は停止だけにし、押した位置にそのまま停止を出す。フォーカスを保つ。詳細条件を変えた後に上へ戻らずに検索できる（UX 契約 buttons.md §3.1） |
 
 ### API の非互換
 
@@ -722,6 +765,9 @@ QA に事前共有してください。**37点あります。**
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
+| `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
+| `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
+| `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
 
 ---
 

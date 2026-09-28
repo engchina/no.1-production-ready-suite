@@ -640,7 +640,8 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
 
   const showPromptPanel = page.getByTestId("nl2sql-show-prompt-panel");
   const showPromptSummary = showPromptPanel.locator("summary");
-  const showPromptChevron = showPromptPanel.getByTestId("nl2sql-show-prompt-chevron");
+  // 共有の Disclosure（#397）の Chevron。開閉の状態は data-state と回転で示す。
+  const showPromptChevron = showPromptSummary.locator("svg[data-state]");
   const showPromptBody = showPromptPanel.getByText("Select AI prompt body");
   await expect(showPromptPanel).toBeVisible();
   await expect(showPromptBody).toBeHidden();
