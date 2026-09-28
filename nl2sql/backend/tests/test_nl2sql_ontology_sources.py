@@ -90,6 +90,9 @@ def _docx_bytes() -> bytes:
         ("model.xlsm", _workbook_bytes(), OntologyEvidenceLocatorKind.SHEET_ROW),
         ("rules.docx", _docx_bytes(), OntologyEvidenceLocatorKind.PARAGRAPH),
     ],
+    # 生成した xlsx / docx の bytes は作成時刻を含む。xdist の worker ごとにテスト ID が
+    # 変わらないよう ID を固定する（#344）。
+    ids=["txt", "md", "csv", "xlsx", "xlsm", "docx"],
 )
 def test_supported_sources_preserve_locator_and_hash(
     filename: str,

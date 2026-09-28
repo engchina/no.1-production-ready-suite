@@ -8,6 +8,7 @@
 # 必要に応じて SKIP_BACKEND=1 / SKIP_FRONTEND=1 / SKIP_E2E=0|1
 # SKIP_FORMAT=1 / SKIP_SECURITY=1 / SKIP_AUDIT=0|1 / SKIP_VALIDATION_EVIDENCE=1
 # SKIP_RELEASE_REHEARSAL=1 で一部を省略・追加できる。
+# PYTEST_ARGS で pytest に引数を足せる（例: PYTEST_ARGS="-n auto" で pytest-xdist の並列実行。CI はこれを使う。#344）。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +34,7 @@ SKIP_AUDIT="${SKIP_AUDIT:-${local_skip_default}}"
 SKIP_VALIDATION_EVIDENCE="${SKIP_VALIDATION_EVIDENCE:-0}"
 SKIP_RELEASE_REHEARSAL="${SKIP_RELEASE_REHEARSAL:-0}"
 UV_SYNC_ARGS="${UV_SYNC_ARGS:---locked --dev}"
+PYTEST_ARGS="${PYTEST_ARGS:-}"
 cleanup_files=()
 
 cleanup() {
@@ -121,8 +123,10 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
   log "backend mypy"
   run_backend_tool mypy .
 
-  log "backend pytest"
-  run_backend_tool pytest -q
+  log "backend pytest ${PYTEST_ARGS}"
+  # PYTEST_ARGS は空白区切りの引数として渡すため、意図して分割する。
+  # shellcheck disable=SC2086
+  run_backend_tool pytest -q ${PYTEST_ARGS}
 
   if [ "${SKIP_VALIDATION_EVIDENCE}" != "1" ]; then
     log "backend validation evidence dry-run"
@@ -176,7 +180,7 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
 
     if [ "${SKIP_AUDIT}" != "1" ]; then
       log "backend pip-audit"
-      run_backend_tool pip-audit
+      run_backend_tool pip-audit --skip-editable
     else
       log "backend pip-audit skipped（SKIP_AUDIT=0 で実行。全件は dependency-audit-nightly.yml）"
     fi

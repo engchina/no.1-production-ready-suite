@@ -45,6 +45,8 @@ jobs:
         || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
       nl2sql_frontend_contract: ${{ steps.filter.outputs.nl2sql_frontend_contract }}
       # pip-audit は依存（uv.lock / pyproject.toml）が変わったときだけ実行する。全件は dependency-audit-nightly.yml。
+      # `--skip-editable`: 自分たちの package（editable で入る backend と platform の package）は PyPI に無いので問い合わせない。
+      # PyPI が存在しない名前に 404 ではなく 503 を返し続け、pip-audit が失敗したため（#344）。
       platform_backend_core_deps: ${{ steps.filter.outputs.platform_backend_core_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_system_settings_deps: ${{ steps.filter.outputs.platform_system_settings_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       rag_deps: ${{ steps.filter.outputs.rag_deps == 'true' || steps.filter.outputs.ci == 'true' }}
@@ -236,15 +238,16 @@ jobs:
       - name: Type check
         run: uv run mypy src
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest --cov=pr_backend_core
+        run: uv run pytest -n auto --cov=pr_backend_core
 
       - name: Security scan
         run: uv run bandit -r src
 
       - name: Dependency audit
         if: needs.changes.outputs.platform_backend_core_deps == 'true'
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
   platform-system-settings-backend:
     name: Platform / system_settings_backend (pr_system_settings)
@@ -292,15 +295,16 @@ jobs:
       - name: Type check
         run: uv run mypy src
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest --cov=pr_system_settings
+        run: uv run pytest -n auto --cov=pr_system_settings
 
       - name: Security scan
         run: uv run bandit -r src
 
       - name: Dependency audit
         if: needs.changes.outputs.platform_system_settings_deps == 'true'
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
   # ---------------------------------------------------------------- rag
 
@@ -352,8 +356,10 @@ jobs:
         run: uv run mypy .
 
       # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
+      # -n auto: pytest-xdist で並列に実行する。実 Oracle のテストは pyproject の
+      # --dist loadgroup で 1 つの worker にまとまる（#344）。
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -c pyproject.toml -r app
@@ -362,7 +368,7 @@ jobs:
         if: needs.changes.outputs.rag_deps == 'true'
         # oci 2.185.1 が cryptography<51.0.0 へ制約を緩和したため cryptography 50 系へ更新でき、
         # GHSA-537c-gmf6-5ccf の ignore は不要になった。ignore を戻す場合は理由をここへ明記する。
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
   rag-docrag-core:
     name: RAG / DocRAG core
@@ -685,8 +691,9 @@ jobs:
       - name: Type check
         run: uv run mypy .
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -r app
@@ -696,7 +703,7 @@ jobs:
         # OCI SDK currently constrains cryptography to <47.0.0, while GHSA-537c-gmf6-5ccf
         # lists 48.0.1 as the first fixed version. Keep auditing all other findings.
         # dependency-audit-nightly.yml にも同じ ignore を書く。
-        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
+        run: uv run pip-audit --skip-editable --ignore-vuln GHSA-537c-gmf6-5ccf
 
   # ---------------------------------------------------------------- agent
   #
@@ -745,6 +752,8 @@ jobs:
           SKIP_FRONTEND: "1"
           SKIP_AUDIT: ${{ needs.changes.outputs.agent_deps == 'true' && '0' || '1' }}
           UV_SYNC_ARGS: "--locked --dev"
+          # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
+          PYTEST_ARGS: "-n auto"
 
   agent-frontend:
     name: Agent / Frontend

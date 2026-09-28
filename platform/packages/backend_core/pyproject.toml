@@ -20,6 +20,7 @@ dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.25",
   "pytest-cov>=6.0",
+  "pytest-xdist>=3.8",
   "ruff>=0.9",
   "black>=25.1",
   "mypy>=1.14",
