@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 
+import { Button } from "./button";
 import { toneIcon, toneRole, toneSurface, type FeedbackTone } from "./feedback-tone";
 import { MessageText } from "./message-text";
 
@@ -12,6 +13,8 @@ import { MessageText } from "./message-text";
  *
  * i18n はパッケージに持ち込まないため、閉じるボタンの aria ラベルは `dismissLabel` で注入する
  * （未指定時は日本語の既定値「閉じる」）。
+ * 閉じるボタンは Toast と同じ共有 `Button`（ghost・iconOnly・44px）。色はトーンの文字色に合わせ、
+ * ホバーの面はトーンの淡い地の上で見える `fg` の薄い重ねにする。
  */
 export function Banner({
   severity,
@@ -58,14 +61,17 @@ export function Banner({
         {action ? <div className="mt-2 flex flex-wrap gap-2">{action}</div> : null}
       </div>
       {onDismiss ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          iconOnly
+          touchTarget
+          icon={X}
           onClick={onDismiss}
           aria-label={dismissLabel}
-          className="-mr-2 -mt-2 inline-flex h-[44px] w-[44px] min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center rounded-md text-current/70 transition-colors hover:bg-fg/5"
-        >
-          <X size={14} aria-hidden />
-        </button>
+          className="-mr-2 -mt-2 shrink-0 text-current hover:enabled:bg-fg/5 active:enabled:bg-fg/10"
+        />
       ) : null}
     </div>
   );

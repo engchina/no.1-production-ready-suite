@@ -49,7 +49,6 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -418,7 +417,7 @@ export function QuestionClassifierModelsPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : t("learning.error.classifier");
       setMessage(message);
-      toastError(message);
+      toast.error(message);
     } finally {
       setLoading("");
     }

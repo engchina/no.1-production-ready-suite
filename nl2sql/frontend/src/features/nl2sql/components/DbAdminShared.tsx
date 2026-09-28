@@ -53,7 +53,6 @@ import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
@@ -696,7 +695,7 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
       await copyTextToClipboard(example.sql);
       toast.success(t("common.action.copied"));
     } catch {
-      toastError(t("common.action.copyFailed"));
+      toast.error(t("common.action.copyFailed"));
     } finally {
       setCopying(null);
     }
@@ -1305,7 +1304,7 @@ export function ObjectDetailPanel({
       await copyTextToClipboard(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
-      toastError(t("common.action.copyFailed"));
+      toast.error(t("common.action.copyFailed"));
     }
   };
 
@@ -1358,7 +1357,7 @@ export function ObjectDetailPanel({
                   downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
                   toast.success(t("common.action.downloaded"));
                 } catch {
-                  toastError(t("common.action.downloadFailed"));
+                  toast.error(t("common.action.downloadFailed"));
                 }
               }} icon={Download}>
               <span>{t("dbAdmin.detail.download")}</span>

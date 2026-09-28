@@ -39,7 +39,6 @@ import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners } from "@/lib/queries";
@@ -1503,7 +1502,7 @@ export function ProfileManagementPage() {
         err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
       setDbProfileRefreshError(message);
       setDbProfileRefreshNeedsFull(true);
-      toastError(message);
+      toast.error(message);
     }
   };
 
@@ -1558,7 +1557,7 @@ export function ProfileManagementPage() {
         })
       );
     } else if (job.status === "error") {
-      toastError(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
+      toast.error(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
     }
   }, [dbProfileRefreshJobStatus, queryClient]);
 
@@ -1753,7 +1752,7 @@ export function ProfileManagementPage() {
         }),
       }));
     } catch (error) {
-      if (editTargetRef.current === target) toastError(error instanceof Error ? error.message : t("profiles.error.load"));
+      if (editTargetRef.current === target) toast.error(error instanceof Error ? error.message : t("profiles.error.load"));
     } finally {
       setBulkSelecting(false);
     }
@@ -1810,7 +1809,7 @@ export function ProfileManagementPage() {
         setLoading("");
         return;
       }
-      toastError(err instanceof Error ? err.message : t("profiles.error.save"));
+      toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
       setLoading("");
       return;
     }
@@ -1932,7 +1931,7 @@ export function ProfileManagementPage() {
         err instanceof ApiError && err.status === 502
           ? t("profiles.error.deleteOracleCleanup")
           : t("profiles.error.delete");
-      toastError(err instanceof Error && err.message ? err.message : fallback);
+      toast.error(err instanceof Error && err.message ? err.message : fallback);
     } finally {
       setLoading("");
     }

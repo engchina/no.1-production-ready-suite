@@ -13,7 +13,6 @@ import {
 import { LogicalStepsList } from "./LogicalStepsList";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import { engineLabel } from "../labels";
 import { QUESTION_FILTER_LABELS, QUESTION_SLOT_LABELS } from "../questionTemplates";
 import {
@@ -403,7 +402,7 @@ export function GeneratedSqlSummary({
       await copyTextToClipboard(displayedSql);
       toast.success(t("common.action.copied"));
     } catch {
-      toastError(t("common.action.copyFailed"));
+      toast.error(t("common.action.copyFailed"));
     }
   };
 

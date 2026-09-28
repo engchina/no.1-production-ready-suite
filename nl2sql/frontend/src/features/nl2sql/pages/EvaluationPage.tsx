@@ -38,7 +38,6 @@ import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -234,7 +233,7 @@ export function EvaluationPage() {
       toast.success(t("qualityEvaluation.notice.deleted"));
     },
     onError: () => {
-      toastError(t("qualityEvaluation.error.delete"));
+      toast.error(t("qualityEvaluation.error.delete"));
     },
   });
   const cancelJobMutation = useMutation({
@@ -251,7 +250,7 @@ export function EvaluationPage() {
       toast.success(t("qualityEvaluation.notice.cancelled"));
     },
     onError: () => {
-      toastError(t("qualityEvaluation.error.cancel"));
+      toast.error(t("qualityEvaluation.error.cancel"));
     },
   });
 

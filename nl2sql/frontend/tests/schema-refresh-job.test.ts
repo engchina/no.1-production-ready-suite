@@ -97,10 +97,10 @@ test("coordinator owns start/track, discovery, terminal notification, and invali
   assert.match(coordinator, /activeSchemaRefreshJob[\s\S]{0,120}active_job: null/u);
   assert.match(coordinator, /toast\.success\(t\("common\.action\.schemaRefreshed"\)\)/u);
   // 失敗は各ページの固定面(context の error)を正本とし、Toast と二重表示しない
-  // (messaging spec §0.6)。coordinator は toastError を呼ばない。
+  // (messaging spec §0.6)。coordinator は toast.error を呼ばない。
   assert.match(coordinator, /setError\(message\)/u);
   assert.match(coordinator, /setError\(schemaRefreshJobErrorMessage\(job\)\)/u);
-  assert.doesNotMatch(coordinator, /toastError/u);
+  assert.doesNotMatch(coordinator, /toast\.error/u);
   assert.match(coordinator, /Boolean\(trackedJobId\) && !job/u);
   assert.doesNotMatch(coordinator, /:query-error/u);
 });

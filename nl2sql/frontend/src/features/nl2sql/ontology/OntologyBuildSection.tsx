@@ -43,7 +43,6 @@ import { isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
@@ -1425,7 +1424,7 @@ export function OntologyBuildSection({
       await copyTextToClipboard(activeMarkdown);
       toast.success(t("common.action.copied"));
     } catch {
-      toastError(t("common.action.copyFailed"));
+      toast.error(t("common.action.copyFailed"));
     }
   };
 

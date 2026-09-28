@@ -69,10 +69,7 @@ export function SyntheticRunNotifications() {
       const previous = runs.get(run.run_id);
       if (previous && previous !== run.status && runFinished(run)) {
         const label = runLabel(run);
-        const options = {
-          duration: 4000,
-          description: run.targets.map((target) => target.table_name).join(", "),
-        };
+        const options = { description: run.targets.map((target) => target.table_name).join(", ") };
         if (run.status === "completed") toast.success(label, options);
         else toast.warning(label, options);
       }
