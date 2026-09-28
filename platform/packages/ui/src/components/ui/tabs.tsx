@@ -16,6 +16,12 @@ export interface TabItem {
   /** 表示ラベルより詳しい読み上げ名が必要な場合だけ指定する。 */
   ariaLabel?: string;
   disabled?: boolean;
+  /**
+   * 無効のときの理由（翻訳済み）。無効のタブにだけ HTML の `title` として付ける（#396）。
+   * 無効のタブはフォーカスを受けず Tooltip を出せないため、ホバーと読み上げ（説明）で理由を伝える。
+   * 画面の別の場所に同じ理由を書いているときは渡さない（二重に伝えない）。
+   */
+  disabledReason?: string;
 }
 
 export interface TabsProps {
@@ -99,6 +105,8 @@ export function revealTabScrollLeft({
  * ビュー切替。**同じ対象の別の見方**に切り替えるときだけ使う。
  * データを絞り込むだけなら ToggleChip、別の画面に移るなら Sidebar。
  * 下線スタイル固定。PageHeader の `tabs` に渡すとヘッダー下端に吸い付く。
+ * ペイン・カードの中の見方の切り替え（原本の処理前 / 処理後、表示する形式など）も Tabs + TabPanel で作る。
+ * 枠の中にボタンを並べたセグメントを手書きしない（#396）。
  *
  * 入りきらないときは横にスクロールし、スクロールできる方向の端だけをフェードする（`data-scroll-start` /
  * `data-scroll-end` と structure/tabs.css、#364）。選択中のタブ（キーボード・クリック・呼び出し側の変更）は、
@@ -195,6 +203,7 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
             aria-controls={`${idPrefix}-panel-${item.id}`}
             tabIndex={selected ? 0 : -1}
             disabled={item.disabled}
+            title={item.disabled ? item.disabledReason : undefined}
             onClick={() => onChange?.(item.id)}
             className={cn(
               "group inline-flex h-[var(--tab-height)] shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap border-b-2 border-transparent px-1 text-sm font-medium text-fg-muted transition-colors",

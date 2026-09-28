@@ -324,7 +324,7 @@ test("構造化要素の修正を保持し、保存後だけ承認できる", as
     expect(saveBox?.x).toBeLessThan(closeBox?.x ?? 0);
   }
   expect(
-    await page.getByRole("tabpanel").evaluate((element) => element.scrollWidth > element.clientWidth)
+    await page.getByTestId("document-inspector-pane").getByRole("tabpanel").evaluate((element) => element.scrollWidth > element.clientWidth)
   ).toBe(false);
   await page.getByRole("button", { name: "編集を閉じる" }).click();
   await expect(

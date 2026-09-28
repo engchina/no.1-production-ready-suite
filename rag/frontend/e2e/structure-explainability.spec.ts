@@ -27,13 +27,13 @@ test("文書詳細で本文テキストと構造化抽出要素を確認でき�
     "aria-selected",
     "true"
   );
-  const textPanel = page.getByRole("tabpanel");
+  const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(textPanel.getByText("# 経費申請")).toBeVisible();
   await expect(textPanel.getByText("| 項目 | 金額 |")).toBeVisible();
   await expect(textPanel.getByRole("button", { name: "本文をコピー" })).toBeVisible();
 
   await page.getByRole("tab", { name: "構造化要素" }).click();
-  const extractionPanel = page.getByRole("tabpanel");
+  const extractionPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(extractionPanel).toBeVisible();
   await expect(extractionPanel.getByText("構造化要素")).toBeVisible();
   await expect(extractionPanel.getByText("見出し")).toBeVisible();
@@ -93,7 +93,7 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
   await page.goto("/documents/doc-1");
 
   // 既定の本文テキストタブでも base64 を読みやすく畳む。
-  const textPanel = page.getByRole("tabpanel");
+  const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(textPanel).toBeVisible();
 
   // base64 の生文字列は本文テキストとして現れない。
@@ -109,7 +109,7 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
 
   // 構造化要素タブでも element 内の画像と本文を確認できる。
   await page.getByRole("tab", { name: "構造化要素" }).click();
-  const extractionPanel = page.getByRole("tabpanel");
+  const extractionPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(
     extractionPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()
   ).toBeVisible();
@@ -117,13 +117,13 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
 
   // Chunk タブへ切替えると、base64 断片はチップに畳まれて表示される。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  const chunkPanel = page.getByRole("tabpanel");
+  const chunkPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(chunkPanel.getByText(/画像データ/)).toBeVisible();
 
   await expectNoHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
-  await expect(page.getByRole("tabpanel")).toBeVisible();
+  await expect(page.getByTestId("document-inspector-pane").getByRole("tabpanel")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -318,6 +318,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   // Chunk タブへ切替えると紐づく chunk が選択されている。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
   const linkedChunkButton = page
+    .getByTestId("document-inspector-pane")
     .getByRole("tabpanel")
     .getByRole("button", { name: /料金表の交通費/ });
   await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");

@@ -10,7 +10,7 @@ import { StatusBadge } from "../src/components/data/status-badge";
 import { Button } from "../src/components/ui/button";
 import { RequiredBadge } from "../src/components/ui/required-badge";
 import { SelectField } from "../src/components/ui/select-field";
-import { nextTabId, Tabs } from "../src/components/ui/tabs";
+import { nextTabId, TabPanel, Tabs } from "../src/components/ui/tabs";
 import { TextField } from "../src/components/ui/text-field";
 
 describe("Tabs", () => {
@@ -34,6 +34,55 @@ describe("Tabs", () => {
     expect(html).toContain('role="tablist"');
     expect(html).toMatch(/id="pr-tab-failed"[^>]*aria-selected="true"[^>]*aria-controls="pr-panel-failed"[^>]*tabindex="0"/);
     expect(html).toMatch(/id="pr-tab-all"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
+  });
+});
+
+describe("Tabs でペインの中の見方を切り替える（#396）", () => {
+  const items = [
+    { id: "original", label: "処理前" },
+    { id: "prepared", label: "処理後", disabled: true, disabledReason: "処理後ファイルはありません。" },
+  ];
+
+  it("tablist / tab と aria-selected で選択を伝え、無効のタブは Tab 順から外れて理由を title で持つ", () => {
+    const html = renderToStaticMarkup(<Tabs items={items} value="original" ariaLabel="原本プレビュー" idPrefix="preview" />);
+    expect(html).toContain('role="tablist" aria-label="原本プレビュー"');
+    const tabs = html.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toContain('aria-selected="true"');
+    expect(tabs[0]).toContain('tabindex="0"');
+    expect(tabs[0]).toContain('aria-controls="preview-panel-original"');
+    expect(tabs[0]).not.toContain("title=");
+    expect(tabs[1]).toContain('aria-selected="false"');
+    expect(tabs[1]).toContain('tabindex="-1"');
+    expect(tabs[1]).toContain('disabled=""');
+    expect(tabs[1]).toContain('title="処理後ファイルはありません。"');
+  });
+
+  it("disabledReason は有効なタブには付けない（ホバーの吹き出しを出さない）", () => {
+    const html = renderToStaticMarkup(
+      <Tabs items={[{ id: "a", label: "A" }, { id: "b", label: "B", disabledReason: "理由" }]} value="a" />
+    );
+    expect(html).not.toContain("title=");
+  });
+
+  it("矢印キーは無効のタブを飛ばし、有効なタブが 1 つだけなら移らない", () => {
+    expect(nextTabId(items, "original", "ArrowRight")).toBe("original");
+    expect(nextTabId(items, "original", "End")).toBe("original");
+    const enabled = items.map((item) => ({ ...item, disabled: false }));
+    expect(nextTabId(enabled, "original", "ArrowRight")).toBe("prepared");
+    expect(nextTabId(enabled, "prepared", "ArrowRight")).toBe("original");
+    expect(nextTabId(enabled, "prepared", "Home")).toBe("original");
+  });
+
+  it("TabPanel は選択中のタブと aria-labelledby で結ばれ、選択中のときだけ描く", () => {
+    const html = renderToStaticMarkup(
+      <>
+        <TabPanel id="original" value="original" idPrefix="preview">原本</TabPanel>
+        <TabPanel id="prepared" value="original" idPrefix="preview">処理後</TabPanel>
+      </>
+    );
+    expect(html).toContain('role="tabpanel" id="preview-panel-original" aria-labelledby="preview-tab-original"');
+    expect(html).not.toContain("preview-panel-prepared");
   });
 });
 

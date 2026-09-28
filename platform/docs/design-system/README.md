@@ -161,6 +161,14 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 > 意味が違うので、下線（タブ）と pill（チップ）で見た目を明確に分けています。**流用しないこと。**
 > 旧実装は `ToggleChip` をタブ代わりに使っており、「押したら内容が入れ替わるのか、減るだけなのか」が判別できませんでした。
 
+**ペイン・カードの中の見方の切り替えも `Tabs` + `TabPanel`（#396）。セグメントコントロールは作らない。**
+
+- 原本の処理前 / 処理後、同じ内容の表示形式（Markdown / HTML / JSON）のように、ページより小さい単位で同じ対象の見方を変えるときも `Tabs` を使い、中身を `TabPanel` で包む。タブの列は内容の直上に置き、関係する操作（ダウンロード等）は見出しの行に置く。1 画面に複数の `Tabs` を置くので `idPrefix` を分ける
+- **枠（`border` + `bg-surface-sunken` + `p-0.5`）の中に `Button` や素の `<button>` を並べた手書きのセグメントを作らない。** RAG の原本プレビューで実測した旧実装は、外枠 1px（`--color-border`）と選択中のボタンの枠 1px（`--color-border-control`）が 1.75px の間隔で二重に並び、ボタンの間は 0px、角丸は外 5.25px に対して内 6px（内側の方が大きく、同心でない）、選択は `variant` の違いだけで `aria-pressed` / `aria-selected` が無く、矢印キーでも動かなかった
+- 別の部品（セグメントコントロール）を足さなかった理由: 意味（同じ対象の別の見方）が `Tabs` と同じで、見た目だけが違う部品を足すと「下線＝見方、pill＝絞り込み」の区別がまた崩れる。WAI-ARIA APG に segmented control のパターンは無く、見方の切り替えの役割は `tablist` / `tab` / `tabpanel`（`radiogroup` はフォームの値の選択、`aria-pressed` はオン / オフのトグル）。キーボード（← → / Home / End、roving `tabIndex`）・強制カラーモード・入りきらないときのフェードは `Tabs` が既に持っている
+- 使えないタブは `disabled` にし、理由は `disabledReason`（無効のときだけ HTML の `title`）で渡す。無効のタブはフォーカスを受けず Tooltip を出せないため。同じ理由を画面の別の場所（バナー等）に書いているときは渡さない
+- 絞り込み・モード・オン / オフの切り替え（見方ではないもの）は従来どおり `ToggleChip` / `Button` の `pressed`（UX 契約 buttons.md §6）
+
 ### `PageBody` / `Section`（新規）
 
 readme が規定していた「左右ガター 2rem / セクション間 1.5rem」の**唯一の実装**。これが無かったため3アプリがそれぞれ `<div style={{padding:'1.5rem 2rem', …}}>` を手書きしていました。**design system で最も確実に壊れる場所が唯一未実装**という状態でした。
@@ -658,7 +666,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**36点あります。**
+QA に事前共有してください。**37点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -698,6 +706,7 @@ QA に事前共有してください。**36点あります。**
 | 34 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
 | 35 | **Agent の一覧が 10 件/ページになり、表の中で縦スクロールする** | Agent の 14 の表は全件をページの高さで表示（ページ送りなし）、読み込み中は 4 本の棒（`LoadingState`）、実行先・Skill を取得している間に「未設定」「Skill を取得できません」などの警告が出た。監査は「表示件数」（既定 100 件）を 1 度に表示、メモリは 20 件で打ち切り → 共有の `PagedDataTable`（表頭の固定、md 未満 5 行・md 以上 8 行の縦スクロール、直下に 10 件/ページの `Pagination`）。一覧のページは作業状態に残り、Run・承認の 5 秒ごとの再取得でも戻らない。監査は API の offset / limit で送る（「1 ページの件数」、既定 10 件。CSV は条件に合う記録を最大 1,000 件）、メモリは 100 件まで取得してページで送る。読み込み中は `TimedLoadingState` と画面の形の Skeleton、取得中は警告を出さない | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
 | 36 | **スピナーの線が太くなり、トラックが見えやすくなる。reduced-motion ではアークの濃さが変わる** | 線の実寸は 16px で 1.33px・14px で 1.17px（viewBox 24 に線幅 2 固定）、トラックは `currentColor` の 25%、reduced-motion では止まったまま（75% の進捗の円に見える）、ボタンの `loading` のスピナーは `fg-disabled`（ライトで地に 2.82:1）、RAG の状態バッジ 3 箇所は lucide の `Loader2` / `LoaderCircle` / `RefreshCw` を回していた → すべて共有 `Spinner`: 線は大きさによらず**実寸 2px**、トラックは `--color-spinner-track`（ライト 30% / ダーク 35%）、reduced-motion では回転を止めてアークの濃さを 1 ↔ 0.5 で変える、ボタンの `loading` のスピナーは `fg-muted`（4.39:1）。回転は等速のまま、ボタンのスピナーは sm / md / lg とも 16px のまま | 等倍の画面で線がかすれ、ダークでトラックが見えにくかった。アーク対トラックの境目 3:1 を保つ上限まで濃くした（§4「Spinner」、#395） |
+| 37 | **RAG の原本プレビューの処理前 / 処理後と、抽出エクスポートの形式が下線のタブになる** | 枠（`border` + `bg-surface-sunken` + `p-0.5`）の中にボタンを並べた手書きのセグメント（外枠と選択中のボタンの枠が 1.75px の間隔で二重、ボタンの間 0px、角丸は外 5.25px・内 6px（形式は内 3.5px）、選択は塗りの違いだけ。処理前 / 処理後は `aria-pressed` も無く、矢印キーで動かない）→ 共有の `Tabs` + `TabPanel`（`tablist` / `aria-selected`、← → / Home / End）。処理前 / 処理後のタブの列は見出し（「原本プレビュー」とダウンロード）の下の行に移り、プレビューがその分（約 2.75rem）低くなる。形式のタブは件数の下に置き、375px で入りきらないときは横スクロールと端のフェード（折り返さない）。「処理後」が使えない理由は無効のタブの `title`（`disabledReason`）で、見た目は変えない | 同じ対象の別の見方は `Tabs`（§4「`Tabs`」）。枠線の二重・隙間 0・同心でない角丸・選択の読み上げの欠落を、部品を足さずに解消する（#396） |
 
 ### API の非互換
 
@@ -719,6 +728,7 @@ QA に事前共有してください。**36点あります。**
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
+| `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
 
 ---
 

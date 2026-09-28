@@ -145,6 +145,8 @@
 
 絞り込み・モード・対象の切替は `aria-pressed` 付きの選択（`ToggleChip` または `<Button variant="secondary" aria-pressed={selected}>`）を使う。同じグループは `role="group"` + `aria-label` でまとめる。同じ対象の別の見方への切替は `Tabs` を使い、`ToggleChip` をタブの代わりにしない（デザインシステムの規約）。
 
+ペイン・カードの中の見方の切替（原本の処理前 / 処理後、表示形式など）も `Tabs` + `TabPanel` にする。枠（`border` + `bg-surface-sunken`）の中に `Button` や素の `<button>` を並べたセグメントを手書きしない（枠線が二重になり、選択状態が読み上げられない。デザインシステム README §4「`Tabs`」、#396）。
+
 タブ（`role="tab"`）、combobox、listbox の option、情報一覧の選択行、Sidebar のナビゲーションはアクションボタンと構造が違うため、各共通部品のレイアウトと ARIA を保つ。これらの生 `<button>` は明示的な適用除外であり、保存・コピー・開閉・削除を独自 CSS で作る例外ではない。
 
 ---
