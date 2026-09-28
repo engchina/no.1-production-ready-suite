@@ -20,6 +20,7 @@ from app.clients.oracle import StoredConversation
 from app.config import get_settings
 from app.main import app
 from app.rag import request_context
+from app.rag.answer_timeout import answer_timeout_message
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
@@ -418,7 +419,7 @@ def test_chat_send_timeout_returns_504_and_saves_error(
     )
     assert result["isError"] is True
     assert result["structuredContent"]["status"] == 504
-    assert result["structuredContent"]["message"] == chat_route.CHAT_TIMEOUT_MESSAGE
+    assert result["structuredContent"]["message"] == answer_timeout_message(None, None)
     (conversation_id,) = chat_oracle.messages.keys()
     # 新しく作った会話の ID を返し、再試行で会話を増やさないようにする（#252）。
     assert result["structuredContent"]["details"] == {"conversation_id": conversation_id}

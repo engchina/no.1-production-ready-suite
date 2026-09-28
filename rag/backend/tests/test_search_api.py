@@ -11,9 +11,11 @@ from pytest import LogCaptureFixture, MonkeyPatch
 from app.api.routes import search as search_route
 from app.config import get_settings
 from app.main import app
+from app.rag.answer_timeout import answer_timeout_message
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.generation_contract import GenerationContractError
+from app.rag.pipeline import SearchStageProgress
 from app.schemas.search import (
     SearchRequest,
     SearchResponse,
@@ -46,7 +48,10 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert response.status_code == 504
     body = response.json()
     assert body["data"] is None
-    assert body["error_messages"] == [search_route.SEARCH_TIMEOUT_MESSAGE]
+    # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
+    assert body["error_messages"] == [answer_timeout_message("agentic_planning", 0.05)]
+    assert "検索の計画" in body["error_messages"][0]
+    assert "もう一度送信してください" in body["error_messages"][0]
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
     audit_event = cast(Any, audit_record).audit_event
@@ -74,7 +79,44 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: error" in response.text
-    assert search_route.SEARCH_TIMEOUT_MESSAGE in response.text
+    assert answer_timeout_message("agentic_planning", 0.05) in response.text
+    # 進捗は時間切れの前に届き、error event は工程と TimeoutError を持つ（画面は 504 相当にする）。
+    assert '"stage": "agentic_planning", "outcome": "started"' in response.text
+    assert '"error_type": "TimeoutError"' in response.text
+    assert '"stage": "agentic_planning"}' in response.text
+
+
+@pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
+def test_search_answer_uses_answer_timeout_not_search_timeout(
+    monkeypatch: MonkeyPatch, path: str
+) -> None:
+    """回答を LLM で作る検索は、検索だけの上限（30 秒）ではなく回答生成の上限で打ち切る（#375）。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.01)
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 5.0)
+    monkeypatch.setattr(search_route, "RagPipeline", _SlowAnswerPipeline)
+
+    response = client.post(path, json={"query": "承認条件"})
+
+    assert response.status_code == 200
+    if path.endswith("/stream"):
+        assert "event: done" in response.text
+        assert "event: error" not in response.text
+    else:
+        assert response.json()["data"]["answer"] == "遅い回答"
+
+
+class _SlowAnswerPipeline:
+    """検索だけの上限より長く、回答生成の上限より短くかかる pipeline。"""
+
+    def __init__(self, **_kwargs: object) -> None:
+        pass
+
+    async def run(
+        self, request: SearchRequest, trace_id: str | None = None, **_kwargs: object
+    ) -> SearchResponse:
+        await asyncio.sleep(0.1)
+        return SearchResponse(answer="遅い回答", trace_id=trace_id or "trace", elapsed_ms=100.0)
 
 
 def test_search_api_returns_502_when_generation_contract_fails(
@@ -383,9 +425,9 @@ def test_search_request_rejects_conflicting_knowledge_base_scope() -> None:
 
 
 def _force_search_timeout(monkeypatch: MonkeyPatch) -> None:
-    """検索 route を低 timeout + 遅い pipeline に差し替える。"""
+    """検索 route を低い回答生成の上限 + 遅い pipeline に差し替える。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.001)
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 0.05)
     monkeypatch.setattr(search_route, "RagPipeline", SlowPipeline)
 
 
@@ -399,11 +441,22 @@ class SlowPipeline:
         self,
         _request: SearchRequest,
         trace_id: str | None = None,
-        progress_callback: object | None = None,
+        progress_callback: Any | None = None,
         token_callback: object | None = None,
     ) -> SearchResponse:
-        _ = progress_callback, token_callback
+        _ = token_callback
         assert trace_id
+        assert progress_callback is not None
+        # 検索の計画（LLM）の途中で時間切れになる。
+        await progress_callback(
+            SearchStageProgress(
+                trace_id=trace_id,
+                stage="agentic_planning",
+                outcome="started",
+                elapsed_ms=0.0,
+                attributes={},
+            )
+        )
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
 

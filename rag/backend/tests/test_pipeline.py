@@ -3717,6 +3717,90 @@ async def test_agentic_multi_hop_reuses_full_post_processing() -> None:
     assert pipeline.grounding_calls.count("compression") == 2
 
 
+async def test_agentic_llm_calls_are_reported_as_stages() -> None:
+    """検索の計画・再分解（LLM）と追加の検索を、ほかの工程と同じく進捗に出す（#375）。"""
+    observed: list[SearchStageProgress] = []
+
+    async def capture_progress(progress: SearchStageProgress) -> None:
+        observed.append(progress)
+
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=QueryAwareRetryOracleClient(),
+        llm=ModePlanningLlm(),
+        settings=_grounding_test_settings(
+            rag_agentic_profile="multi_hop",
+            rag_post_retrieval_pipeline="compact",
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="承認条件", top_k=1, rerank_top_n=1),
+        progress_callback=capture_progress,
+    )
+
+    started = [event.stage for event in observed if event.outcome == "started"]
+    # 計画は埋め込みの前、再分解と追加の検索は rerank の後、回答の生成はその後。
+    assert started.index("agentic_planning") < started.index("embedding")
+    assert (
+        started.index("rerank")
+        < started.index("agentic_multi_hop")
+        < started.index("agentic_multi_hop_retrieval")
+        < started.index("generation")
+    )
+    for stage in ("agentic_planning", "agentic_multi_hop", "agentic_multi_hop_retrieval"):
+        outcomes = [event.outcome for event in observed if event.stage == stage]
+        assert outcomes == ["started", "success"]
+        assert stage in response.diagnostics.stream_stage_timings
+    planning = next(
+        event
+        for event in observed
+        if event.stage == "agentic_planning" and event.outcome == "success"
+    )
+    assert planning.attributes["profile"] == "multi_hop"
+    assert "output_count" in planning.attributes
+
+
+async def test_crag_and_corrective_retries_are_reported_as_stages() -> None:
+    """CRAG の書き換え（LLM）・追加の検索、条件を緩めた再検索も進捗に出す（#375）。"""
+    crag_events: list[SearchStageProgress] = []
+    corrective_events: list[SearchStageProgress] = []
+
+    async def capture_crag(progress: SearchStageProgress) -> None:
+        crag_events.append(progress)
+
+    async def capture_corrective(progress: SearchStageProgress) -> None:
+        corrective_events.append(progress)
+
+    crag = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=QueryAwareRetryOracleClient(),
+        llm=ModePlanningLlm(),
+        settings=_grounding_test_settings(rag_post_retrieval_pipeline="verified_context"),
+    )
+    await crag.run(
+        SearchRequest(query="承認条件", top_k=1, rerank_top_n=1), progress_callback=capture_crag
+    )
+    corrective = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=TopKCorrectiveOracleClient(),
+        llm=GroundedLlm(),
+        settings=_grounding_test_settings(
+            rag_retrieval_strategy="corrective_multi_query",
+            rag_post_retrieval_pipeline="compact",
+        ),
+    )
+    await corrective.run(
+        SearchRequest(query="承認条件", top_k=1, rerank_top_n=1),
+        progress_callback=capture_corrective,
+    )
+
+    crag_started = [event.stage for event in crag_events if event.outcome == "started"]
+    assert crag_started.index("crag_rewrite") < crag_started.index("crag_retrieval")
+    corrective_started = [event.stage for event in corrective_events if event.outcome == "started"]
+    assert "corrective_retrieval" in corrective_started
+
+
 class SamePlanLlm(ModePlanningLlm):
     """どの mode でも同じ sub-question を返す LLM(分解し直しても新しい variant が出ない)。"""
 

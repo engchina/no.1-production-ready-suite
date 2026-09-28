@@ -164,9 +164,18 @@ async def test_pipeline_delegates_to_docrag_engine(monkeypatch: pytest.MonkeyPat
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
 
-    response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+    observed: list[tuple[str, str]] = []
+
+    async def capture(progress: Any) -> None:
+        observed.append((progress.stage, progress.outcome))
+
+    response = await pipeline.run(
+        SearchRequest(query="受注の登録方法は？"), progress_callback=capture
+    )
 
     assert "登録ボタン" in response.answer
+    # DocRAG の回答エンジン（検索と LLM の回答生成）も進捗の工程として通知する（#375）。
+    assert observed == [("docrag_answer", "started"), ("docrag_answer", "success")]
     assert response.citations[0].chunk_id == "doc-1:c1"
     assert response.diagnostics.retrieval_strategy == "docrag"
     assert response.diagnostics.docrag is not None

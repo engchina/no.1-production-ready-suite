@@ -840,10 +840,12 @@ server {
         return 308 /api/;
     }
 
-    # 保存済みの回答の評価（標準回答による評価。LLM を複数回呼ぶ）だけ待ち時間を延ばす（#304）。
-    # backend の上限（LLM 1 回の timeout の設定の上限 600 秒）と画面の timeout（630 秒）より長くし、
-    # 画面が失敗を出した後で backend が評価を保存する、を起こさない。
-    location ~ ^/api/search/answers/[^/]+/evaluation\$ {
+    # LLM を複数回呼ぶ処理だけ待ち時間を延ばす。backend の上限（LLM 1 回の timeout の設定の上限
+    # 600 秒）と画面の timeout（630 秒）より長くし、backend の 504 と理由を画面に届ける。
+    # - 保存済みの回答の評価（標準回答による評価。#304）: 画面が失敗を出した後で評価を保存しない。
+    # - チャット・RAG 検索の回答生成（RAG_ANSWER_TIMEOUT_SECONDS。上限 600 秒。#375）と、
+    #   同じ回答生成を呼ぶ MCP（rag_search / rag_chat_send_message）。
+    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|chat/conversations/[^/]+/messages/stream|mcp)\$ {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;

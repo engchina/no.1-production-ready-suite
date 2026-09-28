@@ -539,7 +539,8 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_QUERY_EXPANSION_ENABLED` / `RAG_QUERY_EXPANSION_MAX_VARIANTS`: retrieval 前に deterministic な業務同義語 query expansion を行う。日本語/英語混在 query の recall を上げる目的で既定有効。variant 数を増やすと embedding / Oracle retrieval 呼び出し数も増えるため、golden set と OCI / Oracle の p95 latency を見て 1-3 から調整する。audit / trace には query 本文や展開語ではなく variant 件数だけを残す。
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
-- `RAG_SEARCH_TIMEOUT_SECONDS`: `/api/search` と `/api/search/stream` の pipeline timeout。OCI / Oracle の p95 latency と worker 数に合わせる。
+- `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP）の通しの timeout（既定 300 秒、上限は LLM 1 回の timeout の上限と同じ 600 秒。#375）。agentic（検索の計画・multi_hop の再分解）を使う業務ビューでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`init_script.sh` が生成する回答生成・評価・MCP の `location`）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
+- `RAG_SEARCH_TIMEOUT_SECONDS`: 品質評価（golden set）の 1 ケースの pipeline timeout（既定 30 秒）。チャット・RAG 検索の回答生成には使わない（#375）。
 - `RAG_STREAM_REALTIME_ENABLED`: 廃止予定の互換設定。値にかかわらず回答の完全生成、PII マスク、groundedness、回答検査が終わるまで SSE `delta` は送信しない。次リリースで削除する。
 - `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
 - `RAG_ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
@@ -585,7 +586,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。
 - backend の Gunicorn の worker 数・timeout: `init_script.sh` が作る unit（`production-ready-rag-backend.service`）の
   `--workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5`。worker 数は Compute の CPU、OCI / Oracle の p95 latency、
-  同時実行数から決める。timeout は `RAG_SEARCH_TIMEOUT_SECONDS` より短くしない。
+  同時実行数から決める。Uvicorn の worker では Gunicorn の `--timeout` は worker の生存確認で、1 件の request の長さ（`RAG_ANSWER_TIMEOUT_SECONDS` まで）を打ち切らない。
 - `RAG_TRACE_EXPORT_HTTP_ENDPOINT`: 空なら構造化ログ + Prometheus のみ。設定時は `rag.trace_span` event を OpenTelemetry / Langfuse gateway へ非同期 POST する。query 本文、context 本文、OCR 原文、prompt、例外 message は送らない。
 - `RAG_TRACE_EXPORT_HTTP_BEARER_TOKEN` / `RAG_TRACE_EXPORT_TIMEOUT_SECONDS` / `RAG_TRACE_EXPORT_QUEUE_SIZE`: trace export の認証、送信 timeout、queue 上限。queue full や送信失敗は `rag_trace_export_dropped` / `rag_trace_export_failed` として記録し、RAG request は失敗させない。
 - `RAG_GUARDRAIL_MAX_QUERY_CHARS`: UI 側の入力制限と合わせる。
