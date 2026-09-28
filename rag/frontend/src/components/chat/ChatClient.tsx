@@ -17,6 +17,8 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   offsetForPage,
   offsetPagination,
+  toast,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import {
   Check,
@@ -24,6 +26,7 @@ import {
   Plus,
   RotateCcw,
   SendHorizontal,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -53,6 +56,7 @@ import {
   useCreateConversation,
   useSavedDocragTraceIds,
   useUpdateConversation,
+  useDeleteConversation,
 } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
@@ -432,6 +436,8 @@ export function ChatClient() {
 
   const createConversation = useCreateConversation();
   const updateConversation = useUpdateConversation();
+  const deleteConversation = useDeleteConversation();
+  const confirm = useConfirm();
   const compareModelsQuery = useCompareModels();
   const compareModels = compareModelsQuery.data ?? [];
 
@@ -559,6 +565,33 @@ export function ChatClient() {
           : t("chat.sessions.renameError")
       );
       titleInputRef.current?.focus();
+    }
+  }
+
+  // 会話の削除は取り消せないため、確認ダイアログを通す（buttons.md §5.1）。
+  async function removeConversation(conversation: ConversationSummary) {
+    const title = conversation.title ?? t("chat.sessions.untitled");
+    const ok = await confirm({
+      title: t("chat.sessions.deleteConfirm.title"),
+      description: t("chat.sessions.deleteConfirm.description", { title }),
+      confirmLabel: t("chat.sessions.deleteConfirm.confirm"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+    try {
+      if (conversation.id === activeId) {
+        abortRef.current?.abort();
+        setLiveTurn(null);
+        setErrorText("");
+        setActiveId(null);
+      }
+      await deleteConversation.mutateAsync(conversation.id);
+      toast.success(t("chat.sessions.deleted"));
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.messages.join(" / ") : t("chat.sessions.deleteError")
+      );
     }
   }
 
@@ -887,7 +920,7 @@ export function ChatClient() {
                         ) : (
                           <div
                             className={cn(
-                              "grid grid-cols-[minmax(0,1fr)_auto] rounded-md transition-colors",
+                              "grid grid-cols-[minmax(0,1fr)_auto_auto] rounded-md transition-colors",
                               INFORMATION_LIST_ROW_CLASS,
                               conversation.id === activeId
                                 ? "bg-accent-subtle text-fg"
@@ -920,6 +953,19 @@ export function ChatClient() {
                               )}
                               aria-label={t("chat.sessions.rename", { title })}
                               onClick={() => startRename(conversation)} icon={Pencil}>
+                              </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="md"
+                              tone="danger"
+                              className={cn(
+                                "mr-1 h-11 w-11 self-center px-0 transition-opacity sm:h-9 sm:w-9 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                                conversation.id === activeId && "sm:opacity-100"
+                              )}
+                              disabled={deleteConversation.isPending}
+                              aria-label={t("chat.sessions.delete", { title })}
+                              onClick={() => void removeConversation(conversation)} icon={Trash2}>
                               </Button>
                           </div>
                         )}

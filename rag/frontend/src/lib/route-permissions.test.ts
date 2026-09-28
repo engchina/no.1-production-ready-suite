@@ -145,12 +145,12 @@ describe("ルートの権限", () => {
     }
   });
 
-  it("既定の入口は RAG 検索、開けなければ `/`（NL2SQL と同じ）", () => {
-    expect(defaultEntryRoute(() => true)).toBe(APP_ROUTES.search);
-    expect(defaultEntryRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.search);
-    expect(defaultEntryRoute(allow(MENU_PERMISSIONS.upload, MENU_PERMISSIONS.chat))).toBe(
-      APP_ROUTES.home
-    );
+  it("既定の入口はチャット（ナビの先頭。`/` と同じ）、開けなければ `/`", () => {
+    expect(defaultEntryRoute(() => true)).toBe(APP_ROUTES.chat);
+    expect(defaultEntryRoute(allow(MENU_PERMISSIONS.upload, MENU_PERMISSIONS.chat))).toBe(APP_ROUTES.chat);
+    // チャットを開けない利用者は `/` へ戻し、ナビの並び順で最初に開ける画面（ここでは RAG 検索）へ。
+    expect(defaultEntryRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.home);
+    expect(firstAllowedRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.search);
     expect(defaultEntryRoute(() => false)).toBe(APP_ROUTES.home);
   });
 
@@ -172,6 +172,6 @@ describe("ルートの権限", () => {
     expect(settingsEntryRoute(allow(MENU_PERMISSIONS.settingsModel, MENU_PERMISSIONS.search))).toBe(
       APP_ROUTES.settingsModel
     );
-    expect(settingsEntryRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.search);
+    expect(settingsEntryRoute(allow(MENU_PERMISSIONS.search))).toBe(APP_ROUTES.home);
   });
 });

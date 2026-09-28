@@ -1498,6 +1498,18 @@ export function useUpdateConversation() {
   });
 }
 
+/** チャット会話削除。削除した会話の詳細は再取得（404）させずに捨てる。 */
+export function useDeleteConversation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteConversation(id),
+    onSuccess: async (_data, id) => {
+      qc.removeQueries({ queryKey: queryKeys.conversation(id), exact: true });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+}
+
 /** 比較で選べる設定済み OCI モデル一覧。 */
 export function useCompareModels(enabled = true) {
   return useQuery({

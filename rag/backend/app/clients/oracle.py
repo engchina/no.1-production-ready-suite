@@ -3158,6 +3158,27 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def delete_conversation(self, conversation_id: str) -> None:
+        """会話を削除する。メッセージは FK の ON DELETE CASCADE で消える。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            if _select_conversation(connection, conversation_id) is None:
+                raise KeyError(f"conversation_id={conversation_id} は存在しません。")
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_conversations
+                WHERE conversation_id = :conversation_id
+                  AND {access_sql}
+                """,
+                    access_sql=_oracle_conversation_access_predicate_sql(),
+                ),
+                _with_conversation_access_bind({"conversation_id": conversation_id}),
+            )
+
+        await self._run_transaction(operation)
+
     async def rename_conversation(self, conversation_id: str, title: str) -> StoredConversation:
         """会話タイトルを変更する。"""
 
