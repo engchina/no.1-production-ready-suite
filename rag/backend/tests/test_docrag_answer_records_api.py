@@ -1,5 +1,6 @@
 """保存済み DocRAG 回答の一覧・詳細 API。"""
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,12 +26,17 @@ RECORD: dict[str, Any] = {
 class FakeAnswerOracle:
     def __init__(self) -> None:
         self.list_calls: list[dict[str, Any]] = []
+        self.count_calls: list[dict[str, Any]] = []
         self.deleted: list[str] = []
         self.evaluations: dict[str, dict[str, Any]] = {}
 
     async def list_answer_records(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.list_calls.append(kwargs)
         return [{**RECORD, "confidence": "high"}]
+
+    async def count_answer_records(self, **kwargs: Any) -> int:
+        self.count_calls.append(kwargs)
+        return 23
 
     async def delete_answer_record(self, trace_id: str) -> bool:
         self.deleted.append(trace_id)
@@ -74,8 +80,11 @@ def test_list_and_get_saved_docrag_answers(fake_oracle: FakeAnswerOracle) -> Non
     listed = client.get("/api/search/answers", params={"business_view_id": "bv-1", "limit": 5})
 
     assert listed.status_code == 200
-    assert listed.json()["data"][0]["confidence"] == "high"
-    assert fake_oracle.list_calls == [{"business_view_id": "bv-1", "limit": 5, "offset": 0}]
+    page = listed.json()["data"]
+    assert page["items"][0]["confidence"] == "high"
+    assert fake_oracle.list_calls == [
+        {"business_view_id": "bv-1", "limit": 5, "offset": 0, "trace_ids": None}
+    ]
 
     detail = client.get("/api/search/answers/trace-1")
     data = detail.json()["data"]
@@ -83,6 +92,50 @@ def test_list_and_get_saved_docrag_answers(fake_oracle: FakeAnswerOracle) -> Non
     assert data["citations"][0]["chunk_id"] == "doc-1:c1"
     assert data["docrag"]["confidence"] == "high"
     assert client.get("/api/search/answers/missing").status_code == 404
+
+
+def test_list_saved_docrag_answers_returns_total_and_paging(
+    fake_oracle: FakeAnswerOracle,
+) -> None:
+    """回答履歴は総件数とページング（limit / offset / has_next）を返す（#304）。"""
+    listed = client.get(
+        "/api/search/answers", params={"business_view_id": "bv-1", "limit": 10, "offset": 10}
+    )
+
+    assert listed.status_code == 200
+    page = listed.json()["data"]
+    assert page["total"] == 23
+    assert page["limit"] == 10
+    assert page["offset"] == 10
+    assert page["has_next"] is True
+    assert len(page["items"]) == 1
+    assert fake_oracle.count_calls == [{"business_view_id": "bv-1", "trace_ids": None}]
+    # 既定は 1 ページ 10 件（共通の Pagination の既定と同じ）。
+    client.get("/api/search/answers", params={"business_view_id": "bv-1"})
+    assert fake_oracle.list_calls[-1]["limit"] == 10
+
+
+def test_list_saved_docrag_answers_filters_trace_ids(fake_oracle: FakeAnswerOracle) -> None:
+    """チャットは会話の回答の trace_id で保存の有無を引き当てる（重複・空白は除く）。"""
+    listed = client.get(
+        "/api/search/answers",
+        params=[
+            ("business_view_id", "bv-1"),
+            ("trace_id", " trace-1 "),
+            ("trace_id", "trace-2"),
+            ("trace_id", "trace-1"),
+        ],
+    )
+
+    assert listed.status_code == 200
+    assert fake_oracle.list_calls[-1]["trace_ids"] == ["trace-1", "trace-2"]
+    assert fake_oracle.count_calls[-1]["trace_ids"] == ["trace-1", "trace-2"]
+    blank = client.get("/api/search/answers", params=[("trace_id", "  ")])
+    too_many = client.get(
+        "/api/search/answers", params=[("trace_id", f"t-{index}") for index in range(101)]
+    )
+    assert blank.status_code == 422
+    assert too_many.status_code == 422
 
 
 def test_delete_saved_docrag_answer(fake_oracle: FakeAnswerOracle) -> None:
@@ -137,6 +190,38 @@ def test_evaluate_saved_answer_rejects_blank_legacy_and_missing(
     assert legacy.status_code == 409
     assert missing.status_code == 404
     assert client.get("/api/search/answers/legacy").json()["data"]["evaluation_available"] is False
+
+
+def test_evaluate_saved_answer_times_out_without_saving(
+    fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """評価が時間の上限を超えたら 504 と理由を返し、評価を保存しない（#304）。"""
+
+    def slow_evaluate(*_args: Any) -> Any:
+        time.sleep(0.5)
+        return {"status": "completed", "total_score": 18, "max_score": 20, "passed": True}
+
+    monkeypatch.setattr(search_route, "evaluate_answer_record", slow_evaluate)
+    monkeypatch.setattr(search_route, "ANSWER_EVALUATION_TIMEOUT_SECONDS", 0.05)
+
+    response = client.post(
+        "/api/search/answers/trace-1/evaluation", json={"standard_answer": "受注番号を入力する"}
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error_messages"] == [search_route.ANSWER_EVALUATION_TIMEOUT_MESSAGE]
+    time.sleep(0.6)  # worker thread の評価が終わっても保存しない。
+    assert fake_oracle.evaluations == {}
+
+
+def test_answer_evaluation_timeout_follows_llm_timeout_limit() -> None:
+    """評価全体の上限は LLM 1 回の timeout の設定の上限（画面・nginx はこれより長い）。"""
+    from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings
+
+    field = Settings.model_fields["oci_enterprise_ai_timeout_seconds"]
+    upper = [item.le for item in field.metadata if getattr(item, "le", None) is not None]
+    assert upper == [OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS]
+    assert search_route.ANSWER_EVALUATION_TIMEOUT_SECONDS == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
 
 
 @pytest.mark.usefixtures("oracle_db")

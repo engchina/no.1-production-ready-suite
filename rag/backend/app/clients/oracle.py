@@ -2205,6 +2205,8 @@ class OracleClient:
             "citations_json": _json_bind(record.get("citations") or []),
             "diagnostics_json": _json_bind(record.get("diagnostics") or {}),
             "evaluation_input_json": _json_bind(record.get("evaluation_input")),
+            # 持ち主（回答を生成した利用者）。一覧・詳細・評価・削除を持ち主へ絞る（#304）。
+            "user_id_hash": current_audit_request_context().user_id_hash,
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -2228,11 +2230,11 @@ class OracleClient:
                 WHEN NOT MATCHED THEN INSERT (
                     trace_id, business_view_id, surface, answer_engine, question,
                     rewritten_question, answer, citations_json, diagnostics_json,
-                    evaluation_input_json
+                    evaluation_input_json, user_id_hash
                 ) VALUES (
                     :trace_id, :business_view_id, :surface, :answer_engine, :question,
                     :rewritten_question, :answer, :citations_json, :diagnostics_json,
-                    :evaluation_input_json
+                    :evaluation_input_json, :user_id_hash
                 )
                 """,
                 binds,
@@ -2249,32 +2251,47 @@ class OracleClient:
         business_view_id: str | None,
         limit: int,
         offset: int = 0,
+        trace_ids: Sequence[str] | None = None,
     ) -> list[dict[str, object]]:
         """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。
 
         利用できる業務ビューが制限されているときは、その業務ビューの回答だけを返す（#214）。
+        持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件。#304）。
+        `trace_ids` を渡すとその回答だけにする（チャットが会話の回答を引き当てる）。
         """
-        clauses = _business_view_scope_predicates("business_view_id")
-        binds: dict[str, object] = _with_business_view_scope_bind(
-            {"limit": limit, "offset": offset}
+        where, binds = _answer_record_list_where(
+            business_view_id=business_view_id, trace_ids=trace_ids
         )
-        if business_view_id:
-            clauses.append("business_view_id = :business_view_id")
-            binds["business_view_id"] = business_view_id
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        binds.update({"limit": limit, "offset": offset})
         rows = await self._fetch_all(
             f"""
             SELECT trace_id, business_view_id, surface, answer_engine, question,
                    rewritten_question, created_at,
                    JSON_VALUE(diagnostics_json, '$.confidence') AS confidence
             FROM rag_answer_records
-            {where}
+            WHERE {where}
             ORDER BY created_at DESC, trace_id DESC
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """,
             binds,
         )
         return rows
+
+    async def count_answer_records(
+        self,
+        *,
+        business_view_id: str | None,
+        trace_ids: Sequence[str] | None = None,
+    ) -> int:
+        """`list_answer_records` と同じ条件の件数（ページングの総件数。#304）。"""
+        where, binds = _answer_record_list_where(
+            business_view_id=business_view_id, trace_ids=trace_ids
+        )
+        row = await self._fetch_one(
+            f"SELECT COUNT(*) AS count_value FROM rag_answer_records WHERE {where}",
+            binds,
+        )
+        return _row_count_value(row)
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
         """保存済み DocRAG 回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
@@ -2290,7 +2307,7 @@ class OracleClient:
             """,
                 scope_sql=_answer_record_scope_sql(),
             ),
-            _with_business_view_scope_bind({"trace_id": trace_id}),
+            _with_answer_record_scope_bind({"trace_id": trace_id}),
         )
         if row is None:
             return None
@@ -2433,7 +2450,7 @@ class OracleClient:
                     "WHERE trace_id = :trace_id AND {scope_sql}",
                     scope_sql=_answer_record_scope_sql(),
                 ),
-                _with_business_view_scope_bind({"trace_id": trace_id}),
+                _with_answer_record_scope_bind({"trace_id": trace_id}),
             ):
                 return False
             _execute(
@@ -2460,7 +2477,7 @@ class OracleClient:
                     "DELETE FROM rag_answer_records WHERE trace_id = :trace_id AND {scope_sql}",
                     scope_sql=_answer_record_scope_sql(),
                 ),
-                _with_business_view_scope_bind({"trace_id": trace_id}),
+                _with_answer_record_scope_bind({"trace_id": trace_id}),
             )
 
         return await self._run_transaction(operation) > 0
@@ -10760,9 +10777,61 @@ def _business_view_scope_predicates(column: str) -> list[str]:
     return [f"{column} IN ({placeholders})"]
 
 
+def _answer_record_owner_hash() -> str | None:
+    """保存済みの回答を絞る持ち主。None は持ち主で絞らない（#304）。
+
+    SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者（`answer_records_unrestricted`）は全件。
+    利用者のない context（認証を通らない内部処理・テスト）は会話と同じく絞らない。
+    持ち主のない行（#304 より前の回答で、持ち主を補えなかったもの）は、絞るときは見せない。
+    """
+    context = current_audit_request_context()
+    if context.answer_records_unrestricted:
+        return None
+    return context.user_id_hash
+
+
+def _answer_record_scope_predicates() -> list[str]:
+    """回答履歴を、利用できる業務ビュー（#214）と持ち主（#304）の回答へ絞る。"""
+    predicates = _business_view_scope_predicates("business_view_id")
+    if _answer_record_owner_hash() is not None:
+        predicates.append("user_id_hash = :answer_owner_user_id_hash")
+    return predicates
+
+
 def _answer_record_scope_sql() -> str:
-    """回答履歴を、利用できる業務ビューの回答へ絞る（業務ビューなしの回答は制限時に見せない）。"""
-    return " AND ".join(_business_view_scope_predicates("business_view_id") or ["1 = 1"])
+    """回答履歴を、利用できる業務ビューの回答へ絞る（業務ビューなしの回答は制限時に見せない）。
+
+    持ち主の回答だけにする（#304）。bind は `_with_answer_record_scope_bind` で足す。
+    """
+    return " AND ".join(_answer_record_scope_predicates() or ["1 = 1"])
+
+
+def _with_answer_record_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
+    """`_answer_record_scope_sql` の bind（業務ビューの範囲と持ち主）を足す。"""
+    resolved = _with_business_view_scope_bind(binds)
+    owner = _answer_record_owner_hash()
+    if owner is not None:
+        resolved["answer_owner_user_id_hash"] = owner
+    return resolved
+
+
+def _answer_record_list_where(
+    *, business_view_id: str | None, trace_ids: Sequence[str] | None
+) -> tuple[str, dict[str, object]]:
+    """回答履歴の一覧・件数の WHERE と bind（範囲・持ち主・業務ビュー・trace_id）。"""
+    clauses = [_answer_record_scope_sql()]
+    binds = _with_answer_record_scope_bind({})
+    if business_view_id:
+        clauses.append("business_view_id = :business_view_id")
+        binds["business_view_id"] = business_view_id
+    if trace_ids is not None:
+        if not trace_ids:
+            clauses.append("1 = 0")
+        else:
+            placeholders = ", ".join(f":trace_id_{index}" for index in range(len(trace_ids)))
+            clauses.append(f"trace_id IN ({placeholders})")
+            binds.update({f"trace_id_{index}": value for index, value in enumerate(trace_ids)})
+    return " AND ".join(clauses), binds
 
 
 def _with_business_view_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
@@ -11911,7 +11980,10 @@ CREATE TABLE {table_name} (
 def oracle_answer_record_schema_sql(
     table_name: str = "rag_answer_records",
 ) -> str:
-    """DocRAG 回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。"""
+    """DocRAG 回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。
+
+    `user_id_hash` は回答を生成した利用者（持ち主。#304）。一覧・詳細・評価・削除を持ち主へ絞る。
+    """
 
     return f"""
 CREATE TABLE {table_name} (
@@ -11926,12 +11998,16 @@ CREATE TABLE {table_name} (
     diagnostics_json    JSON NOT NULL,
     evaluation_input_json JSON,
     evaluation_json     JSON,
+    user_id_hash        CHAR(64),
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
 );
 
 CREATE INDEX {table_name}_view_idx
     ON {table_name} (business_view_id, created_at DESC);
+
+CREATE INDEX {table_name}_owner_idx
+    ON {table_name} (user_id_hash, business_view_id, created_at DESC);
 """.strip()
 
 

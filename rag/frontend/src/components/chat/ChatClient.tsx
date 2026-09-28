@@ -17,6 +17,7 @@ import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
+import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
@@ -30,14 +31,16 @@ import {
   useConversation,
   useConversations,
   useCreateConversation,
-  useDocragAnswers,
+  useSavedDocragTraceIds,
   useUpdateConversation,
 } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
+import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const COMPARE_MAX = 3;
+const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
 
 interface LiveColumn {
   model_id: string;
@@ -291,18 +294,11 @@ export function ChatClient() {
   useEffect(() => {
     if (businessViewMissing) setBusinessViewId(null);
   }, [businessViewMissing, setBusinessViewId]);
-  // 保存済み DocRAG 回答の trace_id(チャット分)。該当する回答だけ根拠と実行記録を開ける。
-  const docragAnswersQuery = useDocragAnswers(businessViewId);
-  const docragTraceIds = useMemo(
-    () =>
-      new Set(
-        (docragAnswersQuery.data ?? [])
-          .filter((answer) => answer.surface === "chat")
-          .map((answer) => answer.trace_id)
-      ),
-    [docragAnswersQuery.data]
-  );
-
+  // 参照 KB が 0 件の業務ビューではチャットしない（利用者の全 KB を検索しない。#304）。
+  // backend も送信時に 409 で理由を返すが、送信する前にこの場で理由を示す。
+  const canOpenBusinessViews = useAuth().hasPermission(MENU_PERMISSIONS.businessViews);
+  const selectedBusinessView = businessViews.find((view) => view.id === businessViewId);
+  const businessViewWithoutKnowledgeBases = selectedBusinessView?.knowledge_base_count === 0;
   const conversationsQuery = useConversations({
     business_view_id: businessViewId ?? undefined,
     limit: 50,
@@ -321,6 +317,17 @@ export function ChatClient() {
     () => conversationQuery.data?.messages ?? [],
     [conversationQuery.data]
   );
+  // 保存済み DocRAG 回答がある回答(trace_id)。該当する回答だけ根拠と実行記録を開ける。
+  // 回答履歴のページングに依存しないよう、開いている会話の回答の trace_id で引き当てる（#304）。
+  const replyTraceIds = useMemo(
+    () =>
+      persistedMessages
+        .filter((message) => message.role === "ASSISTANT" && message.trace_id)
+        .map((message) => message.trace_id as string),
+    [persistedMessages]
+  );
+  const savedDocragQuery = useSavedDocragTraceIds(businessViewId, replyTraceIds);
+  const docragTraceIds = savedDocragQuery.data ?? EMPTY_TRACE_IDS;
 
   const createConversation = useCreateConversation();
   const updateConversation = useUpdateConversation();
@@ -474,7 +481,7 @@ export function ChatClient() {
 
   async function send() {
     const content = composer.trim();
-    if (!content || !activeId || sending) return;
+    if (!content || !activeId || sending || businessViewWithoutKnowledgeBases) return;
     setSending(true);
     setErrorText("");
     setComposer("");
@@ -599,6 +606,29 @@ export function ChatClient() {
                   options={businessViewOptions}
                   onValueChange={(value) => setBusinessViewId(value || null)}
                 />
+                {businessViewWithoutKnowledgeBases && businessViewId ? (
+                  <Banner
+                    severity="warning"
+                    className="lg:col-span-2 2xl:col-span-3"
+                    action={
+                      canOpenBusinessViews ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() =>
+                            navigate(
+                              `${APP_ROUTES.businessViews}?id=${encodeURIComponent(businessViewId)}`
+                            )
+                          }
+                        >
+                          {t("chat.businessView.openSettings")}
+                        </Button>
+                      ) : undefined
+                    }
+                  >
+                    {t("chat.businessView.noKnowledgeBases")}
+                  </Banner>
+                ) : null}
               </div>
             )}
           </CardContent>
@@ -853,7 +883,11 @@ export function ChatClient() {
                     type="button"
                     className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
                     onClick={() => void send()}
-                    disabled={!activeId || composer.trim().length === 0}
+                    disabled={
+                      !activeId ||
+                      composer.trim().length === 0 ||
+                      businessViewWithoutKnowledgeBases
+                    }
                     aria-label={t("chat.composer.send")} icon={SendHorizontal}>
                     {t("chat.composer.send")}
                   </Button>
