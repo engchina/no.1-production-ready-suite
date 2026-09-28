@@ -97,7 +97,6 @@ RAG_BASE_COMPOSE_SERVICES = [
 ]
 RAG_OPTIONAL_COMPOSE_SERVICES = [
     "parser-docling",
-    "parser-marker",
     "parser-oci-genai-vision",
     "parser-oci-document-understanding",
 ]
@@ -743,7 +742,6 @@ def _verify_rag_compose_services(locals_source: str) -> None:
         services_local,
         [
             'var.rag_enable_parser_docling ? ["parser-docling"] : []',
-            'var.rag_enable_parser_marker ? ["parser-marker"] : []',
             "var.rag_enable_oci_cloud_parsers ? [",
         ],
         context="RAG optional compose services",

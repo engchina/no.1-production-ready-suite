@@ -20,6 +20,7 @@ import { ApiError } from "@/lib/api";
 import { confidenceVariant } from "@/lib/docrag-answer";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { toast } from "@/lib/toast";
 import {
   useAnswerRecordSettings,
   useDeleteDocragAnswer,
@@ -112,6 +113,8 @@ export function DocragAnswerHistory({
         ) : null}
         {selected ? (
           <SavedDocragAnswer
+            // 回答ごとに作り直し、前に開いた回答の削除エラーなどを持ち越さない（#285）。
+            key={selected}
             traceId={selected}
             businessViewId={businessViewId}
             onDeleted={() => setSelected(null)}
@@ -146,7 +149,12 @@ export function SavedDocragAnswer({
       tone: "danger",
     });
     if (!confirmed) return;
-    remove.mutate(traceId, { onSuccess: () => onDeleted?.() });
+    remove.mutate(traceId, {
+      onSuccess: () => {
+        toast.success(t("search.history.deleted"));
+        onDeleted?.();
+      },
+    });
   }
 
   if (detail.isPending) return <Skeleton className="h-24 w-full" />;

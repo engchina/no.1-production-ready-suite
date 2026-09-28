@@ -230,7 +230,7 @@ for (const viewport of [
       page.getByRole("heading", { name: "解析 (Parser)(GPU)", exact: true })
     ).toBeVisible();
     await expect(page.getByText("ASR(音声文字起こし)", { exact: true })).toBeVisible();
-    for (const removed of ["Unlimited-OCR", "MinerU", "Dots.OCR", "GLM-OCR"]) {
+    for (const removed of ["Marker", "Unlimited-OCR", "MinerU", "Dots.OCR", "GLM-OCR"]) {
       await expect(page.getByText(removed, { exact: true })).toHaveCount(0);
     }
     // OCI クラウド parser は第 3 グループ「解析 (Parser)(OCI)」として表示。

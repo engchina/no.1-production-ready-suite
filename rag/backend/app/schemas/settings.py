@@ -97,14 +97,11 @@ from app.config import (
 
 ParserAdapterBackendName = Literal[
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
 ]
-ExternalParserBackendName = Literal["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"]
+ExternalParserBackendName = Literal["mineru", "dots_ocr"]
 ExternalParserProtocol = Literal["mineru_file_parse", "openai_chat_completions"]
 ExternalParserConnectionStatus = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
@@ -112,12 +109,9 @@ ExternalParserConnectionStatus = Literal[
 ParserAdapterScoreBackendName = Literal[
     "local",
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 ParserAdapterContractStatus = Literal[
@@ -485,13 +479,10 @@ class ParserAdapterSettingsUpdate(BaseModel):
     adapter_backend: ParserAdapterBackend
     docling_enabled: bool | None = None
     docling_vision_enabled: bool | None = None
-    marker_enabled: bool | None = None
     unstructured_enabled: bool | None = None
-    unlimited_ocr_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
-    glm_ocr_enabled: bool | None = None
-    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=4)
+    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
 
     @field_validator("adapter_backend", mode="before")
     @classmethod

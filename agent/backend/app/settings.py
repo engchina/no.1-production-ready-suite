@@ -64,7 +64,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_region: str = ""
     object_storage_region: str = ""
     object_storage_namespace: str = ""
-    object_storage_bucket: str = ""
+    object_storage_bucket: str = "production-ready"
     upload_storage_backend: str = "local"
     local_storage_dir: str = "/u01/data/production-ready-agent"
     max_upload_bytes: int = 100 * 1024 * 1024

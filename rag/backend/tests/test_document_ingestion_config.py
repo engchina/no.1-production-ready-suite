@@ -158,12 +158,9 @@ def test_ingestion_config_reports_no_drift_when_matching(
     ("backend", "profile"),
     [
         ("docling", "docling_adapter"),
-        ("marker", "marker_adapter"),
         ("unstructured", "unstructured_adapter"),
-        ("unlimited_ocr", "unlimited_ocr_adapter"),
         ("mineru", "mineru_adapter"),
         ("dots_ocr", "dots_ocr_adapter"),
-        ("glm_ocr", "glm_ocr_adapter"),
     ],
 )
 def test_ingestion_config_treats_external_adapter_profiles_as_matching(
@@ -224,6 +221,59 @@ def test_ingestion_config_detects_parser_drift(
     assert data["chunking_drift"] is False
     assert data["parser_drift"] is True
     assert data["config_drift"] is True
+
+
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+def test_saved_recipe_with_removed_engine_inherits_global_default(removed: str) -> None:
+    """削除したエンジン(#270)が文書レシピに保存されていても読み込めて、global 既定を継承する。
+
+    文書レシピは extra="forbid" だが、旧フラグは検証前に取り除く。分割などの他の上書きは保つ。
+    """
+    config = DocumentProcessingConfig.model_validate(
+        {
+            "parser_adapter_backend": removed,
+            f"parser_{removed}_enabled": True,
+            "chunk_size": 900,
+        }
+    )
+
+    assert config.parser_adapter_backend is None
+    assert config.chunk_size == 900
+    assert removed not in config.model_dump_json()
+    effective, _ = documents_route._merge_document_processing_config(config)
+    assert effective.rag_parser_adapter_backend == get_settings().rag_parser_adapter_backend
+
+
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+def test_legacy_experiment_job_with_removed_engine_uses_default_engine(removed: str) -> None:
+    """processing_config を持たない旧実験ジョブの snapshot も既定エンジンへ寄せる(#270)。"""
+    candidate = documents_route._experiment_candidate_settings(
+        get_settings(),
+        {"rag_parser_adapter_backend": removed, "rag_preprocess_profile": "passthrough"},
+    )
+
+    assert candidate.rag_parser_adapter_backend == "unstructured"
+
+
+@pytest.mark.parametrize("profile", ["marker_adapter", "unlimited_ocr_adapter", "glm_ocr_adapter"])
+def test_documents_parsed_by_removed_engine_report_parser_drift(
+    fake_oracle: FakeIngestionConfigOracle,
+    set_global_recipe: Callable[..., None],
+    profile: str,
+) -> None:
+    """削除したエンジンで作った既存の索引は残し、再処理が必要なこと(parser drift)を示す。"""
+    set_global_recipe(parser="unstructured")
+    fake_oracle.add_document(
+        "doc-1",
+        status=FileStatus.INDEXED,
+        chunk_strategy="structure_aware",
+        source_parser=profile,
+    )
+
+    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+
+    assert data["observed_parser_backend"] == profile
+    assert data["parser_drift"] is True
 
 
 def test_ingestion_config_no_drift_when_not_indexed(

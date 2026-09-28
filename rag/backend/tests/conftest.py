@@ -143,12 +143,9 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_vlm_input_mode = "files_api"
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
-    settings.rag_parser_marker_enabled = False
     settings.rag_parser_unstructured_enabled = True
-    settings.rag_parser_unlimited_ocr_enabled = False
     settings.rag_parser_mineru_enabled = False
     settings.rag_parser_dots_ocr_enabled = False
-    settings.rag_parser_glm_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"

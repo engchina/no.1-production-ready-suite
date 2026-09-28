@@ -55,8 +55,9 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     assert {"preprocess", "parser", "chunking"} <= categories
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
     assert gpu_ids == {"parser-asr"}
-    # GPU OCR は外部接続へ移行し、ローカル管理対象には残さない。
+    # GPU OCR は外部接続へ移行し、ローカル管理対象には残さない。Marker は削除した(#270)。
     for service_id in (
+        "parser-marker",
         "parser-unlimited-ocr",
         "parser-mineru",
         "parser-dots-ocr",
@@ -103,7 +104,7 @@ def test_catalog_deployable_marks_future_service_stages() -> None:
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
     """ローカルでモデル DL を行う parser だけ model_cache_path を持つ。"""
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    appuser_cache = {"parser-marker", "parser-docling", "parser-asr"}
+    appuser_cache = {"parser-docling", "parser-asr"}
     for service_id in appuser_cache:
         assert by_id[service_id].model_cache_path == "/home/appuser/.cache"
     # それ以外(OCI proxy / pipeline / preprocess / unstructured)はモデル DL なし。
@@ -214,7 +215,7 @@ def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
     text = compose.read_text(encoding="utf-8")
     cache_entries = [entry for entry in SERVICE_CATALOG if entry.model_cache_path]
 
-    assert len(cache_entries) == 3
+    assert len(cache_entries) == 2
     for entry in cache_entries:
         volume_name = service_model_cache_volume_name(entry)
         assert volume_name is not None
@@ -227,7 +228,7 @@ def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
 
 def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    appuser_services = ("docling", "marker", "asr")
+    appuser_services = ("docling", "asr")
 
     for service in appuser_services:
         text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
@@ -238,7 +239,7 @@ def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
         user_lines = [line for line in text.splitlines() if line.startswith("USER ")]
         assert user_lines[-1] == "USER appuser"
 
-    for service in ("unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"):
+    for service in ("marker", "unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"):
         assert not (repo_root / "services" / "parsers" / service).exists()
 
 
@@ -320,10 +321,10 @@ def test_probe_normalizes_statuses(monkeypatch: MonkeyPatch) -> None:
     _patch_probe_httpx(monkeypatch)
 
     docling = service_health_url(settings, get_catalog_entry("parser-docling"))  # type: ignore[arg-type]
-    marker = service_health_url(settings, get_catalog_entry("parser-marker"))  # type: ignore[arg-type]
+    asr = service_health_url(settings, get_catalog_entry("parser-asr"))  # type: ignore[arg-type]
     _FakeAsyncClient.routes = {
         docling: _FakeResponse({"status": "ok"}),
-        marker: _FakeResponse({"status": "degraded"}),
+        asr: _FakeResponse({"status": "degraded"}),
     }
     _FakeAsyncClient.raise_on_connect = {
         service_health_url(settings, get_catalog_entry("parser-unstructured"))  # type: ignore[arg-type]
@@ -335,7 +336,7 @@ def test_probe_normalizes_statuses(monkeypatch: MonkeyPatch) -> None:
         _FakeAsyncClient.raise_on_connect = set()
 
     assert statuses["parser-docling"] == "running"
-    assert statuses["parser-marker"] == "degraded"
+    assert statuses["parser-asr"] == "degraded"
     assert statuses["parser-unstructured"] == "stopped"
 
 
@@ -905,7 +906,7 @@ def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(ServiceControlClient, "control", fake_control)
-    resp = client.post("/api/services/parser-marker/stop")
+    resp = client.post("/api/services/parser-docling/stop")
     assert resp.status_code == 502
 
 

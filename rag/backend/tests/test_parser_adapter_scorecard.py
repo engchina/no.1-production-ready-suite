@@ -172,17 +172,17 @@ def test_scorecard_applies_metrics_to_selected_active_adapter(
 ) -> None:
     """明示選択された active adapter へ staging 指標を帰属させる。"""
     settings = Settings(
-        rag_parser_adapter_backend="marker",
+        rag_parser_adapter_backend="unstructured",
         rag_parser_docling_enabled=False,
-        rag_parser_marker_enabled=True,
+        rag_parser_unstructured_enabled=True,
     )
 
     def package_info(
         import_name: str,
         _distribution_names: Sequence[str],
     ) -> tuple[bool, str | None, str | None]:
-        if import_name == "marker":
-            return True, "5.0.0", "marker-pdf"
+        if import_name == "unstructured":
+            return True, "0.27.8", "unstructured"
         return False, None, None
 
     monkeypatch.setattr(parser_adapter_readiness, "_package_info", package_info)
@@ -204,9 +204,9 @@ def test_scorecard_applies_metrics_to_selected_active_adapter(
         metrics_source="file_processing_staging",
     )
 
-    assert scorecard.metrics_applied_to == "marker"
-    assert scorecard.recommended_backend == "marker"
-    assert _entry(scorecard, "marker").signals == {
+    assert scorecard.metrics_applied_to == "unstructured"
+    assert scorecard.recommended_backend == "unstructured"
+    assert _entry(scorecard, "unstructured").signals == {
         "element_lineage_coverage": 1.0,
         "page_hit_accuracy": 1.0,
         "backend_source_kind_coverage": 1.0,
@@ -227,7 +227,6 @@ def test_source_routes_follow_selected_adapter_support(
     settings = Settings(
         rag_parser_adapter_backend="unstructured",
         rag_parser_docling_enabled=True,
-        rag_parser_marker_enabled=True,
         rag_parser_unstructured_enabled=True,
     )
 
@@ -244,25 +243,10 @@ def test_source_routes_follow_selected_adapter_support(
     )
     by_kind = {route.source_kind: route for route in routes}
 
-    assert by_kind["pdf"].candidate_order == (
-        "docling",
-        "marker",
-        "unstructured",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    )
+    assert by_kind["pdf"].candidate_order == ("docling", "unstructured", "mineru")
     assert by_kind["pdf"].attempted_order == ("unstructured",)
     assert by_kind["pdf"].selected_backend == "unstructured"
-    assert by_kind["image"].candidate_order == (
-        "unstructured",
-        "marker",
-        "docling",
-        "dots_ocr",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    )
+    assert by_kind["image"].candidate_order == ("unstructured", "docling", "dots_ocr", "mineru")
     assert by_kind["image"].attempted_order == ("unstructured",)
     assert by_kind["image"].selected_backend == "unstructured"
     assert by_kind["office"].candidate_order == ("docling", "unstructured", "mineru")
@@ -290,13 +274,14 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
 ) -> None:
     """明示 adapter が source を扱えない場合も routing evidence に警告を出す。"""
     settings = Settings(
-        rag_parser_adapter_backend="marker",
-        rag_parser_marker_enabled=True,
+        rag_parser_adapter_backend="mineru",
+        rag_parser_mineru_enabled=True,
+        rag_parser_mineru_api_host="http://mineru.example.com",
     )
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
-        lambda import_name, _distribution_names: (import_name == "marker", "1.0.0", import_name),
+        lambda *_args: (False, None, None),
     )
 
     runtime = parser_adapter_runtime_settings(settings)
@@ -307,7 +292,7 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
     assert route.attempted_order == ()
     assert route.selected_backend == "local"
     assert "selected_adapter_unsupported_for_source" in route.reason_codes
-    assert "marker_adapter_source_unsupported" in route.warning_codes
+    assert "mineru_adapter_source_unsupported" in route.warning_codes
 
 
 def _docling_installed(

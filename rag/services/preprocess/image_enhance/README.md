@@ -2,7 +2,7 @@
 
 スキャン画像・写真を **OCR しやすい形へ補正**する前処理マイクロサービス。グレースケール化 →
 ノイズ除去 → CLAHE コントラスト均一化 → 軽い傾き補正(deskew)を決定論で行い、PNG(可逆)で
-返す。後段の OCR parser(mineru / dots_ocr / glm_ocr / Enterprise AI VLM)の精度を前段で
+返す。後段の OCR parser(mineru / dots_ocr / Enterprise AI VLM)の精度を前段で
 底上げする。**ローカル OSS(OpenCV)のみ**で完結し外部 SaaS は呼ばない(確定スタック非抵触)。
 
 | 項目 | 値 |

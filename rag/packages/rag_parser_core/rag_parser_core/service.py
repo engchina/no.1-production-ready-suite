@@ -1,6 +1,6 @@
 """parser マイクロサービス共通の FastAPI app factory。
 
-各 parser サービス(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)は本 factory を
+各 parser サービス(docling/unstructured/mineru/dots_ocr)は本 factory を
 使って同一の HTTP 契約(`POST /parse` / `GET /health`)を公開する。fastapi は
 optional extra `service` でのみ要求し、core の依存(pydantic + charset-normalizer)は
 軽量に保つ。
@@ -86,7 +86,7 @@ def create_parse_app(
 ) -> FastAPI:
     """1 parser サービス用の FastAPI app を生成する。
 
-    backend: adapter 名(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)。
+    backend: adapter 名(docling/unstructured/mineru/dots_ocr)。
     import_name / distribution_names: readiness 表示の version 検出に使う。
     runtime_health: package 導入以外に必要な外部 runtime(vLLM 等)の疎通確認。
     """

@@ -36,13 +36,14 @@ BACKEND_URL=http://localhost:8000 npm run dev   # http://localhost:3000（BACKEN
 
 # まとめて（Docker。CPU parser サービス込み）
 docker compose up --build
-# GPU parser(mineru/dots_ocr/glm_ocr)も起動する場合(CUDA host)
+# ローカル GPU parser(ASR)も起動する場合(CUDA host)
 docker compose --profile gpu up --build
 ```
 
-外部 parser(docling / marker / unstructured / mineru / dots_ocr / glm_ocr)は **独立した FastAPI
-マイクロサービス**(`services/parsers/<name>`)で動き、backend は取込時に HTTP 委譲する。
-各 parser は独自依存で個別に upgrade でき、mineru / dots_ocr / glm_ocr は GPU(CUDA)で実 OCR を行う。
+CPU の parser(docling / unstructured)は **独立した FastAPI マイクロサービス**(`services/parsers/<name>`)で
+動き、backend は取込時に HTTP 委譲する。各 parser は独自依存で個別に upgrade できる。
+GPU の OCR(mineru / dots_ocr)は外部で運用する API を「検索・回答設定 › 文書解析」で指定する。
+Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
 

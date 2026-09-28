@@ -1585,6 +1585,48 @@ async def test_oracle_graph_global_search_returns_community_summary_chunk() -> N
     assert call.parameters["graph_title_exact"] == "%全体の関係%"
 
 
+async def test_oracle_graph_global_search_requires_current_kb_membership() -> None:
+    """community summary の KB は取込時のスナップショットなので、今も所属する文書だけに絞る(#274)。
+
+    KB から外した文書の summary が、その KB の検索・KB 権限の利用者に返らないこと。
+    """
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.graph_global_search("全体の関係", top_k=3, filters={"knowledge_base_id": "kb-1"})
+
+    statement = " ".join(pool.connection.calls[0].statement.split())
+    assert "g.knowledge_base_id IN (:filter_knowledge_base_id_0)" in statement
+    assert (
+        "(g.knowledge_base_id IS NULL OR EXISTS (SELECT 1 FROM rag_document_knowledge_bases "
+        "member_dkb WHERE member_dkb.knowledge_base_id = g.knowledge_base_id "
+        "AND JSON_EXISTS(g.source_document_ids, '$[*]?(@ == $member_document_id)' "
+        'PASSING member_dkb.document_id AS "member_document_id")))'
+    ) in statement
+
+
+async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -> None:
+    """KB のグラフ表示も、KB から外した文書の entity / relationship を出さない(#274)。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [{"entity_id": "ent-1", "canonical_name": "承認条件", "confidence": 0.9}],
+            [],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    nodes, edges = await client.fetch_knowledge_base_subgraph("kb-1", limit=10)
+
+    assert [node["id"] for node in nodes] == ["ent-1"]
+    assert edges == []
+    node_sql, edge_sql = (" ".join(call.statement.split()) for call in pool.connection.calls[:2])
+    assert "{membership_sql}" not in node_sql
+    assert "member_dkb.knowledge_base_id = e.knowledge_base_id" in node_sql
+    assert "JSON_EXISTS(e.source_document_ids," in node_sql
+    assert "member_dkb.knowledge_base_id = r.knowledge_base_id" in edge_sql
+    assert "JSON_EXISTS(r.source_document_ids," in edge_sql
+
+
 async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitted() -> None:
     """後段 status 更新では大きい抽出 JSON を再 bind せず、既存 payload を保持する。"""
     pool = FakeOraclePool()

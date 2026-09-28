@@ -50,7 +50,7 @@ on:
         default: true
         type: boolean
       install_parser_adapters:
-        description: "Docling / Marker / Unstructured optional dependencies を同期します。"
+        description: "Docling / Unstructured optional dependencies を同期します。"
         required: false
         default: false
         type: boolean
@@ -113,8 +113,7 @@ jobs:
              [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ] || \
              [ "$strict_adapter_contract_required" = "true" ]; then
             # 外部 parser は services/parsers/<name> の独立サービスへ切り出した。in-process smoke
-            # では共存可能な docling + unstructured のみ導入する(marker は pillow<11 で unstructured と
-            # 共存不可のため、marker の schema-remap 検証は各サービス側で行う)。
+            # では docling + unstructured を導入する。
             uv sync --locked --dev --extra docling --extra unstructured
           else
             uv sync --locked --dev

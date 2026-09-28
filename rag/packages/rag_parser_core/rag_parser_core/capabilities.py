@@ -97,13 +97,6 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
         ),
         content_type_prefixes=frozenset({"image/"}),
     ),
-    "marker": ParserBackendCapability(
-        modalities=frozenset({SourceModality.PDF, SourceModality.IMAGE}),
-        # 従来 if-chain のまま .bmp は含めない
-        extensions=frozenset({".pdf", ".png", ".jpg", ".jpeg", ".webp"}),
-        content_types=frozenset({"application/pdf"}),
-        content_type_prefixes=frozenset({"image/"}),
-    ),
     "unstructured": ParserBackendCapability(
         # 汎用 partition。UNKNOWN も受ける(従来挙動)。判定は modality だけで決まるため、
         # extensions は UI の拡張子表示用の代表列挙(unstructured[all-docs] の対応形式)。
@@ -146,8 +139,6 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
     ),
     # 外部 API は画像入力。backend が PDF をページ画像へ変換して順序を維持する。
     "dots_ocr": _PDF_AND_IMAGE,
-    "glm_ocr": _PDF_AND_IMAGE,
-    "unlimited_ocr": _PDF_AND_IMAGE,
     "oci_genai_vision": _PDF_AND_IMAGE,
     "enterprise_ai_vlm": _PDF_AND_IMAGE,  # oci_genai_vision の後方互換エイリアス
     "oci_document_understanding": _PDF_AND_IMAGE,

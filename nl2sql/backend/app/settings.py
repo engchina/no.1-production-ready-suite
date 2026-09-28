@@ -97,7 +97,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     local_storage_dir: str = "/u01/data/production-ready-nl2sql"
     object_storage_region: str = ""
     object_storage_namespace: str = ""
-    object_storage_bucket: str = "nl2sql-originals"
+    object_storage_bucket: str = "production-ready"
     max_upload_bytes: int = 200 * 1024 * 1024
     # NL2SQL 安全境界（既定: SELECT のみ許可）。DDL/DML/PLSQL は禁止する方針。
     nl2sql_allow_select_only: bool = True

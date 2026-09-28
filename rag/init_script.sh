@@ -60,7 +60,6 @@ ALLOWED_COMPOSE_SERVICES=(
   preprocess-pii-redact
   parser-unstructured
   parser-docling
-  parser-marker
   parser-oci-genai-vision
   parser-oci-document-understanding
 )

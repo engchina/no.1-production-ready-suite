@@ -25,18 +25,15 @@ from app.rag.parser_adapter_routing import (
     normalize_source_kind,
 )
 
-# source routing には GPU adapter(mineru/dots_ocr/glm_ocr)も流れるため、型ドメインは全 backend を
+# source routing には GPU adapter(mineru/dots_ocr)も流れるため、型ドメインは全 backend を
 # 含める(schema の ParserAdapterScoreBackendName と一致)。採点対象集合は ADAPTER_SCORE_BACKENDS で
 # 別途 CPU/local に限定する。
 ParserAdapterScoreBackend = Literal[
     "local",
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
 ]
 ParserAdapterScoreStatus = Literal[
     "recommended",
@@ -136,7 +133,6 @@ METRIC_SPECS: Mapping[str, ParserAdapterMetricSpec] = {
 ADAPTER_SCORE_BACKENDS: tuple[ParserAdapterScoreBackend, ...] = (
     "local",
     "docling",
-    "marker",
     "unstructured",
 )
 LATENCY_FULL_CREDIT_MS = 5_000.0
@@ -470,8 +466,6 @@ def _infer_metrics_backend(
 ) -> ParserAdapterScoreBackend:
     if runtime.adapter_backend == "docling":
         return "docling"
-    if runtime.adapter_backend == "marker":
-        return "marker"
     if runtime.adapter_backend == "unstructured":
         return "unstructured"
     return "local"

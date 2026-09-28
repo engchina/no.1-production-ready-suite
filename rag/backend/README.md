@@ -16,12 +16,13 @@ Dockerfile の production entrypoint は Gunicorn + `uvicorn.workers.UvicornWork
 `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、`PORT` で worker 数と timeout を調整できます。
 local 開発だけ `uvicorn --reload` を使います。
 
-外部 parser(Docling / Marker / Unstructured / MinerU / Dots.OCR / GLM-OCR)は **backend には載せず**、
+外部 parser(Docling / Unstructured / MinerU / Dots.OCR)は **backend には載せず**、
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
 `app.clients.parser_service` で HTTP 委譲し、未達時は local / Enterprise AI VLM へ fallback します。
-重い parser 依存は runtime / 既定 `uv sync` に入りません。marker(pillow<11)と unstructured(pillow>=11.1)は
-**同一環境で共存不可**のため combined extra は提供せず、必要時のみ単一 adapter を per-adapter extra
+重い parser 依存は runtime / 既定 `uv sync` に入りません。必要時のみ単一 adapter を per-adapter extra
 (`uv sync --extra docling` 等、ローカルデバッグ用)で導入できます。
+Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保存済みの設定・文書レシピ・KB 構築設定に
+これらのエンジンが残っていても、読み込み時に既定の解析エンジン(レシピと KB は global 既定の継承)として扱います。
 > 依存(`rag-parser-core` path 依存)を追加・変更したら **`uv lock` の再生成**が必要です
 > (Docker build context はリポジトリ root)。
 
@@ -67,7 +68,7 @@ Backend は常に以下の OCI / Oracle 実装を使います。local / oci の�
 
 設定は、3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース。`PLATFORM_*`）を共通 `.env`（リポジトリの `platform/.env`、場所は `PLATFORM_ENV_FILE` で上書き可）、RAG 固有の設定（`RAG_*`）を `backend/.env` に置きます。環境変数 → 共通 `.env` → `backend/.env` の順に読み、旧名（接頭辞のない名前や `HF_TOKEN` / `HF_ENDPOINT`）は読みません（#211。既存環境の移行は [docs/deployment.md](../docs/deployment.md) の「既存環境の更新手順（#211）」）。システム設定画面（OCI 認証・アップロード保存先・データベース）は共通 `.env` に、RAG 固有の設定画面は `backend/.env` に保存します。
 
-モデル設定画面で保存した Enterprise AI / Generative AI 設定は `PLATFORM_MODEL_SETTINGS_FILE` の JSON を正本として永続化します。既定は `model-settings.json` で、相対パスは共通 `.env` と同じディレクトリ（`platform/`）を基準に解決され、3製品で共有します（他製品の節は保存時に残します）。`.env` は初期値・bootstrap 用で、保存済み JSON が存在する場合は JSON が優先されます。Enterprise AI API key は JSON には書かず、共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` に保存します（3製品共通の `pr_system_settings.model`。#103）。文書解析の外部 parser の API key（`RAG_PARSER_UNLIMITED_OCR_API_KEY` / `RAG_PARSER_MINERU_API_KEY` / `RAG_PARSER_DOTS_OCR_API_KEY` / `RAG_PARSER_GLM_OCR_API_KEY`）は RAG 固有のため `backend/.env` に保存します（#106 / #211）。旧形式の JSON に残っている key は、次にモデル設定または文書解析の設定を保存したときに `.env` へ移します。画面で保存した key は、プロセスの環境変数より優先されます（画面で削除すると環境変数の値に戻ります）。環境変数から来ただけの key は `.env` に書きません。backend は親ディレクトリを `0700`、ファイルを `0600` に補正して保存します。
+モデル設定画面で保存した Enterprise AI / Generative AI 設定は `PLATFORM_MODEL_SETTINGS_FILE` の JSON を正本として永続化します。既定は `model-settings.json` で、相対パスは共通 `.env` と同じディレクトリ（`platform/`）を基準に解決され、3製品で共有します（他製品の節は保存時に残します）。`.env` は初期値・bootstrap 用で、保存済み JSON が存在する場合は JSON が優先されます。Enterprise AI API key は JSON には書かず、共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` に保存します（3製品共通の `pr_system_settings.model`。#103）。文書解析の外部 parser の API key（`RAG_PARSER_MINERU_API_KEY` / `RAG_PARSER_DOTS_OCR_API_KEY`）は RAG 固有のため `backend/.env` に保存します（#106 / #211）。旧形式の JSON に残っている key は、次にモデル設定または文書解析の設定を保存したときに `.env` へ移します。画面で保存した key は、プロセスの環境変数より優先されます（画面で削除すると環境変数の値に戻ります）。環境変数から来ただけの key は `.env` に書きません。backend は親ディレクトリを `0700`、ファイルを `0600` に補正して保存します。
 
 `OciEnterpriseAiClient` は Enterprise AI の実 endpoint / model deployment / gateway が返す JSON envelope の揺れを吸収します。VLM は `structured_extraction`、`extraction`、`prediction(s)`、`output(s)`、JSON 文字列などから `StructuredExtraction` を取り出して Pydantic で検証します。`StructuredExtraction` は `raw_text` と `elements` を持ち、ページ、読み順、見出し、本文、リスト、表、図、header/footer などを同じ JSON で表せます。LLM は `answer`、`text`、`output_text`、`generated_text`、`choices[].message.content`、`inference_response` などから回答 text を取り出します。独自 gateway がさらに深い envelope を返す場合は `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` に JSON Pointer 形式(`/payload/results/0/text` など)を設定して候補 node を明示できます。いずれも OCI Generative AI chat API には接続しません。
 

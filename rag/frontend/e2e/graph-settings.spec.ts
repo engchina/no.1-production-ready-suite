@@ -53,6 +53,35 @@ test("関係情報の構築設定は full を選んで保存できる", async ({
   await expectNoHorizontalOverflow(page);
 });
 
+test("関係情報の構築設定の保存に失敗しても未保存の選択を残す (#274)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.route("**/api/settings/graph", async (route) => {
+    if (route.request().method() === "PATCH") {
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["関係情報設定を backend/.env へ保存できませんでした。"],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: graphEnvelope("off") });
+  });
+
+  await page.goto("/settings/graph");
+
+  const full = page.getByRole("radio", { name: /フル/ });
+  await full.click();
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByText("関係情報設定を backend/.env へ保存できませんでした。")).toBeVisible();
+  await expect(full).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+});
+
 test("関係情報の構築設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/graph", async (route) => {

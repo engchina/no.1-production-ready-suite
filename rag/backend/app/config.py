@@ -48,12 +48,9 @@ ParserAdapterBackend = Literal[
     # サービスへマップし、in-process 解析は実行しない。
     "local",
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
     # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
     # サービスを backend から直接呼ぶ）。oci_genai_vision は OCI Generative AI(Chat/Responses
     # + Files API)の Vision モデルで文書ページを解析する明示選択（旧称 enterprise_ai_vlm は
@@ -63,6 +60,29 @@ ParserAdapterBackend = Literal[
     "enterprise_ai_vlm",
     "oci_document_understanding",
 ]
+# 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR)。
+# 保存済みの設定(model-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に残っていても
+# 取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
+# 旧値は再保存時に消えるため、既存データを書き換える migration は持たない。
+REMOVED_PARSER_ADAPTER_BACKENDS = frozenset({"marker", "unlimited_ocr", "glm_ocr"})
+DEFAULT_PARSER_ADAPTER_BACKEND: Literal["unstructured"] = "unstructured"
+
+
+def normalize_parser_adapter_backend_value(value: object) -> object:
+    """旧値・削除済みエンジンを既定エンジンへ正規化する(未知値はそのまま検証へ回す)。
+
+    - ``auto``(旧既定)と削除済みエンジン → 既定 ``unstructured``。
+    - ``local_partition``(結果タグ別名)→ baseline 値 ``local``。
+    - ``local`` は正規化しない(advanced diagnostics が常時利用可能な baseline として扱う)。
+    """
+    normalized = str(value).strip().casefold()
+    if normalized == "auto" or normalized in REMOVED_PARSER_ADAPTER_BACKENDS:
+        return DEFAULT_PARSER_ADAPTER_BACKEND
+    if normalized == "local_partition":
+        return "local"
+    return value
+
+
 PreprocessProfile = Literal[
     "passthrough",
     "office_to_pdf",
@@ -235,23 +255,21 @@ class _PersistedParserAdapterSettings(BaseModel):
     adapter_backend: ParserAdapterBackend = "unstructured"
     docling_enabled: bool = False
     docling_vision_enabled: bool = False
-    marker_enabled: bool = False
     unstructured_enabled: bool = True
-    unlimited_ocr_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
-    glm_ocr_enabled: bool = False
-    unlimited_ocr_api_host: str = Field(default="", max_length=2048)
-    unlimited_ocr_model: str = Field(default="/models/Unlimited-OCR", max_length=512)
-    unlimited_ocr_api_key: str = Field(default="", max_length=4096)
     mineru_api_host: str = Field(default="", max_length=2048)
     mineru_api_key: str = Field(default="", max_length=4096)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
     dots_ocr_api_key: str = Field(default="", max_length=4096)
-    glm_ocr_api_host: str = Field(default="", max_length=2048)
-    glm_ocr_model: str = Field(default="ggml-org/GLM-OCR-GGUF:f16", max_length=512)
-    glm_ocr_api_key: str = Field(default="", max_length=4096)
+
+    # 削除済みエンジンの項目(marker_enabled 等)は既定の extra=ignore で読み捨て、
+    # adapter_backend に残っていれば既定エンジンへ寄せる(#270)。
+    @field_validator("adapter_backend", mode="before")
+    @classmethod
+    def normalize_adapter_backend(cls, value: object) -> object:
+        return normalize_parser_adapter_backend_value(value)
 
 
 class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
@@ -426,7 +444,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # --- OCI Object Storage ---
     object_storage_region: str = Field(default="")
     object_storage_namespace: str = Field(default="")
-    object_storage_bucket: str = Field(default="")
+    object_storage_bucket: str = Field(default="production-ready")
     upload_storage_backend: UploadStorageBackend = Field(
         default="local",
         description=(
@@ -1180,7 +1198,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="unstructured",
         description=(
             "文書解析 backend の明示選択。既定は Unstructured(simple 形式の catch-all)。"
-            "Docling/Marker/各 OCR/OCI Vision/Document Understanding は対応 parser "
+            "Docling/各 OCR/OCI Vision/Document Understanding は対応 parser "
             "マイクロサービスへ HTTP 委譲する。in-process 解析・local fallback は持たない。"
         ),
     )
@@ -1197,20 +1215,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "画像 1 枚ごとに LLM 呼び出しと時間を消費する。"
         ),
     )
-    rag_parser_marker_enabled: bool = Field(
-        default=False,
-        description="Marker adapter を feature flag で有効化する。未導入時は安全に fallback する。",
-    )
     rag_parser_unstructured_enabled: bool = Field(
         default=True,
         description=(
             "Unstructured adapter を有効化する。既定 backend(simple 形式の catch-all)のため "
             "既定で True。取込時は parser-unstructured マイクロサービスの常時起動が前提。"
         ),
-    )
-    rag_parser_unlimited_ocr_enabled: bool = Field(
-        default=False,
-        description="外部 Unlimited-OCR API adapter を feature flag で有効化する。",
     )
     rag_parser_mineru_enabled: bool = Field(
         default=False,
@@ -1220,17 +1230,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
-    rag_parser_glm_ocr_enabled: bool = Field(
-        default=False,
-        description="外部 GLM-OCR OpenAI 互換 API adapter を feature flag で有効化する。",
-    )
     rag_parser_docling_service_url: str = Field(
         default="http://parser-docling:8000",
         description="Docling parser マイクロサービスの base URL。",
-    )
-    rag_parser_marker_service_url: str = Field(
-        default="http://parser-marker:8000",
-        description="Marker parser マイクロサービスの base URL。",
     )
     rag_parser_unstructured_service_url: str = Field(
         default="http://parser-unstructured:8000",
@@ -1238,15 +1240,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
     # は読まず、誤った protocol への自動移行を避ける。
-    rag_parser_unlimited_ocr_api_host: str = Field(
-        default="", description="Unlimited-OCR OpenAI 互換 API の base URL。"
-    )
-    rag_parser_unlimited_ocr_model: str = Field(
-        default="/models/Unlimited-OCR", description="Unlimited-OCR の model ID。"
-    )
-    rag_parser_unlimited_ocr_api_key: str = Field(default="", repr=False)
-    rag_parser_unlimited_ocr_dpi: int = Field(default=300, ge=72, le=600)
-    rag_parser_unlimited_ocr_pdf_batch_size: int = Field(default=2, ge=1, le=16)
     rag_parser_mineru_api_host: str = Field(
         default="", description="MinerU native /file_parse API の base URL。"
     )
@@ -1265,15 +1258,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_parser_dots_ocr_api_key: str = Field(default="", repr=False)
     rag_parser_dots_ocr_dpi: int = Field(default=200, ge=72, le=600)
     rag_parser_dots_ocr_pdf_workers: int = Field(default=4, ge=1, le=16)
-    rag_parser_glm_ocr_api_host: str = Field(
-        default="", description="GLM-OCR OpenAI 互換 API の base URL。"
-    )
-    rag_parser_glm_ocr_model: str = Field(
-        default="ggml-org/GLM-OCR-GGUF:f16",
-        description="GLM-OCR の model ID。",
-    )
-    rag_parser_glm_ocr_api_key: str = Field(default="", repr=False)
-    rag_parser_glm_ocr_dpi: int = Field(default=300, ge=72, le=600)
     rag_parser_asr_enabled: bool = Field(
         default=True,
         description=(
@@ -1736,20 +1720,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     @field_validator("rag_parser_adapter_backend", mode="before")
     @classmethod
     def normalize_legacy_parser_adapter_backend(cls, value: object) -> object:
-        """旧値の正規化。
+        """旧値・削除済みエンジン(#270)の正規化。
 
-        - ``auto``(旧既定)→ 新既定 ``unstructured``。
-        - ``local_partition``(結果タグ別名)→ baseline 値 ``local``。
-        - ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
-          「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
-          ``local`` を既定 ``unstructured`` サービスへマップし、in-process 解析は実行しない。
+        ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
+        「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
+        ``local`` を既定 ``unstructured`` サービスへマップし、in-process 解析は実行しない。
         """
-        normalized = str(value).strip().casefold()
-        if normalized == "auto":
-            return "unstructured"
-        if normalized == "local_partition":
-            return "local"
-        return value
+        return normalize_parser_adapter_backend_value(value)
 
     @field_validator("rag_parser_mineru_language")
     @classmethod
@@ -1781,6 +1758,21 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         if str(value).strip().casefold() == "auto":
             return "files_api"
         return value
+
+    @model_validator(mode="after")
+    def normalize_legacy_graph_enabled(self) -> Self:
+        """legacy RAG_GRAPH_ENABLED=true を起動時に RAG_GRAPH_PROFILE へ寄せる(#274)。
+
+        legacy フラグは profile off を full 相当に読み替える。フラグのまま残すと、取込の構築判定
+        (graph_adapter)は full なのに、文書の構築予定・実効設定の表示は rag_graph_profile(off)を
+        見て食い違い、文書レシピで「構築しない」を選んでも full で構築される。profile を唯一の
+        正本にするため、ここで profile へ移してフラグを下ろす。
+        """
+        if self.rag_graph_enabled:
+            if self.rag_graph_profile == "off":
+                self.rag_graph_profile = "full"
+            self.rag_graph_enabled = False
+        return self
 
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:

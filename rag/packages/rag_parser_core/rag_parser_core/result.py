@@ -29,18 +29,11 @@ LOCAL_PARSER_VERSION = "local_partition_v1"
 # 外部 Python package を持つ adapter とその配布 package 名(registry の package 検出に使う)。
 EXTERNAL_ADAPTER_PACKAGES = {
     "docling": "docling",
-    "marker": "marker",
     "unstructured": "unstructured",
     # PoweRAG 由来。未導入時は package_missing、導入のみで未実装なら adapter_unsupported を
     # 返して安全に fallback する(実 OCR は OCI Enterprise AI VLM へ再マップ)。
     "mineru": "mineru",
     "dots_ocr": "dots_ocr",
-    # GLM-OCR(HuggingFace zai-org/GLM-OCR)。専用 pip package は無く、GPU サービス image
-    # では transformers で HF からモデルをロードして実 OCR する(_run_glm_ocr のフォールバック)。
-    "glm_ocr": "glm_ocr",
-    # Unlimited-OCR(HuggingFace baidu/Unlimited-OCR)。既定は SGLang runtime、
-    # UNLIMITED_OCR_RUNTIME=transformers の時だけ直ロードへ退避する。
-    "unlimited_ocr": "unlimited_ocr",
 }
 
 # service 系 backend。外部 package / parser microservice ではなく、backend が OCI
