@@ -1992,6 +1992,34 @@ def test_extract_select_statement_truncates_trailing_exception_with_subquery() -
     assert _extract_select_statement(raw) == "SELECT a FROM (SELECT b FROM t) x"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "SELECT ID FROM APP.ORDERS WHERE NAME = 'a;b'; DELETE FROM APP.ORDERS",
+            "SELECT ID FROM APP.ORDERS WHERE NAME = 'a;b'",
+        ),
+        (
+            "SELECT ID FROM APP.ORDERS WHERE NAME LIKE '%;%'",
+            "SELECT ID FROM APP.ORDERS WHERE NAME LIKE '%;%'",
+        ),
+        (
+            "SELECT ID -- x; y\nFROM APP.ORDERS;\n補足説明",
+            "SELECT ID -- x; y\nFROM APP.ORDERS",
+        ),
+        (
+            'SELECT "A;B" FROM APP.ORDERS /* ; */ WHERE ID = 1;',
+            'SELECT "A;B" FROM APP.ORDERS /* ; */ WHERE ID = 1',
+        ),
+    ],
+)
+def test_extract_select_statement_ignores_semicolon_in_literals_and_comments(
+    raw: str, expected: str
+) -> None:
+    # 文字列リテラル・引用識別子・コメント内の `;` で SQL を切らない。
+    assert _extract_select_statement(raw) == expected
+
+
 def test_extract_select_statement_from_json_payload_with_subquery() -> None:
     raw = '{"sql": "WITH c AS (SELECT 1 FROM dual) SELECT * FROM c"}'
 

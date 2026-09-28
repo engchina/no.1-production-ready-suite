@@ -2220,12 +2220,17 @@ class OntologyApiRuntime:
         with self._lock:
             ontology = self._query_ontology()
             question_key = self._recommendation_key(request.question)
-            node_by_id = {node.id: node for node in ontology.nodes}
             entries: list[tuple[Nl2SqlProfile, ProfileOntologyView, list[str], list[str]]] = []
+            revision_by_profile: dict[str, str] = {}
             for profile in self._active_profiles():
                 if allowed_profile_ids is not None and profile.id not in allowed_profile_ids:
                     continue
-                view = self._base_profile_view(profile, ontology)
+                # Markdown 公開版がある profile は、問い合わせ(create_session)と
+                # 同じ公開版を基準にする。
+                profile_ontology = self._query_ontology(profile.id)
+                revision_by_profile[profile.id] = profile_ontology.revision.id
+                node_by_id = {node.id: node for node in profile_ontology.nodes}
+                view = self._base_profile_view(profile, profile_ontology)
                 scenario_terms = [
                     *view.activation_scenarios_ja,
                     *view.activation_keywords,
@@ -2330,7 +2335,7 @@ class OntologyApiRuntime:
                     ProfileRecommendationCandidateV2(
                         profile_id=profile.id,
                         profile_name=profile.name,
-                        ontology_revision_id=ontology.revision.id,
+                        ontology_revision_id=revision_by_profile[profile.id],
                         score=score,
                         matched_scenarios_ja=matched_scenarios,
                         matched_terms=matched_terms,
@@ -2429,10 +2434,23 @@ class OntologyApiRuntime:
                     "Profile 推薦の有効期限が切れました。再判定してください。",
                 )
             profile = self._strict_profile(request.selected_profile_id)
-            ontology = self._query_ontology()
+            # 推薦候補は profile ごとの基準 revision を持つ(Markdown 公開版がある profile は
+            # 公開版)。候補外を手動で選んだ場合は推薦全体の revision と照合し、保存は profile の
+            # 現在の基準にする。
+            candidate = next(
+                (item for item in recommendation.candidates if item.profile_id == profile.id),
+                None,
+            )
+            ontology = self._query_ontology(profile.id)
+            if candidate is not None:
+                expected_revision_id = candidate.ontology_revision_id
+                current_revision_id = ontology.revision.id
+            else:
+                expected_revision_id = recommendation.ontology_revision_id
+                current_revision_id = self._query_ontology().revision.id
             if (
-                request.selected_revision_id != ontology.revision.id
-                or request.selected_revision_id != recommendation.ontology_revision_id
+                request.selected_revision_id != expected_revision_id
+                or request.selected_revision_id != current_revision_id
             ):
                 raise OntologyVersionConflictError(
                     "PROFILE_RECOMMENDATION_REVISION_CHANGED",
@@ -2528,6 +2546,7 @@ class OntologyApiRuntime:
         node_by_id = {node.id: node for node in ontology.nodes}
         selected_node_ids = {hit.node_id for hit in retrieval_hits}
         inferred_node_ids = self._inferred_context_node_ids(
+            profile.id,
             ontology.revision.id,
             selected_node_ids,
             allowed_node_ids=set(view.node_ids),
@@ -2656,6 +2675,7 @@ class OntologyApiRuntime:
 
     def _inferred_context_node_ids(
         self,
+        profile_id: str,
         revision_id: str,
         seed_node_ids: set[str],
         *,
@@ -2664,21 +2684,32 @@ class OntologyApiRuntime:
     ) -> set[str]:
         """物化 closure を Profile 内の検索拡張だけに利用する。"""
 
+        if not seed_node_ids:
+            return set()
         inferred_documents = [
             document
             for document in self.store.list_documents("artifacts", {"session_id": revision_id})
             if document.get("artifact_type") == "ontology_inferred_turtle"
         ]
-        if not inferred_documents or not seed_node_ids:
-            return set()
-        inferred_documents.sort(
-            key=lambda document: (
-                str(document.get("updated_at") or document.get("created_at") or ""),
-                int(document.get("version_no") or 0),
-                str(document.get("artifact_id") or ""),
+        content = ""
+        if inferred_documents:
+            inferred_documents.sort(
+                key=lambda document: (
+                    str(document.get("updated_at") or document.get("created_at") or ""),
+                    str(document.get("artifact_id") or ""),
+                )
             )
-        )
-        content = str(inferred_documents[-1].get("content") or "")
+            content = str(inferred_documents[-1].get("content") or "")
+        else:
+            # Markdown 公開版は推論結果を別 artifact にせず、公開 snapshot 本体に固定している。
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            try:
+                snapshot = MarkdownOntologyWorkspace(self).snapshot(profile_id, revision_id)
+            except OntologyNotFoundError:
+                snapshot = None
+            if snapshot:
+                content = str((snapshot.get("artifacts") or {}).get("inferred_turtle") or "")
         if not content:
             return set()
         try:
@@ -3028,28 +3059,33 @@ class OntologyApiRuntime:
                 for item in view.physical_objects
             ]
         )
+        # 列を絞った表だけ許可列で上書きし、列指定の無い表は view の全列を残す。
+        # 絞った表しか残さないと、他の許可表の公開定義が prompt から丸ごと消える。
         allowed_column_names: dict[str, list[str]] = {}
-        if runtime_context.allowed_objects.columns:
-            allowed_column_names = {
-                str(table): sorted({str(column) for column in columns})
-                for table, columns in runtime_context.allowed_objects.columns.items()
-            }
-        else:
-            for node_id in view.node_ids:
-                node = node_by_id.get(node_id)
-                if node is None or node.kind != OntologyNodeKind.COLUMN:
-                    continue
-                mapping = node.physical_mappings[0] if node.physical_mappings else None
-                column = mapping.column_refs[0] if mapping and mapping.column_refs else None
-                if column is None:
-                    continue
-                object_name = (
-                    f"{column.owner}.{column.object_name}" if column.owner else column.object_name
-                )
-                allowed_column_names.setdefault(object_name, []).append(column.column_name)
-            allowed_column_names = {
-                key: sorted(set(values)) for key, values in allowed_column_names.items()
-            }
+        for node_id in view.node_ids:
+            node = node_by_id.get(node_id)
+            if node is None or node.kind != OntologyNodeKind.COLUMN:
+                continue
+            mapping = node.physical_mappings[0] if node.physical_mappings else None
+            column = mapping.column_refs[0] if mapping and mapping.column_refs else None
+            if column is None:
+                continue
+            object_name = (
+                f"{column.owner}.{column.object_name}" if column.owner else column.object_name
+            )
+            allowed_column_names.setdefault(object_name, []).append(column.column_name)
+        allowed_column_names = {
+            key: sorted(set(values)) for key, values in allowed_column_names.items()
+        }
+        for table, columns in runtime_context.allowed_objects.columns.items():
+            if not columns:
+                continue
+            key = object_match_key(str(table))
+            for existing in [
+                name for name in allowed_column_names if object_match_key(name) == key
+            ]:
+                allowed_column_names.pop(existing)
+            allowed_column_names[str(table)] = sorted({str(column) for column in columns})
 
         selected_path = next(
             (path for path in intent.candidate_paths if path.id == intent.selected_path_id),
@@ -6412,16 +6448,6 @@ async def start_ontology_build(
     except Exception as exc:
         _raise_domain_error(exc)
 
-    existing_build_idempotency = await run_sync_io(
-        ontology_runtime.store.get_idempotency,
-        "build_ontology",
-        idempotency_key,
-    )
-    existing_build_job_id = (
-        str(existing_build_idempotency.get("resource_id") or "")
-        if existing_build_idempotency is not None
-        else ""
-    )
     stored_sources = []
     for source_file, source_role in uploads:
         try:
@@ -6433,6 +6459,18 @@ async def start_ontology_build(
                 )
             )
         except Exception as exc:
+            # 後続ファイルが不正でも、先に保存した資料の実体を孤児として残さない
+            if stored_sources:
+                try:
+                    await run_sync_io(
+                        ontology_build_service.discard_source_documents, stored_sources
+                    )
+                except Exception:
+                    logger.warning(
+                        "ontology_build_source_cleanup_failed",
+                        exc_info=True,
+                        extra={"profile_id": profile_id},
+                    )
             code = str(getattr(exc, "code", "ONTOLOGY_SOURCE_INVALID"))
             message = str(getattr(exc, "message_ja", str(exc)))
             raise HTTPException(
@@ -6452,8 +6490,12 @@ async def start_ontology_build(
             source_documents=stored_sources,
             idempotency_key=idempotency_key,
         )
-        if stored_sources and existing_build_job_id and job.id == existing_build_job_id:
-            await run_sync_io(ontology_build_service.discard_source_documents, stored_sources)
+        # 同じ Idempotency-Key の再送(先行リクエストとの競合を含む)で既存 job が返った場合、
+        # 今回保存した資料は job に使われないため破棄する
+        used_source_ids = set(job.source_document_ids)
+        unused_sources = [source for source in stored_sources if source.id not in used_source_ids]
+        if unused_sources:
+            await run_sync_io(ontology_build_service.discard_source_documents, unused_sources)
         return ApiResponse(data=OntologyBuildJobData(job=job))
     except Exception as exc:
         if stored_sources:

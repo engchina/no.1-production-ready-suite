@@ -8,7 +8,7 @@ import {
   ContentActionBar,
   DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -17,6 +17,8 @@ import { useWorkspaceState, useResetExecutionConsent } from "@/components/Worksp
 import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
 import { OntologyFindings } from "./OntologyFindings";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";
+
+const MARKDOWN_BUSY = "markdown-check";
 
 type Definition = Record<string, unknown>;
 interface Preparation {
@@ -31,7 +33,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   profileId: string; profileLabel: string; signature: string; disabled: boolean;
   save: () => Promise<OntologyMarkdownState | null | undefined>;
   onPublished: (job: OntologyPublishJob) => void;
-  onBusyChange: (busy:string) => void;
+  onBusyChange: Dispatch<SetStateAction<string>>;
 }) {
   const endpoint = `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-markdown`;
   const [preparationId, setPreparationId] = useWorkspaceState(`markdown:${profileId}:preparation`, "");
@@ -67,10 +69,14 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   const hasWarnings = findings.some(finding => finding.severity === "warning");
   const dataValidationFailed = Number(value?.data_report?.errors ?? 0) > 0;
   const running = Boolean(value && ["queued", "running"].includes(value.status));
+  const ownBusy = Boolean(busy) || running;
   useEffect(() => {
-    onBusyChange(busy || running ? "markdown-check" : "");
-    return () => onBusyChange("");
-  }, [busy, running, onBusyChange]);
+    if (!ownBusy) return;
+    onBusyChange(MARKDOWN_BUSY);
+    // 親の busy は他の操作(構築開始・中止など)と共有するため、自分が立てた値だけを戻す。
+    // 再マウント時に無条件で "" にすると、実行中の操作のボタンが再び押せてしまう。
+    return () => onBusyChange(current => current === MARKDOWN_BUSY ? "" : current);
+  }, [ownBusy, onBusyChange]);
   const headers = (key: string) => ({ headers: { "Idempotency-Key": key } });
   async function prepare() {
     setBusy("prepare"); setError("");
@@ -107,8 +113,10 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     try {
       const result = await apiGet<{job:OntologyPublishJob | null}>(`${endpoint}/publication-outcome?key=${encodeURIComponent(execution.key)}`);
       if (!mounted.current) return;
-      if (result.job) { setExecution({key:""}); onPublished(result.job); }
-      else setError(t("markdownOntology.unknownOutcome"));
+      // publish は同期・atomic のため、結果がなければ公開されていない。key を捨てて再公開できるようにする。
+      setExecution({key:""});
+      if (result.job) onPublished(result.job);
+      else setError(t("markdownOntology.notPublished"));
     } catch(e) { setError(e instanceof Error ? e.message : t("markdownOntology.failed")); }
     finally { setBusy(""); }
   }

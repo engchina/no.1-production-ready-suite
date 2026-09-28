@@ -1897,6 +1897,104 @@ async def test_http_ontology_build_idempotent_replay_discards_new_uploads(
 
 
 @pytest.mark.asyncio
+async def test_http_ontology_build_replay_race_discards_uploads_not_used_by_returned_job(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """同じ Idempotency-Key の先行リクエストが upload 中に start を終えても、
+    再送側の資料を残さない。"""
+
+    api, store, _legacy = runtime
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
+    monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
+    monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
+    source_storage = OntologySourceStorage(settings)
+    build_service = OntologyBuildService(api, source_storage=source_storage)
+    original_save_upload = source_storage.save_upload
+    first_request: dict[str, Any] = {}
+
+    async def save_upload_racing_first_request(**kwargs: Any) -> OntologySourceDocument:
+        document = await original_save_upload(**kwargs)
+        if not first_request:
+            # 先行リクエスト(同じ Idempotency-Key)が、この upload 中に job 投入を完了する
+            first_request["job"] = build_service.start(
+                "sales",
+                source_documents=[
+                    document.model_copy(
+                        update={"id": "ontology_source_first", "storage_uri": "memory://first.md"}
+                    )
+                ],
+                idempotency_key="test-ontology-build-replay-race",
+            )
+        return document
+
+    monkeypatch.setattr(source_storage, "save_upload", save_upload_racing_first_request)
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/nl2sql/profiles/sales/ontology-build",
+            headers={"Idempotency-Key": "test-ontology-build-replay-race"},
+            files=[("source_files", ("rules.md", "# 受注ルール\n".encode(), "text/markdown"))],
+        )
+
+    assert response.status_code == 202
+    job = response.json()["data"]["job"]
+    assert job["id"] == first_request["job"].id
+    assert job["source_document_ids"] == ["ontology_source_first"]
+    assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+    stored_sources = store.list_documents("source_documents", {"profile_id": "sales"})
+    assert [document["source_document_id"] for document in stored_sources] == [
+        "ontology_source_first"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_ontology_build_discards_earlier_uploads_when_later_file_is_invalid(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """複数ファイルのうち後続が不正なとき、先に保存した資料の実体を孤児にしない。"""
+
+    api, store, _legacy = runtime
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
+    monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
+    monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
+    source_storage = OntologySourceStorage(settings)
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    monkeypatch.setattr(
+        ontology_router_module,
+        "ontology_build_service",
+        OntologyBuildService(api, source_storage=source_storage),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/nl2sql/profiles/sales/ontology-build",
+            headers={"Idempotency-Key": "test-ontology-build-invalid-second-file"},
+            files=[
+                ("source_files", ("ok.md", "# 受注ルール\n".encode(), "text/markdown")),
+                ("source_files", ("bad.pdf", b"not a pdf", "application/pdf")),
+            ],
+        )
+
+    assert response.status_code == 400
+    assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+    assert store.list_documents("source_documents", {"profile_id": "sales"}) == []
+
+
+@pytest.mark.asyncio
 async def test_http_ontology_build_rejects_too_many_source_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2236,6 +2334,7 @@ def test_inferred_context_expansion_never_leaves_profile_view(
         }
     )
     expanded = api._inferred_context_node_ids(
+        "sales",
         ontology.revision.id,
         {source_id},
         allowed_node_ids=set(view.node_ids),
@@ -2259,6 +2358,7 @@ def test_inferred_context_expansion_never_leaves_profile_view(
         }
     )
     assert api._inferred_context_node_ids(
+        "sales",
         ontology.revision.id,
         {"node:source"},
         allowed_node_ids={"node:source", "node:target"},

@@ -903,7 +903,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   ).toBeVisible();
   await expect(
     page.getByText(
-      "PDF / DOCX / TXT / MD / CSV / XLSX / XLS / XLSM を最大 5 件まで選択できます。原本と証拠位置を保持します。",
+      "PDF / DOCX / TXT / MD / CSV / XLSX / XLS / XLSM を Q/A ファイルと合わせて最大 5 件まで選択できます。原本と証拠位置を保持します。",
       { exact: true }
     )
   ).toBeVisible();
@@ -939,7 +939,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   );
   await expect(
     page.getByText(
-      "構築資料は最大 5 件までアップロードできます。ファイルを減らして再度選択してください。",
+      "構築資料は Q/A ファイルと合わせて最大 5 件までアップロードできます。ファイルを減らして再度選択してください。",
       { exact: true }
     )
   ).toBeVisible();
@@ -1509,6 +1509,51 @@ test("実行する抽出 UI は表示せず、入力有無から抽出対象を�
       runTextExtraction: true,
     });
   });
+});
+
+test("構築資料の上限 5 件は Q/A ファイルを含む総数で判定する", async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const section = page.getByTestId("profile-ontology-build");
+  const sourceDropzone = page.getByTestId("ontology-build-source-files-dropzone");
+  const qaDropzone = page.getByTestId("ontology-build-qa-file-dropzone");
+  const sourceFileList = section.getByRole("list", { name: "選択した構築資料" });
+  const limitMessage =
+    "構築資料は Q/A ファイルと合わせて最大 5 件までアップロードできます。ファイルを減らして再度選択してください。";
+  const source = (index: number) => ({
+    name: `source-${index}.md`,
+    type: "text/markdown",
+    content: `# 資料 ${index}`,
+    lastModified: 1_700_000_020_000 + index,
+  });
+  const qa = { name: "qa_cases.csv", type: "text/csv", content: "QUESTION,SQL\n受注件数は,SELECT COUNT(*) FROM ORDERS" };
+
+  // 構築資料 4 件 + Q/A 1 件 = 5 件は選択できる
+  await dropFiles(page, sourceDropzone, [1, 2, 3, 4].map(source));
+  await dropFiles(page, qaDropzone, [qa]);
+  await expect(section.getByText("選択済み: qa_cases.csv")).toBeVisible();
+  // Q/A ありで構築資料を 5 件にすると 6 件になるため拒否する
+  await dropFiles(page, sourceDropzone, [source(5)]);
+  await expect(page.getByTestId("ontology-build-source-files").getByText(limitMessage, { exact: true })).toBeVisible();
+  await expect(sourceFileList.getByRole("listitem")).toHaveCount(4);
+
+  // 構築資料 5 件のときは Q/A ファイルの選択も同じ上限で拒否する
+  await page.getByTestId("ontology-build-qa-file").getByRole("button", { name: "ファイル選択を解除" }).click();
+  await dropFiles(page, sourceDropzone, [source(5)]);
+  await expect(sourceFileList.getByRole("listitem")).toHaveCount(5);
+  await dropFiles(page, qaDropzone, [qa]);
+  await expect(page.getByTestId("ontology-build-qa-file").getByText(limitMessage, { exact: true })).toBeVisible();
+  await expect(section.getByText("選択済み: qa_cases.csv")).toHaveCount(0);
+
+  // 構築資料 5 件だけなら backend と同じく受け付ける
+  await section.getByRole("button", { name: "AI 構築を実行" }).click();
+  await expect.poll(() => state.latestRunOptions).toEqual({
+    runSchemaNaming: true,
+    runQaExtraction: false,
+    runTextExtraction: true,
+  });
+  expect(state.startCalls).toBe(1);
 });
 
 test("送信直後にプレースホルダーが出て、完了後は Markdown 下書きを表示する", async ({ page }) => {
@@ -2307,6 +2352,40 @@ test("実行中の構築ジョブを確認ダイアログ経由で中止でき�
   expect(cancelCalls).toBe(1);
 });
 
+test("中止が 409(既に完了)でもポーリングの完了処理で Markdown を再取得する", async ({ page }) => {
+  const state = await mockApi(page);
+  let cancelRequested = false;
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [] })
+  );
+  // 中止を押すまでは実行中、押した後は完了済みを返す(中止より先に job が終わった状況)
+  await page.unroute("**/api/nl2sql/ontology-build/*");
+  await page.route("**/api/nl2sql/ontology-build/*", (route) =>
+    fulfillJson(route, cancelRequested ? buildJob("succeeded", "succeeded") : buildJob("running", "running"))
+  );
+  await page.route("**/api/nl2sql/ontology-build/*/cancel", (route) => {
+    cancelRequested = true;
+    return route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "構築は既に終了しています。" }),
+    });
+  });
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+
+  const section = page.getByTestId("profile-ontology-build");
+  await section.getByLabel("業務説明(自然言語)").fill("受注は顧客に紐づく。");
+  await section.getByRole("button", { name: "AI 構築を実行" }).click();
+  await page.getByTestId("ontology-build-cancel").click();
+  const markdownLoadsBeforeCancel = state.markdownProfileIds.length;
+  await page.getByRole("button", { name: "構築を中止" }).click();
+
+  await expect(page.getByText("AI 構築が完了しました。Markdown 下書きを確認してください。")).toBeVisible();
+  await expect.poll(() => state.markdownProfileIds.length).toBeGreaterThan(markdownLoadsBeforeCancel);
+  await expect(section.getByRole("button", { name: "AI 構築を実行" })).toBeEnabled();
+});
+
 test("Markdown 下書き生成が長時間更新されない場合に警告を表示する", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/ontology-build/*");
@@ -2878,8 +2957,16 @@ for (const committedBeforeDisconnect of [true, false]) {
     await expect(page.getByRole("alertdialog")).toHaveCount(0);expect(calls).toBe(1);
     await page.getByRole("button",{name:"公開結果を確認",exact:true}).click();await expect.poll(()=>lookups).toBe(1);
     if(committedBeforeDisconnect) await expect(page.getByText("オントロジーを公開しました。",{exact:true})).toBeVisible();
-    else await expect(page.getByText(/公開結果はまだ確認できません/)).toBeVisible();
+    else await expect(page.getByText("公開は完了していません。内容を確認して、もう一度公開してください。",{exact:true})).toBeVisible();
     expect(calls).toBe(1);
+    if(!committedBeforeDisconnect){
+      // 公開されていなければ照会キーを捨て、同じ確認結果から再度公開できる(公開ボタンを永久に無効化しない)
+      await expect(page.getByRole("button",{name:"公開結果を確認",exact:true})).toHaveCount(0);
+      const firstKey=key;
+      await confirmPreparedPublish(page);
+      await expect.poll(()=>calls).toBe(2);
+      expect(key).not.toBe(firstKey);
+    }
     await page.screenshot({path:testInfo.outputPath(`markdown-publication-recovery-${committedBeforeDisconnect}.png`)});
   });
 }

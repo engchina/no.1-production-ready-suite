@@ -97,8 +97,10 @@ def published_context(
             raise OntologyGateBlockedError(
                 "MARKDOWN_SNAPSHOT_MISSING", "公開 Markdown が見つかりません。"
             )
-        profile_hash, schema_hash, schema_context = workspace._scope(profile_id)
-        if (profile_hash, schema_hash) != (snapshot["profile_hash"], snapshot["schema_hash"]):
+        schema_context = workspace.scope_is_current(
+            profile_id, snapshot["profile_hash"], snapshot["schema_hash"]
+        )
+        if not schema_context:
             raise OntologyGateBlockedError(
                 "BUSINESS_SCOPE_CHANGED",
                 "Profile または Schema が変更されました。Markdown を再検証してください。",

@@ -2923,3 +2923,165 @@ def test_restored_inprocess_job_refreshes_after_independent_worker_completes(
     snapshot = reader.get(job.id)
     assert snapshot is not None
     assert snapshot.status == OntologyBuildStatus.SUCCEEDED
+
+
+def test_source_deleted_during_extraction_is_not_resurrected(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """抽出中に利用者が資料を削除しても、進捗更新で source_documents 行を復活させない。"""
+
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
+    content = "受注は顧客ごとに管理する。".encode()
+    source = _source_document("ontology_source_deleted", "deleted.md", content)
+    holder: dict[str, OntologyBuildService] = {}
+
+    class _DeletingStorage(_FakeOntologySourceStorage):
+        def load(self, document: OntologySourceDocument) -> bytes:
+            data = super().load(document)
+            holder["service"].delete_profile_source_document("sales", document.id)
+            return data
+
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_DeletingStorage({source.id: content}),  # type: ignore[arg-type]
+    )
+    holder["service"] = service
+    job = service.start(
+        "sales",
+        business_text="受注は顧客に紐づく。",
+        run_schema_naming=False,
+        run_qa_extraction=False,
+        source_documents=[source],
+    )
+    finished = _wait_for_job(service, job.id)
+
+    assert store.get_document("source_documents", {"source_document_id": source.id}) is None
+    assert service.list_profile_source_documents("sales") == []
+    progress = next(item for item in finished.sources if item.source_document_id == source.id)
+    assert progress.status == OntologySourceStatus.FAILED
+    assert "削除" in progress.error_message_ja
+    # 削除済み資料の証拠は構築に混ぜず、他の入力(業務説明)で継続する
+    assert finished.status == OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+
+
+def test_source_deleted_before_its_turn_is_skipped_and_job_continues(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    """後続資料が実行中に削除されても、ジョブ全体を失敗させず残りの資料で継続する。"""
+
+    runtime, store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
+    first_content = "受注は顧客ごとに管理する。".encode()
+    second_content = "顧客は地域に属する。".encode()
+    first = _source_document("ontology_source_first", "first.md", first_content)
+    second = _source_document("ontology_source_second", "second.md", second_content)
+    holder: dict[str, OntologyBuildService] = {}
+
+    class _DeletingNextStorage(_FakeOntologySourceStorage):
+        def load(self, document: OntologySourceDocument) -> bytes:
+            data = super().load(document)
+            if document.id == first.id:
+                holder["service"].delete_profile_source_document("sales", second.id)
+            return data
+
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_DeletingNextStorage(  # type: ignore[arg-type]
+            {first.id: first_content, second.id: second_content}
+        ),
+    )
+    holder["service"] = service
+    job = service.start(
+        "sales",
+        run_schema_naming=False,
+        run_qa_extraction=False,
+        source_documents=[first, second],
+    )
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS
+    progress = {item.source_document_id: item.status for item in finished.sources}
+    assert progress == {
+        first.id: OntologySourceStatus.EXTRACTED,
+        second.id: OntologySourceStatus.FAILED,
+    }
+    assert any("second.md" in warning for warning in finished.warnings_ja)
+    assert store.get_document("source_documents", {"source_document_id": second.id}) is None
+    assert store.get_idempotency("build_ontology_profile_active", "sales") is None
+
+
+def test_unexpected_failure_terminalizes_running_steps_and_phases(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """予期しない例外で FAILED にするとき、running/pending の step・phase も終端化する。"""
+
+    runtime, _store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="販売業務")
+    first_step = job.steps[0].name
+
+    def exploding_run(job_id: str, _text: str, _pairs: list[QaPair]) -> None:
+        service._update(job_id, lambda item: setattr(item, "status", OntologyBuildStatus.RUNNING))
+        service._set_definition_phase(job_id, "freeze", "running")
+        service._set_step(job_id, first_step, OntologyBuildStepStatus.RUNNING, "処理中")
+        raise ValueError("boom")
+
+    monkeypatch.setattr(service, "_run", exploding_run)
+    failed = service.run_persisted(job.id)
+
+    assert failed.status == OntologyBuildStatus.FAILED
+    assert failed.finished_at is not None
+    assert "boom" in failed.error_message_ja
+    assert not [
+        step
+        for step in failed.steps
+        if step.status in {OntologyBuildStepStatus.PENDING, OntologyBuildStepStatus.RUNNING}
+    ]
+    assert all(step.finished_at is not None for step in failed.steps)
+    assert not [
+        phase for phase in failed.definition_phases if phase.status in {"pending", "running"}
+    ]
+    freeze = next(phase for phase in failed.definition_phases if phase.name == "freeze")
+    assert freeze.status == "failed"
+
+
+def test_cancel_profile_jobs_retries_concurrent_progress_write(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile 削除の一括中止は、実行中 job の進捗書込と ETag 競合しても再読して中止する。"""
+
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="販売業務")
+    original = service._save_cancelled
+    calls = 0
+
+    def conflict_once(document: dict[str, Any], *args: Any, **kwargs: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # 一覧取得後に worker が進捗を書いた状態を再現する(ETag が進む)
+            store.save_document(
+                "jobs",
+                {
+                    key: value
+                    for key, value in document.items()
+                    if key not in {"etag", "created_at", "updated_at"}
+                },
+                expected_etag=str(document["etag"]),
+            )
+            raise OntologyVersionConflict("concurrent progress")
+        original(document, *args, **kwargs)
+
+    monkeypatch.setattr(service, "_save_cancelled", conflict_once)
+
+    assert service.cancel_profile_jobs("sales") == 1
+    assert calls == 2
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    assert record["status"] == "cancelled"

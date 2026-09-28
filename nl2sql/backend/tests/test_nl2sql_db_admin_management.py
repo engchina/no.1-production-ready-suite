@@ -55,6 +55,7 @@ from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
     TabularImportValidationError,
+    _domain_column_type,
     _flexible_date_value,
     _normalize_select_ai_object_list,
 )
@@ -5679,3 +5680,65 @@ def test_deterministic_annotation_skips_domain_columns_and_comment_prompt_guides
     assert "コード値の意味" in enterprise_ai.calls[0]["prompt"]
     assert "Join with ORD_TXN.CUST_ID." in enterprise_ai.calls[0]["prompt"]
     assert "推測しない" in enterprise_ai.calls[0]["prompt"]
+
+
+def test_domain_column_type_keeps_char_length_semantics() -> None:
+    """ALL_DOMAIN_COLS は CHAR_USED を持たないため、文字長とバイト長の差で CHAR 長を復元する。"""
+    # row = (data_type, data_length, char_length, data_precision, data_scale)
+    assert _domain_column_type(("VARCHAR2", 80, 20, None, None)) == "VARCHAR2(20 CHAR)"
+    assert _domain_column_type(("VARCHAR2", 20, 20, None, None)) == "VARCHAR2(20)"
+    assert _domain_column_type(("CHAR", 12, 3, None, None)) == "CHAR(3 CHAR)"
+    assert _domain_column_type(("NUMBER", 22, 0, 10, 2)) == "NUMBER(10,2)"
+
+
+def test_oracle_adapter_unbounded_select_stops_at_safety_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """件数未指定でも安全上限を超えて読まず、超過は truncated で示す。"""
+
+    class _Cursor:
+        description = [("ID",)]
+
+        def __init__(self) -> None:
+            self.remaining = [(index,) for index in range(1000)]
+            self.fetched = 0
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchmany(self, _max_rows: int) -> list[tuple[int]]:
+            batch = self.remaining[:50]
+            self.remaining = self.remaining[50:]
+            self.fetched += len(batch)
+            return batch
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+    cursor = _Cursor()
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection(cursor)
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter.settings, "nl2sql_max_result_rows", 60)
+
+    with actor_scope("system-admin", is_system_admin=True):
+        result = adapter.execute_select("SELECT ID FROM T1", None)
+
+    assert result.returned_count == 60
+    assert result.has_more is True
+    assert result.truncated is True
+    assert cursor.fetched == 100  # 上限を 1 行でも超えた時点で読むのをやめる

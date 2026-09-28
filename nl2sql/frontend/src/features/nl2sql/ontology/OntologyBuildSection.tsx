@@ -93,6 +93,7 @@ const ONTOLOGY_SOURCE_FILE_FORMATS: TabularFileFormatConfig = {
   accept: ".pdf,.docx,.txt,.md,.csv,.xlsx,.xls,.xlsm",
   formatLabel: ".PDF / .DOCX / .TXT / .MD / .CSV / .XLSX / .XLS / .XLSM",
 };
+// backend の ONTOLOGY_SOURCE_FILE_MAX_COUNT と同じ。上限は Q/A ファイルを含む総数で判定する。
 const ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5;
 const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
 const textareaClass =
@@ -575,6 +576,7 @@ export function OntologyBuildSection({
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesError, setSourceFilesError] = useState("");
+  const [qaFileError, setQaFileError] = useState("");
   const [savedSourceDocuments, setSavedSourceDocuments] = useState<OntologySourceDocument[]>([]);
   const [savedSourceDocumentsLoading, setSavedSourceDocumentsLoading] = useState(false);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
@@ -995,6 +997,7 @@ export function OntologyBuildSection({
     setQaFile(null);
     setSourceFiles([]);
     setSourceFilesError("");
+    setQaFileError("");
     setSavedSourceDocuments([]);
     setSavedSourceDocumentsLoading(Boolean(profileId));
   }
@@ -1215,7 +1218,7 @@ export function OntologyBuildSection({
     const targetProfileId = profileId;
     const hasBusinessTextInput = businessText.trim().length > 0;
     const hasSourceFilesInput = sourceFiles.length > 0;
-    if (sourceFiles.length > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
+    if (sourceFiles.length + (qaFile ? 1 : 0) > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
       setSourceFilesError(
         t("profiles.ontologyBuild.sourceFilesMaxExceeded", {
           count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
@@ -1294,9 +1297,10 @@ export function OntologyBuildSection({
     if (!ok) return;
     setBusy("cancel");
     try {
-      // 自前の中止はポーリング側で二重通知しない
-      terminalHandledRef.current = targetJobId;
       const next = await cancelOntologyBuildJob(targetJobId);
+      // 自前の中止はポーリング側で二重通知しない。中止に失敗(409 = 既に終端など)したときは
+      // ポーリングの終端処理(Markdown 再取得など)を飛ばさないよう、成功後にだけ設定する。
+      terminalHandledRef.current = targetJobId;
       setJob(next);
       showNotice("info", t("profiles.ontologyBuild.cancelled"));
     } catch (err) {
@@ -1387,7 +1391,7 @@ export function OntologyBuildSection({
 
   const handleSourceFiles = (picked: File[]) => {
     const next = mergeUniqueFiles(sourceFiles, picked);
-    if (next.length > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
+    if (next.length + (qaFile ? 1 : 0) > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
       setSourceFilesError(
         t("profiles.ontologyBuild.sourceFilesMaxExceeded", {
           count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
@@ -1396,7 +1400,23 @@ export function OntologyBuildSection({
       return;
     }
     setSourceFilesError("");
+    setQaFileError("");
     setSourceFiles(next);
+  };
+
+  const handleQaFile = (file: File | undefined) => {
+    if (!file) return;
+    if (sourceFiles.length + 1 > ONTOLOGY_SOURCE_FILE_MAX_COUNT) {
+      setQaFileError(
+        t("profiles.ontologyBuild.sourceFilesMaxExceeded", {
+          count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
+        })
+      );
+      return;
+    }
+    setQaFileError("");
+    setSourceFilesError("");
+    setQaFile(file);
   };
 
   const copyMarkdownOutput = async () => {
@@ -1517,6 +1537,7 @@ export function OntologyBuildSection({
               onClear={() => {
                 setSourceFiles([]);
                 setSourceFilesError("");
+                setQaFileError("");
               }}
             />
             {sourceFiles.length > 0 ? (
@@ -1540,6 +1561,7 @@ export function OntologyBuildSection({
                       })}
                       onClick={() => {
                         setSourceFilesError("");
+                        setQaFileError("");
                         setSourceFiles((current) => current.filter((item) => item !== file));
                       }} icon={X}>
                       </Button>
@@ -1557,9 +1579,14 @@ export function OntologyBuildSection({
             }
             formatLabel={ONTOLOGY_QA_FILE_FORMATS.formatLabel}
             hint={t("profiles.ontologyBuild.qaFileEmpty")}
+            errorText={qaFileError}
             dataTestId="ontology-build-qa-file"
-            onFiles={([file]) => setQaFile(file)}
-            onClear={() => setQaFile(null)}
+            onFiles={([file]) => handleQaFile(file)}
+            onClear={() => {
+              setQaFile(null);
+              setQaFileError("");
+              setSourceFilesError("");
+            }}
           />
           <SavedSourceDocumentsList
             documents={savedSourceDocuments}
