@@ -15,16 +15,17 @@ import { APP_ROUTES } from "./routes";
 export const ROUTE_PERMISSIONS: Readonly<Record<string, string>> = routePermissionMap(NAV_ITEMS);
 
 /**
- * 文書の詳細は、文書ワークスペース（アップロード・文書インデックス）と、引用カードから開く画面
- * （RAG 検索・チャット・ナレッジベース）のどれかがあれば開ける（backend の `_DOCUMENT_VIEW` と同じ）。
+ * 文書の詳細は、文書ワークスペース（アップロード・文書インデックス）の権限で開ける。詳細の画面は
+ * ワークスペース専用の API（backend の `_DOCUMENT_WORKSPACE`）を使うため、RAG 検索・チャット・
+ * ナレッジベースだけの利用者には開かせず、そこから詳細へのリンクも出さない（#303）。
+ * 引用カードのプレビュー（ドロワー）は backend の `_DOCUMENT_VIEW` の API だけで表示できる。
  */
-const DOCUMENT_DETAIL_PERMISSIONS = [
-  MENU_PERMISSIONS.upload,
-  MENU_PERMISSIONS.fileList,
-  MENU_PERMISSIONS.search,
-  MENU_PERMISSIONS.chat,
-  MENU_PERMISSIONS.knowledgeBases,
-];
+const DOCUMENT_DETAIL_PERMISSIONS = [MENU_PERMISSIONS.upload, MENU_PERMISSIONS.fileList];
+
+/** 文書の詳細を開けるか。検索の引用・KB の所属文書・フィードバックの根拠から詳細へのリンクを出す条件。 */
+export function canOpenDocumentDetail(hasPermission: HasPermission): boolean {
+  return DOCUMENT_DETAIL_PERMISSIONS.some((permission) => hasPermission(permission));
+}
 
 function isDetailPath(pathname: string, base: string): boolean {
   return pathname.startsWith(`${base}/`) && pathname.length > base.length + 1;

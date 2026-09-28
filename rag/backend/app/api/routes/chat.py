@@ -20,6 +20,7 @@ from app.api.routes.search import (
     _answer_chunks,
     _resolve_query_context,
     _sse_event,
+    ensure_business_view_has_knowledge_bases,
     ensure_business_view_knowledge_bases_permitted,
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -265,10 +266,13 @@ async def _load_sendable_conversation(
             status_code=409,
             detail="アーカイブ済みの業務ビューではチャットできません。",
         )
-    # 業務ビューの参照 KB が 1 つも利用できないなら、生成を始める前に 403 にする（#214）。
+    # 業務ビューの参照 KB が 0 件なら 409（全 KB を検索しない。#304）、1 つも利用できないなら
+    # 403（#214）。どちらも生成を始める前に HTTP の status で返す。
     view_config = getattr(view, "config", None)
     if view_config is not None:
-        ensure_business_view_knowledge_bases_permitted(view_config.normalized_knowledge_base_ids())
+        knowledge_base_ids = view_config.normalized_knowledge_base_ids()
+        ensure_business_view_has_knowledge_bases(knowledge_base_ids)
+        ensure_business_view_knowledge_bases_permitted(knowledge_base_ids)
     return conversation
 
 

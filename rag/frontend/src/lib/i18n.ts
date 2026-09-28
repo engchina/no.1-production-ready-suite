@@ -1220,6 +1220,20 @@ export const ja = {
   "fileList.bulkDelete.confirm.description":
     "原本ファイル、抽出結果、チャンク、索引、投入ジョブと segment を削除します。この操作は元に戻せません。",
   "fileList.bulkDelete.confirm.confirm": "一括削除",
+  // 正本の削除で重複文書の KB から検索対象が消えることを、削除の前に示す（#303）。
+  "fileList.delete.impact.duplicates":
+    "この文書を正本として参照する重複文書が {count} 件あります。削除すると、重複文書が所属するナレッジベース（{knowledgeBases}）の検索対象からこの内容が消えます。",
+  "fileList.delete.impact.duplicatesWithoutKnowledgeBase":
+    "この文書を正本として参照する重複文書が {count} 件あります。削除すると、重複文書が所属するナレッジベースの検索対象からこの内容が消えます。",
+  "fileList.bulkDelete.impact.duplicates":
+    "選択した文書のうち {sources} 件は、重複文書 {count} 件の正本です。削除すると、重複文書が所属するナレッジベース（{knowledgeBases}）の検索対象からその内容が消えます。",
+  "fileList.bulkDelete.impact.duplicatesWithoutKnowledgeBase":
+    "選択した文書のうち {sources} 件は、重複文書 {count} 件の正本です。削除すると、重複文書が所属するナレッジベースの検索対象からその内容が消えます。",
+  "fileList.delete.impact.restoreHint":
+    "重複文書は残ります。検索対象に戻すには、重複文書のファイル準備を実行してください。",
+  "fileList.delete.impact.moreKnowledgeBases": "{names} ほか {count} 件",
+  "fileList.delete.impact.loadFailed": "削除の影響を確認できませんでした。",
+  "fileList.delete.impact.loadFailedHint": "接続を確認してから、もう一度削除を実行してください。",
   "fileList.bulkDelete.toast.deleted": "{count} 件のドキュメントを削除しました。",
   "fileList.bulkDelete.toast.partial":
     "{deleted}/{total} 件を削除しました。削除できなかったドキュメントがあります。",
@@ -1441,6 +1455,8 @@ export const ja = {
   "businessViews.scope.helper": "選択した業務ビューに紐づく KB を検索対象にします。",
   "businessViews.scope.placeholder": "業務ビューを検索して追加…",
   "businessViews.scope.required": "対象の業務ビューを選択してください。",
+  "businessViews.scope.noKnowledgeBases":
+    "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加してください。",
   "businessViews.scope.applied":
     "{count} 件の業務ビューを対象にしています。回答方針・persona は先頭の業務ビューを使います。",
   "businessViewPicker.addPlaceholder": "業務ビューを検索して追加…",
@@ -2244,6 +2260,9 @@ export const ja = {
   "chat.businessView.empty": "公開済みの業務ビューがありません。先に業務ビューを作成してください。",
   "chat.businessView.required": "業務ビューを選択するとチャットを始められます。",
   "chat.businessView.open": "業務ビューを作成",
+  "chat.businessView.noKnowledgeBases":
+    "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加すると、チャットできます。",
+  "chat.businessView.openSettings": "業務ビューの設定を開く",
   "chat.sessions.title": "会話",
   "chat.sessions.new": "新しい会話",
   "chat.sessions.empty": "まだ会話がありません。「新しい会話」から始めてください。",
@@ -2375,7 +2394,10 @@ export const ja = {
   "search.evaluation.claim.not_a_claim": "主張ではない（見出しなど）",
   "search.history.title": "DocRAG の回答履歴",
   "search.history.description":
-    "選択中の業務ビューで DocRAG が回答した質問です。選ぶと回答・根拠・実行記録を開き直せます。",
+    "選択中の業務ビューで、あなたの質問に DocRAG が回答したものです。選ぶと回答・根拠・実行記録を開き直せます。",
+  "search.history.descriptionAll":
+    "選択中の業務ビューで DocRAG が回答した質問です（フィードバックの管理権限があるため、すべての利用者の回答を表示します）。選ぶと回答・根拠・実行記録を開き直せます。",
+  "search.history.pagination": "回答履歴のページ",
   "search.history.empty": "保存された DocRAG の回答はまだありません。",
   "search.history.loadError": "回答履歴を読み込めませんでした。",
   "search.history.question": "質問: {question}",

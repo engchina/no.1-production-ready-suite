@@ -51,6 +51,14 @@ async def readiness(response: Response) -> ApiResponse[HealthData]:
     )
 
 
+def _safe_database_error_detail(exc: Exception) -> str:
+    """接続文字列や Wallet の path を返さず、分類に必要な ORA コードだけを返す。"""
+    code = oracle_error_code(exc)
+    if code.startswith("ORA-"):
+        return f"Oracle connection probe failed ({code})."
+    return "Oracle connection probe failed."
+
+
 @router.get("/ready/database", response_model=ApiResponse[DatabaseStatusData])
 async def database_status() -> ApiResponse[DatabaseStatusData]:
     """データベースの利用可否を返す(設定の有無 + 実接続プローブ)。
@@ -81,7 +89,8 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
             data=DatabaseStatusData(
                 status="unreachable",
                 check=check,
-                detail=str(exc) or None,
+                # ログイン不要の path なので、接続先を含みうる例外の文字列は返さない(#320)。
+                detail=_safe_database_error_detail(exc),
             ),
         )
 

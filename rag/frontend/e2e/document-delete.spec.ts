@@ -170,10 +170,91 @@ test("選択したドキュメントを一括削除できる", async ({ page }) 
   await expectNoHorizontalOverflow(page);
 });
 
+interface DeleteImpact {
+  duplicate_count: number;
+  knowledge_bases: { id: string; name: string }[];
+}
+
+// #303: 正本を消すと、重複文書が所属する KB の検索対象から内容が黙って消える。削除の前に件数と影響を示す。
+test("重複文書が参照する正本の削除は、確認ダイアログで件数と消える KB を示す", async ({ page }) => {
+  const documents: DocumentSummary[] = [
+    documentSummary("doc-1", "policy.txt", "INDEXED"),
+    documentSummary("doc-2", "guide.txt", "INDEXED"),
+  ];
+  const deletedIds: string[] = [];
+  await mockDocumentIndexApi(
+    page,
+    documents,
+    (id) => {
+      deletedIds.push(id);
+      const index = documents.findIndex((document) => document.id === id);
+      if (index >= 0) documents.splice(index, 1);
+    },
+    {
+      "doc-1": {
+        duplicate_count: 2,
+        knowledge_bases: [
+          { id: "kb-hr", name: "人事規程" },
+          { id: "kb-sales", name: "営業資料" },
+        ],
+      },
+    }
+  );
+
+  await page.goto("/file-list");
+
+  // 影響の無い文書は従来の確認文だけ。
+  await page.getByRole("button", { name: "guide.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "guide.txt を削除" }).click();
+  let dialog = page.getByRole("alertdialog", { name: "このドキュメントを削除しますか？" });
+  await expect(dialog).toContainText("この操作は元に戻せません。");
+  await expect(dialog).not.toContainText("重複文書");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+
+  await page.getByRole("button", { name: "policy.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "policy.txt を削除" }).click();
+  dialog = page.getByRole("alertdialog", { name: "このドキュメントを削除しますか？" });
+  await expect(dialog).toContainText("この文書を正本として参照する重複文書が 2 件あります。");
+  await expect(dialog).toContainText(
+    "重複文書が所属するナレッジベース（人事規程、営業資料）の検索対象からこの内容が消えます。"
+  );
+  await expect(dialog).toContainText("重複文書のファイル準備を実行してください。");
+  await expectNoHorizontalOverflow(page);
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  expect(deletedIds).toEqual([]);
+
+  // 一括削除でも、選んだ文書の中の正本の件数と重複文書の合計を示す。
+  await page.locator("tbody tr").filter({ hasText: "policy.txt" }).getByRole("checkbox").check();
+  await page.locator("tbody tr").filter({ hasText: "guide.txt" }).getByRole("checkbox").check();
+  await page.getByRole("button", { name: "一括削除 (2)" }).click();
+  dialog = page.getByRole("alertdialog", { name: "選択した 2 件を削除しますか？" });
+  await expect(dialog).toContainText("選択した文書のうち 1 件は、重複文書 2 件の正本です。");
+  await dialog.getByRole("button", { name: "一括削除" }).click();
+  await expect(page.getByText("2 件のドキュメントを削除しました。").first()).toBeVisible();
+  expect(deletedIds).toEqual(["doc-1", "doc-2"]);
+});
+
+test("削除の影響を確認できないときは削除せず、原因を通知する", async ({ page }) => {
+  const documents: DocumentSummary[] = [documentSummary("doc-1", "policy.txt", "INDEXED")];
+  let deleteCalls = 0;
+  await mockDocumentIndexApi(page, documents, () => (deleteCalls += 1), "error");
+
+  await page.goto("/file-list");
+  await page.getByRole("button", { name: "policy.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "policy.txt を削除" }).click();
+
+  await expect(page.getByText("削除の影響を確認できませんでした。").first()).toBeVisible();
+  await expect(page.getByText("データベースに接続できません。").first()).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(deleteCalls).toBe(0);
+  await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
+});
+
 async function mockDocumentIndexApi(
   page: Page,
   documents: DocumentSummary[],
-  onDelete: (id: string) => void
+  onDelete: (id: string) => void,
+  impacts: Record<string, DeleteImpact> | "error" = {}
 ) {
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({
@@ -206,6 +287,33 @@ async function mockDocumentIndexApi(
             offset: 0,
             has_next: false,
           },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
+    // 削除の前の影響の確認（#303）。
+    if (request.method() === "GET" && url.pathname === "/api/documents/delete-impact") {
+      if (impacts === "error") {
+        await route.fulfill({
+          status: 503,
+          json: {
+            data: null,
+            error_messages: ["データベースに接続できません。"],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          data: url.searchParams.getAll("document_id").map((id) => ({
+            document_id: id,
+            duplicate_count: impacts[id]?.duplicate_count ?? 0,
+            knowledge_bases: impacts[id]?.knowledge_bases ?? [],
+          })),
           error_messages: [],
           warning_messages: [],
         },

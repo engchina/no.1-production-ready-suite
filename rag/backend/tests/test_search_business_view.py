@@ -251,6 +251,45 @@ def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> N
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-9"]
 
 
+@pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
+def test_business_view_without_knowledge_bases_is_rejected(
+    monkeypatch: MonkeyPatch, path: str
+) -> None:
+    """参照 KB が 0 件の業務ビューでは利用者の全 KB を検索せず、理由を 409 で返す（#304）。"""
+    _install(
+        monkeypatch,
+        {"bv-empty": BusinessViewConfig(), "bv-empty-2": BusinessViewConfig()},
+    )
+
+    response = client.post(
+        path, json={"query": "上限額", "business_view_ids": ["bv-empty", "bv-empty-2"]}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_messages"] == [
+        search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE
+    ]
+    assert RecordingPipeline.captured_request is None
+
+
+def test_empty_business_view_is_searched_with_other_views_knowledge_bases(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """KB のない業務ビューを、KB のある業務ビューと一緒に選んだときは、その KB だけを検索する。"""
+    _install(
+        monkeypatch,
+        {"bv-empty": BusinessViewConfig(), "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1"])},
+    )
+
+    response = client.post(
+        "/api/search", json={"query": "上限額", "business_view_ids": ["bv-empty", "bv-1"]}
+    )
+
+    assert response.status_code == 200
+    assert RecordingPipeline.captured_request is not None
+    assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1"]
+
+
 def test_missing_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
     """明示した業務ビューが無い場合は別 scope へ縮退せず 404 にする。"""
     _install(monkeypatch, {})

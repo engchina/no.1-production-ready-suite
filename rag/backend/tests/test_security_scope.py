@@ -49,10 +49,14 @@ def _scope(
     *,
     business_view_ids: set[str] | None = None,
     knowledge_base_ids: set[str] | None = None,
+    user_id_hash: str | None = None,
+    answer_records_unrestricted: bool = False,
 ) -> Iterator[None]:
     token = set_audit_request_context(
         AuditRequestContext(
             request_id="scope-test",
+            user_id_hash=user_id_hash,
+            answer_records_unrestricted=answer_records_unrestricted,
             allowed_business_view_ids=(
                 None if business_view_ids is None else frozenset(business_view_ids)
             ),
@@ -155,6 +159,102 @@ async def test_answer_records_are_unrestricted_without_scope() -> None:
     assert "access_business_view_id" not in pool.connection.calls[0].statement
 
 
+@pytest.mark.anyio
+async def test_answer_records_are_scoped_to_owner() -> None:
+    """保存済みの回答は持ち主の回答だけを一覧・件数・詳細・評価・削除の対象にする（#304）。"""
+    pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], [], [], []])
+    oracle = _client(pool)
+    with _scope(user_id_hash="owner-hash"):
+        await oracle.list_answer_records(business_view_id="bv-1", limit=10)
+        assert await oracle.count_answer_records(business_view_id="bv-1") == 0
+        assert await oracle.get_answer_record("trace-1") is None
+        assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
+        assert await oracle.delete_answer_record("trace-1") is False
+    calls = pool.connection.calls
+    assert len(calls) == 5
+    for call in calls:
+        assert "user_id_hash = :answer_owner_user_id_hash" in call.statement
+        assert call.parameters["answer_owner_user_id_hash"] == "owner-hash"
+    assert not any(call.statement.lstrip().startswith("UPDATE") for call in calls)
+
+
+@pytest.mark.anyio
+async def test_answer_records_are_unrestricted_for_managers() -> None:
+    """SYSTEM_ADMIN と rag.feedback.manage（answer_records_unrestricted）は持ち主で絞らない。"""
+    pool = FakeOraclePool(execute_results=[[], [{"count_value": 3}]])
+    oracle = _client(pool)
+    with _scope(
+        business_view_ids={"bv-1"}, user_id_hash="manager-hash", answer_records_unrestricted=True
+    ):
+        await oracle.list_answer_records(business_view_id=None, limit=10)
+        assert await oracle.count_answer_records(business_view_id=None) == 3
+    for call in pool.connection.calls:
+        assert "answer_owner_user_id_hash" not in call.statement
+        # 業務ビューの範囲の制限は持ち主と別に残る。
+        assert "business_view_id IN (:access_business_view_id_0)" in call.statement
+
+
+@pytest.mark.anyio
+async def test_answer_records_filter_trace_ids() -> None:
+    pool = FakeOraclePool(execute_results=[[], []])
+    oracle = _client(pool)
+    with _scope(user_id_hash="owner-hash"):
+        await oracle.list_answer_records(
+            business_view_id="bv-1", limit=10, trace_ids=["trace-1", "trace-2"]
+        )
+        await oracle.list_answer_records(business_view_id="bv-1", limit=10, trace_ids=[])
+    listed, empty = pool.connection.calls
+    assert "trace_id IN (:trace_id_0, :trace_id_1)" in listed.statement
+    assert listed.parameters["trace_id_1"] == "trace-2"
+    assert "1 = 0" in empty.statement
+
+
+@pytest.mark.anyio
+async def test_answer_record_is_saved_with_owner() -> None:
+    """回答を保存するときに持ち主（利用者の hash）を記録する（#304）。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    with _scope(user_id_hash="owner-hash"):
+        await _client(pool).save_answer_record(
+            {
+                "trace_id": "trace-1",
+                "surface": "search",
+                "answer_engine": "docrag",
+                "question": "質問",
+                "answer": "回答",
+            }
+        )
+    (call,) = pool.connection.calls
+    assert ":user_id_hash" in call.statement
+    assert call.parameters["user_id_hash"] == "owner-hash"
+
+
+def _capture_answer_list_sql(monkeypatch: MonkeyPatch) -> FakeOraclePool:
+    pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}]] * 3)
+    monkeypatch.setattr(search_route, "OracleClient", lambda *_a, **_k: _client(pool))
+    return pool
+
+
+def test_answer_history_api_limits_regular_users_to_own_answers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """一般の利用者は自分の回答だけ、rag.feedback.manage と SYSTEM_ADMIN は全件（#304）。"""
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("searcher", ["menu.search"])
+    auth.user_with_permissions("feedback-manager", ["menu.search", "rag.feedback.manage"])
+    admin_role = auth.create_role(["menu.search"])
+    auth.create_user("admin", [admin_role], system_admin=True)
+    pool = _capture_answer_list_sql(monkeypatch)
+
+    for login_user_id in ("searcher", "feedback-manager", "admin"):
+        response = client.get("/api/search/answers", headers=login(client, login_user_id))
+        assert response.status_code == 200, response.text
+    searcher_list, _count, manager_list, _count2, admin_list, _count3 = pool.connection.calls
+    assert "user_id_hash = :answer_owner_user_id_hash" in searcher_list.statement
+    assert len(str(searcher_list.parameters["answer_owner_user_id_hash"])) == 64
+    assert "answer_owner_user_id_hash" not in manager_list.statement
+    assert "answer_owner_user_id_hash" not in admin_list.statement
+
+
 def test_feedback_filters_are_scoped_to_allowed_business_views() -> None:
     with _scope(business_view_ids={"bv-1", "bv-2"}):
         where_sql, binds = _feedback_dashboard_filters(
@@ -211,6 +311,45 @@ async def test_document_queries_are_unrestricted_without_knowledge_base_scope() 
     with _scope():
         await _client(pool).list_documents()
     assert "scope_dkb" not in pool.connection.calls[0].statement
+
+
+@pytest.mark.anyio
+async def test_duplicate_documents_count_all_but_show_only_allowed_knowledge_bases() -> None:
+    """削除の影響（#303）は範囲外の複製も数え、所属 KB は利用者が見られるものだけを返す。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "dup-1",
+                    "file_name": "duplicate.txt",
+                    "status": "UPLOADED",
+                    "duplicate_of_document_id": "doc-1",
+                    "uploaded_at": datetime(2026, 9, 1, tzinfo=UTC),
+                }
+            ],
+            [{"document_id": "dup-1", "knowledge_base_id": "kb-1", "name": "社内規程"}],
+        ]
+    )
+    with _scope(knowledge_base_ids={"kb-1"}):
+        duplicates = await _client(pool).list_duplicate_documents(["doc-1", "doc-1"])
+
+    assert [(item.id, item.duplicate_of_document_id) for item in duplicates] == [("dup-1", "doc-1")]
+    assert [ref.id for ref in duplicates[0].knowledge_bases] == ["kb-1"]
+    duplicate_call, knowledge_base_call = pool.connection.calls
+    assert "duplicate_of_document_id IN (:duplicate_of_document_id_0)" in (duplicate_call.statement)
+    assert duplicate_call.parameters["duplicate_of_document_id_0"] == "doc-1"
+    assert "scope_dkb" not in duplicate_call.statement
+    assert "access_knowledge_base_id_0" not in duplicate_call.parameters
+    assert "kb.knowledge_base_id IN (:access_knowledge_base_id_0)" in (
+        knowledge_base_call.statement
+    )
+
+
+@pytest.mark.anyio
+async def test_duplicate_documents_skip_query_without_ids() -> None:
+    pool = FakeOraclePool(execute_results=[])
+    assert await _client(pool).list_duplicate_documents([]) == []
+    assert pool.connection.calls == []
 
 
 @pytest.mark.anyio

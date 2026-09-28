@@ -644,6 +644,18 @@ class DocumentDeleteResult(BaseModel):
     artifact_delete_failed_count: int = 0
 
 
+class DocumentDeleteImpact(BaseModel):
+    """削除の前に確認する影響（#303）。
+
+    重複文書は chunk を持たず、正本の chunk を所属 KB の検索対象として使う。正本を消すと
+    その KB の検索対象から内容が消えるため、自前の索引を持たない重複文書の件数と所属 KB を返す。
+    """
+
+    document_id: str
+    duplicate_count: int = 0
+    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
+
+
 class DocumentStats(BaseModel):
     """ドキュメント状態別の集計。"""
 

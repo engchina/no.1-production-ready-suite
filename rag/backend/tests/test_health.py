@@ -1,6 +1,7 @@
 """ヘルスチェックの疎通テスト。"""
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -362,6 +363,29 @@ def test_database_status_unreachable_when_probe_fails(monkeypatch: MonkeyPatch) 
     assert body["data"]["status"] == "unreachable"
     assert body["data"]["check"] == "ok"
     assert body["data"]["detail"]
+
+
+def test_database_status_unreachable_does_not_leak_connection_details(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """ログイン不要の path なので、接続先・サービス名を含む例外の文字列を返さない(#320)。"""
+    _configure_oracle_only(monkeypatch)
+
+    async def _probe_fail(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(
+            "DPY-6005: cannot connect to database (CONNECTION_ID=abc). "
+            "ORA-12514: listener at adb.example.oraclecloud.com:1522 does not know of "
+            "service secret_service_high"
+        )
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _probe_fail)
+
+    body = client.get("/api/ready/database").json()
+
+    assert body["data"]["status"] == "unreachable"
+    assert body["data"]["detail"] == "Oracle connection probe failed (ORA-12514)."
+    for secret in ("adb.example.oraclecloud.com", "1522", "secret_service_high", "CONNECTION_ID"):
+        assert secret not in json.dumps(body, ensure_ascii=False)
 
 
 def test_not_found_uses_api_response_shape() -> None:

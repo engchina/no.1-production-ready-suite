@@ -164,7 +164,9 @@ test.describe("作業状態の保持", () => {
     await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([businessView])));
     await page.route("**/api/chat/**", (route) => route.fulfill(pageEnvelope([])));
     let searchRequests = 0;
-    await page.route("**/api/search/answers**", (route) => route.fulfill(envelope([])));
+    await page.route("**/api/search/answers**", (route) =>
+    route.fulfill(envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }))
+  );
     await page.route("**/api/search/stream", async (route) => {
       searchRequests += 1;
       await route.fulfill({ status: 500, json: { data: null, error_messages: [], warning_messages: [] } });
@@ -232,7 +234,9 @@ test.describe("作業状態の保持", () => {
         })
       );
     });
-    await page.route("**/api/search/answers**", (route) => route.fulfill(envelope([])));
+    await page.route("**/api/search/answers**", (route) =>
+    route.fulfill(envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }))
+  );
 
     await page.goto("/chat");
     await page.getByRole("combobox", { name: "業務ビュー" }).click();
@@ -318,7 +322,9 @@ test.describe("作業状態の保持", () => {
     await page.route("**/api/feedback**", (route) =>
       route.fulfill({ status: 500, json: { data: null, error_messages: [], warning_messages: [] } })
     );
-    await page.route("**/api/search/answers**", (route) => route.fulfill(envelope([])));
+    await page.route("**/api/search/answers**", (route) =>
+    route.fulfill(envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }))
+  );
 
     await page.goto("/feedback?period=7&sort=oldest&size=50&page=1&rating=not_helpful");
     await openFromSidebar(page, "RAG 検索");
