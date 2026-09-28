@@ -18,7 +18,6 @@ import { ApiError, type DocragPromptKey, type DocragPromptView } from "@/lib/api
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useValuesChanged } from "@/lib/render-sync";
 import { useDocragPrompts, useSaveDocragPrompt } from "@/lib/queries";
 
 const PROMPT_MAX = 50000;
@@ -62,8 +61,13 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
   const save = useSaveDocragPrompt();
   const confirm = useConfirm();
   const [content, setContent] = useState(prompt.content);
-  // 保存・復帰で保存値が変わったレンダーで、編集欄を保存値へ揃える。
-  if (useValuesChanged([prompt.content])) setContent(prompt.content);
+  // 編集欄が基にした保存値。保存値が変わったレンダーで、未編集なら編集欄を保存値へ揃える。
+  // 編集中の内容は背景の再取得で上書きしない(UX 契約 workspace-state。#276)。
+  const [baseContent, setBaseContent] = useState(prompt.content);
+  if (prompt.content !== baseContent) {
+    setBaseContent(prompt.content);
+    if (content === baseContent) setContent(prompt.content);
+  }
   const dirty = content !== prompt.content;
   useLeaveGuard(dirty);
   const inputId = `docrag-prompt-${prompt.key}`;
@@ -76,7 +80,17 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
       confirmLabel: t("settings.docragPrompts.reset"),
       tone: "danger",
     });
-    if (confirmed) save.mutate({ key: prompt.key, content: null });
+    if (!confirmed) return;
+    save.mutate(
+      { key: prompt.key, content: null },
+      {
+        // 既定に戻すときは編集中の内容も捨て、既定の内容を編集欄へ入れる。
+        onSuccess: (data) => {
+          const restored = data.prompts.find((item) => item.key === prompt.key);
+          if (restored) setContent(restored.content);
+        },
+      }
+    );
   }
 
   return (

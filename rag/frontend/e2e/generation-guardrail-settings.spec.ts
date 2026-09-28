@@ -170,7 +170,7 @@ test("回答スタイルの native radio は方向キーで移動できる", asy
   await expect(page.getByRole("radio", { name: /詳細・出典明示/ })).toBeChecked();
 });
 
-test("revision 競合時は再読み込みを案内する", async ({ page }) => {
+test("revision 競合時は最新の設定を読み込み直して案内する", async ({ page }) => {
   await page.route("**/api/settings/generation", async (route) => {
     if (route.request().method() === "PATCH") {
       await route.fulfill({
@@ -189,7 +189,7 @@ test("revision 競合時は再読み込みを案内する", async ({ page }) => 
   await page.getByRole("radio", { name: /詳細・出典明示/ }).check();
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText(/画面を再読み込みしてから保存/)).toBeVisible();
+  await expect(page.getByText(/最新の設定を読み込みました/)).toBeVisible();
 });
 
 test("安全チェック設定は方針を保存できる", async ({ page }) => {
