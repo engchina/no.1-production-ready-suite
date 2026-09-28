@@ -48,6 +48,10 @@ for (const viewport of [
     await expect(page.getByText("標準版")).toBeVisible();
     await expect(page.getByText("監査版")).toBeVisible();
     await expect(page.getByRole("button", { name: "版を作成" })).toBeVisible();
+    // 版の system prompt は回答エンジンが DocRAG の業務ビューでは使われない(#300)。
+    await expect(page.getByTestId("docrag-unused-note")).toContainText(
+      "回答エンジンが DocRAG の業務ビューでは使われません"
+    );
     await expect(page.getByRole("link", { name: "回答プロンプト" })).toHaveAttribute(
       "aria-current",
       "page"

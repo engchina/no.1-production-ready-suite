@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHUNK_SIZE_MAX_CHARS,
   DEFAULT_DOCRAG_CHUNKING_PARAMS,
+  docragChunkingFellBack,
   invalidDocragChunkingParam,
   chunkSizeLabelKey,
   chunkingStrategyPreset,
@@ -68,5 +69,29 @@ describe("DocRAG 親子階層のパラメータ", () => {
       invalidDocragChunkingParam({ ...DEFAULT_DOCRAG_CHUNKING_PARAMS, docrag_child_target_chars: null })
         ?.field
     ).toBe("docrag_child_target_chars");
+  });
+});
+
+describe("docragChunkingFellBack", () => {
+  it("backend が縮退の印を付けた chunk があれば真", () => {
+    expect(
+      docragChunkingFellBack([
+        { metadata: { chunk_strategy: "structure_aware" } },
+        {
+          metadata: {
+            chunk_strategy: "structure_aware",
+            chunk_strategy_requested: "docrag_small_to_big",
+            chunk_strategy_fallback_reason: "docrag_layout_missing",
+          },
+        },
+      ])
+    ).toBe(true);
+  });
+
+  it("DocRAG 親子階層で分割した chunk や空の一覧では偽", () => {
+    expect(docragChunkingFellBack([{ metadata: { chunk_strategy: "docrag_small_to_big" } }])).toBe(
+      false
+    );
+    expect(docragChunkingFellBack([])).toBe(false);
   });
 });

@@ -169,8 +169,11 @@ def test_chunk_preview_reuses_review_extraction_without_state_change(
     )
 
 
-def test_chunk_preview_docrag_requires_docling_layout(monkeypatch: MonkeyPatch) -> None:
-    """DocRAG 親子階層のプレビューは、Docling 以外の解析結果なら理由付きの 422 にする。"""
+def test_chunk_preview_docrag_falls_back_without_docling_layout(monkeypatch: MonkeyPatch) -> None:
+    """Docling 以外の解析結果で DocRAG 親子階層をプレビューすると、構造認識で分割する(#300)。
+
+    以前は理由付きの 422 だった。縮退したことは chunk の metadata で示し、範囲外の値は 422 のまま。
+    """
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     recipe_id = _first_recipe_id(document_id)
@@ -188,8 +191,13 @@ def test_chunk_preview_docrag_requires_docling_layout(monkeypatch: MonkeyPatch) 
     )
 
     assert out_of_range.status_code == 422
-    assert response.status_code == 422
-    assert "Docling" in str(response.json())
+    assert response.status_code == 200
+    chunks = response.json()["data"]["chunks"]
+    assert chunks
+    for chunk in chunks:
+        assert chunk["metadata"]["chunk_strategy"] == "structure_aware"
+        assert chunk["metadata"]["chunk_strategy_requested"] == "docrag_small_to_big"
+        assert chunk["metadata"]["chunk_strategy_fallback_reason"] == "docrag_layout_missing"
 
 
 def test_chunk_preview_rejects_recipe_without_review_artifact(

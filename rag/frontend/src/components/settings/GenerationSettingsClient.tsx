@@ -19,6 +19,7 @@ import { Link } from "react-router-dom";
 import { Archive, RotateCcw, Save, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import {
   ApiError,
   type GenerationProfileName,
@@ -150,8 +151,13 @@ export function GenerationSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-fg">
-              {t("settings.generation.profile")}
+            <div>
+              <div className="text-sm font-medium text-fg">
+                {t("settings.generation.profile")}
+              </div>
+              <DocragUnusedNote id="generation-profile-docrag-note">
+                {t("settings.generation.docragUnused")}
+              </DocragUnusedNote>
             </div>
             {!settings.custom_prompt_configured ? (
               <Banner severity="info" title={t("settings.generation.custom.unavailableTitle")}>
@@ -161,7 +167,10 @@ export function GenerationSettingsClient() {
                 </Link>
               </Banner>
             ) : null}
-            <fieldset className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+            <fieldset
+              aria-describedby="generation-profile-docrag-note"
+              className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
+            >
               <legend className="sr-only">{t("settings.generation.profile")}</legend>
               {profiles.map((item) => {
                 const selected = profile === item.name;

@@ -4,6 +4,10 @@ docling サービスが ``parser_artifacts["docrag_layout"]`` に保持した La
 ``docrag.chunking.build_small_to_big_chunks`` で親子チャンクを作り、子だけを索引単位として返す。
 親の本文と ID は子の metadata(``chunk_group_id`` / ``docrag_parent_text``)に保持し、既存の
 group sibling 展開と回答文脈で使う。Oracle Text と embedding には rag_poc の search_text を使う。
+
+文書解析が Docling 以外で docrag_layout がない文書は、失敗させずに「構造認識」(structure_aware)で
+分割する(#300)。縮退したことは chunk の metadata(``chunk_strategy_requested`` /
+``chunk_strategy_fallback_reason``)に残し、分割プレビューと Chunk 一覧で利用者に示す。
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from rag_parser_core.extraction import StructuredExtraction
@@ -26,13 +31,20 @@ DOCRAG_LAYOUT_ARTIFACT = "docrag_layout"
 DOCRAG_SOURCE_PARSER = "docling_docrag"
 # 検索・embedding 用 text(rag_poc の retrieval_text)を載せる metadata key。
 DOCRAG_SEARCH_TEXT_KEY = "docrag_search_text"
+# docrag_layout がない文書で DocRAG 親子階層の代わりに使う分割方式(#300)。
+DOCRAG_FALLBACK_CHUNKING_STRATEGY = "structure_aware"
+# 縮退時に chunk metadata へ残す key と理由。chunk_strategy には実際に使った方式が入る。
+CHUNK_STRATEGY_REQUESTED_KEY = "chunk_strategy_requested"
+CHUNK_STRATEGY_FALLBACK_REASON_KEY = "chunk_strategy_fallback_reason"
+DOCRAG_LAYOUT_MISSING_REASON = "docrag_layout_missing"
 
 
 class DocragLayoutMissingError(ValueError):
     """DocRAG 分割に必要な docling レイアウトが抽出結果にない。
 
-    文書解析が Docling 以外の文書で DocRAG 親子階層を選んだときに起きる。取込ジョブの
-    失敗理由として、そのまま利用者へ表示してよい文言にする(``safe_for_user``)。
+    取込と分割プレビューは ``has_docrag_layout`` で先に判定して構造認識へ縮退するため、
+    通常は起きない(``build_docrag_chunks`` を直接呼んだときの防御)。起きた場合も
+    利用者へ表示してよい文言にする(``safe_for_user``)。
     """
 
     safe_for_user = True
@@ -41,6 +53,29 @@ class DocragLayoutMissingError(ValueError):
 def has_docrag_layout(extraction: StructuredExtraction) -> bool:
     layout = extraction.parser_artifacts.get(DOCRAG_LAYOUT_ARTIFACT)
     return isinstance(layout, Mapping) and bool(layout.get("records"))
+
+
+def docrag_fallback_needed(strategy: str, extraction: StructuredExtraction) -> bool:
+    """DocRAG 親子階層を選んだが docrag_layout がなく、構造認識で分割するときに真。"""
+    return strategy == DOCRAG_CHUNKING_STRATEGY and not has_docrag_layout(extraction)
+
+
+def mark_docrag_fallback(chunks: list[Chunk]) -> list[Chunk]:
+    """構造認識で縮退した chunk に、選ばれていた方式と縮退の理由を残す。
+
+    ``chunk_strategy`` は分割に実際に使った方式(structure_aware)のまま変えない。
+    """
+    return [
+        replace(
+            chunk,
+            metadata={
+                **chunk.metadata,
+                CHUNK_STRATEGY_REQUESTED_KEY: DOCRAG_CHUNKING_STRATEGY,
+                CHUNK_STRATEGY_FALLBACK_REASON_KEY: DOCRAG_LAYOUT_MISSING_REASON,
+            },
+        )
+        for chunk in chunks
+    ]
 
 
 def docrag_chunking_config(params: DocragChunkingParams | None = None) -> ChunkingConfig:
