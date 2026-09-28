@@ -210,20 +210,8 @@ export function FeedbackClient() {
                 {t("feedback.filters.clear")}
               </Button>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-              <TextField
-                id="feedback-search"
-                label={t("feedback.filters.search")}
-                type="search"
-                value={searchDraft}
-                maxLength={200}
-                placeholder={t("feedback.filters.searchPlaceholder")}
-                leadingIcon={Search}
-                onValueChange={setSearchDraft}
-                onClear={() => setSearchDraft("")}
-                clearLabel={t("common.clearSearch")}
-                className="sm:col-span-2 xl:col-span-2"
-              />
+            {/* 1 行目は選択欄 5 つ、2 行目は検索欄（#405）。DOM の順と見た目の順を同じにし、Tab の順をそろえる。 */}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               <SelectField
                 id="feedback-business-view"
                 label={t("feedback.filters.businessView")}
@@ -260,6 +248,18 @@ export function FeedbackClient() {
                 onValueChange={(value) => setParam("sort", value)}
               />
             </div>
+            <TextField
+              id="feedback-search"
+              label={t("feedback.filters.search")}
+              type="search"
+              value={searchDraft}
+              maxLength={200}
+              placeholder={t("feedback.filters.searchPlaceholder")}
+              leadingIcon={Search}
+              onValueChange={setSearchDraft}
+              onClear={() => setSearchDraft("")}
+              clearLabel={t("common.clearSearch")}
+            />
           </CardContent>
         </Card>
 
