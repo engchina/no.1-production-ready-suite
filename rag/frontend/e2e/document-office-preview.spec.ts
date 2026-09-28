@@ -143,7 +143,7 @@ test("処理後 PDF が無い Office 原本は案内だけを表示し、ダウ�
   const previewPanel = page
     .getByRole("heading", { name: "原本プレビュー" })
     .locator("xpath=ancestor::section[1]");
-  await expect(previewPanel.getByRole("button", { name: "処理後" })).toBeDisabled();
+  await expect(previewPanel.getByRole("tab", { name: "処理後" })).toBeDisabled();
   await expect(
     previewPanel.getByText("Office 原本はブラウザーで直接表示できません", { exact: false })
   ).toBeVisible();
@@ -169,9 +169,9 @@ test("変換なし(passthrough)の処理後は無効化し、専用メッセー�
   const previewPanel = page
     .getByRole("heading", { name: "原本プレビュー" })
     .locator("xpath=ancestor::section[1]");
-  const afterButton = previewPanel.getByRole("button", { name: "処理後" });
-  await expect(afterButton).toBeDisabled();
-  await expect(afterButton).toHaveAttribute(
+  const afterTab = previewPanel.getByRole("tab", { name: "処理後" });
+  await expect(afterTab).toBeDisabled();
+  await expect(afterTab).toHaveAttribute(
     "title",
     "ファイル準備は変換されていないため、処理後ファイルはありません。"
   );

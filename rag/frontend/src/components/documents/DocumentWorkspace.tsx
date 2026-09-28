@@ -71,6 +71,7 @@ import {
   type SelectFieldOption,
   Skeleton,
   Switch,
+  TabPanel,
   Tabs,
   TextField,
   TimedLoadingState,
@@ -1196,68 +1197,63 @@ export function DocumentWorkspace({
           >
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-fg">{t("flow.preview")}</h3>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <div
-                  role="group"
-                  aria-label={t("flow.preview")}
-                  className="inline-flex rounded-md border border-border bg-surface-sunken p-0.5"
-                >
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedPreviewVariant === "original" ? "secondary" : "ghost"}
-                    className="whitespace-nowrap"
-                    onClick={() => setPreviewVariant("original")}
-                  >
-                    {t("flow.preview.before")}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedPreviewVariant === "prepared" ? "secondary" : "ghost"}
-                    className="whitespace-nowrap"
-                    onClick={() => setPreviewVariant("prepared")}
-                    disabled={!hasConvertedPreview}
-                    title={
-                      hasConvertedPreview
-                        ? undefined
-                        : preparedArtifact && !preparedArtifact.converted
-                          ? t("flow.preview.preparedSkipped")
-                          : t("flow.preview.preparedUnavailable")
-                    }
-                  >
-                    {t("flow.preview.after")}
-                  </Button>
-                </div>
-                <a
-                  href={selectedPreviewDownloadUrl}
-                  download={selectedPreviewFileName}
-                  className={cn(
-                    buttonVariants({ variant: "secondary", size: "sm" }),
-                    "whitespace-nowrap"
-                  )}
-                >
-                  <Download size={14} aria-hidden />
-                  {t("flow.preview.download")}
-                </a>
-              </div>
+              <a
+                href={selectedPreviewDownloadUrl}
+                download={selectedPreviewFileName}
+                className={cn(
+                  buttonVariants({ variant: "secondary", size: "sm" }),
+                  "whitespace-nowrap"
+                )}
+              >
+                <Download size={14} aria-hidden />
+                {t("flow.preview.download")}
+              </a>
             </div>
-            <DocumentPreview
-              documentId={documentId}
-              recipeId={selectedRecipeId}
-              fileName={selectedPreviewFileName}
-              variant={selectedPreviewVariant}
-              sourceProfile={selectedPreviewSourceProfile}
-              preparedArtifact={preparedArtifact}
-              showFallbackDownload={false}
-              focusPage={effectiveFocusPage}
-              focusBbox={effectiveFocusBbox}
-              focusBboxMode={effectiveFocusBboxMode}
-              focusBboxUnit={effectiveFocusBboxUnit}
-              focusPageSize={focusPageSize}
-              highlights={previewHighlights}
-              className="min-h-0 flex-1"
+            {/* 処理前 / 処理後は同じ文書の別の見方なので、共有の Tabs + TabPanel で切り替える(#396)。
+                枠の中に Button を並べた手書きのセグメントは、枠線が二重になり選択状態も読み上げられなかった。 */}
+            <Tabs
+              idPrefix="preview"
+              ariaLabel={t("flow.preview")}
+              className="mb-2 shrink-0"
+              value={selectedPreviewVariant}
+              onChange={(value) => setPreviewVariant(value === "prepared" ? "prepared" : "original")}
+              items={[
+                { id: "original", label: t("flow.preview.before") },
+                {
+                  id: "prepared",
+                  label: t("flow.preview.after"),
+                  disabled: !hasConvertedPreview,
+                  disabledReason: hasConvertedPreview
+                    ? undefined
+                    : preparedArtifact && !preparedArtifact.converted
+                      ? t("flow.preview.preparedSkipped")
+                      : t("flow.preview.preparedUnavailable"),
+                },
+              ]}
             />
+            <TabPanel
+              id={selectedPreviewVariant}
+              value={selectedPreviewVariant}
+              idPrefix="preview"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <DocumentPreview
+                documentId={documentId}
+                recipeId={selectedRecipeId}
+                fileName={selectedPreviewFileName}
+                variant={selectedPreviewVariant}
+                sourceProfile={selectedPreviewSourceProfile}
+                preparedArtifact={preparedArtifact}
+                showFallbackDownload={false}
+                focusPage={effectiveFocusPage}
+                focusBbox={effectiveFocusBbox}
+                focusBboxMode={effectiveFocusBboxMode}
+                focusBboxUnit={effectiveFocusBboxUnit}
+                focusPageSize={focusPageSize}
+                highlights={previewHighlights}
+                className="min-h-0 flex-1"
+              />
+            </TabPanel>
           </section>
 
           {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替。
@@ -2208,58 +2204,45 @@ function DocumentExtractionExportPanel({
   const formats: DocumentExtractionExportFormat[] = ["markdown", "html", "json", "chunks"];
   return (
     <section className="mt-4 rounded-lg border border-border bg-surface-sunken p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
-          <Braces size={16} className="text-accent-fg" aria-hidden />
-          {t("flow.extractionExport.title")}
-        </h4>
-        <div
-          className="inline-flex flex-wrap rounded-md border border-border bg-surface p-0.5"
-          role="group"
-          aria-label={t("flow.extractionExport.format")}
-        >
-          {formats.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={cn(
-                "h-8 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
-                item === format
-                  ? "bg-accent-emphasis text-fg-on-accent"
-                  : "text-fg-muted hover:bg-surface-hover hover:text-fg"
-              )}
-              aria-pressed={item === format}
-              onClick={() => onFormatChange(item)}
-            >
-              {extractionExportFormatLabel(item)}
-            </button>
-          ))}
-        </div>
-      </div>
+      <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <Braces size={16} className="text-accent-fg" aria-hidden />
+        {t("flow.extractionExport.title")}
+      </h4>
       <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <ExportMetric label={t("flow.extraction.stats.pages")} value={pageCount} />
         <ExportMetric label={t("flow.extraction.stats.elements")} value={elementCount} />
         <ExportMetric label={t("flow.extractionExport.chunks")} value={chunkCount} />
       </dl>
-      {loading ? (
-        <TimedLoadingState
-          label={t("flow.extractionExport.loading")}
-          operationKey="document-extraction-export-load"
-          framed={false}
-          className="mt-3"
-          testId="document-extraction-export-loading"
-        >
-          <Skeleton className="h-36 w-full rounded-md" />
-        </TimedLoadingState>
-      ) : error ? (
-        <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
-          {t("flow.extractionExport.loadErrorHint")}
-        </Banner>
-      ) : (
-        <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg">
-          <code>{content || t("flow.extractionExport.empty")}</code>
-        </pre>
-      )}
+      {/* 形式は同じ抽出結果の別の見方なので、共有の Tabs + TabPanel で切り替える(#396)。
+          件数は形式によらないため、タブの外(上)に置く。 */}
+      <Tabs
+        idPrefix="extraction-export"
+        ariaLabel={t("flow.extractionExport.format")}
+        className="mt-3"
+        value={format}
+        onChange={(value) => onFormatChange(value as DocumentExtractionExportFormat)}
+        items={formats.map((item) => ({ id: item, label: extractionExportFormatLabel(item) }))}
+      />
+      <TabPanel id={format} value={format} idPrefix="extraction-export" className="mt-3">
+        {loading ? (
+          <TimedLoadingState
+            label={t("flow.extractionExport.loading")}
+            operationKey="document-extraction-export-load"
+            framed={false}
+            testId="document-extraction-export-loading"
+          >
+            <Skeleton className="h-36 w-full rounded-md" />
+          </TimedLoadingState>
+        ) : error ? (
+          <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
+            {t("flow.extractionExport.loadErrorHint")}
+          </Banner>
+        ) : (
+          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg">
+            <code>{content || t("flow.extractionExport.empty")}</code>
+          </pre>
+        )}
+      </TabPanel>
     </section>
   );
 }
