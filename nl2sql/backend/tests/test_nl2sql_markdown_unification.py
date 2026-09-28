@@ -943,3 +943,85 @@ def test_publication_with_legacy_full_scope_fingerprint_stays_usable() -> None:
     snapshot["schema_hash"] = definition_fingerprint(schema)
     svc._write("sales", job.id, SNAPSHOT, snapshot)
     assert published_context(rt, "sales", job.revision_id) == preparation["markdown"]
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expected"),
+    [
+        ({"table_names": ["APP.ORDERS", "APP.CUSTOMERS"]}, "旧形式の業務記述"),
+        ({"table_names": ["APP.ORDERS"]}, None),
+        ({"table_names": ["APP.ORDERS", "APP.CUSTOMERS"], "columns": {"APP.ORDERS": ["ID"]}}, None),
+    ],
+)
+def test_job_sends_legacy_published_markdown_only_for_full_profile_scope(
+    monkeypatch: pytest.MonkeyPatch, allowed: dict[str, Any], expected: str | None
+) -> None:
+    """旧形式の公開版(ontology_revision_*)は、Profile 全体を許可した job にだけ全文を渡す。"""
+    from types import SimpleNamespace
+
+    from app.features.nl2sql import ontology_router
+    from app.features.nl2sql.models import AllowedObjects, JobCreateRequest, Nl2SqlProfile
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+
+    monkeypatch.setattr(
+        ontology_router,
+        "ontology_runtime",
+        SimpleNamespace(published_markdown_for_revision=lambda *_a, **_k: "旧形式の業務記述"),
+    )
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    profile = Nl2SqlProfile(id="sales", name="販売", allowed_tables=["APP.ORDERS", "APP.CUSTOMERS"])
+    monkeypatch.setattr(
+        service, "profile_allowed_object_names", lambda _p: ["APP.ORDERS", "APP.CUSTOMERS"]
+    )
+
+    assert (
+        service._job_published_ontology_markdown(
+            request=JobCreateRequest(profile_id="sales", question="q", use_ontology_context=True),
+            profile=profile,
+            business_release_id="ontology_revision_legacy",
+            allowed=AllowedObjects(**allowed),
+        )
+        == expected
+    )
+
+
+def test_create_session_rejects_publication_between_graph_and_head_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """グラフ取得と公開 head の読み取りの間に公開が入ったら、版の混ざった session を作らない。"""
+    from app.features.nl2sql.ontology_markdown_workspace import MarkdownOntologyWorkspace
+    from app.features.nl2sql.ontology_router import QuerySessionApiCreate
+
+    rt, svc, _parser, preparation = prepared_workspace()
+    svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-race",
+        None,
+    )
+    original_query = rt._query_ontology
+    original_head = MarkdownOntologyWorkspace.head
+    graph_read = {"done": False}
+
+    def query_ontology(profile_id: str = "") -> Any:
+        graph = original_query(profile_id)
+        graph_read["done"] = True
+        return graph
+
+    def head(self: MarkdownOntologyWorkspace, profile_id: str) -> dict[str, Any]:
+        value = original_head(self, profile_id)
+        # グラフを読んだ直後に別の版が公開された状態
+        return (
+            {**value, "snapshot_id": "ontology_markdown_snapshot_newer"}
+            if graph_read["done"]
+            else value
+        )
+
+    monkeypatch.setattr(rt, "_query_ontology", query_ontology)
+    monkeypatch.setattr(MarkdownOntologyWorkspace, "head", head)
+
+    with pytest.raises(OntologyVersionConflictError):
+        rt.create_session(QuerySessionApiCreate(profile_id="sales", question="受注の一覧"))

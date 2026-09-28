@@ -18904,14 +18904,20 @@ class Nl2SqlService:
         if business_release_id == "":
             return None
         if business_release_id and business_release_id.startswith("ontology_revision_"):
+            from .ontology_published_context import legacy_markdown_in_scope
             from .ontology_router import ontology_runtime
 
-            return (
-                ontology_runtime.published_markdown_for_revision(
-                    business_release_id, profile_id=profile.id
-                )
-                or None
+            markdown = ontology_runtime.published_markdown_for_revision(
+                business_release_id, profile_id=profile.id
             )
+            if allowed is not None:
+                markdown = legacy_markdown_in_scope(
+                    markdown,
+                    profile_objects=self.profile_allowed_object_names(profile),
+                    allowed_tables=allowed.table_names,
+                    allowed_columns=allowed.columns,
+                )
+            return markdown or None
         if business_release_id:
             import json
 
