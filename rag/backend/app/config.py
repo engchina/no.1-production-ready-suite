@@ -387,7 +387,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # --- OCI Object Storage ---
     object_storage_region: str = Field(default="")
     object_storage_namespace: str = Field(default="")
-    object_storage_bucket: str = Field(default="")
+    object_storage_bucket: str = Field(default="production-ready")
     upload_storage_backend: UploadStorageBackend = Field(
         default="local",
         description=(
