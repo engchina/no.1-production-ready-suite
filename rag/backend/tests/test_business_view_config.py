@@ -54,6 +54,30 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     assert "vector_index_profile" not in dumped_query
 
 
+def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None:
+    """業務ビューは品質評価を上書きしない。保存済みの値は読み込み時に無視し、次回保存で消える(#301)。"""
+    settings = get_settings()
+    config = parse_business_view_config(
+        {
+            "query": {
+                "generation_profile": "detailed_cited",
+                "evaluation_suite": "strict_ci",
+            }
+        }
+    )
+
+    # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
+    assert config.query.generation_profile == "detailed_cited"
+    assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
+    merged, applied = resolve_business_view_settings(settings, config)
+    assert applied is True
+    assert merged.rag_evaluation_suite == settings.rag_evaluation_suite
+    dumped_query = dump_business_view_config(config)["query"]
+    assert isinstance(dumped_query, dict)
+    assert "evaluation_suite" not in dumped_query
+    assert dumped_query["generation_profile"] == "detailed_cited"
+
+
 def test_persona_and_language_remain_separate_generation_layers() -> None:
     """persona と既定言語は profile を置換せず別 layer として注入される。"""
     settings = get_settings()

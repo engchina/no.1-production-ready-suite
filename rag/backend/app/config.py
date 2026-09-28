@@ -1434,13 +1434,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://pipeline-retrieval:8000",
         description="retrieval ステージマイクロサービスの base URL。",
     )
-    rag_graph_temporal_enabled: bool = Field(
-        default=False,
-        description=(
-            "Temporal GraphRAG: full プロファイル時に KG の entity/relationship へ timestamp を"
-            "付与し、検索時に時間文脈フィルタを可能にする。off/entities では無効。"
-        ),
-    )
     rag_raptor_enabled: bool = Field(
         default=False,
         description=(

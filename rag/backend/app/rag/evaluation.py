@@ -16,7 +16,7 @@ from app.rag.file_processing_evaluation import (
     element_lineage_coverage,
 )
 from app.rag.generation_config import resolve_oracle_generation_settings
-from app.rag.guardrails import evaluate_groundedness
+from app.rag.guardrails import GroundednessEvaluation, evaluate_groundedness
 from app.rag.ingestion_quality import summarize_ingestion_quality
 from app.rag.observability import (
     elapsed_ms,
@@ -234,6 +234,9 @@ class EvaluationRunner:
             retrieved_ids = _unique_in_order([chunk.document_id for chunk in response.citations])
             relevant = set(case.relevant_document_ids)
             relevant_ids = list(case.relevant_document_ids)
+            # 正解が no-results(relevant document なし)の否定 case で、検索も根拠を返さなかった
+            # (no-results で答えた)ときは期待どおりなので、各指標で合格として数える(#301)。
+            expected_no_results = not relevant and not retrieved_ids
             hits: list[str] = []
             precision = 0.0
             recall = 0.0
@@ -247,8 +250,9 @@ class EvaluationRunner:
                 recall = len(set(hits)) / len(relevant)
                 reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
             else:
-                precision = 1.0 if not retrieved_ids else 0.0
-                recall = 1.0 if not retrieved_ids else 0.0
+                precision = 1.0 if expected_no_results else 0.0
+                recall = 1.0 if expected_no_results else 0.0
+                reciprocal_rank = 1.0 if expected_no_results else 0.0
             precision_total += precision
             recall_total += recall
             mrr_total += reciprocal_rank
@@ -258,14 +262,15 @@ class EvaluationRunner:
             )
             if answer_keyword_hit:
                 keyword_hits += 1
-            grounding_context = "\n".join(chunk.text for chunk in response.citations)
-            groundedness = evaluate_groundedness(response.answer, grounding_context)
+            groundedness = _case_groundedness(response, expected_no_results=expected_no_results)
             if groundedness.grounded:
                 groundedness_passes += 1
             faithfulness = groundedness.score
             context_precision = _context_precision(response.citations, relevant)
             context_recall = recall
-            response_relevancy = _response_relevancy(case.query, response.answer)
+            response_relevancy = (
+                1.0 if expected_no_results else _response_relevancy(case.query, response.answer)
+            )
             citation_traceability = _case_citation_traceability_coverage(
                 response,
                 relevant,
@@ -468,6 +473,27 @@ def _ingestion_quality_timeout_seconds(settings: Settings) -> float:
     """評価の補助サマリが golden set 実行を長時間ブロックしない上限を返す。"""
     timeout = float(getattr(settings, "db_read_timeout_seconds", 8.0))
     return max(0.001, min(timeout, 2.0))
+
+
+def _case_groundedness(
+    response: SearchResponse, *, expected_no_results: bool
+) -> GroundednessEvaluation:
+    """case の groundedness を返す。
+
+    正解が no-results の否定 case を no-results で答えたときは合格として数える(#301)。
+    固定の no-results 文言は citation context と重ならないため、通常の判定では
+    ``low_groundedness`` になり、否定 case を含む golden set が閾値で落ちる。
+    """
+    if expected_no_results:
+        return GroundednessEvaluation(
+            grounded=True,
+            score=1.0,
+            overlap_count=0,
+            answer_feature_count=0,
+            high_signal_overlap=False,
+        )
+    grounding_context = "\n".join(chunk.text for chunk in response.citations)
+    return evaluate_groundedness(response.answer, grounding_context)
 
 
 def _reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:

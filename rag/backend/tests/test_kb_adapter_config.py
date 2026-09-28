@@ -153,7 +153,7 @@ def test_dump_parse_round_trip() -> None:
     """dump → parse で正規の KB 構築フィールドだけが保たれる。"""
     config = _config(
         ingestion={"chunking_strategy": "page_level", "parser_adapter_backend": "docling"},
-        query={"evaluation_suite": "strict_ci"},
+        query={"guardrail_policy": "strict"},
     )
     restored = parse_adapter_config(dump_adapter_config(config))
     assert restored.ingestion == config.ingestion
