@@ -93,7 +93,7 @@ def _install(monkeypatch: MonkeyPatch, configs: dict[str, KnowledgeBaseAdapterCo
 def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) -> None:
     """単一 KB 指定でも、その KB の legacy query 上書きは pipeline に効かない。"""
     config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"generation_profile": "detailed_cited", "vector_index_profile": "accurate"}}
+        {"query": {"generation_profile": "detailed_cited", "vector_index_profile": "fast"}}
     )
     _install(monkeypatch, {"kb-1": config})
 
@@ -105,7 +105,7 @@ def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["generation_profile"] == "grounded_concise"
-    assert diagnostics["vector_index_profile"] == "balanced"
+    assert diagnostics["vector_index_profile"] == "accurate"
     assert diagnostics["kb_adapter_config_applied"] is None
     # pipeline へはグローバル settings が渡っている。
     assert RecordingPipeline.captured_settings is not None

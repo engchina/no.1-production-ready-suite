@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { API_REQUEST_TIMEOUT_MS, DASHBOARD_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
+import { API_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
 import { t } from "./i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -19,17 +19,17 @@ describe("api.request envelope", () => {
   it("成功時は data を取り出す", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
-        data: { stats: { total_uploads: 3 } },
+        data: { status: "ok", check: "ok", detail: null },
         error_messages: [],
         warning_messages: [],
       })
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.getDashboardSummary();
+    const result = await api.getDatabaseStatus();
 
-    expect(result.stats.total_uploads).toBe(3);
-    expect(fetchMock).toHaveBeenCalledWith("/api/dashboard/summary", expect.anything());
+    expect(result.status).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledWith("/api/ready/database", expect.anything());
   });
 
   it("エラー時は error_messages を持つ ApiError を投げる", async () => {
@@ -40,41 +40,14 @@ describe("api.request envelope", () => {
       )
     );
 
-    await expect(api.getDashboardSummary()).rejects.toMatchObject({
+    await expect(api.getDatabaseStatus()).rejects.toMatchObject({
       status: 403,
       messages: ["権限がありません。"],
     });
-    await expect(api.getDashboardSummary()).rejects.toBeInstanceOf(ApiError);
+    await expect(api.getDatabaseStatus()).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("応答が返らない場合はタイムアウトを ApiError として返す", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
-      const signal = init?.signal as AbortSignal | undefined;
-      return new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => {
-          reject(new DOMException("The operation was aborted.", "AbortError"));
-        });
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const requestPromise = expect(api.getDashboardSummary()).rejects.toMatchObject({
-      status: 408,
-      messages: [
-        t("common.api.timeout", { seconds: Math.ceil(DASHBOARD_REQUEST_TIMEOUT_MS / 1000) }),
-      ],
-    });
-    await vi.advanceTimersByTimeAsync(DASHBOARD_REQUEST_TIMEOUT_MS);
-
-    await requestPromise;
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/dashboard/summary",
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
-    );
-  });
-
-  it("getDatabaseStatus は Oracle 接続テスト用に通常 API timeout を使う", async () => {
+  it("応答が返らない場合はタイムアウトを ApiError として返す（getDatabaseStatus は通常 API timeout）", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
       const signal = init?.signal as AbortSignal | undefined;
@@ -95,6 +68,10 @@ describe("api.request envelope", () => {
     await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
 
     await requestPromise;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/ready/database",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
   });
 
   it("listDocuments は query string を組み立てる", async () => {
@@ -406,7 +383,6 @@ describe("api.request envelope", () => {
       chunking_strategy: null,
       chunk_size: 512,
       chunk_overlap: null,
-      chunk_child_size: null,
       chunk_min_chars: null,
       chunk_context_header_enabled: null,
       graph_profile: null,

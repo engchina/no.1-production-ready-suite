@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.rag.kb_adapter_config import (
     KbAdapterConfigError,
     KnowledgeBaseAdapterConfig,
+    KnowledgeBaseIngestionConfig,
     KnowledgeBaseQueryConfig,
     apply_adapter_config_or_global,
     compose_query_settings,
@@ -268,3 +269,48 @@ def test_invalid_literal_value_is_rejected_at_validation() -> None:
         KnowledgeBaseAdapterConfig.model_validate(
             {"query": {"retrieval_strategy": "does_not_exist"}}
         )
+
+
+def test_removed_parent_child_strategy_is_read_as_docrag() -> None:
+    """保存済みの親子階層は DocRAG 親子階層として読み、専用の子サイズは捨てる(#271)。"""
+    from app.schemas.document import DocumentProcessingConfig
+
+    config = parse_adapter_config(
+        {
+            "version": 2,
+            "ingestion": {
+                "chunking_strategy": "hierarchical_parent_child",
+                "chunk_child_size": 320,
+            },
+        }
+    )
+    assert config.ingestion.chunking_strategy == "docrag_small_to_big"
+    assert "chunk_child_size" not in config.ingestion.model_dump()
+    dumped_ingestion = dump_adapter_config(config)["ingestion"]
+    assert isinstance(dumped_ingestion, dict)
+    assert dumped_ingestion["chunking_strategy"] == "docrag_small_to_big"
+
+    # 文書レシピは extra="forbid" だが、削除した項目があっても読み込める。
+    recipe = DocumentProcessingConfig.model_validate(
+        {"chunking_strategy": "hierarchical_parent_child", "chunk_child_size": 800}
+    )
+    assert recipe.chunking_strategy == "docrag_small_to_big"
+    assert "chunk_child_size" not in recipe.model_dump(exclude_none=True)
+
+
+def test_docrag_params_overlay_ingestion_settings() -> None:
+    """DocRAG の 5 項目は文書レシピ(ingestion scope)で上書きできる。"""
+    config = KnowledgeBaseAdapterConfig(
+        ingestion=KnowledgeBaseIngestionConfig(
+            chunking_strategy="docrag_small_to_big",
+            docrag_child_target_chars=500,
+            docrag_parent_max_pages=1,
+        )
+    )
+    merged = resolve_effective_settings(get_settings(), config, scope="ingestion")
+    assert merged.rag_chunking_strategy == "docrag_small_to_big"
+    assert merged.rag_docrag_child_target_chars == 500
+    assert merged.rag_docrag_parent_max_pages == 1
+    assert merged.rag_docrag_parent_target_chars == get_settings().rag_docrag_parent_target_chars
+    with pytest.raises(ValueError):
+        KnowledgeBaseIngestionConfig(docrag_child_target_chars=2000)

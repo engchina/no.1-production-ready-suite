@@ -14,29 +14,6 @@ import {
 
 const unauthorized = { data: null, error_messages: ["ログインが必要です。"], warning_messages: [] };
 
-const DASHBOARD_SUMMARY = {
-  stats: {
-    total_uploads: 0,
-    uploads_this_month: 0,
-    total_indexed: 0,
-    indexed_this_month: 0,
-    searchable_rows: 0,
-  },
-  ingestion_quality: {
-    document_count: 0,
-    structured_document_count: 0,
-    element_count: 0,
-    table_count: 0,
-    list_count: 0,
-    page_count: 0,
-    segment_artifact_cache_miss_document_count: 0,
-    chunk_profile_counts: {},
-    content_kind_counts: {},
-  },
-  recent_activities: [],
-  system: { status: "online", version: "test", searchable_rows: 0, checks: {} },
-};
-
 /** ログイン状態を持つ `/api/auth/*` の mock。null は未ログイン（me が 401）。 */
 async function mockAuthApi(page: Page, initial: CurrentUserPayload | null) {
   const state = {
@@ -100,7 +77,7 @@ function loginTarget(loginUserId: string): CurrentUserPayload {
       login_user_id: "first.user",
       display_name: "初回 利用者",
       force_password_change: true,
-      permissions: ["menu.dashboard"],
+      permissions: ["menu.search"],
     });
   }
   return dbUser({
@@ -119,9 +96,6 @@ test.beforeEach(async ({ page }) => {
     route.fulfill({ json: { data: null, error_messages: [], warning_messages: [] } })
   );
   await mockDatabaseReady(page);
-  await page.route("**/api/dashboard/summary", (route) =>
-    route.fulfill({ json: apiEnvelope(DASHBOARD_SUMMARY) })
-  );
 });
 
 test("未ログインで開くとログイン画面へ移り、DB ユーザーでログインすると元の画面を開く", async ({ page }) => {
@@ -182,7 +156,7 @@ test("初回ログインは強制パスワード変更へ移り、変更後は C
   await expect(page.getByRole("button", { name: "ログインへ戻る" })).toBeVisible();
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toHaveCount(0);
   // 強制変更中は他の画面を開いてもパスワード変更へ戻す。
-  await page.goto("/dashboard");
+  await page.goto("/search");
   await expect(page).toHaveURL(/\/password\/change$/);
   await expectNoPageOverflow(page);
 
@@ -212,7 +186,7 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
         })
   );
 
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar).toBeVisible();
 
@@ -226,7 +200,7 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
 test("アカウント欄のパスワード変更とログアウト（ローカル DEBUG ではアカウント欄を出さない）", async ({ page }) => {
   const auth = await mockAuthApi(page, loginTarget("admin.user"));
 
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const viewport = page.viewportSize();
   if (viewport && viewport.width <= 640) {
@@ -237,7 +211,7 @@ test("アカウント欄のパスワード変更とログアウト（ローカ�
   await sidebar.getByRole("button", { name: "パスワード変更" }).click();
   await expect(page).toHaveURL(/\/password\/change$/);
   await page.getByRole("button", { name: "戻る" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
 
   if (viewport && viewport.width <= 640) {
     await page.getByRole("button", { name: "サイドバーを展開" }).click();
@@ -267,14 +241,15 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
     })
   );
 
+  // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
   await page.goto("/");
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/search$/);
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
   await expect(sidebar.getByText("ローカル利用者")).toHaveCount(0);
 
-  // ログイン画面を開いても既定の画面へ戻す。
+  // ログイン画面を開いても既定の入口（RAG 検索）へ戻す。
   await page.goto("/login");
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/search$/);
 });

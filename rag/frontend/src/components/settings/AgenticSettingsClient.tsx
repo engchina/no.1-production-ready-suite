@@ -10,6 +10,7 @@ import {
   Button,
   FormStatus,
   Skeleton,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Workflow } from "lucide-react";
@@ -44,9 +45,10 @@ export function AgenticSettingsClient() {
   const [form, setForm] = useState<AgenticSettingsUpdate | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
+  // server 値が変わったレンダー(初回取得・保存成功)でだけ、フォームを server 値に戻す。
+  // 保存中フラグを条件に入れると、保存に失敗したときも未保存の入力が消えてしまう(#274)。
+  const serverChanged = useValuesChanged([query.data]);
+  if (serverChanged && query.data) {
     setForm(formFromSettings(query.data));
   }
 
@@ -197,21 +199,25 @@ export function AgenticSettingsClient() {
           </dl>
           {/* 上の実行時設定（3 列）と同じ段組みの 1 列目に置く。 */}
           <div className="grid gap-x-6 gap-y-4 lg:grid-cols-3">
-            <NumberField
-              label={t("settings.agentic.maxSubqueries")}
-              value={form.max_subqueries}
+            <TextField
+              id="agentic-max-subqueries"
+              type="number"
+              inputMode="numeric"
               min={1}
               max={8}
-              disabled={save.isPending}
+              step={1}
+              label={t("settings.agentic.maxSubqueries")}
               helper={t("settings.agentic.maxSubqueriesHelper")}
-              onChange={updateMaxSubqueries}
+              error={maxSubqueriesError ? t("settings.agentic.maxSubqueriesError") : undefined}
+              value={Number.isFinite(form.max_subqueries) ? String(form.max_subqueries) : ""}
+              disabled={save.isPending}
+              onValueChange={(value) => updateMaxSubqueries(parseMaxSubqueries(value))}
             />
           </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
-              {maxSubqueriesError ? (
-                <FormStatus tone="danger" message={t("settings.agentic.maxSubqueriesError")} />
-              ) : dirty ? (
+              {/* 入力値の誤りは欄の直下(TextField の error)だけに出し、ここへ重ねない。 */}
+              {dirty ? (
                 <FormStatus tone="warning" message={t("settings.agentic.actions.unsaved")} />
               ) : null}
               {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
@@ -283,40 +289,9 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  disabled,
-  helper,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  disabled: boolean;
-  helper?: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-fg">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        value={Number.isFinite(value) ? value : ""}
-        min={min}
-        max={max}
-        aria-label={label}
-        disabled={disabled}
-        onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      {helper ? <span className="block text-xs text-fg-muted">{helper}</span> : null}
-    </label>
-  );
+/** 入力欄の文字列を数値へ。空欄は NaN(保存不可)として扱い、欄を空のまま表示する。 */
+function parseMaxSubqueries(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
 }
 
 function formFromSettings(settings: AgenticSettingsData): AgenticSettingsUpdate {

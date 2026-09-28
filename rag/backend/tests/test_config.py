@@ -21,27 +21,65 @@ def test_chunking_strategy_defaults_to_structure_aware() -> None:
     """Chunking アダプターの既定戦略は structure_aware。"""
     settings = Settings()
     assert settings.rag_chunking_strategy == "structure_aware"
-    assert settings.rag_chunk_child_size == 320
     assert settings.rag_chunk_min_chars == 120
     assert settings.rag_chunk_delimiter == "\\n\\n"
 
 
-def test_chunk_child_size_and_min_chars_must_be_smaller_than_chunk_size() -> None:
-    """適用 strategy では child_size / min_chars の誤設定を起動時に拒否する。"""
-    with pytest.raises(ValidationError):
-        Settings(
-            rag_chunking_strategy="hierarchical_parent_child",
-            rag_chunk_size=800,
-            rag_chunk_child_size=800,
-        )
+def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:
+    """適用 strategy では min_chars の誤設定を起動時に拒否する。"""
     with pytest.raises(ValidationError):
         Settings(rag_chunk_size=300, rag_chunk_min_chars=300)
     assert Settings(
         rag_chunking_strategy="fixed_size",
         rag_chunk_size=800,
-        rag_chunk_child_size=800,
         rag_chunk_min_chars=800,
     )
+
+
+def test_removed_parent_child_strategy_reads_as_docrag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """削除した親子階層の保存値は DocRAG 親子階層として読む。子サイズの旧変数は読まない。"""
+    monkeypatch.setenv("RAG_CHUNKING_STRATEGY", "hierarchical_parent_child")
+    monkeypatch.setenv("RAG_CHUNK_CHILD_SIZE", "900")
+    settings = Settings()
+    assert settings.rag_chunking_strategy == "docrag_small_to_big"
+    assert not hasattr(settings, "rag_chunk_child_size")
+
+
+def test_docrag_chunking_params_match_rag_poc_defaults_and_ranges() -> None:
+    """DocRAG 親子階層の既定値と範囲は docrag.chunking.constants(rag_poc)と一致する。"""
+    from docrag.chunking import constants as docrag_constants
+
+    settings = Settings()
+    pairs = {
+        "rag_docrag_child_target_chars": (
+            docrag_constants.DEFAULT_CHILD_TARGET_CHARS,
+            docrag_constants.CHILD_TARGET_CHARS_RANGE,
+        ),
+        "rag_docrag_table_child_target_chars": (
+            docrag_constants.DEFAULT_TABLE_CHILD_TARGET_CHARS,
+            docrag_constants.TABLE_CHILD_TARGET_CHARS_RANGE,
+        ),
+        "rag_docrag_parent_target_chars": (
+            docrag_constants.DEFAULT_PARENT_TARGET_CHARS,
+            docrag_constants.PARENT_TARGET_CHARS_RANGE,
+        ),
+        "rag_docrag_parent_max_pages": (
+            docrag_constants.DEFAULT_PARENT_MAX_PAGES,
+            docrag_constants.PARENT_MAX_PAGES_RANGE,
+        ),
+        "rag_docrag_parent_max_children": (
+            docrag_constants.DEFAULT_PARENT_MAX_CHILDREN,
+            docrag_constants.PARENT_MAX_CHILDREN_RANGE,
+        ),
+    }
+    for field, (default, (minimum, maximum, _step)) in pairs.items():
+        assert getattr(settings, field) == default, field
+        Settings.model_validate({field: minimum})
+        Settings.model_validate({field: maximum})
+        with pytest.raises(ValidationError):
+            Settings.model_validate({field: minimum - 1})
+        with pytest.raises(ValidationError):
+            Settings.model_validate({field: maximum + 1})
 
 
 def test_unknown_chunking_strategy_is_rejected() -> None:
@@ -84,9 +122,9 @@ def test_unknown_guardrail_policy_is_rejected() -> None:
         Settings(rag_guardrail_policy="paranoid")
 
 
-def test_vector_index_profile_defaults_to_balanced() -> None:
-    """Vector Index アダプターの既定 balanced は現行挙動と一致させる。"""
-    assert Settings().rag_vector_index_profile == "balanced"
+def test_vector_index_profile_defaults_to_accurate() -> None:
+    """Vector Index アダプターの既定は高精度（accurate。検索時 target accuracy 98。#272）。"""
+    assert Settings().rag_vector_index_profile == "accurate"
 
 
 def test_unknown_vector_index_profile_is_rejected() -> None:
@@ -570,13 +608,10 @@ def test_max_upload_bytes_defaults_to_200_mib_and_is_positive() -> None:
 def test_search_timeout_is_positive() -> None:
     """検索 timeout は正の秒数に制限する。"""
     assert Settings().rag_search_timeout_seconds == 30.0
-    assert Settings().dashboard_query_timeout_seconds == 8.0
     assert Settings().db_read_timeout_seconds == 8.0
 
     with pytest.raises(ValidationError):
         Settings(rag_search_timeout_seconds=0)
-    with pytest.raises(ValidationError):
-        Settings(dashboard_query_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(db_read_timeout_seconds=0)
 

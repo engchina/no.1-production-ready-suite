@@ -24,12 +24,22 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import (
     CHUNK_OVERLAP_MAX_CHARS,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
+    DOCRAG_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_CHILD_TARGET_CHARS_MIN,
+    DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    DOCRAG_PARENT_MAX_CHILDREN_MIN,
+    DOCRAG_PARENT_MAX_PAGES_MAX,
+    DOCRAG_PARENT_MAX_PAGES_MIN,
+    DOCRAG_PARENT_TARGET_CHARS_MAX,
+    DOCRAG_PARENT_TARGET_CHARS_MIN,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     ChunkingStrategy,
     DocragAnswerFlow,
     DocragQueryStrategy,
@@ -42,6 +52,7 @@ from app.config import (
     RetrievalStrategy,
     Settings,
     VectorIndexProfile,
+    normalize_legacy_chunking_strategy_value,
 )
 from app.config import (
     EvaluationSuite as EvaluationSuiteName,
@@ -69,8 +80,13 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunking_strategy": "rag_chunking_strategy",
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
-    "chunk_child_size": "rag_chunk_child_size",
     "chunk_min_chars": "rag_chunk_min_chars",
+    # DocRAG 親子階層の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。
+    "docrag_child_target_chars": "rag_docrag_child_target_chars",
+    "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
+    "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
+    "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
+    "docrag_parent_max_children": "rag_docrag_parent_max_children",
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
@@ -140,8 +156,24 @@ class KnowledgeBaseIngestionConfig(BaseModel):
         le=CHUNK_SIZE_MAX_CHARS,
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
+    docrag_child_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
+    )
+    docrag_table_child_target_chars: int | None = Field(
+        default=None,
+        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    )
+    docrag_parent_target_chars: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
+    )
+    docrag_parent_max_pages: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
+    )
+    docrag_parent_max_children: int | None = Field(
+        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
+    )
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None
     field_extraction_enabled: bool | None = None
@@ -150,6 +182,23 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     auto_parse_after_preprocess_enabled: bool | None = None
     auto_chunk_after_extract_enabled: bool | None = None
     auto_index_after_chunk_enabled: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_removed_chunking_values(cls, data: object) -> object:
+        """削除した分割方式の保存値を読み替える(文書レシピ・KB の保存済み JSON)。
+
+        親子階層(hierarchical_parent_child)は DocRAG 親子階層として扱い、その専用値
+        ``chunk_child_size`` は捨てる。次に保存すると新しい値だけが残る(#271)。
+        """
+        if not isinstance(data, Mapping):
+            return data
+        values = {key: value for key, value in data.items() if key != "chunk_child_size"}
+        if "chunking_strategy" in values:
+            values["chunking_strategy"] = normalize_legacy_chunking_strategy_value(
+                values["chunking_strategy"]
+            )
+        return values
 
 
 class KnowledgeBaseQueryConfig(BaseModel):
@@ -277,8 +326,6 @@ def _validate_chunk_consistency(settings: Settings) -> None:
     """overlay 後の chunk パラメータ整合性を再検査する(Settings の起動時検証と同等)。"""
     if settings.rag_chunk_overlap >= settings.rag_chunk_size:
         raise KbAdapterConfigError("chunk_overlap は chunk_size より小さくしてください。")
-    if settings.rag_chunk_child_size >= settings.rag_chunk_size:
-        raise KbAdapterConfigError("chunk_child_size は chunk_size より小さくしてください。")
     if settings.rag_chunk_min_chars >= settings.rag_chunk_size:
         raise KbAdapterConfigError("chunk_min_chars は chunk_size より小さくしてください。")
 

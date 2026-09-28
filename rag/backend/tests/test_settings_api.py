@@ -34,6 +34,7 @@ from app.clients.oracle import (
     StoredGenerationSettings,
 )
 from app.config import (
+    DOCRAG_CHUNKING_SETTING_FIELDS,
     MODEL_SETTINGS_STORE,
     PARSER_ADAPTERS_SECTION,
     Settings,
@@ -762,8 +763,8 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch.setattr(settings, "rag_chunking_strategy", "page_level")
     monkeypatch.setattr(settings, "rag_chunk_size", 900)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
-    monkeypatch.setattr(settings, "rag_chunk_child_size", 280)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
+    monkeypatch.setattr(settings, "rag_docrag_child_target_chars", 800)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
     monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", False)
 
@@ -774,24 +775,46 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["strategy"] == "page_level"
     assert body["chunk_size"] == 900
     assert body["overlap"] == 150
-    assert body["child_size"] == 280
+    assert "child_size" not in body
     assert body["min_chars"] == 50
+    assert body["docrag_child_target_chars"] == 800
+    assert body["docrag_table_child_target_chars"] == 3000
+    assert body["docrag_parent_target_chars"] == 6000
+    assert body["docrag_parent_max_pages"] == 3
+    assert body["docrag_parent_max_children"] == 12
     assert body["delimiter"] == "\\n---\\n"
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
+    # DocRAG 親子階層は、削除した親子階層の位置(3 番目)に並ぶ(#271)。
     assert names == [
         "structure_aware",
         "recursive_character",
-        "hierarchical_parent_child",
+        "docrag_small_to_big",
         "markdown_heading",
         "page_level",
         "fixed_size",
         "fixed_delimiter",
-        "docrag_small_to_big",
     ]
+    assert all("uses_child_size" not in item for item in body["strategies"])
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
     assert selected == ["page_level"]
+
+
+def _keep_chunking_settings(monkeypatch: MonkeyPatch) -> Any:
+    """PATCH が現在プロセスへ反映する文書分割設定をテスト後に戻す。"""
+    settings = get_settings()
+    for field in (
+        "rag_chunking_strategy",
+        "rag_chunk_size",
+        "rag_chunk_overlap",
+        "rag_chunk_min_chars",
+        "rag_chunk_delimiter",
+        "rag_chunk_context_header_enabled",
+        *DOCRAG_CHUNKING_SETTING_FIELDS,
+    ):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+    return settings
 
 
 def test_update_chunking_settings_persists_env_and_mutates_runtime(
@@ -799,23 +822,17 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     tmp_path: Path,
 ) -> None:
     """Chunking 設定は .env と現在プロセスの取込設定へ反映する。"""
-    settings = get_settings()
+    settings = _keep_chunking_settings(monkeypatch)
     monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
-    monkeypatch.setattr(settings, "rag_chunk_size", 800)
-    monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
-    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
-    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
-    monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", True)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
         "/api/settings/chunking",
         json={
-            "strategy": "hierarchical_parent_child",
+            "strategy": "recursive_character",
             "chunk_size": 1000,
             "overlap": 100,
-            "child_size": 300,
             "min_chars": 40,
             "delimiter": "---",
             "context_header_enabled": False,
@@ -824,21 +841,106 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["strategy"] == "hierarchical_parent_child"
+    assert body["strategy"] == "recursive_character"
     assert body["chunk_size"] == 1000
-    assert settings.rag_chunking_strategy == "hierarchical_parent_child"
+    assert settings.rag_chunking_strategy == "recursive_character"
     assert settings.rag_chunk_size == 1000
-    assert settings.rag_chunk_child_size == 300
     assert settings.rag_chunk_min_chars == 40
     assert settings.rag_chunk_delimiter == "---"
     assert settings.rag_chunk_context_header_enabled is False
     persisted = env_file.read_text(encoding="utf-8")
-    assert "RAG_CHUNKING_STRATEGY=hierarchical_parent_child" in persisted
+    assert "RAG_CHUNKING_STRATEGY=recursive_character" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
-    assert "RAG_CHUNK_CHILD_SIZE=300" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
     assert "RAG_CHUNK_DELIMITER=---" in persisted
     assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED=false" in persisted
+
+
+def test_update_chunking_settings_saves_docrag_params(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """DocRAG 親子階層の 5 項目を保存し、削除した親子階層の旧変数は .env から消す。"""
+    settings = _keep_chunking_settings(monkeypatch)
+    env_file = _settings_env_file(
+        monkeypatch,
+        tmp_path,
+        "RAG_CHUNKING_STRATEGY=hierarchical_parent_child\nRAG_CHUNK_CHILD_SIZE=300\n",
+    )
+
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "docrag_small_to_big",
+            "chunk_size": 800,
+            "overlap": 120,
+            "min_chars": 120,
+            "delimiter": "\\n\\n",
+            "context_header_enabled": True,
+            "docrag_child_target_chars": 600,
+            "docrag_table_child_target_chars": 1500,
+            "docrag_parent_target_chars": 4000,
+            "docrag_parent_max_pages": 2,
+            "docrag_parent_max_children": 8,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["strategy"] == "docrag_small_to_big"
+    assert body["docrag_child_target_chars"] == 600
+    assert body["docrag_parent_max_children"] == 8
+    assert settings.rag_chunking_strategy == "docrag_small_to_big"
+    assert settings.rag_docrag_child_target_chars == 600
+    assert settings.rag_docrag_table_child_target_chars == 1500
+    assert settings.rag_docrag_parent_target_chars == 4000
+    assert settings.rag_docrag_parent_max_pages == 2
+    assert settings.rag_docrag_parent_max_children == 8
+    persisted = env_file.read_text(encoding="utf-8")
+    assert "RAG_CHUNKING_STRATEGY=docrag_small_to_big" in persisted
+    assert "RAG_DOCRAG_CHILD_TARGET_CHARS=600" in persisted
+    assert "RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS=1500" in persisted
+    assert "RAG_DOCRAG_PARENT_TARGET_CHARS=4000" in persisted
+    assert "RAG_DOCRAG_PARENT_MAX_PAGES=2" in persisted
+    assert "RAG_DOCRAG_PARENT_MAX_CHILDREN=8" in persisted
+    assert "RAG_CHUNK_CHILD_SIZE" not in persisted
+    assert "hierarchical_parent_child" not in persisted
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("docrag_child_target_chars", 299),
+        ("docrag_child_target_chars", 1601),
+        ("docrag_table_child_target_chars", 8001),
+        ("docrag_parent_target_chars", 1199),
+        ("docrag_parent_max_pages", 6),
+        ("docrag_parent_max_children", 2),
+    ],
+)
+def test_update_chunking_settings_rejects_docrag_params_out_of_range(
+    field: str,
+    value: int,
+) -> None:
+    payload: dict[str, object] = {
+        "strategy": "docrag_small_to_big",
+        "chunk_size": 800,
+        "overlap": 120,
+        "min_chars": 120,
+        field: value,
+    }
+
+    assert client.patch("/api/settings/chunking", json=payload).status_code == 422
+
+
+def test_update_chunking_settings_rejects_removed_parent_child_strategy() -> None:
+    """削除した親子階層は新しく保存できない(保存済みの値は読み込み時に DocRAG へ読み替える)。"""
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={"strategy": "hierarchical_parent_child", "chunk_size": 800, "overlap": 120},
+    )
+
+    assert resp.status_code == 422
 
 
 def test_update_chunking_settings_rejects_unknown_strategy() -> None:
@@ -848,7 +950,6 @@ def test_update_chunking_settings_rejects_unknown_strategy() -> None:
             "strategy": "semantic_double_pass",
             "chunk_size": 800,
             "overlap": 120,
-            "child_size": 320,
             "min_chars": 0,
         },
     )
@@ -863,7 +964,6 @@ def test_update_chunking_settings_rejects_overlap_not_smaller_than_size() -> Non
             "strategy": "structure_aware",
             "chunk_size": 400,
             "overlap": 400,
-            "child_size": 320,
             "min_chars": 0,
         },
     )
@@ -880,7 +980,6 @@ def test_update_chunking_settings_accepts_new_maximums(
         "rag_chunking_strategy",
         "rag_chunk_size",
         "rag_chunk_overlap",
-        "rag_chunk_child_size",
         "rag_chunk_min_chars",
         "rag_chunk_delimiter",
         "rag_chunk_context_header_enabled",
@@ -894,7 +993,6 @@ def test_update_chunking_settings_accepts_new_maximums(
             "strategy": "page_level",
             "chunk_size": 32_000,
             "overlap": 8_000,
-            "child_size": 320,
             "min_chars": 120,
             "delimiter": "\\n\\n",
             "context_header_enabled": True,
@@ -918,7 +1016,6 @@ def test_update_chunking_settings_rejects_values_above_new_maximums(
         "strategy": "structure_aware",
         "chunk_size": 32_000,
         "overlap": 120,
-        "child_size": 320,
         "min_chars": 120,
         "delimiter": "\\n\\n",
         "context_header_enabled": True,
@@ -932,12 +1029,11 @@ def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """固定長は child_size / min_chars の cross-field bounds を使わない。"""
+    """固定長は min_chars の cross-field bounds を使わない。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
     monkeypatch.setattr(settings, "rag_chunk_size", 800)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
-    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
     _settings_env_file(monkeypatch, tmp_path)
@@ -948,7 +1044,6 @@ def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
             "strategy": "fixed_size",
             "chunk_size": 400,
             "overlap": 120,
-            "child_size": 400,
             "min_chars": 400,
             "delimiter": "\\n\\n",
         },
@@ -956,22 +1051,6 @@ def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
 
     assert resp.status_code == 200
     assert settings.rag_chunking_strategy == "fixed_size"
-
-
-def test_update_chunking_settings_rejects_child_size_for_parent_child() -> None:
-    resp = client.patch(
-        "/api/settings/chunking",
-        json={
-            "strategy": "hierarchical_parent_child",
-            "chunk_size": 400,
-            "overlap": 120,
-            "child_size": 400,
-            "min_chars": 0,
-            "delimiter": "\\n\\n",
-        },
-    )
-
-    assert resp.status_code == 422
 
 
 def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
@@ -982,7 +1061,6 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
     monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
     monkeypatch.setattr(settings, "rag_chunk_size", 800)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
-    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
     env_file = _settings_env_file(monkeypatch, tmp_path)
@@ -993,7 +1071,6 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
             "strategy": "fixed_delimiter",
             "chunk_size": 400,
             "overlap": 400,
-            "child_size": 400,
             "min_chars": 400,
             "delimiter": "---",
         },
@@ -1287,6 +1364,32 @@ def test_update_grounding_settings_rejects_inverted_crag_thresholds() -> None:
     assert resp.status_code == 422
 
 
+def test_update_grounding_settings_rejects_partial_update_that_inverts_thresholds(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """片方の閾値だけの部分更新でも、保存済みの他方と逆転する値は保存しない(#275)。"""
+    settings = get_settings()
+    _patch_grounding_crag_fields(monkeypatch, settings)
+    monkeypatch.setattr(settings, "rag_grounding_crag_confidence_threshold", 0.35)
+    monkeypatch.setattr(settings, "rag_crag_high_confidence_threshold", 0.7)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+
+    low_resp = client.patch("/api/settings/grounding", json={"crag_low_confidence_threshold": 0.9})
+    high_resp = client.patch(
+        "/api/settings/grounding", json={"crag_high_confidence_threshold": 0.2}
+    )
+
+    assert low_resp.status_code == 422
+    assert high_resp.status_code == 422
+    assert "高しきい値は低しきい値以上" in low_resp.text
+    assert settings.rag_grounding_crag_confidence_threshold == 0.35
+    assert settings.rag_crag_high_confidence_threshold == 0.7
+    after = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+    assert after == before
+
+
 def test_update_grounding_settings_rejects_unknown_pipeline() -> None:
     resp = client.patch("/api/settings/grounding", json={"pipeline": "agentic_loop"})
     assert resp.status_code == 422
@@ -1444,6 +1547,24 @@ def test_update_guardrail_settings_rejects_unready_oci_backend(
     assert response.status_code == 422
     assert "OCI 認証" in response.json()["error_messages"][0]
     assert settings.rag_guardrail_backend == "local"
+
+
+def test_guardrail_settings_reports_oci_readiness_even_when_local(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """保存中が local でも、OCI Guardrails を選んだときの未設定理由を返す(#277)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
+    monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
+    monkeypatch.setattr(settings, "oci_compartment_id", "")
+
+    resp = client.get("/api/settings/guardrail")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["backend"] == "local"
+    assert body["oci_configured"] is False
+    assert body["oci_warning_code"] == "oci_guardrails_compartment_missing"
 
 
 def test_update_guardrail_settings_rejects_unknown_policy() -> None:

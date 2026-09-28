@@ -20,7 +20,6 @@ import { SecurityPermissionsPage } from "@/components/security/SecurityPermissio
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
-import { DashboardClient } from "@/components/dashboard/DashboardClient";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FeedbackClient } from "@/components/feedback/FeedbackClient";
@@ -56,7 +55,12 @@ import { PipelineHubClient } from "@/components/settings/PipelineHubClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { UploadWorkspace } from "@/components/upload/UploadWorkspace";
 import { APP_ROUTES } from "@/lib/routes";
-import { canOpenRoute, defaultEntryRoute, settingsEntryRoute } from "@/lib/route-permissions";
+import {
+  canOpenRoute,
+  defaultEntryRoute,
+  firstAllowedRoute,
+  settingsEntryRoute,
+} from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 
@@ -77,8 +81,9 @@ export function App() {
       <Route path={APP_ROUTES.passwordChange} element={<PasswordChangePage />} />
       <Route path={APP_ROUTES.forbidden} element={<ForbiddenPage />} />
       <Route element={<ProtectedLayout />}>
-        <Route path="/" element={<EntryRedirect />} />
-        <Route path={APP_ROUTES.dashboard} element={<DashboardClient />} />
+        <Route path={APP_ROUTES.home} element={<HomeRedirect />} />
+        {/* 旧ルート互換: 廃止したダッシュボード（#261）のブックマークは既定の入口へ */}
+        <Route path="/dashboard" element={<EntryRedirect />} />
         <Route path={APP_ROUTES.upload} element={<UploadWorkspace />} />
         <Route path={APP_ROUTES.fileList} element={<FileListClient />} />
         <Route path={APP_ROUTES.knowledgeBases} element={<KnowledgeBaseManagementClient />} />
@@ -135,7 +140,13 @@ export function App() {
   );
 }
 
-/** `/` と未知の URL は、権限のある既定の画面へ（ダッシュボード、無ければナビの最初の画面。#214）。 */
+/** `/` はナビの並び順で最初に開ける画面へ（NL2SQL と同じ。#261）。 */
+function HomeRedirect() {
+  const { hasPermission } = useAuth();
+  return <Navigate to={firstAllowedRoute(hasPermission)} replace />;
+}
+
+/** 未知の URL と旧 URL は既定の入口へ（RAG 検索、開けなければ `/` 経由で最初に開ける画面）。 */
 function EntryRedirect() {
   const { hasPermission } = useAuth();
   return <Navigate to={defaultEntryRoute(hasPermission)} replace />;

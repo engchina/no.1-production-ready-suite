@@ -25,7 +25,7 @@ from rag_pipeline_core.vector_index import (
 from app.config import Settings, VectorIndexProfile
 
 VectorIndexProfileName = VectorIndexProfile
-DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = "balanced"
+DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = "accurate"
 VECTOR_INDEX_PROFILE_ORDER: tuple[VectorIndexProfileName, ...] = VECTOR_INDEX_PROFILES  # type: ignore[assignment]
 
 

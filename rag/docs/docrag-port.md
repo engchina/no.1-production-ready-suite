@@ -12,7 +12,7 @@ sibling repo `../rag_poc`（DocRAG）の、解析から回答生成までの実�
 |---|---|
 | `packages/docrag_core` | rag_poc の `src/docrag` を `entrypoints`（Gradio / HTTP）を除いてそのまま移したもの。import パスは `docrag.*` のまま。backend と docling サービスが依存する。回帰テストは CI の「DocRAG core」ジョブで実行する |
 | `services/parsers/docling` | DocRAG の Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約、装飾画像の判定、任意の Vision 図説明）。`parser_artifacts.docrag_layout` に LayoutRecord を保持する |
-| `backend/app/rag/docrag_chunking.py` | チャンク戦略 `docrag_small_to_big`（rag_poc の Small-to-Big 親子分割） |
+| `backend/app/rag/docrag_chunking.py` | チャンク戦略 `docrag_small_to_big`（画面の表示名は「DocRAG 親子階層」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/docrag_answer.py` | 回答エンジン `docrag`（rag_poc の回答フローを backend の検索・rerank で駆動） |
 | `backend/app/rag/business_view_knowledge.py` | 業務ビュー単位の知識（ドメインキーワード / Approved FAQ / 用語・ルール） |
 | `backend/app/rag/document_crop.py` | 解析に使ったファイルからの bbox の切り出し（プレビューと回答画像で共用） |
@@ -24,7 +24,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 機能 | 層 | 設定する場所 |
 |---|---|---|
 | Docling 解析・Vision 図説明 | 文書レシピ | 検索・回答設定 > 文書解析（Docling 選択時の「図・画像を AI で読み取る」）、または文書のレシピ編集 |
-| DocRAG 親子分割 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子分割」、または文書のレシピ編集 |
+| DocRAG 親子階層 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子階層」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
 | 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
@@ -44,7 +44,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 ## 使い方（推奨の流れ）
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、Vision（図・画像を AI で読み取る）を有効にする。有効にすると、画像 1 枚ごとに LLM の呼び出しと時間がかかる。
-2. **分割**：文書分割を「DocRAG 親子分割」にする。Docling の解析結果が必要で、他のパーサーの結果に対して選ぶとエラーで止まる。
+2. **分割**：文書分割を「DocRAG 親子階層」にする。Docling の解析結果が必要で、他のパーサーの結果に対して選ぶと Chunk 作成のジョブが「DocRAG 親子階層には Docling の解析結果が必要です。…」で失敗する（分割プレビューは 422）。失敗しても直前の active chunk_set は検索対象のまま残る。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
 3. **確認**：文書詳細の抽出タブで、次を確認できる。
    - 要素の種別と bbox
    - 表のテキスト化
@@ -67,6 +67,12 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 | 設定（env） | 既定 | 内容 |
 |---|---|---|
+| `RAG_CHUNKING_STRATEGY=docrag_small_to_big` | — | 文書分割を DocRAG 親子階層にする（文書レシピで上書きできる） |
+| `RAG_DOCRAG_CHILD_TARGET_CHARS` | `1000` | DocRAG 親子階層の子チャンク目標文字数（300〜1,600）。超える `Text` / `List-item` は文末で分ける |
+| `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `3000` | 表の子チャンク目標文字数（300〜8,000）。超える表だけ行グループに分け、列見出しを繰り返し付ける |
+| `RAG_DOCRAG_PARENT_TARGET_CHARS` | `6000` | 親チャンク目標文字数（1,200〜10,000） |
+| `RAG_DOCRAG_PARENT_MAX_PAGES` | `3` | 親チャンク最大ページ数（1〜5） |
+| `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `12` | 親チャンク最大 child 数（3〜20） |
 | `RAG_PARSER_DOCLING_VISION_ENABLED` | `false` | Docling 解析で図と画像入りの表を Vision で説明する（文書レシピで上書きできる） |
 | `RAG_ANSWER_ENGINE` | `standard` | 回答エンジンの全体既定。`docrag` で rag_poc の回答フローを使う（業務ビューで上書きできる） |
 | `RAG_TEXT_SEARCH_TOKENIZER` | `builtin` | Oracle Text クエリの分割方式。`sudachi` で rag_poc の Sudachi 分割を使う（検索・回答設定 > 検索方法で変更でき、業務ビューで上書きできる）。業務ビューにドメインキーワードがあれば、`builtin` でも DocRAG の分割でキーワードを 1 語として優先する |
@@ -91,6 +97,17 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
 - **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。
+
+DocRAG 親子階層の 5 項目は rag_poc の「チャンキング」tab と同じ名前・既定値・範囲（`docrag.chunking.constants` の `DEFAULT_*` / `*_RANGE`）。検索用テキストの 3 項目（`contextual_search_text_enabled` / `search_text_context_max_chars` / `child_search_text_max_chars`）は rag_poc でも画面に出していないので、既定値のまま使う。DocRAG 親子階層は検索用テキストを自分で組み立てるため、文書分割の「文脈ヘッダを検索対象へ追加」は効かない（画面でも DocRAG 選択時は出さない）。5 項目を既定から変えた文書だけ chunk_set_id が変わる（既定のままなら変わらない）。
+
+## 親子階層（`hierarchical_parent_child`）の削除（#271）
+
+LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧の同じ位置（再帰文字分割の次）に DocRAG 親子階層を置いた。
+
+- 保存済みの `hierarchical_parent_child`（`backend/.env` の `RAG_CHUNKING_STRATEGY`、文書・レシピの処理設定、KB の構築設定）は、読み込み時に `docrag_small_to_big` として扱う。子サイズ `chunk_child_size` / `RAG_CHUNK_CHILD_SIZE` は読まない。DB の移行は不要で、次に保存すると新しい値だけが残る（文書分割の設定を保存すると `.env` から `RAG_CHUNK_CHILD_SIZE` の行も消える）。
+- 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。`GET /api/documents/{id}/ingestion-config` は `chunking_strategy` の差分（`chunking_drift`）として返す。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない。DocRAG 親子階層で作り直すには、その文書の Chunk を再作成する。
+- DocRAG 親子階層は Docling の解析結果が必要。親子階層を使っていた文書の文書解析が Docling 以外なら、Chunk を作り直すと失敗する（上の「使い方」2.）。その文書は文書解析を Docling にして再解析するか、文書のレシピで別の分割方式（構造認識など）を選ぶ。
+- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は DocRAG 親子階層として読み、後者は無視する）。Docling を使わない環境では、更新前に `RAG_CHUNKING_STRATEGY` を `structure_aware` などへ変えておく。
 
 ## rag_poc との差分
 

@@ -7,7 +7,8 @@ export const APP_ROUTES = {
   passwordChange: "/password/change",
   forbidden: "/forbidden",
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
-  dashboard: "/",
+  // `/` は画面を持たない入口（ナビの並び順で最初に開ける画面へ移す。ダッシュボードは廃止。#262）。
+  home: "/",
   agents: "/agents",
   runtimes: "/runtimes",
   runs: "/runs",

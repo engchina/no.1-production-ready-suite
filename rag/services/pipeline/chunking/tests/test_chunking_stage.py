@@ -79,15 +79,16 @@ def test_run_rejects_cross_field_chunk_bounds() -> None:
             "overlap": 200,
         },
     )
-    child = client.post(
+    min_chars = client.post(
         "/run",
         json={
             "extraction": extraction.model_dump(mode="json"),
-            "strategy": "hierarchical_parent_child",
+            "strategy": "structure_aware",
             "chunk_size": 320,
-            "child_size": 320,
+            "overlap": 0,
+            "min_chars": 320,
         },
     )
 
     assert overlap.status_code == 422
-    assert child.status_code == 422
+    assert min_chars.status_code == 422

@@ -25,7 +25,7 @@ test("DB 接続済みでも schema 未作成ならデータベース設定へ案
     route.fulfill({ json: dbStatus("setup_required") })
   );
 
-  await page.goto("/dashboard");
+  await page.goto("/file-list");
 
   await expect(
     page.getByRole("heading", { name: "RAG システムテーブルの準備が必要です" })
@@ -44,12 +44,12 @@ test("DB 接続不可時、機能ページはエラーではなく確認案内�
   await page.route("**/api/ready/database", (route) =>
     route.fulfill({ json: dbStatus("unreachable") })
   );
-  // ダッシュボード本体 API は叩かれない想定だが、保険で 500 を返しておく
-  await page.route("**/api/dashboard/summary", (route) =>
+  // 画面本体の API は叩かれない想定だが、保険で 500 を返しておく
+  await page.route("**/api/documents**", (route) =>
     route.fulfill({ status: 500, json: { data: null, error_messages: ["boom"], warning_messages: [] } })
   );
 
-  await page.goto("/dashboard");
+  await page.goto("/file-list");
 
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
   // 全画面エラー(サーバー内部エラー)ではないこと

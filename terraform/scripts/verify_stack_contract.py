@@ -94,8 +94,6 @@ RAG_BASE_COMPOSE_SERVICES = [
     "preprocess-image-enhance",
     "preprocess-pii-redact",
     "parser-unstructured",
-    "pipeline-generation",
-    "pipeline-retrieval",
 ]
 RAG_OPTIONAL_COMPOSE_SERVICES = [
     "parser-docling",
@@ -626,16 +624,15 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             'user_data"           = local.agent_cloud_init_user_data',
             'from = oci_core_instance.product["agent"]',
             'to   = oci_core_instance.agent["agent"]',
-            # 全 Compute で同じサービス間 token の署名鍵と、Agent → RAG / NL2SQL の MCP を通す NSG。
+            # 全 Compute で同じサービス間 token の署名鍵。
             'resource "random_password" "service_token_secret" {',
             "special = false",
-            "product_mcp_nsg_enabled = var.deploy_agent && (var.deploy_rag || var.deploy_nl2sql)",
-            "source                    = data.oci_core_subnet.selected_compute_subnet.cidr_block",
-            "min = var.application_port",
-            "nsg_ids                   = oci_core_network_security_group.product_mcp[*].id",
         ],
         context="Compute per product",
     )
+    # MCP の通信は subnet の security list（stack の外）で許可する。stack は NSG を作らない（#259）。
+    if "oci_core_network_security_group" in compute or "nsg_ids" in compute:
+        raise AssertionError("The stack must not create NSGs; allow the MCP traffic in the subnet security list")
     instance_resources = re.findall(r'(?m)^resource "oci_core_instance" "([a-z_]+)"', compute)
     if instance_resources != ["product", "agent"]:
         raise AssertionError(

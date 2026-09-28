@@ -14,36 +14,6 @@ resource "random_password" "service_token_secret" {
   special = false
 }
 
-# Agent から RAG / NL2SQL の MCP（同じ subnet の application_port）への通信を通す最小の規則（#233）。
-# subnet の security list は stack の外で管理するため、RAG / NL2SQL の VNIC に NSG を付けて許可する。
-locals {
-  product_mcp_nsg_enabled = var.deploy_agent && (var.deploy_rag || var.deploy_nl2sql)
-}
-
-resource "oci_core_network_security_group" "product_mcp" {
-  count          = local.product_mcp_nsg_enabled ? 1 : 0
-  compartment_id = var.compartment_ocid
-  vcn_id         = data.oci_core_subnet.selected_compute_subnet.vcn_id
-  display_name   = "production-ready-suite-product-mcp"
-}
-
-resource "oci_core_network_security_group_security_rule" "product_mcp_ingress" {
-  count                     = local.product_mcp_nsg_enabled ? 1 : 0
-  network_security_group_id = oci_core_network_security_group.product_mcp[0].id
-  description               = "Agent to RAG / NL2SQL MCP (/api/mcp) in the same subnet"
-  direction                 = "INGRESS"
-  protocol                  = "6"
-  source                    = data.oci_core_subnet.selected_compute_subnet.cidr_block
-  stateless                 = false
-
-  tcp_options {
-    destination_port_range {
-      min = var.application_port
-      max = var.application_port
-    }
-  }
-}
-
 resource "oci_core_instance" "product" {
   for_each = local.non_agent_products
 
@@ -61,7 +31,6 @@ resource "oci_core_instance" "product" {
     assign_private_dns_record = "true"
     assign_public_ip          = !local.compute_subnet_prohibits_public_ip
     subnet_id                 = var.subnet_ai_subnet_id
-    nsg_ids                   = oci_core_network_security_group.product_mcp[*].id
   }
   display_name = local.product_instances[each.key].display_name
   instance_options {

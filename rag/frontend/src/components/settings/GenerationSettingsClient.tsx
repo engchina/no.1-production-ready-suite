@@ -36,6 +36,12 @@ import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { QueryHistorySettingsCard } from "./QueryHistorySettingsCard";
 
+type GenerationDraft = {
+  profile: GenerationProfileName;
+  /** 選び始めたときの保存値の revision。保存時の expected_revision に使う。 */
+  baseRevision: number;
+};
+
 const PROFILE_ORDER: GenerationProfileName[] = [
   "grounded_concise",
   "detailed_cited",
@@ -50,17 +56,15 @@ const PROFILE_ORDER: GenerationProfileName[] = [
 export function GenerationSettingsClient() {
   const query = useGenerationSettings();
   const save = useUpdateGenerationSettings();
-  const [profile, setProfile] = useState<GenerationProfileName | null>(null);
+  // 利用者が選んだ未保存の回答スタイルと、選び始めたときの revision(#276)。
+  // null の間は保存値を表示し、背景 refetch で保存値が変われば表示も追従する。選択中の値は
+  // 背景 refetch で上書きせず、保存時は選び始めた revision を送って他の更新との競合を検出する。
+  const [draft, setDraft] = useState<GenerationDraft | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // 初回ロード時のみ render 中に同期する。保存後の反映は onSuccess が担うため、背景 refetch で
-  // 未保存の選択を上書きしない。
-  if (query.data && profile === null) {
-    setProfile(query.data.profile);
-  }
+  const dirty = Boolean(query.data && draft && draft.profile !== query.data.profile);
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
+  useLeaveGuard(dirty);
 
   if (query.isPending) {
     return (
@@ -86,9 +90,9 @@ export function GenerationSettingsClient() {
   }
 
   const settings = query.data;
-  if (!settings || !profile) return null;
+  if (!settings) return null;
 
-  const dirty = profile !== settings.profile;
+  const profile = draft?.profile ?? settings.profile;
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.generation.saveError");
   const profiles = orderedProfiles(settings.profiles);
@@ -96,25 +100,36 @@ export function GenerationSettingsClient() {
   function selectProfile(next: GenerationProfileName) {
     save.reset();
     setSuccessMessage(null);
-    setProfile(next);
+    setDraft((current) =>
+      next === settings.profile
+        ? null
+        : { profile: next, baseRevision: current?.baseRevision ?? settings.revision }
+    );
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
-    setProfile(settings.profile);
+    setDraft(null);
   }
 
   function submit() {
-    if (!profile) return;
+    if (!draft || !dirty) return;
     save.mutate(
-      { profile, expected_revision: settings.revision },
+      { profile: draft.profile, expected_revision: draft.baseRevision },
       {
-        onSuccess: (data) => {
-          setProfile(data.profile);
+        onSuccess: () => {
+          setDraft(null);
           setSuccessMessage(t("settings.generation.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
+        onError: (error) => {
+          setSuccessMessage(null);
+          if (error instanceof ApiError && error.status === 409) {
+            // 他の操作で更新済み。古い選択を残さず最新の保存値を読み直して表示する。
+            setDraft(null);
+            void query.refetch();
+          }
+        },
       }
     );
   }

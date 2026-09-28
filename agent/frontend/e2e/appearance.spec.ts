@@ -68,7 +68,6 @@ for (const viewport of [
       .locator('[id^="nav-section-nav-section-"]')
       .evaluateAll((elements) => elements.map((element) => element.id));
     expect(sectionIds).toEqual([
-      "nav-section-nav-section-overview",
       "nav-section-nav-section-controlPlane",
       "nav-section-nav-section-security",
       "nav-section-nav-section-operations",

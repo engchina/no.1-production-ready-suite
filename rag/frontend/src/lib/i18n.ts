@@ -134,7 +134,6 @@ export const ja = {
   "appearance.theme.light": "ライト",
   "appearance.theme.dark": "ダーク",
   "appearance.theme.system": "自動（OS 設定）",
-  "nav.dashboard": "ダッシュボード",
   "nav.upload": "文書アップロード",
   "nav.upload.sidebar": "アップロード",
   "nav.fileList": "文書インデックス",
@@ -147,7 +146,6 @@ export const ja = {
   "nav.feedback": "フィードバック",
   // ページタイトルとサイドバー表示はいずれもユーザー向けの業務語を優先する。
   "nav.settingsPipeline": "設定の概要",
-  "nav.settingsPipeline.sidebar": "概要",
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",
   "nav.settingsUploadStorage": "アップロード保存先",
@@ -375,7 +373,7 @@ export const ja = {
   "settings.chunking.overview.description":
     "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、backend 内処理または pipeline-chunking へ渡す方式として選択できます。",
   "settings.chunking.serviceNote":
-    "ここで選ぶ 7 個は分割方式です。pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
+    "ここで選ぶ 7 個は分割方式です。DocRAG 親子階層は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
   "settings.chunking.selected": "選択中",
   "settings.chunking.recommendedFor": "推奨用途",
@@ -387,9 +385,9 @@ export const ja = {
   "settings.chunking.strategy.recursive_character": "再帰文字分割",
   "settings.chunking.strategy.recursive_character.description":
     "章節→文→文字の順に固定長で分割(LangChain 風)",
-  "settings.chunking.strategy.hierarchical_parent_child": "親子階層",
-  "settings.chunking.strategy.hierarchical_parent_child.description":
-    "親 chunk を子 chunk へ再分割し子を索引(AutoMerging 風)",
+  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子階層",
+  "settings.chunking.strategy.docrag_small_to_big.description":
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書では分割が失敗します）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -402,12 +400,26 @@ export const ja = {
   "settings.chunking.strategy.fixed_delimiter": "固定分割符",
   "settings.chunking.strategy.fixed_delimiter.description":
     "指定した分割符文字列で機械的に分割",
-  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子分割",
-  "settings.chunking.strategy.docrag_small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出し、親の節を回答文脈に使う（文書解析が Docling のときに利用）",
   "settings.chunking.params.title": "戦略別パラメータ",
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",
+  "settings.chunking.params.docragDescription":
+    "DocRAG 親子階層で使う子 chunk と親 chunk の大きさを設定します。既定値は rag_poc と同じです。親は番号付きの機能見出しもまたぎません。",
+  "settings.chunking.params.docragChildTargetChars": "子チャンク目標文字数",
+  "settings.chunking.params.docragChildTargetCharsHint":
+    "検索に使う子の大きさ（300〜1,600、既定 1,000）。超える本文は文末で分けます。",
+  "settings.chunking.params.docragTableChildTargetChars": "表の子チャンク目標文字数",
+  "settings.chunking.params.docragTableChildTargetCharsHint":
+    "この文字数を超える表だけ行グループに分け、列見出しを繰り返し付けます（300〜8,000、既定 3,000）。",
+  "settings.chunking.params.docragParentTargetChars": "親チャンク目標文字数",
+  "settings.chunking.params.docragParentTargetCharsHint":
+    "回答文脈に使う親の大きさ（1,200〜10,000、既定 6,000）。",
+  "settings.chunking.params.docragParentMaxPages": "親チャンク最大ページ数",
+  "settings.chunking.params.docragParentMaxPagesHint":
+    "1 つの親がまたげるページ数（1〜5、既定 3）。",
+  "settings.chunking.params.docragParentMaxChildren": "親チャンク最大 child 数",
+  "settings.chunking.params.docragParentMaxChildrenHint":
+    "1 つの親に入れる子の数（3〜20、既定 12）。",
   "settings.chunking.params.fixedSizeDescription":
     "固定長戦略で使う chunk サイズと overlap を設定します。",
   "settings.chunking.params.delimiterTitle": "固定分割符",
@@ -430,9 +442,7 @@ export const ja = {
   "settings.chunking.params.semanticSummary": "{size}文字超のみ再分割 / {overlap}",
   "settings.chunking.params.noOverlap": "重複なし",
   "settings.chunking.params.withOverlap": "重複 {overlap}文字",
-  "settings.chunking.params.childSize": "子 chunk サイズ(文字)",
   "settings.chunking.params.minChars": "最小 chunk 文字数",
-  "settings.chunking.params.childSizeHint": "親子階層戦略でのみ使用します。",
   "settings.chunking.params.minCharsHint": "0 で微小 chunk の吸収を無効化します。",
   "settings.chunking.params.contextHeader": "文脈ヘッダを検索対象へ追加",
   "settings.chunking.params.contextHeaderHint":
@@ -776,13 +786,13 @@ export const ja = {
     "検索方法の補正検索、または補正付き処理方式が有効なときの evidence grade 判定を調整します。",
   "settings.grounding.crag.lowThreshold": "低しきい値",
   "settings.grounding.crag.lowThreshold.helper":
-    "この値未満は低 grade(棄権の対象)。0 で補正検索全体を無効化します。",
+    "この値未満は低 grade(棄権の対象)。0 で信頼度による判定と精緻化の再検索を無効にします(根拠 0 件のときの補正は残ります)。",
   "settings.grounding.crag.highThreshold": "高しきい値",
   "settings.grounding.crag.highThreshold.helper":
     "この値以上は再検索せずそのまま回答します。低しきい値以上にしてください。",
   "settings.grounding.crag.maxHops": "再検索の上限回数",
   "settings.grounding.crag.maxHops.helper":
-    "中間帯でのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみ。",
+    "信頼度が高しきい値未満のときのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみで、根拠 0 件のときは検索方法の補正検索(条件緩和)を行います。",
   "settings.grounding.crag.abstain": "低 grade で回答を保留する",
   "settings.grounding.crag.abstain.helper":
     "再検索後も低しきい値未満のとき、回答せず保留メッセージを返します(既定 OFF)。",
@@ -822,13 +832,13 @@ export const ja = {
   "settings.generation.recommended.tuning": "調整",
   "settings.generation.profile.grounded_concise": "根拠重視・簡潔",
   "settings.generation.profile.grounded_concise.description":
-    "現行の標準 system prompt(既定)",
+    "質問へ直接答え、必要な根拠だけを簡潔にまとめる(既定)",
   "settings.generation.profile.detailed_cited": "詳細・出典明示",
   "settings.generation.profile.detailed_cited.description":
-    "根拠ごとに出典 ID を明示する詳細回答",
+    "段落ごとに出典 ID を明示する詳細回答",
   "settings.generation.profile.strict_extractive": "厳密抽出",
   "settings.generation.profile.strict_extractive.description":
-    "context の事実のみ・推測禁止・無ければ無いと回答",
+    "根拠の文をそのまま抜き出す・推測禁止・無ければ無いと回答",
   "settings.generation.profile.structured_json": "構造化 JSON",
   "settings.generation.profile.structured_json.description":
     "answer/evidence/sources を JSON で返す",
@@ -847,7 +857,7 @@ export const ja = {
   "settings.generation.actions.reset": "変更を破棄",
   "settings.generation.actions.unsaved": "未保存の変更があります。",
   "settings.generation.actions.conflict":
-    "別の操作で設定が更新されました。画面を再読み込みしてから保存してください。",
+    "別の操作で回答スタイルが更新されたため、最新の設定を読み込みました。内容を確認し、必要ならもう一度選んで保存してください。",
   "settings.generation.loadError": "回答スタイル設定を取得できませんでした。",
   "settings.generation.saveError": "回答スタイル設定を保存できませんでした。",
   "settings.generation.custom.manageLink": "プロンプト版を管理 →",
@@ -952,9 +962,9 @@ export const ja = {
   "settings.vectorIndex.reprovisionBadge": "索引再作成が必要",
   "settings.vectorIndex.profile.balanced": "バランス",
   "settings.vectorIndex.profile.balanced.description":
-    "現行設定の target accuracy を使用(既定)",
+    "現行設定の target accuracy を使用",
   "settings.vectorIndex.profile.accurate": "高精度",
-  "settings.vectorIndex.profile.accurate.description": "target accuracy 98。高再現・やや低速",
+  "settings.vectorIndex.profile.accurate.description": "target accuracy 98。高再現・やや低速(既定)",
   "settings.vectorIndex.profile.fast": "高速",
   "settings.vectorIndex.profile.fast.description": "target accuracy 85。低レイテンシ",
   "settings.vectorIndex.actions.save": "保存",
@@ -1059,7 +1069,7 @@ export const ja = {
     "最大 N 個の sub-question に分解し RRF 融合へ注入",
   "settings.agentic.profile.multi_hop": "multi-hop",
   "settings.agentic.profile.multi_hop.description":
-    "分解 + 根拠が弱い時に top context で 1 回追加分解(上限 1 hop)",
+    "分解 + 根拠が見つからない時に、上位の検索結果を踏まえて 1 回だけ追加分解(検索の補正が動いた時は行わない)",
   "settings.agentic.profile.smart_routing": "スマートルーティング",
   "settings.agentic.profile.smart_routing.description":
     "クエリの種別を見極めて検索向けに正規化(現状は書き換え相当の LLM 計画)",
@@ -1200,81 +1210,6 @@ export const ja = {
   "settings.database.systemTables.confirm.description":
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
-
-  "dashboard.title": "ダッシュボード",
-  "dashboard.subtitle":
-    "ナレッジ構築から根拠付き検索まで、検索・回答フローの状態を確認できます。",
-  "dashboard.refresh": "今すぐ更新",
-  "dashboard.lastUpdated": "最終更新",
-
-  "dashboard.metric.totalUploads": "累計アップロード",
-  "dashboard.metric.totalIndexed": "索引済み",
-  "dashboard.metric.searchableRows": "検索対象チャンク",
-  "dashboard.metric.unit.cases": "件",
-  "dashboard.metric.thisMonth": "今月 +{count}",
-
-  "dashboard.featureHub.title": "主要機能ハブ",
-  "dashboard.featureHub.subtitle": "RAG 運用の入口を集約",
-  "dashboard.feature.open": "画面を開く",
-  "dashboard.feature.upload.description": "検索対象にする文書を Object Storage 境界へ保存します。",
-  "dashboard.feature.fileList.description": "OCR、chunking、embedding、索引状態を確認します。",
-  "dashboard.feature.search.description": "索引済み文書を根拠付きで自然言語検索します。",
-
-  "dashboard.workflow.title": "RAG フロー",
-  "dashboard.workflow.subtitle": "推奨する処理順",
-  "dashboard.workflow.step.upload": "アップロード",
-  "dashboard.workflow.step.ingest": "取込・索引",
-  "dashboard.workflow.step.search": "RAG 検索",
-
-  "dashboard.activity.title": "最近のアクティビティ",
-  "dashboard.activity.subtitle": "直近の処理履歴",
-  "dashboard.activity.empty": "まだアクティビティがありません。",
-  "dashboard.activity.emptyHint": "ドキュメントアップロード後、この欄に処理履歴が表示されます。",
-  "dashboard.activity.type.upload": "アップロード",
-  "dashboard.activity.type.indexing": "索引済み",
-
-  "dashboard.system.title": "システム情報",
-  "dashboard.system.subtitle": "サービス状態",
-  "dashboard.system.serviceStatus": "サービス状態",
-  "dashboard.system.online": "稼働中",
-  "dashboard.system.degraded": "縮退稼働",
-  "dashboard.system.offline": "停止",
-  "dashboard.system.databaseStatus": "データベース状態",
-  "dashboard.system.version": "バージョン",
-  "dashboard.system.indexedRows": "検索対象チャンク",
-  "dashboard.system.databaseDegraded.title": "データベース機能は縮退中です",
-  "dashboard.system.databaseDegraded.message":
-    "画面は利用できますが、文書一覧・検索・索引など DB を使う機能は復旧まで失敗する場合があります。データベースの起動状態を確認してください。",
-  "dashboard.system.openDatabaseSettings": "データベース設定を開く",
-  "dashboard.system.check.timeout": "タイムアウト",
-  "dashboard.system.hint":
-    "検索品質を安定させるため、索引済みチャンク数と readiness を定期的に確認してください。",
-  "dashboard.ingestionQuality.title": "取込品質",
-  "dashboard.ingestionQuality.subtitle": "構造化抽出と chunk metadata のカバレッジ",
-  "dashboard.ingestionQuality.structuredCoverage": "構造化カバレッジ",
-  "dashboard.ingestionQuality.structuredDocuments": "{structured}/{total} 文書",
-  "dashboard.ingestionQuality.structureMetrics": "構造メトリクス",
-  "dashboard.ingestionQuality.healthMetrics": "品質ヘルス",
-  "dashboard.ingestionQuality.elements": "要素",
-  "dashboard.ingestionQuality.pages": "ページ",
-  "dashboard.ingestionQuality.tables": "表",
-  "dashboard.ingestionQuality.figures": "図",
-  "dashboard.ingestionQuality.formulas": "数式",
-  "dashboard.ingestionQuality.lists": "リスト",
-  "dashboard.ingestionQuality.pageCoverage": "ページ網羅率",
-  "dashboard.ingestionQuality.lowConfidence": "低信頼",
-  "dashboard.ingestionQuality.fallbacks": "フォールバック",
-  "dashboard.ingestionQuality.failedSegments": "失敗 segment",
-  "dashboard.ingestionQuality.segmentArtifactMisses": "Segment artifact 再抽出",
-  "dashboard.ingestionQuality.longDocuments": "長文書",
-  "dashboard.ingestionQuality.chunkProfiles": "分割方針",
-  "dashboard.ingestionQuality.parserBackends": "解析エンジン",
-  "dashboard.ingestionQuality.contentKinds": "内容種別",
-  "dashboard.ingestionQuality.emptyDistribution": "まだ分布データがありません。",
-  "dashboard.ingestionQuality.unknown": "不明",
-  "dashboard.ingestionQuality.parserBackend.enterpriseAi": "OCI Enterprise AI",
-  "dashboard.ingestionQuality.parserBackend.localPartition": "ローカル partition",
-  "dashboard.ingestionQuality.parserBackend.unsupported": "未対応",
 
   "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",
@@ -1555,6 +1490,10 @@ export const ja = {
     "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.search": "追加する文書を検索",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
+  "knowledgeBases.assignment.truncated":
+    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
@@ -1600,7 +1539,7 @@ export const ja = {
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
-    "「{fileName}」を「{name}」から外します。文書自体は削除されません。",
+    "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",

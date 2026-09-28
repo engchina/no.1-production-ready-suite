@@ -362,7 +362,7 @@ class FakeViewAndKbOracle:
 def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
     """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"vector_index_profile": "accurate", "post_retrieval_pipeline": "lean"}}
+        {"query": {"vector_index_profile": "fast", "post_retrieval_pipeline": "lean"}}
     )
     view_config = BusinessViewConfig(
         knowledge_base_ids=["kb-1"],
@@ -398,7 +398,7 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
     assert settings.rag_generation_profile == "detailed_cited"
     assert settings.rag_post_retrieval_pipeline == "compact"
     # Business View が触れていない vector_index は KB legacy 値ではなく global 既定。
-    assert settings.rag_vector_index_profile == "balanced"
+    assert settings.rag_vector_index_profile == "accurate"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] == "bv-1"
     assert diagnostics["kb_adapter_config_applied"] is None

@@ -188,6 +188,59 @@ test("根拠確認設定は CRAG しきい値を編集・検証できる", async
   await expect(page.getByRole("switch", { name: "低 grade で回答を保留する" })).toBeVisible();
 });
 
+test("検索方法設定の保存に失敗しても未保存の編集を残す (#275)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  let patchCount = 0;
+  await page.route("**/api/settings/retrieval", async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchCount += 1;
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["検索方法設定を backend/.env へ保存できませんでした。"],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: retrievalEnvelope("hybrid_rrf") });
+  });
+
+  await page.goto("/settings/retrieval");
+
+  const keyword = page.getByRole("radio", { name: /キーワード/ });
+  await keyword.click();
+  await page.getByRole("switch", { name: "補正検索" }).click();
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByText("検索方法設定を backend/.env へ保存できませんでした。")).toBeVisible();
+  expect(patchCount).toBe(1);
+  // 失敗後も利用者の選択を server 値へ戻さず、そのまま再試行できる。
+  await expect(keyword).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("switch", { name: "補正検索" })).toBeChecked();
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+});
+
+test("根拠確認のしきい値欄を空にしても 0 を入れず、小数を打ち込める (#275)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockGrounding(page);
+
+  await page.goto("/settings/grounding");
+
+  const low = page.getByRole("spinbutton", { name: "低しきい値" });
+  await expect(low).toHaveValue("0.35");
+  await low.fill("");
+  // 空欄は「CRAG を無効化する 0」として保存させない。
+  await expect(low).toHaveValue("");
+  await expect(page.getByText(/しきい値は 0〜1/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+  await low.pressSequentially("0.45");
+  await expect(low).toHaveValue("0.45");
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+});
+
 test("検索方法設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/retrieval", async (route) => {

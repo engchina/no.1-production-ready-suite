@@ -12,7 +12,6 @@ export const MENU_PERMISSIONS = {
   businessViews: "menu.business_views",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",
-  dashboard: "menu.dashboard",
   upload: "menu.upload",
   fileList: "menu.file_list",
   knowledgeBases: "menu.knowledge_bases",

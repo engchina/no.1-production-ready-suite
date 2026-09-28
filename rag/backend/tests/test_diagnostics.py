@@ -12,6 +12,8 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
         rag_context_window_chars=4096,
         rag_rrf_k=30,
         oracle_vector_target_accuracy=90,
+        # 設定の accuracy がそのまま出る balanced に固定する（既定は高精度。#272）。
+        rag_vector_index_profile="balanced",
     )
     request = SearchRequest(
         query="承認条件",
@@ -94,8 +96,13 @@ def test_rag_config_fingerprint_changes_when_rag_parameters_change() -> None:
 
 def test_rag_config_fingerprint_changes_when_oracle_vector_accuracy_changes() -> None:
     """fingerprint は Oracle approximate search 精度の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(oracle_vector_target_accuracy=95))
-    second = rag_config_fingerprint(Settings(oracle_vector_target_accuracy=90))
+    # 設定の accuracy がそのまま効く balanced で比べる（既定の高精度は 98 固定。#272）。
+    first = rag_config_fingerprint(
+        Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="balanced")
+    )
+    second = rag_config_fingerprint(
+        Settings(oracle_vector_target_accuracy=90, rag_vector_index_profile="balanced")
+    )
 
     assert first != second
 

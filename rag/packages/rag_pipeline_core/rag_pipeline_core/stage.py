@@ -46,7 +46,6 @@ class ChunkingStageRequest(BaseModel):
         le=CHUNK_SIZE_MAX_CHARS,
     )
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    child_size: int = Field(default=320, ge=80, le=4000)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
 
@@ -57,14 +56,11 @@ class ChunkingStageRequest(BaseModel):
             return self
         if self.overlap >= self.chunk_size:
             raise ValueError("overlap は chunk_size より小さくしてください。")
-        if self.strategy == "hierarchical_parent_child" and self.child_size >= self.chunk_size:
-            raise ValueError("child_size は chunk_size より小さくしてください。")
         if (
             self.strategy
             in {
                 "structure_aware",
                 "recursive_character",
-                "hierarchical_parent_child",
                 "markdown_heading",
                 "page_level",
             }

@@ -10,7 +10,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.business_views",
   "menu.evaluation",
   "menu.feedback",
-  "menu.dashboard",
   "menu.upload",
   "menu.file_list",
   "menu.knowledge_bases",

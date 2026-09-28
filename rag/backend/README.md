@@ -41,7 +41,6 @@ uv run bandit -r app          # セキュリティ
 |---|---|
 | `GET /api/health` | 稼働確認。OCI 前提の稼働 message を返す |
 | `GET /api/ready` | 依存設定を含む readiness。未設定時は 503 |
-| `GET /api/dashboard/summary` | ダッシュボード初期表示用の集計・最近の活動・システム情報 |
 | `POST /api/documents/upload` | ドキュメントファイルを Object Storage 境界へ保存 |
 | `GET /api/documents?status=UPLOADED&q=manual&limit=50&offset=0` | 文書一覧をページング・状態・ファイル名で絞り込み |
 | `GET /api/documents/stats` | 状態別ドキュメント件数を取得 |
@@ -125,10 +124,6 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` のいずれかが含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet のどちらかを要求します。レスポンスには設定値や secret は含めません。
 
-## ダッシュボード
-
-`GET /api/dashboard/summary` は UI 初期表示向けに、文書件数、月次アップロード/索引済み件数、検索可能チャンク数、最近の活動、readiness check をまとめて返します。集計は Oracle document/chunk table の SQL を使います。
-
 ## Oracle 26ai schema
 
 `app.rag.oracle_schema` は production 初期化用の DDL artifact と監査 manifest を生成します。`oracle_document_schema_sql()` は文書メタデータ、`oracle_vector_schema_sql()` は `VECTOR(1536, FLOAT32)` の chunk/vector table、`oracle_search_audit_schema_sql()` / `oracle_ingestion_audit_schema_sql()` は検索・取込の監査 table を生成します。
@@ -171,7 +166,7 @@ chunking は `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御し、通常方式�
 
 `structure_v1` では章節境界を跨がず、表は他要素から孤立させ、図・画像説明と図注は `content_kind=figure` として同一 chunk にまとめ、リストは連続性を保ち、header/footer は繰り返しノイズとして主索引から除外します。citation metadata には `chunk_profile`、`content_kind`、`section_title/path/level`、`page_start/page_end`、`element_kinds`、`element_ids`、`text_sha256`、`text_chars` を入れ、Oracle DDL を変えずに `rag_chunks.metadata_json` でトレースできるようにします。
 
-`INGESTING` / `ERROR` へ移ると、そのドキュメントの既存 chunk/index 行と古い抽出結果は検索・表示対象から外します。検索とダッシュボードの searchable rows は `INDEXED` の chunk だけを数えます。ユーザーが修正できる取込エラーは日本語の原因を残し、未知の内部/SDK エラーは汎用メッセージだけを document error に保存します。
+`INGESTING` / `ERROR` へ移ると、そのドキュメントの既存 chunk/index 行と古い抽出結果は検索・表示対象から外します。検索対象の chunk は `INDEXED` の文書の chunk だけです。ユーザーが修正できる取込エラーは日本語の原因を残し、未知の内部/SDK エラーは汎用メッセージだけを document error に保存します。
 
 `INDEXED` は chunk、embedding、Oracle 保存、chunk_set、KB binding、extraction artifact が揃った場合だけ付与します。KB への公開 binding に失敗した場合は `ERROR` に戻し、部分的に保存された chunk を検索対象にしません。
 
@@ -261,7 +256,7 @@ HTTP エラー、リクエスト検証エラー、未処理の 500 エラーは 
 app/
   main.py            FastAPI エントリ
   config.py          設定（pydantic-settings）
-  api/routes/        health / dashboard / documents / search / evaluation
+  api/routes/        health / documents / search / evaluation
   clients/           oci_enterprise_ai(LLM/VLM) / oci_genai(embed,rerank) / oracle(26ai) / object_storage
   rag/               chunking / ingestion / pipeline
   schemas/           common / document / search

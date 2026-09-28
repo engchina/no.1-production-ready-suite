@@ -8,7 +8,6 @@ import {
   Library,
   MessagesSquare,
   MessageSquareHeart,
-  LayoutDashboard,
   LayoutGrid,
   Boxes,
   ClipboardCheck,
@@ -97,7 +96,6 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.ingestion",
     items: [
-      { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard, permission: MENU_PERMISSIONS.dashboard },
       {
         href: APP_ROUTES.upload,
         labelKey: "nav.upload",
@@ -110,13 +108,13 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // RAG の検索・回答設定を、利用者が理解しやすい処理順で並べる。
+    // RAG の検索・回答設定を、利用者が理解しやすい処理順で並べる。「設定の概要」の工程の番号と同じ順番
+    // （ナレッジ構築の工程 → 検索・回答の工程。PipelineHubClient の INGESTION_HREFS）にする（#267）。
     titleKey: "nav.section.pipeline",
     items: [
       {
         href: APP_ROUTES.settingsPipeline,
         labelKey: "nav.settingsPipeline",
-        sidebarLabelKey: "nav.settingsPipeline.sidebar",
         icon: LayoutGrid,
         permission: MENU_PERMISSIONS.settingsPipeline,
       },
@@ -147,6 +145,12 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsVectorIndex.sidebar",
         icon: Boxes,
         permission: MENU_PERMISSIONS.settingsVectorIndex,
+      },
+      {
+        href: APP_ROUTES.settingsGraph,
+        labelKey: "nav.settingsGraph",
+        icon: Share2,
+        permission: MENU_PERMISSIONS.settingsGraph,
       },
       {
         href: APP_ROUTES.settingsRetrieval,
@@ -189,12 +193,6 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsEvaluation.sidebar",
         icon: ClipboardCheck,
         permission: MENU_PERMISSIONS.settingsEvaluation,
-      },
-      {
-        href: APP_ROUTES.settingsGraph,
-        labelKey: "nav.settingsGraph",
-        icon: Share2,
-        permission: MENU_PERMISSIONS.settingsGraph,
       },
       {
         href: APP_ROUTES.settingsAgentic,

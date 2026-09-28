@@ -83,18 +83,19 @@ _DEMOTED_STAGE_IDS = {
     "pipeline-guardrail",
     "pipeline-evaluation",
     "pipeline-agentic",
+    # 検索方法・回答スタイルも backend 内処理にそろえ、操作・配備の対象から外した（#278）。
+    "pipeline-retrieval",
+    "pipeline-generation",
 }
 
 
 def test_catalog_deployable_marks_future_service_stages() -> None:
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    # 格下げ 7 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
+    # 格下げ 9 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
     for sid in _DEMOTED_STAGE_IDS:
         assert by_id[sid].deployable is False, sid
         assert by_id[sid].execution_policy == "in_process_when_disabled", sid
-    # サービス維持: retrieval/generation と parser/preprocess 代表。
-    assert by_id["pipeline-retrieval"].deployable is True
-    assert by_id["pipeline-generation"].deployable is True
+    # サービス維持: parser/preprocess 代表。
     assert by_id["parser-docling"].deployable is True
     assert by_id["preprocess-office-to-pdf"].deployable is True
 
@@ -686,7 +687,7 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert chunking["deployable"] is False
     retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
     assert retrieval["execution_policy"] == "in_process_when_disabled"
-    assert retrieval["deployable"] is True
+    assert retrieval["deployable"] is False
 
 
 def test_control_rejects_non_deployable_stage(monkeypatch: MonkeyPatch) -> None:

@@ -12,9 +12,9 @@ import logging
 import math
 import re
 from array import array
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -428,6 +428,25 @@ class CustomPromptNotConfiguredError(RuntimeError):
     safe_for_user = True
 
 
+KNOWLEDGE_BASE_NAME_CONFLICT_MESSAGE = (
+    "同じ名前のナレッジベース（アーカイブ済みを含む）がすでにあります。別の名前を指定してください。"
+)
+DEFAULT_ONLY_MEMBERSHIP_REMOVE_MESSAGE = (
+    "DEFAULT にだけ所属する文書は外せません。先に別のナレッジベースへ追加してください。"
+)
+
+
+class KnowledgeBaseNameConflictError(ValueError):
+    """同じ tenant に同じ名前（大文字小文字を区別しない）のナレッジベースがある。
+
+    名前の一意制約（`rag_knowledge_bases_tenant_name_uidx`）はアーカイブ済みも含むため、
+    作成・改名の前に確かめて 409 で返す（制約違反のまま 500 にしない。#282）。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(KNOWLEDGE_BASE_NAME_CONFLICT_MESSAGE)
+
+
 class OracleClient:
     """Oracle 26ai 接続・ベクトル検索クライアント。"""
 
@@ -554,8 +573,11 @@ class OracleClient:
         confidence 降順で node/edge を上限件数まで取り、端点が node 集合に含まれる
         edge のみ返す(部分グラフの整合)。グラフ未構築なら空を返す。
         """
+        # entity / relationship の knowledge_base_id は取込時の所属のスナップショットなので、
+        # KB から外した文書の要素を出さないよう、今も所属している文書の行だけに絞る(#274)。
         node_rows = await self._fetch_all(
-            """
+            _render_sql(
+                """
             SELECT * FROM (
                 SELECT
                     e.entity_id,
@@ -564,9 +586,12 @@ class OracleClient:
                     NVL(e.confidence, 1) AS confidence
                 FROM rag_graph_entities e
                 WHERE e.knowledge_base_id = :kb
+                  AND {membership_sql}
                 ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
+                membership_sql=_graph_current_membership_predicate("e"),
+            ),
             {"kb": knowledge_base_id, "limit": limit},
         )
         nodes: list[dict[str, object]] = [
@@ -582,7 +607,8 @@ class OracleClient:
         if not node_ids:
             return nodes, []
         edge_rows = await self._fetch_all(
-            """
+            _render_sql(
+                """
             SELECT * FROM (
                 SELECT
                     r.relationship_id,
@@ -592,9 +618,12 @@ class OracleClient:
                     NVL(r.confidence, 1) AS confidence
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
+                  AND {membership_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
             ) WHERE ROWNUM <= :limit
             """,
+                membership_sql=_graph_current_membership_predicate("r"),
+            ),
             {"kb": knowledge_base_id, "limit": limit},
         )
         edges: list[dict[str, object]] = [
@@ -700,7 +729,14 @@ class OracleClient:
             existing = await self._find_knowledge_base_by_name_with_oracle(name)
             if existing is not None:
                 return existing
-            return await self.create_knowledge_base(name=name)
+            try:
+                return await self.create_knowledge_base(name=name)
+            except KnowledgeBaseNameConflictError:
+                # 同時に作成された DEFAULT を使う。
+                existing = await self._find_knowledge_base_by_name_with_oracle(name)
+                if existing is None:
+                    raise
+                return existing
 
     async def list_knowledge_bases(
         self,
@@ -2854,7 +2890,7 @@ class OracleClient:
                 )
                 """,
                 {
-                    "generation_profile": profile,
+                    "generation_profile": _initial_generation_profile(profile, imported_active),
                     "active_prompt_version_id": imported_active,
                     "updated_at": now,
                     "updated_by_hash": current_audit_request_context().user_id_hash,
@@ -3458,14 +3494,6 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
         )
-
-    async def count_chunks(self) -> int:
-        """検索可能なチャンク行数を返す。"""
-        return await self._count_chunks_with_oracle()
-
-    async def list_chunk_metadata(self) -> list[dict[str, MetadataValue]]:
-        """検索対象 chunk の metadata JSON だけを返す。"""
-        return await self._list_chunk_metadata_with_oracle()
 
     async def count_document_chunks(self, document_id: str) -> int:
         """指定 document の検索可能なチャンク行数を返す。"""
@@ -5129,35 +5157,12 @@ class OracleClient:
         )
 
         def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
-            _execute(
-                connection,
-                """
-                INSERT INTO rag_knowledge_bases (
-                    knowledge_base_id,
-                    tenant_id_hash,
-                    name,
-                    description,
-                    status,
-                    default_search_mode,
-                    retrieval_config,
-                    created_at,
-                    updated_at,
-                    archived_at
-                ) VALUES (
-                    :knowledge_base_id,
-                    :tenant_id_hash,
-                    :name,
-                    :description,
-                    :status,
-                    :default_search_mode,
-                    :retrieval_config,
-                    :created_at,
-                    :updated_at,
-                    :archived_at
-                )
-                """,
-                _knowledge_base_binds(knowledge_base),
-            )
+            # 名前の一意制約は tenant 全体（利用者の KB 範囲外・アーカイブ済みを含む）なので、
+            # tenant だけで探して 409 にする。
+            if _select_knowledge_base_by_name(connection, name) is not None:
+                raise KnowledgeBaseNameConflictError()
+            with _knowledge_base_name_conflict_guard():
+                _insert_knowledge_base(connection, knowledge_base)
             return _to_knowledge_base_detail(knowledge_base)
 
         return await self._run_transaction(operation)
@@ -5381,6 +5386,14 @@ class OracleClient:
                 and existing.name.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold()
             ):
                 raise ValueError("DEFAULT ナレッジベースの名前は変更できません。")
+            if (
+                "name" in fields
+                and name is not None
+                and name.casefold() != existing.name.casefold()
+            ):
+                conflicting = _select_knowledge_base_by_name(connection, name)
+                if conflicting is not None and conflicting.id != existing.id:
+                    raise KnowledgeBaseNameConflictError()
             updated = existing
             now = datetime.now(UTC)
             if fields:
@@ -5400,10 +5413,11 @@ class OracleClient:
                         retrieval_config=retrieval_config or {},
                     )
                 updated = updated_copy_knowledge_base(updated, updated_at=now)
-                _execute(
-                    connection,
-                    _render_sql(
-                        """
+                with _knowledge_base_name_conflict_guard():
+                    _execute(
+                        connection,
+                        _render_sql(
+                            """
                     UPDATE rag_knowledge_bases
                     SET
                         name = :name,
@@ -5414,10 +5428,12 @@ class OracleClient:
                     WHERE knowledge_base_id = :knowledge_base_id
                       AND {knowledge_base_access_sql}
                     """,
-                        knowledge_base_access_sql=(_oracle_knowledge_base_access_predicate_sql()),
-                    ),
-                    _knowledge_base_binds(updated),
-                )
+                            knowledge_base_access_sql=(
+                                _oracle_knowledge_base_access_predicate_sql()
+                            ),
+                        ),
+                        _knowledge_base_binds(updated),
+                    )
             return _to_knowledge_base_detail(updated)
 
         return await self._run_transaction(operation)
@@ -5792,6 +5808,21 @@ class OracleClient:
                 raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
             if _select_document(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+            # 文書は 1 つ以上の KB に所属させる（knowledge-base-management.md §6.2）。
+            # 最後の所属を外すときは DEFAULT へ移し、未所属の文書を作らない
+            # （利用者の KB 範囲外の所属も数える）。
+            member_ids = _select_document_membership_knowledge_base_ids(connection, document_id)
+            if member_ids == [knowledge_base_id]:
+                if knowledge_base.name.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold():
+                    raise ValueError(DEFAULT_ONLY_MEMBERSHIP_REMOVE_MESSAGE)
+                default_knowledge_base = _ensure_default_knowledge_base(
+                    connection, DEFAULT_KNOWLEDGE_BASE_NAME
+                )
+                _insert_document_knowledge_base_rows(
+                    connection,
+                    document_id=document_id,
+                    knowledge_base_ids=[default_knowledge_base.id],
+                )
             _execute(
                 connection,
                 _render_sql(
@@ -7127,44 +7158,6 @@ class OracleClient:
             binds,
         )
         return _row_count_value(row)
-
-    async def _count_chunks_with_oracle(self) -> int:
-        """Oracle chunk/vector table の検索可能件数を取得する。"""
-        where_sql, binds = _oracle_retrieval_where({})
-        row = await self._fetch_one(
-            _render_sql(
-                """
-            SELECT COUNT(*) AS count_value
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return _row_count_value(row)
-
-    async def _list_chunk_metadata_with_oracle(self) -> list[dict[str, MetadataValue]]:
-        """Oracle chunk table から検索対象 chunk の metadata JSON だけを取得する。"""
-        where_sql, binds = _oracle_retrieval_where({})
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_index,
-                c.metadata_json
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return [_chunk_metadata_from_row(row) for row in rows]
 
     async def _count_document_chunks_with_oracle(self, document_id: str) -> int:
         """Oracle chunk/vector table の document 別検索可能件数を取得する。"""
@@ -8661,7 +8654,11 @@ def _ensure_generation_settings_row(
     *,
     default_profile: str,
 ) -> StoredGenerationSettings:
-    """GLOBAL 行を一度だけ作成し、現在値を返す。"""
+    """GLOBAL 行を一度だけ作成し、現在値を返す。
+
+    新しい行は有効な Prompt 版を持たないため、deploy 既定が custom でも grounded_concise で
+    作る(custom は有効な版が必須。#276)。
+    """
 
     now = datetime.now(UTC)
     _execute(
@@ -8687,7 +8684,7 @@ def _ensure_generation_settings_row(
         )
         """,
         {
-            "generation_profile": default_profile,
+            "generation_profile": _initial_generation_profile(default_profile, None),
             "updated_at": now,
             "updated_by_hash": current_audit_request_context().user_id_hash,
         },
@@ -8708,6 +8705,14 @@ def _ensure_generation_settings_row(
     if row is None:  # pragma: no cover - MERGE/SELECT の DB invariant
         raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を初期化できませんでした。")
     return _stored_generation_settings_from_row(row)
+
+
+def _initial_generation_profile(profile: str, active_prompt_version_id: str | None) -> str:
+    """GLOBAL 行を新しく作るときの profile。有効な版がない custom は既定へ戻す。"""
+
+    if profile == "custom" and active_prompt_version_id is None:
+        return "grounded_concise"
+    return profile
 
 
 def _lock_generation_settings_row(
@@ -9496,6 +9501,22 @@ def _execute_ingestion_job_insert(
         )
 
 
+def _is_unique_constraint_violation(exc: Exception) -> bool:
+    """一意制約違反（ORA-00001）かどうか。"""
+    return "ORA-00001" in str(exc).upper()
+
+
+@contextmanager
+def _knowledge_base_name_conflict_guard() -> Iterator[None]:
+    """ナレッジベース名の一意制約違反を 409 用の例外へ読み替える（同時作成の競合）。"""
+    try:
+        yield
+    except Exception as exc:
+        if _is_unique_constraint_violation(exc):
+            raise KnowledgeBaseNameConflictError() from exc
+        raise
+
+
 def _is_missing_ingestion_job_max_attempts_error(exc: Exception) -> bool:
     message = str(exc).upper()
     return "ORA-00904" in message and "MAX_ATTEMPTS" in message
@@ -9969,6 +9990,33 @@ def _insert_document_knowledge_base_rows(
     )
 
 
+def _select_document_membership_knowledge_base_ids(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> list[str]:
+    """文書の所属 KB ID を tenant 全体で返し、所属の行をロックする。
+
+    最後の所属を外すかの判定に使う。利用者の KB 範囲で絞ると範囲外の所属を見落として
+    DEFAULT へ移してしまうため、tenant だけで絞る。同時に別の KB から外す操作と競合しても
+    未所属にならないよう、行をロックする。
+    """
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT knowledge_base_id
+        FROM rag_document_knowledge_bases
+        WHERE document_id = :document_id
+          AND {tenant_sql}
+        FOR UPDATE
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    return sorted(str(row["knowledge_base_id"]) for row in rows)
+
+
 def _select_document_knowledge_base_refs(
     connection: OracleConnectionProtocol,
     document_id: str,
@@ -10074,6 +10122,8 @@ def _oracle_document_where(
             "filter_knowledge_base_id",
             knowledge_base_ids,
         )
+        # 所属の一覧はアーカイブ済みの KB でも所属を返す（アーカイブは文書を消さない。
+        # 検索対象から外す ACTIVE 条件は検索の SQL（_oracle_retrieval_where）だけが持つ。#282）。
         clauses.append(
             """
             EXISTS (
@@ -10083,7 +10133,6 @@ def _oracle_document_where(
                   ON kb.knowledge_base_id = dkb.knowledge_base_id
                 WHERE dkb.document_id = rag_documents.document_id
                   AND {knowledge_base_filter_sql}
-                  AND kb.status = 'ACTIVE'
                   AND {knowledge_base_access_sql}
             )
             """.format(
@@ -10445,6 +10494,9 @@ def _oracle_graph_community_where(
         )
         clauses.append(knowledge_base_filter_sql)
         binds.update(knowledge_base_binds)
+    # community summary の knowledge_base_id は取込時点の所属のスナップショット。文書を KB から
+    # 外した後も行が残るため、今もその KB に所属している文書の summary だけに絞る(#274)。
+    clauses.append(_graph_current_membership_predicate("g"))
     explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
     if explicit_chunk_set_id:
         clauses.append("g.chunk_set_id = :graph_chunk_set_id")
@@ -10458,6 +10510,25 @@ def _oracle_graph_community_where(
             ")"
         )
     return " AND ".join(clauses), binds
+
+
+def _graph_current_membership_predicate(alias: str) -> str:
+    """graph 行の KB(取込時のスナップショット)に、元文書が今も所属しているかの predicate。
+
+    元文書は ``source_document_ids``(JSON 配列)で判定する。chunk_set を持たない旧来の行にも
+    効くよう、chunk_set 経由では判定しない。knowledge_base_id が NULL の行(取込時にどの KB にも
+    所属していなかった文書)は KB scope を持たないため、従来どおり KB 指定なしの検索だけが対象に
+    する(KB 指定・KB 権限の predicate が NULL を除外する)。
+    """
+    return (
+        f"({alias}.knowledge_base_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM rag_document_knowledge_bases member_dkb "
+        f"WHERE member_dkb.knowledge_base_id = {alias}.knowledge_base_id "
+        f"AND JSON_EXISTS({alias}.source_document_ids, "
+        "'$[*]?(@ == $member_document_id)' "
+        'PASSING member_dkb.document_id AS "member_document_id")'
+        "))"
+    )
 
 
 def _oracle_graph_local_match_predicate(query: str) -> tuple[str, dict[str, object]]:
@@ -11100,21 +11171,6 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
         category_name=_optional_str(row.get("category_name")),
         metadata=metadata,
     )
-
-
-def _chunk_metadata_from_row(row: Mapping[str, object]) -> dict[str, MetadataValue]:
-    """chunk metadata listing に traceable citation lineage を補う。"""
-    metadata = _metadata_from_json(row.get("metadata_json"))
-    document_id = row.get("document_id")
-    if document_id is not None:
-        metadata.setdefault("document_id", str(document_id))
-    chunk_id = row.get("chunk_id")
-    if chunk_id is not None:
-        metadata.setdefault("chunk_id", str(chunk_id))
-    chunk_index = row.get("chunk_index")
-    if "chunk_index" not in metadata and chunk_index is not None:
-        metadata["chunk_index"] = _int_value(chunk_index)
-    return metadata
 
 
 def _agent_memory_chunk_from_row(

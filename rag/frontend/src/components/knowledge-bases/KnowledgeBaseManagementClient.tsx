@@ -11,9 +11,9 @@ import {
   DataTable,
   type DataTableColumn,
   type EntityAction,
-  FieldError,
   FormStatus,
   RowActionMenu,
+  TextField,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import { Database, Search } from "lucide-react";
@@ -64,7 +64,9 @@ function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView
   );
 }
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
-const NAME_ERROR_ID = "knowledge-base-name-error";
+// API（KnowledgeBaseCreateRequest）の上限。超えると 422 の英語の検証メッセージになるため入力で止める。
+const NAME_MAX_LENGTH = 256;
+const DESCRIPTION_MAX_LENGTH = 2000;
 
 /** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
 export function KnowledgeBaseManagementClient() {
@@ -91,6 +93,19 @@ export function KnowledgeBaseManagementClient() {
     fn();
     setOffset(0);
   };
+  // 検索語が変わったときだけ先頭のページへ戻す（フォーカスが外れただけでページを戻さない）。
+  const applySearch = () => {
+    const next = search.trim();
+    if (next !== q) resetView(() => setQ(next));
+  };
+
+  // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す。
+  // 範囲外のまま「ナレッジベースがありません」を出さない。
+  const outOfRange = Boolean(page && page.offset === offset && items.length === 0 && offset > 0);
+  const lastPageOffset =
+    page && page.total > 0 ? Math.floor((page.total - 1) / LIMIT) * LIMIT : 0;
+  const movingToLastPage = outOfRange && lastPageOffset !== offset;
+  if (movingToLastPage) setOffset(lastPageOffset);
 
   return (
     <div>
@@ -135,9 +150,9 @@ export function KnowledgeBaseManagementClient() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") resetView(() => setQ(search.trim()));
+                if (event.key === "Enter") applySearch();
               }}
-              onBlur={() => resetView(() => setQ(search.trim()))}
+              onBlur={applySearch}
               placeholder={t("knowledgeBases.search.placeholder")}
               aria-label={t("knowledgeBases.search.placeholder")}
               className="h-9 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring sm:w-64"
@@ -152,7 +167,7 @@ export function KnowledgeBaseManagementClient() {
             }
             onRetry={() => void query.refetch()}
           />
-        ) : query.isPending ? (
+        ) : query.isPending || movingToLastPage ? (
           <KnowledgeBaseListSkeleton />
         ) : items.length > 0 ? (
           <>
@@ -249,35 +264,24 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-            <div>
-              <label htmlFor="knowledge-base-name" className="text-sm font-medium text-fg">
-                {t("knowledgeBases.field.name")}
-              </label>
-              <input
-                id="knowledge-base-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onBlur={() => setTouched(true)}
-                aria-invalid={Boolean(nameError)}
-                aria-describedby={nameError ? NAME_ERROR_ID : undefined}
-                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
-              />
-              <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
-            </div>
-            <div>
-              <label
-                htmlFor="knowledge-base-description"
-                className="text-sm font-medium text-fg"
-              >
-                {t("knowledgeBases.field.description")}
-              </label>
-              <input
-                id="knowledge-base-description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
-              />
-            </div>
+            <TextField
+              id="knowledge-base-name"
+              label={t("knowledgeBases.field.name")}
+              required
+              requiredLabel={t("common.required")}
+              value={name}
+              onValueChange={setName}
+              onBlur={() => setTouched(true)}
+              error={nameError ?? undefined}
+              maxLength={NAME_MAX_LENGTH}
+            />
+            <TextField
+              id="knowledge-base-description"
+              label={t("knowledgeBases.field.description")}
+              value={description}
+              onValueChange={setDescription}
+              maxLength={DESCRIPTION_MAX_LENGTH}
+            />
           </div>
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
             <Button size="lg" loading={create.isPending} type="submit" icon={Database}>

@@ -24,7 +24,7 @@
 - `category_name` は廃止せず、タグ/カテゴリ相当の軽量 facet として残す。
 - ナレッジベースは `rag_knowledge_bases` として独立管理する。
 - 文書とナレッジベースは多対多の関連表で管理し、同じ文書・chunk・embedding を物理複製しない。
-- 検索、評価、ダッシュボード、監査、認可はナレッジベース ID をスコープとして扱う。
+- 検索、評価、監査、認可はナレッジベース ID をスコープとして扱う。
 - UI 表示名は日本語で「ナレッジベース」とし、i18n key 経由で管理する。
 
 ## 2. 参考プロジェクトから取り込む考え方
@@ -189,6 +189,10 @@ Phase 1 では必須にしない。
 | `PATCH` | `/api/knowledge-bases/{knowledge_base_id}` | 名前、説明、既定検索モード、構築設定を更新。 |
 | `POST` | `/api/knowledge-bases/{knowledge_base_id}/archive` | アーカイブ。文書と chunk は削除しない。 |
 
+- 名前は tenant 内で一意（大文字小文字を区別せず、アーカイブ済みを含む）。作成・改名で重複すると 409 と理由を返す（#282）。
+- 変更系（`PATCH` / `archive` / 文書の追加・外す）の応答は、文書数・索引済み数などの集計列を取り直した詳細を返す（#282）。
+- アーカイブ済みの KB でも所属文書の一覧（`GET /api/knowledge-bases/{id}/documents`、`GET /api/documents?knowledge_base_id=`）は所属を返す。検索対象から外すのは検索の SQL だけ（#282）。
+
 作成 payload:
 
 ```json
@@ -209,6 +213,10 @@ Phase 1 では必須にしない。
 KB が持つのはナレッジ構築設定だけとする。検索方法、根拠確認、回答スタイル、安全チェック、
 品質評価は業務ビューの検索・回答設定で扱う。旧 `retrieval_config` / `query` 系の値は
 後方互換の読み取り対象に留め、runtime では使わない。
+
+> 3 層モデル（`rag/AGENTS.md`「RAG 設定責務」）以降、文書レシピの既定は global から解決し、KB の
+> `adapter_config.ingestion` も取込では使わない（保存値の読み取り互換だけ）。詳細の
+> `effective_adapter_config` は、文書レシピが継承する global 既定だけで解決した値を返す（#282）。
 
 レスポンス summary:
 
@@ -260,6 +268,8 @@ KB が持つのはナレッジ構築設定だけとする。検索方法、根�
 - アーカイブ済みナレッジベースへ新規文書は追加できない。
 - 文書が少なくとも 1 つのナレッジベースに所属する状態を原則とする。
 - 最後の membership 削除は、代替所属先を指定するか、`DEFAULT` へ自動移動する。
+  `DELETE /api/knowledge-bases/{id}/documents/{document_id}` は、利用者の KB 範囲外を含めてほかに所属がなければ
+  `DEFAULT` へ所属させてから外す。`DEFAULT` にだけ所属する文書は外せない（409。#282）。
 
 ### 6.3 アップロード API
 
@@ -416,10 +426,9 @@ X-RAG-Allowed-Knowledge-Base-Ids: kb_1,kb_2
 
 推奨順:
 
-1. ダッシュボード
-2. ナレッジベース
-3. アップロード
-4. 文書インデックス
+1. ナレッジベース
+2. アップロード
+3. 文書インデックス
 
 理由:
 
@@ -641,7 +650,6 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 - `UploadWorkspace` に `KnowledgeBasePicker` を追加。
 - `FileListClient` に knowledge base filter / column / membership action を追加。
 - `SearchClient` に search scope picker を追加。
-- `DashboardClient` に knowledge base metrics を追加するか、Phase 1 ではリンクだけ追加する。
 
 i18n key 例:
 
@@ -756,7 +764,6 @@ Playwright 実行時は dev server を起動し、desktop と mobile viewport �
 - upload に `KnowledgeBasePicker`。
 - file list に filter / column。
 - search に scope picker。
-- dashboard に metrics / link。
 - mobile / desktop / keyboard / empty-loading-error state を Playwright で確認。
 
 ### Step 5: Migration and ops

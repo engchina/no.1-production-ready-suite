@@ -99,6 +99,12 @@ def build_docrag_settings(
         "OCI_ENTERPRISE_AI_PROJECT_OCID": settings.oci_enterprise_ai_project_ocid,
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": enterprise_ai_default_model_id(settings),
         "OCI_ENTERPRISE_AI_VLM_MODEL": enterprise_ai_vision_model_id(settings),
+        # docrag は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
+        # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して
+        # 呼ぶが、この 2 値を渡さないと RAG_DOCRAG_RERANK_ENABLED=true でも
+        # 常に「未実行」になる(#275)。
+        "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
+        "RERANK_MODEL": settings.oci_genai_rerank_model,
         "DOCRAG_PROFILE": settings.rag_docrag_profile,
         "DOCRAG_OUTPUT_DIR": str(output_dir),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),

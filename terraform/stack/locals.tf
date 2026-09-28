@@ -56,8 +56,6 @@ locals {
       "preprocess-image-enhance",
       "preprocess-pii-redact",
       "parser-unstructured",
-      "pipeline-generation",
-      "pipeline-retrieval",
     ],
     var.rag_enable_parser_docling ? ["parser-docling"] : [],
     var.rag_enable_parser_marker ? ["parser-marker"] : [],
@@ -157,7 +155,7 @@ AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}
 EOT
 
   # Agent が RAG / NL2SQL の MCP（POST /api/mcp）を呼ぶ URL（#233）。配備した製品だけ。
-  # 同じ subnet の private IP の Nginx（/api/ を backend へ proxy）へ送る。通信は compute.tf の NSG で許可する。
+  # 同じ subnet の private IP の Nginx（/api/ を backend へ proxy）へ送る。通信は subnet の security list（stack の外）で許可する（#259）。
   # 認証は呼び出しごとのサービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET）。
   application_port_suffix = var.application_port == 80 ? "" : ":${var.application_port}"
   product_mcp_urls = {

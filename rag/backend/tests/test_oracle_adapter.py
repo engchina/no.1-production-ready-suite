@@ -130,6 +130,60 @@ async def test_independent_oracle_clients_read_same_generation_settings() -> Non
 
 
 @pytest.mark.anyio
+async def test_generation_settings_row_is_not_initialized_as_custom_without_prompt() -> None:
+    """deploy 既定が custom でも、有効な版のない GLOBAL 行は grounded_concise で作る(#276)。"""
+    row: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 1,
+        "updated_at": datetime.now(UTC),
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[row]])
+
+    await OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="custom"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).get_generation_settings()
+
+    merge = next(
+        call
+        for call in pool.connection.calls
+        if "MERGE INTO rag_generation_settings" in call.statement
+    )
+    assert merge.parameters["generation_profile"] == "grounded_concise"
+
+
+@pytest.mark.anyio
+async def test_legacy_import_does_not_create_custom_without_active_prompt() -> None:
+    """旧 profile が custom でも取り込める有効版がなければ grounded_concise で作る(#276)。"""
+    row: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 1,
+        "updated_at": datetime.now(UTC),
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[], [row], [row], [{"count_value": 0}], []])
+
+    result = await OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).import_legacy_generation_settings(profile="custom", versions=[], active_version_id=None)
+
+    merges = [
+        call
+        for call in pool.connection.calls
+        if "MERGE INTO rag_generation_settings" in call.statement
+    ]
+    assert merges
+    assert all(call.parameters["generation_profile"] == "grounded_concise" for call in merges)
+    assert result["profile"] == "grounded_concise"
+
+
+@pytest.mark.anyio
 async def test_generation_settings_update_locks_and_increments_revision() -> None:
     now = datetime.now(UTC)
     current: dict[str, object] = {
@@ -1261,7 +1315,9 @@ async def test_oracle_client_persists_knowledge_bases_through_pool() -> None:
     assert detail.status == KnowledgeBaseStatus.ACTIVE
     assert detail.retrieval_config == {"top_k": 20}
     assert pool.connection.commits == 1
-    call = pool.connection.calls[0]
+    # 作成前に tenant 内の同名 KB を確かめてから INSERT する（#282）。
+    assert "LOWER(name) = :knowledge_base_name" in pool.connection.calls[0].statement
+    call = pool.connection.calls[-1]
     assert "INSERT INTO rag_knowledge_bases" in call.statement
     assert call.parameters["name"] == "社内規程"
     assert call.parameters["default_search_mode"] == "hybrid"
@@ -1527,6 +1583,48 @@ async def test_oracle_graph_global_search_returns_community_summary_chunk() -> N
     assert "FROM rag_graph_community_summaries g" in call.statement
     assert call.parameters["top_k"] == 3
     assert call.parameters["graph_title_exact"] == "%全体の関係%"
+
+
+async def test_oracle_graph_global_search_requires_current_kb_membership() -> None:
+    """community summary の KB は取込時のスナップショットなので、今も所属する文書だけに絞る(#274)。
+
+    KB から外した文書の summary が、その KB の検索・KB 権限の利用者に返らないこと。
+    """
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.graph_global_search("全体の関係", top_k=3, filters={"knowledge_base_id": "kb-1"})
+
+    statement = " ".join(pool.connection.calls[0].statement.split())
+    assert "g.knowledge_base_id IN (:filter_knowledge_base_id_0)" in statement
+    assert (
+        "(g.knowledge_base_id IS NULL OR EXISTS (SELECT 1 FROM rag_document_knowledge_bases "
+        "member_dkb WHERE member_dkb.knowledge_base_id = g.knowledge_base_id "
+        "AND JSON_EXISTS(g.source_document_ids, '$[*]?(@ == $member_document_id)' "
+        'PASSING member_dkb.document_id AS "member_document_id")))'
+    ) in statement
+
+
+async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -> None:
+    """KB のグラフ表示も、KB から外した文書の entity / relationship を出さない(#274)。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [{"entity_id": "ent-1", "canonical_name": "承認条件", "confidence": 0.9}],
+            [],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    nodes, edges = await client.fetch_knowledge_base_subgraph("kb-1", limit=10)
+
+    assert [node["id"] for node in nodes] == ["ent-1"]
+    assert edges == []
+    node_sql, edge_sql = (" ".join(call.statement.split()) for call in pool.connection.calls[:2])
+    assert "{membership_sql}" not in node_sql
+    assert "member_dkb.knowledge_base_id = e.knowledge_base_id" in node_sql
+    assert "JSON_EXISTS(e.source_document_ids," in node_sql
+    assert "member_dkb.knowledge_base_id = r.knowledge_base_id" in edge_sql
+    assert "JSON_EXISTS(r.source_document_ids," in edge_sql
 
 
 async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitted() -> None:
@@ -1850,55 +1948,6 @@ async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> Non
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
     assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
-
-
-async def test_oci_list_chunk_metadata_adds_traceable_lineage() -> None:
-    """metadata 一覧も citation 可視化に必要な chunk lineage を補完する。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:4",
-                    "chunk_index": 4,
-                    "metadata_json": json.dumps(
-                        {
-                            "content_kind": "table",
-                            "element_ids": "tbl-1",
-                            "page_start": 2,
-                            "page_end": 3,
-                            "bbox": "[0.1,0.2,0.8,0.9]",
-                            "chunk_group_id": "grp-table",
-                            "source_parser": "marker",
-                        }
-                    ),
-                }
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    metadata = await client.list_chunk_metadata()
-
-    assert metadata == [
-        {
-            "document_id": "doc-1",
-            "chunk_id": "doc-1:4",
-            "chunk_index": 4,
-            "content_kind": "table",
-            "element_ids": "tbl-1",
-            "page_start": 2,
-            "page_end": 3,
-            "bbox": "[0.1,0.2,0.8,0.9]",
-            "chunk_group_id": "grp-table",
-            "source_parser": "marker",
-        }
-    ]
-    call = pool.connection.calls[0]
-    assert "c.document_id" in call.statement
-    assert "c.chunk_id" in call.statement
-    assert "c.chunk_index" in call.statement
-    assert "c.metadata_json" in call.statement
 
 
 async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_metadata() -> None:
@@ -2673,12 +2722,12 @@ async def test_local_delete_document_removes_chunks_and_is_idempotent() -> None:
         [[1.0, 0.0, 0.0]],
     )
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
 
     assert await client.delete_document(document.id) is True
     assert await client.delete_document(document.id) is False
     assert await client.get_document(document.id) is None
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
 
 
 @IN_MEMORY_ORACLE_REMOVED
@@ -3193,15 +3242,15 @@ async def test_non_searchable_status_clears_existing_chunks() -> None:
         [Chunk(index=0, text="社内規程 クラウド利用料", start_offset=0, end_offset=10)],
         [[1.0, 0.0, 0.0]],
     )
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
 
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1)
 
     await client.update_document_status(document.id, FileStatus.ERROR, "再分析に失敗しました。")
 
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
 
 
@@ -3522,11 +3571,11 @@ async def test_analyzing_status_removes_stale_chunks_during_reindex() -> None:
         [[1.0, 0.0, 0.0]],
     )
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
 
     await client.update_document_status(document.id, FileStatus.INGESTING)
 
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
 
 
@@ -3680,6 +3729,8 @@ def _oci_settings() -> Settings:
         oci_genai_embedding_dim=3,
         rag_min_similarity=0.05,
         oracle_vector_target_accuracy=90,
+        # 設定の target accuracy をそのまま使う balanced に固定する（既定は高精度。#272）。
+        rag_vector_index_profile="balanced",
         oracle_user="rag_app",
         oracle_password="oracle-password",
         oracle_dsn="adb.example.com/rag",

@@ -16,7 +16,6 @@ import {
   ApiError,
   type ChunkSetExperimentRequest,
   type ParserExtractionExperimentRequest,
-  type DashboardActivity,
   type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
   type DocumentChunkPreviewRequest,
@@ -86,7 +85,6 @@ import {
 
 export const queryKeys = {
   databaseStatus: ["system", "database-status"] as const,
-  dashboardSummary: ["dashboard", "summary"] as const,
   documents: (params: {
     status?: FileStatus;
     q?: string;
@@ -244,7 +242,6 @@ function invalidateDocumentProcessingQueries(
     queryKey: queryKeys.documentIngestionSegments(documentId),
   });
   qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-  qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
 }
 
 /**
@@ -286,17 +283,6 @@ export function documentsHaveActiveWork(
 /** ADB lifecycle が遷移中か。 */
 export function adbIsTransitioning(state: string | null | undefined): boolean {
   return state != null && ADB_TRANSITIONAL_STATES.has(state);
-}
-
-/** ダッシュボードの最近のアクティビティに進行中の処理が含まれるか。 */
-export function dashboardHasActiveWork(
-  activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined,
-): boolean {
-  return Boolean(
-    activities?.some((activity) =>
-      DOCUMENT_ACTIVE_STATUSES.has(activity.status),
-    ),
-  );
 }
 
 /** 取込 job がまだキュー待ち/実行中か。 */
@@ -362,19 +348,6 @@ export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
     retry: false,
     // 短時間はキャッシュし、ページ遷移ごとの再プローブを避ける。
     staleTime: 15_000,
-  });
-}
-
-/** ダッシュボード集計。取込/索引が進行中の間だけ自動再取得する。 */
-export function useDashboardSummary() {
-  return useQuery({
-    queryKey: queryKeys.dashboardSummary,
-    queryFn: api.getDashboardSummary,
-    retry: false,
-    refetchInterval: (query) =>
-      dashboardHasActiveWork(query.state.data?.recent_activities)
-        ? ACTIVE_REFETCH_INTERVAL_MS
-        : false,
   });
 }
 
@@ -544,7 +517,6 @@ export function useRetryFailedDocumentIngestionSegments() {
       qc.invalidateQueries({
         queryKey: ["documents", "ingestion-jobs", job.id],
       });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -798,7 +770,6 @@ export function useReplaceDocumentKnowledgeBases() {
       });
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -814,12 +785,11 @@ export function useDeleteDocument() {
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: queryKeys.documentStats });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
 
-/** ファイルアップロード。成功時に一覧・ダッシュボードを無効化。 */
+/** ファイルアップロード。成功時に一覧を無効化。 */
 export function useUploadDocument() {
   const qc = useQueryClient();
   return useMutation({
@@ -835,7 +805,6 @@ export function useUploadDocument() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -857,7 +826,6 @@ export function useBatchUploadDocuments() {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -926,7 +894,6 @@ export function useCreateKnowledgeBase() {
       api.createKnowledgeBase(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1454,7 +1421,6 @@ export function useApproveDocument() {
         queryKey: queryKeys.documentIngestionSegments(job.document_id),
       });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1487,7 +1453,6 @@ export function useRejectDocument() {
     onSuccess: (detail) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(detail.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1504,7 +1469,6 @@ export function useDrainIngestionJobs() {
       for (const job of jobs) {
         qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
       }
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1525,7 +1489,6 @@ export function useRetryIngestionJob() {
         queryKey: queryKeys.documentIngestionSegments(job.document_id),
       });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1539,7 +1502,6 @@ export function useCancelIngestionJob() {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1586,7 +1548,6 @@ export function useInitializeSystemTables() {
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.systemTables, data);
       qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1669,7 +1630,6 @@ export function useUpdateGraphSettings() {
       api.updateGraphSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.graphSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1691,7 +1651,6 @@ export function useUpdateAgenticSettings() {
       api.updateAgenticSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.agenticSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1734,7 +1693,6 @@ export function useUpdateVectorIndexSettings() {
       api.updateVectorIndexSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.vectorIndexSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1756,7 +1714,6 @@ export function useUpdateGenerationSettings() {
       api.updateGenerationSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.generationSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1822,7 +1779,6 @@ export function useUpdateGuardrailSettings() {
       api.updateGuardrailSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.guardrailSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1844,7 +1800,6 @@ export function useUpdateRetrievalSettings() {
       api.updateRetrievalSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.retrievalSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1866,7 +1821,6 @@ export function useUpdateGroundingSettings() {
       api.updateGroundingSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.groundingSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1953,7 +1907,6 @@ export function useUpdatePreprocessSettings() {
       api.updatePreprocessSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.preprocessSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1974,7 +1927,6 @@ export function useUpdateChunkingSettings() {
       api.updateChunkingSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.chunkingSettings, data);
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }
@@ -1989,7 +1941,6 @@ export function useUpdateParserAdapterSettings() {
       qc.setQueryData(queryKeys.parserAdapterSettings, data);
       void qc.resetQueries({ queryKey: queryKeys.externalParserStatuses });
       qc.invalidateQueries({ queryKey: queryKeys.parserAdapterContract });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
 }

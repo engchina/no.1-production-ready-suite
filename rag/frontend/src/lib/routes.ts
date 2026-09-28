@@ -7,7 +7,7 @@ export const APP_ROUTES = {
   login: "/login",
   passwordChange: "/password/change",
   forbidden: "/forbidden",
-  dashboard: "/dashboard",
+  home: "/",
   upload: "/upload",
   fileList: "/file-list",
   knowledgeBases: "/knowledge-bases",
