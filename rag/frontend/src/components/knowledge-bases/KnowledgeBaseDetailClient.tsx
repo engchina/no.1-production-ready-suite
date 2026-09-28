@@ -1,7 +1,7 @@
 "use client";
 
-import { FilePlus2, Files, Unlink } from "lucide-react";
-import { useMemo, useState } from "react";
+import { FilePlus2, Files, Save, Unlink } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -23,16 +23,19 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
+  DEFAULT_KNOWLEDGE_BASE_NAME,
   type DocumentSummary,
   type KnowledgeBaseDetail,
 } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import {
   useAssignDocumentsToKnowledgeBase,
   useDocuments,
   useKnowledgeBase,
   useRemoveDocumentFromKnowledgeBase,
+  useUpdateKnowledgeBase,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
@@ -40,7 +43,12 @@ import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
-import { useKnowledgeBaseActions } from "./knowledge-base-actions";
+import {
+  DESCRIPTION_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  useKnowledgeBaseActions,
+  validateKnowledgeBaseName,
+} from "./knowledge-base-actions";
 
 // 追加候補として一度に取得する文書数（API の上限 200 以内）。これを超える文書は名前で検索して選ぶ。
 const CANDIDATE_LIMIT = 100;
@@ -48,8 +56,11 @@ const CANDIDATE_LIMIT = 100;
 /** ナレッジベース詳細ページ。概要・所属文書・構築設定(構築フロー + フォーム)を全幅で扱う。 */
 export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const detail = useKnowledgeBase(knowledgeBaseId);
+  // 概要の名前・説明をその場で編集する（#302）。
+  const [editing, setEditing] = useState(false);
   // 一覧の行（RowActionMenu）と同じ操作の定義を ObjectActionBar に渡す（buttons.md §5.1）。
-  const knowledgeBaseActions = useKnowledgeBaseActions();
+  // 編集は詳細だけに出す（一覧からは名前のリンクで詳細へ移る）。
+  const knowledgeBaseActions = useKnowledgeBaseActions({ onEdit: () => setEditing(true) });
 
   if (detail.isPending) {
     return (
@@ -75,6 +86,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       {/* 概要: 名称・状態・メトリクス(この KB が何か) */}
       <Card>
         <CardContent className="space-y-5 pt-6">
+          {editing && isActive ? (
+            <KnowledgeBaseEditForm knowledgeBase={kb} onDone={() => setEditing(false)} />
+          ) : (
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
@@ -90,6 +104,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
             </div>
             {kb.description ? <p className="mt-1 text-sm text-fg-muted">{kb.description}</p> : null}
           </div>
+          )}
 
           <div className="grid grid-cols-3 gap-2">
             <Metric label={t("knowledgeBases.metric.documents")} value={kb.document_count} />
@@ -137,6 +152,120 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           構築の既定パイプライン図だけ参考表示する(per-KB 取込上書き UI は撤去)。 */}
       <KnowledgeBasePipelineCanvas config={kb.effective_adapter_config ?? kb.adapter_config} />
     </div>
+  );
+}
+
+/**
+ * 名前・説明の編集フォーム（#302）。DEFAULT は改名できない（名前は読み取り専用で説明だけ送る）。
+ * 同名（アーカイブ済みを含む）は backend が 409 と理由を返すので、名前の欄の下に出す。
+ */
+function KnowledgeBaseEditForm({
+  knowledgeBase,
+  onDone,
+}: {
+  knowledgeBase: KnowledgeBaseDetail;
+  onDone: () => void;
+}) {
+  const update = useUpdateKnowledgeBase();
+  const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
+  const [name, setName] = useState(knowledgeBase.name);
+  const [description, setDescription] = useState(knowledgeBase.description ?? "");
+  const [touched, setTouched] = useState(false);
+  const dirty =
+    name.trim() !== knowledgeBase.name ||
+    description.trim() !== (knowledgeBase.description ?? "");
+  // 保存していない変更があるときだけ離脱を確認する。
+  useLeaveGuard(dirty);
+
+  const nameError = !isDefault && touched ? validateKnowledgeBaseName(name) : null;
+  const serverError = update.isError
+    ? update.error instanceof ApiError
+      ? update.error.message
+      : t("knowledgeBases.error.update")
+    : null;
+  // 同名の KB がある（409）ときは名前の欄の下に理由を出す。それ以外はフォームの下に出す。
+  const conflict = update.error instanceof ApiError && update.error.status === 409;
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTouched(true);
+    if (!isDefault && validateKnowledgeBaseName(name)) return;
+    if (!dirty) {
+      onDone();
+      return;
+    }
+    update.mutate(
+      {
+        id: knowledgeBase.id,
+        payload: {
+          ...(isDefault ? {} : { name: name.trim() }),
+          description: description.trim() || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success(t("knowledgeBases.toast.updated"));
+          onDone();
+        },
+      }
+    );
+  };
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      onKeyDown={(event) => {
+        // 変更がなければ Esc で閉じる（変更があるときはキャンセルのボタンで明示的に閉じる）。
+        if (event.key === "Escape" && !dirty && !update.isPending) onDone();
+      }}
+      className="space-y-4"
+      aria-labelledby="knowledge-base-edit-title"
+      data-testid="knowledge-base-edit-form"
+    >
+      <h1 id="knowledge-base-edit-title" className="text-xl font-semibold text-fg">
+        {t("knowledgeBases.edit.title")}
+      </h1>
+      <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <TextField
+            id="knowledge-base-edit-name"
+            label={t("knowledgeBases.field.name")}
+            required={!isDefault}
+            requiredLabel={t("common.required")}
+            value={name}
+            onValueChange={setName}
+            onBlur={() => setTouched(true)}
+            readOnly={isDefault}
+            aria-readonly={isDefault || undefined}
+            helper={isDefault ? t("knowledgeBases.edit.defaultNameFixed") : undefined}
+            error={nameError ?? (conflict && serverError ? serverError : undefined)}
+            maxLength={NAME_MAX_LENGTH}
+            autoFocus={!isDefault}
+            inputClassName={isDefault ? "cursor-default text-fg-muted" : undefined}
+          />
+        <TextField
+          id="knowledge-base-edit-description"
+          label={t("knowledgeBases.field.description")}
+          value={description}
+          onValueChange={setDescription}
+          maxLength={DESCRIPTION_MAX_LENGTH}
+          autoFocus={isDefault}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+        <Button type="submit" icon={Save} loading={update.isPending}>
+          {t("knowledgeBases.actions.save")}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={onDone}
+          disabled={update.isPending}
+        >
+          {t("knowledgeBases.actions.cancel")}
+        </Button>
+        {serverError && !conflict ? <FormStatus tone="danger" message={serverError} /> : null}
+      </div>
+    </form>
   );
 }
 

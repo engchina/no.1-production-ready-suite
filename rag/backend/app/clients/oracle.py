@@ -49,6 +49,7 @@ from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.schemas.business_view import (
     DEFAULT_BUSINESS_VIEW_NAME,
     BusinessViewDetail,
+    BusinessViewKnowledgeBaseRef,
     BusinessViewStatus,
     BusinessViewSummary,
 )
@@ -745,13 +746,15 @@ class OracleClient:
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> list[KnowledgeBaseSummary]:
-        """ナレッジベース一覧を返す。"""
+        """ナレッジベース一覧を返す。`knowledge_base_ids` を渡すとその ID に絞る(#302)。"""
         return await self._list_knowledge_bases_with_oracle(
             status=status,
             query=query,
             limit=limit,
             offset=offset,
+            knowledge_base_ids=knowledge_base_ids,
         )
 
     async def count_knowledge_bases(
@@ -759,9 +762,12 @@ class OracleClient:
         *,
         status: KnowledgeBaseStatus | None = None,
         query: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> int:
         """条件に一致するナレッジベース数を返す。"""
-        return await self._count_knowledge_bases_with_oracle(status=status, query=query)
+        return await self._count_knowledge_bases_with_oracle(
+            status=status, query=query, knowledge_base_ids=knowledge_base_ids
+        )
 
     async def get_knowledge_base(
         self,
@@ -2139,13 +2145,53 @@ class OracleClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[BusinessViewSummary]:
-        """業務ビュー一覧を返す。"""
-        return await self._list_business_views_with_oracle(
+        """業務ビュー一覧を返す。参照 KB のうちアーカイブ済み・存在しない件数も埋める(#302)。"""
+        stored = await self._list_business_views_with_oracle(
             status=status,
             query=query,
             limit=limit,
             offset=offset,
         )
+        return await self._with_knowledge_base_reference_counts(stored)
+
+    async def _with_knowledge_base_reference_counts(
+        self,
+        views: Sequence[StoredBusinessView],
+    ) -> list[BusinessViewSummary]:
+        """一覧の業務ビューごとに、参照 KB のアーカイブ済み・存在しない件数を数える。
+
+        ページ内の参照 KB をまとめて 1 回で解決する(tenant 内。利用者の KB 範囲では絞らない。
+        詳細の `knowledge_bases` と同じ範囲)。
+        """
+        summaries = [_to_business_view_summary(view) for view in views]
+        referenced = {
+            view.id: parse_business_view_config(view.view_config).normalized_knowledge_base_ids()
+            for view in views
+        }
+        all_ids = _unique_optional_sequence(
+            [knowledge_base_id for ids in referenced.values() for knowledge_base_id in ids]
+        )
+        if not all_ids:
+            return summaries
+        refs = await self._resolve_knowledge_base_refs(all_ids)
+        status_by_id = {ref.id: ref.status for ref in refs}
+        return [
+            summary.model_copy(
+                update={
+                    "archived_knowledge_base_count": sum(
+                        1
+                        for knowledge_base_id in referenced[summary.id]
+                        if status_by_id.get(knowledge_base_id) == KnowledgeBaseStatus.ARCHIVED
+                    ),
+                    "missing_knowledge_base_count": sum(
+                        1
+                        for knowledge_base_id in referenced[summary.id]
+                        if knowledge_base_id not in status_by_id
+                    ),
+                }
+            )
+            for summary in summaries
+        ]
 
     async def count_business_views(
         self,
@@ -2164,8 +2210,25 @@ class OracleClient:
         view = await self._get_business_view_with_oracle(business_view_id)
         if view is None:
             return None
-        refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
-        return view.model_copy(update={"knowledge_bases": refs})
+        knowledge_base_ids = view.config.normalized_knowledge_base_ids()
+        refs = await self._resolve_knowledge_base_refs(knowledge_base_ids)
+        resolved_ids = {ref.id for ref in refs}
+        missing_ids = [
+            knowledge_base_id
+            for knowledge_base_id in _unique_optional_sequence(knowledge_base_ids)
+            if knowledge_base_id not in resolved_ids
+        ]
+        # 参照先のアーカイブ済み・存在しない KB は検索対象にならない。画面で警告する(#302)。
+        return view.model_copy(
+            update={
+                "knowledge_bases": refs,
+                "missing_knowledge_base_ids": missing_ids,
+                "archived_knowledge_base_count": sum(
+                    1 for ref in refs if ref.status == KnowledgeBaseStatus.ARCHIVED
+                ),
+                "missing_knowledge_base_count": len(missing_ids),
+            }
+        )
 
     async def list_access_target_ids(self) -> tuple[set[str], set[str]]:
         """tenant 内の全業務ビュー・全ナレッジベースの ID（アーカイブ済みを含む）。
@@ -5213,9 +5276,12 @@ class OracleClient:
         query: str | None,
         limit: int | None,
         offset: int,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> list[KnowledgeBaseSummary]:
         """Oracle knowledge base table から一覧取得する。"""
-        where_sql, binds = _oracle_knowledge_base_where(status=status, query=query)
+        where_sql, binds = _oracle_knowledge_base_where(
+            status=status, query=query, knowledge_base_ids=knowledge_base_ids
+        )
         binds["offset"] = offset
         if limit is not None:
             binds["limit"] = limit
@@ -5282,9 +5348,12 @@ class OracleClient:
         *,
         status: KnowledgeBaseStatus | None,
         query: str | None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> int:
         """Oracle knowledge base table の件数を取得する。"""
-        where_sql, binds = _oracle_knowledge_base_where(status=status, query=query)
+        where_sql, binds = _oracle_knowledge_base_where(
+            status=status, query=query, knowledge_base_ids=knowledge_base_ids
+        )
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -5510,8 +5579,8 @@ class OracleClient:
         query: str | None,
         limit: int | None,
         offset: int,
-    ) -> list[BusinessViewSummary]:
-        """Oracle business view table から一覧取得する。"""
+    ) -> list[StoredBusinessView]:
+        """Oracle business view table から一覧取得する(集計前の保存値)。"""
         where_sql, binds = _oracle_business_view_where(status=status, query=query)
         binds["offset"] = offset
         if limit is not None:
@@ -5545,7 +5614,7 @@ class OracleClient:
             ),
             binds,
         )
-        return [_to_business_view_summary(_stored_business_view_from_row(row)) for row in rows]
+        return [_stored_business_view_from_row(row) for row in rows]
 
     async def _count_business_views_with_oracle(
         self,
@@ -5712,8 +5781,11 @@ class OracleClient:
     async def _resolve_knowledge_base_refs(
         self,
         knowledge_base_ids: Sequence[str],
-    ) -> list[KnowledgeBaseRef]:
-        """参照 KB ID 群から存在する KB の {id, name} を tenant scope で解決する。"""
+    ) -> list[BusinessViewKnowledgeBaseRef]:
+        """参照 KB ID 群から存在する KB の {id, name, status} を tenant scope で解決する。
+
+        アーカイブ済みの KB も返す(status で見分ける。#302)。存在しない KB は落とす。
+        """
         ids = _unique_optional_sequence(knowledge_base_ids)
         if not ids:
             return []
@@ -5723,7 +5795,7 @@ class OracleClient:
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT kb.knowledge_base_id, kb.name
+            SELECT kb.knowledge_base_id, kb.name, kb.status
             FROM rag_knowledge_bases kb
             WHERE {in_sql}
               AND {tenant_sql}
@@ -5733,10 +5805,14 @@ class OracleClient:
             ),
             binds,
         )
-        by_id = {str(row["knowledge_base_id"]): str(row["name"]) for row in rows}
+        by_id = {str(row["knowledge_base_id"]): row for row in rows}
         # 入力順を保ち、存在しない KB は落とす。
         return [
-            KnowledgeBaseRef(id=knowledge_base_id, name=by_id[knowledge_base_id])
+            BusinessViewKnowledgeBaseRef(
+                id=knowledge_base_id,
+                name=str(by_id[knowledge_base_id]["name"]),
+                status=_knowledge_base_status(by_id[knowledge_base_id].get("status")),
+            )
             for knowledge_base_id in ids
             if knowledge_base_id in by_id
         ]
@@ -10162,9 +10238,19 @@ def _oracle_knowledge_base_where(
     *,
     status: KnowledgeBaseStatus | None = None,
     query: str | None = None,
+    knowledge_base_ids: Sequence[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_knowledge_base_access_predicates(alias="kb")
     binds = _with_tenant_bind({})
+    if knowledge_base_ids is not None:
+        ids = _unique_optional_sequence(knowledge_base_ids)
+        if not ids:
+            # 空の ID 指定は「どれにも一致しない」(IN () は SQL として不正)。
+            clauses.append("1 = 0")
+        else:
+            in_sql, in_binds = _oracle_in_predicate("kb.knowledge_base_id", "filter_kb_id", ids)
+            clauses.append(in_sql)
+            binds.update(in_binds)
     if status is not None:
         clauses.append("kb.status = :knowledge_base_status")
         binds["knowledge_base_status"] = status.value

@@ -824,7 +824,6 @@ export interface KnowledgeBaseCreateRequest {
   description?: string | null;
   default_search_mode?: SearchMode;
   retrieval_config?: Record<string, unknown>;
-  adapter_config?: KnowledgeBaseAdapterConfig | null;
 }
 
 export interface KnowledgeBaseUpdateRequest {
@@ -832,7 +831,6 @@ export interface KnowledgeBaseUpdateRequest {
   description?: string | null;
   default_search_mode?: SearchMode | null;
   retrieval_config?: Record<string, unknown> | null;
-  adapter_config?: KnowledgeBaseAdapterConfig | null;
 }
 
 export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
@@ -861,14 +859,25 @@ export interface BusinessViewSummary extends BusinessViewRef {
   description: string | null;
   status: BusinessViewStatus;
   knowledge_base_count: number;
+  /** 参照 KB のうちアーカイブ済みの件数（検索対象にならない。#302）。 */
+  archived_knowledge_base_count?: number;
+  /** 参照 KB のうち存在しない件数（検索対象にならない。#302）。 */
+  missing_knowledge_base_count?: number;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
 }
 
+/** 業務ビューが参照する KB（アーカイブ済みを含む。status で見分ける）。 */
+export interface BusinessViewKnowledgeBaseRef extends KnowledgeBaseRef {
+  status: KnowledgeBaseStatus;
+}
+
 export interface BusinessViewDetail extends BusinessViewSummary {
   config: BusinessViewConfig;
-  knowledge_bases: KnowledgeBaseRef[];
+  knowledge_bases: BusinessViewKnowledgeBaseRef[];
+  /** 参照 KB のうち存在しない ID（#302）。 */
+  missing_knowledge_base_ids?: string[];
 }
 
 export interface BusinessViewCreateRequest {
@@ -2806,11 +2815,14 @@ export const api = {
       q?: string;
       limit?: number;
       offset?: number;
+      /** 指定した ID の KB だけを返す（選択済みの名前・状態の解決用。#302）。 */
+      ids?: string[];
     } = {},
   ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
     if (params.q) search.set("q", params.q);
+    for (const id of params.ids ?? []) search.append("ids", id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();

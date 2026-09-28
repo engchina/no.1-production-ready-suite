@@ -11,9 +11,10 @@ from app.rag.business_view_config import BusinessViewConfig, parse_business_view
 from app.schemas.business_view import (
     DEFAULT_BUSINESS_VIEW_NAME,
     BusinessViewDetail,
+    BusinessViewKnowledgeBaseRef,
     BusinessViewStatus,
 )
-from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.knowledge_base import KnowledgeBaseStatus
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -152,9 +153,11 @@ class FakeBusinessViewOracle:
         self.views[business_view_id] = archived
         return archived
 
-    def _refs(self, config: BusinessViewConfig) -> list[KnowledgeBaseRef]:
+    def _refs(self, config: BusinessViewConfig) -> list[BusinessViewKnowledgeBaseRef]:
         return [
-            KnowledgeBaseRef(id=kb_id, name=self.knowledge_bases[kb_id])
+            BusinessViewKnowledgeBaseRef(
+                id=kb_id, name=self.knowledge_bases[kb_id], status=KnowledgeBaseStatus.ACTIVE
+            )
             for kb_id in config.normalized_knowledge_base_ids()
             if kb_id in self.knowledge_bases
         ]

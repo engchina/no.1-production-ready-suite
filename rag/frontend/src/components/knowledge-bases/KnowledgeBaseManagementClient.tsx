@@ -25,7 +25,6 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   ApiError,
-  DEFAULT_KNOWLEDGE_BASE_NAME,
   type KnowledgeBaseStatus,
   type KnowledgeBaseSummary,
 } from "@/lib/api";
@@ -41,7 +40,12 @@ import {
   KnowledgeBaseStatusPill,
   knowledgeBaseStatusLabel,
 } from "./KnowledgeBaseStatusPill";
-import { useKnowledgeBaseActions } from "./knowledge-base-actions";
+import {
+  DESCRIPTION_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  useKnowledgeBaseActions,
+  validateKnowledgeBaseName,
+} from "./knowledge-base-actions";
 
 const LIMIT = 20;
 
@@ -64,9 +68,6 @@ function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView
   );
 }
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
-// API（KnowledgeBaseCreateRequest）の上限。超えると 422 の英語の検証メッセージになるため入力で止める。
-const NAME_MAX_LENGTH = 256;
-const DESCRIPTION_MAX_LENGTH = 2000;
 
 /** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
 export function KnowledgeBaseManagementClient() {
@@ -370,15 +371,6 @@ function knowledgeBaseColumns({
       ),
     },
   ];
-}
-
-function validateKnowledgeBaseName(name: string) {
-  const cleaned = name.trim();
-  if (!cleaned) return t("knowledgeBases.validation.nameRequired");
-  if (cleaned.toUpperCase() === DEFAULT_KNOWLEDGE_BASE_NAME) {
-    return t("knowledgeBases.validation.nameReserved");
-  }
-  return null;
 }
 
 function KnowledgeBaseListSkeleton() {

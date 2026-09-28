@@ -36,7 +36,7 @@ import {
   useDeleteDocument,
   useDocuments,
   useEnqueueDocumentIngestionJob,
-  useKnowledgeBases,
+  useAllKnowledgeBases,
 } from "@/lib/queries";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
@@ -103,13 +103,13 @@ export function FileListClient() {
     },
     { graceActive }
   );
-  const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
+  // 絞り込みの選択肢は有効な KB をすべて取る（先頭の 100 件で打ち切らない。#302）。
+  const knowledgeBases = useAllKnowledgeBases({ status: "ACTIVE" });
   // 復元した KB 絞り込みが削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
   const knowledgeBaseFilterMissing =
     knowledgeBaseId !== "ALL" &&
     Boolean(knowledgeBases.data) &&
-    !knowledgeBases.data?.has_next &&
-    !knowledgeBases.data?.items.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId);
+    !knowledgeBases.data?.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId);
   useEffect(() => {
     if (knowledgeBaseFilterMissing) {
       setView((current) => ({ ...current, knowledgeBaseId: "ALL", offset: 0 }));
@@ -144,7 +144,7 @@ export function FileListClient() {
   const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
     () => [
       { value: "ALL", label: t("fileList.knowledgeBaseFilter.all") },
-      ...((knowledgeBases.data?.items ?? []).map((knowledgeBase) => ({
+      ...((knowledgeBases.data ?? []).map((knowledgeBase) => ({
         value: knowledgeBase.id,
         label: knowledgeBase.name,
         description: t("knowledgeBaseScope.documentCount", {
@@ -152,7 +152,7 @@ export function FileListClient() {
         }),
       })) satisfies SelectFieldOption<string>[]),
     ],
-    [knowledgeBases.data?.items]
+    [knowledgeBases.data]
   );
 
   const resetView = (fn: () => void) => {
