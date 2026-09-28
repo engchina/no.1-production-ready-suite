@@ -386,7 +386,7 @@ function OntologyGraphLegend({
               aria-pressed={enabled}
               title={t("nl2sql.ontology.legendToggleHint")}
               className={cn(
-                "inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none",
+                "inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 transition-colors motion-reduce:transition-none",
                 enabled ? "hover:bg-surface-hover" : "opacity-40 line-through hover:opacity-60"
               )}
               onClick={() => onToggleGroup(group.id)}
@@ -469,7 +469,7 @@ function GraphModeControl({
             type="button"
             aria-pressed={selected}
             className={cn(
-              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none sm:h-[32px]",
+              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium transition-colors motion-reduce:transition-none sm:h-[32px]",
               selected ? "bg-accent-emphasis text-fg-on-accent" : "text-fg-muted hover:bg-surface-hover hover:text-fg"
             )}
             onClick={() => onChange(item.id)}
@@ -494,7 +494,7 @@ function GraphToolbarSearchField({
   const label = t("nl2sql.ontology.graphSearch");
   return (
     <label
-      className="pointer-events-auto flex h-[var(--control-height-touch)] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:ring-2 focus-within:ring-focus-ring sm:h-[var(--button-height-lg)] sm:w-72 sm:max-w-[18rem]"
+      className="pointer-events-auto flex h-[var(--control-height-touch)] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring sm:h-[var(--button-height-lg)] sm:w-72 sm:max-w-[18rem]"
       data-testid="ontology-graph-search-field"
     >
       <Search size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
@@ -512,7 +512,7 @@ function GraphToolbarSearchField({
         }}
         placeholder={label}
         aria-label={label}
-        className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-fg shadow-none outline-none placeholder:text-fg-muted focus:border-transparent focus:shadow-none focus:outline-none focus:ring-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+        className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-fg shadow-none placeholder:text-fg-muted focus:border-transparent focus:shadow-none focus-visible:shadow-none [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
         style={{ WebkitAppearance: "none", boxShadow: "none" }}
         data-testid="ontology-graph-search"
       />
@@ -1117,7 +1117,7 @@ function OntologyFlow({
         {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button type="button" key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
         {detailCount > 0 ? (
           <label
-            className="flex h-[var(--control-height-touch)] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:ring-2 focus-within:ring-focus-ring sm:h-[var(--button-height-lg)]"
+            className="flex h-[var(--control-height-touch)] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring sm:h-[var(--button-height-lg)]"
             data-testid="ontology-graph-details-toggle-field"
           >
             <input

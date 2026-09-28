@@ -83,6 +83,58 @@ test("取込ジョブ一覧から実行中 job をキャンセルできる", asy
   await expectNoHorizontalOverflow(page);
 });
 
+test("キャンセルは loading 中もフォーカスを保ち、Enter の連打で二重に送信しない（#355）", async ({ page }) => {
+  let cancelRequests = 0;
+  let jobStatus = "RUNNING";
+  let releaseCancel: () => void = () => {};
+  const cancelReleased = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  await page.route("**/api/documents/ingestion-jobs**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/documents/ingestion-jobs/job-running/cancel") {
+      cancelRequests += 1;
+      await cancelReleased;
+      jobStatus = "CANCELLED";
+      await route.fulfill({
+        json: { data: ingestionJob(jobStatus), error_messages: [], warning_messages: [] },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        data: { items: [ingestionJob(jobStatus)], total: 1, limit: 5, offset: 0, has_next: false },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/upload");
+  const cancel = page.getByRole("button", { name: "キャンセル" });
+  await expect(cancel).toBeVisible();
+  // 処理中のジョブを止める操作は確定的な破壊ではないため、赤塗りの danger にしない（secondary + tone="danger"）。
+  await expect(cancel).not.toHaveClass(/(^|\s)bg-danger-emphasis(\s|$)/);
+  await expect(cancel).toHaveClass(/(^|\s)text-danger-fg(\s|$)/);
+
+  await cancel.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => cancelRequests).toBe(1);
+  await expect(cancel).toHaveAttribute("aria-busy", "true");
+  await expect(cancel).toHaveAttribute("aria-disabled", "true");
+  // 以前は disabled を付けたため、フォーカスが body へ外れていた。
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await expect(cancel).toBeFocused();
+  expect(cancelRequests).toBe(1);
+
+  releaseCancel();
+  await expect(page.getByText("キャンセル済み")).toBeVisible();
+  expect(cancelRequests).toBe(1);
+  await expectNoHorizontalOverflow(page);
+});
+
 function ingestionJob(status: string) {
   return {
     id: "job-running",

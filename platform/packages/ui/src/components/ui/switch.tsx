@@ -26,7 +26,7 @@ export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(
         disabled={disabled}
         onClick={handleClick}
         className={cn(
-          "relative inline-flex h-[24px] min-h-[24px] w-[44px] min-w-[44px] shrink-0 cursor-pointer appearance-none items-center rounded-full border border-transparent p-0 leading-none transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50",
+          "relative inline-flex h-[24px] min-h-[24px] w-[44px] min-w-[44px] shrink-0 cursor-pointer appearance-none items-center rounded-full border border-transparent p-0 leading-none transition-colors duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-50",
           checked ? "bg-accent-emphasis" : "bg-border-control",
           className
         )}

@@ -121,7 +121,7 @@ const EMPTY_DRAFT: UserDraftState = {
 };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring read-only:cursor-default read-only:bg-surface-hover read-only:text-fg-muted disabled:bg-surface-hover disabled:text-fg-disabled";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus:border-focus-ring read-only:cursor-default read-only:bg-surface-hover read-only:text-fg-muted disabled:bg-surface-hover disabled:text-fg-disabled";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");

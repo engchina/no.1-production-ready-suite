@@ -412,8 +412,10 @@ export function FileListClient() {
                 disabled={bulkBusy || ingestibleSelected.length === 0} icon={Sparkles}>
                 {`${t("fileList.bulkQueue")} (${ingestibleSelected.length})`}
               </Button>
+              {/* 確認ダイアログを開く起点（確定は ConfirmDialog の danger ボタン）。赤塗りにせず secondary + tone="danger"。 */}
               <Button
-                variant="danger"
+                variant="secondary"
+                tone="danger"
                 size="sm"
                 onClick={() => void runBulkDelete()}
                 loading={bulkDelete !== null}

@@ -6,7 +6,7 @@
 export { cn } from "./lib/utils";
 
 // --- UI primitives ---
-export { Button, buttonVariants, type ButtonProps } from "./components/ui/button";
+export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
 export { Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
 export { TextField } from "./components/ui/text-field";
 export {

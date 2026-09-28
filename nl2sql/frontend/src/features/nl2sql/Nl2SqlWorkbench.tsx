@@ -1098,7 +1098,7 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                       }}
                       disabled={active || profilesQuery.isPending || noProfiles}
-                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
                     >
                       {profilesQuery.isPending && (
                         <option value={profileId}>{t("profiles.summary.loading")}</option>
@@ -1253,7 +1253,7 @@ function ExecutableNl2SqlWorkbench() {
                           rows={5}
                           required
                           aria-required="true"
-                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                         {guidedClarificationOpen ? (
@@ -1335,7 +1335,7 @@ function ExecutableNl2SqlWorkbench() {
                                     onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
                                     disabled={active}
                                     rows={3}
-                                    className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                                    className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
                                     placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
                                   />
                                 </label>
@@ -1374,7 +1374,7 @@ function ExecutableNl2SqlWorkbench() {
                                       onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
                                       disabled={active}
                                       rows={2}
-                                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 focus:border-focus-ring"
                                       placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
                                     />
                                   </label>
@@ -1557,7 +1557,7 @@ function ExecutableNl2SqlWorkbench() {
                                 tabIndex={0}
                                 role="region"
                                 aria-label={t("nl2sql.similar.title")}
-                                className="max-h-28 overflow-auto rounded-md border border-border bg-surface p-2 text-sm leading-6 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                className="max-h-28 overflow-auto rounded-md border border-border bg-surface p-2 text-sm leading-6 text-fg"
                               >
                                 <code>{entry.sql}</code>
                               </pre>

@@ -62,7 +62,9 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
   assert.match(dbObjectFilterFieldsSource, /min-h-\[44px\]/u);
   assert.match(dbObjectFilterFieldsSource, /disabled:cursor-not-allowed/u);
-  assert.match(dbObjectFilterFieldsSource, /focus:ring-2/u);
+  assert.match(dbObjectFilterFieldsSource, /focus:border-focus-ring/u);
+  // フォーカスの表示は outline に一本化（ring を使わない。#355）
+  assert.doesNotMatch(dbObjectFilterFieldsSource, /focus(?:-visible)?:ring-/u);
   assert.match(dbObjectFilterFieldsSource, /event\.currentTarget\.value\.toUpperCase\(\)/u);
   assert.match(dbObjectSharedSource, /from "@\/components\/DbObjectFilterFields"/u);
   assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields/u);

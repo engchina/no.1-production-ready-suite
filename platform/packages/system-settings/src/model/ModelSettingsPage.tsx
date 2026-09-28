@@ -440,7 +440,7 @@ export function ModelSettingsPage({
                         href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+                        className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
                       >
                         {t("settings.model.enterprise.endpointDocs")}
                       </a>

@@ -62,7 +62,8 @@ describe("Button loading spinner", () => {
     expect(classesOf(html, "<button")).toContain(
       "[&amp;&gt;svg:not(.animate-spin)]:hidden"
     );
-    expect(html).toContain("disabled");
+    // loading 中はネイティブの disabled ではなく aria-disabled（フォーカスを保つ。#355）
+    expect(html).toContain('aria-disabled="true"');
   });
 
   it("base.css が回転原点を図形中心へ固定し合成レイヤーで回す", () => {

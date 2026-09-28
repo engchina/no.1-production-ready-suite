@@ -354,7 +354,7 @@ function ShowPromptArtifactPanel({
       data-testid="nl2sql-show-prompt-panel"
       onToggle={handlePromptToggle}
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <FileText size={16} className="shrink-0" aria-hidden="true" />
           <span>{t("nl2sql.showPrompt.title")}</span>
@@ -371,7 +371,7 @@ function ShowPromptArtifactPanel({
         tabIndex={0}
         role="region"
         aria-label={t("nl2sql.showPrompt.title")}
-        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-3 text-xs leading-5 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-3 text-xs leading-5 text-fg"
       >
         <code>{artifact.prompt}</code>
       </pre>
@@ -454,7 +454,7 @@ export function GeneratedSqlSummary({
         tabIndex={0}
         role="region"
         aria-label={t("nl2sql.sql.region")}
-        className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-6 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-6 text-fg"
       >
         <code>{displayedSql}</code>
       </pre>

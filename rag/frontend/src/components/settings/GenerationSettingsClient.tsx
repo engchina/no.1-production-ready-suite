@@ -182,7 +182,7 @@ export function GenerationSettingsClient() {
                     key={item.name}
                     htmlFor={`generation-profile-${item.name}`}
                     className={cn(
-                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors focus-within:ring-2 focus-within:ring-focus-ring focus-within:ring-offset-2",
+                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors",
                       disabled && "cursor-not-allowed opacity-50",
                       selected
                         ? "border-accent-emphasis bg-accent-subtle text-fg"
@@ -222,7 +222,7 @@ export function GenerationSettingsClient() {
             {profile === "custom" ? (
               <Link
                 to={APP_ROUTES.settingsPrompts}
-                className="inline-flex text-sm font-medium text-accent-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+                className="inline-flex text-sm font-medium text-accent-fg hover:underline"
               >
                 {t("settings.generation.custom.manageLink")}
               </Link>

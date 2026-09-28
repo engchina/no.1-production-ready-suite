@@ -79,7 +79,9 @@ describe("SecretField", () => {
   it("保存済みの値の取り出し中は切り替えがスピナーになり、取得中のラベルで押せなくする", () => {
     const html = render({ hasSavedSecret: true, revealPending: true, revealPendingLabel: "DB パスワードを取得中" });
     const button = toggleButton(html);
-    expect(button).toContain('disabled=""');
+    // 取り出し中もフォーカスを保つため、ネイティブの disabled ではなく aria-disabled（#355）
+    expect(button).toContain('aria-disabled="true"');
+    expect(button).not.toMatch(/\sdisabled=""/);
     expect(button).toContain('aria-busy="true"');
     expect(button).toContain('aria-label="DB パスワードを取得中"');
     expect(html).toContain("animate-spin");

@@ -61,6 +61,14 @@
           {
             "selector": "JSXElement[openingElement.name.name='Button']:has(JSXAttribute[name.name='loading']) JSXExpressionContainer > ConditionalExpression:matches([test.name=/loading|pending|saving|submitting|running|busy/i], [test.property.name=/loading|pending|saving|submitting|running|busy/i], [test.left.name=/loading|pending|saving|submitting|running|busy/i], [test.left.property.name=/loading|pending|saving|submitting|running|busy/i]):matches([consequent.type='Literal'][consequent.value=/./], [consequent.type='TemplateLiteral'], [consequent.callee.name='t'], [alternate.type='Literal'][alternate.value=/./], [alternate.type='TemplateLiteral'], [alternate.callee.name='t'])",
             "message": "loading 中に Button のラベルを「保存中…」等へ差し替えない。ラベルは固定し、loading プロップで先頭アイコンをスピナーに置き換える。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='Button']:has(> JSXAttribute[name.name='loading']):not(:has(> JSXAttribute[name.name='icon'])):not(:has(> JSXSpreadAttribute))",
+            "message": "loading を渡す Button には icon を渡す（loading 中は先頭アイコンがスピナーに置き換わる。icon が無いとスピナーの分だけ幅が変わる）。docs/design-system/README.md §4 Button。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:(?:peer|group)-)?focus(?:-visible|-within)?:(?:ring(?:-[\\w\\[\\]-]+)?|outline-none)(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:(?:peer|group)-)?focus(?:-visible|-within)?:(?:ring(?:-[\\w\\[\\]-]+)?|outline-none)(?![\\w-])/])",
+            "message": "フォーカスの表示を ring（box-shadow）で作らず、focus / focus-visible で outline を消さない。表示はグローバルの :focus-visible（outline）に任せ、形の調整は focus-visible:outline-* / focus-visible:-outline-offset-* で行う（docs/design-system/README.md §4「フォーカスの表示」）。"
           }
         ]
       }

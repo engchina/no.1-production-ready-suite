@@ -199,6 +199,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
    → 破壊的な操作は本来オーバーフローメニュー（︙）に入れるべきです。`DropdownMenu` 実装後に移行
 4. `tabs` スロット追加
 5. **通常表示の `utility` は `secondary` と同じ枠付きボタン**。表示更新・DB 構造の再取得など、ページツールにも操作範囲を示す。`kind` による並び順・compact 時の優先度は維持し、オーバーフローメニュー内は従来どおり `ghost` とする。
+6. **グループの境界に区切り線**（#355、buttons.md §5）。操作を「危険操作（`danger`）」「ページツール（`utility`）」「作業開始（`secondary` + `primary`）」の 3 グループに分け、隣り合うグループの間に縦の区切り線（`--color-border`、高さ 1.25rem、左右に `--space-1`）を置く。読み上げない装飾（`aria-hidden`）。狭い画面の「その他の操作」メニューでは、危険操作の前に区切り線（`role="separator"`）を置く。
 
 ### `Button`（変更）— ★ アイコンと loading の統一基準
 
@@ -253,10 +254,31 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 **loading の規約**
 
 - **ラベルは変えない。**「実行中…」「処理中…」に差し替えないこと（3アプリで訳が分岐し、幅も跳ねる）
-- アイコンと同じ 16px 枠なので **幅が変わらない**
-- `aria-busy="true"` と `disabled` が自動で付く
+- アイコンと同じ 16px 枠なので **幅が変わらない**。そのため **`loading` を渡す `Button` は必ず `icon` を持つ**（adherence の lint が「`loading` があるのに `icon` が無い `Button`」を検出する。`{...props}` で渡す場合は対象外）
+- **フォーカスを保つ（#355）**: `loading` 中はネイティブの `disabled` を付けず、`aria-busy="true"` と `aria-disabled="true"` を付ける。フォーカス中のボタンに `disabled` を付けると、フォーカスが `body` へ外れ、キーボード・スクリーンリーダーの利用者が位置を失うため（Chromium で確認）
+  - `loading` 中はクリック・Enter / Space・form の送信（入力欄での Enter による暗黙の送信を含む）を止める。呼び出し側の `onClick` / `onPointerDown` / `onMouseDown` は呼ばない。Tab・Escape などのキーはそのまま渡す
+  - 見た目は `disabled` と同じ（`aria-disabled:` に同じ色・カーソル。hover / active の塗りは付かない）
+  - `disabled` prop はネイティブの `disabled` のまま。`disabled` と `loading` が重なったら `disabled` を優先する（`aria-busy` は付く）
+  - 完了後もフォーカスはボタンに残る。結果へフォーカスを移すかどうかは画面の規約（buttons.md §4.1）に従う
+  - Playwright の `toBeDisabled()` は `aria-disabled` も無効と判定する。jest-dom の `toBeDisabled()` と CSS の `:disabled` は判定しないので、loading の検証は `aria-disabled` / `aria-busy` で行う
 - **旧実装のバグ:** `loading` でスピナーを**追加**していたため、スピナー＋アイコン＋ラベルの三重表示で幅が跳ねていました
 - 1秒を超えて領域全体が待ちになる処理は、ボタンではなく領域側で `LoadingState`。ボタンのスピナーは「この操作が進行中」だけを表す
+
+**variant と tone（danger の使い方）**
+
+- 赤塗りの `variant="danger"` は **実際の破壊的な確定**（確認ダイアログの確定、確認語を入力した「危険な操作」区画の実行）にだけ使う。
+- 確定の前の起点（確認ダイアログを開くボタン）や、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は、`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。
+- `variant="danger"` と `tone="danger"` は**型で同時に指定できない**（赤地に赤文字になり読めない）。
+
+### フォーカスの表示（新設）— ★ outline に一本化（#355）
+
+- **フォーカスの表示は outline 1 つ。** 既定はグローバルの `:focus-visible`（`tokens/base.css`、2px の `--color-focus-ring`、`outline-offset: 2px`）が出す。部品・製品はフォーカスのために何も書かないのが基本。
+- グローバルの `:focus-visible` は **`@layer base`** に置く。レイヤーの外に置くと Tailwind のユーティリティ（utilities レイヤー）に常に勝ち、部品の `focus-visible:-outline-offset-2` 等の調整が効かず、`focus-visible:outline-none` + `ring` を書いた箇所で outline と ring が二重に表示されていた。
+- 形を変えるときは outline のユーティリティだけを使う: 内側に描く（スクロール領域の端で切れる行・タブ）は `focus-visible:-outline-offset-2`、詰めた部品は `focus-visible:outline-offset-1` など。
+- **ring（box-shadow）をフォーカスの表示に使わない。`focus:` / `focus-visible:` で outline を消さない。** adherence の lint が `focus:ring-*` / `focus-visible:ring-*` / `focus-within:ring-*` / `peer-focus-visible:ring-*` / `focus(-visible):outline-none` を検出する（フォーカス以外の ring、例えば選択中の強調の `ring-2` は対象外）。
+- **テキスト入力（input / textarea / select）** は例外で、枠線の色 + 内側 1px の影（`tokens/base.css`、レイヤーの外で常に優先）。label や隣の要素に outline が重ならないようにするため。入力欄に ring を足さない（影で上書きされて効かない）。
+- **中の要素が見えない複合部品**（`sr-only` のファイル入力を包むドロップゾーン、枠の中に枠なしの入力欄を置く検索欄・コンボボックス）は、外枠に `focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring`（`sr-only` の入力の隣の要素は `peer-focus-visible:outline-*`）を付ける。中の要素（チェックボックス・ラジオ）が見える場合は、外枠に付けない（中の要素の outline と二重になる）。
+- `prefers-contrast: more` では 3px（`tokens/a11y.css`）、強制カラーモードでは `CanvasText` の輪郭。
 
 ### カード内の操作行（新設）— ★ 主操作と破壊的操作の配置
 
@@ -497,7 +519,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**18点あります。**
+QA に事前共有してください。**21点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -519,12 +541,16 @@ QA に事前共有してください。**18点あります。**
 | 16 | **ページヘッダーの補助操作に枠線を表示** | `utility` の `ghost` → `secondary` | 更新・再取得も取込と同じ操作範囲を示す。並び順とメニュー表示は維持 |
 | 17 | **通知の消え方が変わる** | danger 8 秒・warning 6 秒で自動で消える → **danger は閉じるまで残る**、warning は 4 秒。ホバー・フォーカス中は消えず、離れたら残り時間から再開。Banner の閉じる × は共有 `Button`（ghost・iconOnly、16px のアイコン） | UX 契約 messaging §3.1 に合わせる。読んでいる・押そうとしている途中で消さない（WCAG 2.2.1）。閉じる × の見た目を Toast とそろえる（#351） |
 | 18 | **SelectField の一覧が画面の下端で上に開く** | 常に下（親の overflow で切れる）→ body へ Portal で描き、下に入らなければ**上に反転**。モーダルの中ではモーダルの中に描き、暗幕とモーダルの上に出す | 画面の下端・表のセル・モーダルの中でも選択肢が見える（#352、components-reference「SelectField — 変更」） |
+| 19 | **フォーカスの表示が outline 1 つになる** | Switch・折りたたみの見出し・一覧の行ボタン・コードブロック等で outline と ring（box-shadow）が二重 → **outline 1 つ**（2px、offset 2px）。タブ・表の並べ替え列頭は部品の指定どおり内側の outline。`loading` 中のボタンはフォーカスが外れず、リングが残る | グローバルの `:focus-visible` を `@layer base` へ移し、部品の outline の調整が効くようにした。ring はフォーカスに使わない（§4「フォーカスの表示」、#355） |
+| 20 | **ページヘッダーの操作のグループに区切り線** | 区切りなし → 危険操作 / ページツール / 作業開始の境界に縦の区切り線。「その他の操作」メニューでは危険操作の前に区切り線 | buttons.md §5。README #16 で utility に枠線を付けた代わりに、グループの違いを区切りで示す（#355） |
+| 21 | **破壊的でない操作が赤塗りでなくなる** | RAG のジョブのキャンセル・一括削除の起点・業務ビューの削除の起点、Agent の承認の拒否・Run のキャンセルが `danger`（赤塗り）→ `secondary` / `ghost` + `tone="danger"`（赤文字）。Agent のストリーム方式の切り替えは手書きのセグメント → `ToggleChip` | 赤塗りは破壊的な確定だけに使う（§4 Button「variant と tone」、buttons.md §3）。確定は確認ダイアログの danger ボタンで行う（#355） |
 
 ### API の非互換
 
 | 対象 | 変更 |
 |---|---|
 | `Button` | `icon` / `trailingIcon` プロップ新設。子にアイコンを書く旧スタイルは動くが**非推奨** |
+| `Button`（#355） | `loading` 中はネイティブの `disabled` ではなく `aria-disabled="true"`（CSS の `:disabled`・jest-dom の `toBeDisabled()` では判定できない）。`ButtonProps` は `interface` から `type`（`variant` と `tone` の組み合わせの union）に変わり、`variant="danger"` + `tone="danger"` は型エラー。組み合わせの型は `ButtonVariantToneProps` として export |
 | `StatusBadge` | `icon` プロップ新設（既定 `true`）。`pending` は `warning` の別名で**非推奨** |
 | `PageHeader` | `tabs` / `wide` プロップ新設。アクションの並び順が変わる |
 | `.pr-icon-button` | **削除。** `<Button variant="ghost" iconOnly>` へ |
@@ -602,12 +628,17 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - [ ] ヘッダーのアクションの右端が primary
 - [ ] 同じボタングループ内でアイコンの有無が混在していない
 - [ ] `loading` にしてもボタンの幅とラベルが変わらない
+- [ ] Enter で押したボタンが `loading` になってもフォーカスがボタンに残り（`aria-disabled` / `aria-busy`）、完了後もボタンのまま。`loading` 中の Enter / Space / クリック / 入力欄の Enter で二重に送信しない
+- [ ] `loading` を渡す `Button` がすべて `icon` を持つ（adherence の lint の違反 0 件）
+- [ ] 赤塗りの `danger` が破壊的な確定（確認ダイアログの確定・確認語つきの危険な操作）だけに使われている
+- [ ] ヘッダーの操作のグループ（危険操作 / ページツール / 作業開始）の境界に区切り線がある
 - [ ] 表ヘッダのソートがセル全体で押せる
 - [ ] カード内の操作行で、主操作と破壊的操作が隣り合っていない（二者択一は反対の端、影響の大きい操作は危険な操作区画、行内はメニュー）
 - [ ] 確認語欄が入力前に danger 色を使っていない
 
 **アクセシビリティ**
 - [ ] サイドバー内を Tab 移動してフォーカスリングが視認できる
+- [ ] フォーカスの表示が outline 1 つ（ring との二重表示が 0 件。adherence の lint の違反 0 件）
 - [ ] Tab キーで最初に「本文へスキップ」に到達する
 - [ ] Windows ハイコントラストモードでボタン・入力・アクティブ nav が消えない
 - [ ] `StatusBadge` をグレースケールにしても状態が判別できる

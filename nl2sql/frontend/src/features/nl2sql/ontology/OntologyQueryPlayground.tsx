@@ -270,7 +270,7 @@ function ServerSearchResultPanel({
               <li key={hit.node.id}>
                 <button
                   type="button"
-                  className="grid w-full cursor-pointer gap-1 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none disabled:cursor-default"
+                  className="grid w-full cursor-pointer gap-1 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left transition-colors hover:border-accent-emphasis motion-reduce:transition-none disabled:cursor-default"
                   onClick={() => inGraph && onSelectNode(hit.node.id)}
                   disabled={!inGraph}
                   data-testid={`ontology-server-hit-${hit.node.id}`}
@@ -339,7 +339,7 @@ function RelationshipCard({
   return (
     <button
       type="button"
-      className={`grid w-full cursor-pointer gap-2 rounded-md border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none ${
+      className={`grid w-full cursor-pointer gap-2 rounded-md border bg-surface-sunken px-3 py-2 text-left transition-colors motion-reduce:transition-none ${
         selected ? "border-accent-emphasis ring-2 ring-accent-emphasis" : "border-border hover:border-accent-emphasis"
       }`}
       onClick={() => onSelect?.(row.edge_id)}
@@ -502,7 +502,7 @@ function OntologyNodeDetailsPanel({
                   <button
                     key={item.id}
                     type="button"
-                    className={`grid min-w-0 cursor-pointer gap-0.5 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none ${INFORMATION_LIST_ROW_CLASS}`}
+                    className={`grid min-w-0 cursor-pointer gap-0.5 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left transition-colors hover:border-accent-emphasis motion-reduce:transition-none ${INFORMATION_LIST_ROW_CLASS}`}
                     onClick={() => onSelectNode(item.id)}
                     data-testid={`ontology-inspector-node-${item.id}`}
                   >

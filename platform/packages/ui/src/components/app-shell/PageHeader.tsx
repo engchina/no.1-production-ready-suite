@@ -1,5 +1,6 @@
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import {
+  Fragment,
   isValidElement,
   useEffect,
   useId,
@@ -11,7 +12,7 @@ import {
 } from "react";
 
 import { cn } from "../../lib/utils";
-import { Button } from "../ui/button";
+import { Button, type ButtonVariantToneProps } from "../ui/button";
 import { measureClass } from "./PageBody";
 
 export interface PageHeaderAction {
@@ -32,6 +33,31 @@ export interface PageHeaderAction {
 
 const ORDER: Record<PageHeaderAction["kind"], number> = { danger: 0, utility: 1, secondary: 2, primary: 3 };
 const VARIANT = { primary: "primary", secondary: "secondary", utility: "secondary", danger: "danger" } as const;
+
+/**
+ * 操作のグループ（buttons.md §5）。primary / secondary = 作業開始、utility = ページツール、danger = 危険操作。
+ * グループの境界に区切り線と余白を置く。
+ */
+export type PageActionGroup = "danger" | "utility" | "work";
+
+export function actionGroup(kind: PageHeaderAction["kind"]): PageActionGroup {
+  return kind === "danger" || kind === "utility" ? kind : "work";
+}
+
+/** 並べた順の操作の間で、グループが変わる位置（区切りを置く index。その要素の直前に置く）。 */
+export function groupBoundaries(actions: PageHeaderAction[]): Set<number> {
+  const boundaries = new Set<number>();
+  actions.forEach((action, index) => {
+    if (index > 0 && actionGroup(actions[index - 1].kind) !== actionGroup(action.kind)) boundaries.add(index);
+  });
+  return boundaries;
+}
+
+/** 見た目（variant / tone）。メニューの中は ghost で、危険操作だけ文字を danger にする。 */
+function actionLook(kind: PageHeaderAction["kind"], menuItem: boolean): ButtonVariantToneProps {
+  if (menuItem) return { variant: "ghost", tone: kind === "danger" ? "danger" : "default" };
+  return kind === "danger" ? { variant: "danger" } : { variant: VARIANT[kind] };
+}
 
 /**
  * アクションの並び順。右寄せグループなので右端（最も押しやすい位置）に primary、左端に danger。
@@ -83,8 +109,7 @@ function useCompact() {
 function ActionButton({ action, menuItem = false, onInvoked }: { action: PageHeaderAction; menuItem?: boolean; onInvoked?: () => void }) {
   return (
     <Button
-      variant={menuItem ? "ghost" : VARIANT[action.kind]}
-      tone={menuItem && action.kind === "danger" ? "danger" : "default"}
+      {...actionLook(action.kind, menuItem)}
       role={menuItem ? "menuitem" : undefined}
       icon={action.icon}
       iconOnly={!menuItem && !action.label}
@@ -168,8 +193,14 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
           onKeyDown={onKeyDown}
           className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1 grid min-w-56 gap-0.5 rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]"
         >
-          {actions.map((action) => (
-            <ActionButton key={action.id} action={action} menuItem onInvoked={() => setOpen(false)} />
+          {actions.map((action, index) => (
+            <Fragment key={action.id}>
+              {/* 危険操作は区切り線の下に置く（buttons.md §5.1）。 */}
+              {action.kind === "danger" && index > 0 && actions[index - 1].kind !== "danger" ? (
+                <div role="separator" className="my-1 h-px bg-border" data-testid="page-actions-menu-separator" />
+              ) : null}
+              <ActionButton action={action} menuItem onInvoked={() => setOpen(false)} />
+            </Fragment>
           ))}
         </div>
       ) : null}
@@ -226,12 +257,19 @@ export function PageHeader({
     const list = actions as PageHeaderAction[];
     // 狭い画面では主操作 1 つ +「その他の操作」にまとめ、sticky ヘッダーが本文を覆わない高さに保つ。
     const { visible, overflow } = compact ? splitCompactActions(list) : { visible: orderActions(list), overflow: [] };
+    const boundaries = groupBoundaries(visible);
     actionNodes =
       list.length > 0 ? (
         <>
           {overflow.length > 0 ? <OverflowMenu actions={overflow} label={moreActionsLabel} /> : null}
-          {visible.map((action) => (
-            <ActionButton key={action.id} action={action} />
+          {visible.map((action, index) => (
+            <Fragment key={action.id}>
+              {/* グループの境界に軽い区切りと余白（buttons.md §5）。gap-2 と合わせて左右 1rem 空く。 */}
+              {boundaries.has(index) ? (
+                <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" data-testid="page-actions-separator" />
+              ) : null}
+              <ActionButton action={action} />
+            </Fragment>
           ))}
         </>
       ) : null;

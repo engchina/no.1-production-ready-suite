@@ -56,7 +56,7 @@ for (const theme of ["light", "dark"]) {
     // 実際に合成された色を sRGB に変換して通常文字の 4.5:1 を検証する。
     // 共有 Button には nl2sql-button クラスが無いため、fixture の共有 Button を data-testid で対象にする。
     const sharedButtons = page.locator(
-      ['sm-', 'md-', 'lg-'].map(prefix => `button[data-testid^="${prefix}"]:not(:disabled)`)
+      ['sm-', 'md-', 'lg-'].map(prefix => `button[data-testid^="${prefix}"]:not(:disabled):not([aria-disabled="true"])`)
         .concat(['[data-testid="icon"]', '[data-testid="field"]', '[data-testid="danger-trigger"]'])
         .join(", ")
     );

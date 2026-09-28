@@ -274,7 +274,7 @@ export function MultiSelectCombobox<T>({
     <div ref={rootRef} className="space-y-2" onKeyDown={onRootKeyDown} onBlur={onRootBlur}>
       <div
         className={cn(
-          "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-md border border-border/80 bg-surface px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-focus-ring focus-within:bg-surface-hover focus-within:ring-2 focus-within:ring-focus-ring",
+          "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-md border border-border/80 bg-surface px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-focus-ring focus-within:bg-surface-hover focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring",
           triggerClassName,
           disabled && "cursor-not-allowed opacity-60"
         )}
@@ -314,7 +314,7 @@ export function MultiSelectCombobox<T>({
                 }}
                 disabled={disabled}
                 aria-label={strings.removeChip(name)}
-                className="relative flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed"
+                className="relative flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-surface-hover hover:text-fg disabled:cursor-not-allowed"
               >
                 <X size={14} aria-hidden />
               </button>
@@ -340,7 +340,7 @@ export function MultiSelectCombobox<T>({
           onKeyDown={onInputKeyDown}
           placeholder={chips.length === 0 ? strings.addPlaceholder : ""}
           disabled={disabled}
-          className="h-8 min-w-[7.5rem] flex-1 appearance-none border-0 bg-transparent px-1 text-sm leading-8 text-fg shadow-none outline-none placeholder:text-fg-muted focus:outline-none focus:ring-0 focus-visible:border-transparent! focus-visible:shadow-none! disabled:cursor-not-allowed sm:min-w-[12rem]"
+          className="h-8 min-w-[7.5rem] flex-1 appearance-none border-0 bg-transparent px-1 text-sm leading-8 text-fg shadow-none placeholder:text-fg-muted focus-visible:border-transparent! focus-visible:shadow-none! disabled:cursor-not-allowed sm:min-w-[12rem]"
         />
         <button
           type="button"
@@ -356,7 +356,7 @@ export function MultiSelectCombobox<T>({
           }}
           disabled={disabled}
           aria-label={strings.toggleListAria}
-          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-info-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed"
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-info-subtle hover:text-fg disabled:cursor-not-allowed"
         >
           <ChevronDown
             size={16}

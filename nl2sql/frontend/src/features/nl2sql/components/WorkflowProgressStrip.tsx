@@ -257,7 +257,7 @@ export function WorkflowProgressStrip({
                   className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-surface-sunken sm:px-2"
                   open={step.open}
                 >
-                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:gap-3 [&::-webkit-details-marker]:hidden">
+                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm sm:gap-3 [&::-webkit-details-marker]:hidden">
                     <span className="flex min-w-0 max-w-full flex-1 basis-full items-center gap-2 font-semibold text-fg sm:basis-0">
                       <span className="min-w-0 break-words sm:truncate">{step.label}</span>
                       <DisclosureChevron

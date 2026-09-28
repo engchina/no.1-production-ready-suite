@@ -96,9 +96,9 @@ const ONTOLOGY_SOURCE_FILE_FORMATS: TabularFileFormatConfig = {
 const ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5;
 const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
 const textareaClass =
-  "min-h-24 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
+  "min-h-24 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring";
 const markdownTextareaClass =
-  "min-h-[22rem] w-full resize-y rounded-md border border-border-control bg-surface p-3 font-mono text-xs leading-6 text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-70";
+  "min-h-[22rem] w-full resize-y rounded-md border border-border-control bg-surface p-3 font-mono text-xs leading-6 text-fg transition-colors placeholder:text-fg-muted focus:border-focus-ring disabled:cursor-not-allowed disabled:opacity-70";
 type MarkdownTab = "draft" | "published";
 type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save" | "publish";
 
@@ -1750,7 +1750,7 @@ export function OntologyBuildSection({
                     open={job.status === "failed"}
                     className="group/disclosure rounded-md border border-warning-border bg-warning-subtle p-2 text-sm text-warning-fg"
                   >
-                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold [&::-webkit-details-marker]:hidden">
                       <span>
                         {t("profiles.ontologyBuild.warningsTitle")} ({buildWarnings.length})
                       </span>

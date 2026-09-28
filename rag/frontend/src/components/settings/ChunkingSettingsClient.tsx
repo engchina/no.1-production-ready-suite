@@ -244,7 +244,7 @@ function OverviewCard({
                   disabled={saving}
                   onClick={() => onStrategyChange(strategy.name)}
                   className={cn(
-                    "min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                    "min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                     selected
                       ? "border-accent-emphasis bg-accent-subtle text-fg"
                       : "border-border bg-surface text-fg hover:bg-surface-hover"
@@ -436,7 +436,7 @@ function ParamsCard({
               key={form.strategy}
               className="group rounded-md border border-border bg-surface-sunken p-3 md:col-span-2"
             >
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
                 <span>{t("settings.chunking.params.semanticDetails")}</span>
                 <ChevronDown
                   size={16}

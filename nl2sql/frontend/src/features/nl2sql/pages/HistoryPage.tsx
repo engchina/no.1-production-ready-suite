@@ -333,7 +333,7 @@ function HistoryGrid({
                         aria-label={t("history.grid.show", { question: item.question })}
                         aria-describedby={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
                         aria-current={selected ? "true" : undefined}
-                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring ${
+                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors ${
                           selected
                             ? "border-l-accent-fg bg-accent-subtle"
                             : "border-l-transparent hover:bg-surface-hover"
@@ -419,7 +419,7 @@ function HistoryFilterSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+        className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
       >
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>
@@ -487,7 +487,7 @@ function HistoryDetailPanel({
             id="history-detail-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="min-w-0 flex-1 break-words text-base font-semibold leading-6 text-fg [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="min-w-0 flex-1 break-words text-base font-semibold leading-6 text-fg [overflow-wrap:anywhere]"
           >
             {t("history.detail.title")}
           </h2>

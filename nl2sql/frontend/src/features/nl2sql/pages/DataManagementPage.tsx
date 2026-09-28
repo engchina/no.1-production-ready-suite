@@ -1956,7 +1956,7 @@ function CsvUploadWorkspace({
         <select
           value={mode}
           onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-          className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+          className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
         >
           <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
           <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
@@ -2241,7 +2241,7 @@ function SyntheticWorkspace({
               value={syntheticProfileName}
               onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
               disabled={dbProfileRefreshRequired || dbProfileRefreshing}
-              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
             >
               {(selectAiDbProfiles?.profiles ?? []).length === 0 && (
                 <option value="">{t("dataTools.syntheticData.noProfiles")}</option>
@@ -2261,7 +2261,7 @@ function SyntheticWorkspace({
               max={100}
               value={syntheticRows}
               onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+              className="h-11 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
             />
           </label>
         </div>
@@ -2353,7 +2353,7 @@ function SyntheticWorkspace({
                         type="checkbox"
                         checked={selected}
                         onChange={(event) => onSyntheticTableToggle(tableName, event.currentTarget.checked)}
-                        className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+                        className="h-4 w-4 rounded border-border text-accent-fg"
                         aria-label={t("dataTools.syntheticData.tableOption", { name: tableName })}
                       />
                       <DbObjectName value={tableName} size="xs" interactive className="min-w-0" />
@@ -2394,7 +2394,7 @@ function SyntheticWorkspace({
               onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
               rows={5}
               placeholder={t("dataTools.syntheticData.promptPlaceholder")}
-              className="min-h-40 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+              className="min-h-40 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
             />
           </label>
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
@@ -2407,7 +2407,7 @@ function SyntheticWorkspace({
                 max={100}
                 value={syntheticSampleRows}
                 onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
-                className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
               />
             </label>
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
@@ -2415,7 +2415,7 @@ function SyntheticWorkspace({
                 type="checkbox"
                 checked={syntheticUseComments}
                 onChange={(event) => onSyntheticUseCommentsChange(event.currentTarget.checked)}
-                className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
+                className="h-4 w-4 rounded border-border text-accent-fg"
               />
               <span>{t("dataTools.syntheticData.useComments")}</span>
             </label>
@@ -2483,7 +2483,7 @@ function SyntheticWorkspace({
               value={hasValidResultTable ? syntheticResultTable : ""}
               onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
               disabled={loading === "results"}
-              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
             >
               {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
               {resultTableOptions.map((tableName) => (

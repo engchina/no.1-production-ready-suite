@@ -290,7 +290,7 @@ export function OntologyBuildPage() {
                   <select
                     value={selectedProfileId}
                     onChange={(event) => selectProfile(event.currentTarget.value)}
-                    className="min-h-11 min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                    className="min-h-11 min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                     data-testid="ontology-build-profile-select"
                   >
                     {!selectedProfileId && <option value="" disabled>{t("nl2sql.workspace.profileUnavailable")}</option>}

@@ -164,7 +164,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
           <div className="grid min-w-0 gap-4 border-t border-border p-4">
             <div className="space-y-2">
               <label htmlFor="markdown-acceptance" className="block text-sm font-medium text-fg">{t("markdownOntology.acceptance")}</label>
-              <textarea id="markdown-acceptance" rows={5} className="min-h-32 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
+              <textarea id="markdown-acceptance" rows={5} className="min-h-32 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
               <p id="markdown-acceptance-hint" className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.acceptanceHint")}</p>
               <FieldError id="markdown-acceptance-error" message={acceptanceError} />
             </div>

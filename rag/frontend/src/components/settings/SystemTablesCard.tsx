@@ -335,7 +335,7 @@ export function SystemTablesCard() {
                   onChange={(event) => setRecreateConfirmation(event.target.value)}
                   placeholder={RECREATE_RAG_SYSTEM_TABLES_CONFIRMATION}
                   aria-describedby="system-tables-recreate-helper"
-                  className="min-h-[44px] w-full rounded-md border border-border-control bg-surface-sunken px-3 font-mono text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-h-[44px] w-full rounded-md border border-border-control bg-surface-sunken px-3 font-mono text-sm text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <p
                   id="system-tables-recreate-helper"

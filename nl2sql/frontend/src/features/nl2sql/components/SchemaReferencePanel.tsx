@@ -163,7 +163,7 @@ export function SchemaReferencePanel({
             if (onSearchQueryChange) onSearchQueryChange(value);
             else setLocalQuery(value);
           }}
-          className="min-h-9 min-w-0 w-full rounded-md border border-border-control bg-surface py-1.5 pl-8 pr-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+          className="min-h-9 min-w-0 w-full rounded-md border border-border-control bg-surface py-1.5 pl-8 pr-3 text-sm focus:border-focus-ring"
           placeholder={t("nl2sql.schema.searchPlaceholder")}
           aria-label={t("nl2sql.schema.search")}
           disabled={disabled}

@@ -1569,6 +1569,7 @@ export function DocumentWorkspace({
                   type="button"
                   variant="secondary"
                   size="sm"
+                  icon={RotateCcw}
                   onClick={() =>
                     enqueueIngestion.mutate(
                       {
@@ -1663,6 +1664,7 @@ export function DocumentWorkspace({
                 <Button
                   key={phase}
                   variant="ghost"
+                  icon={RotateCcw}
                   onClick={() => void handlePhaseRestart(phase, "reprocess")}
                   loading={
                     enqueueIngestion.isPending && enqueueIngestion.variables?.phase === phase
@@ -1672,9 +1674,6 @@ export function DocumentWorkspace({
                     (enqueueIngestion.isPending && enqueueIngestion.variables?.phase !== phase)
                   }
                 >
-                  {!enqueueIngestion.isPending || enqueueIngestion.variables?.phase !== phase ? (
-                    <RotateCcw size={16} aria-hidden />
-                  ) : null}
                   {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
                 </Button>
               ))}
@@ -2480,7 +2479,7 @@ function ChunkPreviewControls({
                 key={form.chunking_strategy}
                 className="group rounded-md border border-border bg-surface-sunken p-3 sm:col-span-2"
               >
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
                   <span>{t("settings.chunking.params.semanticDetails")}</span>
                   <ChevronDown
                     size={16}

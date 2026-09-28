@@ -148,7 +148,7 @@ export function GuardrailSettingsClient() {
               <FormStatus tone="warning" message={ociWarning} />
               <Link
                 to={APP_ROUTES.settingsOci}
-                className="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-accent-fg underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:min-h-9"
+                className="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-accent-fg underline-offset-4 hover:underline sm:min-h-9"
               >
                 {t("settings.guardrail.ociSettingsLink")}
               </Link>
@@ -175,7 +175,7 @@ export function GuardrailSettingsClient() {
                     <label
                       htmlFor={`guardrail-backend-${item}`}
                       className={cn(
-                        "flex min-h-20 cursor-pointer flex-col rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-focus-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "flex min-h-20 cursor-pointer flex-col rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
                           ? "border-accent-emphasis bg-accent-subtle text-fg"
                           : "border-border bg-surface text-fg hover:bg-surface-hover"
@@ -218,7 +218,7 @@ export function GuardrailSettingsClient() {
                     <label
                       htmlFor={`guardrail-policy-${item.name}`}
                       className={cn(
-                        "block min-h-[104px] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-focus-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "block min-h-[104px] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
                           ? "border-accent-emphasis bg-accent-subtle text-fg"
                           : "border-border bg-surface text-fg hover:bg-surface-hover"

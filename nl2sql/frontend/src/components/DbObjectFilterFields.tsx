@@ -1,7 +1,7 @@
 import { Search } from "lucide-react";
 
 const INPUT_CLASS =
-  "min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled";
+  "min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled";
 
 export interface DbObjectFilterFieldProps {
   label: string;

@@ -217,6 +217,8 @@ import { Icon } from "../core/Icon.jsx";
    danger は本来オーバーフローメニューに入れるべきものです（DropdownMenu 実装後に移行）。 */
 const ORDER = { danger: 0, utility: 1, secondary: 2, primary: 3 };
 const VARIANT = { primary: "primary", secondary: "secondary", utility: "secondary", danger: "danger" };
+/** 操作のグループ。境界に区切り線を置く（buttons.md §5）。 */
+const GROUP = { danger: "danger", utility: "utility", secondary: "work", primary: "work" };
 
 /** Location trail for 3+ level flows. The last item is the current page. */
 export function Breadcrumbs({ items = [], onNavigate }) {
@@ -250,6 +252,7 @@ export function Breadcrumbs({ items = [], onNavigate }) {
  * `tabs` に <Tabs> を渡すとヘッダー下端に吸い付きます（ビュー切替の唯一の置き場所）。
  * actions: [{ id, kind: "primary"|"secondary"|"utility"|"danger", label, icon?, onClick?, loading?, disabled? }]
  * 並びは danger → utility → secondary → primary（右端が primary）。
+ * グループ（danger / utility / secondary + primary）の境界に区切り線を置く（buttons.md §5）。
  */
 export function PageHeader({ title, subtitle, status, breadcrumbs, actions = [], tabs, wide = false, onNavigate }) {
   const ordered = actions.map((action, index) => ({ action, index })).sort((a, b) => ORDER[a.action.kind] - ORDER[b.action.kind] || a.index - b.index).map(({ action }) => action);
@@ -290,9 +293,12 @@ export function PageHeader({ title, subtitle, status, breadcrumbs, actions = [],
         </div>
         {ordered.length ? (
           <div role="group" aria-label="ページ操作" style={{ display: "flex", flexShrink: 0, alignItems: "center", gap: "var(--gap-action)" }}>
-            {ordered.map((action) => (
+            {ordered.map((action, index) => (
+              <React.Fragment key={action.id}>
+              {index > 0 && GROUP[ordered[index - 1].kind] !== GROUP[action.kind] ? (
+                <span aria-hidden className="pr-page-header__separator" />
+              ) : null}
               <Button
-                key={action.id}
                 variant={VARIANT[action.kind]}
                 icon={action.icon}
                 loading={action.loading}
@@ -303,6 +309,7 @@ export function PageHeader({ title, subtitle, status, breadcrumbs, actions = [],
               >
                 {action.label ? <span>{action.label}</span> : null}
               </Button>
+              </React.Fragment>
             ))}
           </div>
         ) : null}
@@ -363,9 +370,13 @@ import { Icon } from "./Icon.jsx";
  * `loading` 中は **先頭アイコンがスピナーに置き換わります**。
  *   - ラベルは変えません（「実行中…」に差し替えない）
  *   - したがって幅が変わらず、レイアウトが跳ねません
- *   - `aria-busy="true"` と `disabled` が自動で付きます
- * ★ 非同期の操作を起こすボタンは必ず `icon` を持たせてください。
+ *   - `aria-busy="true"` と `aria-disabled="true"` が自動で付きます。ネイティブの `disabled` は付けません
+ *     （フォーカス中のボタンに disabled を付けるとフォーカスが body へ外れるため。#355）。
+ *     クリック・Enter / Space・form の submit（暗黙の送信を含む）は止め、見た目は disabled と同じにします
+ *   - `disabled` prop はネイティブの `disabled` のまま（loading と重なったら disabled を優先）
+ * ★ 非同期の操作を起こすボタンは必ず `icon` を持たせてください（adherence の lint が検出します）。
  *   アイコンが無いとスピナーの分だけ幅が広がります。
+ * ★ `variant="danger"` と `tone="danger"` は同時に指定できません（型で禁止。赤地に赤文字になる）。
  * 1 秒を超えて領域全体が待ちになる処理は、ボタンではなく領域側で
  * LoadingState を出します。
  */
@@ -383,8 +394,11 @@ export function Button({
   type = "button",
   className = "",
   children,
+  onClick,
   ...rest
 }) {
+  // disabled が優先。loading だけのときはフォーカスを保つため aria-disabled にしてクリックを止める。
+  const busy = loading && !disabled;
   const classes = [
     "pr-button",
     `pr-button--${variant}`,
@@ -405,10 +419,12 @@ export function Button({
     <button
       type={type}
       className={classes}
-      disabled={disabled || loading}
       aria-busy={loading || undefined}
       aria-pressed={pressed}
       {...rest}
+      disabled={disabled || undefined}
+      aria-disabled={busy || undefined}
+      onClick={busy ? (event) => { event.preventDefault(); event.stopPropagation(); } : onClick}
     >
       {leading}
       {children}
@@ -424,8 +440,12 @@ export function Button({
 import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "ghost" | "danger";
+/** variant="danger"（赤塗り）と tone="danger"（赤文字）の同時指定は禁止（赤地に赤文字になる）。 */
+export type ButtonVariantToneProps =
+  | { variant: "danger"; tone?: "default" }
+  | { variant?: "primary" | "secondary" | "ghost"; tone?: "default" | "danger" };
+
+export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & ButtonVariantToneProps & {
   size?: "sm" | "md" | "lg";
   /** 先頭アイコン（lucide-react のコンポーネント。例: icon={Upload}）。子要素にアイコンを直接書かない。 */
   icon?: LucideIcon;
@@ -433,11 +453,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   trailingIcon?: LucideIcon;
   iconOnly?: boolean;
   touchTarget?: boolean;
-  tone?: "default" | "danger";
-  /** true で先頭アイコンがスピナーに置き換わる。ラベルは変えない。 */
+  /** true で先頭アイコンがスピナーに置き換わる。ラベルは変えない。aria-disabled でフォーカスを保つ。 */
   loading?: boolean;
   pressed?: boolean;
-}
+};
 
 /** @dsComponent */
 export declare function Button(props: ButtonProps): JSX.Element;

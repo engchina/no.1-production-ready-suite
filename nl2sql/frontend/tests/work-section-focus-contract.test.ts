@@ -25,13 +25,11 @@ const workSection = sliceBetween(
   "export function ManagementPanelShell"
 );
 
-test("WorkSection summary は mouse focus ring ではなく focus-visible を使う", () => {
+test("WorkSection summary のフォーカスはグローバルの :focus-visible（outline）に任せる（#355）", () => {
   assert.match(workSection, /list-none/u);
-  assert.match(workSection, /focus-visible:ring-2/u);
-  assert.match(workSection, /focus-visible:ring-focus-ring/u);
-  assert.match(workSection, /focus-visible:ring-danger-border/u);
-  assert.doesNotMatch(workSection, /focus:ring-2/u);
-  assert.doesNotMatch(workSection, /focus:ring-focus-ring/u);
+  // ring を足すとグローバルの outline と二重に表示される。outline を消すとキーボードの位置が見えなくなる。
+  assert.doesNotMatch(workSection, /focus(?:-visible)?:ring/u);
+  assert.doesNotMatch(workSection, /focus(?:-visible)?:outline-none/u);
 });
 
 test("WorkSection は既存折りたたみ UI と同じ chevron 表現を使う", () => {
@@ -45,8 +43,8 @@ test("DbAdminShared の details summary は普通の focus ring を使わない"
   const summaryTags = source.match(/<summary\b[\s\S]*?>/gu) ?? [];
   assert.ok(summaryTags.length > 0);
   for (const summaryTag of summaryTags) {
-    assert.doesNotMatch(summaryTag, /focus:ring-/u);
-    assert.doesNotMatch(summaryTag, /focus:ring-2/u);
+    assert.doesNotMatch(summaryTag, /focus(?:-visible)?:ring-/u);
+    assert.doesNotMatch(summaryTag, /focus(?:-visible)?:outline-none/u);
   }
 });
 

@@ -478,9 +478,12 @@ function RecentIngestionJobsPanel() {
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
                   <IngestionJobBadge job={job} />
                   {job.status === "QUEUED" || job.status === "RUNNING" ? (
+                    // 処理中のジョブを止める操作。データを消す確定ではないため赤塗り（danger）にせず、
+                    // secondary + tone="danger" で控えめに示す（buttons.md §3、README §4 カード内の操作行）。
                     <Button
                       type="button"
-                      variant="danger"
+                      variant="secondary"
+                      tone="danger"
                       size="sm"
                       onClick={() => cancel.mutate({ id: job.id })}
                       loading={cancel.isPending && cancel.variables?.id === job.id}

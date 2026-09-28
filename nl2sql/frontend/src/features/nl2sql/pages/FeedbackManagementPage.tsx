@@ -941,7 +941,7 @@ export function FeedbackManagementPage() {
                   <input
                     value={feedbackSearch}
                     onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                     placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
                   />
                 </label>
@@ -954,7 +954,7 @@ export function FeedbackManagementPage() {
                       const rating = event.currentTarget.value as AppFeedbackFilter;
                       void refreshAppFeedback("", "reset", { rating });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
                     <option value="good">{t("nl2sql.feedback.good")}</option>
@@ -971,7 +971,7 @@ export function FeedbackManagementPage() {
                       const profileId = event.currentTarget.value;
                       void refreshAppFeedback("", "reset", { profileId });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                   >
                     <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
                     {appProfiles.filter((profile) => !profile.archived).map((profile) => (
@@ -1120,7 +1120,7 @@ export function FeedbackManagementPage() {
                       aria-label={t("feedbackManagement.appFeedback.adminRating")}
                       value={adminFeedbackRating}
                       onChange={(event) => setAdminFeedbackRating(event.currentTarget.value as FeedbackRating)}
-                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
                       <option value="bad">{t("nl2sql.feedback.bad")}</option>
@@ -1149,7 +1149,7 @@ export function FeedbackManagementPage() {
                       onChange={(event) => setAdminFeedbackContent(event.currentTarget.value)}
                       required={adminFeedbackContentRequired}
                       rows={4}
-                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
                       placeholder={t("feedbackManagement.appFeedback.adminFeedbackPlaceholder")}
                     />
                   </div>
@@ -1170,7 +1170,7 @@ export function FeedbackManagementPage() {
                         value={selectAiResponse}
                         onChange={(event) => setSelectAiResponse(event.currentTarget.value)}
                         rows={5}
-                        className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                        className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring"
                         placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
                       />
                     </label>
@@ -1319,7 +1319,7 @@ function ProfileSelect({
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+        className="min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>
@@ -1366,7 +1366,7 @@ function FeedbackEntriesList({
       render: (entry, index) => (
         <button
           type="button"
-          className="block w-full rounded-sm text-left text-fg underline-offset-2 hover:text-accent-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="block w-full rounded-sm text-left text-fg underline-offset-2 hover:text-accent-fg"
           aria-label={t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           })}
@@ -1594,7 +1594,7 @@ function FeedbackHistoryRow({
       type="button"
       data-testid="feedback-history-row"
       aria-current={selected ? "true" : undefined}
-      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-focus-ring ${
+      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm ${
         selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
       }`}
       onClick={onSelect}
@@ -1687,7 +1687,7 @@ function SimilarityConfigField({
           const nextValue = Number(event.currentTarget.value);
           if (!Number.isNaN(nextValue)) onChange(nextValue);
         }}
-        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
       />
       <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
         {hint}
@@ -1732,7 +1732,7 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
       />
     </fieldset>
   );

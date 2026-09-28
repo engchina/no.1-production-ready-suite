@@ -133,8 +133,6 @@ export function WorkSection({
     tone === "danger"
       ? "border-danger-border bg-danger-subtle text-danger-fg marker:text-danger-fg"
       : "border-border bg-surface text-fg marker:text-fg-muted";
-  const summaryFocusClass =
-    tone === "danger" ? "focus-visible:ring-danger-border" : "focus-visible:ring-focus-ring";
   const summaryIconClass = tone === "danger" ? "text-danger-fg" : "text-fg-muted";
 
   return (
@@ -145,7 +143,7 @@ export function WorkSection({
       onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
     >
       <summary
-        className={`flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus-visible:ring-2 ${summaryFocusClass} [&::-webkit-details-marker]:hidden`}
+        className={`flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden`}
       >
         <span className="min-w-0">
           <span className="block font-semibold">{title}</span>
@@ -318,7 +316,7 @@ export function ExecutionConfirmationField({
   const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3";
   const inputClass = [
     "h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
-    "focus:border-danger-fg focus:ring-2 focus:ring-danger-border",
+    "focus:border-danger-fg",
   ].join(" ");
   const statusClass = [
     "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
@@ -663,7 +661,7 @@ export function DbAdminErrorNotice({
         {error.examples.length > 0 ? <SqlRecoveryExamples examples={error.examples} /> : null}
         {hasDetail ? (
           <details className="group/disclosure rounded-md border border-border bg-surface">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
               <span>{t("dbAdmin.result.error.detail")}</span>
               <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
             </summary>
@@ -840,7 +838,7 @@ export function SelectionListPanel({
                     type="checkbox"
                     checked={selected}
                     onChange={() => onToggle(name)}
-                    className="h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
+                    className="h-4 w-4 shrink-0 rounded border-border text-accent-fg"
                   />
                   <span className="min-w-0 break-all font-mono text-xs font-semibold text-fg">
                     {name}
@@ -1118,7 +1116,7 @@ export function StatementRunnerCard({
           onChange={(event) => setSql(event.currentTarget.value)}
           rows={9}
           placeholder={placeholder}
-          className="min-h-52 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+          className="min-h-52 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
         />
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1234,7 +1232,7 @@ export function ObjectListPanel({
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+            className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 focus:border-focus-ring"
             placeholder={t("dbAdmin.search.placeholder")}
           />
         </span>
@@ -1253,7 +1251,7 @@ export function ObjectListPanel({
               role="listitem"
               aria-current={item.name === selectedName ? "true" : undefined}
               onClick={() => onSelect(item)}
-              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-focus-ring ${
+              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition ${
                 item.name === selectedName
                   ? "border-accent-emphasis bg-accent-subtle"
                   : "border-border bg-surface hover:bg-surface-hover"
@@ -1335,7 +1333,7 @@ export function ObjectDetailPanel({
         />
       </div>
       <details className="group/disclosure rounded-md border border-border bg-surface-sunken">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
             {t("dbAdmin.detail.ddl")}
             <span className="ml-2 text-xs font-normal text-fg-muted">{t("dbAdmin.detail.ddlHint")}</span>

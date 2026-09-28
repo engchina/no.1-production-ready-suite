@@ -150,7 +150,7 @@ function ExecutableDirectSqlPage() {
               rows={12}
               required
               aria-required="true"
-              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
               placeholder={t("nl2sql.sqlRunner.placeholder")}
             />
           </div>
