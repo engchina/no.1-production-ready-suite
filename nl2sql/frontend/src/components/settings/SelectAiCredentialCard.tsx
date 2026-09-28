@@ -13,6 +13,7 @@ import {
   Skeleton,
   SelectField,
   type SelectFieldOption,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type SelectAiCredentialRegion } from "@/lib/api";
@@ -22,7 +23,6 @@ import {
   useSelectAiCredential,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 
 const SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE";
 const SELECT_AI_CREDENTIAL_REGION_OPTIONS = [

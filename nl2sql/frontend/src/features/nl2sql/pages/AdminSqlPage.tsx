@@ -9,6 +9,7 @@ import {
   PageHeader,
   PageBody,
   ActionResultRegion,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 import { FieldLabel } from "@/components/ui/required-field";
 
@@ -22,7 +23,6 @@ import type { OperationTimestamp } from "@/lib/operationTiming";
 import { t } from "@/lib/i18n";
 import {
   DbAdminExecutionResult,
-  ExecutionConfirmationField,
   SqlFileInput,
   dbAdminExecutionActivityStatus,
 } from "../components/DbAdminShared";

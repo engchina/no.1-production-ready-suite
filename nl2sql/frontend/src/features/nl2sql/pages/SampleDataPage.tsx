@@ -9,6 +9,7 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -16,7 +17,7 @@ import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { DbAdminExecutionResult, ExecutionConfirmationField } from "../components/DbAdminShared";
+import { DbAdminExecutionResult } from "../components/DbAdminShared";
 import { DbObjectName } from "../components/DbObjectName";
 import {
   DbManagementLoadingSkeleton,

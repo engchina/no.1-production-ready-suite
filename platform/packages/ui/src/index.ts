@@ -26,6 +26,14 @@ export {
   type SecretFieldClearOption,
 } from "./components/ui/secret-field";
 export { RequiredBadge } from "./components/ui/required-badge";
+export {
+  ExecutionConfirmationField,
+  executionConfirmationStatus,
+  DEFAULT_EXECUTION_CONFIRMATION_LABELS,
+  type ExecutionConfirmationFieldProps,
+  type ExecutionConfirmationLabels,
+  type ExecutionConfirmationStatus,
+} from "./components/ui/execution-confirmation-field";
 export { Spinner, type SpinnerProps } from "./components/ui/spinner";
 export {
   Card,

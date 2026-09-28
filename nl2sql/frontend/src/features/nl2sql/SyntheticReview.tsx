@@ -6,13 +6,13 @@ import {
   Button,
   FormStatus,
   useConfirm,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
-import { ExecutionConfirmationField } from "./components/DbAdminShared";
 import { runFinished, type SyntheticRun } from "./syntheticRuns";
 
 export function SyntheticReview({ run, previews, stale, onUpdated }: {

@@ -32,6 +32,7 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  ExecutionConfirmationField,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -4691,6 +4692,9 @@ export function RuntimeSafetySettingsPage() {
   );
 }
 
+/** 実行時スナップショットの置換の確認語（入力の完全一致で置換を許す）。 */
+const SNAPSHOT_REPLACE_CONFIRMATION = "REPLACE";
+
 export function RuntimeSnapshotSettingsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -4778,7 +4782,7 @@ export function RuntimeSnapshotSettingsPage() {
     if (!parsed) {
       return;
     }
-    if (confirmText !== "REPLACE") {
+    if (confirmText !== SNAPSHOT_REPLACE_CONFIRMATION) {
       setFormError(t("settings.snapshot.confirmRequired"));
       return;
     }
@@ -4885,31 +4889,29 @@ export function RuntimeSnapshotSettingsPage() {
               </Button>
             </div>
             {validationResult ? <SnapshotValidationPanel result={validationResult} /> : null}
-            <div className="rounded-md border border-danger-border p-3">
-              <Field label={t("settings.snapshot.confirmText")} htmlFor="runtime-snapshot-confirm">
-                <input
-                  id="runtime-snapshot-confirm"
-                  value={confirmText}
-                  onChange={(event) => setConfirmText(event.target.value)}
-                  placeholder={t("settings.snapshot.confirmPlaceholder")}
-                  aria-describedby="runtime-snapshot-confirm-hint"
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-                <p id="runtime-snapshot-confirm-hint" className="mt-1 text-xs leading-5 text-fg-muted">
-                  {t("settings.snapshot.confirmRequired")}
-                </p>
-              </Field>
-              <Button
-                variant="danger"
-                className="mt-3"
-                onClick={() => void replaceRuntimeSnapshot()}
-                loading={importSnapshot.isPending}
-                disabled={confirmText !== "REPLACE"}
-                aria-describedby={confirmText !== "REPLACE" ? "runtime-snapshot-confirm-hint" : undefined}
-                icon={Upload}>
-                {t("common.replace")}
-              </Button>
-            </div>
+            <ExecutionConfirmationField
+              id="runtime-snapshot-confirm"
+              value={confirmText}
+              onChange={setConfirmText}
+              confirmed={confirmText === SNAPSHOT_REPLACE_CONFIRMATION}
+              expectedLabel={SNAPSHOT_REPLACE_CONFIRMATION}
+              placeholder={t("settings.snapshot.confirmPlaceholder")}
+              helper={t("settings.snapshot.confirmRequired")}
+              labels={{ label: t("settings.snapshot.confirmText") }}
+              disabled={importSnapshot.isPending}
+              actions={
+                <Button
+                  variant="danger"
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  onClick={() => void replaceRuntimeSnapshot()}
+                  loading={importSnapshot.isPending}
+                  disabled={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION}
+                  icon={Upload}>
+                  {t("common.replace")}
+                </Button>
+              }
+            />
             {formError ? <Banner severity="danger">{formError}</Banner> : null}
             {importSnapshot.error ? <Banner severity="danger">{importSnapshot.error.message}</Banner> : null}
           </CardContent>

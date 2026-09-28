@@ -33,6 +33,7 @@ import {
   TableSkeleton,
   ListSkeleton,
   FormSkeleton,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -51,7 +52,6 @@ import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import { securityApi } from "@/features/security/api";
 import type { ProfileAccessProfile } from "@/features/security/types";
-import { ExecutionConfirmationField } from "../components/DbAdminShared";
 import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,

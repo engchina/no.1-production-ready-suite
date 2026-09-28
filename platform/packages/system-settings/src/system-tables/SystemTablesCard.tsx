@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
 import {
@@ -11,11 +11,10 @@ import {
   CardTitle,
   DataTable,
   DisclosureChevron,
-  RequiredBadge,
+  ExecutionConfirmationField,
   Skeleton,
   StatusBadge,
   TimedLoadingState,
-  cn,
   toast,
 } from "@engchina/production-ready-ui";
 
@@ -325,14 +324,23 @@ export function SystemTablesCard({
                       </p>
                     </div>
                   </div>
-                  <RecreateConfirmationField
+                  <ExecutionConfirmationField
                     value={recreateInput}
                     onChange={setRecreateInput}
                     confirmed={recreateConfirmed}
-                    phrase={phrase}
+                    expectedLabel={phrase}
+                    helper={text("settings.database.systemTables.confirmation.helper", { phrase })}
                     disabled={busy}
-                    text={text}
-                    action={
+                    labels={{
+                      label: text("settings.database.systemTables.confirmation.label"),
+                      required: text("settings.database.systemTables.confirmation.required"),
+                      // `{phrase}` の位置に確認語を差し込むのは共有の確認語欄が行う。
+                      expected: text("settings.database.systemTables.confirmation.expected", { phrase: "{phrase}" }),
+                      pending: text("settings.database.systemTables.confirmation.status.pending"),
+                      mismatch: text("settings.database.systemTables.confirmation.status.mismatch"),
+                      confirmed: text("settings.database.systemTables.confirmation.status.confirmed"),
+                    }}
+                    actions={
                       <Button
                         type="button"
                         size="lg"
@@ -369,103 +377,6 @@ function SummaryItem({ label, value, description }: { label: string; value: stri
   );
 }
 
-/**
- * 全再作成の確認語の入力（NL2SQL の実行確認語の見た目）。
- * 入力前から danger 色にせず、状態（未入力 / 不一致 / 確認済み）は文字のバッジでも示す。
- */
-function RecreateConfirmationField({
-  value,
-  onChange,
-  confirmed,
-  phrase,
-  disabled,
-  text,
-  action,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  confirmed: boolean;
-  phrase: string;
-  disabled: boolean;
-  text: Text;
-  action: ReactNode;
-}) {
-  const id = useId();
-  const helperId = `${id}-helper`;
-  const mismatch = Boolean(value.trim()) && !confirmed;
-  const statusLabel = confirmed
-    ? text("settings.database.systemTables.confirmation.status.confirmed")
-    : mismatch
-      ? text("settings.database.systemTables.confirmation.status.mismatch")
-      : text("settings.database.systemTables.confirmation.status.pending");
-  // 「入力条件: {phrase}」の確認語の部分だけを等幅で出すため、前後に分ける。
-  const [expectedPrefix, expectedSuffix = ""] = text("settings.database.systemTables.confirmation.expected", {
-    phrase: PHRASE_PLACEHOLDER,
-  }).split(PHRASE_PLACEHOLDER);
-
-  return (
-    <div
-      className="grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3"
-      data-testid="execution-confirmation-field"
-    >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <label htmlFor={id} className="text-sm font-semibold text-fg">
-          {text("settings.database.systemTables.confirmation.label")}
-          <RequiredBadge
-            label={text("settings.database.systemTables.confirmation.required")}
-            aria-hidden
-            className="ml-2 align-middle"
-          />
-        </label>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
-            {expectedPrefix}
-            {/* 確認語は識別子なので、入力する文字を読み違えないよう等幅で示す。 */}
-            <span className="font-mono font-semibold [overflow-wrap:anywhere]">{phrase}</span>
-            {expectedSuffix}
-          </span>
-          <span
-            className={cn(
-              "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
-              confirmed
-                ? "border-success-border bg-success-subtle text-success-fg"
-                : mismatch
-                  ? "border-danger-border bg-danger-subtle text-danger-fg"
-                  : "border-border bg-surface text-fg-muted",
-            )}
-            aria-live="polite"
-          >
-            {statusLabel}
-          </span>
-        </div>
-      </div>
-      <input
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        className="h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted focus:border-danger-fg disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
-        placeholder={phrase}
-        disabled={disabled}
-        required
-        aria-required="true"
-        aria-describedby={helperId}
-        aria-invalid={mismatch ? "true" : undefined}
-        autoCapitalize="off"
-        autoCorrect="off"
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <p id={helperId} className={cn("break-words text-xs leading-5", mismatch ? "text-danger-fg" : "text-fg-muted")}>
-        {text("settings.database.systemTables.confirmation.helper", { phrase })}
-      </p>
-      <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center">
-        {action}
-      </div>
-    </div>
-  );
-}
-
-const PHRASE_PLACEHOLDER = "\u0000";
 
 function SystemTablesDetails({
   data,
