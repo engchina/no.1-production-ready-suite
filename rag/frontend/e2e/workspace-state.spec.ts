@@ -124,8 +124,8 @@ test.describe("未保存変更の離脱ガード", () => {
     });
     await page.goto("/settings/huggingface");
     await page.locator("#hf-endpoint").fill("https://hf-mirror.com");
-    await page.getByRole("button", { name: "保存する" }).click();
-    await expect(page.getByText("保存しました")).toBeVisible();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("HuggingFace 設定を保存しました")).toBeVisible();
 
     expect(await beforeUnloadPrevented(page)).toBe(false);
     await openFromSidebar(page, "OCI 認証設定");

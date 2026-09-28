@@ -1,15 +1,7 @@
 "use client";
 
-import {
-  AlertCircle,
-  Clipboard,
-  CheckCircle2,
-  FileJson2,
-  FileText,
-  ShieldCheck,
-  type LucideIcon,
-} from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Clipboard, type LucideIcon } from "lucide-react";
+import { useState } from "react";
 
 import {
   Button,
@@ -25,9 +17,6 @@ import { cn } from "@/lib/utils";
 
 type CopyState = "idle" | "success" | "error";
 
-export const SETTINGS_DETAIL_GRID_CLASS =
-  "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]";
-
 interface PreviewCardProps {
   title: string;
   description: string;
@@ -36,128 +25,6 @@ interface PreviewCardProps {
   copyLabel: string;
   icon: LucideIcon;
   previewHeightClassName: string;
-}
-
-export function EnvPreviewCard(props: Omit<PreviewCardProps, "title" | "icon" | "copyLabel">) {
-  return (
-    <SettingsPreviewCard
-      {...props}
-      title={t("settings.preview.env.title")}
-      copyLabel={t("settings.preview.env.copy")}
-      icon={FileText}
-    />
-  );
-}
-
-export function JsonPreviewCard(props: Omit<PreviewCardProps, "title" | "icon" | "copyLabel">) {
-  return (
-    <SettingsPreviewCard
-      {...props}
-      title={t("settings.preview.json.title")}
-      copyLabel={t("settings.preview.json.copy")}
-      icon={FileJson2}
-    />
-  );
-}
-
-export function SettingsSupplementalPanels({
-  status,
-  env,
-  json,
-  operation,
-}: {
-  status?: ReactNode;
-  env: {
-    description: string;
-    value: string;
-  };
-  json?: {
-    description: string;
-    value: string;
-  };
-  operation: {
-    description: string;
-    notes: string[];
-    warnings?: string[];
-  };
-}) {
-  return (
-    <aside className="space-y-5">
-      <EnvPreviewCard
-        description={env.description}
-        value={env.value}
-        previewHeightClassName="h-44"
-      />
-      {json ? (
-        <JsonPreviewCard
-          description={json.description}
-          value={json.value}
-          previewHeightClassName="h-56"
-        />
-      ) : null}
-      <OperationMemoCard
-        description={operation.description}
-        notes={operation.notes}
-        warnings={operation.warnings ?? []}
-      />
-      {status}
-    </aside>
-  );
-}
-
-function OperationMemoCard({
-  description,
-  notes,
-  warnings,
-}: {
-  description: string;
-  notes: string[];
-  warnings: string[];
-}) {
-  const uniqueWarnings = [...new Set(warnings.filter(Boolean))];
-
-  return (
-    <Card>
-      <CardHeader>
-        <SettingsCardHeader
-          icon={ShieldCheck}
-          title={t("settings.preview.ops.title")}
-          description={description}
-        />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <ul className="space-y-2 text-sm leading-relaxed text-fg-muted">
-          {notes.map((note) => (
-            <li key={note} className="flex gap-2">
-              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-info-fg" aria-hidden />
-              <span className="leading-relaxed">{note}</span>
-            </li>
-          ))}
-        </ul>
-        {uniqueWarnings.length > 0 ? (
-          <ul className="space-y-2 border-t border-border pt-3 text-sm leading-relaxed text-fg">
-            {uniqueWarnings.map((warning) => (
-              <li key={warning} className="flex gap-2">
-                <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning-fg" aria-hidden />
-                <span className="leading-relaxed">{warning}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-export function formatSettingsEnvValue(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) return "";
-  if (/[\s#"']/u.test(normalized)) return JSON.stringify(normalized);
-  return normalized;
-}
-
-export function formatSettingsJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
 }
 
 export function SettingsPreviewCard({
