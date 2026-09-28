@@ -429,18 +429,15 @@ printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_read_timeout 660s;' \
   || fail "保存済みの回答の評価の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
 printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_pass http://127.0.0.1:8000;' \
   || fail "保存済みの回答の評価が backend へ proxy されていない"
-frontend_template="${REPO_DIR}/frontend/nginx.conf.template"
-# 範囲の終わりは行だけの `}`（`${BACKEND_URL}` の `}` で止めない）。
-awk '/location ~ \^\/api\/search\/answers\/\[\^\/\]\+\/evaluation\$ \{/,/^ *\}$/' "${frontend_template}" \
-  | grep -Fq 'proxy_read_timeout 660s;' \
-  || fail "frontend の nginx の保存済みの回答の評価の待ち時間が延びていない"
-# upload の上限: backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）+ multipart の余白 10 MiB（Refs #306）。
+# upload の上限: backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）+ multipart の余白 10 MiB（#306）。
+# Nginx の既定（1m）のままだと 1 MB を超える文書を送れない（#280）。
 grep -Fq 'client_max_body_size 210M;' "${site}" \
   || fail "既定の upload の上限が backend の RAG_MAX_UPLOAD_BYTES（200 MiB）+ 余白になっていない"
-# frontend の nginx（nginx.conf.template）も同じ上限にする。既定の 1m だと 1 MB 超を送れない（#280）。
-grep -Fq 'client_max_body_size 210M;' "${frontend_template}" \
-  || fail "frontend の nginx の upload 上限が init_script.sh（backend の既定値 + 余白）と合っていない"
-grep -Fq 'proxy_read_timeout 600s;' "${frontend_template}" || fail "frontend の nginx が大きな upload の保存を待てない"
+grep -Fq 'proxy_read_timeout 600s;' "${site}" || fail "Nginx が大きな upload の保存を待てない"
+# 上限の値は init_script.sh が生成する 1 か所だけにする（固定値を持つ別の Nginx 設定を置かない。#306）。
+# frontend/nginx.conf.template は Docker の frontend image 用だった（#356 で Dockerfile を削除）。
+test ! -e "${REPO_DIR}/frontend/nginx.conf.template" \
+  || fail "使われない frontend/nginx.conf.template が固定の upload の上限を持ったまま残っている"
 run_nginx_case nginx-custom-upload "RAG_MAX_UPLOAD_BYTES=524288000"
 grep -Fq 'client_max_body_size 510M;' "${TEST_TMP_DIR}/nginx-custom-upload/sites-available/production-ready-rag" \
   || fail "backend/.env の RAG_MAX_UPLOAD_BYTES（500 MiB）から Nginx の上限を作っていない"

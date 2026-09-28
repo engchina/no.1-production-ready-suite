@@ -50,7 +50,7 @@ STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
 # 評価は LLM を複数回呼ぶため、検索の timeout（`rag_search_timeout_seconds`）ではなく、LLM 1 回の
 # timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を評価全体の上限にする。
 # 画面の timeout（frontend の `ANSWER_EVALUATION_TIMEOUT_MS` = 630 秒）と nginx の待ち時間（660 秒。
-# `frontend/nginx.conf.template`・`init_script.sh`）はこれより長くし、backend の 504 と理由が画面に
+# `init_script.sh` が生成する設定）はこれより長くし、backend の 504 と理由が画面に
 # 届くようにする（画面が先に諦めた後で backend が評価を保存する、を起こさない）。
 ANSWER_EVALUATION_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
 ANSWER_EVALUATION_TIMEOUT_MESSAGE = (

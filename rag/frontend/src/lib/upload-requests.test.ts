@@ -8,6 +8,7 @@ import {
   mergeBatchUploadResults,
   planUploadRequests,
   totalUploadBytes,
+  uploadFileProgresses,
   uploadProgressOf,
   uploadProgressPercent,
 } from "./upload-requests";
@@ -139,5 +140,59 @@ describe("送信の進み具合", () => {
     const progress = uploadProgressOf(90, 20, { loaded: 5, total: 2 }, 100);
 
     expect(progress.sentBytes).toBe(100);
+  });
+});
+
+describe("ファイルごとの送信の進み具合", () => {
+  const files = [file("a.pdf", 30 * MB), file("b.pdf", 10 * MB), file("c.pdf", 20 * MB)];
+
+  it("全体の送信済みバイト数を、送る順に先頭のファイルから割り振る", () => {
+    expect(uploadFileProgresses(files, 35 * MB)).toEqual([
+      { name: "a.pdf", sentBytes: 30 * MB, totalBytes: 30 * MB, state: "sent" },
+      { name: "b.pdf", sentBytes: 5 * MB, totalBytes: 10 * MB, state: "sending" },
+      { name: "c.pdf", sentBytes: 0, totalBytes: 20 * MB, state: "waiting" },
+    ]);
+  });
+
+  it("送信前はすべて待機中、送り終えたらすべて送信済みにする", () => {
+    expect(uploadFileProgresses(files, 0).map((item) => item.state)).toEqual([
+      "waiting",
+      "waiting",
+      "waiting",
+    ]);
+    const done = uploadFileProgresses(files, 60 * MB);
+    expect(done.map((item) => item.state)).toEqual(["sent", "sent", "sent"]);
+    expect(done.map((item) => item.sentBytes)).toEqual([30 * MB, 10 * MB, 20 * MB]);
+  });
+
+  it("ちょうど境目では前のファイルを送信済みにし、次のファイルはまだ待機中にする", () => {
+    expect(uploadFileProgresses(files, 30 * MB).map((item) => item.state)).toEqual([
+      "sent",
+      "waiting",
+      "waiting",
+    ]);
+  });
+
+  it("送信済みの量が合計を超えても、各ファイルの大きさを超えない", () => {
+    const over = uploadFileProgresses(files, 999 * MB);
+    expect(over.map((item) => item.sentBytes)).toEqual([30 * MB, 10 * MB, 20 * MB]);
+  });
+
+  it("0 バイトのファイルは、後ろのファイルを送り始めるか全体を送り終えたら送信済みにする", () => {
+    const withEmpty = [file("a", 10), file("empty", 0), file("b", 10)];
+    expect(uploadFileProgresses(withEmpty, 10).map((item) => item.state)).toEqual([
+      "sent",
+      "waiting",
+      "waiting",
+    ]);
+    expect(uploadFileProgresses(withEmpty, 11).map((item) => item.state)).toEqual([
+      "sent",
+      "sent",
+      "sending",
+    ]);
+    expect(uploadFileProgresses([file("a", 10), file("empty", 0)], 10).map((item) => item.state)).toEqual([
+      "sent",
+      "sent",
+    ]);
   });
 });

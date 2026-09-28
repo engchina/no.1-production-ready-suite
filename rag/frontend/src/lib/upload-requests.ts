@@ -3,9 +3,10 @@ import type { BatchUploadFailedItem, BatchUploadResult, UploadTransferProgress }
 /**
  * 文書アップロードの送信計画（#280）。
  *
- * backend の上限は「1 ファイル」あたり（`RAG_MAX_UPLOAD_BYTES`、既定 200 MiB）だが、前段の nginx の
- * `client_max_body_size`（210M）は「1 リクエスト」あたりに効く。複数ファイルを 1 リクエストで送ると、
- * 1 件ずつは上限内でも合計が 210M を超えた時点で一括アップロード全体が 413 になる。
+ * backend の上限は「1 ファイル」あたり（`RAG_MAX_UPLOAD_BYTES`、既定 200 MiB）だが、前段の Nginx の
+ * `client_max_body_size`（`init_script.sh` が `RAG_MAX_UPLOAD_BYTES` + multipart の余白から作る。#306）は
+ * 「1 リクエスト」あたりに効く。複数ファイルを 1 リクエストで送ると、1 件ずつは上限内でも合計が
+ * その値を超えた時点で一括アップロード全体が 413 になる。
  * そこで、1 リクエストの合計を 1 ファイルの上限以内に収めるよう分けて送り、上限を超えるファイルは
  * 送る前に失敗として扱う（大きなファイルを最後まで送ってから拒否されるのを避ける）。
  */
@@ -124,4 +125,42 @@ export function uploadProgressPercent(progress: UploadProgress): number {
   if (progress.totalBytes <= 0) return 0;
   if (progress.sentBytes >= progress.totalBytes) return 100;
   return Math.min(99, Math.floor((progress.sentBytes / progress.totalBytes) * 100));
+}
+
+/** ファイルごとの送信の状態（#306）。 */
+export type UploadFileSendState = "waiting" | "sending" | "sent";
+
+/** ファイルごとの送信の進み具合（#306）。 */
+export interface UploadFileProgress {
+  name: string;
+  sentBytes: number;
+  totalBytes: number;
+  state: UploadFileSendState;
+}
+
+/**
+ * 全体の送信済みバイト数を、送る順に並べたファイルへ割り振る（#306）。
+ *
+ * multipart の本文はファイルを並べた順に送るため、全体の送信済みバイト数を先頭のファイルから順に
+ * 埋めていけば、各ファイルの送信済みの量になる（境界などの付加分は全体の進み具合と同じく含めない）。
+ * `files` は送る順（一括アップロードでは分けたまとまりを順に連ねたもの）で、上限を超えて送らない
+ * ファイルは含めない。
+ */
+export function uploadFileProgresses(
+  files: readonly Pick<File, "name" | "size">[],
+  sentBytes: number,
+): UploadFileProgress[] {
+  const totalBytes = totalUploadBytes(files);
+  let offset = 0;
+  return files.map((file) => {
+    const start = offset;
+    offset += file.size;
+    const sent = Math.min(file.size, Math.max(0, sentBytes - start));
+    // 0 バイトのファイルは、後ろのファイルを送り始めたか全体を送り終えたときに送信済みとする。
+    const finished =
+      sentBytes >= start + file.size &&
+      (file.size > 0 || sentBytes > start || sentBytes >= totalBytes);
+    const state: UploadFileSendState = finished ? "sent" : sentBytes > start ? "sending" : "waiting";
+    return { name: file.name, sentBytes: sent, totalBytes: file.size, state };
+  });
 }

@@ -491,6 +491,58 @@ test("送信中は送信済み / 合計のバイト数と割合を示し、送�
   await expect(page.getByText("保存先に保存できませんでした。")).toBeVisible();
 });
 
+test("複数のファイルを送るときは、ファイルごとの送信済みの量と状態を示す", async ({ page }) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  await captureUploadXhr(page);
+  let releaseUpload: () => void = () => undefined;
+  const uploadReleased = new Promise<void>((resolve) => {
+    releaseUpload = resolve;
+  });
+  await page.route("**/api/documents/batch-upload", async (route) => {
+    await uploadReleased;
+    await route.fulfill({
+      json: apiEnvelope({
+        items: [uploadResult("a.txt"), uploadResult("b.txt"), uploadResult("c.txt")],
+        failed_items: [],
+        total_count: 3,
+        uploaded_count: 3,
+        failed_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+  const MB = 1024 * 1024;
+  // 長いファイル名は省略し、title に全文を出す（375px でも横にはみ出さない）。
+  const longName = `${"年度別経費精算規程と出張旅費の取り扱い".repeat(4)}.txt`;
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles([textFile(longName, 6 * MB), textFile("b.txt", 2 * MB), textFile("c.txt", 4 * MB)]);
+
+  const list = page.getByRole("list", { name: "ファイルごとの送信状況" });
+  const items = list.getByTestId("upload-file-progress-item");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(0)).toHaveAttribute("data-state", "waiting");
+  await expect(items.nth(0)).toContainText("待機中 · 0 B / 6 MB");
+  await expect(items.nth(0).getByTitle(longName)).toBeVisible();
+
+  // 本文の 7/12 を送った時点: 先頭（6 MB）は送信済み、2 件目は途中、3 件目は待機中。
+  const bodyBytes = 12 * MB + 1200;
+  await emitUploadProgress(page, (bodyBytes / 12) * 7, bodyBytes);
+  await expect(page.getByTestId("upload-progress-bytes")).toHaveText("送信済み 7 MB / 12 MB（58%）");
+  await expect(items.nth(0)).toHaveAttribute("data-state", "sent");
+  await expect(items.nth(0)).toContainText("送信済み · 6 MB / 6 MB");
+  await expect(items.nth(1)).toHaveAttribute("data-state", "sending");
+  await expect(items.nth(1)).toContainText("送信中 · 1 MB / 2 MB");
+  await expect(items.nth(2)).toHaveAttribute("data-state", "waiting");
+  await expect(items.nth(2)).toContainText("待機中 · 0 B / 4 MB");
+  await expectNoPageOverflow(page);
+
+  releaseUpload();
+  await expect(page.getByTestId("upload-sending")).toHaveCount(0);
+});
+
 // 既定の文書解析エンジン Docling は PDF と画像だけを解析する（#286）。それ以外の形式は、
 // アップロードの結果で「処理レシピで Unstructured を選ぶ」ように案内する（取込は始めない）。
 // desktop / mobile（375px）は playwright.config.ts の project で両方実行する。

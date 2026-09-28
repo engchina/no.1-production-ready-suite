@@ -1738,6 +1738,11 @@ export const ja = {
   "upload.progress.aria": "送信の進み具合",
   "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
   "upload.progress.saving": "送信が完了しました。保存先への保存と文書の登録を待っています。",
+  "upload.progress.files": "ファイルごとの送信状況",
+  "upload.progress.fileBytes": "{sent} / {total}",
+  "upload.progress.state.waiting": "待機中",
+  "upload.progress.state.sending": "送信中",
+  "upload.progress.state.sent": "送信済み",
   "upload.error.failed": "アップロードに失敗しました。時間をおいて、もう一度お試しください。",
   "upload.error.fileTooLarge":
     "ファイルサイズが上限（{size} / ファイル）を超えるため、送信しませんでした。",

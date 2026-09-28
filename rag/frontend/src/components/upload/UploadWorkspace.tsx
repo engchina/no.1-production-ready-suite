@@ -90,6 +90,8 @@ export function UploadWorkspace() {
   const [sendingCount, setSendingCount] = useState(0);
   // 送信済み / 合計のバイト数（#306）。送信を始めるたびに 0 から数え直す。
   const [sendProgress, setSendProgress] = useState<UploadProgress | null>(null);
+  // 送るファイル（送る順。上限を超えて送らないファイルは除く）。ファイルごとの進み具合に使う（#306）。
+  const [sendingFiles, setSendingFiles] = useState<File[]>([]);
   const upload = useUploadDocument();
   const batchUpload = useBatchUploadDocuments();
   // 1 ファイルの上限。送信前の確認と、一括アップロードを分けて送る基準に使う（#280）。
@@ -124,12 +126,12 @@ export function UploadWorkspace() {
     setBatchFailedItems([]);
     upload.reset();
     batchUpload.reset();
+    // 上限を超えて送らないファイルは数えない（hook の最初の通知と同じ合計）。一括アップロードは
+    // 選んだ順を保ったまとまりに分けて順に送るため、この順がそのまま送る順になる。
+    const sendable = files.filter((file) => file.size <= maxUploadBytes);
     setSendingCount(files.length);
-    setSendProgress({
-      sentBytes: 0,
-      // 上限を超えて送らないファイルは数えない（hook の最初の通知と同じ合計）。
-      totalBytes: totalUploadBytes(files.filter((file) => file.size <= maxUploadBytes)),
-    });
+    setSendingFiles(sendable);
+    setSendProgress({ sentBytes: 0, totalBytes: totalUploadBytes(sendable) });
     // 上限を超える 1 ファイルは、一括アップロードの経路で送らずに失敗として示す。
     if (files.length === 1 && files[0].size <= maxUploadBytes) {
       upload.mutate(
@@ -175,7 +177,11 @@ export function UploadWorkspace() {
             />
             <Dropzone onFiles={handleFiles} disabled={isBusy} maxUploadBytes={maxUploadBytes} />
             {isBusy ? (
-              <UploadSendingState fileCount={sendingCount} progress={sendProgress} />
+              <UploadSendingState
+                fileCount={sendingCount}
+                files={sendingFiles}
+                progress={sendProgress}
+              />
             ) : null}
             {mutationError ? <ErrorState message={uploadErrorMessage(mutationError)} /> : null}
             {batchFailedItems.length > 0 ? (
