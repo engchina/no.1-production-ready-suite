@@ -106,7 +106,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_BUSINESS,
         "フィードバック",
         "フィードバックの一覧・詳細を表示し、評価ケースを作成できます"
-        "（利用できる業務ビューのフィードバックだけ）。",
+        "（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
+        "見られるのは SYSTEM_ADMIN だけ）。",
     ),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
@@ -156,7 +157,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_MANAGE,
         "フィードバックの承認 FAQ 反映",
         "フィードバックの回答を業務ビューの承認済み FAQ に登録できます"
-        "（利用できる業務ビューのフィードバックだけ）。フィードバックの表示と、他の利用者の"
+        "（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
+        "扱えるのは SYSTEM_ADMIN だけ）。フィードバックの表示と、他の利用者の"
         "保存済みの回答の表示・評価・削除も含みます。",
         implies=(MENU_FEEDBACK,),
     ),

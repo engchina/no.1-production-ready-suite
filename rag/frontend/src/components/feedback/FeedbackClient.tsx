@@ -2,6 +2,7 @@ import {
   PageBody,
   Tabs,
   PageHeader,
+  Banner,
   Button,
   Card,
   CardContent,
@@ -87,6 +88,9 @@ export function FeedbackClient() {
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 100, offset: 0 });
+  // 見える範囲は backend が決める（SYSTEM_ADMIN は全員の分、ほかのロールは自分が送った分だけ。#408）。
+  // 画面はその範囲を案内するだけ。
+  const seesAllUsers = useAuth().user?.is_system_admin === true;
   const data = query.data;
   const page = data?.items;
   const totalPages = Math.max(1, Math.ceil((page?.total ?? 0) / urlState.pageSize));
@@ -185,6 +189,12 @@ export function FeedbackClient() {
     <div>
       <PageHeader wide title={t("feedback.page.title")} subtitle={t("feedback.page.subtitle")} />
       <PageBody wide>
+        <Banner
+          severity="info"
+          title={t(seesAllUsers ? "feedback.scope.allTitle" : "feedback.scope.ownTitle")}
+        >
+          {t(seesAllUsers ? "feedback.scope.allDescription" : "feedback.scope.ownDescription")}
+        </Banner>
         <Card>
           <CardContent className="space-y-4 pt-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
