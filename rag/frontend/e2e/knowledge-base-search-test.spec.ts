@@ -349,3 +349,55 @@ test("文書の詳細を開けない利用者には、所属文書と引用か�
   await expect(page).toHaveURL(/\/knowledge-bases\/kb-1$/);
   await expectNoPageOverflow(page);
 });
+
+test("検索テストと停止は同じボタンで、フォーカスを保ったまま切り替わる（#413）", async ({ page }) => {
+  await mockKbPage(page, 1);
+  let calls = 0;
+  let aborted = 0;
+  page.on("requestfailed", (request) => {
+    if (request.url().includes("/api/search/stream")) aborted += 1;
+  });
+  // 応答を返さず、生成中のままにする。
+  await page.route("**/api/search/stream", () => {
+    calls += 1;
+    return new Promise<void>(() => undefined);
+  });
+
+  await page.goto("/knowledge-bases/kb-1");
+  const input = page.getByPlaceholder("この知識ベースに質問してみる…");
+  await input.fill("有給休暇の付与日数は？");
+  const button = page.getByTestId("kb-search-test-run-stop");
+  await expect(button).toHaveAccessibleName("検索テスト");
+  const idleBox = await button.boundingBox();
+
+  await button.click();
+  await expect(button).toHaveAccessibleName("停止");
+  await expect(button).toBeFocused();
+  // 「検索テスト」→「停止」でも幅が縮まず、位置が変わらない。
+  const runningBox = await button.boundingBox();
+  expect(runningBox?.x).toBe(idleBox?.x);
+  expect(runningBox?.width).toBe(idleBox?.width);
+  // 処理中は結果の領域に今の工程と経過時間を出す（ボタンはスピナーを出さない）。
+  await expect(page.getByTestId("kb-search-test-progress")).toBeVisible();
+
+  // 実行中の入力欄の Enter では停止しない。
+  await input.press("Enter");
+  await page.waitForTimeout(300);
+  await expect(button).toHaveAccessibleName("停止");
+  expect(calls).toBe(1);
+  expect(aborted).toBe(0);
+
+  await button.click();
+  await expect(button).toHaveAccessibleName("検索テスト");
+  await expect(button).toBeFocused();
+  await expect.poll(() => aborted).toBe(1);
+
+  // 停止の後に再び実行できる。ダブルクリックの 2 回目（実行中に変わった直後の「停止」）では停止しない。
+  await button.dblclick();
+  await expect.poll(() => calls).toBe(2);
+  await expect(button).toHaveAccessibleName("停止");
+  await page.waitForTimeout(300);
+  await expect(button).toHaveAccessibleName("停止");
+  expect(aborted).toBe(1);
+  await expectNoPageOverflow(page);
+});

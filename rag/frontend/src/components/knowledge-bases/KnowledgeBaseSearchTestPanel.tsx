@@ -1,11 +1,12 @@
 "use client";
 
-import { FlaskConical, Search as SearchIcon, Sparkles, X } from "lucide-react";
+import { FlaskConical, Search as SearchIcon, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { RunStopButton } from "@/components/RunStopButton";
+import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { CitationCard } from "@/components/search/CitationCard";
 import {
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -15,7 +16,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk, type SearchMode } from "@/lib/api";
-import { streamSearch } from "@/lib/search-stream";
+import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t, type I18nKey } from "@/lib/i18n";
 
@@ -50,6 +51,9 @@ export function KnowledgeBaseSearchTestPanel({
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
   const [meta, setMeta] = useState<{ trace_id: string; elapsed_ms: number } | null>(null);
   const [errorText, setErrorText] = useState("");
+  // 処理中の表示（今の工程と経過時間）。ボタンは実行中に「停止」になりスピナーを出さないため、ここで示す（#413）。
+  const [stages, setStages] = useState<SearchStageEvent[]>([]);
+  const [startedAtMs, setStartedAtMs] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   // パネルを離れたら生成中の検索を止める（#285）。
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -65,6 +69,8 @@ export function KnowledgeBaseSearchTestPanel({
     const controller = new AbortController();
     abortRef.current = controller;
     setPhase("streaming");
+    setStages([]);
+    setStartedAtMs(Date.now());
     setAnswer("");
     setCitations([]);
     setMeta(null);
@@ -74,6 +80,7 @@ export function KnowledgeBaseSearchTestPanel({
       await streamSearch(
         { query: trimmed, mode, top_k: TEST_TOP_K, knowledge_base_ids: [knowledgeBaseId] },
         {
+          onStage: (stage) => setStages((current) => [...current, stage]),
           onMetadata: (m) => setMeta({ trace_id: m.trace_id, elapsed_ms: m.elapsed_ms }),
           onDelta: (text) => setAnswer((prev) => prev + text),
           onReplace: (text) => setAnswer(text),
@@ -126,7 +133,7 @@ export function KnowledgeBaseSearchTestPanel({
         ) : (
           <>
             <div className="flex flex-col gap-2 sm:flex-row">
-              {/* 隣の lg の Button と同じ高さ（size="lg"）。 */}
+              {/* 隣の lg の Button と同じ高さ（size="lg"）。入力欄の Enter は実行だけ（実行中の Enter は submit が無視する）。 */}
               <TextField
                 id={inputId}
                 label={t("knowledgeBases.searchTest.title")}
@@ -141,25 +148,17 @@ export function KnowledgeBaseSearchTestPanel({
                 leadingIcon={SearchIcon}
                 className="min-w-0 flex-1"
               />
-              <Button
-                type="button"
-                icon={SearchIcon}
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  void submit();
-                }}
-                onClick={() => void submit()}
-                loading={isStreaming}
-                size="lg"
+              {/* 検索テストと停止は同じボタン。実行中は同じ位置で「停止」になる（buttons.md §3.1、#413）。 */}
+              <RunStopButton
+                running={isStreaming}
+                onRun={() => void submit()}
+                onStop={cancel}
+                runLabel={t("knowledgeBases.searchTest.button")}
+                stopLabel={t("knowledgeBases.searchTest.cancel")}
+                runIcon={SearchIcon}
                 className="sm:min-w-28"
-              >
-                {t("knowledgeBases.searchTest.button")}
-              </Button>
-              {isStreaming ? (
-                <Button type="button" variant="secondary" size="lg" onClick={cancel} icon={X}>
-                  {t("knowledgeBases.searchTest.cancel")}
-                </Button>
-              ) : null}
+                testId="kb-search-test-run-stop"
+              />
             </div>
 
             <div
@@ -186,6 +185,15 @@ export function KnowledgeBaseSearchTestPanel({
                       <Sparkles size={16} className="text-accent-fg" aria-hidden />
                       {t("search.answer")}
                     </h3>
+                    {isStreaming ? (
+                      <AnswerProgress
+                        active
+                        stages={stages}
+                        startedAtMs={startedAtMs}
+                        testId="kb-search-test-progress"
+                        className="mb-3"
+                      />
+                    ) : null}
                     <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
                       {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       {isStreaming ? (

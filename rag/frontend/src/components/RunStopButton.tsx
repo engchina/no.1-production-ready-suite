@@ -1,0 +1,77 @@
+import { Button, cn, type ButtonProps } from "@engchina/production-ready-ui";
+import { Square, type LucideIcon } from "lucide-react";
+
+import { isRepeatedActivationKey, runStopClickAction } from "@/lib/run-stop";
+
+/**
+ * その場で結果を待つ操作（検索・チャットの送信・検索テスト）の「実行」と「停止」を 1 つのボタンで出す（#413）。
+ * UX 契約 buttons.md §3.1「その場の実行と停止」。
+ *
+ * - 同じ `<button>` のまま、実行中は `secondary` の「停止」（Square）に切り替える。要素が変わらないためフォーカスが残る。
+ *   停止・完了の後も同じボタンにフォーカスが残る。
+ * - 実行中に押せるのは停止だけ。停止は取り消せる停止なので赤塗りにしない（buttons.md §3）。
+ * - ボタンのスピナー（`loading`）は使わない。処理中は結果の領域の `ProcessingIndicator` が出し、
+ *   その `role="status"` が読み上げる（messaging §3.7）。
+ * - 実行できない間は `aria-disabled`（フォーカスを受ける）。停止・完了の後に実行できない状態へ戻っても
+ *   （チャットは送信で入力欄が空になる）ネイティブの `disabled` のようにフォーカスが `body` へ外れない（#355）。
+ * - ダブルクリックの 2 回目と、押し続けた Enter / Space の繰り返しは無視する（実行の直後に停止しない）。
+ * - 2 つのラベルを重ねて置き、幅を長い方にそろえる（「検索テスト」→「停止」で幅が縮まない）。
+ * - 入力欄の Enter は呼び出し側が `onRun` 相当の送信にだけつなぐ（実行中の Enter で停止しない）。
+ *
+ * 今は RAG だけが使う。2 製品目が使うときは `packages/ui` へ移す。
+ */
+export function RunStopButton({
+  running,
+  onRun,
+  onStop,
+  runLabel,
+  stopLabel,
+  runIcon,
+  runDisabled = false,
+  size = "lg",
+  touchTarget,
+  className,
+  testId,
+}: {
+  running: boolean;
+  onRun: () => void;
+  onStop: () => void;
+  runLabel: string;
+  stopLabel: string;
+  runIcon: LucideIcon;
+  /** 実行できない（入力が空など）。実行中の停止には効かない。 */
+  runDisabled?: boolean;
+  size?: ButtonProps["size"];
+  touchTarget?: boolean;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Button
+      type="button"
+      variant={running ? "secondary" : "primary"}
+      size={size}
+      touchTarget={touchTarget}
+      icon={running ? Square : runIcon}
+      aria-disabled={!running && runDisabled ? true : undefined}
+      data-state={running ? "running" : "idle"}
+      data-testid={testId}
+      className={className}
+      onKeyDown={(event) => {
+        if (isRepeatedActivationKey(event)) event.preventDefault();
+      }}
+      onClick={(event) => {
+        const action = runStopClickAction({ running, runDisabled, clickCount: event.detail });
+        if (action === "run") onRun();
+        else if (action === "stop") onStop();
+      }}
+    >
+      {/* 2 つのラベルを同じセルに重ね、見えない方（visibility: hidden）は名前にも入らない。
+          左寄せにして、短いラベルでもアイコンと文字の間を開けない。 */}
+      <span className="grid justify-items-start">
+        <span className={cn("col-start-1 row-start-1", running && "invisible")}>{runLabel}</span>
+        <span className={cn("col-start-1 row-start-1", !running && "invisible")}>{stopLabel}</span>
+      </span>
+    </Button>
+  );
+}

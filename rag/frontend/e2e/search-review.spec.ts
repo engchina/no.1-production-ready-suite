@@ -334,3 +334,74 @@ test("業務ビューの読み込み中は読み込み中の状態として読�
   release();
   await expect(page.getByRole("combobox", { name: /対象の業務ビュー/ })).toBeVisible();
 });
+
+test("検索のボタンは詳細条件の下にあり、実行中は同じ位置・同じ要素のまま「停止」になる（#413）", async ({ page }) => {
+  let calls = 0;
+  let aborted = 0;
+  page.on("requestfailed", (request) => {
+    if (request.url().includes("/api/search/stream")) aborted += 1;
+  });
+  // 応答を返さず、生成中のままにする。
+  await page.route("**/api/search/stream", () => {
+    calls += 1;
+    return new Promise<void>(() => undefined);
+  });
+
+  await page.goto("/search");
+  await selectViews(page, [/経理ビュー/]);
+  const input = page.getByRole("textbox", { name: "RAG 検索" });
+  await input.fill("交通費の上限");
+
+  // 配置: フォームの最後（詳細条件の下）。
+  const button = page.getByTestId("search-run-stop");
+  const advanced = page.getByRole("button", { name: "詳細条件" });
+  const [buttonBox, advancedBox] = await Promise.all([button.boundingBox(), advanced.boundingBox()]);
+  if (!buttonBox || !advancedBox) throw new Error("ボタンの位置を計測できません。");
+  expect(buttonBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
+  await expect(button).toHaveAccessibleName("検索");
+  await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
+
+  // キーボードで実行 → 同じ要素のまま「停止」になり、フォーカスと位置が変わらない。
+  const marker = await button.evaluate((element) => {
+    (element as HTMLElement).dataset.e2eMarker = "same-element";
+    return true;
+  });
+  expect(marker).toBe(true);
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await expect(button).toHaveAccessibleName("停止");
+  await expect(button).toHaveAttribute("data-e2e-marker", "same-element");
+  await expect(button).toBeFocused();
+  await expect(button).not.toHaveAttribute("aria-disabled", "true");
+  const runningBox = await button.boundingBox();
+  expect(runningBox?.x).toBe(buttonBox.x);
+  expect(runningBox?.y).toBe(buttonBox.y);
+  expect(runningBox?.width).toBe(buttonBox.width);
+  // 実行中に押せる操作は 1 つだけ（押せない「検索」が並ばない）。
+  await expect(page.getByRole("button", { name: "検索", exact: true })).toHaveCount(0);
+  expect(calls).toBe(1);
+
+  // 実行中の質問欄の Enter では停止しない（二重に送信もしない）。
+  await input.press("Enter");
+  await page.waitForTimeout(300);
+  await expect(button).toHaveAccessibleName("停止");
+  expect(calls).toBe(1);
+  expect(aborted).toBe(0);
+
+  // 停止で中断する。フォーカスはボタンに残る。
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await expect(button).toHaveAccessibleName("検索");
+  await expect(button).toBeFocused();
+  await expect(page.getByText("検索ストリームを停止しました。")).toBeVisible();
+  await expect.poll(() => aborted).toBe(1);
+
+  // 停止の後に再び実行できる（ダブルクリックでも 1 回だけ実行し、停止しない）。
+  await button.dblclick();
+  await expect.poll(() => calls).toBe(2);
+  await expect(button).toHaveAccessibleName("停止");
+  await page.waitForTimeout(300);
+  await expect(button).toHaveAccessibleName("停止");
+  expect(aborted).toBe(1);
+  await expectNoPageOverflow(page);
+});
