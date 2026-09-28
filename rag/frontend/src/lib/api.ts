@@ -112,6 +112,14 @@ export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
  */
 export const ANSWER_GENERATION_TIMEOUT_MS = 630_000;
 
+/**
+ * 品質評価（golden set。`POST /api/evaluation/run`・`/compare`）の timeout（#383）。評価は 1 ケースごとに
+ * LLM で回答を生成するため、通常の API の 30 秒では足りない。backend は評価全体を 600 秒
+ * （`EVALUATION_RUN_TIMEOUT_SECONDS`）で打ち切り、残りのケースを失敗として結果を返すので、画面は
+ * それより 30 秒長く待ち、打ち切った結果を表示する。Nginx はさらに長い 660 秒にしている。
+ */
+export const EVALUATION_RUN_TIMEOUT_MS = 630_000;
+
 /** チャットが会話の回答の保存有無を一度に引き当てる trace_id の上限（backend と同じ）。 */
 export const ANSWER_TRACE_ID_FILTER_MAX = 100;
 
@@ -1425,6 +1433,8 @@ export interface EvaluationCaseResult {
   diagnostics: SearchDiagnostics;
   elapsed_ms: number;
   error_type: string | null;
+  /** 時間切れになった工程（進捗の stage と同じ名前）。時間切れ以外は null（#383）。 */
+  error_stage?: string | null;
   error_message: string | null;
 }
 
@@ -3262,11 +3272,14 @@ export const api = {
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>
-    request<EvaluationMetrics>("/api/evaluation/run", jsonBody(body)),
+    request<EvaluationMetrics>("/api/evaluation/run", jsonBody(body), {
+      timeoutMs: EVALUATION_RUN_TIMEOUT_MS,
+    }),
   compareEvaluation: (body: EvaluationCompareRequestBody) =>
     request<EvaluationCompareResponse>(
       "/api/evaluation/compare",
       jsonBody(body),
+      { timeoutMs: EVALUATION_RUN_TIMEOUT_MS },
     ),
 
   // 設定: モデル

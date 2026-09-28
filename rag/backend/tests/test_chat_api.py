@@ -577,7 +577,6 @@ def test_chat_answer_uses_answer_timeout_not_search_timeout(monkeypatch: MonkeyP
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(chat_route, "RagPipeline", _SlowAnswerPipeline)
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.01)
     monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 5.0)
 
     resp = client.post(

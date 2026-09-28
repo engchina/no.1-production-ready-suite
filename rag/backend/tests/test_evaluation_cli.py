@@ -499,3 +499,10 @@ def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
             },
         ],
     }
+
+
+def test_evaluation_gate_cli_waits_longer_than_evaluation_time_budget() -> None:
+    """CLI の既定の timeout は、評価 API の全体の上限より長い（打ち切った結果を受け取る。#383）。"""
+    from app.api.routes.evaluation import EVALUATION_RUN_TIMEOUT_SECONDS
+
+    assert evaluation_cli.DEFAULT_TIMEOUT_SECONDS > EVALUATION_RUN_TIMEOUT_SECONDS

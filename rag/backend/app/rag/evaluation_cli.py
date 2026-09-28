@@ -25,7 +25,9 @@ from app.schemas.evaluation import (
 DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/run"
 DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/compare"
 DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
-DEFAULT_TIMEOUT_SECONDS = 300.0
+# 評価 API は評価全体を 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`）で打ち切り、残りのケースを
+# 失敗として結果を返す（#383）。その結果を受け取れるよう、画面と同じくそれより 30 秒長く待つ。
+DEFAULT_TIMEOUT_SECONDS = 630.0
 EvaluationRequestKind = Literal["run", "compare"]
 logger = logging.getLogger(__name__)
 

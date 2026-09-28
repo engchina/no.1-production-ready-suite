@@ -22,11 +22,15 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
     )
 
 
-def test_answer_timeout_is_separate_from_search_timeout() -> None:
-    """回答生成は既定 300 秒・上限は LLM 1 回の timeout の上限。検索だけの上限は 30 秒のまま。"""
+def test_answer_timeout_default_and_limit() -> None:
+    """回答生成は既定 300 秒・上限は LLM 1 回の timeout の上限。
+
+    検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
+    回答生成の上限で打ち切る）。
+    """
     settings = Settings()
     assert settings.rag_answer_timeout_seconds == 300.0
-    assert settings.rag_search_timeout_seconds == 30.0
+    assert not hasattr(settings, "rag_search_timeout_seconds")
     assert Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS)
     with pytest.raises(ValidationError):
         Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS + 1)
@@ -126,7 +130,7 @@ async def test_run_answer_with_timeout_wraps_inner_timeout_without_limit() -> No
 
 
 async def test_run_answer_with_timeout_returns_result_within_limit() -> None:
-    settings = Settings(rag_answer_timeout_seconds=5, rag_search_timeout_seconds=0.01)
+    settings = Settings(rag_answer_timeout_seconds=5)
 
     async def quick(tracker: StageTracker) -> str:
         await asyncio.sleep(0.05)

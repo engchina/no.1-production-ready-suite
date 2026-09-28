@@ -309,7 +309,7 @@ def _with_knowledge_base_ids(
 async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
-    pipeline は回答を LLM で生成するため、検索だけの上限（`rag_search_timeout_seconds`）は使わない。
+    pipeline は回答を LLM で生成するため、LLM を何度か呼んでも収まる回答生成の上限を使う。
     """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
         request, get_settings()

@@ -3,11 +3,19 @@
 import asyncio
 import re
 from collections.abc import Sequence
+from functools import partial
 from time import perf_counter
 from typing import Protocol
 
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
+from app.rag.answer_timeout import (
+    AnswerTimeoutError,
+    answer_stage_label,
+    answer_timeout_seconds,
+    format_timeout_limit,
+    run_answer_with_timeout,
+)
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.file_processing_evaluation import (
@@ -24,7 +32,7 @@ from app.rag.observability import (
     record_evaluation_case,
     record_rag_request,
 )
-from app.rag.pipeline import RagPipeline
+from app.rag.pipeline import RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
@@ -44,6 +52,10 @@ from app.schemas.search import SearchMode, SearchRequest, SearchResponse
 EVALUATION_CASE_ERROR_MESSAGE = (
     "評価ケースの検索処理に失敗しました。trace_id で監査ログを確認してください。"
 )
+# 評価全体の上限（`time_budget_seconds`）に達して実行しなかったケースの error_type（#383）。
+EVALUATION_TIME_BUDGET_ERROR_TYPE = "EvaluationTimeBudgetExceeded"
+EVALUATION_TIME_BUDGET_MESSAGE_PREFIX = "評価全体の時間の上限に達したため、"
+EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX = "ケースを減らすか、分けて評価してください。"
 ZERO_METRIC = 0.0
 TEXT_FEATURE_PATTERN = re.compile(r"[0-9a-zA-Z_]+|[\u3040-\u30ff\u3400-\u9fff]+")
 EVALUATION_STOP_FEATURES = {
@@ -70,8 +82,12 @@ class SearchPipeline(Protocol):
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
-        """検索を実行する。"""
+        """検索を実行する。
+
+        `progress_callback` へ工程を通知する（時間切れになった工程の特定に使う）。
+        """
 
 
 class IngestionQualitySource(Protocol):
@@ -108,8 +124,17 @@ class EvaluationRunner:
         knowledge_base_ids: Sequence[str] | None = None,
         thresholds: EvaluationThresholds | None = None,
         rag_overrides: EvaluationRagOverrides | None = None,
+        *,
+        time_budget_seconds: float | None = None,
     ) -> EvaluationMetrics:
-        """評価ケースを実行し、集計指標を返す。"""
+        """評価ケースを実行し、集計指標を返す。
+
+        1 ケースは回答生成の上限（`rag_answer_timeout_seconds`）で打ち切り、時間切れになった工程を
+        ケースの結果に残して次のケースへ進む（#383）。`time_budget_seconds` を渡すと、評価全体を
+        その秒数で打ち切る（同期の HTTP の待ちを超えないため）。上限に達したら実行中のケースを
+        打ち切り、残りのケースは実行せずに失敗として記録する。
+        """
+        deadline = _deadline(time_budget_seconds)
         effective_settings = _settings_with_rag_overrides(self._settings, rag_overrides)
         if self._pipeline is None:
             effective_settings = await resolve_oracle_generation_settings(effective_settings)
@@ -142,7 +167,9 @@ class EvaluationRunner:
                 case_results=[],
                 ingestion_quality=await _ingestion_quality_summary(
                     self._quality_source,
-                    timeout_seconds=_ingestion_quality_timeout_seconds(effective_settings),
+                    timeout_seconds=_ingestion_quality_timeout_seconds(
+                        effective_settings, deadline
+                    ),
                 ),
                 **aggregate_values,
             )
@@ -177,20 +204,33 @@ class EvaluationRunner:
                 knowledge_base_ids=list(knowledge_base_ids or []),
             )
             trace_id = new_trace_id()
+            remaining = _remaining_seconds(deadline)
+            if remaining is not None and remaining <= 0:
+                # 評価全体の上限に達した。残りのケースは pipeline を呼ばずに失敗として記録する。
+                skipped_result = _case_skipped_result(case=case, trace_id=trace_id)
+                _accumulate_failure_reasons(failure_reason_counts, skipped_result.failure_reasons)
+                case_results.append(skipped_result)
+                error_count += 1
+                continue
+            case_limit = answer_timeout_seconds(effective_settings)
+            limited_by_budget = remaining is not None and remaining < case_limit
             case_started_at = perf_counter()
             try:
-                response = await asyncio.wait_for(
-                    pipeline.run(request, trace_id=trace_id),
-                    timeout=effective_settings.rag_search_timeout_seconds,
+                # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
+                response = await run_answer_with_timeout(
+                    partial(pipeline.run, request, trace_id),
+                    effective_settings,
+                    timeout_seconds=remaining if limited_by_budget else None,
                 )
-            except TimeoutError as exc:
+            except AnswerTimeoutError as exc:
                 elapsed = elapsed_ms(case_started_at)
                 record_evaluation_case(request.mode.value, "error", elapsed / 1000)
                 _record_case_error_audit(
                     trace_id=trace_id,
                     request=request,
                     elapsed=elapsed,
-                    error=exc,
+                    # 監査と結果の error_type は、従来どおり元の TimeoutError にする。
+                    error=exc.original_error,
                     settings=effective_settings,
                     error_stage="timeout",
                 )
@@ -198,7 +238,13 @@ class EvaluationRunner:
                     case=case,
                     trace_id=trace_id,
                     elapsed=elapsed,
-                    error=exc,
+                    error=exc.original_error,
+                    error_stage=exc.stage,
+                    error_message=_case_timeout_message(
+                        exc,
+                        # 工程の中の時間切れ（LLM 1 回の timeout など）は、全体の上限ではない。
+                        limited_by_budget=limited_by_budget and exc.timeout_seconds is not None,
+                    ),
                 )
                 _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
                 case_results.append(error_result)
@@ -367,7 +413,7 @@ class EvaluationRunner:
             case_results=case_results,
             ingestion_quality=await _ingestion_quality_summary(
                 self._quality_source,
-                timeout_seconds=_ingestion_quality_timeout_seconds(effective_settings),
+                timeout_seconds=_ingestion_quality_timeout_seconds(effective_settings, deadline),
             ),
             **aggregate_values,
         )
@@ -379,10 +425,16 @@ class EvaluationRunner:
         *,
         ranking_metric: EvaluationMetricName = "mrr",
         thresholds: EvaluationThresholds | None = None,
+        time_budget_seconds: float | None = None,
     ) -> EvaluationCompareResponse:
-        """同じ golden set で複数 RAG 設定を評価し、安定した順位を返す。"""
+        """同じ golden set で複数 RAG 設定を評価し、安定した順位を返す。
+
+        `time_budget_seconds`（評価全体の上限。#383）は experiment の間で共有する。
+        """
+        deadline = _deadline(time_budget_seconds)
         results: list[EvaluationExperimentResult] = []
         for experiment in experiments:
+            remaining = _remaining_seconds(deadline)
             metrics = await self.run(
                 cases=cases,
                 top_k=experiment.top_k,
@@ -392,6 +444,7 @@ class EvaluationRunner:
                 knowledge_base_ids=experiment.knowledge_base_ids,
                 thresholds=thresholds,
                 rag_overrides=experiment.rag_overrides,
+                time_budget_seconds=None if remaining is None else max(0.0, remaining),
             )
             results.append(
                 EvaluationExperimentResult(
@@ -469,10 +522,47 @@ async def _ingestion_quality_summary(
     )
 
 
-def _ingestion_quality_timeout_seconds(settings: Settings) -> float:
-    """評価の補助サマリが golden set 実行を長時間ブロックしない上限を返す。"""
-    timeout = float(getattr(settings, "db_read_timeout_seconds", 8.0))
-    return max(0.001, min(timeout, 2.0))
+def _ingestion_quality_timeout_seconds(settings: Settings, deadline: float | None = None) -> float:
+    """評価の補助サマリが golden set 実行を長時間ブロックしない上限を返す。
+
+    評価全体の上限（#383）の残りがそれより短ければ、残りの時間にする。
+    """
+    timeout = min(float(getattr(settings, "db_read_timeout_seconds", 8.0)), 2.0)
+    remaining = _remaining_seconds(deadline)
+    if remaining is not None:
+        timeout = min(timeout, remaining)
+    return max(0.001, timeout)
+
+
+def _deadline(time_budget_seconds: float | None) -> float | None:
+    """評価全体の上限の期限（`perf_counter` の時刻）。上限がなければ None。"""
+    return None if time_budget_seconds is None else perf_counter() + time_budget_seconds
+
+
+def _remaining_seconds(deadline: float | None) -> float | None:
+    """評価全体の上限までの残り秒数。上限がなければ None。"""
+    return None if deadline is None else deadline - perf_counter()
+
+
+def _case_timeout_message(error: AnswerTimeoutError, *, limited_by_budget: bool) -> str:
+    """時間切れのケースの文言。時間切れになった工程を含め、query 本文は含めない（#383）。
+
+    評価全体の上限の秒数は、比較では experiment ごとの残り時間になるため文言に出さない。
+    """
+    stage = answer_stage_label(error.stage)
+    if limited_by_budget:
+        return (
+            EVALUATION_TIME_BUDGET_MESSAGE_PREFIX
+            + f"評価ケースの回答生成を打ち切りました（時間切れになった工程: {stage}）。"
+            + EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX
+        )
+    limit = "時間内に"
+    if error.timeout_seconds is not None:
+        limit = f"上限の {format_timeout_limit(error.timeout_seconds)}以内に"
+    return (
+        f"評価ケースの回答生成が{limit}終わりませんでした（時間切れになった工程: {stage}）。"
+        "trace_id で監査ログを確認してください。"
+    )
 
 
 def _case_groundedness(
@@ -679,6 +769,8 @@ def _case_error_result(
     trace_id: str,
     elapsed: float,
     error: Exception,
+    error_stage: str | None = None,
+    error_message: str = EVALUATION_CASE_ERROR_MESSAGE,
 ) -> EvaluationCaseResult:
     """評価 case の失敗を query 本文なしの診断結果に変換する。"""
     return EvaluationCaseResult(
@@ -700,7 +792,32 @@ def _case_error_result(
         failure_reasons=["case_error"],
         elapsed_ms=elapsed,
         error_type=type(error).__name__,
-        error_message=EVALUATION_CASE_ERROR_MESSAGE,
+        error_stage=error_stage,
+        error_message=error_message,
+    )
+
+
+def _case_skipped_result(*, case: EvaluationCase, trace_id: str) -> EvaluationCaseResult:
+    """評価全体の上限に達して実行しなかったケースを、失敗として記録する（#383）。"""
+    return EvaluationCaseResult(
+        case_id=case.id,
+        trace_id=trace_id,
+        status="error",
+        relevant_document_ids=list(case.relevant_document_ids),
+        precision_at_k=0.0,
+        recall_at_k=0.0,
+        reciprocal_rank=0.0,
+        answer_keyword_hit=False,
+        groundedness_passed=False,
+        groundedness_score=0.0,
+        failure_reasons=["case_error"],
+        elapsed_ms=0.0,
+        error_type=EVALUATION_TIME_BUDGET_ERROR_TYPE,
+        error_message=(
+            EVALUATION_TIME_BUDGET_MESSAGE_PREFIX
+            + "このケースは実行していません。"
+            + EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX
+        ),
     )
 
 

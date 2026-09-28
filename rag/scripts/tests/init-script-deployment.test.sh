@@ -423,8 +423,8 @@ grep -Fq 'listen 8080;' "${site}" || fail "application port で listen してい
 grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backend 8000 へ proxy されていない"
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
-# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375）の待ち時間。
-llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|chat/conversations/[^/]+/messages/stream|mcp)$ {'
+# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375・品質評価 #383）の待ち時間。
+llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$ {'
 grep -Fqx "${llm_location_line}" "${site}" \
   || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
 evaluation_location="$(awk -v start="${llm_location_line}" '$0 == start {found = 1} found {print} found && /^ *\}$/ {exit}' "${site}")"
@@ -437,12 +437,14 @@ printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_pass http://127.0.0.1:8
   || fail "評価・回答生成が backend へ proxy されていない"
 # location の正規表現が、実際の path（評価・検索・検索の SSE・チャットの SSE・MCP）に当たり、
 # ほかの API（検索の回答の一覧など）には当たらないこと（Nginx の正規表現は PCRE。grep -E で近似する）。
-llm_location_regex='^/api/(search|search/stream|search/answers/[^/]+/evaluation|chat/conversations/[^/]+/messages/stream|mcp)$'
+llm_location_regex='^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$'
 for path in /api/search /api/search/stream /api/search/answers/trace-1/evaluation \
+  /api/evaluation/run /api/evaluation/compare \
   /api/chat/conversations/conv-1/messages/stream /api/mcp; do
   printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}" || fail "${path} の待ち時間が延びない"
 done
-for path in /api/search/answers /api/chat/conversations /api/search/citation-feedback; do
+for path in /api/search/answers /api/chat/conversations /api/search/citation-feedback \
+  /api/evaluation/runs; do
   if printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}"; then
     fail "${path} まで待ち時間を延ばしている"
   fi

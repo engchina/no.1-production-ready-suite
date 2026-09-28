@@ -90,9 +90,8 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
 def test_search_answer_uses_answer_timeout_not_search_timeout(
     monkeypatch: MonkeyPatch, path: str
 ) -> None:
-    """回答を LLM で作る検索は、検索だけの上限（30 秒）ではなく回答生成の上限で打ち切る（#375）。"""
+    """回答を LLM で作る検索は、検索だけの上限（旧 30 秒）ではなく回答生成の上限で打ち切る。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.01)
     monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 5.0)
     monkeypatch.setattr(search_route, "RagPipeline", _SlowAnswerPipeline)
 

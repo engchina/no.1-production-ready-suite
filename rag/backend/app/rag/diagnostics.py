@@ -211,7 +211,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "query_expansion_max_variants": resolved_settings.rag_query_expansion_max_variants,
         "vector_index_profile": resolved_settings.rag_vector_index_profile,
         "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
-        "search_timeout_seconds": resolved_settings.rag_search_timeout_seconds,
         "agent_memory_search_enabled": resolved_settings.rag_agent_memory_search_enabled,
         "agent_memory_writeback_enabled": (resolved_settings.rag_agent_memory_writeback_enabled),
         "agent_memory_top_k": resolved_settings.rag_agent_memory_top_k,

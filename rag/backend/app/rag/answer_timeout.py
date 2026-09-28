@@ -1,9 +1,10 @@
 """LLM を呼ぶ回答生成の時間の上限と、時間切れの文言（#375）。
 
-チャット・検索の回答は、検索の前の計画（agentic）・追加の検索の再分解・回答の生成で LLM を
-何度か呼ぶ。検索だけの上限（`rag_search_timeout_seconds`、既定 30 秒）では足りないため、
-回答生成は `rag_answer_timeout_seconds`（既定 300 秒、上限は LLM 1 回の timeout の設定の上限）で
-打ち切る。時間切れのときは、進捗（`SearchStageProgress`）から分かる最後の工程を文言に含める。
+チャット・検索の回答と品質評価の 1 ケース（#383）は、検索の前の計画（agentic）・追加の検索の
+再分解・回答の生成で LLM を何度か呼ぶ。検索だけの上限（旧 `rag_search_timeout_seconds`、
+30 秒。#383 で削除）では足りないため、回答生成は `rag_answer_timeout_seconds`（既定 300 秒、
+上限は LLM 1 回の timeout の設定の上限）で打ち切る。時間切れのときは、進捗
+（`SearchStageProgress`）から分かる最後の工程を文言に含める。
 """
 
 from __future__ import annotations
@@ -51,7 +52,8 @@ def answer_stage_label(stage: str | None) -> str:
     return ANSWER_STAGE_LABELS.get(stage, ANSWER_STAGE_UNKNOWN_LABEL)
 
 
-def _format_limit(seconds: float) -> str:
+def format_timeout_limit(seconds: float) -> str:
+    """上限の秒数の表記（例: 300 → 「5 分」、45 → 「45 秒」）。"""
     whole = max(1, round(seconds))
     if whole >= 60 and whole % 60 == 0:
         return f"{whole // 60} 分"
@@ -66,7 +68,7 @@ def answer_timeout_message(stage: str | None, timeout_seconds: float | None) -> 
     """
     limit = "時間内に"
     if timeout_seconds is not None:
-        limit = f"上限の {_format_limit(timeout_seconds)}以内に"
+        limit = f"上限の {format_timeout_limit(timeout_seconds)}以内に"
     return (
         f"回答の生成が{limit}終わりませんでした"
         f"（時間切れになった工程: {answer_stage_label(stage)}）。"
@@ -127,15 +129,20 @@ async def run_answer_with_timeout[T](
     operation: Callable[[StageTracker], Awaitable[T]],
     settings: Settings,
     progress_callback: SearchStageProgressCallback | None = None,
+    *,
+    timeout_seconds: float | None = None,
 ) -> T:
     """回答生成を `rag_answer_timeout_seconds` で打ち切る。
+
+    `timeout_seconds` を渡すと、その秒数で打ち切る（品質評価で、評価全体の残り時間が回答生成の
+    上限より短いとき。#383）。
 
     `operation` には工程を記録する callback（`StageTracker`）を渡す。時間切れのときは
     最後の工程を持つ `AnswerTimeoutError` を送出する（`TimeoutError` の派生）。工程の中で
     起きた `TimeoutError`（LLM 1 回の timeout など）も、工程が分かるように同じ例外にする。
     """
     tracker = StageTracker(progress_callback)
-    timeout = answer_timeout_seconds(settings)
+    timeout = answer_timeout_seconds(settings) if timeout_seconds is None else timeout_seconds
     budget = asyncio.timeout(timeout)
     try:
         async with budget:

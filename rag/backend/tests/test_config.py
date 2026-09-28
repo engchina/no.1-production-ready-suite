@@ -691,13 +691,10 @@ def test_max_upload_bytes_defaults_to_200_mib_and_is_positive() -> None:
         Settings(max_upload_bytes=0)
 
 
-def test_search_timeout_is_positive() -> None:
-    """検索 timeout は正の秒数に制限する。"""
-    assert Settings().rag_search_timeout_seconds == 30.0
+def test_db_read_timeout_is_positive() -> None:
+    """DB 読み取りの timeout は正の秒数に制限する。"""
     assert Settings().db_read_timeout_seconds == 8.0
 
-    with pytest.raises(ValidationError):
-        Settings(rag_search_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(db_read_timeout_seconds=0)
 

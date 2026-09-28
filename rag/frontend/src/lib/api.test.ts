@@ -5,6 +5,7 @@ import {
   ANSWER_GENERATION_TIMEOUT_MS,
   API_REQUEST_TIMEOUT_MS,
   ApiError,
+  EVALUATION_RUN_TIMEOUT_MS,
   api,
 } from "./api";
 import { t } from "./i18n";
@@ -141,6 +142,41 @@ describe("api.request envelope", () => {
       expect.objectContaining({ method: "POST" })
     );
   });
+
+  // Issue 383: 品質評価は 1 ケースごとに回答を生成するため、評価全体の上限（600 秒）まで待つ。
+  it.each([
+    ["runEvaluation", "/api/evaluation/run"],
+    ["compareEvaluation", "/api/evaluation/compare"],
+  ] as const)(
+    "品質評価（%s）は通常の timeout で打ち切らず、評価全体の上限より長く待つ",
+    async (method, path) => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      let settled = false;
+      // payload の中身はこのテストでは使わない（timeout だけを確かめる）。
+      const requestPromise = api[method]({} as never).catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+
+      // backend の評価全体の上限（600 秒）より長く待つ。通常の API の 30 秒では失敗にしない。
+      expect(EVALUATION_RUN_TIMEOUT_MS).toBeGreaterThan(600_000);
+      await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS + 1_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(EVALUATION_RUN_TIMEOUT_MS);
+
+      await expect(requestPromise).resolves.toMatchObject({ status: 408 });
+      expect(fetchMock).toHaveBeenCalledWith(path, expect.objectContaining({ method: "POST" }));
+    },
+  );
 
   it("listDocragAnswers はページングと trace_id の絞り込みを query string にする", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
