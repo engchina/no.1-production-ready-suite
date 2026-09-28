@@ -9,7 +9,6 @@
 - 選んだ製品ごとに OCI Compute を **1台ずつ**（Ubuntu。shape / image / subnet / SSH 鍵は共通、OCPU / メモリ / boot volume は製品ごと）
 - 各 Compute の cloud-init。suite monorepo を1回 clone し、その製品の `init_script.sh`（[`rag/`](../rag/init_script.sh) / [`nl2sql/`](../nl2sql/init_script.sh) / [`agent/`](../agent/init_script.sh)）で配備する
 - 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
-- Agent と RAG / NL2SQL を一緒に配備する場合、Agent から RAG / NL2SQL の MCP へ通す NSG（同じ subnet から `application_port` の TCP だけ。RAG / NL2SQL の VNIC に付ける）
 
 ```text
                  ┌──────────────────────────────┐
@@ -149,9 +148,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 - Wallet は `/u01/aipoc/wallet`、cloud-init のログは `/var/log/cloud-init-custom.log`。
 - apply 後の output に、製品ごとの URL（`rag_application_url` など）と SSH command が出ます。配備しなかった製品の output は表示されません。
 - 製品間の HTTP 連携（Agent から RAG / NL2SQL の MCP を呼ぶ）は、別 Compute の private IP の `application_port` を使います。
-  stack は Agent と RAG / NL2SQL を一緒に配備するとき、同じ subnet の CIDR からその port だけを許可する NSG
-  （`production-ready-suite-product-mcp`）を作って RAG / NL2SQL の VNIC に付けます。stack を実行するユーザーには NSG の作成と
-  VNIC への関連付けの権限（`manage network-security-groups` と VCN の `use`）が必要です。
+  stack は NSG を作りません（#259）。subnet の security list（stack の外で管理）で、同じ subnet の CIDR から `application_port` の TCP を
+  許可してください（Agent と RAG / NL2SQL を一緒に配備する場合）。
 - 既存の stack を更新するとき（#233）: 共通 `.env` に `PLATFORM_SERVICE_TOKEN_SECRET` が加わり、Agent の `backend/.env` に MCP の URL が
   加わるため、全製品の Compute の `user_data`（cloud-init）が変わります。OCI provider は `user_data` の変更で Compute を
   **置き換え（replace）** ます（`oci_core_instance` の CustomizeDiff。Agent の resource の移動は `moved` で扱うが、置き換え自体は避けられない）。
@@ -159,7 +157,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   - 作り直したくない環境: stack を apply せず、各 Compute で手動で追記します。各 Compute の `platform/.env` に同じ
     `PLATFORM_SERVICE_TOKEN_SECRET`（`openssl rand -base64 48` などで作った1つの値）を、Agent の `backend/.env` に
     `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<private IP>[:port]/api/mcp`）を追記し、backend を再起動します。
-    Agent から RAG / NL2SQL の `application_port` へ通信できない場合は、subnet の security list か NSG で同じ subnet からの TCP を許可します。
+    Agent から RAG / NL2SQL の `application_port` へ通信できない場合は、subnet の security list で同じ subnet からの TCP を許可します。
   - どちらの場合も、apply 前に Resource Manager の plan で置き換えになる resource を確認してください。
   旧名の `AGENT_EXTERNAL_RAG_BASE_URL` / `AGENT_EXTERNAL_RAG_API_KEY`（NL2SQL も同じ）は読まれないので削除してください。
 
