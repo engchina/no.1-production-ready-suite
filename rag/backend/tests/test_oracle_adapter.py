@@ -1103,6 +1103,55 @@ async def test_oracle_client_transition_ingestion_job_returns_none_when_no_row_m
     assert updated is None
     assert len(pool.connection.calls) == 1
     assert "status IN (:from_status_0)" in pool.connection.calls[0].statement
+    # lease を渡さない遷移(利用者の取り消し・lease を持たない実行)は lease を条件にしない。
+    assert "lease_owner" not in pool.connection.calls[0].statement
+    assert "lease_owner" not in pool.connection.calls[0].parameters
+
+
+async def test_oracle_client_transition_ingestion_job_with_lease_requires_own_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lease を渡した遷移は、自分の lease の行だけを書く(再 claim 後の上書きを防ぐ。#359)。"""
+    pool = FakeOraclePool(execute_results=[])
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 0, raising=False)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.transition_ingestion_job(
+        "job-1",
+        from_statuses=(IngestionJobStatus.RUNNING,),
+        to_status=IngestionJobStatus.SUCCEEDED,
+        finished_at=datetime(2026, 1, 2, 0, 5, tzinfo=UTC),
+        lease_owner="host:1:worker",
+    )
+
+    assert updated is None
+    [update_call] = pool.connection.calls
+    assert "UPDATE rag_ingestion_jobs" in update_call.statement
+    assert "status IN (:from_status_0)" in update_call.statement
+    assert "AND lease_owner = :lease_owner" in update_call.statement
+    assert update_call.parameters["lease_owner"] == "host:1:worker"
+    # 0 行なら最新行を読み直さない(古い実行の結果として捨てる)。
+    assert pool.connection.commits == 1
+
+
+async def test_oracle_client_reads_ingestion_job_lease() -> None:
+    """job の状態と lease の持ち主を、job の取得と同じ範囲の条件で読む(#359)。"""
+    pool = FakeOraclePool(
+        execute_results=[[{"status": "RUNNING", "lease_owner": "host:2:other"}], []]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    lease = await client.get_ingestion_job_lease("job-1")
+    missing = await client.get_ingestion_job_lease("job-missing")
+
+    assert lease is not None
+    assert lease.status == IngestionJobStatus.RUNNING
+    assert lease.lease_owner == "host:2:other"
+    assert missing is None
+    call = pool.connection.calls[0]
+    assert "SELECT j.status, j.lease_owner" in call.statement
+    assert "JOIN rag_documents d" in call.statement
+    assert call.parameters["job_id"] == "job-1"
 
 
 async def test_oracle_client_recovers_stale_ingestion_jobs(
@@ -1139,12 +1188,20 @@ async def test_oracle_client_recovers_stale_ingestion_jobs(
     select_call = pool.connection.calls[0]
     assert "j.status = 'RUNNING'" in select_call.statement
     assert "COALESCE(j.started_at, j.queued_at) < :stale_before" in select_call.statement
-    # heartbeat のある job は lease の TTL で判定する(#357)。省略時は stale_before と同じ。
+    # heartbeat のある job は lease の TTL で判定する(#357)。heartbeat と同じ DB の時計で比べ、
+    # worker の時計に依存しない(#359)。省略時は設定の TTL を使う。
     assert "j.heartbeat_at IS NULL" in select_call.statement
-    assert "j.heartbeat_at < :heartbeat_stale_before" in select_call.statement
+    assert (
+        "j.heartbeat_at < SYSTIMESTAMP - NUMTODSINTERVAL(:lease_ttl_seconds, 'SECOND')"
+        in select_call.statement
+    )
+    assert "heartbeat_stale_before" not in select_call.statement
     assert "exclude_lease_owner" not in select_call.statement
     assert select_call.parameters["stale_before"] == stale_at
-    assert select_call.parameters["heartbeat_stale_before"] == stale_at
+    assert (
+        select_call.parameters["lease_ttl_seconds"]
+        == _oci_settings().ingestion_queue_lease_ttl_seconds
+    )
     assert select_call.parameters["limit"] == 10
     update_calls = [
         call for call in pool.connection.calls[1:] if "UPDATE rag_ingestion_jobs" in call.statement
@@ -1154,7 +1211,10 @@ async def test_oracle_client_recovers_stale_ingestion_jobs(
     # 戻す UPDATE も RUNNING かつ stale のときだけ書き、lease を外す。
     for call in update_calls:
         assert "AND status = 'RUNNING'" in call.statement
-        assert "heartbeat_at < :heartbeat_stale_before" in call.statement
+        assert (
+            "heartbeat_at < SYSTIMESTAMP - NUMTODSINTERVAL(:lease_ttl_seconds, 'SECOND')"
+            in call.statement
+        )
     assert "lease_owner = NULL" in requeue_call.statement
     assert "heartbeat_at = NULL" in requeue_call.statement
     # 固着防止: 再キュー/失敗時は文書状態も復旧する。
@@ -1321,7 +1381,6 @@ async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_
 async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> None:
     """SELECT の後に heartbeat が打たれた(0 行更新)job は、文書も戻さず回復の結果に含めない。"""
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
-    heartbeat_stale_at = datetime(2026, 1, 2, 1, 3, tzinfo=UTC)
     pool = FakeOraclePool(
         execute_results=[
             [
@@ -1338,7 +1397,7 @@ async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> No
 
     recovered = await client.recover_stale_ingestion_jobs(
         stale_before=stale_at,
-        heartbeat_stale_before=heartbeat_stale_at,
+        lease_ttl_seconds=90.0,
         limit=10,
         exclude_lease_owner="host:1:worker",
     )
@@ -1347,7 +1406,7 @@ async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> No
     select_call = pool.connection.calls[0]
     assert "j.lease_owner <> :exclude_lease_owner" in select_call.statement
     assert select_call.parameters["exclude_lease_owner"] == "host:1:worker"
-    assert select_call.parameters["heartbeat_stale_before"] == heartbeat_stale_at
+    assert select_call.parameters["lease_ttl_seconds"] == 90.0
     requeue_call = next(
         call for call in pool.connection.calls if "SET status = 'QUEUED'" in call.statement
     )
@@ -1357,7 +1416,7 @@ async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> No
 
 
 async def test_oracle_client_claims_ingestion_job_with_lease() -> None:
-    """lease_owner を渡した claim は lease を取り、heartbeat_at を開始時刻にする(#357)。"""
+    """lease_owner を渡した claim は lease を取り、heartbeat_at を DB の時刻にする(#357 / #359)。"""
     started_at = datetime(2026, 1, 2, 0, 2, tzinfo=UTC)
     pool = FakeOraclePool(
         execute_results=[
@@ -1375,30 +1434,27 @@ async def test_oracle_client_claims_ingestion_job_with_lease() -> None:
     assert claimed is not None
     update_call = pool.connection.calls[3]
     assert "lease_owner = :lease_owner" in update_call.statement
-    assert "heartbeat_at = :heartbeat_at" in update_call.statement
+    assert "heartbeat_at = SYSTIMESTAMP" in update_call.statement
     assert update_call.parameters["lease_owner"] == "host:1:worker"
-    assert update_call.parameters["heartbeat_at"] == started_at
+    assert "heartbeat_at" not in update_call.parameters
 
 
 async def test_oracle_client_heartbeats_own_running_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """heartbeat は自分の lease の RUNNING job だけを更新する。"""
+    """heartbeat は自分の lease の RUNNING job だけを、DB の時刻で更新する(#357 / #359)。"""
     monkeypatch.setattr(FakeOracleCursor, "rowcount", 2, raising=False)
-    heartbeat_at = datetime(2026, 1, 2, 0, 3, tzinfo=UTC)
     pool = FakeOraclePool()
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
-    updated = await client.heartbeat_ingestion_jobs(
-        lease_owner="host:1:worker", heartbeat_at=heartbeat_at
-    )
+    updated = await client.heartbeat_ingestion_jobs(lease_owner="host:1:worker")
 
     assert updated == 2
     [call] = pool.connection.calls
-    assert "SET heartbeat_at = :heartbeat_at" in call.statement
+    assert "SET heartbeat_at = SYSTIMESTAMP" in call.statement
     assert "WHERE lease_owner = :lease_owner" in call.statement
     assert "AND status = 'RUNNING'" in call.statement
-    assert call.parameters == {"lease_owner": "host:1:worker", "heartbeat_at": heartbeat_at}
+    assert call.parameters == {"lease_owner": "host:1:worker"}
     assert pool.connection.commits == 1
 
 
@@ -1547,7 +1603,7 @@ async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     assert update_call.parameters["started_at"] == started_at
     # lease を持たない実行は heartbeat を NULL にし、従来の経過時間で stale を判定する(#357)。
     assert update_call.parameters["lease_owner"] is None
-    assert update_call.parameters["heartbeat_at"] is None
+    assert "heartbeat_at = NULL" in update_call.statement
 
 
 async def test_oracle_client_replaces_and_lists_ingestion_segments() -> None:

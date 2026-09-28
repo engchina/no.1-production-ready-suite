@@ -14,6 +14,11 @@ lease と heartbeat(#357):
 - 実行中は ``heartbeat_interval`` ごとに自分の lease の RUNNING job の heartbeat を更新する。
   stale の回復は heartbeat が TTL を超えて途絶えた job だけを戻し、自分の lease の job は戻さない。
   job の長さの上限は job の timeout だけが持つ。
+- heartbeat の時刻と TTL の判定は DB の時計(``SYSTIMESTAMP``)で行い、worker を別の host で
+  動かしても時計のずれに左右されない(#359)。worker の時計(``clock``)は、heartbeat の無い
+  lease 導入前の行の判定(開始からの経過時間)にだけ使う。
+- 完了・失敗・再キューは自分の lease の job のときだけ書く。heartbeat が途絶えて別の worker が
+  claim し直した後の古い実行の結果は捨てる(#359)。
 - 停止(SIGTERM / lifespan の終了)では新しい job を取らず、``shutdown_grace_seconds`` まで
   実行中の job を待つ。終わらなければ子を止め、自分の lease の job を QUEUED に戻す
   (attempt は増やさない)。
@@ -274,21 +279,18 @@ class IngestionQueueWorker:
         )
 
     async def _default_recover_stale(self) -> Sequence[IngestionJob]:
-        now = self._clock()
+        # heartbeat のある job は DB の時計で TTL を判定する(#359)。worker の時計は、heartbeat の
+        # 無い lease 導入前の行(開始からの経過時間)にだけ使う。
         return await OracleClient().recover_stale_ingestion_jobs(
-            stale_before=now
+            stale_before=self._clock()
             - timedelta(seconds=self._settings.ingestion_queue_stale_running_seconds),
-            heartbeat_stale_before=now
-            - timedelta(seconds=self._settings.ingestion_queue_lease_ttl_seconds),
+            lease_ttl_seconds=self._settings.ingestion_queue_lease_ttl_seconds,
             limit=self._settings.ingestion_queue_startup_drain_limit,
             exclude_lease_owner=self.worker_id,
         )
 
     async def _default_heartbeat(self) -> int:
-        return await OracleClient().heartbeat_ingestion_jobs(
-            lease_owner=self.worker_id,
-            heartbeat_at=self._clock(),
-        )
+        return await OracleClient().heartbeat_ingestion_jobs(lease_owner=self.worker_id)
 
     async def _default_requeue_leased(self) -> Sequence[IngestionJob]:
         return await OracleClient().requeue_leased_ingestion_jobs(lease_owner=self.worker_id)
@@ -380,7 +382,7 @@ class IngestionQueueWorker:
                 )
                 self._interrupted_on_stop = True
                 return
-            await _mark_running_job_failed(job_id, error=exc)
+            await _mark_running_job_failed(job_id, error=exc, lease_owner=self.worker_id)
             logger.exception(
                 "ingestion_worker_job_failed",
                 extra={"job_id": job_id, **oracle_error_log_fields(exc)},
@@ -463,13 +465,17 @@ class IngestionQueueWorker:
             )
 
 
-async def _mark_running_job_failed(job_id: str, *, error: Exception) -> None:
+async def _mark_running_job_failed(
+    job_id: str, *, error: Exception, lease_owner: str | None = None
+) -> None:
     """subprocess が落ちた時に RUNNING のまま放置しない。
 
     - RUNNING の job は FAILED にする(RUNNING のときだけ書く。#305)。レシピの job は
       レシピ行だけを ERROR にし、文書(全レシピの集約)の status は変えない。文書単位の job は
       文書を ERROR にする(子が落ちたので pipeline は書けていない)。
     - 取り消し済みの job は、取り消しを検知した側として文書・レシピの status を戻す。
+    - ``lease_owner``(この worker)を渡すと、自分の lease の job のときだけ書く。heartbeat が
+      途絶えて別の worker が claim し直した job は、FAILED にも取り消しの後始末にもしない(#359)。
     """
     try:
         # 循環 import を避けるため遅延 import する。
@@ -480,12 +486,12 @@ async def _mark_running_job_failed(job_id: str, *, error: Exception) -> None:
         if job is None:
             return
         if job.status == IngestionJobStatus.CANCELLED:
-            await _restore_statuses_after_cancel(oracle, job)
+            await _restore_statuses_after_cancel(oracle, job, lease_owner=lease_owner)
             return
         if job.status != IngestionJobStatus.RUNNING:
             return
         message = str(error)[:500] or "取込ジョブ実行プロセスが異常終了しました。"
-        failed = await _fail_ingestion_job(oracle, job, message)
+        failed = await _fail_ingestion_job(oracle, job, message, lease_owner=lease_owner)
         if failed and job.recipe_id is None:
             await oracle.update_document_status(job.document_id, FileStatus.ERROR, message)
     except Exception:

@@ -559,6 +559,10 @@ uv run python -m app.rag.file_processing_staging_cli \
   - stale の回復（worker の起動時と、アイドル時に `RAG_INGESTION_QUEUE_RECOVERY_INTERVAL_SECONDS` ごと）は、heartbeat が `LEASE_TTL_SECONDS`（既定 90 秒。間隔の 3 倍以上）を超えて途絶えた job だけを戻す。
     自分の lease の job は戻さない。`heartbeat_at` の無い行（lease 導入前の行）は従来どおり `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` で判定する。job の長さの上限は job の timeout（`RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`）だけが持つ。
     戻す UPDATE にも同じ条件を入れるため、回復の途中で heartbeat が打たれた job や完了した job は戻さない。
+    heartbeat の時刻（claim の時点を含む）と TTL の判定は DB の時計（`SYSTIMESTAMP`）で行うため、worker を別の host で動かしても host の時計のずれに左右されない（#359）。
+  - 完了・失敗・一時的な DB エラーでの再キューと、取り消しの後始末（文書・レシピの status の戻し）は、自分の lease の job のときだけ行う（#359）。
+    heartbeat が TTL を超えて途絶え、別の worker が claim し直した後の古い実行の結果は捨て、文書・レシピも変えずに `ingestion_job_stale_result_discarded`（`job_id` / `lease_owner` / `discarded_status` / `current_status` / `current_lease_owner`）を warning で出す。
+    古い実行は、工程の途中の取り消しの確認でも lease を失ったことを検知して止まる。
   - dispatch は、同じ文書の別の job が `RUNNING` の `QUEUED` job（claim できない）と、自分が実行中の job を除いて古い順に取る。先頭の claim できない job で後ろの job が止まらない。
   - 停止（SIGTERM / SIGINT）では新しい job を取らず、実行中の job の完了を `SHUTDOWN_GRACE_SECONDS`（既定 60 秒）まで待つ。終わらなければ子プロセスを止め（SIGTERM、10 秒で SIGKILL）、自分の lease の `RUNNING` job を `QUEUED` に戻す。
     claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。

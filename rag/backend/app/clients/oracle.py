@@ -66,6 +66,7 @@ from app.schemas.document import (
     DocumentSummary,
     FileStatus,
     IngestionJob,
+    IngestionJobLease,
     IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
@@ -3496,20 +3497,25 @@ class OracleClient:
         *,
         stale_before: datetime,
         limit: int,
-        heartbeat_stale_before: datetime | None = None,
+        lease_ttl_seconds: float | None = None,
         exclude_lease_owner: str | None = None,
     ) -> list[IngestionJob]:
         """stale RUNNING job を再キューまたは失敗へ戻し、戻した job を返す。
 
-        - heartbeat のある job は、heartbeat が ``heartbeat_stale_before`` より前で途絶えたもの
-          (lease の TTL 切れ)を stale とする(#357)。省略時は ``stale_before`` を使う。
+        - heartbeat のある job は、heartbeat が DB の時計(``SYSTIMESTAMP``)で ``lease_ttl_seconds``
+          より前に途絶えたもの(lease の TTL 切れ)を stale とする(#357)。heartbeat も DB の時計で
+          書くため、worker の時計のずれに左右されない(#359)。省略時は設定の TTL を使う。
         - heartbeat の無い job(lease 導入前の行・lease を持たない実行)は、従来どおり開始が
           ``stale_before`` より前のものを stale とする。
         - ``exclude_lease_owner`` の lease の job(呼び出した worker 自身が実行中の job)は戻さない。
         """
         return await self._recover_stale_ingestion_jobs_with_oracle(
             stale_before=stale_before,
-            heartbeat_stale_before=heartbeat_stale_before or stale_before,
+            lease_ttl_seconds=(
+                lease_ttl_seconds
+                if lease_ttl_seconds is not None
+                else self._settings.ingestion_queue_lease_ttl_seconds
+            ),
             limit=limit,
             exclude_lease_owner=exclude_lease_owner,
         )
@@ -3523,23 +3529,19 @@ class OracleClient:
     ) -> IngestionJob | None:
         """QUEUED job を row lock 付きで RUNNING へ遷移し、実行権を獲得する。
 
-        ``lease_owner``(取込 worker の識別子)を渡すと lease を取り、``heartbeat_at`` を
-        ``started_at`` にする。以後は worker の heartbeat で lease を延長する(#357)。
+        ``lease_owner``(取込 worker の識別子)を渡すと lease を取り、``heartbeat_at`` を DB の時刻
+        (``SYSTIMESTAMP``)にする。以後は worker の heartbeat で lease を延長する(#357 / #359)。
         """
         return await self._claim_ingestion_job_with_oracle(
             job_id, started_at=started_at, lease_owner=lease_owner
         )
 
-    async def heartbeat_ingestion_jobs(
-        self,
-        *,
-        lease_owner: str,
-        heartbeat_at: datetime,
-    ) -> int:
-        """``lease_owner`` の lease の RUNNING job の heartbeat を更新し、更新件数を返す(#357)。"""
-        return await self._heartbeat_ingestion_jobs_with_oracle(
-            lease_owner=lease_owner, heartbeat_at=heartbeat_at
-        )
+    async def heartbeat_ingestion_jobs(self, *, lease_owner: str) -> int:
+        """``lease_owner`` の lease の RUNNING job の heartbeat を更新し、更新件数を返す(#357)。
+
+        heartbeat の時刻は DB の時計(``SYSTIMESTAMP``)で書き、stale の判定と同じ時計にする(#359)。
+        """
+        return await self._heartbeat_ingestion_jobs_with_oracle(lease_owner=lease_owner)
 
     async def requeue_leased_ingestion_jobs(self, *, lease_owner: str) -> list[IngestionJob]:
         """``lease_owner`` の lease の RUNNING job を QUEUED に戻し、戻した job を返す(#357)。
@@ -3595,12 +3597,18 @@ class OracleClient:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
         """job が ``from_statuses`` のときだけ ``to_status`` へ遷移する(compare-and-set)。
 
         状態の確認と書き込みを 1 回の条件付き UPDATE で行い、cancel と完了・失敗の
         書き込みが互いの最終状態を上書きしないようにする(#305)。遷移元の状態でなければ
         0 行更新になり ``None`` を返す。``error_message`` / ``finished_at`` は None でも書く。
+
+        ``lease_owner``(job を実行している worker の識別子)を渡すと、その lease の行だけを
+        遷移する(#359)。heartbeat が途絶えて別の worker が claim し直した後に、古い実行の完了・
+        失敗が新しい実行の状態を上書きしないようにする。lease を持たない実行(利用者の取り消し・
+        lease 導入前の経路)は渡さず、従来どおり状態だけを条件にする。
         """
         return await self._transition_ingestion_job_with_oracle(
             job_id,
@@ -3608,7 +3616,15 @@ class OracleClient:
             to_status=to_status,
             error_message=error_message,
             finished_at=finished_at,
+            lease_owner=lease_owner,
         )
+
+    async def get_ingestion_job_lease(self, job_id: str) -> IngestionJobLease | None:
+        """job の状態と lease の持ち主を返す(worker が自分の実行かどうかを確かめる。#359)。
+
+        worker は request の文脈を持たないが、``get_ingestion_job`` と同じ範囲の条件で読む。
+        """
+        return await self._get_ingestion_job_lease_with_oracle(job_id)
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         """同一 content hash の既存ドキュメントを返す。"""
@@ -6396,6 +6412,29 @@ class OracleClient:
         )
         return None if not rows else _ingestion_job_from_row(rows[0])
 
+    async def _get_ingestion_job_lease_with_oracle(self, job_id: str) -> IngestionJobLease | None:
+        """job の status と lease_owner を読む(#359)。"""
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT j.status, j.lease_owner
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE j.job_id = :job_id
+              AND {document_access_sql}
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"job_id": job_id}),
+        )
+        if row is None:
+            return None
+        return IngestionJobLease(
+            status=_ingestion_job_status(row.get("status")),
+            lease_owner=_optional_str(row.get("lease_owner")),
+        )
+
     async def _list_ingestion_jobs_with_oracle(
         self,
         *,
@@ -6765,7 +6804,7 @@ class OracleClient:
         self,
         *,
         stale_before: datetime,
-        heartbeat_stale_before: datetime,
+        lease_ttl_seconds: float,
         limit: int,
         exclude_lease_owner: str | None,
     ) -> list[IngestionJob]:
@@ -6791,7 +6830,7 @@ class OracleClient:
         now = datetime.now(UTC)
         stale_binds: dict[str, object] = {
             "stale_before": stale_before,
-            "heartbeat_stale_before": heartbeat_stale_before,
+            "lease_ttl_seconds": lease_ttl_seconds,
         }
         if exclude_lease_owner is not None:
             stale_binds["exclude_lease_owner"] = exclude_lease_owner
@@ -7120,10 +7159,11 @@ class OracleClient:
     ) -> IngestionJob | None:
         """QUEUED job をロックして RUNNING へ遷移し、lease を取る。
 
+        lease を持つ実行は ``heartbeat_at`` を DB の時刻(``SYSTIMESTAMP``)にする(#359)。
         lease を持たない実行(``lease_owner`` なし)は ``heartbeat_at`` を NULL にし、stale の判定を
         従来どおり開始からの経過時間にする(heartbeat を打つ worker がいないため)。
         """
-        heartbeat_at = started_at if lease_owner is not None else None
+        heartbeat_sql = "SYSTIMESTAMP" if lease_owner is not None else "NULL"
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
             queued = _fetch_one(
@@ -7201,7 +7241,7 @@ class OracleClient:
                     error_message = NULL,
                     finished_at = NULL,
                     lease_owner = :lease_owner,
-                    heartbeat_at = :heartbeat_at
+                    heartbeat_at = {heartbeat_sql}
                 WHERE job_id = :job_id
                   AND EXISTS (
                       SELECT 1
@@ -7210,6 +7250,7 @@ class OracleClient:
                         AND {document_access_sql}
                   )
                 """,
+                    heartbeat_sql=heartbeat_sql,
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind(
@@ -7218,7 +7259,6 @@ class OracleClient:
                         "attempt_count": attempt_count,
                         "started_at": started_at,
                         "lease_owner": lease_owner,
-                        "heartbeat_at": heartbeat_at,
                     }
                 ),
             )
@@ -7234,17 +7274,12 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _heartbeat_ingestion_jobs_with_oracle(
-        self,
-        *,
-        lease_owner: str,
-        heartbeat_at: datetime,
-    ) -> int:
-        """自分の lease の RUNNING job の heartbeat_at を更新する。
+    async def _heartbeat_ingestion_jobs_with_oracle(self, *, lease_owner: str) -> int:
+        """自分の lease の RUNNING job の heartbeat_at を DB の時刻(``SYSTIMESTAMP``)に更新する。
 
         lease_owner は worker プロセスごとに一意(host・pid・乱数)なので、tenant の条件は付けない
         (worker は request の文脈を持たない)。RUNNING でなくなった job(完了・取り消し・回復済み)
-        には書かない。
+        には書かない。stale の判定も DB の時計で行うため、worker の時計には依存しない(#359)。
         """
 
         def operation(connection: OracleConnectionProtocol) -> int:
@@ -7252,11 +7287,11 @@ class OracleClient:
                 connection,
                 """
                 UPDATE rag_ingestion_jobs
-                SET heartbeat_at = :heartbeat_at
+                SET heartbeat_at = SYSTIMESTAMP
                 WHERE lease_owner = :lease_owner
                   AND status = 'RUNNING'
                 """,
-                {"lease_owner": lease_owner, "heartbeat_at": heartbeat_at},
+                {"lease_owner": lease_owner},
             )
 
         return await self._run_transaction(operation)
@@ -7530,8 +7565,9 @@ class OracleClient:
         to_status: IngestionJobStatus,
         error_message: str | None,
         finished_at: datetime | None,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
-        """遷移元の status を WHERE に入れた UPDATE で job の状態を遷移する。"""
+        """遷移元の status(と lease の持ち主)を WHERE に入れた UPDATE で job の状態を遷移する。"""
         statuses = list(dict.fromkeys(from_statuses))
         if not statuses:
             raise ValueError("遷移元の status を 1 つ以上指定してください。")
@@ -7546,6 +7582,11 @@ class OracleClient:
             "finished_at": finished_at,
             **status_binds,
         }
+        lease_sql = ""
+        if lease_owner is not None:
+            # 別の worker が claim し直した行(lease の持ち主が変わった行)は書かない(#359)。
+            lease_sql = "AND lease_owner = :lease_owner"
+            binds["lease_owner"] = lease_owner
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
             updated_count = _execute_count(
@@ -7558,6 +7599,7 @@ class OracleClient:
                     finished_at = :finished_at
                 WHERE job_id = :job_id
                   AND status IN ({status_placeholders})
+                  {lease_sql}
                   AND EXISTS (
                       SELECT 1
                       FROM rag_documents d
@@ -7566,6 +7608,7 @@ class OracleClient:
                   )
                 """,
                     status_placeholders=status_placeholders,
+                    lease_sql=lease_sql,
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind(binds),
@@ -10108,7 +10151,8 @@ def _stale_running_ingestion_job_predicate_sql(
 ) -> str:
     """RUNNING job が stale(worker が止まった)かを判定する SQL 条件(#357)。
 
-    - heartbeat のある job: heartbeat が ``:heartbeat_stale_before`` より前(lease の TTL 切れ)。
+    - heartbeat のある job: heartbeat が DB の時計で ``:lease_ttl_seconds`` 秒より前
+      (lease の TTL 切れ)。heartbeat も DB の時計で書き、worker の時計のずれに左右されない(#359)。
     - heartbeat の無い job(lease 導入前の行など): 開始が ``:stale_before`` より前。
     - ``exclude_own_lease``: ``:exclude_lease_owner`` の lease の job は stale にしない。
     """
@@ -10117,7 +10161,8 @@ def _stale_running_ingestion_job_predicate_sql(
         "("
         f"({prefix}heartbeat_at IS NULL"
         f" AND COALESCE({prefix}started_at, {prefix}queued_at) < :stale_before)"
-        f" OR {prefix}heartbeat_at < :heartbeat_stale_before"
+        f" OR {prefix}heartbeat_at"
+        " < SYSTIMESTAMP - NUMTODSINTERVAL(:lease_ttl_seconds, 'SECOND')"
         ")"
     )
     if exclude_own_lease:

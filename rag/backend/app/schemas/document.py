@@ -115,6 +115,16 @@ class IngestionJob(BaseModel):
     finished_at: datetime | None = None
 
 
+class IngestionJobLease(BaseModel):
+    """取込 job の状態と lease の持ち主(worker が自分の実行かどうかを確かめる。#359)。
+
+    API の応答には出さない(``lease_owner`` は worker の host・pid を含むため)。
+    """
+
+    status: IngestionJobStatus
+    lease_owner: str | None = None
+
+
 class DocumentClassification(BaseModel):
     """文書の分類と有効期間(rag_poc の document.classification / effective_from / effective_to)。
 
