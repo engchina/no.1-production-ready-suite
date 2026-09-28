@@ -820,13 +820,13 @@ export const ja = {
   "settings.generation.recommended.tuning": "調整",
   "settings.generation.profile.grounded_concise": "根拠重視・簡潔",
   "settings.generation.profile.grounded_concise.description":
-    "現行の標準 system prompt(既定)",
+    "質問へ直接答え、必要な根拠だけを簡潔にまとめる(既定)",
   "settings.generation.profile.detailed_cited": "詳細・出典明示",
   "settings.generation.profile.detailed_cited.description":
-    "根拠ごとに出典 ID を明示する詳細回答",
+    "段落ごとに出典 ID を明示する詳細回答",
   "settings.generation.profile.strict_extractive": "厳密抽出",
   "settings.generation.profile.strict_extractive.description":
-    "context の事実のみ・推測禁止・無ければ無いと回答",
+    "根拠の文をそのまま抜き出す・推測禁止・無ければ無いと回答",
   "settings.generation.profile.structured_json": "構造化 JSON",
   "settings.generation.profile.structured_json.description":
     "answer/evidence/sources を JSON で返す",
@@ -845,7 +845,7 @@ export const ja = {
   "settings.generation.actions.reset": "変更を破棄",
   "settings.generation.actions.unsaved": "未保存の変更があります。",
   "settings.generation.actions.conflict":
-    "別の操作で設定が更新されました。画面を再読み込みしてから保存してください。",
+    "別の操作で回答スタイルが更新されたため、最新の設定を読み込みました。内容を確認し、必要ならもう一度選んで保存してください。",
   "settings.generation.loadError": "回答スタイル設定を取得できませんでした。",
   "settings.generation.saveError": "回答スタイル設定を保存できませんでした。",
   "settings.generation.custom.manageLink": "プロンプト版を管理 →",

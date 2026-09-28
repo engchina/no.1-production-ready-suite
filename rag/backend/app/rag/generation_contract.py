@@ -13,6 +13,11 @@ NO_RELEVANT_EVIDENCE_ANSWER = "提供された根拠には該当する情報が�
 JAPANESE_RE = re.compile(r"[ぁ-んァ-ン一-龯々ー]")
 ENGLISH_RE = re.compile(r"[A-Za-z]")
 SOURCE_ID_RE = re.compile(r"([^\s\[\](){}|,;]+#[A-Za-z0-9._:-]+)")
+# 出典 ID の chunk_id 部分に使う文字。許可 ID の直後にこれが続く場合は別 ID の一部とみなす。
+SOURCE_ID_TAIL_RE = re.compile(r"[A-Za-z0-9._:-]*")
+# 許可 ID の直前に置ける区切り。ファイル名は空白・括弧・読点を含みうるため、許可 ID は
+# 正規表現で切り出さず、文字列一致 + 前後の境界で見つける(#276)。
+SOURCE_ID_LEADING_BOUNDARY = frozenset(" \t\r\n[](){}|,;:、，：「」（）【】")
 CITATION_BLOCK_RE = re.compile(r"\[[^\]]+\]")
 SENTENCE_END_RE = re.compile(r"[。！？!?]")
 
@@ -85,8 +90,11 @@ def repair_instruction(codes: list[str]) -> str:
 
 def _validate_detailed_cited(text: str, allowed: set[str]) -> None:
     codes = _unknown_source_codes(text, allowed)
+    # 見出しだけの段落(Markdown の # 行)は主張を含まないため出典を要求しない(#276)。
     paragraphs = [
-        paragraph.strip() for paragraph in re.split(r"\n\s*\n", text) if paragraph.strip()
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n", text)
+        if paragraph.strip() and not _is_heading_only(paragraph)
     ]
     if any(not _valid_sources(paragraph, allowed) for paragraph in paragraphs):
         codes.append("missing_paragraph_citation")
@@ -162,17 +170,52 @@ def _validate_inline_cited(text: str, allowed: set[str]) -> None:
     _raise_codes(codes)
 
 
+def _is_heading_only(paragraph: str) -> bool:
+    lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+    return bool(lines) and all(line.startswith("#") for line in lines)
+
+
 def _unknown_source_codes(text: str, allowed: set[str]) -> list[str]:
-    cited = _source_ids(text)
+    known_spans = _known_source_spans(text, allowed)
+    masked = list(text)
+    for start, end, _source_id in known_spans:
+        masked[start:end] = " " * (end - start)
+    cited = {match.group(1).rstrip("。.!?]") for match in SOURCE_ID_RE.finditer("".join(masked))}
     return ["unknown_citation"] if cited.difference(allowed) else []
 
 
-def _source_ids(text: str) -> set[str]:
-    return {match.group(1).rstrip("。.!?]") for match in SOURCE_ID_RE.finditer(text)}
+def _known_source_spans(text: str, allowed: set[str]) -> list[tuple[int, int, str]]:
+    """本文中の許可 ID の出現位置を返す。
+
+    ファイル名に空白・括弧・読点を含む ID(例: ``就業規則 (2024年版).pdf#c1``)も
+    そのまま一致させる。前後が ID の一部として続く位置(``xa.pdf#c1`` や ``c10``)は除く。
+    """
+
+    spans: list[tuple[int, int, str]] = []
+    for source_id in sorted(allowed, key=len, reverse=True):
+        if not source_id:
+            continue
+        start = text.find(source_id)
+        while start != -1:
+            end = start + len(source_id)
+            if _has_leading_boundary(text, start) and _has_trailing_boundary(text, end):
+                spans.append((start, end, source_id))
+            start = text.find(source_id, start + 1)
+    return spans
+
+
+def _has_leading_boundary(text: str, start: int) -> bool:
+    return start == 0 or text[start - 1] in SOURCE_ID_LEADING_BOUNDARY
+
+
+def _has_trailing_boundary(text: str, end: int) -> bool:
+    tail = SOURCE_ID_TAIL_RE.match(text, end)
+    # 文末の "." や ":" は区切りとして扱い、"c1-2" や "c10" のような続きは別 ID とみなす。
+    return tail is None or not tail.group(0).strip("._:-")
 
 
 def _valid_sources(text: str, allowed: set[str]) -> set[str]:
-    return _source_ids(text).intersection(allowed)
+    return {source_id for _start, _end, source_id in _known_source_spans(text, allowed)}
 
 
 def _ends_with_valid_citation(sentence: str, allowed: set[str]) -> bool:
