@@ -794,3 +794,84 @@ export function AppShell({ sidebar, children, style }) {
 ```
 
 ---
+
+## SecretField — **新規**（#296）
+
+API key・パスワード・token など、**保存済みの値を画面に出さない** secret の入力欄です。システム設定のモデル設定（API key）・データベース設定（DB パスワード / Wallet パスワード）・RAG の HuggingFace 設定（token）が別々に持っていた実装を `packages/ui` にまとめました。製品で secret の入力欄を再実装しないでください。
+
+| 決めたこと | 理由 |
+|---|---|
+| ラベルの行の右端に「保存済み / 未設定」を `StatusBadge`（`success` / `neutral`、アイコン付き）で出す | 保存済みかどうかは値を見せずに伝える必要がある。色だけに頼らない（`StatusBadge` の規約） |
+| 入力欄は `TextField` と同じ高さ（`--field-height`）・枠線・フォーカス表示。既定はマスク（`type="password"`）、`autoComplete="off"`・`spellCheck={false}` | 2 列の grid で隣の `TextField` と上端・高さをそろえる。secret をブラウザの補完・スペルチェックへ渡さない |
+| 表示の切り替えは入力欄の直後の共有 `Button`（`ghost` + `iconOnly`、`Eye` / `EyeOff`）。`aria-label` は「〜を表示 / 〜を隠す」 | アイコンだけのボタンには `aria-label` が要る。`#id + button` で引ける構造を 3 製品の E2E が使う |
+| 保存済みの値をサーバーから取り出す間（`revealPending`）は、切り替えが `loading`（共有 `Spinner`）になり押せない | ボタンの loading の規約と同じ。取得中の `aria-label`（例:「DB パスワードを取得中」）は `revealPendingLabel` で渡す |
+| 保存済みの値の削除は `clearOption` のチェックボックスで、**入力欄の直下**に出す（保存済みのときだけ）。指定中は入力欄と切り替えを無効にする | 削除の指定と対象の入力欄を近くに置く。削除と新しい値の入力を同時に受け付けない |
+| 削除の指定・取り出し・保存は呼び出し側が持つ | `packages/ui` は API と業務語彙を知らない。文言はすべて翻訳済みの文字列で渡す |
+
+```tsx
+<SecretField
+  id="enterprise-api-key"
+  label="API key"
+  value={draft.api_key}
+  onValueChange={(value) => update("api_key", value)}
+  visible={apiKeyVisible}
+  onVisibleChange={setApiKeyVisible}
+  hasSavedSecret={draft.has_api_key}
+  savedLabel="保存済み"
+  notSetLabel="未設定"
+  showLabel="API key を表示"
+  hideLabel="API key を隠す"
+  helper="OpenAI-compatible gateway の Bearer 認証で使います。"
+  clearOption={{ label: "保存済み API key を削除する", checked: draft.clear_api_key, onCheckedChange: updateClear }}
+/>
+```
+
+### SecretField の props
+
+```ts
+import type { ReactNode, Ref } from "react";
+
+export interface SecretFieldClearOption {
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}
+
+export interface SecretFieldProps {
+  id: string;
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  hasSavedSecret: boolean;
+  savedLabel: string;
+  notSetLabel: string;
+  showLabel: string;
+  hideLabel: string;
+  /** 省略すると内部の状態で切り替える。 */
+  visible?: boolean;
+  onVisibleChange?: (visible: boolean) => void;
+  revealPending?: boolean;
+  revealPendingLabel?: string;
+  revealError?: string | null;
+  helper?: ReactNode;
+  error?: string;
+  placeholder?: string;
+  /** aria-required と RequiredBadge。required のときは requiredLabel を必ず渡す。 */
+  required?: boolean;
+  requiredLabel?: string;
+  disabled?: boolean;
+  /** hasSavedSecret のときだけ表示する。 */
+  clearOption?: SecretFieldClearOption;
+  autoComplete?: string;
+  className?: string;
+  ref?: Ref<HTMLInputElement>;
+}
+
+/** @dsComponent */
+export declare function SecretField(props: SecretFieldProps): JSX.Element;
+```
+
+- 補足・エラー・取り出しの失敗の id は `${id}-hint` / `${id}-error` / `${id}-reveal-error`、削除のチェックボックスは `${id}-clear` です。
+- 保存の操作行は `FormActionBar`（UX 契約 buttons §5.2.1）に置きます。`<form>` の中の保存は、`FormActionDescriptor` の `type: "submit"` で form の送信（Enter による暗黙の送信と `onSubmit` の検証）をそのまま使えます（既定は `type="button"`）。
+
+---

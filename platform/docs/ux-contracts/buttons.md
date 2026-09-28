@@ -123,6 +123,7 @@
 - **破壊的操作**：`dangerActions`（削除など）は赤いボタンとして直置きせず、右端の「その他の操作」メニューへまとめる（`moreLabel` で製品の i18n から差し替える。既定は日本語）。メニューは WAI-ARIA の Menu Button（`aria-haspopup="menu"`、`Escape` / 矢印 / `Home` / `End`、閉じたら起点へフォーカスを戻す）。
 - **一覧・詳細との共有**：同じ対象の操作は `EntityAction` で 1 回だけ定義し、フォームへは `entityActionToFormAction` で渡す（[§5.1](#51-オブジェクト操作一覧行--詳細)）。
 - **構造**：`aria-label` 必須（例: `ロール編集操作`）。上に区切り線を引き、375px では縦に積む。
+- **送信**：`<form>` の中の保存は `type: "submit"`（`FormActionDescriptor`。既定は `"button"`）にして、Enter による暗黙の送信と `onSubmit` の検証をそのまま使う。保存中もラベルは変えず、`loading` で先頭アイコンをスピナーにする（#296）。
 
 ## 5.3 一括選択バー
 

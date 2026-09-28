@@ -6,6 +6,7 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FormActionBar,
   FormStatus,
   PageBody,
   SelectField,
@@ -211,19 +212,15 @@ export function UploadStorageSettingsPage({
         >
           <Card>
             <CardHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
-                  {form.backend === "oci" ? (
-                    <Cloud size={20} aria-hidden />
-                  ) : (
-                    <HardDrive size={20} aria-hidden />
-                  )}
-                </div>
-                <div>
-                  <CardTitle>{m.destinationTitle}</CardTitle>
-                  <CardDescription>{m.destinationDescription}</CardDescription>
-                </div>
-              </div>
+              <CardTitle className="flex items-center gap-2">
+                {form.backend === "oci" ? (
+                  <Cloud size={16} className="text-accent-fg" aria-hidden />
+                ) : (
+                  <HardDrive size={16} className="text-accent-fg" aria-hidden />
+                )}
+                {m.destinationTitle}
+              </CardTitle>
+              <CardDescription>{m.destinationDescription}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <fieldset className="space-y-3">
@@ -277,7 +274,6 @@ export function UploadStorageSettingsPage({
                       error={errors.objectStorageRegion}
                       required
                       requiredLabel={m.required}
-                      buttonClassName="h-11"
                     />
                     <TextField
                       id="upload-storage-object-storage-namespace"
@@ -322,15 +318,22 @@ export function UploadStorageSettingsPage({
                   ) : null}
                 </div>
               )}
+
+              <FormActionBar
+                ariaLabel={m.actionsLabel}
+                primaryActions={[
+                  {
+                    id: "save",
+                    type: "submit",
+                    label: m.save,
+                    icon: Save,
+                    loading: save.isPending,
+                  },
+                ]}
+                status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
+              />
             </CardContent>
           </Card>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" loading={save.isPending} icon={Save}>
-              {m.save}
-            </Button>
-            {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-          </div>
         </fieldset>
       </form>
     </PageBody>

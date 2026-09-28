@@ -9,7 +9,6 @@ import {
 import { useEffect, useState } from "react";
 import {
   toast,
-  Button,
   ErrorState,
   TextField,
   Card,
@@ -17,6 +16,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  FormActionBar,
   FormStatus,
   PageBody,
   SelectField,
@@ -379,14 +379,15 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
   return (
     <PageBody wide>
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-6">
-        <Card className="rounded-md">
-          <CardHeader className="p-6 pb-0">
-            <div className="flex items-center gap-2 border-b border-border pb-5">
-              <KeyRound size={20} aria-hidden />
-              <CardTitle className="text-base">{t("settings.oci.auth.cardTitle")}</CardTitle>
-            </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <KeyRound size={16} className="text-accent-fg" aria-hidden />
+              {t("settings.oci.auth.cardTitle")}
+            </CardTitle>
+            <CardDescription>{t("settings.oci.auth.cardDescription")}</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-5 p-6">
+          <CardContent className="space-y-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <ConfigFileField
                 id="oci-config-file"
@@ -452,7 +453,6 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 placeholder={t("settings.oci.placeholder.region")}
                 required
                 requiredLabel={t("settings.oci.required")}
-                buttonClassName="h-11"
               />
             </div>
 
@@ -473,7 +473,6 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               ariaContext={t("nav.settingsOci")}
               saveState={authSaveState}
               saveLabel={t("settings.oci.actions.saveAuth")}
-              savingLabel={t("settings.oci.actions.saving")}
               onSave={() => void saveAuthDraft()}
               testState={configTestState.phase}
               testLabel={t("settings.oci.actions.test")}
@@ -486,15 +485,11 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
 
         <Card>
           <CardHeader>
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
-                <Cloud size={20} aria-hidden />
-              </div>
-              <div>
-                <CardTitle>{t("settings.oci.storage.title")}</CardTitle>
-                <CardDescription>{t("settings.oci.storage.description")}</CardDescription>
-              </div>
-            </div>
+            <CardTitle className="flex items-center gap-2">
+              <Cloud size={16} className="text-accent-fg" aria-hidden />
+              {t("settings.oci.storage.title")}
+            </CardTitle>
+            <CardDescription>{t("settings.oci.storage.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -528,7 +523,6 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               ariaContext={t("settings.oci.storage.title")}
               saveState={storageSaveState}
               saveLabel={t("settings.oci.actions.save")}
-              savingLabel={t("settings.oci.actions.saving")}
               onSave={saveStorageDraft}
             />
           </CardContent>
@@ -538,11 +532,14 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
   );
 }
 
+/**
+ * カード末尾の操作行（UX 契約 buttons §5.2.1 の FormActionBar）。
+ * 保存中・接続テスト中もラベルは変えず、先頭アイコンだけが Button の loading でスピナーになる。
+ */
 function SectionActions({
   ariaContext,
   saveState,
-  saveLabel: idleSaveLabel,
-  savingLabel,
+  saveLabel,
   onSave,
   testState,
   testLabel,
@@ -551,51 +548,49 @@ function SectionActions({
   ariaContext: string;
   saveState: FeedbackState;
   saveLabel: string;
-  savingLabel: string;
   onSave: () => void;
   testState?: ConfigTestState["phase"];
   testLabel?: string;
   onTest?: () => void;
 }) {
-  const currentSaveLabel =
-    saveState === "loading"
-      ? savingLabel
-      : saveState === "success"
-        ? t("settings.oci.actions.saved")
-        : idleSaveLabel;
-  // 接続テスト中もラベルは変えず、先頭アイコンだけが Button の loading でスピナーになる。
-  const currentTestLabel = testLabel;
+  const isSaving = saveState === "loading";
   const isTesting = testState === "loading";
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-      <Button
-        type="button"
-        size="lg"
-        className="whitespace-nowrap"
-        aria-label={`${ariaContext}: ${currentSaveLabel}`}
-        loading={saveState === "loading"}
-        disabled={isTesting}
-        onClick={onSave} icon={Save}>
-        {currentSaveLabel}
-      </Button>
-      {onTest && currentTestLabel ? (
-        <Button
-          type="button"
-          variant="secondary"
-          size="lg"
-          className="whitespace-nowrap"
-          aria-label={`${ariaContext}: ${currentTestLabel}`}
-          loading={isTesting}
-          disabled={saveState === "loading"}
-          onClick={onTest} icon={ShieldCheck}>
-          {currentTestLabel}
-        </Button>
-      ) : null}
-      {saveState === "error" ? (
-        <FormStatus tone="danger" message={t("settings.oci.status.invalid")} />
-      ) : null}
-    </div>
+    <FormActionBar
+      ariaLabel={t("settings.oci.actions.label", { section: ariaContext })}
+      primaryActions={[
+        {
+          id: "save",
+          label: saveLabel,
+          ariaLabel: `${ariaContext}: ${saveLabel}`,
+          icon: Save,
+          loading: isSaving,
+          disabled: isTesting,
+          onClick: onSave,
+        },
+      ]}
+      secondaryActions={
+        onTest && testLabel
+          ? [
+              {
+                id: "test",
+                label: testLabel,
+                ariaLabel: `${ariaContext}: ${testLabel}`,
+                icon: ShieldCheck,
+                loading: isTesting,
+                disabled: isSaving,
+                onClick: onTest,
+              },
+            ]
+          : []
+      }
+      status={
+        saveState === "error" ? (
+          <FormStatus tone="danger" message={t("settings.oci.status.invalid")} />
+        ) : null
+      }
+    />
   );
 }
 
@@ -746,14 +741,13 @@ function addImportedValue(
   appliedFields.push(field);
 }
 
+// loading 中もラベルは変えない（先頭アイコンがスピナーになる。デザインシステムの禁止事項）。
 function configImportButtonLabel(state: FeedbackState): string {
-  if (state === "loading") return t("settings.oci.actions.applyingConfig");
   if (state === "success") return t("settings.oci.actions.applied");
   return t("settings.oci.actions.applyConfig");
 }
 
 function namespaceFetchButtonLabel(state: FeedbackState): string {
-  if (state === "loading") return t("settings.oci.actions.fetchingNamespace");
   if (state === "success") return t("settings.oci.actions.namespaceFetched");
   return t("settings.oci.actions.fetchNamespace");
 }
