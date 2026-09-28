@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ANSWER_EVALUATION_TIMEOUT_MS, API_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
+import {
+  ANSWER_EVALUATION_TIMEOUT_MS,
+  ANSWER_GENERATION_TIMEOUT_MS,
+  API_REQUEST_TIMEOUT_MS,
+  ApiError,
+  api,
+} from "./api";
 import { t } from "./i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -72,6 +78,33 @@ describe("api.request envelope", () => {
       "/api/ready/database",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("回答を生成する検索は通常の timeout で打ち切らず、backend の回答生成の上限より長く待つ", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    let settled = false;
+    const requestPromise = api.search({ query: "得点" }).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+
+    // backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の上限 600 秒）より長く待つ（#375）。
+    expect(ANSWER_GENERATION_TIMEOUT_MS).toBeGreaterThan(600_000);
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS + 1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(ANSWER_GENERATION_TIMEOUT_MS);
+
+    await expect(requestPromise).resolves.toMatchObject({ status: 408 });
+    expect(fetchMock).toHaveBeenCalledWith("/api/search", expect.objectContaining({ method: "POST" }));
   });
 
   it("保存済みの回答の評価は通常の timeout で打ち切らず、評価用の長い timeout を使う", async () => {

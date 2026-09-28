@@ -325,6 +325,7 @@ class RagPipeline:
                 query_guardrail=query_guardrail,
                 token_callback=token_callback,
                 history=history,
+                progress_callback=progress_callback,
             )
 
         error_stage = "embedding"
@@ -432,10 +433,19 @@ class RagPipeline:
             query_variants: list[str] = []
             if retrieval_params.query_expansion and self._settings.rag_query_expansion_llm_enabled:
                 # opt-in の LLM マルチクエリ拡張。失敗・空応答は決定論展開へ縮退する。
-                query_variants = await expand_retrieval_queries_with_llm(
-                    query_guardrail.sanitized_text,
-                    llm=self._llm,
-                    max_variants=self._settings.rag_query_expansion_max_variants,
+                query_variants = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "query_expansion",
+                    expand_retrieval_queries_with_llm(
+                        query_guardrail.sanitized_text,
+                        llm=self._llm,
+                        max_variants=self._settings.rag_query_expansion_max_variants,
+                    ),
+                    attributes={"max_variants": self._settings.rag_query_expansion_max_variants},
+                    result_attributes=lambda variants: {"output_count": len(variants or [])},
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
                 if query_variants:
                     query_expansion_source = "llm"
@@ -451,10 +461,25 @@ class RagPipeline:
                 query_variants = [query_guardrail.sanitized_text]
             if agentic_params.enabled:
                 error_stage = "agentic_planning"
-                planned = await self._llm.plan_query(
-                    query_guardrail.sanitized_text,
-                    mode=agentic_params.profile,
-                    max_subqueries=agentic_params.max_subqueries,
+                # 検索の前の計画（書き換え / HyDE / 分解）は LLM を呼ぶため、進捗に出す（#375）。
+                planned = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "agentic_planning",
+                    self._llm.plan_query(
+                        query_guardrail.sanitized_text,
+                        mode=agentic_params.profile,
+                        max_subqueries=agentic_params.max_subqueries,
+                    ),
+                    attributes={
+                        "profile": agentic_params.profile,
+                        "hyde": agentic_params.hyde,
+                        "rewrite": agentic_params.rewrite,
+                        "max_subqueries": agentic_params.max_subqueries,
+                    },
+                    result_attributes=lambda planned: {"output_count": len(planned or [])},
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
                 if planned:
                     agentic_subquery_count = len(planned)
@@ -603,31 +628,41 @@ class RagPipeline:
                         crag_hops += 1
                     corrective_retried = True
                     crag_fallback_triggered = True
-                    rewritten = await self._llm.plan_query(
-                        query_guardrail.sanitized_text,
-                        mode="query_rewrite",
-                        max_subqueries=agentic_params.max_subqueries,
+                    rewritten = await _observe_stage(
+                        trace_id,
+                        request.mode.value,
+                        "crag_rewrite",
+                        self._llm.plan_query(
+                            query_guardrail.sanitized_text,
+                            mode="query_rewrite",
+                            max_subqueries=agentic_params.max_subqueries,
+                        ),
+                        attributes={"attempt": refinement_attempts},
+                        result_attributes=lambda rewritten: {"output_count": len(rewritten or [])},
+                        progress_callback=progress_callback,
+                        stage_timings=stream_stage_timings,
                     )
                     if not rewritten:
                         break
                     crag_variants = _dedupe_strings([*rewritten, *query_variants])
-                    crag_vectors = (
-                        []
-                        if resolved_strategy.mode == SearchMode.KEYWORD
-                        else await self._genai.embed(crag_variants, input_type="SEARCH_QUERY")
-                    )
-                    crag_result = await self._retrieve_with_strategy(
-                        query_variants=crag_variants,
-                        vectors=crag_vectors,
-                        request=effective_request,
-                        resolved_strategy=resolved_strategy,
+                    crag_result, crag_ranked = await _observe_stage(
+                        trace_id,
+                        request.mode.value,
+                        "crag_retrieval",
+                        self._search_again(
+                            query=query_guardrail.sanitized_text,
+                            query_variants=crag_variants,
+                            vectors=None,
+                            request=effective_request,
+                            resolved_strategy=resolved_strategy,
+                            rerank_top_n=request.rerank_top_n,
+                        ),
+                        attributes={"query_variant_count": len(crag_variants)},
+                        result_attributes=_search_again_attributes,
+                        progress_callback=progress_callback,
+                        stage_timings=stream_stage_timings,
                     )
                     crag_researched = True
-                    crag_ranked = await self._rerank(
-                        query_guardrail.sanitized_text,
-                        crag_result.chunks,
-                        request.rerank_top_n,
-                    )
                     crag_grounded = await self._process_grounding_candidates(
                         query=query_guardrail.sanitized_text,
                         retrieved=crag_result.chunks,
@@ -659,16 +694,22 @@ class RagPipeline:
                 corrective_retried = True
                 error_stage = "corrective_retrieval"
                 relaxed_request = _relaxed_corrective_request(effective_request)
-                corrective_result = await self._retrieve_with_strategy(
-                    query_variants=query_variants,
-                    vectors=vectors,
-                    request=relaxed_request,
-                    resolved_strategy=resolved_strategy,
-                )
-                corrective_ranked = await self._rerank(
-                    query_guardrail.sanitized_text,
-                    corrective_result.chunks,
-                    request.rerank_top_n,
+                corrective_result, corrective_ranked = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "corrective_retrieval",
+                    self._search_again(
+                        query=query_guardrail.sanitized_text,
+                        query_variants=query_variants,
+                        vectors=vectors,
+                        request=relaxed_request,
+                        resolved_strategy=resolved_strategy,
+                        rerank_top_n=request.rerank_top_n,
+                    ),
+                    attributes={"query_variant_count": len(query_variants)},
+                    result_attributes=_search_again_attributes,
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
                 corrective_grounded = await self._process_grounding_candidates(
                     query=query_guardrail.sanitized_text,
@@ -696,32 +737,43 @@ class RagPipeline:
                 error_stage = "agentic_multi_hop"
                 # 1 回目と同じ入力(temperature 0)で分解し直しても同じ sub-question しか返らない。
                 # 上位の検索結果を context として渡し、不足している情報を探す追加の分解にする。
-                hop_queries = await self._llm.plan_query(
-                    query_guardrail.sanitized_text,
-                    mode="decompose",
-                    max_subqueries=agentic_params.max_subqueries,
-                    context=_multi_hop_context(grounded.ranked or ranked),
+                # 再分解も LLM を呼ぶため、進捗に出す（#375）。
+                hop_queries = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "agentic_multi_hop",
+                    self._llm.plan_query(
+                        query_guardrail.sanitized_text,
+                        mode="decompose",
+                        max_subqueries=agentic_params.max_subqueries,
+                        context=_multi_hop_context(grounded.ranked or ranked),
+                    ),
+                    attributes={"max_subqueries": agentic_params.max_subqueries},
+                    result_attributes=lambda hop_queries: {"output_count": len(hop_queries or [])},
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
                 hop_variants = _dedupe_strings([*query_variants, *hop_queries])
                 # 新しい variant が無い hop は同じ検索の繰り返しになるので実行しない。
                 if len(hop_variants) > len(query_variants):
                     corrective_retried = True
                     agentic_hops += 1
-                    hop_vectors = (
-                        []
-                        if resolved_strategy.mode == SearchMode.KEYWORD
-                        else await self._genai.embed(hop_variants, input_type="SEARCH_QUERY")
-                    )
-                    hop_result = await self._retrieve_with_strategy(
-                        query_variants=hop_variants,
-                        vectors=hop_vectors,
-                        request=effective_request,
-                        resolved_strategy=resolved_strategy,
-                    )
-                    hop_ranked = await self._rerank(
-                        query_guardrail.sanitized_text,
-                        hop_result.chunks,
-                        request.rerank_top_n,
+                    hop_result, hop_ranked = await _observe_stage(
+                        trace_id,
+                        request.mode.value,
+                        "agentic_multi_hop_retrieval",
+                        self._search_again(
+                            query=query_guardrail.sanitized_text,
+                            query_variants=hop_variants,
+                            vectors=None,
+                            request=effective_request,
+                            resolved_strategy=resolved_strategy,
+                            rerank_top_n=request.rerank_top_n,
+                        ),
+                        attributes={"query_variant_count": len(hop_variants)},
+                        result_attributes=_search_again_attributes,
+                        progress_callback=progress_callback,
+                        stage_timings=stream_stage_timings,
                     )
                     hop_grounded = await self._process_grounding_candidates(
                         query=query_guardrail.sanitized_text,
@@ -1208,6 +1260,35 @@ class RagPipeline:
             )
             raise
 
+    async def _search_again(
+        self,
+        *,
+        query: str,
+        query_variants: list[str],
+        vectors: list[list[float]] | None,
+        request: SearchRequest,
+        resolved_strategy: ResolvedRetrievalStrategy,
+        rerank_top_n: int,
+    ) -> tuple[RetrievalExecutionResult, list[RetrievedChunk]]:
+        """追加の検索（CRAG / 条件緩和 / multi-hop）の埋め込み → 検索 → rerank を 1 工程で行う。
+
+        `vectors` が None なら `query_variants` を埋め込み直す（keyword 検索では埋め込まない）。
+        """
+        if vectors is None:
+            vectors = (
+                []
+                if resolved_strategy.mode == SearchMode.KEYWORD
+                else await self._genai.embed(query_variants, input_type="SEARCH_QUERY")
+            )
+        result = await self._retrieve_with_strategy(
+            query_variants=query_variants,
+            vectors=vectors,
+            request=request,
+            resolved_strategy=resolved_strategy,
+        )
+        ranked = await self._rerank(query, result.chunks, rerank_top_n)
+        return result, ranked
+
     async def _rerank(
         self,
         query: str,
@@ -1563,6 +1644,7 @@ class RagPipeline:
         query_guardrail: GuardrailResult,
         token_callback: SearchTokenCallback | None,
         history: Sequence[ChatTurn] | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         """DocRAG(rag_poc)の根拠付き回答エンジンで回答する。回答側ガードレールは共通。
 
@@ -1576,7 +1658,13 @@ class RagPipeline:
         original_query = request.query
         rewritten_query = ""
         if history and self._settings.rag_docrag_history_rewrite_enabled:
-            rewritten_query = await self._safe_rewritten_query(original_query, history)
+            rewritten_query = await _observe_stage(
+                trace_id,
+                request.mode.value,
+                "docrag_history_rewrite",
+                self._safe_rewritten_query(original_query, history),
+                progress_callback=progress_callback,
+            )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
         engine = DocragAnswerEngine(
@@ -1585,7 +1673,15 @@ class RagPipeline:
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
         )
-        outcome = await engine.run(request)
+        # DocRAG の回答エンジンは検索と回答の生成（LLM）を中で行う。
+        # 進捗には 1 工程として出す（#375）。
+        outcome = await _observe_stage(
+            trace_id,
+            request.mode.value,
+            "docrag_answer",
+            engine.run(request),
+            progress_callback=progress_callback,
+        )
         answer_guardrail = await asyncio.to_thread(
             self._guardrails.validate_answer, outcome.answer, outcome.context_text
         )
@@ -3541,6 +3637,13 @@ def _retrieved_chunk_sort_key(
     chunk_index = chunk.metadata.get("chunk_index")
     stable_index = chunk_index if isinstance(chunk_index, int) else 0
     return (-score, chunk.document_id, stable_index, chunk.chunk_id)
+
+
+def _search_again_attributes(
+    outcome: tuple[RetrievalExecutionResult, list[RetrievedChunk]],
+) -> dict[str, object]:
+    result, ranked = outcome
+    return {"output_count": len(result.chunks), "ranked_count": len(ranked)}
 
 
 async def _observe_stage[T](

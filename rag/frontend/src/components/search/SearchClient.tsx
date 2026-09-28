@@ -48,13 +48,14 @@ import {
   type SearchMode,
 } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
+import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
-import { useNowMs } from "@/lib/use-now-ms";
 import { isOneOf, removeWorkspace, useWorkspaceState } from "@/lib/workspace-state";
+import { AnswerProgress } from "./AnswerProgress";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { QuerySuggestions } from "./QuerySuggestions";
@@ -130,24 +131,6 @@ const RERANK_TOP_N_SELECT_OPTIONS = RERANK_TOP_N_OPTIONS.map((option) => ({
   value: option,
   label: option,
 })) satisfies SelectFieldOption<RerankTopNOption>[];
-const STAGE_LABEL: Record<string, I18nKey> = {
-  agentic_multi_hop: "search.stage.agentic",
-  agentic_planning: "search.stage.agentic",
-  answer_guardrail: "search.stage.answerGuardrail",
-  business_fit_weighting: "search.stage.businessFit",
-  context_adaptive_expansion: "search.stage.context",
-  context_compression: "search.stage.context",
-  context_dependency_promotion: "search.stage.context",
-  context_diversity: "search.stage.context",
-  context_expansion: "search.stage.context",
-  context_group_expansion: "search.stage.context",
-  corrective_retrieval: "search.stage.corrective",
-  crag_corrective: "search.stage.corrective",
-  embedding: "search.stage.embedding",
-  generation: "search.stage.generation",
-  rerank: "search.stage.rerank",
-  retrieval: "search.stage.retrieval",
-};
 
 /** RAG 検索画面。回答を SSE でストリーミング表示する。 */
 export function SearchClient() {
@@ -229,10 +212,6 @@ export function SearchClient() {
   const rerankTopNOptions = RERANK_TOP_N_SELECT_OPTIONS.filter(
     (option) => Number(option.value) <= Number(topK)
   );
-  const runStartedAtMs = run?.startedAtMs;
-  // 回答生成中だけ 1 秒ごとに時計を進める。開始直後（時計の購読前）は開始時刻を下限にして 0 秒と見せる。
-  const clockNowMs = useNowMs(phase === "streaming" && runStartedAtMs != null, runStartedAtMs);
-  const elapsedNowMs = Math.max(clockNowMs, runStartedAtMs ?? clockNowMs);
 
   const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
@@ -734,7 +713,6 @@ export function SearchClient() {
                     <SearchRunPanel
                       run={run}
                       phase={phase}
-                      nowMs={elapsedNowMs}
                       traceId={run.traceId ?? meta?.trace_id ?? null}
                     />
                   ) : null}
@@ -824,12 +802,10 @@ function clampRerankTopN(
 function SearchRunPanel({
   run,
   phase,
-  nowMs,
   traceId,
 }: {
   run: SearchRun;
   phase: Phase;
-  nowMs: number;
   traceId: string | null;
 }) {
   const completedStages = run.stages.filter((stage) => stage.outcome !== "started");
@@ -845,14 +821,18 @@ function SearchRunPanel({
         </h3>
         <span className={runStatusClass(phase)}>{runStatusLabel(phase)}</span>
       </div>
-      <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+      {/* 今の工程と経過時間（#375）。検索ボタンが loading のスピナーを出すため、ここは静的な表示にする。 */}
+      <AnswerProgress
+        active={phase === "streaming"}
+        stages={run.stages}
+        startedAtMs={run.startedAtMs}
+        finishedAtMs={run.endedAtMs}
+        finalLabel={runFinishedLabel(phase)}
+        activityIcon="none"
+        testId="search-run-progress"
+      />
+      <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
         <SearchRunMetric label={t("search.run.startedAt")} value={formatDateTime(run.startedAtIso)} />
-        <SearchRunMetric
-          label={t("search.run.elapsed")}
-          value={formatSearchElapsed(run, nowMs)}
-          testId="search-run-elapsed"
-        />
-        <SearchRunMetric label={t("search.run.currentStage")} value={currentStageLabel(run, phase)} />
         <SearchRunMetric label={t("search.run.trace")} value={shortTraceId(traceId)} />
       </dl>
       {completedStages.length ? (
@@ -895,16 +875,14 @@ function SearchRunMetric({
   );
 }
 
-function currentStageLabel(run: SearchRun, phase: Phase): string {
-  if (phase === "done") return t("search.run.stage.done");
-  if (phase === "cancelled") return t("search.run.stage.cancelled");
-  if (phase === "error") return t("search.run.stage.error");
-  const latest = run.stages[run.stages.length - 1];
-  return latest ? stageLabel(latest.stage) : t("search.stage.waiting");
+function runFinishedLabel(phase: Phase): string {
+  if (phase === "cancelled") return t("search.run.finished.cancelled");
+  if (phase === "error") return t("search.run.finished.error");
+  return t("search.run.finished.done");
 }
 
 function stageLabel(stage: string): string {
-  return t(STAGE_LABEL[stage] ?? "search.stage.processing");
+  return answerStageLabel(stage);
 }
 
 function runStatusLabel(phase: Phase): string {
@@ -958,18 +936,6 @@ function stageChipClass(outcome: SearchStageEvent["outcome"]): string {
     default:
       return `${base} bg-surface-hover text-fg-muted`;
   }
-}
-
-function formatSearchElapsed(run: SearchRun, nowMs: number): string {
-  const end = run.endedAtMs ?? nowMs;
-  if (!Number.isFinite(end) || end < run.startedAtMs) return "—";
-  const seconds = Math.max(0, Math.round((end - run.startedAtMs) / 1000));
-  if (seconds < 60) return t("search.run.elapsedSeconds", { seconds });
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest
-    ? t("search.run.elapsedMinutesSeconds", { minutes, seconds: rest })
-    : t("search.run.elapsedMinutes", { minutes });
 }
 
 function shortTraceId(traceId: string | null): string {

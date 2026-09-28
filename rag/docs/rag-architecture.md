@@ -113,7 +113,8 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - retrieval / rerank 後に citation が 0 件の場合は LLM を呼ばず、固定の no-results 回答と warning を返す。
    - generation context は rerank 後の上位 chunk を `RAG_CONTEXT_WINDOW_CHARS` に収めて作り、レスポンスと監査ログの `citations` には実際に context へ入った chunk だけを含める。
    - 生成後に secret leakage をブロックし、回答と citation context の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返す。
-   - `/api/search` と `/api/search/stream` は `RAG_SEARCH_TIMEOUT_SECONDS` で pipeline 実行時間を制限する。通常検索は timeout 時に 504 を返す。SSE は stream 開始後に timeout した場合、HTTP status は維持して `error` event を返し、どちらも `rag_search_audit.error_stage=timeout` を残す。
+   - `/api/search`・`/api/search/stream`・チャットの送信は、回答を LLM で生成するため `RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）で pipeline 実行時間を制限する（#375。検索だけの `RAG_SEARCH_TIMEOUT_SECONDS` は品質評価の 1 ケースに使う）。通常検索は timeout 時に 504 を返す。SSE は stream 開始後に timeout した場合、HTTP status は維持して `error` event（`message` に時間切れになった工程と再試行の案内、`stage` に工程名）を返し、どちらも `rag_search_audit.error_stage=timeout` を残す。
+   - 進捗の stage は embedding / retrieval / rerank / 根拠の整理 / generation に加え、LLM を呼ぶ `query_expansion`・`agentic_planning`（検索の計画: 書き換え / HyDE / 分解）・`crag_rewrite`・`agentic_multi_hop`（再分解）と、追加の検索 `crag_retrieval`・`corrective_retrieval`・`agentic_multi_hop_retrieval`、DocRAG の `docrag_history_rewrite`・`docrag_answer` を通知する（#375）。画面（RAG 検索・チャット）は今の工程と経過時間を出す。
    - embedding / retrieval / rerank / generation は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
    - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は `embedding`、`retrieval`、`rerank`、`generation` などの `started` / `success` / `error` と低機密 attributes を表し、最終 `metadata.diagnostics.stream_stage_timings` には stage 別の ms timing を含める。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。`RAG_STREAM_REALTIME_ENABLED` は廃止予定の互換設定で、検査前出力を有効化しない。

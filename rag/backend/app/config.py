@@ -973,7 +973,26 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
-    rag_search_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
+    rag_search_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=300.0,
+        description=(
+            "品質評価（golden set）の 1 ケースの pipeline の上限（秒）。チャット・RAG 検索の"
+            "回答生成は rag_answer_timeout_seconds を使う（#375）。"
+        ),
+    )
+    rag_answer_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+        description=(
+            "LLM を呼ぶ回答生成（チャット・RAG 検索の回答。ストリーム・非ストリーム・MCP）の"
+            "通しの上限（秒。#375）。検索の計画・追加の検索の再分解・回答の生成で LLM を複数回"
+            "呼ぶため、検索だけの上限（rag_search_timeout_seconds）とは分ける。上限は LLM 1 回の"
+            " timeout の設定の上限と同じ。画面と Nginx の待ち時間はこれより長くする。"
+        ),
+    )
     rag_graph_enabled: bool = Field(
         default=False,
         description=(

@@ -423,12 +423,36 @@ grep -Fq 'listen 8080;' "${site}" || fail "application port で listen してい
 grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backend 8000 へ proxy されていない"
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
-evaluation_location="$(awk '/location ~ \^\/api\/search\/answers\/\[\^\/\]\+\/evaluation\$ \{/,/^ *\}$/' "${site}")"
+# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375）の待ち時間。
+llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|chat/conversations/[^/]+/messages/stream|mcp)$ {'
+grep -Fqx "${llm_location_line}" "${site}" \
+  || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
+evaluation_location="$(awk -v start="${llm_location_line}" '$0 == start {found = 1} found {print} found && /^ *\}$/ {exit}' "${site}")"
 test -n "${evaluation_location}" || fail "保存済みの回答の評価の location がない"
 printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_read_timeout 660s;' \
-  || fail "保存済みの回答の評価の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
+  || fail "評価・回答生成の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
+printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_buffering off;' \
+  || fail "回答生成の SSE のため proxy buffering を無効にしていない"
 printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_pass http://127.0.0.1:8000;' \
-  || fail "保存済みの回答の評価が backend へ proxy されていない"
+  || fail "評価・回答生成が backend へ proxy されていない"
+# location の正規表現が、実際の path（評価・検索・検索の SSE・チャットの SSE・MCP）に当たり、
+# ほかの API（検索の回答の一覧など）には当たらないこと（Nginx の正規表現は PCRE。grep -E で近似する）。
+llm_location_regex='^/api/(search|search/stream|search/answers/[^/]+/evaluation|chat/conversations/[^/]+/messages/stream|mcp)$'
+for path in /api/search /api/search/stream /api/search/answers/trace-1/evaluation \
+  /api/chat/conversations/conv-1/messages/stream /api/mcp; do
+  printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}" || fail "${path} の待ち時間が延びない"
+done
+for path in /api/search/answers /api/chat/conversations /api/search/citation-feedback; do
+  if printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}"; then
+    fail "${path} まで待ち時間を延ばしている"
+  fi
+done
+# backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx・画面より短いこと。
+answer_timeout_max="$(sed -n 's/^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = \([0-9]*\)\.0$/\1/p' "${REPO_DIR}/backend/app/config.py")"
+test "${answer_timeout_max}" = "600" || fail "LLM 1 回の timeout の上限（回答生成の上限）が 600 秒ではない"
+awk '/rag_answer_timeout_seconds: float = Field\(/ {found = 1} found {print} found && /^    \)$/ {exit}' \
+  "${REPO_DIR}/backend/app/config.py" | grep -Fq 'le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,' \
+  || fail "回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS）が LLM 1 回の timeout の上限で抑えられていない"
 # upload の上限: backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）+ multipart の余白 10 MiB（#306）。
 # Nginx の既定（1m）のままだと 1 MB を超える文書を送れない（#280）。
 grep -Fq 'client_max_body_size 210M;' "${site}" \

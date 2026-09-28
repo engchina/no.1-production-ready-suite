@@ -12,18 +12,29 @@ import {
   Skeleton,
   ListSkeleton,
 } from "@engchina/production-ready-ui";
-import { Check, ChevronDown, Pencil, Plus, SendHorizontal, Square, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Pencil,
+  Plus,
+  RotateCcw,
+  SendHorizontal,
+  Square,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard } from "@/components/search/CitationCard";
+import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import type { AnswerStageEvent } from "@/lib/answer-progress";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -56,6 +67,9 @@ interface LiveColumn {
   guardrailWarnings: string[];
   /** DocRAG 回答エンジンの根拠・実行記録(standard では null)。 */
   docrag: unknown;
+  /** 回答生成の工程の進捗（#375）。 */
+  stages: AnswerStageEvent[];
+  startedAtMs: number;
 }
 
 interface LiveTurn {
@@ -96,6 +110,8 @@ function AssistantColumn({
   guardrailWarnings,
   docrag = null,
   savedDocrag = false,
+  progress = null,
+  onRetry,
   showLabel,
   className,
 }: {
@@ -111,9 +127,14 @@ function AssistantColumn({
   docrag?: unknown;
   /** 保存済み DocRAG 回答がある(trace_id から根拠と実行記録を開ける)。 */
   savedDocrag?: boolean;
+  /** 生成中の工程と開始時刻（#375）。回答の本文が届くまで経過時間と今の工程を出す。 */
+  progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
+  /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
+  onRetry?: () => void;
   showLabel: boolean;
   className?: string;
 }) {
+  const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   return (
     <div
       id={messageId ? `message-${messageId}` : undefined}
@@ -131,9 +152,33 @@ function AssistantColumn({
         </h3>
       ) : null}
       {errorMessage ? (
-        <p className="text-sm text-danger-fg" role="alert">
+        <Banner
+          severity="danger"
+          action={
+            onRetry ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-11 sm:h-8"
+                icon={RotateCcw}
+                onClick={onRetry}
+              >
+                {t("chat.error.retry")}
+              </Button>
+            ) : undefined
+          }
+        >
           {errorMessage}
-        </p>
+        </Banner>
+      ) : waitingForAnswer && progress ? (
+        // 回答の本文は生成と検査が終わってからまとめて届く。それまでは今の工程と経過時間を出す。
+        <AnswerProgress
+          active
+          stages={progress.stages}
+          startedAtMs={progress.startedAtMs}
+          testId="chat-answer-progress"
+        />
       ) : (
         <p
           className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
@@ -202,9 +247,12 @@ function MessageTurn({
   user,
   columns,
   businessViewId,
+  onRetry,
 }: {
   user: ChatMessage;
   businessViewId: string;
+  /** 失敗した回答があるときに同じ質問をもう一度送る（最新のターンだけ渡す）。 */
+  onRetry?: () => void;
   columns: {
     key: string;
     label: string | null;
@@ -217,6 +265,7 @@ function MessageTurn({
     guardrailWarnings: string[];
     docrag?: unknown;
     savedDocrag?: boolean;
+    progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
   }[];
 }) {
   const compare = columns.length > 1;
@@ -257,6 +306,8 @@ function MessageTurn({
             guardrailWarnings={column.guardrailWarnings}
             docrag={column.docrag}
             savedDocrag={column.savedDocrag}
+            progress={column.progress}
+            onRetry={column.errorMessage ? onRetry : undefined}
             showLabel={compare}
             className={
               compare && columns.length % 2 === 1 && index === columns.length - 1
@@ -482,21 +533,25 @@ export function ChatClient() {
     });
   }
 
-  async function send() {
-    const content = composer.trim();
+  /** 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。 */
+  async function send(retryContent?: string) {
+    const content = (retryContent ?? composer).trim();
     if (!content || !activeId || sending || businessViewWithoutKnowledgeBases) return;
     setSending(true);
     setErrorText("");
-    setComposer("");
+    if (retryContent === undefined) setComposer("");
     const controller = new AbortController();
     abortRef.current = controller;
+    let started = false;
     try {
       await streamChatMessage(
         activeId,
         { content, model_ids: selectedModelIds },
         {
           onStart: ({ user_message, columns }) => {
+            started = true;
             void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+            const startedAtMs = Date.now();
             setLiveTurn({
               user: user_message,
               columns: columns.map((column: ChatColumn) => ({
@@ -509,7 +564,22 @@ export function ChatClient() {
                 errorMessage: null,
                 guardrailWarnings: [],
                 docrag: null,
+                stages: [],
+                startedAtMs,
               })),
+            });
+          },
+          onStage: ({ model_id, stage, outcome }) => {
+            setLiveTurn((current) => {
+              if (!current) return current;
+              return {
+                ...current,
+                columns: current.columns.map((column) =>
+                  column.model_id === model_id
+                    ? { ...column, stages: [...column.stages, { stage, outcome }] }
+                    : column
+                ),
+              };
             });
           },
           onDelta: (modelId, text) => {
@@ -546,6 +616,8 @@ export function ChatClient() {
     } catch (error) {
       if (!controller.signal.aborted) {
         setErrorText(error instanceof ApiError ? error.messages.join(" / ") : t("chat.error.send"));
+        // 質問を保存する前に失敗したら、入力を戻して送り直せるようにする。
+        if (!started && retryContent === undefined) setComposer(content);
       }
       setLiveTurn(null);
     } finally {
@@ -578,8 +650,10 @@ export function ChatClient() {
         errorMessage: column.errorMessage,
         guardrailWarnings: column.guardrailWarnings,
         docrag: column.docrag,
+        progress: { stages: column.stages, startedAtMs: column.startedAtMs },
       }))
     : [];
+  const lastTurnId = turns.length ? turns[turns.length - 1].user.message_id : null;
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
@@ -831,6 +905,15 @@ export function ChatClient() {
                       key={turn.user.message_id}
                       user={turn.user}
                       businessViewId={businessViewId}
+                      onRetry={
+                        // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
+                        turn.user.message_id === lastTurnId &&
+                        turn.user.status !== "ERROR" &&
+                        !liveTurn &&
+                        !sending
+                          ? () => void send(turn.user.content)
+                          : undefined
+                      }
                       columns={turn.replies.map((reply) => ({
                         key: reply.message_id,
                         label: reply.model,

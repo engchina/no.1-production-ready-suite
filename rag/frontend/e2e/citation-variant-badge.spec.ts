@@ -183,8 +183,10 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   const runPanel = page.getByRole("region", { name: "検索実行" });
   await expect(runPanel).toBeVisible();
   await expect(runPanel.getByText("開始")).toBeVisible();
-  await expect(runPanel.getByText("経過")).toBeVisible();
-  const elapsed = runPanel.getByTestId("search-run-elapsed");
+  // 経過時間は共有の ProcessingIndicator で出す（#375）。
+  await expect(runPanel.getByTestId("search-run-progress")).toContainText("回答を生成しています");
+  const elapsed = runPanel.getByTestId("search-run-progress-timer");
+  await expect(elapsed).toContainText("経過時間");
   const firstElapsed = await elapsed.textContent();
   await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
 
