@@ -248,6 +248,15 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     expect(tabPanelMetrics.overflowY).toBe("auto");
     expect(tabPanelMetrics.overscrollBehaviorY).toBe("auto");
   }
+  // 抽出エクスポートの内容の表示は、右ペインの下端（左のプレビューの下端）まで伸びる（#436）。
+  const exportContent = inspectorPane.locator("pre");
+  const exportContentBox = (await exportContent.boundingBox())!;
+  const inspectorPaneBox = (await inspectorPane.boundingBox())!;
+  const bottomGap =
+    inspectorPaneBox.y + inspectorPaneBox.height - (exportContentBox.y + exportContentBox.height);
+  // 残りは枠（section）の padding と border だけ。
+  expect(bottomGap).toBeGreaterThanOrEqual(0);
+  expect(bottomGap).toBeLessThan(24);
 });
 
 test("取込解析エンジンは抽出工程行に segment parser だけを表示する", async ({
