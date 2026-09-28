@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   expectMainScrollEndsAtContent,
   expectNoPageOverflow,
+  mockAuthUser,
   mockDatabaseReady,
   mockLocalAuth,
 } from "./_helpers";
@@ -35,7 +36,6 @@ const adapterConfig = {
     post_retrieval_pipeline: null,
     generation_profile: null,
     guardrail_policy: null,
-    evaluation_suite: null,
   },
 };
 
@@ -136,6 +136,12 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
   expect(streamRequestBody).toMatchObject({ knowledge_base_ids: ["kb-1"] });
   expect(streamRequestBody).not.toHaveProperty("business_view_ids");
 
+  // 文書の詳細を開ける利用者には、引用位置（文書の詳細）へのリンクを出す。
+  await expect(page.getByRole("link", { name: "policy.pdf の引用位置を開く" })).toHaveAttribute(
+    "href",
+    /\/documents\/doc-1/
+  );
+
   // 引用プレビューを画面に留まったままドロワー(native dialog)で確認・全画面導線も保持。
   await page.getByRole("button", { name: "プレビュー" }).click();
   const dialog = page.getByRole("dialog");
@@ -209,4 +215,69 @@ test("Office 引用プレビューの降格表示では原本をダウンロー�
   await expect(
     dialog.getByRole("link", { name: "ファイルをダウンロード", exact: true })
   ).toHaveAttribute("href", /\/api\/documents\/doc-1\/content\?disposition=attachment$/);
+});
+
+// #303: 文書の詳細はワークスペース（アップロード・文書インデックス）専用の API を使う。KB の権限だけの
+// 利用者には、所属文書・引用から詳細へのリンクを出さない（押すと 403 で権限なしの画面へ飛ぶため）。
+test("文書の詳細を開けない利用者には、所属文書と引用から詳細へのリンクを出さない", async ({ page }) => {
+  await mockKbPage(page, 1);
+  await mockAuthUser(page, {
+    permissions: ["menu.knowledge_bases"],
+    allowed_knowledge_base_ids: ["kb-1"],
+  });
+  // 所属文書は `GET /api/documents?knowledge_base_id=kb-1`。ほかの文書 API は前の route へ回す。
+  await page.route("**/api/documents**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/documents" || url.searchParams.get("knowledge_base_id") !== "kb-1") {
+      return route.fallback();
+    }
+    return route.fulfill({
+      json: ok({
+        items: [
+          {
+            id: "doc-1",
+            file_name: "policy.pdf",
+            status: "INDEXED",
+            category_name: null,
+            content_type: "application/pdf",
+            file_size_bytes: 1024,
+            content_sha256: null,
+            duplicate_of_document_id: null,
+            uploaded_at: "2026-06-15T00:00:00Z",
+            indexed_at: "2026-06-15T00:05:00Z",
+            knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+            source_profile: null,
+          },
+        ],
+        total: 1,
+        limit: 10,
+        offset: 0,
+        has_next: false,
+      }),
+    });
+  });
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({ status: 200, contentType: "text/event-stream", body: searchStreamBody() })
+  );
+
+  await page.goto("/knowledge-bases/kb-1");
+
+  // 所属文書の名前は表示するが、リンクにしない。
+  const member = page.locator("li").filter({ hasText: "policy.pdf" }).first();
+  await expect(member).toBeVisible();
+  await expect(member.getByRole("link")).toHaveCount(0);
+
+  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByRole("button", { name: "検索テスト" }).click();
+  await expect(page.getByText("これはテスト回答です。")).toBeVisible();
+
+  // 引用はプレビュー（ドロワー）だけを出し、詳細へのリンク（引用位置・全画面で開く）は出さない。
+  await expect(page.getByRole("link", { name: "policy.pdf の引用位置を開く" })).toHaveCount(0);
+  await page.getByRole("button", { name: "プレビュー" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("link", { name: "全画面で開く" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "閉じる" }).click();
+  await expect(page).toHaveURL(/\/knowledge-bases\/kb-1$/);
+  await expectNoPageOverflow(page);
 });

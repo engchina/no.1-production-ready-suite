@@ -175,7 +175,6 @@ def test_run_graph_remote(monkeypatch: MonkeyPatch) -> None:
             "build_relationships": True,
             "build_claims": True,
             "build_community_summary": True,
-            "temporal": False,
         },
     )
     from rag_pipeline_core.stage import GraphStageRequest

@@ -179,6 +179,85 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    `compose_services.txt` から `parser-marker` を消してから `init_script.sh` を実行し直すか、stack を更新して Compute を作り直す。
    stack の入力 `rag_enable_parser_marker` は削除した。
 
+## 既存環境の更新手順（#310 compose の project 名の固定と parser image の作り直し）
+
+#310 で次の2点を変えた。既存のローカル環境は、旧 project のコンテナを止めてから新しい名前で作り直す。
+
+- **compose の project 名を `production-ready-rag` に固定した。** `docker-compose.yml` の top-level `name:`、
+  サービス管理（`backend/app/services/control.py` が `--project-name` / `--project-directory` を付ける）、
+  `scripts/build-services.sh`、本番の `init_script.sh` の wrapper（`rag-compose`）が同じ名前を使う。
+  以前は project 名が compose ファイルのディレクトリ名から決まり（monorepo では `rag`、archive 済みの旧 repo
+  `no.1-production-ready-rag` では `no1-production-ready-rag`）、サービス管理の「ログ」は別 project の
+  コンテナを探して空の結果を返していた。今は対象の project にコンテナが無ければ、ログ・停止・再起動は
+  エラー（HTTP 502）になる。
+- **parser-docling / parser-unstructured の cv2 を headless 版（`opencv-python-headless`）にした。**
+  GUI 版（`opencv-python`）は slim の base image に無い libxcb / libGL / glib を要し、Docling の
+  TableFormer の `import cv2` が `ImportError: libxcb.so.1` で失敗していた（全 PDF が `docling_adapter_failed`）。
+  image の作り直しが必要。parser-unstructured の apt の `libgl1` / `libglib2.0-0` も外した。
+
+### ローカル（dev: backend はホスト、parser / 前処理はコンテナ）
+
+1. 旧 project のコンテナを確認する。`com.docker.compose.project` label が `no1-production-ready-rag`（旧 repo）や
+   `rag`（#310 より前に monorepo の `rag/` で compose を使った場合）のものが対象。
+
+   ```bash
+   docker ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Status}}' \
+     | grep -E $'\t(no1-production-ready-rag|rag)\t'
+   ```
+
+2. 旧 project のコンテナを止めて削除する（dev port 18010〜18038 を新しいコンテナへ空ける）。
+   label で絞るので、別 project（例: 外部の MinerU API）のコンテナは消えない。
+
+   ```bash
+   for project in no1-production-ready-rag rag; do
+     docker ps -aq --filter "label=com.docker.compose.project=${project}" | xargs -r docker rm -f
+   done
+   ```
+
+3. 新しい project 名で image を作り、起動する（`rag/` で実行）。起動はサービス管理画面の「起動」でもよい。
+
+   ```bash
+   scripts/build-services.sh --cpu --preprocess      # image 名は production-ready-rag-<service>
+   docker compose --project-name production-ready-rag --project-directory "$PWD" \
+     -f docker-compose.yml -f docker-compose.dev.yml \
+     up -d --no-build parser-docling parser-unstructured \
+     preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-csv-to-json preprocess-excel-to-json
+   ```
+
+4. 確認する。
+   - サービス管理画面で parser-docling の「ログ」に起動ログが出る。
+   - `rag/evaluation/file-processing-fixtures/policy-ja.pdf` を Docling で解析すると成功する
+     （`curl -F file=@evaluation/file-processing-fixtures/policy-ja.pdf -F content_type=application/pdf http://127.0.0.1:18020/parse`
+     の `extraction` が `null` でなく、`warnings` に `docling_adapter_failed` / `docling_unavailable` が無い）。
+
+5. 旧 project の volume と image を片付ける（任意）。named volume と image は project 名が接頭辞になるため、
+   新しい project からは使われない。
+   - モデルキャッシュ（`no1-production-ready-rag_parser-*-model-cache`、`no1-production-ready-rag_hf-cache`）:
+     Docling のモデルは image に焼き込むため、新しい `production-ready-rag_parser-docling-model-cache` は
+     初回起動時に image の内容で初期化される（再ダウンロードは不要）。旧 volume は削除してよい。
+     MinerU / GLM-OCR などの volume は削除済みのエンジン（#270）のもの。
+   - `no1-production-ready-rag_backend-local-storage` / `no1-production-ready-rag_oci-config`: backend を
+     コンテナで動かしていた場合だけ中身がある。必要なら新しい volume へ写してから削除する。
+
+   ```bash
+   docker volume ls -q | grep '^no1-production-ready-rag_'           # 対象を確認する
+   # backend のローカル保存を引き継ぐ場合（例）
+   docker volume create production-ready-rag_backend-local-storage
+   docker run --rm -v no1-production-ready-rag_backend-local-storage:/from:ro \
+     -v production-ready-rag_backend-local-storage:/to python:3.12-slim cp -a /from/. /to/
+   docker volume ls -q | grep '^no1-production-ready-rag_' | xargs -r docker volume rm
+   docker images --format '{{.Repository}}:{{.Tag}}' | grep '^no1-production-ready-rag-' | xargs -r docker rmi
+   ```
+
+### OCI Compute（`init_script.sh` で配備した環境）
+
+project 名は以前から `production-ready-rag` なので、コンテナの作り直しは不要。parser の image だけ作り直す。
+
+```bash
+sudo rag-compose build parser-docling parser-unstructured
+sudo rag-compose up -d parser-docling parser-unstructured
+```
+
 ## 本番構成
 
 OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台で `docker-compose.yml`

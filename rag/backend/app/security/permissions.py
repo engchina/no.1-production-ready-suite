@@ -122,7 +122,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
     _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
     _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "品質評価の設定"),
-    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係検索"),
+    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
     _menu_permission(MENU_SETTINGS_AGENTIC, _GROUP_PIPELINE, "高度な検索"),
     _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace 設定"),
     _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス管理"),
@@ -226,7 +226,9 @@ def _any(*codes: str) -> frozenset[str]:
 
 # 複数の画面から使う API の許可集合。
 _DOCUMENT_WORKSPACE = _any(MENU_UPLOAD, MENU_FILE_LIST)
-# 文書の詳細・原本表示は、文書ワークスペースと引用カード（検索・チャット・KB の検索テスト）が使う。
+# 文書の要約・レシピ・原本表示は、文書ワークスペースと引用カードのプレビュー（検索・チャット・
+# KB の検索テスト）が使う。文書の詳細の画面はワークスペース専用の API も使うため、frontend は
+# `_DOCUMENT_WORKSPACE` の権限がある利用者にだけ詳細へのリンクを出す（#303）。
 _DOCUMENT_VIEW = _any(MENU_UPLOAD, MENU_FILE_LIST, MENU_SEARCH, MENU_CHAT, MENU_KNOWLEDGE_BASES)
 _KNOWLEDGE_BASE_READ = _any(
     MENU_UPLOAD,
@@ -255,6 +257,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/documents/batch-upload"): _any(MENU_UPLOAD),
     ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),
     ("GET", "/documents/stats"): _any(MENU_FILE_LIST),
+    # 削除の確認で使う（削除と同じ権限。#303）。
+    ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
     ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,

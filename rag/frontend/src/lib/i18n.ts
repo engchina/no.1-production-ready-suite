@@ -162,7 +162,7 @@ export const ja = {
   "nav.settingsVectorIndex.sidebar": "検索インデックス",
   "nav.settingsEvaluation": "品質評価",
   "nav.settingsEvaluation.sidebar": "品質評価",
-  "nav.settingsGraph": "関係検索",
+  "nav.settingsGraph": "関係情報の構築",
   "nav.settingsAgentic": "高度な検索",
   "nav.settingsModel": "モデル設定",
   "nav.settingsModel.sidebar": "モデル",
@@ -1220,6 +1220,20 @@ export const ja = {
   "fileList.bulkDelete.confirm.description":
     "原本ファイル、抽出結果、チャンク、索引、投入ジョブと segment を削除します。この操作は元に戻せません。",
   "fileList.bulkDelete.confirm.confirm": "一括削除",
+  // 正本の削除で重複文書の KB から検索対象が消えることを、削除の前に示す（#303）。
+  "fileList.delete.impact.duplicates":
+    "この文書を正本として参照する重複文書が {count} 件あります。削除すると、重複文書が所属するナレッジベース（{knowledgeBases}）の検索対象からこの内容が消えます。",
+  "fileList.delete.impact.duplicatesWithoutKnowledgeBase":
+    "この文書を正本として参照する重複文書が {count} 件あります。削除すると、重複文書が所属するナレッジベースの検索対象からこの内容が消えます。",
+  "fileList.bulkDelete.impact.duplicates":
+    "選択した文書のうち {sources} 件は、重複文書 {count} 件の正本です。削除すると、重複文書が所属するナレッジベース（{knowledgeBases}）の検索対象からその内容が消えます。",
+  "fileList.bulkDelete.impact.duplicatesWithoutKnowledgeBase":
+    "選択した文書のうち {sources} 件は、重複文書 {count} 件の正本です。削除すると、重複文書が所属するナレッジベースの検索対象からその内容が消えます。",
+  "fileList.delete.impact.restoreHint":
+    "重複文書は残ります。検索対象に戻すには、重複文書のファイル準備を実行してください。",
+  "fileList.delete.impact.moreKnowledgeBases": "{names} ほか {count} 件",
+  "fileList.delete.impact.loadFailed": "削除の影響を確認できませんでした。",
+  "fileList.delete.impact.loadFailedHint": "接続を確認してから、もう一度削除を実行してください。",
   "fileList.bulkDelete.toast.deleted": "{count} 件のドキュメントを削除しました。",
   "fileList.bulkDelete.toast.partial":
     "{deleted}/{total} 件を削除しました。削除できなかったドキュメントがあります。",
@@ -1394,7 +1408,6 @@ export const ja = {
   "businessViews.field.grounding": "根拠確認",
   "businessViews.field.generation": "回答スタイル",
   "businessViews.field.guardrail": "安全チェック",
-  "businessViews.field.evaluation": "品質評価",
   "businessViews.inherit": "グローバル既定を継承",
   "businessViews.override": "業務ビューで上書き",
   "businessViews.actions.create": "作成する",

@@ -81,7 +81,8 @@ def test_ocr_engine_without_entry_point_falls_back(monkeypatch: pytest.MonkeyPat
 
     assert result.extraction is None
     assert result.fallback_used is True
-    assert "mineru_adapter_failed" in result.warnings
+    # 失敗の warning には例外の型名が付く(#310)。code は ``:`` の前。
+    assert [w.partition(":")[0] for w in result.warnings] == ["mineru_adapter_failed"]
 
 
 def test_mineru_cli_fallback_reads_generated_markdown(
@@ -288,7 +289,8 @@ def test_external_adapter_failure_logs_traceback(
         )
 
     assert result.extraction is None
-    assert result.warnings == ("dots_ocr_adapter_failed",)
+    # 例外の型名だけを添え、メッセージ("boom")は warning に載せない(#310)。
+    assert result.warnings == ("dots_ocr_adapter_failed: RuntimeError",)
     record = next(
         item for item in caplog.records if item.message == "external parser adapter failed"
     )

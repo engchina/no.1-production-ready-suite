@@ -3495,6 +3495,46 @@ class OracleClient:
             knowledge_base_id=knowledge_base_id,
         )
 
+    async def list_duplicate_documents(self, document_ids: Sequence[str]) -> list[DocumentSummary]:
+        """指定した正本を参照する重複文書を、所属 KB 付きで返す（削除の影響の確認。#303）。
+
+        正本の削除は利用者の範囲外の複製の参照も外すため、複製は tenant だけで絞る。
+        所属 KB は利用者が見られるものだけを付ける。
+        """
+        unique_document_ids = _unique_optional_sequence(document_ids)
+        if not unique_document_ids:
+            return []
+        document_filter_sql, document_binds = _oracle_in_predicate(
+            "duplicate_of_document_id",
+            "duplicate_of_document_id",
+            unique_document_ids,
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                document_id,
+                file_name,
+                status,
+                content_type,
+                file_size_bytes,
+                content_sha256,
+                duplicate_of_document_id,
+                uploaded_at,
+                indexed_at
+            FROM rag_documents
+            WHERE {document_filter_sql}
+              AND {tenant_sql}
+            ORDER BY uploaded_at DESC, document_id DESC
+            """,
+                document_filter_sql=document_filter_sql,
+                tenant_sql=_oracle_tenant_predicate(),
+            ),
+            _with_tenant_bind(document_binds),
+        )
+        summaries = [_to_document_summary(_stored_document_from_row(row)) for row in rows]
+        return await self._attach_knowledge_base_refs_to_documents(summaries)
+
     async def list_document_extractions(self) -> list[dict[str, object]]:
         """アクセス可能な document の extraction JSON だけを返す。"""
         return await self._list_document_extractions_with_oracle()

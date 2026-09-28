@@ -314,6 +314,45 @@ async def test_document_queries_are_unrestricted_without_knowledge_base_scope() 
 
 
 @pytest.mark.anyio
+async def test_duplicate_documents_count_all_but_show_only_allowed_knowledge_bases() -> None:
+    """削除の影響（#303）は範囲外の複製も数え、所属 KB は利用者が見られるものだけを返す。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "dup-1",
+                    "file_name": "duplicate.txt",
+                    "status": "UPLOADED",
+                    "duplicate_of_document_id": "doc-1",
+                    "uploaded_at": datetime(2026, 9, 1, tzinfo=UTC),
+                }
+            ],
+            [{"document_id": "dup-1", "knowledge_base_id": "kb-1", "name": "社内規程"}],
+        ]
+    )
+    with _scope(knowledge_base_ids={"kb-1"}):
+        duplicates = await _client(pool).list_duplicate_documents(["doc-1", "doc-1"])
+
+    assert [(item.id, item.duplicate_of_document_id) for item in duplicates] == [("dup-1", "doc-1")]
+    assert [ref.id for ref in duplicates[0].knowledge_bases] == ["kb-1"]
+    duplicate_call, knowledge_base_call = pool.connection.calls
+    assert "duplicate_of_document_id IN (:duplicate_of_document_id_0)" in (duplicate_call.statement)
+    assert duplicate_call.parameters["duplicate_of_document_id_0"] == "doc-1"
+    assert "scope_dkb" not in duplicate_call.statement
+    assert "access_knowledge_base_id_0" not in duplicate_call.parameters
+    assert "kb.knowledge_base_id IN (:access_knowledge_base_id_0)" in (
+        knowledge_base_call.statement
+    )
+
+
+@pytest.mark.anyio
+async def test_duplicate_documents_skip_query_without_ids() -> None:
+    pool = FakeOraclePool(execute_results=[])
+    assert await _client(pool).list_duplicate_documents([]) == []
+    assert pool.connection.calls == []
+
+
+@pytest.mark.anyio
 async def test_ingestion_jobs_are_scoped_through_documents() -> None:
     pool = FakeOraclePool(execute_results=[[]])
     with _scope(knowledge_base_ids={"kb-1"}):

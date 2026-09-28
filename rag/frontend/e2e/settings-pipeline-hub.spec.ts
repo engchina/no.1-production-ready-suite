@@ -23,6 +23,12 @@ test("検索・回答設定の概要ハブが工程をフェーズ別カード�
     "href",
     "/settings/retrieval"
   );
+  // 関係情報の工程は取込時の構築の設定なので「関係情報の構築」の名前でナレッジ構築フェーズに並ぶ(#301)。
+  await expect(
+    page
+      .getByRole("region", { name: "ナレッジ構築" })
+      .getByRole("link", { name: "関係情報の構築 の設定を開く" })
+  ).toHaveAttribute("href", "/settings/graph");
 
   // カードから実際に詳細設定へ遷移できる。
   await page.getByRole("link", { name: "文書分割 の設定を開く" }).click();

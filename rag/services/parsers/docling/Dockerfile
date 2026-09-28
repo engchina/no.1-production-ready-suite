@@ -16,13 +16,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 COPY packages/rag_parser_core /build/packages/rag_parser_core
 COPY packages/docrag_core /build/packages/docrag_core
 WORKDIR /build/services/parsers/docling
-COPY services/parsers/docling/pyproject.toml services/parsers/docling/README.md ./
-RUN uv sync --no-install-project \
+# uv.lock も入れて --locked で同期する(lock と違う依存を image へ入れない)。
+COPY services/parsers/docling/pyproject.toml services/parsers/docling/uv.lock services/parsers/docling/README.md ./
+RUN uv sync --locked --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /tmp/uv-cache /home/appuser/.cache \
     && chown -R appuser:appuser /tmp/uv-cache /home/appuser/.cache /build
 
 COPY --chown=appuser:appuser services/parsers/docling/app ./app
+
+# cv2 は headless 版だけを入れ、GUI の OS ライブラリ(libxcb / libGL / glib)を apt で入れない(#310)。
+# TableFormer と RapidOCR が import できない image は build の時点で失敗させる。
+RUN uv run --no-sync python -c "import cv2, rapidocr, docling_ibm_models.tableformer.data_management.tf_predictor"
 
 EXPOSE 8000
 USER appuser
