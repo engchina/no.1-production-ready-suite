@@ -39,6 +39,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
+  RowTitleButton,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -1381,9 +1382,11 @@ function FeedbackEntriesList({
       className: "align-top",
       headerClassName: "w-[42%] uppercase",
       render: (entry, index) => (
-        <button
-          type="button"
-          className="block w-full rounded-sm text-left text-fg underline-offset-2 hover:text-accent-fg"
+        <RowTitleButton
+          title={entry.content || "-"}
+          // 長い質問は 3 行で切り詰め、全文はホバー・フォーカスの Tooltip と右の詳細で見せる。
+          maxLines={3}
+          current={index === selectedIndex}
           aria-label={t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           })}
@@ -1391,9 +1394,7 @@ function FeedbackEntriesList({
             event.stopPropagation();
             onSelect(index);
           }}
-        >
-          <span className="line-clamp-3 break-words">{entry.content || "-"}</span>
-        </button>
+        />
       ),
     },
     {

@@ -174,6 +174,65 @@ test("375pxでは一覧と詳細を縦に積み、カードを選ぶと詳細へ
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-mobile.png"), fullPage: true });
 });
 
+test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Enter / Space で選び、選んだ対象を aria-current で伝える", async ({ page }, testInfo) => {
+  // #421: RAG の EntityLayout の RowTitleButton を packages/ui の共有部品へ移した。
+  await mockFeedback(page, []);
+  await page.goto("/feedback?period=30&sort=newest&size=25&page=1");
+  await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
+
+  const answerButton = page.getByRole("button", { name: "最新の経費申請期限を教えて の詳細を表示" });
+  const citationButton = page.getByRole("button", { name: "申請期限を確認したい の詳細を表示" });
+  await expect(answerButton).toBeVisible();
+  await expect(answerButton).toHaveAttribute("data-row-title-button", "");
+  await expect(answerButton).not.toHaveAttribute("aria-current", /.*/);
+
+  // Tab で届く（行そのものはフォーカスを受けず、題名のボタンが選ぶ導線）。
+  await answerButton.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(answerButton).toBeFocused();
+  // フォーカスの表示は outline 1 つ（2px、ring なし。#355）。
+  const focusStyle = await answerButton.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, boxShadow: style.boxShadow };
+  });
+  expect(focusStyle.outlineStyle).toBe("solid");
+  expect(focusStyle.outlineWidth).toBe("2px");
+  expect(focusStyle.boxShadow).toBe("none");
+
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/feedback=feedback-answer/);
+  await expect(answerButton).toHaveAttribute("aria-current", "true");
+
+  await citationButton.focus();
+  await page.keyboard.press("Space");
+  await expect(page).toHaveURL(/feedback=feedback-citation/);
+  await expect(citationButton).toHaveAttribute("aria-current", "true");
+  await expect(answerButton).not.toHaveAttribute("aria-current", /.*/);
+
+  if (testInfo.project.name === "desktop") {
+    // desktop は表の行と題名のボタンの両方が「現在の項目」。ホバーで題名に下線を引く。
+    await expect(page.getByTestId("feedback-row-feedback-citation")).toHaveAttribute("aria-current", "true");
+    await answerButton.hover();
+    await expect(answerButton.locator("span").first()).toHaveCSS("text-decoration-line", "underline");
+  } else {
+    // 375px のカード一覧（Pixel 5 = タッチ端末）: カードと題名のボタンが「現在の項目」。
+    await expect(page.locator("main li[aria-current='true']")).toContainText("申請期限を確認したい");
+    // タッチ端末では見た目を変えずに当たり判定を縦 44px 以上に広げる（pr-touch-target、#364）。
+    const hit = await answerButton.evaluate((node) => {
+      node.scrollIntoView({ block: "center" });
+      const rect = node.getBoundingClientRect();
+      const reach = Math.max(0, (44 - rect.height) / 2) - 1;
+      const above = document.elementFromPoint(rect.left + rect.width / 2, rect.top - reach);
+      return { height: rect.height, hitsSelf: reach <= 0 || node.contains(above) };
+    });
+    expect(hit.hitsSelf).toBe(true);
+    expect(hit.height).toBeLessThan(44);
+    await expectNoPageOverflow(page);
+  }
+  await page.screenshot({ path: testInfo.outputPath(`feedback-row-title-${testInfo.project.name}.png`), fullPage: true });
+});
+
 test("回答のフィードバックを詳細から Approved FAQ に登録し、品質評価のケースに追加できる", async ({ page }) => {
   await mockFeedback(page, []);
   await page.route("**/api/feedback/feedback-answer", (route) => {

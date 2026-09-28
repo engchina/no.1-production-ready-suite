@@ -36,6 +36,7 @@ import {
   ExecutionConfirmationField,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  RowTitleButton,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -420,18 +421,15 @@ function ProfileList({
               sortable: true,
               className: "align-top",
               render: (profile) => (
-                <button
-                  type="button"
-                  className="grid max-w-full text-left"
-                  aria-current={profile.id === selectedProfileId ? "true" : undefined}
+                <RowTitleButton
+                  // 375px では名前列が狭く、区切りのない名前（PROFILE_EMP 等）の min-content が隣の列へはみ出すため、
+                  // `_` の位置を優先して折り返し、最後の手段として任意位置で折り返す。
+                  title={<IdentifierText value={profile.name} />}
+                  subtitle={<span className="line-clamp-2">{profile.category || "-"}</span>}
+                  current={profile.id === selectedProfileId}
                   aria-label={t("profiles.action.selectProfile", { name: profile.name })}
                   onClick={() => onSelect(profile)}
-                >
-                  {/* 375px では名前列が狭く、区切りのない名前（PROFILE_EMP 等）の min-content が隣の列へはみ出すため、
-                      `_` の位置を優先して折り返し、最後の手段として任意位置で折り返す。 */}
-                  <IdentifierText value={profile.name} className="font-semibold text-accent-fg" />
-                  <span className="line-clamp-2 text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{profile.category || "-"}</span>
-                </button>
+                />
               ),
             },
             {

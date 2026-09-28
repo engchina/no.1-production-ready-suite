@@ -66,6 +66,7 @@ import {
   type PageHeaderAction,
   type StatusVariant,
   PageBody,
+  RowTitleButton,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -101,7 +102,6 @@ import {
   AgentSplitPane,
   EditorBreadcrumbs,
   MissingEditorTarget,
-  RowTitleButton,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import { useEditorRoute } from "@/lib/editor-route";
@@ -2007,7 +2007,9 @@ export function MemoryPage() {
       rowHeader: true,
       render: (entry) => (
         <RowTitleButton
-          title={entry.content.length > 80 ? `${entry.content.slice(0, 80)}…` : entry.content}
+          // 長い記憶は 2 行で切り詰め、全文はホバー・フォーカスの Tooltip と右の詳細で見せる（#421）。
+          title={entry.content}
+          maxLines={2}
           subtitle={formatDate(entry.created_at)}
           current={entry.id === selectedEntry?.id}
           onClick={() => setSelectedEntryId(entry.id)}

@@ -2,7 +2,14 @@
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
 import { Children, useId, useState, type ReactNode } from "react";
 import { Search, type LucideIcon } from "lucide-react";
-import { FixedSplitPane, TextField, cn, type FixedSplitWidePane } from "@engchina/production-ready-ui";
+import {
+  FixedSplitPane,
+  RowTitleButton,
+  TextField,
+  cn,
+  type FixedSplitWidePane,
+  type RowTitleButtonProps,
+} from "@engchina/production-ready-ui";
 
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
@@ -286,8 +293,26 @@ export function SecurityDetailField({ label, children }: { label: string; childr
 }
 
 /**
+ * 一覧の行の題名のボタン（共有の `RowTitleButton`、#421）に、ID と表示名の 2 段表示を載せたもの。
+ * 1 行目 = ID（主表示・mono）、2 行目 = 表示名（muted。ID と同じなら出さない）。選択の見た目は行が持つ。
+ */
+export function SecurityIdentityRowTitleButton({
+  id,
+  name,
+  ...props
+}: { id: string; name?: string | null } & Omit<RowTitleButtonProps, "title" | "subtitle">) {
+  return (
+    <RowTitleButton
+      {...props}
+      title={<span className="break-all font-mono">{id}</span>}
+      subtitle={identitySecondaryName(id, name) || undefined}
+    />
+  );
+}
+
+/**
  * ID/コードと表示名の 2 段表示。1 行目 = ID（主表示・mono）、2 行目 = 表示名（muted）。
- * 文字色は親（通常 `text-fg`、選択行は `text-accent-fg`）を継承する。
+ * 文字色は親を継承する。一覧の行の題名には `SecurityIdentityRowTitleButton` を使う。
  */
 export function SecurityIdentityLines({
   id,

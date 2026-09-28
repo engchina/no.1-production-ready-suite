@@ -8975,6 +8975,9 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   });
   await selectedEntryButton.click();
   await expect(selectedEntryButton.locator("xpath=ancestor::tr")).toHaveAttribute("aria-current", "true");
+  // 共有 RowTitleButton（#421）: 題名のボタンも「現在の項目」、長い質問は 3 行で切り詰める。
+  await expect(selectedEntryButton).toHaveAttribute("aria-current", "true");
+  await expect(selectedEntryButton.locator("span").first()).toHaveCSS("-webkit-line-clamp", "3");
   const selectedEntryDetail = page.getByTestId("feedback-management-entry-detail");
   await expect(selectedEntryDetail).toContainText("select ai showsql 請求金額を確認したい");
   await expect(page.getByTestId("feedback-management-entry-sql")).toContainText(

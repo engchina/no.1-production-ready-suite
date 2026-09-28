@@ -310,13 +310,18 @@ export interface TooltipProps {
   placement?: TooltipPlacement;
   /** true で出さない（`aria-describedby` の結び付けも外す）。 */
   disabled?: boolean;
+  /**
+   * false で説明として結び付けない（吹き出しは `aria-hidden`）。読み上げ名に同じ内容が既に入っているとき
+   * （切り詰めた対象名の全文を見せる `RowTitleButton` など）に使う。既定は読み上げ名と文言が違えば結び付ける。
+   */
+  describe?: boolean;
 }
 
 /**
  * アイコンだけのボタンなどに、ホバーとキーボードのフォーカスで短い説明を出す。
  * アイコンだけの `Button`（`iconOnly`）は既定で `aria-label` と同じ文言を出すので、通常は直接使わない。
  */
-export function Tooltip({ content, children, placement = "top", disabled = false }: TooltipProps) {
+export function Tooltip({ content, children, placement = "top", disabled = false, describe = true }: TooltipProps) {
   const id = useId();
   const isClient = useIsClient();
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -335,7 +340,7 @@ export function Tooltip({ content, children, placement = "top", disabled = false
     });
   }
   const controller = controllerRef.current;
-  const describes = !disabled && tooltipDescribesTrigger(content, children.props["aria-label"]);
+  const describes = !disabled && describe && tooltipDescribesTrigger(content, children.props["aria-label"]);
   const open = state.open && !disabled;
 
   useEffect(() => () => controller.dispose(), [controller]);

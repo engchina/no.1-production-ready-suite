@@ -34,6 +34,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
+  RowTitleButton,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -655,18 +656,15 @@ export function DbSingleObjectPickerList({
         const selectionDisabled = Boolean(selectDisabled?.(item));
         return (
           <div className="grid min-w-0 gap-1">
-            <button
-              type="button"
-              aria-current={selected ? "true" : undefined}
+            <RowTitleButton
+              title={<DbObjectName value={item.name} size="xs" />}
+              subtitle={<DbObjectCommentText id={commentId} comment={item.comment} />}
+              current={selected}
               aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
               aria-describedby={commentId}
               disabled={selectionDisabled}
-              className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left disabled:cursor-not-allowed md:min-h-0"
               onClick={() => onSelect(item)}
-            >
-              <DbObjectName value={item.name} size="xs" interactive />
-              <DbObjectCommentText id={commentId} comment={item.comment} />
-            </button>
+            />
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted md:hidden" data-testid="db-object-picker-row-meta">
               {item.kindLabel ? <StatusBadge icon={false} variant={item.kindVariant ?? "neutral"} label={item.kindLabel} /> : null}
               <span className="whitespace-nowrap font-sans text-fg">{item.rowCountLabel || "-"}</span>
@@ -1071,17 +1069,14 @@ export function DbObjectGrid({
                 const qualifiedName = formatDbObjectName(item);
                 const commentId = `${idPrefix}-comment-${index}`;
                 return (
-                  <button
-                    type="button"
+                  <RowTitleButton
+                    title={<DbObjectName value={qualifiedName} size="xs" />}
+                    subtitle={showComments ? <DbObjectCommentText id={commentId} comment={item.comment} /> : undefined}
+                    current={qualifiedName === selectedName}
                     aria-label={labels.showObject(qualifiedName)}
                     aria-describedby={showComments ? commentId : undefined}
-                    aria-current={qualifiedName === selectedName ? "true" : undefined}
-                    className="grid max-w-full text-left"
                     onClick={() => onSelect(qualifiedName)}
-                  >
-                    <DbObjectName value={qualifiedName} size="xs" interactive />
-                    {showComments && <DbObjectCommentText id={commentId} comment={item.comment} />}
-                  </button>
+                  />
                 );
               },
             },

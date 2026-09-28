@@ -36,12 +36,13 @@ test("ユーザー / ロール / DeepSec の名前と ID の組は ID 先の共�
   const roles = sharedSource("RoleManagementPage.tsx");
   const deepsec = source("SecurityDeepSecPage.tsx");
 
-  assert.match(users, /<SecurityIdentityLines id=\{user\.login_user_id\} name=\{user\.display_name\} \/>/u);
+  // 一覧の行の題名は共有の RowTitleButton に ID と表示名を載せた SecurityIdentityRowTitleButton（#421）。
+  assert.match(users, /<SecurityIdentityRowTitleButton\s+id=\{user\.login_user_id\}\s+name=\{user\.display_name\}/u);
   assert.match(users, /<SecurityIdentityLines id=\{role\.role_code\} name=\{role\.display_name\} \/>/u);
   assert.match(users, /compareText\(left\.login_user_id, right\.login_user_id, sort\.direction\)/u);
   assert.doesNotMatch(users, /compareText\(left\.display_name/u);
 
-  assert.match(roles, /<SecurityIdentityLines id=\{role\.role_code\} name=\{role\.display_name\} \/>/u);
+  assert.match(roles, /<SecurityIdentityRowTitleButton\s+id=\{role\.role_code\}\s+name=\{role\.display_name\}/u);
   assert.match(roles, /compareText\(left\.role_code, right\.role_code, sort\.direction\)/u);
   assert.doesNotMatch(roles, /compareText\(left\.display_name/u);
 

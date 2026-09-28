@@ -37,45 +37,6 @@ export function EditorBreadcrumbs({
   );
 }
 
-/**
- * 一覧の行の先頭セルに置く対象名のボタン。行のクリックと同じ「開く / 選ぶ」をキーボードでも行えるようにする
- * （UX 契約 page-archetypes.md §0-7。選択だけの導線は RowActionMenu に入れない）。
- * 情報一覧の選択行の構造コントロールなので、アクションボタン（共有 Button）の適用除外として生の button を使う。
- */
-export function RowTitleButton({
-  title,
-  subtitle,
-  onClick,
-  ariaLabel,
-  dataAttributes,
-}: {
-  title: string;
-  subtitle?: ReactNode;
-  onClick: () => void;
-  ariaLabel?: string;
-  /** フォーカスを戻す先を探すための `data-*` 属性。 */
-  dataAttributes?: Record<`data-${string}`, string>;
-}) {
-  return (
-    <button
-      {...dataAttributes}
-      type="button"
-      onClick={onClick}
-      aria-label={ariaLabel}
-      className="block min-w-0 max-w-full cursor-pointer rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-    >
-      <span className="block break-words text-sm font-medium leading-5 text-fg underline-offset-2 hover:underline [overflow-wrap:anywhere]">
-        {title}
-      </span>
-      {subtitle ? (
-        <span className="mt-0.5 block break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
-          {subtitle}
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
 /** URL の `?id=` の対象が無いときの説明。黙って別の対象に置き換えず、一覧へ戻る導線を出す。 */
 export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => void }) {
   return (

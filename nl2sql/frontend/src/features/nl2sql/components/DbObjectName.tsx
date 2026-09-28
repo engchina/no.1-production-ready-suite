@@ -14,8 +14,9 @@ type DbObjectNameProps = {
   /** 一覧・バッジは xs、文中は sm、見出しは base。 */
   size?: DbObjectNameSize;
   /**
-   * 押せる要素（選択ボタン・リンク）の中に置くときだけ true にする。
+   * 押せる要素（選択肢・チェックボックスのラベル・リンク）の中に置くときだけ true にする。
    * accent 色は「押せる」ことを示すため、見出し・バッジ・確認ダイアログ・結果表示では使わない。
+   * 一覧の行の題名（共有の `RowTitleButton`）の中では使わない（3 製品で題名の色をそろえる。#421）。
    */
   interactive?: boolean;
   /**

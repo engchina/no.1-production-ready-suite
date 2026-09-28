@@ -58,6 +58,7 @@ import {
   SecurityPanelHeader,
   SecuritySearchField,
   describeErrorMessageOnly,
+  SecurityIdentityRowTitleButton,
   identitySecondaryName,
   isAbortError,
   mapFieldErrors,
@@ -712,21 +713,17 @@ export function UserManagementPage({
       render: (user) => {
         const selected = visibleSelectedId === user.user_uuid;
         return (
-          <button
-            type="button"
-            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              selected ? "text-accent-fg" : "text-fg"
-            }`}
+          <SecurityIdentityRowTitleButton
+            id={user.login_user_id}
+            name={user.display_name}
+            current={selected}
             aria-label={t("security.users.showUser", { name: user.login_user_id })}
-            aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
               selectUser(user.user_uuid);
             }}
-          >
-            <SecurityIdentityLines id={user.login_user_id} name={user.display_name} />
-          </button>
+          />
         );
       },
     },

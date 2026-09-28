@@ -7041,9 +7041,10 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
         const bar = firstCellShadow.match(/(rgba?\([^)]*\)) [\d.]+px 0px 0px 0px inset/);
         return {
           // 1 行目 = ID/コード（mono）、2 行目 = 表示名（muted）の順で描画する（#584）。
-          firstLineIsCode: button.firstElementChild?.classList.contains("font-mono") ?? false,
-          name: contrast(rgb(getComputedStyle(button.querySelector(":scope > span:not(.font-mono)")!).color), rowBg),
-          code: contrast(rgb(getComputedStyle(button.querySelector(":scope > span.font-mono")!).color), rowBg),
+          // 共有 RowTitleButton（#421）の題名の枠の中に ID、補足の枠に表示名を置く。
+          firstLineIsCode: button.firstElementChild?.querySelector(".font-mono") != null,
+          name: contrast(rgb(getComputedStyle(button.querySelector(":scope > span:nth-of-type(2)")!).color), rowBg),
+          code: contrast(rgb(getComputedStyle(button.querySelector("span.font-mono")!).color), rowBg),
           body: contrast(rgb(getComputedStyle(row).color), rowBg),
           bar: bar ? contrast(rgb(bar[1]), rowBg) : 0,
           rowBgLuminance: luminance(rowBg),
