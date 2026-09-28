@@ -201,8 +201,7 @@ class _FakeOracleCursor:
                 if self.db.synthetic_function_signature_failures > 0:
                     self.db.synthetic_function_signature_failures -= 1
                     raise RuntimeError(
-                        'ORA-00904: "DBMS_CLOUD_AI"."GENERATE_SYNTHETIC_DATA": '
-                        "invalid identifier"
+                        'ORA-00904: "DBMS_CLOUD_AI"."GENERATE_SYNTHETIC_DATA": invalid identifier'
                     )
                 self._row = ("operation-001",)
             else:
@@ -213,8 +212,7 @@ class _FakeOracleCursor:
                 raise RuntimeError("ORA-20046: Invalid profile")
             if self.db.run_team_calls <= self.db.run_team_signature_failures:
                 raise RuntimeError(
-                    "ORA-06553: PLS-306: wrong number or types of arguments "
-                    "in call to 'RUN_TEAM'"
+                    "ORA-06553: PLS-306: wrong number or types of arguments in call to 'RUN_TEAM'"
                 )
             self._row = ('{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES"}',)
         elif "DBMS_CLOUD_AI_AGENT.RUN_TOOL" in normalized_sql:
@@ -3929,8 +3927,7 @@ def test_service_select_ai_feedback_missing_table_returns_warning() -> None:
     assert entries.runtime == "oracle"
     assert entries.items == []
     assert entries.warnings == [
-        "Select AI feedback vector table が未作成です。"
-        "feedback vector index を再構築してください。"
+        "Select AI feedback vector table が未作成です。feedback vector index を再構築してください。"
     ]
     assert "DEFAULT_FEEDBACK_VECINDEX$VECTAB" not in " ".join(entries.warnings)
 

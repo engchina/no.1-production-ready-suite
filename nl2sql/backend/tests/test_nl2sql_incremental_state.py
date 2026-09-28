@@ -1220,9 +1220,7 @@ def test_enterprise_ai_direct_deterministic_fallback_uses_incremental_schema_sna
     )
     service = _incremental_service(repository)
     service._catalog = SchemaCatalog(refreshed_at="legacy-empty", tables=[])  # noqa: SLF001
-    service._enterprise_ai_client = _FakeEnterpriseAiClient(
-        "説明だけで SQL はありません。"
-    )  # noqa: SLF001
+    service._enterprise_ai_client = _FakeEnterpriseAiClient("説明だけで SQL はありません。")  # noqa: SLF001
 
     preview = service.preview(
         PreviewRequest(

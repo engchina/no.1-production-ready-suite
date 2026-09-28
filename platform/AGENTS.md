@@ -100,6 +100,6 @@ npm ci && npm run typecheck && npm test && npm run build
 # backend (production-ready-backend-core)
 cd packages/backend_core
 uv sync --locked --dev
-uv run black --check . && uv run ruff check . && uv run mypy src
+uv run ruff format --check . && uv run ruff check . && uv run mypy src
 uv run pytest --cov=pr_backend_core && uv run bandit -r src && uv run pip-audit
 ```

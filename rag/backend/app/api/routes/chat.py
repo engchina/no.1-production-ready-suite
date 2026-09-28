@@ -365,9 +365,12 @@ async def _prepare_chat_turn(
         top_k=request.top_k,
         business_view_ids=[business_view_id],
     )
-    effective_request, effective_settings, _applied_kb, _applied_view = (
-        await _resolve_query_context(base_request, settings)
-    )
+    (
+        effective_request,
+        effective_settings,
+        _applied_kb,
+        _applied_view,
+    ) = await _resolve_query_context(base_request, settings)
     guardrails = GuardrailPolicy(effective_settings)
     query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。

@@ -14,8 +14,7 @@ from app.features.nl2sql.ontology_sql_validation import expression_in_query
 @pytest.mark.parametrize(
     "sql",
     [
-        'SELECT "o".ID, SUM("o".AMOUNT) FROM APP.ORDERS "o" '
-        'WHERE "o".AMOUNT > 0 GROUP BY "o".ID',
+        'SELECT "o".ID, SUM("o".AMOUNT) FROM APP.ORDERS "o" WHERE "o".AMOUNT > 0 GROUP BY "o".ID',
         'SELECT "Mixed Case".ID, SUM("Mixed Case".AMOUNT) FROM APP.ORDERS "Mixed Case" '
         'WHERE "Mixed Case".AMOUNT > 0 GROUP BY "Mixed Case".ID',
         "WITH src AS (SELECT ID, AMOUNT FROM APP.ORDERS) "

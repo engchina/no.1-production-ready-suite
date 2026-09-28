@@ -247,7 +247,7 @@ def _assert_schema_refresh_owner(
 
 def _lock_schema_refresh_owner(cursor: Any, expected: SchemaRefreshJob) -> None:
     cursor.execute(
-        "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS " "WHERE JOB_ID = :job_id FOR UPDATE",
+        "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS WHERE JOB_ID = :job_id FOR UPDATE",
         {"job_id": expected.job_id},
     )
     row = cursor.fetchone()
@@ -1396,8 +1396,7 @@ class OracleIncrementalNl2SqlRepository:
         try:
             with self._connection_factory() as connection, connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT VERSION_NO FROM NL2SQL_SCHEMA_MIGRATIONS "
-                    "WHERE VERSION_NO IN (3, 5, 6)"
+                    "SELECT VERSION_NO FROM NL2SQL_SCHEMA_MIGRATIONS WHERE VERSION_NO IN (3, 5, 6)"
                 )
                 rows = cursor.fetchall()
         except Exception as exc:
@@ -1484,8 +1483,7 @@ class OracleIncrementalNl2SqlRepository:
                 )
                 count_binds["query"] = binds["query"]
             db_cursor.execute(
-                "SELECT COUNT(*) FROM NL2SQL_PROFILES WHERE "
-                + " AND ".join(count_where),  # nosec B608
+                "SELECT COUNT(*) FROM NL2SQL_PROFILES WHERE " + " AND ".join(count_where),  # nosec B608
                 count_binds,
             )
             count_row = db_cursor.fetchone()
@@ -1595,7 +1593,7 @@ class OracleIncrementalNl2SqlRepository:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
                 cursor.execute(
-                    "SELECT ETAG FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id " "FOR UPDATE",
+                    "SELECT ETAG FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id FOR UPDATE",
                     {"profile_id": profile_id},
                 )
                 current = cursor.fetchone()
@@ -2570,9 +2568,7 @@ class OracleIncrementalNl2SqlRepository:
             )
             filter_binds[bind_name] = value
         count_predicate = " AND ".join(where)
-        count_sql = (
-            f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
-        )
+        count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         page_binds = dict(filter_binds)
         sort_expr = _state_document_sort_sql(collection)
         if decoded:

@@ -69,11 +69,13 @@ def test_chunk_text_adds_section_and_content_metadata() -> None:
 
 def test_structured_extraction_infers_elements_from_raw_text() -> None:
     """raw_text だけでも title/list/table 要素へ軽量正規化する。"""
-    extraction = StructuredExtraction(raw_text="""# 経費申請
+    extraction = StructuredExtraction(
+        raw_text="""# 経費申請
 - 部門長が承認します。
 |項目|条件|
 |期限|月末|
-""")
+"""
+    )
 
     assert [element.kind for element in extraction.elements] == [
         "title",
@@ -88,7 +90,8 @@ def test_structured_extraction_infers_elements_from_raw_text() -> None:
 
 def test_structured_extraction_infers_code_and_equation_blocks() -> None:
     """Markdown/LaTeX block を code/equation element として保持する。"""
-    extraction = StructuredExtraction(raw_text="""# 実装メモ
+    extraction = StructuredExtraction(
+        raw_text="""# 実装メモ
 ```python
 def answer() -> int:
     return 42
@@ -97,7 +100,8 @@ def answer() -> int:
 $$
 E = mc^2
 $$
-""")
+"""
+    )
 
     assert [element.kind for element in extraction.elements] == [
         "title",
@@ -423,13 +427,7 @@ def test_chunk_extraction_repeats_table_header_for_row_group_chunks() -> None:
             DocumentElement(kind="title", text="## 経費明細", page_number=1),
             DocumentElement(
                 kind="table",
-                text=(
-                    "|項目|金額|\n"
-                    "|---|---|\n"
-                    "|交通費|1000円|\n"
-                    "|宿泊費|2000円|\n"
-                    "|会議費|3000円|"
-                ),
+                text=("|項目|金額|\n|---|---|\n|交通費|1000円|\n|宿泊費|2000円|\n|会議費|3000円|"),
                 page_number=1,
                 metadata={
                     "element_id": "tbl-expenses",

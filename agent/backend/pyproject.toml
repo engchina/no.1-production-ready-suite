@@ -29,7 +29,6 @@ dev = [
   "pytest-cov>=6.0",
   "pytest-xdist>=3.8",
   "ruff>=0.9",
-  "black>=25.1",
   "mypy>=1.14",
   "bandit>=1.8",
   "pip-audit>=2.9",
@@ -55,9 +54,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
-[tool.black]
-line-length = 100
-target-version = ["py312"]
+# 整形（#345）。black と同じ既定（二重引用符・空白の字下げ・magic trailing comma を尊重）にそろえる。
+# 行の長さは [tool.ruff] の line-length を共有する。
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.12"

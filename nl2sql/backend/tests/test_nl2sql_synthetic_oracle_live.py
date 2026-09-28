@@ -161,6 +161,4 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
     finally:
         with adapter.connection() as conn, conn.cursor() as cur:
             for name in reversed(created):
-                cur.execute(
-                    f"DROP TABLE {name} CASCADE CONSTRAINTS PURGE"
-                )  # nosec B608 - generated name
+                cur.execute(f"DROP TABLE {name} CASCADE CONSTRAINTS PURGE")  # nosec B608 - generated name

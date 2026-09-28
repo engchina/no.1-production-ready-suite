@@ -882,7 +882,8 @@ async def test_restore_recipe_status_after_cancel_returns_to_state_before_phase(
 
     job = _recipe_job(phase, IngestionJobStatus.CANCELLED)
     await documents_route._restore_recipe_status_after_cancel(
-        RestoreOracle(), job  # type: ignore[arg-type]
+        RestoreOracle(),  # type: ignore[arg-type]
+        job,
     )
 
     assert recorded["recipe_id"] == "recipe-1"

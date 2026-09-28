@@ -128,12 +128,8 @@ def test_bare_unquoted_name_does_not_match_quoted_catalog_table() -> None:
     quoted_only = _service(_table("SH", "Mixed_Case"), current_owner="APP")
 
     # 引用なしの `mixed_case` は Oracle では `MIXED_CASE`。引用名の表 SH."Mixed_Case" に解決しない。
-    assert (
-        quoted_only._resolve_profile_object_name("mixed_case") == "APP.MIXED_CASE"
-    )  # noqa: SLF001
-    assert (
-        quoted_only._resolve_profile_object_name('"Mixed_Case"') == 'SH."Mixed_Case"'
-    )  # noqa: SLF001
+    assert quoted_only._resolve_profile_object_name("mixed_case") == "APP.MIXED_CASE"  # noqa: SLF001
+    assert quoted_only._resolve_profile_object_name('"Mixed_Case"') == 'SH."Mixed_Case"'  # noqa: SLF001
 
 
 # --- 許可表チェック（SQL 安全性検査） --------------------------------------------

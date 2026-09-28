@@ -837,7 +837,9 @@ def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[D
             (
                 _STEP_SUCCEEDED
                 if i < failed_index
-                else DocumentRecipeStepStatus.FAILED if i == failed_index else _STEP_PENDING
+                else DocumentRecipeStepStatus.FAILED
+                if i == failed_index
+                else _STEP_PENDING
             )
             for i in range(len(_RECIPE_PHASES))
         )

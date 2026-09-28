@@ -8226,8 +8226,7 @@ class Nl2SqlService:
                 table_name=settings.nl2sql_feedback_vector_table,
                 index_name=settings.nl2sql_feedback_vector_index,
                 warnings=[
-                    "OCI GenAI embedding 設定が不足しているため、"
-                    "類似検索公開をスキップしました。"
+                    "OCI GenAI embedding 設定が不足しているため、類似検索公開をスキップしました。"
                 ],
             )
 
@@ -11019,7 +11018,9 @@ class Nl2SqlService:
             label = (
                 table.logical_name.strip()
                 if table and table.logical_name.strip()
-                else table.comment.strip() if table and table.comment.strip() else fallback_label
+                else table.comment.strip()
+                if table and table.comment.strip()
+                else fallback_label
             )
             label = self._apply_reverse_glossary(
                 label,
@@ -11070,7 +11071,9 @@ class Nl2SqlService:
             label = (
                 column.logical_name.strip()
                 if column and column.logical_name.strip()
-                else column.comment.strip() if column and column.comment.strip() else fallback_label
+                else column.comment.strip()
+                if column and column.comment.strip()
+                else fallback_label
             )
             label = self._apply_reverse_glossary(
                 label,
@@ -11170,7 +11173,9 @@ class Nl2SqlService:
             label = (
                 table.logical_name.strip()
                 if table and table.logical_name.strip()
-                else table.comment.strip() if table and table.comment.strip() else fallback
+                else table.comment.strip()
+                if table and table.comment.strip()
+                else fallback
             )
             return self._apply_reverse_glossary(label, profile=profile, enabled=use_glossary)
 
@@ -11180,7 +11185,9 @@ class Nl2SqlService:
             label = (
                 column.logical_name.strip()
                 if column and column.logical_name.strip()
-                else column.comment.strip() if column and column.comment.strip() else fallback
+                else column.comment.strip()
+                if column and column.comment.strip()
+                else fallback
             )
             return self._apply_reverse_glossary(label, profile=profile, enabled=use_glossary)
 
@@ -14482,7 +14489,9 @@ class Nl2SqlService:
         select_execution_context = (
             "deepsec_data_plane"
             if select_vpd_context_enforced
-            else "oracle_data_plane" if self._use_oracle_runtime() else "deterministic"
+            else "oracle_data_plane"
+            if self._use_oracle_runtime()
+            else "deterministic"
         )
         statements = _split_sql_statements(request.sql)
         if not statements:

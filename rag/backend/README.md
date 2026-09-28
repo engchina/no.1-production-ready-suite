@@ -34,7 +34,7 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保�
 ```bash
 uv run pytest                 # テスト
 uv run ruff check .           # lint
-uv run black .                # フォーマット
+uv run ruff format .          # フォーマット
 uv run mypy .                 # 型チェック
 uv run bandit -r app          # セキュリティ
 ```

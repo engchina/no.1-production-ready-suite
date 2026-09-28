@@ -1860,7 +1860,7 @@ tool_registry.register(
     ToolDefinition(
         name="agent_skill_run",
         description=(
-            "指定 Skill を標準 ToolCall 計画へ展開する。" "実行は Runtime の通常ステップで行う。"
+            "指定 Skill を標準 ToolCall 計画へ展開する。実行は Runtime の通常ステップで行う。"
         ),
         input_schema=_schema(AgentSkillRunInput),
         output_schema=_schema(AgentSkillPlanOutput),

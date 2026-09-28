@@ -38,6 +38,6 @@ Settings は pydantic の model で、`upload_storage_backend` / `local_storage_
 ```bash
 cd platform/packages/system_settings_backend
 uv sync --locked --dev
-uv run black --check . && uv run ruff check . && uv run mypy src
+uv run ruff format --check . && uv run ruff check . && uv run mypy src
 uv run pytest && uv run bandit -r src && uv run pip-audit
 ```

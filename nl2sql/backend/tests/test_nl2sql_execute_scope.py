@@ -337,7 +337,7 @@ def test_execute_accepts_pivot_cte_with_result_alias(
     monkeypatch: pytest.MonkeyPatch, alias: str, operation: str
 ) -> None:
     service = _service(_repository())
-    sql = "WITH x AS (SELECT ID, AMOUNT FROM APP.ORDERS) " f"SELECT * FROM x {operation} {alias}"
+    sql = f"WITH x AS (SELECT ID, AMOUNT FROM APP.ORDERS) SELECT * FROM x {operation} {alias}"
     allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
     analysis = service.analyze_sql(sql, allowed, 100)
     assert analysis.safety.is_safe, analysis.safety.blocked_reason

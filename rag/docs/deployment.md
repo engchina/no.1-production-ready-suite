@@ -445,7 +445,7 @@ backend:
 ```bash
 cd backend
 uv run ruff check .
-uv run black --check .
+uv run ruff format --check .
 uv run mypy .
 uv run pytest
 uv run bandit -c pyproject.toml -r app

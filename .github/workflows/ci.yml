@@ -220,8 +220,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
+      # 整形の検査は ruff format（#345。black から置き換えた）。設定は pyproject.toml の [tool.ruff.format]。
+      # ほかの backend の job も同じ。
       - name: Format check
-        run: uv run black --check .
+        run: uv run ruff format --check .
 
       - name: Lint
         run: uv run ruff check .
@@ -278,7 +280,7 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Format check
-        run: uv run black --check .
+        run: uv run ruff format --check .
 
       - name: Lint
         run: uv run ruff check .
@@ -338,7 +340,7 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Format check
-        run: uv run black --check .
+        run: uv run ruff format --check .
 
       - name: Lint
         run: uv run ruff check .
@@ -682,7 +684,7 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Format check
-        run: uv run black --check .
+        run: uv run ruff format --check .
 
       - name: Lint
         run: uv run ruff check .
@@ -753,7 +755,7 @@ jobs:
             mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-
             mypy-agent-backend-
 
-      # black / ruff / mypy / pytest / 検証 evidence の dry-run / release chain の rehearsal / bandit / pip-audit。
+      # ruff format / ruff check / mypy / pytest / 検証 evidence の dry-run / release chain の rehearsal / bandit / pip-audit。
       - name: Run backend checks
         run: scripts/check-all.sh
         env:

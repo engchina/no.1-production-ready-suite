@@ -281,7 +281,7 @@ def _ranked_entries(
 ) -> tuple[ChunkTemplateScorecardEntry, ...]:
     sorted_entries = sorted(
         entries,
-        key=lambda entry: (-1.0 if entry.score is None else entry.score),
+        key=lambda entry: -1.0 if entry.score is None else entry.score,
         reverse=True,
     )
     ranked: list[ChunkTemplateScorecardEntry] = []

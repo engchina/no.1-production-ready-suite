@@ -504,8 +504,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         placeholders, binds = bind_list("job_status_", _ACTIVE_JOB_STATES)
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT COUNT(*) FROM RAG_INGESTION_JOBS "
-                f"WHERE UPPER(STATUS) IN ({placeholders})",  # nosec B608 - fixed states
+                f"SELECT COUNT(*) FROM RAG_INGESTION_JOBS WHERE UPPER(STATUS) IN ({placeholders})",  # nosec B608 - fixed states
                 binds,
             )
             row = cursor.fetchone()

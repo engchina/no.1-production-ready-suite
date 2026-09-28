@@ -80,7 +80,7 @@ class ProfileOntologyDefinitionService:
             {d.id: d.model_copy(deep=True) for d in definitions} if unified else {}
         )
         conflicts: list[DefinitionConflict] = []
-        for definition in ([] if unified else definitions):
+        for definition in [] if unified else definitions:
             item = definition.model_copy(deep=True)
             matches = [
                 candidate

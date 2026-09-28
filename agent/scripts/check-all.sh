@@ -111,10 +111,10 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
   ensure_backend_deps
 
   if [ "${SKIP_FORMAT}" != "1" ]; then
-    log "backend black"
-    run_backend_tool black --check .
+    log "backend ruff format"
+    run_backend_tool ruff format --check .
   else
-    log "backend black skipped"
+    log "backend ruff format skipped"
   fi
 
   log "backend ruff"

@@ -327,10 +327,7 @@ def _markdown_summary(bundle: JsonObject) -> str:
         f"- Retention days: `{archive_policy.get('retention_days', '')}`",
         f"- Archive location: `{archive_policy.get('archive_location', '')}`",
         f"- Archive owner: `{archive_policy.get('archive_owner', '')}`",
-        (
-            "- Immutable storage required: "
-            f"`{archive_policy.get('immutable_storage_required', '')}`"
-        ),
+        (f"- Immutable storage required: `{archive_policy.get('immutable_storage_required', '')}`"),
         (
             "- Required artifact kinds: "
             f"`{', '.join(_string_list(archive_policy.get('required_artifact_kinds')))}`"

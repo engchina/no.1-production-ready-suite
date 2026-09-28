@@ -110,9 +110,10 @@ async def update_role_access(
     request_id, client_ip = request_context(request)
     # 指定 ID の存在確認は利用者の範囲と無関係に行う（範囲外は 403、存在しない ID は 400）。
     with unrestricted_access_scope():
-        known_business_view_ids, known_knowledge_base_ids = (
-            await OracleClient().list_access_target_ids()
-        )
+        (
+            known_business_view_ids,
+            known_knowledge_base_ids,
+        ) = await OracleClient().list_access_target_ids()
     role = await run_in_threadpool(
         lambda: get_security_service().update_role_access(
             role_id,

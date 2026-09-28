@@ -621,9 +621,9 @@ WiredRetrievalMode = Literal[
     "graph_augmented",
     "reasoning_tree_search",
 ]
-assert set(get_args(WiredRetrievalMode)) == set(
-    WIRED_RETRIEVAL_MODES
-), "WiredRetrievalMode と core の WIRED_RETRIEVAL_MODES がずれています。"
+assert set(get_args(WiredRetrievalMode)) == set(WIRED_RETRIEVAL_MODES), (
+    "WiredRetrievalMode と core の WIRED_RETRIEVAL_MODES がずれています。"
+)
 PostRetrievalPipelineName = PostRetrievalPipeline
 ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
 

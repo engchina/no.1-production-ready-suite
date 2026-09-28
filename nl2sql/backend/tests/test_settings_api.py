@@ -290,8 +290,7 @@ def test_select_ai_credential_rejects_wrong_confirmation_before_reading_key(
     [
         (b"", False, "key_file"),
         (
-            b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n"
-            b"-----END ENCRYPTED PRIVATE KEY-----\n",
+            b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----\n",
             True,
             "private_key_encrypted",
         ),

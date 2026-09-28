@@ -836,9 +836,7 @@ def test_file_processing_trend_cli_fails_on_backend_source_bad_status_count_regr
     assert exit_code == 1
     assert payload["regressions"] == [
         {
-            "metric": (
-                "parser_adapter_contract_backend_source_status_count:" "docling:pdf:fallback"
-            ),
+            "metric": ("parser_adapter_contract_backend_source_status_count:docling:pdf:fallback"),
             "direction": "max",
             "baseline": 0.0,
             "current": 1.0,
@@ -899,7 +897,7 @@ def test_file_processing_trend_cli_fails_on_backend_source_passed_count_decrease
     assert exit_code == 1
     assert payload["regressions"] == [
         {
-            "metric": ("parser_adapter_contract_backend_source_status_count:" "docling:pdf:passed"),
+            "metric": ("parser_adapter_contract_backend_source_status_count:docling:pdf:passed"),
             "direction": "min",
             "baseline": 3.0,
             "current": 2.0,
@@ -960,9 +958,7 @@ def test_file_processing_trend_cli_fails_on_adapter_warning_code_increase(
     assert exit_code == 1
     assert payload["regressions"] == [
         {
-            "metric": (
-                "parser_adapter_contract_warning_code_count:" "docling_adapter_layout_warning"
-            ),
+            "metric": ("parser_adapter_contract_warning_code_count:docling_adapter_layout_warning"),
             "direction": "max",
             "baseline": 0.0,
             "current": 1.0,

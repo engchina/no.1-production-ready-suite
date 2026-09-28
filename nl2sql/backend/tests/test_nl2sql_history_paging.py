@@ -185,7 +185,9 @@ def test_history_route_scopes_non_admin_and_passes_cursor(monkeypatch: pytest.Mo
     assert own.data.total == 3
 
     own_rest = nl2sql_router.history(
-        _request(_principal(admin=False)), cursor=own.data.next_cursor, limit=2  # type: ignore[arg-type]
+        _request(_principal(admin=False)),  # type: ignore[arg-type]
+        cursor=own.data.next_cursor,
+        limit=2,
     )
     assert own_rest.data is not None
     assert [item.id for item in own_rest.data.items] == ["hist-001"]
@@ -295,7 +297,9 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
         ("deleted", ""),
     ]
     second = nl2sql_router.history(
-        _request(_principal(admin=True)), cursor=first.next_cursor, limit=2  # type: ignore[arg-type]
+        _request(_principal(admin=True)),  # type: ignore[arg-type]
+        cursor=first.next_cursor,
+        limit=2,
     ).data
     assert second is not None
     assert [(item.actor_login_user_id, item.actor_display_name) for item in second.items] == [

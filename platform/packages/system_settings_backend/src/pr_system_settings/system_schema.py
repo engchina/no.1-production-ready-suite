@@ -624,8 +624,7 @@ class SystemSchemaManagerBase(ABC):
 
         with connection.cursor() as cursor:
             cursor.execute(
-                "ALTER SESSION SET DDL_LOCK_TIMEOUT = "
-                f"{self._ddl_lock_timeout_seconds}"  # nosec B608 - 上限付きの整数
+                f"ALTER SESSION SET DDL_LOCK_TIMEOUT = {self._ddl_lock_timeout_seconds}"  # nosec B608 - 上限付きの整数
             )
 
     @staticmethod

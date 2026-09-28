@@ -133,7 +133,7 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 ## 開発・検証
 
 - 機能変更と同時に pytest / Playwright を追加・更新する。
-- 完了前に `scripts/check-all.sh`（backend の black/ruff/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
+- 完了前に `scripts/check-all.sh`（backend の ruff format/ruff check/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
   frontend の lint/build）と、Runtime の compose を変えたときは `docker compose --profile openclaw --profile hermes --profile deerflow config --quiet`、
   secret/socket/digest security check を実行する。
   - `check-all.sh` のローカルの既定は Playwright e2e と pip-audit を省く（#339）。関係する spec だけ

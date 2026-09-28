@@ -358,8 +358,7 @@ class OracleQualityEvaluationRepository:
                 placeholders.append(f":{bind_name}")
                 filter_binds[bind_name] = profile_id
             where_sql = (
-                " WHERE COALESCE(NULLIF(PROFILE_ID, ''), 'default') "
-                f"IN ({', '.join(placeholders)})"
+                f" WHERE COALESCE(NULLIF(PROFILE_ID, ''), 'default') IN ({', '.join(placeholders)})"
             )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)

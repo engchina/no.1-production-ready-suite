@@ -98,8 +98,9 @@ def relation_catalog(
     )
     grouped: dict[str, dict[str, Any]] = {}
     for row in cursor.fetchall():
-        child, parent = _catalog_qualified_name(row[0], row[2]), _catalog_qualified_name(
-            row[3], row[4]
+        child, parent = (
+            _catalog_qualified_name(row[0], row[2]),
+            _catalog_qualified_name(row[3], row[4]),
         )
         related = parent if child == target else child
         if related == target or related not in objects:

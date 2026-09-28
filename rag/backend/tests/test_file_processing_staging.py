@@ -143,14 +143,17 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert isinstance(table_cell_lineage_evidence, Mapping)
     assert table_cell_lineage_evidence["expected_case_count"] >= 1
     assert table_cell_lineage_evidence["expected_ref_count"] >= 1
-    assert table_cell_lineage_evidence["resolved_ref_count"] == (
-        table_cell_lineage_evidence["expected_ref_count"]
+    assert (
+        table_cell_lineage_evidence["resolved_ref_count"]
+        == (table_cell_lineage_evidence["expected_ref_count"])
     )
-    assert table_cell_lineage_evidence["covered_ref_count"] == (
-        table_cell_lineage_evidence["expected_ref_count"]
+    assert (
+        table_cell_lineage_evidence["covered_ref_count"]
+        == (table_cell_lineage_evidence["expected_ref_count"])
     )
-    assert table_cell_lineage_evidence["lineage_ref_count"] == (
-        table_cell_lineage_evidence["expected_ref_count"]
+    assert (
+        table_cell_lineage_evidence["lineage_ref_count"]
+        == (table_cell_lineage_evidence["expected_ref_count"])
     )
     assert table_cell_lineage_evidence["unresolved_ref_count"] == 0
     assert table_cell_lineage_evidence["uncovered_ref_count"] == 0
@@ -161,11 +164,13 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert isinstance(preview_addressability_evidence, Mapping)
     assert preview_addressability_evidence["preview_gate_case_count"] >= 1
     assert preview_addressability_evidence["target_count"] >= 1
-    assert preview_addressability_evidence["addressable_target_count"] == (
-        preview_addressability_evidence["target_count"]
+    assert (
+        preview_addressability_evidence["addressable_target_count"]
+        == (preview_addressability_evidence["target_count"])
     )
-    assert preview_addressability_evidence["chunk_bbox_count"] == (
-        preview_addressability_evidence["chunk_target_count"]
+    assert (
+        preview_addressability_evidence["chunk_bbox_count"]
+        == (preview_addressability_evidence["chunk_target_count"])
     )
     assert preview_addressability_evidence["unaddressable_target_count"] == 0
     assert preview_addressability_evidence["all_targets_addressable"] is True
@@ -283,16 +288,19 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert payload_artifact_reuse_evidence["retained_successful_segment_artifact_count"] == 1
     payload_table_cell_lineage = payload["metric_evidence"]["table_cell_lineage"]
     assert payload_table_cell_lineage["expected_ref_count"] >= 1
-    assert payload_table_cell_lineage["resolved_ref_count"] == (
-        payload_table_cell_lineage["expected_ref_count"]
+    assert (
+        payload_table_cell_lineage["resolved_ref_count"]
+        == (payload_table_cell_lineage["expected_ref_count"])
     )
-    assert payload_table_cell_lineage["covered_ref_count"] == (
-        payload_table_cell_lineage["expected_ref_count"]
+    assert (
+        payload_table_cell_lineage["covered_ref_count"]
+        == (payload_table_cell_lineage["expected_ref_count"])
     )
     payload_preview_addressability = payload["metric_evidence"]["preview_addressability"]
     assert payload_preview_addressability["target_count"] >= 1
-    assert payload_preview_addressability["addressable_target_count"] == (
-        payload_preview_addressability["target_count"]
+    assert (
+        payload_preview_addressability["addressable_target_count"]
+        == (payload_preview_addressability["target_count"])
     )
     assert payload_preview_addressability["unaddressable_target_count"] == 0
     artifact_chain = payload["object_storage_artifact_chain"]
@@ -300,22 +308,26 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert artifact_chain["roundtrip_check"] == "ok"
     assert artifact_chain["roundtrip_object_uri_scheme"] == "oci"
     assert artifact_chain["full_artifact_cached_case_count"] >= 1
-    assert artifact_chain["full_artifact_oci_case_count"] == (
-        artifact_chain["full_artifact_cached_case_count"]
+    assert (
+        artifact_chain["full_artifact_oci_case_count"]
+        == (artifact_chain["full_artifact_cached_case_count"])
     )
     assert artifact_chain["full_artifact_identity_present_case_count"] >= 1
     assert artifact_chain["full_artifact_readable_case_count"] >= 1
     assert artifact_chain["full_artifact_identity_verified_case_count"] >= 1
     assert artifact_chain["segment_artifact_expected_count"] >= 1
-    assert artifact_chain["segment_artifact_oci_uri_count"] == (
-        artifact_chain["segment_artifact_expected_count"]
+    assert (
+        artifact_chain["segment_artifact_oci_uri_count"]
+        == (artifact_chain["segment_artifact_expected_count"])
     )
     assert artifact_chain["segment_artifact_non_oci_uri_count"] == 0
-    assert artifact_chain["segment_artifact_readable_count"] == (
-        artifact_chain["segment_artifact_expected_count"]
+    assert (
+        artifact_chain["segment_artifact_readable_count"]
+        == (artifact_chain["segment_artifact_expected_count"])
     )
-    assert artifact_chain["segment_artifact_identity_verified_count"] == (
-        artifact_chain["segment_artifact_expected_count"]
+    assert (
+        artifact_chain["segment_artifact_identity_verified_count"]
+        == (artifact_chain["segment_artifact_expected_count"])
     )
     assert artifact_chain["artifact_integrity_error_count"] == 0
     assert artifact_chain["retained_successful_segment_artifact_count"] == 1
@@ -373,17 +385,20 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert trend["segment_artifact_reuse"]["retained_successful_segment_artifact_count"] == 1
     assert trend["segment_artifact_reuse"]["artifact_integrity_error_count"] == 0
     assert trend["table_cell_lineage"]["expected_ref_count"] >= 1
-    assert trend["table_cell_lineage"]["resolved_ref_count"] == (
-        trend["table_cell_lineage"]["expected_ref_count"]
+    assert (
+        trend["table_cell_lineage"]["resolved_ref_count"]
+        == (trend["table_cell_lineage"]["expected_ref_count"])
     )
-    assert trend["table_cell_lineage"]["covered_ref_count"] == (
-        trend["table_cell_lineage"]["expected_ref_count"]
+    assert (
+        trend["table_cell_lineage"]["covered_ref_count"]
+        == (trend["table_cell_lineage"]["expected_ref_count"])
     )
     assert trend["table_cell_lineage"]["unresolved_ref_count"] == 0
     assert trend["table_cell_lineage"]["coverage"] == 1.0
     assert trend["preview_addressability"]["target_count"] >= 1
-    assert trend["preview_addressability"]["addressable_target_count"] == (
-        trend["preview_addressability"]["target_count"]
+    assert (
+        trend["preview_addressability"]["addressable_target_count"]
+        == (trend["preview_addressability"]["target_count"])
     )
     assert trend["preview_addressability"]["unaddressable_target_count"] == 0
     assert trend["preview_addressability"]["coverage"] == 1.0
@@ -632,8 +647,9 @@ async def test_staging_blocks_promotion_when_required_artifact_cache_is_skipped(
         "status": "skipped",
     } in payload["promotion_blockers"]
     assert payload["object_storage_artifact_chain"]["passed"] is False
-    assert "object_storage_artifact_roundtrip_not_ok" in (
-        payload["object_storage_artifact_chain"]["blocker_codes"]
+    assert (
+        "object_storage_artifact_roundtrip_not_ok"
+        in (payload["object_storage_artifact_chain"]["blocker_codes"])
     )
     assert any(
         blocker["code"] == "object_storage_artifact_chain_failed"
@@ -3309,8 +3325,7 @@ class FakeStagingOracle:
                         "extraction_artifact_document_id": document_id,
                         "extraction_artifact_trace_id": "fake-staging-trace",
                         "extraction_artifact_path": (
-                            "oci://namespace/bucket/artifacts/extractions/"
-                            f"{document_id}/full.json"
+                            f"oci://namespace/bucket/artifacts/extractions/{document_id}/full.json"
                         ),
                     },
                     "quality_report": {

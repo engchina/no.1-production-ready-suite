@@ -509,9 +509,7 @@ def test_classifier_training_import_delete_and_scores_enforce_profile_access(
     )
     assert set(trained_status.data.categories) == {"profile-a", "profile-c"}  # type: ignore[union-attr]
     with service._lock:  # noqa: SLF001
-        trained_categories = set(
-            (service._classifier_artifact or {}).get("categories", [])
-        )  # noqa: SLF001
+        trained_categories = set((service._classifier_artifact or {}).get("categories", []))  # noqa: SLF001
     assert trained_categories == {"profile-a", "profile-c"}
 
     service.import_classifier_model_artifact(

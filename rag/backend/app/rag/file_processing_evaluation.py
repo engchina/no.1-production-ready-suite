@@ -714,7 +714,7 @@ def _validate_staging_dataset_policy(
         fixture = _string_value(case.get("fixture"))
         if required_fixture_prefix and not fixture.startswith(required_fixture_prefix):
             errors.append(
-                f"case[{case_id}]:real_world_fixture_prefix_mismatch:" f"{required_fixture_prefix}"
+                f"case[{case_id}]:real_world_fixture_prefix_mismatch:{required_fixture_prefix}"
             )
 
     if len(real_world_cases) < min_real_world_cases:
@@ -3713,7 +3713,7 @@ def _validate_fixture_extension(
     extension = fixture_relative.suffix.casefold()
     if extension not in expected_extensions:
         errors.append(
-            f"case[{case_id}]:fixture_extension_mismatch:" f"{modality}:{extension or '<none>'}"
+            f"case[{case_id}]:fixture_extension_mismatch:{modality}:{extension or '<none>'}"
         )
 
 

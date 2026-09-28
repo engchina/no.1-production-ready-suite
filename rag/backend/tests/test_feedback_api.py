@@ -388,7 +388,9 @@ def test_feedback_permissions_split_view_and_approved_faq(
     contexts: list[object] = []
 
     class ScopeRecordingClient(FakeFeedbackClient):
-        async def list_feedback_dashboard_rows(self, **kwargs: object) -> tuple[
+        async def list_feedback_dashboard_rows(
+            self, **kwargs: object
+        ) -> tuple[
             list[dict[str, object]],
             int,
             list[dict[str, object]],
@@ -470,7 +472,9 @@ class FakeFeedbackClient:
         self.current_trace = trace_id
         return self.current
 
-    async def list_feedback_dashboard_rows(self, **_: object) -> tuple[
+    async def list_feedback_dashboard_rows(
+        self, **_: object
+    ) -> tuple[
         list[dict[str, object]],
         int,
         list[dict[str, object]],

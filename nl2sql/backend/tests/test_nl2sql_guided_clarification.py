@@ -881,8 +881,7 @@ def test_free_text_reinterpretation_rebuilds_query_without_duplicate_condition()
     )
 
     assert updated.question_effective == (
-        "受注のうち、受注状態が「確定」のデータを対象に、"
-        "検索結果には受注件数を表示してください。"
+        "受注のうち、受注状態が「確定」のデータを対象に、検索結果には受注件数を表示してください。"
     )
     assert updated.question_effective.count("受注状態") == 1
 

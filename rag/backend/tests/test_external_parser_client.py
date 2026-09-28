@@ -101,7 +101,7 @@ def test_mineru_file_parse_preserves_page_bbox_table_auth_and_language(
     assert seen[0].url.path == "/file_parse"
     assert seen[0].headers["authorization"] == "Bearer mineru-secret"
     assert b'name="return_content_list"' in seen[0].content
-    assert f'\r\n\r\n{language or "japan"}\r\n'.encode() in seen[0].content
+    assert f"\r\n\r\n{language or 'japan'}\r\n".encode() in seen[0].content
     assert result.extraction is not None
     assert [element.page_number for element in result.extraction.elements] == [1, 2]
     assert result.extraction.elements[0].bbox == [10.0, 20.0, 100.0, 40.0]

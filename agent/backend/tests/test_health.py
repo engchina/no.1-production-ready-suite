@@ -4809,7 +4809,7 @@ def test_release_archive_rejects_artifact_hash_mismatch(tmp_path: Path) -> None:
     assert "bundle.content_sha256_mismatch" in bad_content_record["violations"]
 
     secret_summary = (
-        "# Agent Runtime Validation Evidence\n" "Authorization: Bearer should-not-copy-this-token\n"
+        "# Agent Runtime Validation Evidence\nAuthorization: Bearer should-not-copy-this-token\n"
     )
     summary_path.write_text(secret_summary, encoding="utf-8")
     secret_bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
@@ -5608,8 +5608,8 @@ def test_production_validation_manifest_documents_required_sections() -> None:
         "rollback_plan_confirmed",
     }
     assert "agent/docs/agent-runtime-production-validation.manifest.json" in workflow
-    assert "agent/backend/validation-runner-readiness." "${{ inputs.environment }}.json" in workflow
-    assert "agent/backend/validation-runner-readiness." "${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-runner-readiness.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-runner-readiness.${{ inputs.environment }}.md" in workflow
     assert "agent/backend/validation-review.${{ inputs.environment }}.json" in workflow
     assert "agent/backend/validation-bundle.${{ inputs.environment }}.json" in workflow
     assert "agent/backend/validation-bundle.${{ inputs.environment }}.md" in workflow
@@ -6498,8 +6498,9 @@ def test_oci_responses_planner_falls_back_to_heuristic_when_unconfigured(
         )
         assert planner_event["payload"]["provider"] == "oci_responses_fallback_heuristic"
         assert planner_event["payload"]["selected_skill_id"] == "business_rag_research"
-        assert "planner.oci_responses_failed:planner.oci_responses.not_configured" in (
-            planner_event["payload"]["warnings"]
+        assert (
+            "planner.oci_responses_failed:planner.oci_responses.not_configured"
+            in (planner_event["payload"]["warnings"])
         )
     finally:
         _reset_planner()
@@ -6536,8 +6537,9 @@ def test_oci_agent_planner_provider_is_reserved_and_falls_back(
         )
         assert planner_event["payload"]["provider"] == "oci_agent_fallback_heuristic"
         assert planner_event["payload"]["selected_skill_id"] == "business_rag_research"
-        assert "planner.oci_agent_failed:planner.oci_agent.not_implemented" in (
-            planner_event["payload"]["warnings"]
+        assert (
+            "planner.oci_agent_failed:planner.oci_agent.not_implemented"
+            in (planner_event["payload"]["warnings"])
         )
     finally:
         _reset_planner()

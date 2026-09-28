@@ -985,7 +985,7 @@ class OracleClient:
                    recipe_subset, status, chunk_count, vector_count, is_active,
                    created_at, updated_at
             FROM rag_chunk_sets
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY updated_at DESC, chunk_set_id DESC
             FETCH FIRST 1 ROWS ONLY
             """,
@@ -11647,11 +11647,10 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
             clauses.append(f"JSON_VALUE(d.classification, '$.{key}') = :filter_{key}")
             binds[f"filter_{key}"] = value
     clauses.append(
-        "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) "
-        "<= :filter_as_of"
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) <= :filter_as_of"
     )
     clauses.append(
-        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') " "> :filter_as_of"
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') > :filter_as_of"
     )
     binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
     return clauses, binds
@@ -11945,7 +11944,8 @@ def _oracle_document_knowledge_base_scope_predicates(*, alias: str | None = None
     placeholders = ", ".join(
         f":access_knowledge_base_id_{index}" for index, _ in enumerate(sorted(allowed))
     )
-    return [f"""
+    return [
+        f"""
         (
             EXISTS (
                 SELECT 1
@@ -11962,7 +11962,8 @@ def _oracle_document_knowledge_base_scope_predicates(*, alias: str | None = None
                   AND scope_duplicate_dkb.knowledge_base_id IN ({placeholders})
             )
         )
-        """]
+        """
+    ]
 
 
 def _oracle_business_view_access_predicates(*, alias: str | None = None) -> list[str]:

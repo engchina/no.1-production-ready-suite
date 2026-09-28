@@ -84,7 +84,8 @@ def get_results(
     quoted_owner = identity.owner.replace('"', '""')
     quoted_name = identity.object_name.replace('"', '""')
     result = service.adapter.execute_select(
-        f'SELECT * FROM "{quoted_owner}"."{quoted_name}"', limit  # nosec B608
+        f'SELECT * FROM "{quoted_owner}"."{quoted_name}"',  # nosec B608
+        limit,
     )  # both identifiers escape embedded double quotes
     return ApiResponse(
         data={

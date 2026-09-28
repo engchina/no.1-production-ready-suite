@@ -152,9 +152,7 @@ class SyntheticPreview:
                 )
                 comment_row = cur.fetchone()
                 comment = f"{name}: {comment_row[0] or ''}" if comment_row else name
-                cur.execute(
-                    f"COMMENT ON TABLE {table} IS '" + comment.replace("'", "''") + "'"
-                )  # nosec B608
+                cur.execute(f"COMMENT ON TABLE {table} IS '" + comment.replace("'", "''") + "'")  # nosec B608
                 cur.execute(
                     "SELECT COLUMN_NAME, COMMENTS FROM ALL_COL_COMMENTS WHERE OWNER=:owner "
                     "AND TABLE_NAME=:name AND COMMENTS IS NOT NULL",
@@ -273,13 +271,9 @@ class SyntheticPreview:
         with conn.cursor() as cur:
             # Lock all targets and stages in a stable order before checking or inserting anything.
             for name in sorted(run.staging):
-                cur.execute(
-                    f"LOCK TABLE {qualified(name)} IN SHARE ROW EXCLUSIVE MODE NOWAIT"
-                )  # nosec B608
+                cur.execute(f"LOCK TABLE {qualified(name)} IN SHARE ROW EXCLUSIVE MODE NOWAIT")  # nosec B608
                 stage = run.staging[name]
-                cur.execute(
-                    f"LOCK TABLE {qualified(stage['name'])} IN SHARE MODE NOWAIT"
-                )  # nosec B608
+                cur.execute(f"LOCK TABLE {qualified(stage['name'])} IN SHARE MODE NOWAIT")  # nosec B608
                 self.check_identity(cur, name, run.request["_object_ids"][name])
                 if metadata(cur, name) != stage["metadata"]:
                     raise HTTPException(
@@ -321,9 +315,7 @@ class SyntheticPreview:
                     )
                 try:
                     # Table names are reserved, random and persisted before creation; no user names.
-                    cur.execute(
-                        f"DROP TABLE {qualified(stage['name'])} CASCADE CONSTRAINTS PURGE"
-                    )  # nosec B608
+                    cur.execute(f"DROP TABLE {qualified(stage['name'])} CASCADE CONSTRAINTS PURGE")  # nosec B608
                 except Exception as exc:
                     if "ORA-00942" not in str(exc):
                         raise

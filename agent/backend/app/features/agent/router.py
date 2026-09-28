@@ -164,8 +164,7 @@ router = APIRouter(tags=["agent-runtime"])
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 MODEL_TEST_IMAGE_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9s"
-    "AAAAASUVORK5CYII="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
@@ -2461,7 +2460,9 @@ async def get_external_mcp_settings() -> ApiResponse[ExternalServiceSettings]:
             auth_mode=(
                 "oauth_client_credentials"
                 if oauth_configured
-                else "api_key" if config.api_key else "none"
+                else "api_key"
+                if config.api_key
+                else "none"
             ),
             session_configured=bool(config.session_id),
             timeout_seconds=config.timeout_seconds,
@@ -2495,7 +2496,9 @@ def _mcp_server_settings(config: object, *, default_id: str) -> ExternalMcpServe
         auth_mode=(
             "oauth_client_credentials"
             if oauth_configured
-            else "api_key" if getattr(config, "api_key", None) else "none"
+            else "api_key"
+            if getattr(config, "api_key", None)
+            else "none"
         ),
         session_configured=bool(getattr(config, "session_id", None)),
         timeout_seconds=getattr(config, "timeout_seconds", 10.0),

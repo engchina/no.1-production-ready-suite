@@ -180,8 +180,7 @@ def test_owner_aware_semantic_scope_rejects_unqualified_external_table() -> None
     unqualified = service.analyze_sql("SELECT * FROM ORDERS", allowed, None)
     qualified = service.analyze_sql("SELECT * FROM SH.ORDERS", allowed, None)
     joined = service.analyze_sql(
-        "SELECT o.ORDER_ID FROM SH.ORDERS o "
-        "JOIN SSB.CUSTOMERS c ON c.CUSTOMER_ID = o.CUSTOMER_ID",
+        "SELECT o.ORDER_ID FROM SH.ORDERS o JOIN SSB.CUSTOMERS c ON c.CUSTOMER_ID = o.CUSTOMER_ID",
         allowed,
         None,
     )
@@ -222,9 +221,7 @@ def test_sample_import_catalog_state_keeps_other_owner_duplicates() -> None:
 
     service._apply_sample_import_to_catalog(SampleDataStep.ALL)  # noqa: SLF001
 
-    remaining = {
-        (table.owner, table.table_name) for table in service._catalog.tables
-    }  # noqa: SLF001
+    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
     assert ("SH", "DEPARTMENT") in remaining
     assert ("APP", "DEPARTMENT") in remaining
     assert service.sample_data_info().imported_objects == SAMPLE_OBJECTS
@@ -235,9 +232,7 @@ def test_sample_delete_removes_current_owner_only() -> None:
 
     service._remove_sample_from_state()  # noqa: SLF001 - regression for owner scoped deletion
 
-    remaining = {
-        (table.owner, table.table_name) for table in service._catalog.tables
-    }  # noqa: SLF001
+    remaining = {(table.owner, table.table_name) for table in service._catalog.tables}  # noqa: SLF001
     assert not {("APP", name) for name in SAMPLE_OBJECTS} & remaining
     assert {("SH", name) for name in SAMPLE_OBJECTS} <= remaining
     assert service.sample_data_info().imported_objects == []
