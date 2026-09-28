@@ -6,12 +6,12 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, OraclePoolProtocol
 from app.config import get_settings
 from app.main import app
 from app.rag import evaluation_jobs
@@ -657,7 +657,9 @@ async def _run_inline(operation: Any) -> Any:
 
 def _oracle_store(connection: _FakeConnection) -> OracleEvaluationJobStore:
     client = OracleClient(
-        settings=get_settings(), pool=_FakePool(connection), db_call_runner=_run_inline
+        settings=get_settings(),
+        pool=cast(OraclePoolProtocol, _FakePool(connection)),
+        db_call_runner=_run_inline,
     )
     return OracleEvaluationJobStore(client)
 
