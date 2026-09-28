@@ -68,7 +68,6 @@ docker compose --profile gpu up --build
 
 - `POST /api/documents/upload`: 原本を Object Storage 境界へ保存し、SHA-256 / サイズ / 重複元を記録してドキュメント行を作成。
 - `POST /api/documents/{id}/ingest`: OCI Enterprise AI 境界で OCR/構造化要素抽出し、ページ・章節・表・リスト感知 chunking、embedding、Oracle 26ai 境界への索引まで実行。
-- `GET /api/dashboard/summary`: 文書状態、索引済み件数、検索可能チャンク数、最近の活動、readiness をまとめて返却。
 - `POST /api/search`: Business Context Pack、Retrieval Plan、hybrid/vector/keyword 検索、Oracle 26ai Agent Memory Search、rerank、Resolver / Verifier、Evidence / Support / History 分離、citation-grounded 回答、Agent Memory writeback、trace ID、guardrail warning を返却。
 - `POST /api/search/select-ai`: Oracle Select AI profile を使い、自然言語から SQL (`showsql`) または明示的な SQL 実行結果 (`runsql`) を取得。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。

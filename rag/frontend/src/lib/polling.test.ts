@@ -4,19 +4,14 @@ import {
   ADB_TRANSITIONAL_STATES,
   DOCUMENT_ACTIVE_STATUSES,
   adbIsTransitioning,
-  dashboardHasActiveWork,
   documentWorkspaceShouldRefresh,
   documentsHaveActiveWork,
   ingestionJobIsActive,
   ingestionSegmentHasActiveWork,
 } from "./queries";
-import type { DashboardActivity, DocumentSummary, FileStatus } from "./api";
+import type { DocumentSummary, FileStatus } from "./api";
 
 function doc(status: FileStatus): Pick<DocumentSummary, "status"> {
-  return { status };
-}
-
-function activity(status: FileStatus): Pick<DashboardActivity, "status"> {
   return { status };
 }
 
@@ -75,21 +70,6 @@ describe("adbIsTransitioning", () => {
     expect(adbIsTransitioning("STOPPED")).toBe(false);
     expect(adbIsTransitioning("FAILED")).toBe(false);
     expect(adbIsTransitioning("TERMINATED")).toBe(false);
-  });
-});
-
-describe("dashboardHasActiveWork", () => {
-  it("空配列/undefined は false", () => {
-    expect(dashboardHasActiveWork([])).toBe(false);
-    expect(dashboardHasActiveWork(undefined)).toBe(false);
-  });
-
-  it("進行中アクティビティがあれば true", () => {
-    expect(dashboardHasActiveWork([activity("INDEXED"), activity("INGESTING")])).toBe(true);
-  });
-
-  it("安定状態のみなら false", () => {
-    expect(dashboardHasActiveWork([activity("UPLOADED"), activity("INDEXED")])).toBe(false);
   });
 });
 

@@ -482,6 +482,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_role_permissions",
             sql=_role_access_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260928_001_retire_dashboard_permission",
+            table_name="rag_role_permissions",
+            sql=_retire_dashboard_permission_migration_sql(),
+        ),
     ]
 
 
@@ -1090,6 +1095,26 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_role_knowledge_bases_kb_idx '
             || 'ON rag_role_knowledge_bases (knowledge_base_id)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _retire_dashboard_permission_migration_sql() -> str:
+    """廃止したダッシュボードの権限 `menu.dashboard` をロールから外す(冪等。#261)。
+
+    `RAG_ROLE_PERMISSIONS` は他製品の権限昇格の判定（platform）も生のコードで読むため、
+    カタログにない古いコードを残さない。表が無い環境では何もしない。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code = ''menu.dashboard''';
     END IF;
 END;
 /

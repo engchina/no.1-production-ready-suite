@@ -96,12 +96,6 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_API_TIMEOUT_MS,
   30_000,
 );
-// バックエンドは DB 停止時 dashboard_query_timeout_seconds(既定 8 秒)で縮退応答する。
-// フロント側は縮退応答が届くよう十分な余裕を取り、全画面エラーに落ちないようにする。
-export const DASHBOARD_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
-  import.meta.env.VITE_DASHBOARD_API_TIMEOUT_MS,
-  15_000,
-);
 
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
@@ -280,61 +274,6 @@ export interface RoleAccessUpdate {
   permissions: string[];
   business_view_ids: string[];
   knowledge_base_ids: string[];
-}
-
-// --- ダッシュボード ---
-export interface DashboardStats {
-  total_uploads: number;
-  uploads_this_month: number;
-  total_indexed: number;
-  indexed_this_month: number;
-  searchable_rows: number;
-}
-
-export interface DashboardIngestionQuality {
-  document_count: number;
-  structured_document_count: number;
-  element_count: number;
-  table_count: number;
-  figure_count: number;
-  formula_count: number;
-  list_count: number;
-  page_count: number;
-  low_confidence_count: number;
-  fallback_document_count: number;
-  failed_segment_document_count: number;
-  segment_artifact_cache_miss_document_count: number;
-  long_document_count: number;
-  average_page_coverage: number;
-  risk_counts: Record<string, number>;
-  parser_profile_counts: Record<string, number>;
-  parser_backend_counts: Record<string, number>;
-  warning_counts: Record<string, number>;
-  chunk_profile_counts: Record<string, number>;
-  content_kind_counts: Record<string, number>;
-}
-
-export interface DashboardActivity {
-  id: string;
-  type: "UPLOAD" | "INDEXING";
-  file_name: string;
-  timestamp: string;
-  status: FileStatus;
-  category_name: string | null;
-}
-
-export interface DashboardSystemInfo {
-  status: "online" | "degraded" | "offline";
-  version: string;
-  searchable_rows: number;
-  checks: Record<string, string>;
-}
-
-export interface DashboardSummary {
-  stats: DashboardStats;
-  ingestion_quality: DashboardIngestionQuality;
-  recent_activities: DashboardActivity[];
-  system: DashboardSystemInfo;
 }
 
 // --- ヘルスチェック ---
@@ -2499,12 +2438,6 @@ export const api = {
 
   // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
   getDatabaseStatus: () => request<DatabaseStatusData>("/api/ready/database"),
-
-  // ダッシュボード
-  getDashboardSummary: () =>
-    request<DashboardSummary>("/api/dashboard/summary", undefined, {
-      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
-    }),
 
   // ドキュメント
   listDocuments: (

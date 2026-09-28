@@ -53,10 +53,10 @@ describe("CSRF header", () => {
 
   it("GET では送らない", async () => {
     stubBrowser(`${CSRF_COOKIE_NAME}=token-123`);
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...OK, data: { stats: {} } }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...OK, data: { status: "ok", check: "ok", detail: null } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.getDashboardSummary();
+    await api.getDatabaseStatus();
 
     expect(sentHeaders(fetchMock).has("X-CSRF-Token")).toBe(false);
     expect(sentHeaders(fetchMock).get("Accept")).toBe("application/json");
@@ -100,8 +100,8 @@ describe("401 / 403 の通知", () => {
         )
     );
 
-    await expect(api.getDashboardSummary()).rejects.toMatchObject({ status: 401 });
-    await expect(api.getDashboardSummary()).rejects.toMatchObject({ status: 403, requestId: "req-1" });
+    await expect(api.getDatabaseStatus()).rejects.toMatchObject({ status: 401 });
+    await expect(api.getDatabaseStatus()).rejects.toMatchObject({ status: 403, requestId: "req-1" });
 
     expect(events).toEqual(["app-auth-unauthorized", "app-auth-forbidden"]);
   });

@@ -8,7 +8,6 @@ import {
   Library,
   MessagesSquare,
   MessageSquareHeart,
-  LayoutDashboard,
   LayoutGrid,
   Boxes,
   ClipboardCheck,
@@ -97,7 +96,6 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.ingestion",
     items: [
-      { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard, permission: MENU_PERMISSIONS.dashboard },
       {
         href: APP_ROUTES.upload,
         labelKey: "nav.upload",

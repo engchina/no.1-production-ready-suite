@@ -17,49 +17,6 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("Dashboard で取込品質を確認できる", async ({ page }) => {
-  await page.route("**/api/dashboard/summary", async (route) => {
-    await route.fulfill({
-      json: {
-        data: dashboardSummary(),
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
-
-  await page.goto("/dashboard");
-
-  await expect(page.getByRole("heading", { name: "取込品質" })).toBeVisible();
-  await expect(page.getByText("75%")).toBeVisible();
-  await expect(page.getByText("3/4 文書")).toBeVisible();
-  await expect(page.getByText("構造メトリクス")).toBeVisible();
-  await expect(page.getByText("図", { exact: true })).toBeVisible();
-  await expect(page.getByText("数式", { exact: true })).toBeVisible();
-  await expect(page.getByText("品質ヘルス")).toBeVisible();
-  await expect(page.getByText("ページ網羅率", { exact: true })).toBeVisible();
-  await expect(page.getByText("88%", { exact: true })).toBeVisible();
-  await expect(page.getByText("フォールバック", { exact: true })).toBeVisible();
-  const segmentArtifactMetric = page.getByText("Segment artifact 再抽出", { exact: true });
-  await segmentArtifactMetric.scrollIntoViewIfNeeded();
-  await expect(segmentArtifactMetric).toBeVisible();
-  const parserBackend = page.getByText("解析エンジン", { exact: true });
-  await parserBackend.scrollIntoViewIfNeeded();
-  await expect(parserBackend).toBeVisible();
-  await expect(page.getByText("ローカル partition", { exact: true })).toBeVisible();
-  const chunkProfile = page.getByText("structure_v1", { exact: true });
-  await chunkProfile.scrollIntoViewIfNeeded();
-  await expect(chunkProfile).toBeVisible();
-  const tableKind = page.getByTitle("table");
-  await tableKind.scrollIntoViewIfNeeded();
-  await expect(tableKind).toBeVisible();
-  await expectNoHorizontalOverflow(page);
-
-  await page.setViewportSize({ width: 375, height: 900 });
-  await expect(page.getByRole("heading", { name: "取込品質" })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
-});
-
 test("文書詳細で本文テキストと構造化抽出要素を確認できる", async ({ page }) => {
   await mockDocumentDetail(page);
 
@@ -801,47 +758,6 @@ function knowledgeBase(id: string, name: string, documentCount: number) {
     created_at: "2026-06-14T00:00:00Z",
     updated_at: "2026-06-14T00:00:00Z",
     archived_at: null,
-  };
-}
-
-function dashboardSummary() {
-  return {
-    stats: {
-      total_uploads: 4,
-      uploads_this_month: 4,
-      total_indexed: 3,
-      indexed_this_month: 3,
-      searchable_rows: 8,
-    },
-    ingestion_quality: {
-      document_count: 4,
-      structured_document_count: 3,
-      element_count: 18,
-      table_count: 2,
-      figure_count: 3,
-      formula_count: 2,
-      list_count: 4,
-      page_count: 6,
-      low_confidence_count: 5,
-      fallback_document_count: 1,
-      failed_segment_document_count: 1,
-      segment_artifact_cache_miss_document_count: 1,
-      long_document_count: 1,
-      average_page_coverage: 0.875,
-      risk_counts: { low: 2, medium: 1, high: 1 },
-      parser_profile_counts: { enterprise_ai_pdf_layout: 2, local_text_structure: 1 },
-      parser_backend_counts: { local_partition: 2, enterprise_ai: 1 },
-      warning_counts: { parser_fallback_used: 1, failed_segments: 1 },
-      chunk_profile_counts: { structure_v1: 7, text_v1: 1 },
-      content_kind_counts: { text: 4, table: 2, list: 2 },
-    },
-    recent_activities: [],
-    system: {
-      status: "online",
-      version: "0.1.0",
-      searchable_rows: 8,
-      checks: { local_storage: "ok" },
-    },
   };
 }
 

@@ -278,7 +278,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SYNC (ON COMMIT)" in sql
     assert "-- migration: 20260927_001_role_access" in sql
     assert "REFERENCES platform_roles (role_id) ON DELETE CASCADE" in sql
-    assert len(statements) == 63
+    assert "-- migration: 20260928_001_retire_dashboard_permission" in sql
+    assert "DELETE FROM rag_role_permissions WHERE permission_code = ''menu.dashboard''" in sql
+    assert len(statements) == 64
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -337,6 +339,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260926_004_docrag_prompts",
         "20260926_005_query_history",
         "20260927_001_role_access",
+        "20260928_001_retire_dashboard_permission",
     ]
 
 
