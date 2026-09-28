@@ -147,7 +147,6 @@ export const ja = {
   "nav.feedback": "フィードバック",
   // ページタイトルとサイドバー表示はいずれもユーザー向けの業務語を優先する。
   "nav.settingsPipeline": "設定の概要",
-  "nav.settingsPipeline.sidebar": "概要",
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",
   "nav.settingsUploadStorage": "アップロード保存先",
