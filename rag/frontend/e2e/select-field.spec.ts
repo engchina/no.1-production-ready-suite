@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { LOCAL_AUTH_ME } from "./_helpers";
 
 async function mockApi(page: Page) {
@@ -187,4 +187,193 @@ test("評価のランキング指標も同じドロップダウン UI で選択�
 
   await listbox.getByRole("option", { name: "Recall@K" }).click();
   await expect(rankingMetric).toContainText("Recall@K");
+});
+
+// ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────
+
+/** 要素の中心で一番上にある要素が、その要素（か子孫）であること。親の overflow で切れていれば別の要素になる。 */
+async function expectCenterHitsSelf(locator: Locator) {
+  await expect
+    .poll(() =>
+      locator.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return Boolean(hit && node.contains(hit));
+      })
+    )
+    .toBe(true);
+}
+
+/** 強調中の選択肢（aria-activedescendant）が一覧の表示範囲に入っていること。 */
+async function expectActiveOptionInView(combobox: Locator, listbox: Locator, name: string) {
+  const activeId = await combobox.getAttribute("aria-activedescendant");
+  expect(activeId).toBeTruthy();
+  const active = listbox.locator(`[id="${activeId}"]`);
+  await expect(active).toHaveText(name);
+  await expect
+    .poll(async () => {
+      const [item, list] = await Promise.all([active.boundingBox(), listbox.boundingBox()]);
+      if (!item || !list) return false;
+      return item.y >= list.y - 1 && item.y + item.height <= list.y + list.height + 1;
+    })
+    .toBe(true);
+}
+
+test("overflow: hidden の親の中でも一覧が切れず、選択肢を押せる", async ({ page }) => {
+  await page.goto("/settings/oci");
+  const region = page.getByRole("combobox", { name: "リージョン", exact: true });
+  await expect(region).toContainText("us-chicago-1");
+  // フィールドの外枠をトリガーの高さで切る（DataTable のセル・カード・スクロール枠と同じ状況）。
+  await region.evaluate((button) => {
+    const clip = button.parentElement as HTMLElement;
+    clip.style.overflow = "hidden";
+    clip.style.height = `${button.offsetHeight}px`;
+  });
+
+  await region.click();
+  const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
+  await expect(listbox).toBeVisible();
+  const last = listbox.getByRole("option", { name: "us-chicago-1" });
+  await expectCenterHitsSelf(last);
+  await expectCenterHitsSelf(listbox.getByRole("option", { name: "ap-tokyo-1" }));
+
+  // 一覧（Portal 先）の中を押しても外側クリックとみなさない。選んだら閉じてボタンにフォーカスを戻す。
+  await listbox.getByRole("option", { name: "ap-osaka-1" }).click();
+  await expect(region).toContainText("ap-osaka-1");
+  await expect(listbox).toBeHidden();
+  await expect(region).toBeFocused();
+
+  // 一覧の外を押すと閉じる。
+  await region.click();
+  await expect(listbox).toBeVisible();
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(listbox).toBeHidden();
+  await expect(region).toContainText("ap-osaka-1");
+});
+
+test("画面の下端では一覧を上に開き、画面の外にはみ出さない", async ({ page }) => {
+  await page.goto("/evaluation");
+  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
+  await expect(rankingMetric).toBeVisible();
+  const trigger = await rankingMetric.boundingBox();
+  expect(trigger).not.toBeNull();
+  // フィールドの下に 1 行分の余白しか残らない高さにする（上の内容は画面の高さに依らない）。
+  const width = page.viewportSize()?.width ?? 1440;
+  await page.setViewportSize({ width, height: Math.ceil(trigger!.y + trigger!.height + 40) });
+
+  await rankingMetric.click();
+  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  await expect(listbox).toHaveAttribute("data-floating-menu-placement", "top");
+  const [list, button] = await Promise.all([listbox.boundingBox(), rankingMetric.boundingBox()]);
+  const viewportHeight = page.viewportSize()!.height;
+  expect(list!.y).toBeGreaterThanOrEqual(0);
+  expect(list!.y + list!.height).toBeLessThanOrEqual(button!.y);
+  expect(list!.y + list!.height).toBeLessThanOrEqual(viewportHeight);
+  // 一覧はトリガーと同じ幅・左端。
+  expect(Math.abs(list!.x - button!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(list!.width - button!.width)).toBeLessThanOrEqual(1);
+
+  await listbox.getByRole("option", { name: "Recall@K" }).click();
+  await expect(rankingMetric).toContainText("Recall@K");
+});
+
+test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", async ({ page }) => {
+  await page.goto("/evaluation");
+  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
+  await rankingMetric.focus();
+  await page.keyboard.press("ArrowDown");
+  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  await expect(listbox).toBeVisible();
+  await expectActiveOptionInView(rankingMetric, listbox, "MRR");
+
+  await page.keyboard.press("End");
+  await expectActiveOptionInView(rankingMetric, listbox, "Noise Robustness");
+  await page.keyboard.press("Home");
+  await expectActiveOptionInView(rankingMetric, listbox, "MRR");
+  for (let index = 0; index < 8; index += 1) await page.keyboard.press("ArrowDown");
+  await expectActiveOptionInView(rankingMetric, listbox, "Content Kind 命中");
+  await page.keyboard.press("PageDown");
+  await expectActiveOptionInView(rankingMetric, listbox, "Noise Robustness");
+  await page.keyboard.press("PageUp");
+  await expectActiveOptionInView(rankingMetric, listbox, "Groundedness");
+
+  await page.keyboard.press("Enter");
+  await expect(listbox).toBeHidden();
+  await expect(rankingMetric).toContainText("Groundedness");
+});
+
+test("文字の入力で選択肢に飛ぶ（typeahead）", async ({ page }) => {
+  await page.goto("/evaluation");
+  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
+  await rankingMetric.focus();
+
+  // 閉じているときに打つと開き、その文字で始まる選択肢を強調する。
+  await page.keyboard.press("c");
+  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  await expect(listbox).toBeVisible();
+  await expectActiveOptionInView(rankingMetric, listbox, "Citation Traceability");
+  // 同じ文字を続けて打つと、その文字で始まる次の選択肢へ巡る。
+  await page.keyboard.press("c");
+  await expectActiveOptionInView(rankingMetric, listbox, "Content Kind 命中");
+
+  // 入力が途切れたら（500ms）リセットし、続けて打った文字は前方一致で絞り込む
+  // （"c" は次の Context Precision、"ci" で Citation Traceability に戻る）。
+  await page.waitForTimeout(700);
+  await page.keyboard.type("ci", { delay: 30 });
+  await expectActiveOptionInView(rankingMetric, listbox, "Citation Traceability");
+
+  await page.waitForTimeout(700);
+  await page.keyboard.type("FA", { delay: 30 });
+  await expectActiveOptionInView(rankingMetric, listbox, "Faithfulness");
+  await page.keyboard.press("Enter");
+  await expect(listbox).toBeHidden();
+  await expect(rankingMetric).toContainText("Faithfulness");
+});
+
+test("モーダルの層の中でも一覧を暗幕とモーダルの上に出し、Esc は一覧だけを閉じる", async ({ page }) => {
+  await page.goto("/settings/oci");
+  const region = page.getByRole("combobox", { name: "リージョン", exact: true });
+  await expect(region).toContainText("us-chicago-1");
+  // ConfirmDialog と同じ重なり（暗幕 --z-scrim の上に --z-dialog の面）を作り、フィールドをその面に載せる。
+  await region.evaluate((button) => {
+    const field = button.parentElement?.parentElement as HTMLElement;
+    const scrim = document.createElement("div");
+    scrim.dataset.testid = "test-scrim";
+    scrim.style.cssText = "position:fixed;inset:0;z-index:var(--z-scrim);background:var(--scrim)";
+    document.body.append(scrim);
+    // フィールドを --z-dialog の面に載せる。React の root の外へは動かせないため、その場で持ち上げる
+    // （途中の重なり文脈に閉じ込められないよう、body までの祖先をすべて --z-dialog にする）。
+    field.setAttribute("role", "dialog");
+    field.style.background = "var(--color-surface-overlay)";
+    for (let node: HTMLElement | null = field; node && node !== document.body; node = node.parentElement) {
+      if (getComputedStyle(node).position === "static") node.style.position = "relative";
+      node.style.zIndex = "var(--z-dialog)";
+    }
+    (window as unknown as { escapeCount: number }).escapeCount = 0;
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") (window as unknown as { escapeCount: number }).escapeCount += 1;
+    });
+  });
+
+  await region.click();
+  const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
+  await expect(listbox).toBeVisible();
+  await expectCenterHitsSelf(listbox.getByRole("option", { name: "ap-osaka-1" }));
+
+  await page.keyboard.press("Escape");
+  await expect(listbox).toBeHidden();
+  await expect(region).toBeFocused();
+  expect(await page.evaluate(() => (window as unknown as { escapeCount: number }).escapeCount)).toBe(0);
+
+  // aria-modal のモーダルでは、一覧をモーダルの中に描く（外に出すと支援技術がモーダルの外として読まない）。
+  await region.evaluate((button) => button.parentElement?.parentElement?.setAttribute("aria-modal", "true"));
+  await page.keyboard.press("ArrowDown");
+  await expect(listbox).toBeVisible();
+  expect(
+    await listbox.evaluate((node) => Boolean(node.closest('[aria-modal="true"]')?.contains(document.activeElement)))
+  ).toBe(true);
+  await expectCenterHitsSelf(listbox.getByRole("option", { name: "ap-tokyo-1" }));
+  await listbox.getByRole("option", { name: "ap-tokyo-1" }).click();
+  await expect(region).toContainText("ap-tokyo-1");
+  await expect(listbox).toBeHidden();
 });

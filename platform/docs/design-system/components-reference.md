@@ -975,3 +975,25 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 ```
 
 ---
+
+## SelectField — 変更（#352）
+
+選択肢の一覧を **body へ Portal で描く**ようにしました。親の `overflow: hidden / auto`（`DataTable` のセル・モーダル・カード・スクロール枠）で切れず、画面の下端では上に反転します。位置の計算は `FloatingActionMenu` と同じ `useFloatingMenuPosition`（`floating-menu.tsx`）を共有します。props・id・aria は変えていません（`id` / `${id}-option-${index}` / `aria-controls` / `aria-activedescendant` / `aria-labelledby`）。
+
+| 決めたこと | 理由 |
+|---|---|
+| 一覧は `position: fixed` で body に出し、トリガーと同じ幅・左端にそろえる。開いている間はスクロール（どの祖先でも）とリサイズに追従する | 親の overflow に切られない。375px でも画面の外にはみ出さない（左右 8px の余白で止める） |
+| 下に 16rem（`max-h-64` と同じ）が入らず、上のほうが広ければ上に反転する。どちらにも入らなければ広い側に出し、空きの高さまで縮めて内部スクロールにする。反転の向きは `data-floating-menu-placement`（`top` / `bottom`） | 画面の下端のフィールドでも選択肢が見える。E2E が向きを確かめられる |
+| モーダル（`aria-modal="true"` / `<dialog open>`）の中で開いたときは、body ではなくそのモーダルの中に描く | モーダルの外に出すと、支援技術がモーダルの外として読まない（aria-modal）・`<dialog>` の top layer の下に隠れる |
+| z-index を持つ層（モーダル・固定ヘッダーなど）の中では、その層より 1 段上に出す。層の外は `--z-dropdown` のまま | Portal で描くと、`--z-dropdown` のままではモーダルの暗幕や層の下に隠れる |
+| 外側クリックの判定は、フィールド本体と一覧の両方を内側とみなす。一覧を押してもフォーカスはボタンに残す | 一覧は DOM 上フィールドの外にある。スクロールバーや余白を押しても閉じない |
+| 選択は `click` で確定する（以前は `pointerdown`） | タッチで一覧をスクロールしただけで選ばれないようにする。Portal でも React のイベントは祖先に伝わるため、一覧のクリックは表の行などへ伝えない |
+| 矢印キー・Home / End・PageUp / PageDown（10 件）・typeahead で強調を動かすと、強調中の選択肢を一覧の中で見せる（`scrollIntoView({ block: "nearest" })` と同じ動き）。マウスの移動ではスクロールしない | 7 件目以降が枠の外に出たままにならない。`scrollIntoView` は一覧の外（ページ本体）まで動かすので、一覧の `scrollTop` だけを動かす |
+| typeahead（W3C APG の select-only combobox）: 文字を打つと、その文字で始まる選択肢を強調する（閉じていれば開く）。続けて打つと前方一致で絞り込み、同じ文字の繰り返しは順に巡る。500ms 入力がなければ入力をリセットする。大文字小文字・全角半角は区別しない | キーボードで長い一覧（リージョン・評価指標など）を選べる。Space は従来どおり選択・開閉に使う |
+| 一覧が開いているときの Esc は一覧だけを閉じ、囲むモーダルには伝えない | Esc 1 回でモーダルごと閉じない（APG: Esc は一覧を閉じる） |
+
+- E2E で一覧を引くときは、フィールドを囲む要素ではなく `page.getByRole("listbox", { name: "<ラベル>" })` で引きます（一覧は body の直下、モーダルの中ならモーダルの直下にあります）。
+- 一覧は `position: fixed` です。`transform` / `filter` / `contain` を持つ要素（固定の containing block）をモーダルの外枠にすると位置がずれるため、モーダルの中央寄せは flex で行います（`ConfirmDialog` と同じ）。
+- 純粋関数 `computeFloatingMenuLayout`（位置と反転）・`floatingLayerZIndex`（重なり順）・`selectPortalContainer`（描く先）・`findTypeaheadIndex` / `typeaheadStartIndex`（typeahead）・`nearestScrollTop`（強調中の選択肢のスクロール）・`isInsideAny`（外側クリック）は `packages/ui/tests/select-field.test.tsx` が確かめます。パッケージのルートからは export しません。
+
+---
