@@ -587,6 +587,10 @@ class RagPipeline:
                 grounding_params.corrective_enabled
                 and (not grounded.ranked or grounded.context_pack.evidence_count == 0)
             ) or (crag_enabled and crag_confidence_score < crag_high_threshold)
+            # CRAG の精緻化で実際に再検索したか。hop 上限 0 や書き換えの失敗(空応答)で
+            # 再検索しなかったときは、根拠 0 件の補正(条件緩和の再検索 / multi-hop)を
+            # この後で行う(#275)。
+            crag_researched = False
             if should_refine:
                 error_stage = "crag_corrective"
                 refinement_limit = (
@@ -618,6 +622,7 @@ class RagPipeline:
                         request=effective_request,
                         resolved_strategy=resolved_strategy,
                     )
+                    crag_researched = True
                     crag_ranked = await self._rerank(
                         query_guardrail.sanitized_text,
                         crag_result.chunks,
@@ -646,8 +651,10 @@ class RagPipeline:
                     query_variants = crag_variants
                     if not crag_enabled or crag_confidence_score >= crag_high_threshold:
                         break
-            elif (
-                retrieval_params.corrective_retrieval and grounded.context_pack.evidence_count == 0
+            if (
+                not crag_researched
+                and retrieval_params.corrective_retrieval
+                and grounded.context_pack.evidence_count == 0
             ):
                 corrective_retried = True
                 error_stage = "corrective_retrieval"
@@ -681,7 +688,11 @@ class RagPipeline:
                 ):
                     grounded = corrective_grounded
                     selected_retrieval_result = corrective_result
-            elif agentic_params.multi_hop and grounded.context_pack.evidence_count == 0:
+            elif (
+                not crag_researched
+                and agentic_params.multi_hop
+                and grounded.context_pack.evidence_count == 0
+            ):
                 error_stage = "agentic_multi_hop"
                 # 1 回目と同じ入力(temperature 0)で分解し直しても同じ sub-question しか返らない。
                 # 上位の検索結果を context として渡し、不足している情報を探す追加の分解にする。

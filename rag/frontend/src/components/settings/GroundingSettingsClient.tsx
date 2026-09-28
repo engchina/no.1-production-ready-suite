@@ -355,12 +355,19 @@ function NumberField({
         step={step}
         aria-label={label}
         disabled={disabled}
-        onChange={(event) => onChange(Number(event.target.value))}
+        // 空欄を Number("") の 0 として扱うと、低しきい値では「CRAG を無効化」という別の設定が黙って
+        // 入り、途中入力(「0.」など)も 0 に書き戻される。空欄は NaN にして未入力(保存不可)とする(#275)。
+        onChange={(event) => onChange(parseNumberInput(event.target.value))}
         className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
       <span className="block text-xs text-fg-muted">{helper}</span>
     </label>
   );
+}
+
+/** number input の値を数値へ。空欄は未入力として NaN を返す(0 と区別する)。 */
+export function parseNumberInput(raw: string): number {
+  return raw.trim() === "" ? Number.NaN : Number(raw);
 }
 
 function orderedPipelines(
