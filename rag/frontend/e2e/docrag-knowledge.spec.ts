@@ -410,6 +410,8 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
   await confirmDialog.getByRole("button", { name: "削除" }).click();
   await expect(page.getByText("保存された DocRAG の回答はまだありません。")).toBeVisible();
   await expect(page.getByText("受注一覧で取消ボタンを押します。")).toHaveCount(0);
+  // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
+  await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
   expect(deleted).toBe(true);
 });
 

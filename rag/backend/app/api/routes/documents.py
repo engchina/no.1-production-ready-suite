@@ -35,6 +35,7 @@ from app.config import (
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     Settings,
     get_settings,
+    normalize_parser_adapter_backend_value,
 )
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -159,12 +160,9 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_adapter_backend",
         "parser_docling_enabled",
         "parser_docling_vision_enabled",
-        "parser_marker_enabled",
         "parser_unstructured_enabled",
-        "parser_unlimited_ocr_enabled",
         "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
-        "parser_glm_ocr_enabled",
     ),
     "chunking_strategy": (
         "chunking_strategy",
@@ -1577,6 +1575,12 @@ def _experiment_candidate_settings(base: Settings, overrides: dict[str, object])
     """global 設定に実験ジョブの候補レシピ上書きを重ねた Settings を返す(既知キーのみ)。"""
     allowed = {"rag_preprocess_profile", "rag_parser_adapter_backend"}
     filtered = {key: value for key, value in overrides.items() if key in allowed}
+    if "rag_parser_adapter_backend" in filtered:
+        # model_copy は validator を通さないため、削除済みエンジン(#270)が残る旧ジョブの
+        # snapshot もここで既定エンジンへ寄せる。
+        filtered["rag_parser_adapter_backend"] = normalize_parser_adapter_backend_value(
+            filtered["rag_parser_adapter_backend"]
+        )
     return base.model_copy(update=filtered)
 
 
@@ -1953,12 +1957,9 @@ def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> boo
         return False
     aliases = {
         "docling": {"docling", "docling_adapter"},
-        "marker": {"marker", "marker_adapter"},
         "unstructured": {"unstructured", "unstructured_adapter"},
-        "unlimited_ocr": {"unlimited_ocr", "unlimited_ocr_adapter"},
         "mineru": {"mineru", "mineru_adapter"},
         "dots_ocr": {"dots_ocr", "dots_ocr_adapter"},
-        "glm_ocr": {"glm_ocr", "glm_ocr_adapter"},
         "oci_genai_vision": {"oci_genai_vision", "enterprise_ai_vlm"},
         "enterprise_ai_vlm": {"oci_genai_vision", "enterprise_ai_vlm"},
     }

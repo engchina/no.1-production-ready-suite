@@ -2992,7 +2992,9 @@ class PlanningLlm(OciEnterpriseAiClient):
         *,
         mode: str,
         max_subqueries: int = 3,
+        context: str = "",
     ) -> list[str]:
+        del context
         self.plan_calls.append((query, mode, max_subqueries))
         return list(self._planned)
 
@@ -3424,6 +3426,7 @@ class ModePlanningLlm(OciEnterpriseAiClient):
         self.generate_allowed = generate_allowed
         self.generated = False
         self.plan_modes: list[str] = []
+        self.plan_contexts: list[str] = []
 
     async def plan_query(
         self,
@@ -3431,9 +3434,11 @@ class ModePlanningLlm(OciEnterpriseAiClient):
         *,
         mode: str,
         max_subqueries: int = 3,
+        context: str = "",
     ) -> list[str]:
         del query, max_subqueries
         self.plan_modes.append(mode)
+        self.plan_contexts.append(context)
         if mode == "query_rewrite":
             return ["承認条件 書き換え"]
         if mode == "decompose":
@@ -3704,7 +3709,52 @@ async def test_agentic_multi_hop_reuses_full_post_processing() -> None:
     assert response.citations[0].chunk_id == "doc-evidence:0"
     assert response.diagnostics.corrective_retried is True
     assert "decompose" in llm.plan_modes
+    # 2 回目の分解には 1 回目の上位の検索結果を context として渡す(#274)。
+    assert llm.plan_modes == ["multi_hop", "decompose"]
+    assert llm.plan_contexts[0] == ""
+    assert llm.plan_contexts[1].startswith("[1] ")
+    assert response.diagnostics.agentic_hops == 1
     assert pipeline.grounding_calls.count("compression") == 2
+
+
+class SamePlanLlm(ModePlanningLlm):
+    """どの mode でも同じ sub-question を返す LLM(分解し直しても新しい variant が出ない)。"""
+
+    async def plan_query(
+        self,
+        query: str,
+        *,
+        mode: str,
+        max_subqueries: int = 3,
+        context: str = "",
+    ) -> list[str]:
+        del query, max_subqueries
+        self.plan_modes.append(mode)
+        self.plan_contexts.append(context)
+        return ["承認条件 補足"]
+
+
+async def test_agentic_multi_hop_skips_hop_without_new_subqueries() -> None:
+    """追加の分解で新しい variant が出ないときは同じ検索を繰り返さない(#274)。"""
+    llm = SamePlanLlm()
+    oracle = QueryAwareRetryOracleClient(initial_empty=True)
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=llm,
+        settings=_grounding_test_settings(
+            rag_agentic_profile="multi_hop",
+            rag_post_retrieval_pipeline="compact",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert llm.plan_modes == ["multi_hop", "decompose"]
+    # 1 回目の検索(元 query + sub-question)だけで、hop の再検索はしない。
+    assert oracle.queries == ["承認条件", "承認条件 補足"]
+    assert response.diagnostics.agentic_hops == 1
+    assert response.diagnostics.corrective_retried is False
 
 
 def test_compression_selects_best_segments_before_restoring_source_order() -> None:
@@ -3761,7 +3811,9 @@ class RewritePlanningLlm(OciEnterpriseAiClient):
         self.plan_calls = 0
         self.prompt = ""
 
-    async def plan_query(self, query: str, *, mode: str, max_subqueries: int = 3) -> list[str]:
+    async def plan_query(
+        self, query: str, *, mode: str, max_subqueries: int = 3, context: str = ""
+    ) -> list[str]:
         self.plan_calls += 1
         return ["精緻化した検索クエリ"]
 
@@ -3901,8 +3953,10 @@ class EmptyRewriteLlm(GroundedLlm):
         super().__init__()
         self.plan_calls = 0
 
-    async def plan_query(self, query: str, *, mode: str, max_subqueries: int = 3) -> list[str]:
-        del query, mode, max_subqueries
+    async def plan_query(
+        self, query: str, *, mode: str, max_subqueries: int = 3, context: str = ""
+    ) -> list[str]:
+        del query, mode, max_subqueries, context
         self.plan_calls += 1
         return []
 
@@ -4078,3 +4132,56 @@ async def test_tree_search_falls_back_when_no_section_selected() -> None:
     assert llm.select_calls == 1
     assert [c.chunk_id for c in response.citations] == ["doc-1:0"]
     assert response.diagnostics.fallback_reason == "tree_search_no_section_selected"
+
+
+class GraphQueryRecordingOracleClient(EmptyGraphOracleClient):
+    """graph local search に渡された query を記録する Oracle client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.graph_queries: list[str] = []
+
+    async def graph_local_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del top_k, filters
+        self.graph_queries.append(query)
+        return []
+
+
+async def test_pipeline_hyde_keeps_question_as_primary_graph_query() -> None:
+    """HyDE の仮説文書は埋め込み variant に足し、graph 検索の主クエリは質問のまま(#274)。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = GraphQueryRecordingOracleClient()
+    hypothetical = "請求書の原本は Object Storage に 7 年間保管します。"
+    llm = PlanningLlm([hypothetical])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_agentic_profile="hyde",
+            rag_agentic_service_enabled=False,
+            rag_graph_service_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="請求書 保管",
+            strategy=SearchStrategy.GRAPH_LOCAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert llm.plan_calls == [("請求書 保管", "hyde", 3)]
+    assert oracle.graph_queries == ["請求書 保管"]
+    # 仮説文書は埋め込み検索の variant として使う。
+    assert genai.embedded_texts == ["請求書 保管", hypothetical]
+    assert response.diagnostics.hyde_generated is True

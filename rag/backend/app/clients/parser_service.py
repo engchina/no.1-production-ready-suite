@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 # 設定の service URL フィールド名(backend ごと)。
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
-    "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
     "asr": "rag_parser_asr_service_url",
     # OCI クラウド service 系 backend(薄いプロキシ microservice)。
@@ -45,12 +44,9 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
 
 _SERVICE_LABELS: dict[str, str] = {
     "docling": "Docling",
-    "marker": "Marker",
     "unstructured": "Unstructured",
-    "unlimited_ocr": "Unlimited-OCR",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
-    "glm_ocr": "GLM-OCR",
     "asr": "ASR",
     "oci_genai_vision": "OCI Generative AI Vision",
     "oci_document_understanding": "OCI Document Understanding",
@@ -484,6 +480,18 @@ def _service_unavailable_message(
             f"選択した文書解析エンジン（{label}）に設定したモデルが見つかりません。"
             "外部接続のモデル ID を確認し、接続テストを再実行してください。"
         )
+    if reason == "adapter_source_unsupported":
+        # 外部 API のエンジン(MinerU / Dots.OCR)も呼び出し前の形式判定で止まるため、
+        # 接続エラーの文言にせず対応形式を案内する。
+        formats = supported_formats_label(backend)
+        formats_suffix = f"（対応形式: {formats}）" if formats else ""
+        noun = "文書解析エンジン" if external else "文書解析サービス"
+        return (
+            f"選択した{noun}（{label}）はこのファイル形式を処理できません"
+            f"{formats_suffix}。"
+            "別の解析エンジンを選ぶか、対応形式に変換してから再実行してください。"
+            f"{warning_suffix}"
+        )
     if external:
         suffix = f" 接続先: {service_url}" if service_url else ""
         if reason == "adapter_invalid_input":
@@ -519,15 +527,6 @@ def _service_unavailable_message(
             "サービス内に見つかりません。"
             f"サービス管理画面で {service_id} のイメージ・依存関係を確認し、"
             "再ビルドまたは再起動してから再実行してください。"
-            f"{warning_suffix}"
-        )
-    if reason == "adapter_source_unsupported":
-        formats = supported_formats_label(backend)
-        formats_suffix = f"（対応形式: {formats}）" if formats else ""
-        return (
-            f"選択した文書解析サービス（{label}）はこのファイル形式を処理できません"
-            f"{formats_suffix}。"
-            "別の解析エンジンを選ぶか、対応形式に変換してから再実行してください。"
             f"{warning_suffix}"
         )
     if reason == "adapter_invalid_input":

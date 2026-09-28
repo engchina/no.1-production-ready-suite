@@ -55,13 +55,6 @@ services:
     ports:
       - "127.0.0.1:18020:8000"
 
-  parser-marker:
-    build: *dev-no-bake
-    volumes:
-      - parser-marker-model-cache:/home/appuser/.cache
-    ports:
-      - "127.0.0.1:18021:8000"
-
   parser-unstructured:
     ports:
       - "127.0.0.1:18022:8000"
@@ -122,5 +115,4 @@ services:
 
 volumes:
   parser-docling-model-cache:
-  parser-marker-model-cache:
   parser-asr-model-cache:

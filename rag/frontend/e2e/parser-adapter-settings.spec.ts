@@ -29,32 +29,28 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "文書解析", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Marker.*CPU.*停止/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
-    await expect(
-      page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*設定済み/ })
-    ).toBeVisible();
     await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*未設定/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
+    // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
+    await expect(page.getByRole("radio", { name: /Marker|Unlimited-OCR|GLM-OCR/ })).toHaveCount(0);
     await expect(
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
     ).toBeVisible();
     const engineNames = (await page.getByRole("radio").allTextContents()).map((text) =>
       text.replace(/\s+/g, " ").trim()
     );
+    expect(engineNames).toHaveLength(6);
     expect(engineNames[0]).toContain("Docling");
-    expect(engineNames[1]).toContain("Marker");
-    expect(engineNames[2]).toContain("Unstructured");
-    expect(engineNames[3]).toContain("Unlimited-OCR");
-    expect(engineNames[4]).toContain("MinerU");
-    expect(engineNames[5]).toContain("Dots.OCR");
-    expect(engineNames[6]).toContain("GLM-OCR");
-    expect(engineNames[7]).toContain("OCI Generative AI (Vision)");
-    expect(engineNames[8]).toContain("OCI Document Understanding");
+    expect(engineNames[1]).toContain("Unstructured");
+    expect(engineNames[2]).toContain("MinerU");
+    expect(engineNames[3]).toContain("Dots.OCR");
+    expect(engineNames[4]).toContain("OCI Generative AI (Vision)");
+    expect(engineNames[5]).toContain("OCI Document Understanding");
     await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
-    await expect(page.getByLabel("Endpoint")).toHaveCount(4);
-    await expect(page.getByLabel("Model")).toHaveCount(4);
-    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(4);
+    await expect(page.getByLabel("Endpoint")).toHaveCount(2);
+    await expect(page.getByLabel("Model")).toHaveCount(2);
+    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(2);
     await page.getByText("運用診断", { exact: true }).click();
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -104,7 +100,7 @@ async function mockParserAdapterContract(page: Page) {
           passed: false,
           fixture_root: "fixture_root:hash-fixtures",
           source_kinds: ["pdf", "email"],
-          backends: ["docling", "marker", "unstructured"],
+          backends: ["docling", "mineru", "unstructured"],
           case_count: 3,
           blocking_failure_count: 1,
           cases: [
@@ -131,7 +127,7 @@ async function mockParserAdapterContract(page: Page) {
               reason_codes: ["schema_remap_contract_ok"],
             },
             {
-              backend: "marker",
+              backend: "mineru",
               source_kind: "pdf",
               fixture_name: "pdf_fixture:hash-policy",
               content_type: "application/pdf",
@@ -139,7 +135,7 @@ async function mockParserAdapterContract(page: Page) {
               blocking: true,
               parser_backend: null,
               parser_version: null,
-              adapter_import_name: "marker",
+              adapter_import_name: "external_api",
               adapter_distribution_name: null,
               adapter_package_version: null,
               template: null,
@@ -180,16 +176,16 @@ async function mockParserAdapterContract(page: Page) {
             case_count: 3,
             blocking_failure_count: 1,
             source_kinds: ["pdf", "email"],
-            backends: ["docling", "marker", "unstructured"],
+            backends: ["docling", "mineru", "unstructured"],
             passed_source_kinds: ["pdf"],
             backend_status_counts: {
               docling: { passed: 1 },
-              marker: { missing: 1 },
+              mineru: { missing: 1 },
               unstructured: { available: 1 },
             },
             backend_source_status: {
               docling: { pdf: "passed" },
-              marker: { pdf: "missing" },
+              mineru: { pdf: "missing" },
               unstructured: { email: "available" },
             },
             reason_code_counts: {
@@ -201,7 +197,7 @@ async function mockParserAdapterContract(page: Page) {
             blocking_failure_reason_counts: { adapter_missing: 1 },
             blocking_failures: [
               {
-                backend: "marker",
+                backend: "mineru",
                 source_kind: "pdf",
                 status: "missing",
                 warning_codes: ["adapter_package_missing"],
@@ -298,12 +294,9 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
           config_source: "runtime",
           adapters: [
             disabledAdapter("docling"),
-            disabledAdapter("marker"),
             disabledAdapter("unstructured"),
-            disabledAdapter("unlimited_ocr"),
             { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
             disabledAdapter("dots_ocr"),
-            disabledAdapter("glm_ocr"),
           ],
         }),
       });
@@ -316,12 +309,9 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
         config_source: "runtime",
         adapters: [
           disabledAdapter("docling"),
-          disabledAdapter("marker"),
           disabledAdapter("unstructured"),
-          disabledAdapter("unlimited_ocr"),
           disabledAdapter("mineru"),
           disabledAdapter("dots_ocr"),
-          disabledAdapter("glm_ocr"),
         ],
       }),
     });
@@ -346,12 +336,9 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     adapter_backend: "mineru",
     docling_enabled: false,
     docling_vision_enabled: false,
-    marker_enabled: false,
     unstructured_enabled: false,
-    unlimited_ocr_enabled: false,
     mineru_enabled: true,
     dots_ocr_enabled: false,
-    glm_ocr_enabled: false,
     connections: defaultConnections().map((connection) => ({
       backend: connection.backend,
       endpoint: connection.endpoint,
@@ -393,29 +380,26 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
     }
     await route.fulfill({
       json: parserAdapterEnvelope({
-        adapter_backend: "unlimited_ocr",
-        effective_order: ["unlimited_ocr"],
+        adapter_backend: "dots_ocr",
+        effective_order: ["dots_ocr"],
         config_source: "runtime",
         connections,
         adapters: [
           disabledAdapter("docling"),
-          disabledAdapter("marker"),
           disabledAdapter("unstructured"),
-          { ...disabledAdapter("unlimited_ocr"), enabled: true, selected: true, status: "active" },
           disabledAdapter("mineru"),
-          disabledAdapter("dots_ocr"),
-          disabledAdapter("glm_ocr"),
+          { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
         ],
       }),
     });
   });
   let statusChecks = 0;
-  await page.route("**/api/settings/parser-adapters/unlimited_ocr/status", async (route) => {
+  await page.route("**/api/settings/parser-adapters/dots_ocr/status", async (route) => {
     statusChecks += 1;
     await route.fulfill({
       json: {
         data: {
-          backend: "unlimited_ocr",
+          backend: "dots_ocr",
           status: statusChecks === 1 ? "available" : "model_missing",
           version: null,
           warning_code: statusChecks === 1 ? null : "external_parser_model_missing",
@@ -427,8 +411,8 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   });
 
   await page.goto("/settings/parser-adapters");
-  const endpoint = page.locator("#external-parser-unlimited_ocr-endpoint");
-  const model = page.locator("#external-parser-unlimited_ocr-model");
+  const endpoint = page.locator("#external-parser-dots_ocr-endpoint");
+  const model = page.locator("#external-parser-dots_ocr-model");
   const card = endpoint.locator("xpath=../../..");
 
   await card.getByRole("button", { name: "接続を確認" }).click();
@@ -444,16 +428,16 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(endpoint).toBeFocused();
   expect(payloads).toHaveLength(0);
 
-  await endpoint.fill("https://unlimited-new.example.com/v1");
-  await model.fill("served-unlimited");
+  await endpoint.fill("https://dots-new.example.com/v1");
+  await model.fill("served-dots");
   await page.getByRole("button", { name: "保存" }).click();
   await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
   const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
-  const firstUnlimited = firstConnections.find((item) => item.backend === "unlimited_ocr");
-  expect(firstUnlimited).toEqual({
-    backend: "unlimited_ocr",
-    endpoint: "https://unlimited-new.example.com/v1",
-    model: "served-unlimited",
+  const firstDots = firstConnections.find((item) => item.backend === "dots_ocr");
+  expect(firstDots).toEqual({
+    backend: "dots_ocr",
+    endpoint: "https://dots-new.example.com/v1",
+    model: "served-dots",
   });
   await expect(card.getByText("接続できました。")).toHaveCount(0);
 
@@ -465,10 +449,10 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await card.getByLabel("保存済み API key を削除").check();
   await page.getByRole("button", { name: "保存" }).click();
   const secondConnections = payloads[1].connections as Array<Record<string, unknown>>;
-  expect(secondConnections.find((item) => item.backend === "unlimited_ocr")).toEqual({
-    backend: "unlimited_ocr",
-    endpoint: "https://unlimited-new.example.com/v1",
-    model: "served-unlimited",
+  expect(secondConnections.find((item) => item.backend === "dots_ocr")).toEqual({
+    backend: "dots_ocr",
+    endpoint: "https://dots-new.example.com/v1",
+    model: "served-dots",
     clear_api_key: true,
   });
   await expectNoHorizontalOverflow(page);
@@ -497,19 +481,6 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               warning_code: null,
             },
             {
-              backend: "marker",
-              package_name: "marker",
-              import_name: "marker",
-              distribution_name: null,
-              install_package: "marker-pdf[full]==1.10.2",
-              enabled: true,
-              selected: false,
-              installed: false,
-              status: "ignored",
-              version: null,
-              warning_code: "adapter_flag_ignored_by_backend",
-            },
-            {
               backend: "unstructured",
               package_name: "unstructured",
               import_name: "unstructured",
@@ -521,19 +492,6 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               status: "ignored",
               version: null,
               warning_code: "adapter_flag_ignored_by_backend",
-            },
-            {
-              backend: "unlimited_ocr",
-              package_name: "external_api",
-              import_name: "external_api",
-              distribution_name: "openai_chat_completions",
-              install_package: "外部 Unlimited-OCR API",
-              enabled: false,
-              selected: false,
-              installed: false,
-              status: "disabled",
-              version: null,
-              warning_code: null,
             },
             {
               backend: "mineru",
@@ -554,19 +512,6 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               import_name: "external_api",
               distribution_name: "openai_chat_completions",
               install_package: "外部 Dots.OCR API",
-              enabled: false,
-              selected: false,
-              installed: false,
-              status: "disabled",
-              version: null,
-              warning_code: null,
-            },
-            {
-              backend: "glm_ocr",
-              package_name: "external_api",
-              import_name: "external_api",
-              distribution_name: "openai_chat_completions",
-              install_package: "外部 GLM-OCR API",
               enabled: false,
               selected: false,
               installed: false,
@@ -607,7 +552,7 @@ function parserAdapterEnvelope(data: object) {
         missing_source_kinds: [],
         backend_source_kinds: {
           docling: ["pdf", "image", "office", "html"],
-          unlimited_ocr: ["pdf", "image"],
+          dots_ocr: ["pdf", "image"],
           local: ["audio", "text", "unknown"],
         },
         route_evidence: sourceRoutes,
@@ -623,24 +568,16 @@ function defaultSourceRoutes() {
   return [
     {
       source_kind: "pdf",
-      candidate_order: ["docling", "marker", "unstructured", "unlimited_ocr", "mineru", "glm_ocr"],
-      attempted_order: ["docling", "marker"],
+      candidate_order: ["docling", "unstructured", "mineru", "dots_ocr"],
+      attempted_order: ["docling", "unstructured"],
       active_order: ["docling"],
       selected_backend: "docling",
       reason_codes: ["selected_adapter_supported_for_source", "active_adapter_available_for_source"],
-      warning_codes: ["marker_adapter_package_missing"],
+      warning_codes: ["unstructured_adapter_package_missing"],
     },
     {
       source_kind: "image",
-      candidate_order: [
-        "unstructured",
-        "marker",
-        "docling",
-        "dots_ocr",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-      ],
+      candidate_order: ["unstructured", "docling", "dots_ocr", "mineru"],
       attempted_order: ["docling"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -680,7 +617,6 @@ function defaultSourceRoutes() {
 async function mockParserServiceStatuses(page: Page) {
   const statuses: Record<string, string> = {
     "parser-docling": "running",
-    "parser-marker": "stopped",
     "parser-unstructured": "degraded",
     "parser-oci-genai-vision": "running",
     "parser-oci-document-understanding": "unconfigured",
@@ -734,14 +670,6 @@ async function mockExternalParserStatuses(page: Page) {
 function defaultConnections() {
   return [
     {
-      backend: "unlimited_ocr",
-      protocol: "openai_chat_completions",
-      endpoint: "https://unlimited.example.com/v1",
-      model: "/models/Unlimited-OCR",
-      api_key_configured: true,
-      configured: true,
-    },
-    {
       backend: "mineru",
       protocol: "mineru_file_parse",
       endpoint: "",
@@ -752,18 +680,10 @@ function defaultConnections() {
     {
       backend: "dots_ocr",
       protocol: "openai_chat_completions",
-      endpoint: "",
+      endpoint: "https://dots.example.com/v1",
       model: "rednote-hilab/dots.mocr",
-      api_key_configured: false,
-      configured: false,
-    },
-    {
-      backend: "glm_ocr",
-      protocol: "openai_chat_completions",
-      endpoint: "",
-      model: "ggml-org/GLM-OCR-GGUF:f16",
-      api_key_configured: false,
-      configured: false,
+      api_key_configured: true,
+      configured: true,
     },
   ] as const;
 }
@@ -776,39 +696,21 @@ function serviceProfileForId(serviceId: string) {
   return "cpu";
 }
 
-function disabledAdapter(
-  backend:
-    | "docling"
-    | "marker"
-    | "unstructured"
-    | "unlimited_ocr"
-    | "mineru"
-    | "dots_ocr"
-    | "glm_ocr"
-) {
+function disabledAdapter(backend: "docling" | "unstructured" | "mineru" | "dots_ocr") {
+  const external = backend === "mineru" || backend === "dots_ocr";
   return {
     backend,
-    package_name: ["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"].includes(backend)
-      ? "external_api"
-      : backend,
-    import_name: ["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"].includes(backend)
-      ? "external_api"
-      : backend,
+    package_name: external ? "external_api" : backend,
+    import_name: external ? "external_api" : backend,
     distribution_name: null,
     install_package:
-      backend === "marker"
-        ? "marker-pdf[full]==1.10.2"
-        : backend === "unstructured"
-          ? "unstructured[all-docs]==0.18.32"
-          : backend === "unlimited_ocr"
-            ? "外部 Unlimited-OCR API"
-            : backend === "mineru"
-              ? "外部 MinerU API"
-              : backend === "dots_ocr"
-                ? "外部 Dots.OCR API"
-                : backend === "glm_ocr"
-                  ? "外部 GLM-OCR API"
-                  : "docling==2.103.0",
+      backend === "unstructured"
+        ? "unstructured[all-docs]==0.18.32"
+        : backend === "mineru"
+          ? "外部 MinerU API"
+          : backend === "dots_ocr"
+            ? "外部 Dots.OCR API"
+            : "docling==2.103.0",
     enabled: false,
     selected: false,
     installed: false,

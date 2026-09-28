@@ -59,15 +59,8 @@ export const ja = {
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
-  "settings.preview.env.title": ".env プレビュー",
-  "settings.preview.json.title": "JSON プレビュー",
-  "settings.preview.env.copy": ".env をコピー",
-  "settings.preview.json.copy": "JSON をコピー",
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
-  "settings.preview.ops.title": "運用メモ",
-  "settings.preview.secret.saved": "<保存済み secret>",
-  "settings.preview.secret.entered": "<入力済み secret>",
 
   // ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品（AUTH_MESSAGES）が持つ（#214）。
 
@@ -208,12 +201,9 @@ export const ja = {
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Unstructured へ正規化",
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
-  "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
-  "settings.parserAdapters.backend.unlimited_ocr.description": "外部 Unlimited-OCR API を使用",
   "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
-  "settings.parserAdapters.backend.glm_ocr.description": "外部 GLM-OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.oci_genai_vision.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
@@ -543,7 +533,7 @@ export const ja = {
   "settings.services.commands.description":
     "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
   "settings.services.commands.buildAll.label": "CPU サービスを事前ビルド(前処理 / Parser CPU / pipeline)",
-  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(例: GLM-OCR)",
+  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(ASR 音声文字起こし)",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
@@ -569,7 +559,7 @@ export const ja = {
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
   "settings.services.cpuNote":
-    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling / Marker は明示選択した場合のみ使用します。",
+    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling は明示選択した場合のみ使用します。",
   "settings.services.gpuNote": "GPU 構成(docker compose --profile gpu で opt-in)。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
@@ -638,7 +628,6 @@ export const ja = {
   "settings.services.item.preprocessImageEnhance": "画像補正",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
-  "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
@@ -1069,7 +1058,7 @@ export const ja = {
     "最大 N 個の sub-question に分解し RRF 融合へ注入",
   "settings.agentic.profile.multi_hop": "multi-hop",
   "settings.agentic.profile.multi_hop.description":
-    "分解 + 根拠が弱い時に top context で 1 回追加分解(上限 1 hop)",
+    "分解 + 根拠が見つからない時に、上位の検索結果を踏まえて 1 回だけ追加分解(検索の補正が動いた時は行わない)",
   "settings.agentic.profile.smart_routing": "スマートルーティング",
   "settings.agentic.profile.smart_routing.description":
     "クエリの種別を見極めて検索向けに正規化(現状は書き換え相当の LLM 計画)",
@@ -1099,10 +1088,14 @@ export const ja = {
 
   "settings.huggingface.subtitle":
     "parser のモデルダウンロード認証 token・ミラー endpoint を設定します。",
-  "settings.huggingface.loadError": "HuggingFace 設定の取得に失敗しました。",
+  "settings.huggingface.loading": "HuggingFace 設定を読み込んでいます",
+  "settings.huggingface.loadError":
+    "HuggingFace 設定を取得できませんでした。backend の状態を確認して再試行してください。",
   "settings.huggingface.saveError":
     "HuggingFace 設定の保存に失敗しました。入力値とサーバー側 .env の書き込み権限を確認してください。",
   "settings.huggingface.cardTitle": "HuggingFace モデルダウンロード",
+  "settings.huggingface.cardDescription":
+    "どちらも任意です。空欄なら公式 hub から token なし（匿名）でダウンロードします。",
   "settings.huggingface.field.endpoint": "ミラー endpoint(任意)",
   "settings.huggingface.placeholder.endpoint": "https://hf-mirror.com",
   "settings.huggingface.helper.endpoint":
@@ -1114,28 +1107,17 @@ export const ja = {
     "gated モデルや rate limit 緩和のための HuggingFace アクセス token。各 parser コンテナへ env で渡します。",
   "settings.huggingface.helper.tokenSaved": "token は保存済みです。変更する場合だけ入力してください。",
   "settings.huggingface.secrets.saved": "保存済み",
+  "settings.huggingface.secrets.notSet": "未設定",
   "settings.huggingface.secrets.clearToken": "保存済み token を削除する",
   "settings.huggingface.secrets.show": "token を表示",
   "settings.huggingface.secrets.hide": "token を隠す",
-  "settings.huggingface.actions.save": "保存する",
-  "settings.huggingface.actions.saving": "保存中…",
-  "settings.huggingface.actions.saved": "保存しました",
+  "settings.huggingface.actions.label": "HuggingFace 設定の操作",
+  "settings.huggingface.actions.save": "保存",
+  "settings.huggingface.actions.saved": "HuggingFace 設定を保存しました",
   "settings.huggingface.hint":
-    "保存した値は backend/.env に書き込まれ、サービス起動時に各 parser へ供給されます。既存コンテナは再作成で反映されます。",
-  "settings.huggingface.env.description": "保存される backend/.env のプレビュー(token はマスク)。",
-  "settings.huggingface.ops.description": "保存後の挙動。",
-  "settings.huggingface.ops.persist":
-    "値は backend の .env に保存します(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)。",
-  "settings.huggingface.ops.mount":
-    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。",
-  "settings.huggingface.ops.bake": "prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時 DL/認証にのみ使います。",
-  "settings.huggingface.status.title": "ダウンロード設定の状態",
-  "settings.huggingface.status.description": "現在の token / ミラーの設定状況。",
-  "settings.huggingface.status.token": "認証 token",
-  "settings.huggingface.status.tokenConfigured": "設定済み",
-  "settings.huggingface.status.tokenNotConfigured": "未設定(匿名 DL)",
-  "settings.huggingface.status.endpoint": "ミラー endpoint",
-  "settings.huggingface.status.endpointDefault": "公式 hub",
+    "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。既存のコンテナは再作成で反映されます。",
+  "settings.huggingface.hintCache":
+    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.database.readiness.ok": "OK",
   "settings.database.readiness.missing": "未設定",
@@ -1490,6 +1472,10 @@ export const ja = {
     "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.search": "追加する文書を検索",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
+  "knowledgeBases.assignment.truncated":
+    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
@@ -1535,7 +1521,7 @@ export const ja = {
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
-    "「{fileName}」を「{name}」から外します。文書自体は削除されません。",
+    "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",
@@ -2277,6 +2263,9 @@ export const ja = {
   "search.searching": "検索中…",
   "search.cancel": "停止",
   "search.cancelled": "検索ストリームを停止しました。",
+  "search.stream.incomplete":
+    "回答の受信が途中で途切れました。通信状態を確認して、もう一度検索してください。",
+  "search.stream.failed": "検索処理中にエラーが発生しました。時間をおいて再度お試しください。",
   "search.cancelledHint": "検索は途中で停止されました。必要に応じて再検索してください。",
   "search.mode.hybrid": "ハイブリッド",
   "search.mode.vector": "ベクトル",
@@ -2382,7 +2371,8 @@ export const ja = {
   "search.history.savedAt": "保存日時: {value}",
   "search.history.deleteTitle": "保存された回答を削除しますか？",
   "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
-  "search.history.deleteError": "回答を削除できませんでした。",
+  "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
+  "search.history.deleted": "保存された回答を削除しました。",
   "settings.docragPrompts.vlm_answer.title": "DocRAG の回答生成テンプレート",
   "settings.docragPrompts.vlm_answer.description":
     "回答エンジンが DocRAG のとき、根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
@@ -2654,6 +2644,7 @@ export const ja = {
     "RAG 検索は業務ビュー単位で行います。知識ベースを束ねた業務ビューを作成すると検索できます。",
   "search.businessViewRequired.cta": "業務ビューを作成",
   "search.businessViewError": "業務ビューを読み込めませんでした。",
+  "search.businessViewLoading": "業務ビューを読み込んでいます。",
   "search.guardrail": "安全チェック警告",
   "search.meta.trace": "トレースID",
   "search.meta.elapsed": "処理時間",

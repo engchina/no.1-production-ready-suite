@@ -201,7 +201,6 @@ function emptyAdapterConfig() {
       preprocess_profile: null,
       parser_adapter_backend: null,
       parser_docling_enabled: null,
-      parser_marker_enabled: null,
       parser_unstructured_enabled: null,
       chunking_strategy: null,
       chunk_size: null,
@@ -294,6 +293,21 @@ async function mockKnowledgeBaseApi(
         description?: string | null;
         default_search_mode?: SearchMode;
       };
+      if (
+        state.knowledgeBases.some(
+          (item) => item.name.toLowerCase() === payload.name.toLowerCase()
+        )
+      ) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            data: null,
+            error_messages: [DUPLICATE_NAME_MESSAGE],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
       const knowledgeBase = makeKnowledgeBase({
         id: `kb-${state.knowledgeBases.length + 1}`,
         name: payload.name,
@@ -368,19 +382,24 @@ async function mockKnowledgeBaseApi(
       return;
     }
     const knowledgeBaseId = url.searchParams.get("knowledge_base_id");
-    const documents = knowledgeBaseId
-      ? state.documents.filter((document) =>
-          document.knowledge_bases.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId)
-        )
-      : state.documents;
+    const q = url.searchParams.get("q")?.trim().toLowerCase();
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const documents = (
+      knowledgeBaseId
+        ? state.documents.filter((document) =>
+            document.knowledge_bases.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId)
+          )
+        : state.documents
+    ).filter((document) => !q || document.file_name.toLowerCase().includes(q));
     await route.fulfill({
       json: {
         data: {
-          items: documents,
+          items: documents.slice(offset, offset + limit),
           total: documents.length,
-          limit: Number(url.searchParams.get("limit") ?? 50),
-          offset: Number(url.searchParams.get("offset") ?? 0),
-          has_next: false,
+          limit,
+          offset,
+          has_next: offset + limit < documents.length,
         },
         error_messages: [],
         warning_messages: [],
@@ -388,6 +407,126 @@ async function mockKnowledgeBaseApi(
     });
   });
 }
+
+const DUPLICATE_NAME_MESSAGE =
+  "同じ名前のナレッジベース（アーカイブ済みを含む）がすでにあります。別の名前を指定してください。";
+
+// #282: 所属文書は件数で打ち切らずページングし、外して空になったページから最後のページへ戻る。
+test("所属文書は 10 件ずつページングし、外して空になったページから戻る", async ({ page }) => {
+  const state = createKnowledgeBaseState();
+  const kb = state.knowledgeBases[0];
+  for (let index = 2; index <= 11; index += 1) {
+    state.documents.push(
+      makeDocument({
+        id: `doc-member-${index}`,
+        file_name: `member-${String(index).padStart(2, "0")}.txt`,
+        status: "INDEXED",
+        knowledge_bases: [{ id: kb.id, name: kb.name }],
+      })
+    );
+  }
+  refreshKnowledgeBaseCounts(state, kb.id);
+  await mockKnowledgeBaseApi(page, state);
+
+  await page.goto("/knowledge-bases/kb-1");
+  const pagination = page.getByTestId("knowledge-base-documents-pagination");
+  await expect(pagination).toContainText("1 - 10 / 11 件");
+  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(10);
+
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("11 - 11 / 11 件");
+  const lastRow = page.locator("li").filter({ hasText: "member-11.txt" });
+  await expect(lastRow).toBeVisible();
+
+  // 2 ページ目の唯一の文書を外すと、空の案内ではなく 1 ページ目へ戻る。
+  await lastRow.getByRole("button", { name: "member-11.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "外す" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "所属から外しますか？" });
+  await expect(dialog).toContainText("ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。");
+  await dialog.getByRole("button", { name: "外す" }).click();
+
+  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(10);
+  await expect(page.getByText("所属文書がありません。")).toHaveCount(0);
+  // 1 ページに収まったので Pagination は出さない。
+  await expect(pagination).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("追加候補は文書名で検索して選べる", async ({ page }) => {
+  const state = createKnowledgeBaseState();
+  state.documents.push(
+    makeDocument({ id: "doc-3", file_name: "security-handbook.pdf", knowledge_bases: [] })
+  );
+  await mockKnowledgeBaseApi(page, state);
+  const candidateQueries: (string | null)[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/documents" && !url.searchParams.has("knowledge_base_id")) {
+      candidateQueries.push(url.searchParams.get("q"));
+    }
+  });
+
+  await page.goto("/knowledge-bases/kb-1");
+  const search = page.getByRole("searchbox", { name: "追加する文書を検索" });
+  await search.fill("security");
+  await search.press("Enter");
+  await expect.poll(() => candidateQueries.includes("security")).toBe(true);
+
+  await page.getByRole("combobox", { name: "文書を追加" }).click();
+  await expect(page.getByRole("option", { name: "security-handbook.pdf" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "guide.txt" })).toHaveCount(0);
+  await page.getByRole("option", { name: "security-handbook.pdf" }).click();
+  await page.getByRole("button", { name: "追加", exact: true }).click();
+  await expect(page.getByRole("link", { name: "security-handbook.pdf" })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("同じ名前で作成すると理由を表示し、詳細へ移らない", async ({ page }) => {
+  const state = createKnowledgeBaseState();
+  await mockKnowledgeBaseApi(page, state);
+
+  await page.goto("/knowledge-bases");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("社内規程");
+  await page.getByRole("button", { name: "作成" }).click();
+
+  await expect(page.getByText(DUPLICATE_NAME_MESSAGE).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/knowledge-bases$/);
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute(
+    "maxlength",
+    "256"
+  );
+});
+
+test("最後のページの KB をアーカイブすると、空の案内ではなく前のページへ戻る", async ({ page }) => {
+  const state = createKnowledgeBaseState();
+  for (let index = 2; index <= 21; index += 1) {
+    state.knowledgeBases.push(
+      makeKnowledgeBase({ id: `kb-${index}`, name: `KB ${String(index).padStart(2, "0")}` })
+    );
+  }
+  await mockKnowledgeBaseApi(page, state);
+
+  await page.goto("/knowledge-bases");
+  // 状態は色だけでなくアイコン付きの StatusBadge で出す。
+  await expect(
+    page.locator("tbody tr").first().locator('[data-status-variant="success"] svg')
+  ).toBeVisible();
+  await page.getByRole("button", { name: "次へ" }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+
+  const lastRow = page.locator("tbody tr").first();
+  const name = (await lastRow.getByRole("link").textContent())?.trim() ?? "";
+  await lastRow.getByRole("button", { name: `${name} の操作` }).click();
+  await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+  await page
+    .getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" })
+    .getByRole("button", { name: "アーカイブ" })
+    .click();
+
+  await expect(page.locator("tbody tr")).toHaveCount(20);
+  await expect(page.getByText("知識ベースがありません。")).toHaveCount(0);
+  await expect(page.getByText("1 - 20 / 20 件")).toBeVisible();
+});
 
 function createKnowledgeBaseState() {
   const knowledgeBases = [

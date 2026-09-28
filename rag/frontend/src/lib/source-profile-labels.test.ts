@@ -44,9 +44,16 @@ describe("source profile labels", () => {
   });
 
   it("parser backend labels hide external adapter implementation names", () => {
-    expect(parserBackendLabel("unlimited_ocr_adapter")).toBe("Unlimited-OCR");
-    expect(isSameParserBackend("unlimited_ocr_adapter", "unlimited_ocr")).toBe(true);
+    expect(parserBackendLabel("dots_ocr_adapter")).toBe("Dots.OCR");
+    expect(isSameParserBackend("dots_ocr_adapter", "dots_ocr")).toBe(true);
     expect(parserBackendLabel("mineru_adapter")).toBe("MinerU");
     expect(isSameParserBackend("mineru_adapter", "mineru")).toBe(true);
+  });
+
+  it("削除済みの解析エンジン名は過去の解析結果でも生の値のまま表示する", () => {
+    // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。過去の解析結果に残る名前は壊さず表示する。
+    expect(parserBackendLabel("marker_adapter")).toBe("marker_adapter");
+    expect(parserBackendLabel("unlimited_ocr_adapter")).toBe("unlimited_ocr_adapter");
+    expect(parserBackendLabel("glm_ocr")).toBe("glm_ocr");
   });
 });

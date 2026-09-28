@@ -1,6 +1,6 @@
 """Parser adapter の runtime compatibility matrix。
 
-Docling / Marker / Unstructured などの parser service が利用できる場合だけ、実際に
+Docling / Unstructured などの parser service が利用できる場合だけ、実際に
 `parse_with_registry` を通して本プロジェクト schema へ remap できるかを確認する。
 外部 adapter 実行は parser マイクロサービス境界へ委譲し、出力 artifact には本文を含めない。
 """
@@ -208,7 +208,6 @@ def strict_parser_adapter_settings(settings: Settings) -> Settings:
         update={
             "rag_parser_adapter_backend": "docling",
             "rag_parser_docling_enabled": True,
-            "rag_parser_marker_enabled": True,
             "rag_parser_unstructured_enabled": True,
         }
     )
@@ -570,12 +569,9 @@ def _compatibility_case(
         content_type=fixture.content_type,
         adapter_backend=adapter.backend,
         docling_enabled=adapter.backend == "docling",
-        marker_enabled=adapter.backend == "marker",
         unstructured_enabled=adapter.backend == "unstructured",
-        unlimited_ocr_enabled=adapter.backend == "unlimited_ocr",
         mineru_enabled=adapter.backend == "mineru",
         dots_ocr_enabled=adapter.backend == "dots_ocr",
-        glm_ocr_enabled=adapter.backend == "glm_ocr",
         external_adapter_runner=external_adapter_runner,
     )
     if result.extraction is None or result.parser_backend != adapter.backend:

@@ -1,7 +1,7 @@
 "use client";
 
 import { FlaskConical, Search as SearchIcon, Sparkles, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CitationCard } from "@/components/search/CitationCard";
 import {
@@ -15,6 +15,7 @@ import {
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk, type SearchMode } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { t, type I18nKey } from "@/lib/i18n";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -49,6 +50,8 @@ export function KnowledgeBaseSearchTestPanel({
   const [meta, setMeta] = useState<{ trace_id: string; elapsed_ms: number } | null>(null);
   const [errorText, setErrorText] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  // パネルを離れたら生成中の検索を止める（#285）。
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const ready = !disabled && indexedDocumentCount > 0;
   const isStreaming = phase === "streaming";
@@ -137,7 +140,7 @@ export function KnowledgeBaseSearchTestPanel({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") void submit();
+                    if (isSubmitEnter(e)) void submit();
                   }}
                   placeholder={t("knowledgeBases.searchTest.placeholder")}
                   aria-label={t("knowledgeBases.searchTest.title")}

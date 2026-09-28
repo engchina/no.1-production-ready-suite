@@ -1109,7 +1109,7 @@ def test_parser_registry_records_safe_fallback_for_corrupted_office() -> None:
 def test_parser_registry_records_external_adapter_unavailable_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Docling/Marker/Unstructured flags は未導入環境でも安全に local fallback する。"""
+    """Docling/Unstructured flags は未導入環境でも安全に local fallback する。"""
 
     def unavailable(name: str) -> bool:
         return False
@@ -1218,72 +1218,6 @@ def test_parser_registry_adapter_fallback_warning_affects_quality_report(
     assert "docling_adapter_package_missing" in quality.quality_warnings
 
 
-def test_parser_registry_uses_explicit_marker_adapter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """明示選択された Marker adapter を利用する。"""
-    marker_module = ModuleType("marker")
-    marker_module.__dict__["__version__"] = "4.5.6"
-    converters_module = ModuleType("marker.converters")
-    pdf_module = ModuleType("marker.converters.pdf")
-    models_module = ModuleType("marker.models")
-    output_module = ModuleType("marker.output")
-
-    class FakePdfConverter:
-        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
-            assert artifact_dict == {"model": "fake"}
-
-        def __call__(self, path: str) -> object:
-            assert path.endswith(".pdf")
-            return object()
-
-    def create_model_dict() -> dict[str, object]:
-        return {"model": "fake"}
-
-    def text_from_rendered(
-        rendered: object,
-    ) -> tuple[str, dict[str, object], dict[str, object]]:
-        _ = rendered
-        return "# Marker Fallback\n本文", {}, {}
-
-    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
-    models_module.__dict__["create_model_dict"] = create_model_dict
-    output_module.__dict__["text_from_rendered"] = text_from_rendered
-    monkeypatch.setitem(sys.modules, "marker", marker_module)
-    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
-    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
-    monkeypatch.setitem(sys.modules, "marker.models", models_module)
-    monkeypatch.setitem(sys.modules, "marker.output", output_module)
-    monkeypatch.setattr("rag_parser_core.registry._module_available", lambda name: name == "marker")
-
-    data = b"%PDF"
-    profile = build_source_profile(
-        original_file_name="sample.pdf",
-        sanitized_file_name="sample.pdf",
-        content_type="application/pdf",
-        file_size_bytes=len(data),
-        content_sha256="9" * 64,
-        data=data,
-    )
-
-    result = parse_with_registry(
-        data,
-        source_profile=profile,
-        content_type=profile.content_type,
-        adapter_backend="marker",
-        docling_enabled=False,
-        marker_enabled=True,
-    )
-
-    assert result.parser_backend == "marker"
-    assert result.parser_version == "4.5.6"
-    assert result.fallback_used is False
-    assert result.warnings == ()
-    assert result.extraction is not None
-    assert result.extraction.parser_artifacts["external_adapter"] == "marker"
-    assert "Marker Fallback" in result.extraction.raw_text
-
-
 def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1307,15 +1241,15 @@ def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="marker",
+        adapter_backend="mineru",
         docling_enabled=True,
-        marker_enabled=True,
         unstructured_enabled=True,
+        mineru_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert result.warnings == ("marker_adapter_source_unsupported",)
+    assert result.warnings == ("mineru_adapter_source_unsupported",)
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "markdown_by_heading"
 
@@ -1363,7 +1297,6 @@ def test_parser_registry_explicit_unstructured_routes_email(
         content_type=profile.content_type,
         adapter_backend="unstructured",
         docling_enabled=False,
-        marker_enabled=False,
         unstructured_enabled=True,
     )
 
@@ -1419,7 +1352,6 @@ def test_parser_registry_explicit_docling_routes_office(
         content_type=profile.content_type,
         adapter_backend="docling",
         docling_enabled=True,
-        marker_enabled=False,
         unstructured_enabled=False,
     )
 
@@ -1433,38 +1365,22 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """bbox を返さない image adapter でも source image asset で preview lineage を残す。"""
-    marker_module = ModuleType("marker")
-    marker_module.__dict__["__version__"] = "4.5.6"
-    converters_module = ModuleType("marker.converters")
-    pdf_module = ModuleType("marker.converters.pdf")
-    models_module = ModuleType("marker.models")
-    output_module = ModuleType("marker.output")
+    docling_module = ModuleType("docling")
+    docling_module.__dict__["__version__"] = "3.0.0"
+    converter_module = ModuleType("docling.document_converter")
 
-    class FakePdfConverter:
-        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
-            assert artifact_dict == {"model": "fake"}
+    class FakeDocument:
+        def export_to_markdown(self) -> str:
+            return "TOTAL 1000 JPY"
 
-        def __call__(self, path: str) -> object:
+    class FakeDocumentConverter:
+        def convert(self, path: str) -> object:
             assert path.endswith(".png")
-            return object()
+            return SimpleNamespace(document=FakeDocument())
 
-    def create_model_dict() -> dict[str, object]:
-        return {"model": "fake"}
-
-    def text_from_rendered(
-        rendered: object,
-    ) -> tuple[str, dict[str, object], dict[str, object]]:
-        _ = rendered
-        return "TOTAL 1000 JPY", {}, {}
-
-    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
-    models_module.__dict__["create_model_dict"] = create_model_dict
-    output_module.__dict__["text_from_rendered"] = text_from_rendered
-    monkeypatch.setitem(sys.modules, "marker", marker_module)
-    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
-    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
-    monkeypatch.setitem(sys.modules, "marker.models", models_module)
-    monkeypatch.setitem(sys.modules, "marker.output", output_module)
+    converter_module.__dict__["DocumentConverter"] = FakeDocumentConverter
+    monkeypatch.setitem(sys.modules, "docling", docling_module)
+    monkeypatch.setitem(sys.modules, "docling.document_converter", converter_module)
 
     data = b"\x89PNG\r\n\x1a\n"
     profile = build_source_profile(
@@ -1480,11 +1396,11 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="marker",
-        marker_enabled=True,
+        adapter_backend="docling",
+        docling_enabled=True,
     )
 
-    assert result.parser_backend == "marker"
+    assert result.parser_backend == "docling"
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["source_image_full_frame_asset_count"] == 1
     asset = result.extraction.assets[0]
@@ -1496,13 +1412,13 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
     assert asset.metadata["bbox_unit"] == "ratio"
 
 
-def test_parser_registry_explicit_marker_rejects_html_source(
+def test_parser_registry_explicit_mineru_rejects_html_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実装済み Marker adapter が扱えない source は warning を残して local fallback する。"""
+    """実装済み MinerU adapter が扱えない source は warning を残して local fallback する。"""
 
     def fail_if_checked(name: str) -> bool:
-        raise AssertionError(f"unsupported marker source should not import adapter: {name}")
+        raise AssertionError(f"unsupported mineru source should not import adapter: {name}")
 
     monkeypatch.setattr("rag_parser_core.registry._module_available", fail_if_checked)
     data = b"<h1>Title</h1><p>Body</p>"
@@ -1519,13 +1435,13 @@ def test_parser_registry_explicit_marker_rejects_html_source(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="marker",
-        marker_enabled=True,
+        adapter_backend="mineru",
+        mineru_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert "marker_adapter_source_unsupported" in result.warnings
+    assert "mineru_adapter_source_unsupported" in result.warnings
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "html_semantic"
 
@@ -2036,133 +1952,6 @@ def test_docling_adapter_keeps_cell_only_tables(
     assert chunk.metadata["bbox_unit"] == "percent"
     assert chunk.metadata["page_width"] == 612
     assert chunk.metadata["page_height"] == 792
-
-
-def test_parser_registry_uses_marker_adapter_without_llm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Marker adapter は LLM 補正を有効化せず markdown を remap する。"""
-    marker_module = ModuleType("marker")
-    marker_module.__dict__["__version__"] = "4.5.6"
-    converters_module = ModuleType("marker.converters")
-    pdf_module = ModuleType("marker.converters.pdf")
-    models_module = ModuleType("marker.models")
-    output_module = ModuleType("marker.output")
-
-    class FakePdfConverter:
-        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
-            assert artifact_dict == {"model": "fake"}
-
-        def __call__(self, path: str) -> object:
-            assert path.endswith(".pdf")
-            return object()
-
-    def create_model_dict() -> dict[str, object]:
-        return {"model": "fake"}
-
-    def text_from_rendered(
-        rendered: object,
-    ) -> tuple[str, dict[str, object], dict[str, object]]:
-        _ = rendered
-        return "# Marker\n本文", {}, {}
-
-    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
-    models_module.__dict__["create_model_dict"] = create_model_dict
-    output_module.__dict__["text_from_rendered"] = text_from_rendered
-    monkeypatch.setitem(sys.modules, "marker", marker_module)
-    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
-    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
-    monkeypatch.setitem(sys.modules, "marker.models", models_module)
-    monkeypatch.setitem(sys.modules, "marker.output", output_module)
-
-    data = b"%PDF"
-    profile = build_source_profile(
-        original_file_name="sample.pdf",
-        sanitized_file_name="sample.pdf",
-        content_type="application/pdf",
-        file_size_bytes=len(data),
-        content_sha256="1" * 64,
-        data=data,
-    )
-
-    result = parse_with_registry(
-        data,
-        source_profile=profile,
-        content_type=profile.content_type,
-        adapter_backend="marker",
-        marker_enabled=True,
-    )
-
-    assert result.parser_backend == "marker"
-    assert result.parser_version == "4.5.6"
-    assert result.extraction is not None
-    assert "Marker" in result.extraction.raw_text
-    assert result.extraction.parser_artifacts["llm_enabled"] is False
-
-
-def test_marker_adapter_remaps_chunks_without_llm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Marker chunks は LLM 補正なしで block lineage として remap する。"""
-    marker_module = ModuleType("marker")
-    marker_module.__dict__["__version__"] = "5.0.0"
-    converters_module = ModuleType("marker.converters")
-    pdf_module = ModuleType("marker.converters.pdf")
-    models_module = ModuleType("marker.models")
-    output_module = ModuleType("marker.output")
-
-    class FakeRendered:
-        chunks = [
-            SimpleNamespace(kind="Title", text="手順書", metadata=SimpleNamespace(page_number=1)),
-            SimpleNamespace(kind="Code", text="```sql\nselect 1 from dual;\n```"),
-        ]
-
-    class FakePdfConverter:
-        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
-            assert artifact_dict == {"model": "fake"}
-
-        def __call__(self, path: str) -> object:
-            assert path.endswith(".pdf")
-            return FakeRendered()
-
-    def create_model_dict() -> dict[str, object]:
-        return {"model": "fake"}
-
-    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
-    models_module.__dict__["create_model_dict"] = create_model_dict
-    monkeypatch.setitem(sys.modules, "marker", marker_module)
-    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
-    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
-    monkeypatch.setitem(sys.modules, "marker.models", models_module)
-    monkeypatch.setitem(sys.modules, "marker.output", output_module)
-
-    data = b"%PDF"
-    profile = build_source_profile(
-        original_file_name="runbook.pdf",
-        sanitized_file_name="runbook.pdf",
-        content_type="application/pdf",
-        file_size_bytes=len(data),
-        content_sha256="4" * 64,
-        data=data,
-    )
-
-    result = parse_with_registry(
-        data,
-        source_profile=profile,
-        content_type=profile.content_type,
-        adapter_backend="marker",
-        marker_enabled=True,
-    )
-
-    assert result.parser_backend == "marker"
-    assert result.extraction is not None
-    assert result.extraction.parser_artifacts["llm_enabled"] is False
-    assert result.extraction.parser_artifacts["adapter_export"] == "structured_elements"
-    assert [element.content_kind for element in result.extraction.elements] == [
-        "text",
-        "code",
-    ]
-    assert "select 1" in result.extraction.elements[1].text
 
 
 def test_parser_registry_uses_unstructured_adapter_elements(
@@ -3340,7 +3129,6 @@ def test_parser_registry_blocks_audio_content_type_without_source_profile(
         content_type="audio/mpeg",
         adapter_backend="unstructured",
         docling_enabled=True,
-        marker_enabled=True,
         unstructured_enabled=True,
     )
 
@@ -3454,11 +3242,6 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 @pytest.mark.parametrize(
     ("backend", "file_name", "content_type", "expected"),
     [
-        # marker: PDF・画像のみ(.bmp 拡張子は宣言外だが image/ MIME で通る)
-        ("marker", "doc.pdf", "application/pdf", True),
-        ("marker", "scan.png", "image/png", True),
-        ("marker", "memo.md", "text/markdown", False),
-        ("marker", "sheet.xlsx", _XLSX_MIME, False),
         # docling: PDF・画像・テキスト・HTML・Office
         ("docling", "doc.pdf", "application/pdf", True),
         ("docling", "memo.md", "text/markdown", True),
@@ -3473,8 +3256,6 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # 外部 GPU OCR は backend 側で PDF をページ画像化する。
         ("dots_ocr", "scan.png", "image/png", True),
         ("dots_ocr", "doc.pdf", "application/pdf", True),
-        ("glm_ocr", "doc.pdf", "application/pdf", True),
-        ("unlimited_ocr", "doc.pdf", "application/pdf", True),
         # OCI service backend: PDF・画像
         ("oci_genai_vision", "doc.pdf", "application/pdf", True),
         ("oci_genai_vision", "memo.md", "text/markdown", False),
@@ -3483,8 +3264,11 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # 音声は全 backend 非対応
         ("unstructured", "meeting.m4a", "audio/mp4", False),
         ("docling", "meeting.m4a", "audio/mp4", False),
-        # 未宣言 backend は非対応
+        # 未宣言 backend と削除したエンジン(#270)は非対応
         ("no_such_backend", "doc.pdf", "application/pdf", False),
+        ("marker", "doc.pdf", "application/pdf", False),
+        ("unlimited_ocr", "doc.pdf", "application/pdf", False),
+        ("glm_ocr", "scan.png", "image/png", False),
     ],
 )
 def test_adapter_capabilities_matrix(
@@ -3520,7 +3304,7 @@ def test_supported_modalities_for_display() -> None:
     """表示用一覧は定義順で UNKNOWN/AUDIO を含まない。"""
     from rag_parser_core.capabilities import supported_modalities
 
-    assert [m.value for m in supported_modalities("marker")] == ["pdf", "image"]
+    assert [m.value for m in supported_modalities("dots_ocr")] == ["pdf", "image"]
     assert [m.value for m in supported_modalities("unstructured")] == [
         "pdf",
         "image",
@@ -3536,32 +3320,23 @@ def test_parser_registry_classifies_broken_pdf_as_invalid_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PdfiumError 系の失敗は adapter_failed でなく adapter_invalid_input に分類する。"""
-    marker_module = ModuleType("marker")
-    marker_module.__dict__["__version__"] = "4.5.6"
-    converters_module = ModuleType("marker.converters")
-    pdf_module = ModuleType("marker.converters.pdf")
-    models_module = ModuleType("marker.models")
-    output_module = ModuleType("marker.output")
+    docling_module = ModuleType("docling")
+    docling_module.__dict__["__version__"] = "3.0.0"
+    converter_module = ModuleType("docling.document_converter")
 
     class PdfiumError(RuntimeError):
         pass
 
-    class FakePdfConverter:
-        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
-            _ = artifact_dict
-
-        def __call__(self, path: str) -> object:
+    class FakeDocumentConverter:
+        def convert(self, path: str) -> object:
             raise PdfiumError("Failed to load document (PDFium: Data format error).")
 
-    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
-    models_module.__dict__["create_model_dict"] = lambda: {"model": "fake"}
-    output_module.__dict__["text_from_rendered"] = lambda rendered: ("", {}, {})
-    monkeypatch.setitem(sys.modules, "marker", marker_module)
-    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
-    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
-    monkeypatch.setitem(sys.modules, "marker.models", models_module)
-    monkeypatch.setitem(sys.modules, "marker.output", output_module)
-    monkeypatch.setattr("rag_parser_core.registry._module_available", lambda name: name == "marker")
+    converter_module.__dict__["DocumentConverter"] = FakeDocumentConverter
+    monkeypatch.setitem(sys.modules, "docling", docling_module)
+    monkeypatch.setitem(sys.modules, "docling.document_converter", converter_module)
+    monkeypatch.setattr(
+        "rag_parser_core.registry._module_available", lambda name: name == "docling"
+    )
 
     data = b"broken-not-a-real-pdf"
     profile = build_source_profile(
@@ -3577,11 +3352,11 @@ def test_parser_registry_classifies_broken_pdf_as_invalid_input(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="marker",
-        marker_enabled=True,
+        adapter_backend="docling",
+        docling_enabled=True,
     )
 
     assert result.extraction is None
     assert result.fallback_used is True
-    assert "marker_adapter_invalid_input" in result.warnings
-    assert "marker_adapter_failed" not in result.warnings
+    assert "docling_adapter_invalid_input" in result.warnings
+    assert "docling_adapter_failed" not in result.warnings

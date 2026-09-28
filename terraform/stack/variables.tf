@@ -496,19 +496,13 @@ variable "rag_enable_parser_docling" {
   default     = true
 }
 
-variable "rag_enable_parser_marker" {
-  description = "Build and start the Marker parser microservice (CPU, parser-marker). Heavy on CPU and memory."
-  type        = bool
-  default     = false
-}
-
 variable "rag_enable_oci_cloud_parsers" {
   description = "Build and start the OCI cloud parser proxies (parser-oci-genai-vision / parser-oci-document-understanding). They call OCI services and need no GPU."
   type        = bool
   default     = false
 }
 
-# GPU の parser（MinerU / Dots.OCR / GLM-OCR / Unlimited-OCR）はこの stack に含めない。
+# GPU の parser（MinerU / Dots.OCR）はこの stack に含めない。
 # RAG はこれらを外部 API として「文書解析」設定の API host で指定する。
 
 # ---------------------------------------------------------------- NL2SQL

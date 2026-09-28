@@ -725,7 +725,7 @@ test("失敗した取込 job は取込中 banner を残さず原因を表示す�
 
 test("同じ取込エラー原因は上部の原因バナーに 1 本化する", async ({ page }) => {
   const message =
-    "選択した文書解析サービス（Unlimited-OCR）で解析処理が失敗しました。エラーコード: unlimited_ocr_adapter_failed";
+    "選択した文書解析サービス（Dots.OCR）で解析処理が失敗しました。エラーコード: dots_ocr_adapter_failed";
   await mockDocumentWorkspace(page, {
     documentStatus: "ERROR",
     latestJobStatus: "FAILED",

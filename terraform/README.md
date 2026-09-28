@@ -69,15 +69,18 @@ Compute に直接インストールせず [`rag/docker-compose.yml`](../rag/dock
 - ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
   「ユーザーとロール」でユーザーとロールを作り、「RAG セキュリティ > 権限管理」でロールごとのメニュー・業務ビュー・ナレッジベースを設定します。
   `rag_app_auth_cookie_secure`（→ `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
-- 文書解析は CPU の parser だけを配備します。GPU の parser（MinerU / Dots.OCR / GLM-OCR / Unlimited-OCR）は含めず、
+- 文書解析は CPU の parser だけを配備します。GPU の parser（MinerU / Dots.OCR）は含めず、
   起動後に「検索・回答設定 > 文書解析」で外部 API として指定します。
 
   | service | 既定 | 入力 |
   |---|---|---|
   | `parser-unstructured` | 常に起動 | 既定の解析方式（`RAG_PARSER_ADAPTER_BACKEND=unstructured`） |
   | `parser-docling` | 起動 | `rag_enable_parser_docling` |
-  | `parser-marker` | 起動しない | `rag_enable_parser_marker`（CPU とメモリを多く使う） |
   | `parser-oci-genai-vision` / `parser-oci-document-understanding` | 起動しない | `rag_enable_oci_cloud_parsers` |
+
+  Marker の parser（`parser-marker`）と入力 `rag_enable_parser_marker` は削除しました（#270）。既存の stack を更新すると
+  この入力は使われず、`compose_services.txt` にも `parser-marker` は入りません。既存の Compute で `parser-marker` の
+  コンテナが残っている場合は、compose が定義に無いコンテナ（orphan）として警告するので `docker rm -f` で削除します。
 
 - Compute の既定は 4 OCPU / 32 GB / boot volume 200 GB（parser のモデルと Docker image が大きいため）。
 
@@ -198,7 +201,7 @@ CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` 
 | 旧（製品ごとの stack） | 新（統合 stack） |
 |---|---|
 | RAG の `app_login_user` / `app_login_password` / `app_auth_cookie_secure` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#214） / 廃止 / `rag_app_auth_cookie_secure` |
-| RAG の `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers` | `rag_enable_parser_*` / `rag_enable_oci_cloud_parsers` |
+| RAG の `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers` | `rag_enable_parser_docling` / 廃止（Marker は削除。#270） / `rag_enable_oci_cloud_parsers` |
 | NL2SQL の `app_admin_login_user_password` / `oracle_deepsec_enabled` / `oracle_deepsec_data_user_password` | `app_admin_login_user_password`（RAG と共通） / `nl2sql_oracle_deepsec_enabled` / `nl2sql_oracle_deepsec_data_user_password` |
 | NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `nl2sql_app_environment` / `nl2sql_app_auth_cookie_secure` / `app_admin_login_user_id`（RAG と共通） |
 | Agent の `app_basic_auth_user` / `app_basic_auth_password` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#215） |

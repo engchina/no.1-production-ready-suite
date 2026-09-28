@@ -168,12 +168,9 @@ export type EvaluationMetricName =
 export type ParserAdapterBackend =
   | "local"
   | "docling"
-  | "marker"
   | "unstructured"
-  | "unlimited_ocr"
   | "mineru"
   | "dots_ocr"
-  | "glm_ocr"
   | "oci_genai_vision"
   // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
   | "enterprise_ai_vlm"
@@ -182,14 +179,10 @@ export type ParserServiceBackendName =
   "oci_genai_vision" | "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
-  | "marker"
   | "unstructured"
-  | "unlimited_ocr"
   | "mineru"
-  | "dots_ocr"
-  | "glm_ocr";
-export type ExternalParserBackendName =
-  "unlimited_ocr" | "mineru" | "dots_ocr" | "glm_ocr";
+  | "dots_ocr";
+export type ExternalParserBackendName = "mineru" | "dots_ocr";
 export type ExternalParserProtocol =
   "mineru_file_parse" | "openai_chat_completions";
 export type ExternalParserConnectionStatus =
@@ -726,12 +719,9 @@ export interface KnowledgeBaseIngestionConfig {
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_docling_vision_enabled?: boolean | null;
-  parser_marker_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
-  parser_unlimited_ocr_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
-  parser_glm_ocr_enabled: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
@@ -1744,12 +1734,9 @@ export interface ParserAdapterSettingsUpdate {
   adapter_backend: ParserAdapterBackend;
   docling_enabled?: boolean;
   docling_vision_enabled?: boolean;
-  marker_enabled?: boolean;
   unstructured_enabled?: boolean;
-  unlimited_ocr_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
-  glm_ocr_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
 }
 
