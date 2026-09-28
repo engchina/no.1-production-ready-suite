@@ -12,6 +12,17 @@
 #     major を無視する。破壊的変更の取り込みは Issue を立てて個別に判断する。
 #   - patch/minor は required checks 成功後に自動 merge する（#76、
 #     .github/workflows/dependabot-auto-merge.yml）。major は手動レビューで判断する。
+#   - 互いに peer dependency を持つ一式（eslint と @eslint/js など）は major も 1 本の PR にまとめる。
+#     別々の PR にすると、片方だけ上げた lock が `npm ci` の peer 解決で失敗し続ける（実例: #88 / #89、#339）。
+#   - 失敗し続ける major（コードの追従が要るもの）は ignore に理由付きで書き、追従は Issue を立てて行う。
+#
+# group PR（patch/minor）が CI で失敗したときの扱い（#339）:
+#   - group 全体が止まるため放置しない。失敗の原因になった依存を特定し、直せるならその PR に修正 commit を足す。
+#   - すぐ直せない依存は、その版を `ignore`（`versions: [...]`）に理由と Issue 番号付きで足し、
+#     PR に `@dependabot recreate` とコメントして残りの更新だけで作り直させる。
+#
+# rebase-strategy は auto（既定。競合したときだけ rebase する）を明示する。ruleset の up-to-date 要求（strict）を
+# やめたため（#339）、main が進んだだけでは rebase も CI の再実行も起きず、auto-merge は CI OK の成功だけを待つ。
 #
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
 # services/*（21 個の pyproject.toml と 21 個の Dockerfile）は CI 検証対象外で PR 数も
@@ -32,6 +43,7 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: auto
     groups:
       backend-patch-minor:
         patterns:
@@ -51,6 +63,11 @@ updates:
       # （tests/test_config.py が一致を確認する）。解析結果が変わるため、サービスと同時に上げる。
       - dependency-name: docling
       - dependency-name: unstructured
+      # 本番の ASGI サーバーの起動。major は tests/test_deployment_contract.py が版の範囲を固定しており、
+      # 起動設定（26 系では control socket の無効化）の追従も要るため、26 系の PR は CI が失敗し続けた（#92、#339）。
+      # major は Issue を立て、起動の契約を更新する PR で個別に上げる。
+      - dependency-name: gunicorn
+        update-types: ["version-update:semver-major"]
 
   # frontend
   - package-ecosystem: npm
@@ -63,6 +80,7 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: auto
     groups:
       frontend-patch-minor:
         patterns:
@@ -70,6 +88,16 @@ updates:
         update-types:
           - patch
           - minor
+      # eslint 本体・@eslint/*・プラグイン・typescript-eslint は peer dependency で結び付くため、major も 1 本にまとめる。
+      eslint-major:
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "eslint-plugin-*"
+          - "@typescript-eslint/*"
+          - "typescript-eslint"
+        update-types:
+          - major
     ignore:
       # UI/routing/ビルドの中核。major は画面全体へ影響するため個別判断する。
       - dependency-name: react
@@ -83,8 +111,11 @@ updates:
 
   # GitHub Actions。actions/checkout@v4 などが Node 20 非推奨の警告を出しているため、
   # actions 自体の更新も追随する。
+  # .github/actions/* の composite action（#339）の中の action も対象にする。
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
       day: monday

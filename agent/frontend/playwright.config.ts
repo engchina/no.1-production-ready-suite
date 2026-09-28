@@ -12,6 +12,9 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false,
   workers: 1,
+  // RAG / NL2SQL と同じく CI だけ retries 2（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
+  // retries が無いと trace: "on-first-retry" も記録されない。
+  retries: process.env.CI ? 2 : 0,
   timeout: 30_000,
   expect: {
     timeout: 7_500,

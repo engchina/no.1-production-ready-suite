@@ -80,7 +80,9 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 
 ```bash
 scripts/start-all.sh
-scripts/check-all.sh
+scripts/check-all.sh                                        # ローカルの既定は e2e と pip-audit を省く（#339）
+SKIP_E2E=0 E2E_ARGS="e2e/auth-login.spec.ts" scripts/check-all.sh   # 関係する spec だけ e2e も実行
+FULL=1 scripts/check-all.sh                                 # CI と同じく全部を実行
 ```
 
 ## Docker Compose

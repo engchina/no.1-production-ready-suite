@@ -1,0 +1,54 @@
+name: Dependency Audit Nightly
+
+# backend の依存の脆弱性（pip-audit）を毎晩 main で全件検査する（#339）。
+# PR / main push の CI（ci.yml）は、その backend の uv.lock / pyproject.toml が変わったときだけ pip-audit を実行する
+# （advisory の公開で無関係な PR が赤になるのを避けるため。bandit は PR でも毎回実行する）。
+# 失敗は ci-failure-issue.yml が Issue にする。ignore する advisory は ci.yml と同じにし、理由をここと ci.yml に書く。
+
+on:
+  schedule:
+    - cron: "30 18 * * *" # 03:30 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: ${{ matrix.name }} (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Platform / backend_core", dir: platform/packages/backend_core, args: "" }
+          - { name: "Platform / system_settings_backend", dir: platform/packages/system_settings_backend, args: "" }
+          - { name: "RAG / Backend", dir: rag/backend, args: "" }
+          # OCI SDK が cryptography を <47.0.0 に制約し、GHSA-537c-gmf6-5ccf の修正版は 48.0.1（ci.yml と同じ）。
+          - { name: "NL2SQL / Backend", dir: nl2sql/backend, args: "--ignore-vuln GHSA-537c-gmf6-5ccf" }
+          - { name: "Agent / Backend", dir: agent/backend, args: "" }
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.dir }}/uv.lock
+          save-cache: "false"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Dependency audit
+        run: uv run pip-audit ${{ matrix.args }}

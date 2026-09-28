@@ -252,6 +252,7 @@ npm run lint && npm run build
 
 - 開発時は実装と同時に対応するテストコードを追加・更新する。バックエンドは pytest、フロントエンドのロジックは Vitest、UI/UX とユーザー操作は Playwright を基本とする。
 - 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。実行できない場合は理由と代替確認を明記する。
+- ローカルは変更範囲の検査にする（#339）。backend は関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`（全件は約 2 分かかる）、frontend は `npm run lint` / `npm run build` と関係するロジックテスト（`node --import jiti/register --test tests/<対象>.test.ts`）、e2e は関係する spec だけ（`npx playwright test tests/e2e/<対象>.spec.ts`。全件は 8 shard で 10 分超）。backend の全テスト・`mypy .`・`pip-audit`、Playwright の smoke / 全件は CI（`NL2SQL / Backend`・`NL2SQL / Frontend`・`NL2SQL / E2E smoke`）と nightly に任せ、PR の `検証結果` にその job 結果を引用してよい。
 - UI/UX に関わるすべての機能は、Playwright でブラウザ表示を確認し、少なくとも主要ユーザーフロー、モバイル幅(例: 375px)、デスクトップ幅、重要な空/読込/エラー状態を検証する。
 
 ## コーディング規約・重要ルール

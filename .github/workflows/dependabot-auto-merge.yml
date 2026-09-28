@@ -7,13 +7,12 @@ name: Dependabot auto-merge
 #
 # 前提となる repo 設定（この workflow だけでは有効にならない）:
 #   - Settings > General > Allow auto-merge が有効であること。
-#   - main の branch protection の required checks に Backend / Frontend /
-#     Docker Compose / Secret scan (gitleaks) が入っていること。auto-merge は
-#     required checks の成功だけを待つため、必須から外れた job の失敗は merge を止めない。
-#   - required checks は strict（branch を最新化してから merge）のため、main が進むと
-#     Dependabot の rebase 完了まで auto-merge は待機する。
+#   - main の ruleset の必須 check が統合 CI（ci.yml）の `CI OK` であること（#71）。`CI OK` は
+#     変更のあった製品の job の結果を集約するため、Dependabot の PR もその製品の job が通るまで merge されない。
+#   - ruleset の up-to-date 要求（strict）はやめた（#339）。main が進んでも rebase を待たずに merge される。
+#     main で壊れた場合は ci-failure-issue.yml が Issue を作る。
 #
-# checks が失敗した PR は merge されず open のまま残る。
+# checks が失敗した PR は merge されず open のまま残る（扱いは .github/dependabot.yml の冒頭を参照）。
 
 on: pull_request
 
@@ -29,6 +28,7 @@ jobs:
   auto-merge:
     name: Auto merge
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # 人間の PR では実行しない。
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     steps:

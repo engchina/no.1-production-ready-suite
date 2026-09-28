@@ -34,6 +34,18 @@
 - 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。`platform/` と製品にまたがる変更は、1つの PR にまとめて同時に検証してよい。
 - **変更・必要な検証・PR 本文の更新が完了し、PR の最新 commit に対する CI/checks（必須 check `CI OK`）が成功したら、追加のユーザ確認を求めず自動で `main` へ merge する。** PR 作成や CI 成功の報告だけで作業を終了しない。merge は **Create a merge commit** で行う（main の ruleset が削除・force push を禁止し、`CI OK` を必須にしている）。
 - CI/checks の失敗や merge conflict がある場合は、原因を修正・解消し、最新 commit を再検証してから merge する。branch protection / ruleset を迂回した強制 merge は行わない。解消できない場合は原因と未完了の操作を明示する。
+- **main の取り込みは必要なときだけ行う（#339）。** main の ruleset は、PR の branch が main の最新を含むこと（up-to-date、strict）を求めない。strict のときは main が進むたびに「main の取り込み → CI の再実行」が直列に起き、1 週間で merge 133 件に対して取り込みが 126 回あり、PR が main に入るまでの待ちの大半を占めていたためやめた（`allow_update_branch` は有効）。
+  - merge の前に、**PR の最新の CI が走ったとき以降に、main で PR が触る製品のディレクトリ（`rag/` `nl2sql/` `agent/` `terraform/`）か `platform/`・`.github/` が変わっていたら**、main を取り込んで（`gh pr update-branch <PR 番号>` か `git merge origin/main`）CI をやり直してから merge する。変わっていなければ取り込まずに merge してよい。
+  - 判定の例（`<CI の base>` は、PR の最新の CI が始まった時点の main の commit）:
+
+    ```bash
+    git fetch origin
+    started=$(gh run list --workflow CI --branch <作業ブランチ> --limit 1 --json createdAt -q '.[0].createdAt')
+    ci_base=$(git rev-list -1 --first-parent --before="$started" origin/main)   # <CI の base>
+    git diff --name-only "$ci_base"..origin/main -- rag/ platform/ .github/     # 何か出たら取り込んで CI をやり直す
+    ```
+
+  - それでも main が壊れることはある（別々の PR が同時に入った組み合わせ）。main の push の CI と nightly が失敗すると `.github/workflows/ci-failure-issue.yml` が Issue（label `ci-failure`）を作る。**main が赤になったら、ほかの作業より先に直す。** 直す PR はその Issue を `Closes` する。
 - **merge 後はローカルブランチを必ず `main` に切り替え、`git fetch --prune` で削除済みリモートブランチの参照を掃除したうえで `origin/main` へ fast-forward 同期してから完了を報告する。** PR の merge 状態、ローカルブランチ、同期状態を確認する。ユーザの未保存変更を破棄する `reset --hard` 等は使わず、変更を保持したまま安全に同期する。同期できない場合は理由と残作業を明示する。
 - docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
 - 並行して作業する別のセッションやプロセスの未コミット変更・stash・worktree を、確認なしに破棄・上書きしない。
@@ -106,7 +118,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 - `関連 Issue` には、merge で完了する Issue は `Closes #N`、参照のみは `Refs #N` と記載する。複数ある場合はすべて列挙する。
 - `変更内容` は commit の羅列ではなく、reviewer が挙動差分と責務境界を判断できる粒度で記載する。変更していない重要範囲や backward compatibility も必要に応じて明記する。
-- `検証結果` には実行した正確な command と結果を記載する。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。実行できない test がある場合は理由と代替確認を記載する。command は各製品の `AGENTS.md` の開発コマンドを基本とする。
+- `検証結果` には実行した正確な command と結果を記載する。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。実行できない test がある場合は理由と代替確認を記載する。command は各製品の `AGENTS.md` の開発コマンドを基本とする。ローカルで実行しなかった全件の検査（backend の全テスト・mypy・pip-audit・e2e の smoke 等）は、PR の CI の job 結果（job 名と pass / fail）を引用してよい（「共通の技術方針」の「ローカルの検証の範囲」）。
 - `platform/` を変更した場合は、影響を受ける製品の検証結果（統合 CI の該当 job を含む）も記載する。
 - UI/UX 変更では、対象 Playwright spec、desktop / 375px viewport、主要導線と重要状態(空/読込/エラー/ブロック)の結果を記載する。見た目を変更した場合は必要に応じて screenshot または visual check の結果を添える。
 - OCI / Oracle / LLM を呼ぶ範囲の変更では、CI 上の決定論スタブによる確認と、手動/ステージングでの実サービス確認をそれぞれ区別して記載する。
@@ -115,12 +127,21 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ## CI
 
-- PR と `main` への push で `.github/workflows/ci.yml`（統合 CI）が動く。`changes` job が変更パスを判定し、**変更のあった製品の job だけ**を実行する。`platform/` または `ci.yml` を変更した場合は全製品の job を実行する。
+- PR と `main` への push で `.github/workflows/ci.yml`（統合 CI）が動く。`changes` job が変更パスを判定し、**変更のあった製品の job だけ**を実行する。
+  - `platform/` は frontend（`packages/ui`・`packages/system-settings`・`docs/design-system/`・`package.json`・`package-lock.json`）と backend（`packages/backend_core`・`packages/system_settings_backend`）に分けて判定する。platform の frontend の変更は各製品の frontend / e2e の job を、backend の変更は各製品の backend の job を動かす（#339）。
+  - `ci.yml`・`.github/actions/` と、どちらにも属さない platform のファイル（`.env.example`・`contracts/`・`scripts/`・`templates/` 等）の変更は、両方として全製品の job を動かす。platform の Markdown（`AGENTS.md`・README・`docs/ux-contracts/` 等）だけの変更では製品の job を動かさない。
+  - 製品のテストが platform の別の側のファイルを読むとき（例: NL2SQL の frontend の契約テストが `system_settings_backend` の `model.py` / `database.py` を読む）は、`changes` の filter にそのファイルを足す。
 - 必須 check は **`CI OK`** の1つだけ（skip された job は成功扱い、failure / cancelled があれば失敗）。job を追加したら `ci-ok` の `needs` にも追加する。
+- **すべての job に `timeout-minutes` を付ける**（通常 10〜15 分、e2e は実測の倍程度）。既定の 360 分のまま止まると、runner と PR の待ちを長く塞ぐ。
+- キャッシュ（#339）: uv は main の push だけが保存し PR は復元だけ（repo の上限 10 GB を PR の cache で埋めないため）、`.mypy_cache` は lock とブランチを key に main から復元、共有 UI の dist は `.github/actions/platform-ui`（platform の frontend のソースの hash）、Playwright のブラウザは `.github/actions/playwright-browsers`（Playwright の版）がキャッシュする。
+- Agent は `Agent / Backend`・`Agent / Frontend`（lint・build）・`Agent / E2E smoke` の 3 job に分けている（#339）。
+- `pip-audit` は、その backend の `uv.lock` / `pyproject.toml`（または `ci.yml`）が変わったときだけ PR / main の CI で実行する。全件は `.github/workflows/dependency-audit-nightly.yml` が毎晩実行する。`bandit` は毎回実行する。
+- nightly（`e2e-nightly.yml`・`rag-evaluation-nightly.yml`・`dependency-audit-nightly.yml`）と main の push の CI が失敗すると、`ci-failure-issue.yml` が Issue（label `ci-failure` と製品の label）を作る。同じ workflow・製品の open な Issue があれば comment で追記する。schedule の workflow を追加したら、`ci-failure-issue.yml` の `workflows` にも追加する。
 - secret 検出は root の `.gitleaks.toml` / `.gitleaksignore`（pre-commit hook は `.pre-commit-config.yaml`）。CI の gitleaks-action は gitleaks 8.24 系のため、allowlist は単一の `[allowlist]` で書く（`[[allowlists]]` は解釈されない）。誤検知の除外は fingerprint 単位で `.gitleaksignore` に理由付きで追加する。
 - OCI Resource Manager の Terraform stack は root の `terraform/stack/` に1つだけ置く（#217）。ADB を1つ（新規 / 既存）作り、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低1つ）ごとに Compute を1台作る。製品固有の入力は `rag_` / `nl2sql_` / `agent_` の接頭辞を付ける。Compute 上の配備手順は各製品の `init_script.sh` が持つ。CI は `Suite / Terraform` job が `terraform/scripts/package_stack.py` と `verify_stack_contract.py` を実行する。
 - Terraform stack の release tag は `suite-v*`（例: `suite-v0.1.0`）。`.github/workflows/terraform-release.yml` が zip と sha256 を公開する。製品ごとの release（`<製品>-v*`、#94）は作らない（既存の `nl2sql-v0.1.32` 等は残す）。README 等では `releases/latest` ではなく tag を固定して参照する。
-- Dependabot（`.github/dependabot.yml`）の patch / minor 更新は `CI OK` 成功後に自動 merge される（`dependabot-auto-merge.yml`）。
+- Dependabot（`.github/dependabot.yml`）の patch / minor 更新は `CI OK` 成功後に自動 merge される（`dependabot-auto-merge.yml`）。失敗し続ける major は `ignore` に理由付きで書き、peer dependency で結び付く一式（eslint 等）は major も 1 本の PR にまとめる。group PR が失敗したときの扱いは `dependabot.yml` の冒頭に書く。
+- pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend の Python ファイルだけへの `ruff check`（その backend の uv 環境と設定）を実行する。整形の検査は CI の black。
 
 ## デザインシステム / UI（platform が正本）
 
@@ -188,7 +209,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 - **UI/UX に関する作業（設計・実装・レビュー・改善）は必ず `ui-ux-pro-max` skill を使う。**
 - UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。空/読込/エラー/ブロック状態も必要に応じて確認する。
-- **e2e の量**：ローカルの検証も PR の検証も、変更に関係する spec だけを選び、1 回おおむね 1 分以内で終わる量にする（`-g` や spec のパスで絞る）。Playwright の全件は `.github/workflows/e2e-nightly.yml` が毎晩実行する。PR の CI（`ci.yml` の `rag-e2e` / `nl2sql-e2e`）は約 1 分の smoke だけを実行する（#184）。
+- **e2e の量**：ローカルの検証も PR の検証も、変更に関係する spec だけを選び、1 回おおむね 1 分以内で終わる量にする（`-g` や spec のパスで絞る）。Playwright の全件は `.github/workflows/e2e-nightly.yml` が毎晩実行する。PR の CI（`ci.yml` の `rag-e2e` / `nl2sql-e2e` / `agent-e2e`）は約 1 分の smoke だけを実行する（#184 / #339）。
 - ライト / ダークの両テーマで確認する。
 - 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
 - キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
@@ -204,6 +225,12 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - LLM 出力は Pydantic スキーマで検証してから保存・利用する。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービス検証は手動 / ステージングで行う。
 - 実装と同時に対応するテストを追加・更新し、変更後は該当範囲の lint・型チェック・テストを実行して結果を報告する。
+- **ローカルの検証の範囲（#339）**：ローカルでは変更した範囲だけを検査し、全件は CI に任せる。
+  - backend: 変更したファイルの `ruff check` / `black --check`、関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と、直前に失敗したもの（`uv run pytest --lf -x`）。`mypy` は変更したパッケージを渡してよい。全テスト・全体の `mypy`・`pip-audit` は CI が実行する。
+  - frontend: `npm run lint` と `npm run build`（型検査を兼ねる）。単体テストは関係するものだけ（Vitest は `npx vitest related <変更したファイル>` か `npx vitest --changed`、NL2SQL のロジックテストは `node --import jiti/register --test tests/<対象>.test.ts`）。
+  - e2e: 変更に関係する Playwright の spec だけ（「UI 変更の検証」の e2e の量）。
+  - PR の `検証結果` には、ローカルで実行した command と、CI の job 結果（全件の検査）を分けて書く。
+  - worktree の準備は `scripts/setup-worktree.sh <製品…>`（触る製品の frontend だけ `npm ci --prefer-offline --no-audit --no-fund` し、platform の共有 UI を build する）で短くできる。
 
 ### 共通の仕組みと製品固有の仕組みの分け方
 
