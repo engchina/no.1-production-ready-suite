@@ -1084,6 +1084,7 @@ _DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実�
 # 利用者定義の関数・package 関数・object method(`APP.FN()` / `PKG.FN()` / `x.m()`)は、
 # 表スコープ判定を経ずに任意のデータを読めるため、NL2SQL_ALLOWED_USER_FUNCTIONS に
 # 登録したものだけ通す。
+# fmt: off
 _ORACLE_BUILTIN_FUNCTIONS = frozenset(
     {
         # 数値
@@ -1128,6 +1129,7 @@ _ORACLE_BUILTIN_FUNCTIONS = frozenset(
         "XMLSERIALIZE", "XMLTYPE",
     }
 )
+# fmt: on
 # リテラルから一覧を作るだけの Oracle 提供の collection 型(TABLE(SYS.ODCINUMBERLIST(1, 2)) など)。
 _ORACLE_BUILTIN_COLLECTION_TYPES = frozenset(
     {
@@ -2856,10 +2858,13 @@ def _unapproved_function_names(sql: str, allowed_user_functions: Iterable[str]) 
     for statement in [item for item in statements if item is not None]:
         # XQuery の collection()/doc() は oradb: URI で任意の表を読めるため XMLTABLE でも拒否する。
         for xml_table in statement.find_all(exp.XMLTable):
-            if any(
-                _XQUERY_DATA_ACCESS_RE.search(str(literal.this))
-                for literal in xml_table.find_all(exp.Literal)
-            ) and "XMLTABLE" not in unapproved:
+            if (
+                any(
+                    _XQUERY_DATA_ACCESS_RE.search(str(literal.this))
+                    for literal in xml_table.find_all(exp.Literal)
+                )
+                and "XMLTABLE" not in unapproved
+            ):
                 unapproved.append("XMLTABLE")
         for node in statement.find_all(exp.Anonymous):
             parent = node.parent
@@ -7625,9 +7630,7 @@ class Nl2SqlService:
             _bind_placeholder_names(sql) if graph is not None and select_only else []
         )
         unapproved_function_names = (
-            _unapproved_function_names(
-                sql, get_settings().nl2sql_allowed_user_functions.split(",")
-            )
+            _unapproved_function_names(sql, get_settings().nl2sql_allowed_user_functions.split(","))
             if graph is not None and select_only
             else []
         )

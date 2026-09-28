@@ -812,9 +812,9 @@ def test_context_search_reads_inferred_closure_from_markdown_snapshot() -> None:
     from rdflib import Graph, URIRef
     from rdflib.namespace import RDF, RDFS
 
-    inferred = Graph().parse(
-        data=svc.snapshot("sales", job.id)["artifacts"]["inferred_turtle"], format="turtle"
-    )
+    snapshot = svc.snapshot("sales", job.id)
+    assert snapshot is not None
+    inferred = Graph().parse(data=snapshot["artifacts"]["inferred_turtle"], format="turtle")
     prefix = "urn:nl2sql:ontology:node:"
     edges = [
         (unquote(str(left).removeprefix(prefix)), unquote(str(right).removeprefix(prefix)))
@@ -826,9 +826,7 @@ def test_context_search_reads_inferred_closure_from_markdown_snapshot() -> None:
         and str(right).startswith(prefix)
     ]
     node_ids = {node.id for node in graph.nodes}
-    seed = next(
-        (left for left, right in edges if left in node_ids and right in node_ids), None
-    )
+    seed = next((left for left, right in edges if left in node_ids and right in node_ids), None)
     assert seed is not None, "推論結果に Profile 内の node 間の意味関係が無い"
     expanded = rt._inferred_context_node_ids(
         "sales", graph.revision.id, {seed}, allowed_node_ids=node_ids, max_hops=2

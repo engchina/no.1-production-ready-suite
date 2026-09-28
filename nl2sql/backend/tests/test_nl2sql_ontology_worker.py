@@ -194,7 +194,7 @@ def test_worker_main_loop_survives_iteration_failure(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(sys, "argv", ["ontology_worker"])
     monkeypatch.setattr(OntologyWorker, "process_one", process_one)
-    monkeypatch.setattr(ontology_worker_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr("app.features.nl2sql.ontology_worker.time.sleep", lambda _seconds: None)
 
     with pytest.raises(_StopLoop):
         ontology_worker_module.main()
