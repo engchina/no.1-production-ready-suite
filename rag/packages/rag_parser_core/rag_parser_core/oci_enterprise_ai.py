@@ -174,6 +174,16 @@ _QUERY_DECOMPOSE_PROMPT = (
     '出力は JSON 文字列配列のみ(例: ["sub-question 1", "sub-question 2"])とし、'
     "説明文は付けないでください。元質問が単純なら 1 要素でも構いません。"
 )
+# multi-hop の 2 回目: 1 回目の検索結果(evidence_context)を踏まえ、不足している情報を探す。
+_QUERY_FOLLOWUP_DECOMPOSE_PROMPT = (
+    "あなたは質問分解アシスタントです。"
+    "evidence_context は 1 回目の検索で見つかった抜粋ですが、"
+    "質問に答える根拠としては不足しています。"
+    "抜粋から分かった用語・名称を手掛かりに、質問に答えるためにまだ不足している情報を探す"
+    "独立した sub-question を作成してください。1 回目と同じ言い回しの繰り返しは避けてください。"
+    '出力は JSON 文字列配列のみ(例: ["sub-question 1", "sub-question 2"])とし、'
+    "説明文は付けないでください。"
+)
 _SECTION_SELECT_PROMPT = (
     "あなたは文書ナビゲーションアシスタントです。"
     "質問に答える根拠がありそうな section を、"
@@ -428,24 +438,31 @@ class OciEnterpriseAiClient:
         *,
         mode: str,
         max_subqueries: int = 3,
+        context: str = "",
     ) -> list[str]:
         """Agentic アダプター用にクエリ計画(書き換え/分解)を LLM で行う。
 
         mode="query_rewrite" は検索向けに 1 つへ書き換え、それ以外は sub-question を返す。
+        分解系で ``context``(前の検索結果の抜粋)を渡すと、不足している情報を探す追加の
+        sub-question を作る(multi-hop の 2 回目)。
         JSON 文字列配列で受領し、解析失敗・空時は空 list を返して呼び出し側で元 query を使う。
         """
         # smart_routing(v1)は query_rewrite と同じ LLM 書き換え経路を使う。
         # hyde は仮説的回答文書を 1 つ生成し、その埋め込みで検索する(別プロンプト・1 件)。
         rewrite_modes = {"query_rewrite", "smart_routing"}
         single_modes = rewrite_modes | {"hyde"}
+        evidence = ""
         if mode == "hyde":
             system_prompt = _QUERY_HYDE_PROMPT
         elif mode in rewrite_modes:
             system_prompt = _QUERY_REWRITE_PROMPT
+        elif context.strip():
+            system_prompt = _QUERY_FOLLOWUP_DECOMPOSE_PROMPT
+            evidence = context
         else:
             system_prompt = _QUERY_DECOMPOSE_PROMPT
         try:
-            raw = await self.generate(query, "", system_prompt=system_prompt)
+            raw = await self.generate(query, evidence, system_prompt=system_prompt)
         except Exception:
             return []
         limit = 1 if mode in single_modes else max(1, max_subqueries)

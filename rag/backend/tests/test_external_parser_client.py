@@ -224,82 +224,6 @@ def test_dots_renders_only_one_worker_batch_ahead(
     assert [page.page_number for page in result.extraction.pages] == [1, 2, 3, 4, 5]
 
 
-def test_glm_and_unlimited_openai_responses_keep_pages_and_clean_markers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    responses = iter(
-        [
-            "GLM 第一頁",
-            "GLM 第二頁",
-            "<|ref|>Unlimited 第一頁<|/ref|><|det|>bbox<|/det|><PAGE>Unlimited 第二頁",
-        ]
-    )
-
-    def handle(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"choices": [{"finish_reason": "stop", "message": {"content": next(responses)}}]},
-        )
-
-    _install_transport(monkeypatch, handle)
-    settings = Settings(
-        rag_parser_glm_ocr_api_host="https://glm.example.com",
-        rag_parser_glm_ocr_model="glm-model",
-        rag_parser_unlimited_ocr_api_host="https://unlimited.example.com",
-        rag_parser_unlimited_ocr_model="unlimited-model",
-        rag_parser_unlimited_ocr_pdf_batch_size=2,
-    )
-    client = ExternalParserClient(settings)
-
-    glm = client.parse("glm_ocr", _pdf(), _profile(), "application/pdf")
-    unlimited = client.parse("unlimited_ocr", _pdf(), _profile(), "application/pdf")
-
-    assert glm.extraction is not None
-    assert [element.page_number for element in glm.extraction.elements] == [1, 2]
-    assert "GLM 第一頁" in glm.extraction.raw_text
-    assert unlimited.extraction is not None
-    assert [element.page_number for element in unlimited.extraction.elements] == [1, 2]
-    assert "<|det|>" not in unlimited.extraction.raw_text
-    assert "Unlimited 第二頁" in unlimited.extraction.raw_text
-
-
-def test_unlimited_renders_only_one_configured_batch_ahead(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rendered: list[int] = []
-    rendered_at_call: list[int] = []
-    parser = ExternalParserClient(
-        Settings(
-            rag_parser_unlimited_ocr_api_host="https://unlimited.example.com",
-            rag_parser_unlimited_ocr_model="unlimited-model",
-            rag_parser_unlimited_ocr_pdf_batch_size=2,
-        )
-    )
-
-    def source_images(*_args: object) -> object:
-        for number in range(1, 6):
-            rendered.append(number)
-            yield _RenderedPage(number, b"png", 120, 80)
-
-    def openai_chat(
-        _connection: object,
-        images: list[tuple[bytes, str]],
-        _prompt: str,
-        **_kwargs: object,
-    ) -> str:
-        rendered_at_call.append(len(rendered))
-        return "<PAGE>".join(f"page-{index}" for index in range(len(images)))
-
-    monkeypatch.setattr(parser, "_source_images", source_images)
-    monkeypatch.setattr(parser, "_openai_chat", openai_chat)
-
-    result = parser.parse("unlimited_ocr", b"%PDF", _profile(), "application/pdf")
-
-    assert rendered_at_call == [2, 4, 5]
-    assert result.extraction is not None
-    assert [page.page_number for page in result.extraction.pages] == [1, 2, 3, 4, 5]
-
-
 def test_status_health_models_retry_and_missing_model(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
 
@@ -334,14 +258,14 @@ def test_status_health_models_retry_and_missing_model(monkeypatch: pytest.Monkey
 @pytest.mark.parametrize(
     ("payload", "warning_code"),
     [
-        ({"choices": []}, "glm_ocr_external_invalid_response"),
+        ({"choices": []}, "dots_ocr_external_invalid_response"),
         (
             {"choices": [{"finish_reason": "length", "message": {"content": "partial"}}]},
-            "glm_ocr_external_truncated",
+            "dots_ocr_external_truncated",
         ),
         (
             {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]},
-            "glm_ocr_external_invalid_response",
+            "dots_ocr_external_invalid_response",
         ),
     ],
 )
@@ -353,13 +277,15 @@ def test_openai_invalid_truncated_and_empty_results_fail_fast(
     _install_transport(monkeypatch, lambda _request: httpx.Response(200, json=payload))
     parser = ExternalParserClient(
         Settings(
-            rag_parser_glm_ocr_api_host="https://glm.example.com",
-            rag_parser_glm_ocr_model="glm-model",
+            rag_parser_dots_ocr_api_host="https://dots.example.com",
+            rag_parser_dots_ocr_model="dots-model",
         )
     )
 
     with pytest.raises(ExternalParserCallError) as exc_info:
-        parser.parse("glm_ocr", b"png", _profile("scan.png", content_type="image/png"), "image/png")
+        parser.parse(
+            "dots_ocr", b"png", _profile("scan.png", content_type="image/png"), "image/png"
+        )
 
     assert exc_info.value.warning_code == warning_code
 
@@ -375,15 +301,17 @@ def test_api_key_is_not_exposed_in_error_or_logs(
     )
     parser = ExternalParserClient(
         Settings(
-            rag_parser_glm_ocr_api_host="https://glm.example.com",
-            rag_parser_glm_ocr_model="glm-model",
-            rag_parser_glm_ocr_api_key=secret,
+            rag_parser_dots_ocr_api_host="https://dots.example.com",
+            rag_parser_dots_ocr_model="dots-model",
+            rag_parser_dots_ocr_api_key=secret,
             rag_http_service_retry_attempts=1,
         )
     )
 
     with caplog.at_level(logging.WARNING), pytest.raises(ExternalParserCallError) as exc_info:
-        parser.parse("glm_ocr", b"png", _profile("scan.png", content_type="image/png"), "image/png")
+        parser.parse(
+            "dots_ocr", b"png", _profile("scan.png", content_type="image/png"), "image/png"
+        )
 
     assert secret not in str(exc_info.value)
     assert secret not in caplog.text

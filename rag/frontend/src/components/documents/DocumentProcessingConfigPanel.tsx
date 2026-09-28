@@ -58,12 +58,9 @@ const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PREPROCES
 
 const PARSER_VALUES = [
   "docling",
-  "marker",
   "unstructured",
-  "unlimited_ocr",
   "mineru",
   "dots_ocr",
-  "glm_ocr",
   "oci_genai_vision",
   "oci_document_understanding",
 ] as const;
@@ -111,12 +108,9 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_adapter_backend: null,
     parser_docling_enabled: null,
     parser_docling_vision_enabled: null,
-    parser_marker_enabled: null,
     parser_unstructured_enabled: null,
-    parser_unlimited_ocr_enabled: null,
     parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
-    parser_glm_ocr_enabled: null,
     chunking_strategy: null,
     chunk_size: null,
     chunk_overlap: null,

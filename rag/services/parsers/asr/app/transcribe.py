@@ -19,7 +19,7 @@ from rag_parser_core.asr import TranscriptSegment
 # transcriber: 音声ファイルパス -> (全文, segments, 言語コード)。
 Transcriber = Callable[[str], tuple[str, list[TranscriptSegment], str | None]]
 
-# 既定モデル(GPU メモリと精度のバランス。GLM/dots と同じく env で上書き可)。
+# 既定モデル(GPU メモリと精度のバランス。他の parser と同じく env で上書き可)。
 _DEFAULT_MODEL = os.environ.get("ASR_MODEL_SIZE", "large-v3")
 _DEFAULT_DEVICE = os.environ.get("ASR_DEVICE", "cuda")
 _DEFAULT_COMPUTE_TYPE = os.environ.get("ASR_COMPUTE_TYPE", "float16")

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { groundingUseCaseLabel } from "./GroundingSettingsClient";
+import { groundingUseCaseLabel, parseNumberInput } from "./GroundingSettingsClient";
 
 describe("groundingUseCaseLabel", () => {
   it("推奨用途 token を日本語化し、未知値を露出しない", () => {
@@ -23,5 +23,14 @@ describe("groundingUseCaseLabel", () => {
       expect(groundingUseCaseLabel(token)).toBe(label);
     }
     expect(groundingUseCaseLabel("future_internal_token")).toBe("その他");
+  });
+});
+
+describe("parseNumberInput", () => {
+  it("空欄を 0 ではなく未入力(NaN)として扱う", () => {
+    expect(parseNumberInput("")).toBeNaN();
+    expect(parseNumberInput("  ")).toBeNaN();
+    expect(parseNumberInput("0")).toBe(0);
+    expect(parseNumberInput("0.45")).toBe(0.45);
   });
 });

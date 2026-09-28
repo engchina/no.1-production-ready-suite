@@ -48,15 +48,17 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
     adapter_config: KnowledgeBaseAdapterConfig = Field(
         default_factory=KnowledgeBaseAdapterConfig,
         description=(
-            "KB 単位の構築設定。query は legacy 互換として読めるが検索・回答 runtime へは"
-            "反映しない。None フィールドはグローバル設定を継承する。"
+            "KB 単位の legacy 構築設定(互換のための保存値)。3 層モデルでは文書レシピが"
+            "global から解決するため、ingestion も query も取込・検索・回答 runtime へは"
+            "反映しない。"
         ),
     )
     effective_adapter_config: KnowledgeBaseAdapterConfig | None = Field(
         default=None,
         description=(
-            "KB 構築上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承フィールドに"
-            "「実際に効く値」を出すために使う。query は常に空。materialize には使わない。"
+            "文書レシピが継承する構築設定のグローバル既定(表示専用)。KB の legacy 構築上書き"
+            "(adapter_config.ingestion)は取込で使わないため重ねない。query は常に空。"
+            "materialize には使わない。"
         ),
     )
     legacy_query_config_ignored: bool = Field(

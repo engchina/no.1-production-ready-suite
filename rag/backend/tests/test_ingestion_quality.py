@@ -15,7 +15,7 @@ from app.schemas.extraction import (
 
 
 def test_quality_report_counts_first_class_structure_and_parser_artifacts() -> None:
-    """Docling/Marker 系の first-class metadata から品質指標を落とさず集計する。"""
+    """Docling 系の first-class metadata から品質指標を落とさず集計する。"""
     extraction = StructuredExtraction(
         raw_text="本文\n表\n図",
         confidence=0.92,

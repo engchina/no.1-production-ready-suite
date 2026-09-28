@@ -129,7 +129,7 @@ def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
 
     assert "install_parser_adapters:" in workflow
     # 外部 parser はサービス化したため combined extra は廃止。in-process smoke は共存可能な
-    # docling + unstructured のみ導入する(marker は per-service 検証)。
+    # docling + unstructured のみ導入する。
     assert "uv sync --locked --dev --extra docling --extra unstructured" in workflow
     assert "strict_adapter_contract_required=false" in workflow
     assert "adapter_contract_strict_enabled=false" in workflow

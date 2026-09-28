@@ -460,9 +460,12 @@ class RagPipeline:
                     agentic_subquery_count = len(planned)
                     agentic_hops = 1
                     if agentic_params.hyde:
-                        # HyDE: 仮説文書を主検索クエリにし、元クエリも残す。
+                        # HyDE: 仮説文書は埋め込み検索の variant として足す。先頭の variant は
+                        # graph 検索・Agent Memory・ツリー検索の主クエリに使うため、質問のまま残す
+                        # (仮説文書を先頭にすると graph の語句一致が回答文で行われる)。
                         hyde_generated = True
-                    if agentic_params.rewrite:
+                        query_variants = _dedupe_strings([*query_variants, planned[0]])
+                    elif agentic_params.rewrite:
                         query_variants = _dedupe_strings([planned[0], *query_variants])
                     else:
                         query_variants = _dedupe_strings([*query_variants, *planned])
@@ -584,6 +587,10 @@ class RagPipeline:
                 grounding_params.corrective_enabled
                 and (not grounded.ranked or grounded.context_pack.evidence_count == 0)
             ) or (crag_enabled and crag_confidence_score < crag_high_threshold)
+            # CRAG の精緻化で実際に再検索したか。hop 上限 0 や書き換えの失敗(空応答)で
+            # 再検索しなかったときは、根拠 0 件の補正(条件緩和の再検索 / multi-hop)を
+            # この後で行う(#275)。
+            crag_researched = False
             if should_refine:
                 error_stage = "crag_corrective"
                 refinement_limit = (
@@ -615,6 +622,7 @@ class RagPipeline:
                         request=effective_request,
                         resolved_strategy=resolved_strategy,
                     )
+                    crag_researched = True
                     crag_ranked = await self._rerank(
                         query_guardrail.sanitized_text,
                         crag_result.chunks,
@@ -643,8 +651,10 @@ class RagPipeline:
                     query_variants = crag_variants
                     if not crag_enabled or crag_confidence_score >= crag_high_threshold:
                         break
-            elif (
-                retrieval_params.corrective_retrieval and grounded.context_pack.evidence_count == 0
+            if (
+                not crag_researched
+                and retrieval_params.corrective_retrieval
+                and grounded.context_pack.evidence_count == 0
             ):
                 corrective_retried = True
                 error_stage = "corrective_retrieval"
@@ -678,17 +688,25 @@ class RagPipeline:
                 ):
                     grounded = corrective_grounded
                     selected_retrieval_result = corrective_result
-            elif agentic_params.multi_hop and grounded.context_pack.evidence_count == 0:
-                corrective_retried = True
+            elif (
+                not crag_researched
+                and agentic_params.multi_hop
+                and grounded.context_pack.evidence_count == 0
+            ):
                 error_stage = "agentic_multi_hop"
+                # 1 回目と同じ入力(temperature 0)で分解し直しても同じ sub-question しか返らない。
+                # 上位の検索結果を context として渡し、不足している情報を探す追加の分解にする。
                 hop_queries = await self._llm.plan_query(
                     query_guardrail.sanitized_text,
                     mode="decompose",
                     max_subqueries=agentic_params.max_subqueries,
+                    context=_multi_hop_context(grounded.ranked or ranked),
                 )
-                if hop_queries:
+                hop_variants = _dedupe_strings([*query_variants, *hop_queries])
+                # 新しい variant が無い hop は同じ検索の繰り返しになるので実行しない。
+                if len(hop_variants) > len(query_variants):
+                    corrective_retried = True
                     agentic_hops += 1
-                    hop_variants = _dedupe_strings([*query_variants, *hop_queries])
                     hop_vectors = (
                         []
                         if resolved_strategy.mode == SearchMode.KEYWORD
@@ -2909,6 +2927,20 @@ def _leading_segment_indices(
         if len(selected) >= max_sentences:
             break
     return selected or [0]
+
+
+MULTI_HOP_CONTEXT_MAX_CHUNKS = 3
+MULTI_HOP_CONTEXT_MAX_CHARS_PER_CHUNK = 400
+
+
+def _multi_hop_context(chunks: list[RetrievedChunk]) -> str:
+    """multi-hop の追加分解へ渡す上位の検索結果の抜粋を作る(空なら空文字)。"""
+    excerpts = [
+        chunk.text.strip()[:MULTI_HOP_CONTEXT_MAX_CHARS_PER_CHUNK]
+        for chunk in chunks[:MULTI_HOP_CONTEXT_MAX_CHUNKS]
+        if chunk.text.strip()
+    ]
+    return "\n\n".join(f"[{index}] {text}" for index, text in enumerate(excerpts, start=1))
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:

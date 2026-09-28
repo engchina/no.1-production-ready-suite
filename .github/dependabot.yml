@@ -14,7 +14,7 @@
 #     .github/workflows/dependabot-auto-merge.yml）。major は手動レビューで判断する。
 #
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
-# services/*（22 個の pyproject.toml と 24 個の Dockerfile）は CI 検証対象外で PR 数も
+# services/*（21 個の pyproject.toml と 21 個の Dockerfile）は CI 検証対象外で PR 数も
 # 多くなるため、本設定には含めない。運用が安定してから ecosystem を追加する。
 # monorepo（#71）では rag の backend / frontend と root の GitHub Actions を対象にする。
 # nl2sql / agent / platform の追加は、運用が安定してから ecosystem を足す。
@@ -51,7 +51,6 @@ updates:
       # （tests/test_config.py が一致を確認する）。解析結果が変わるため、サービスと同時に上げる。
       - dependency-name: docling
       - dependency-name: unstructured
-      - dependency-name: marker-pdf
 
   # frontend
   - package-ecosystem: npm

@@ -336,6 +336,62 @@ async def test_docrag_standard_flow_without_rerank_answers(
     assert "登録ボタン" in outcome.answer
 
 
+def test_build_docrag_settings_configures_rerank(tmp_path: Any) -> None:
+    """docrag が rerank を実行する条件(model と compartment)を backend の設定から渡す(#275)。"""
+    from docrag.generation.answer_records import _rerank_configured
+
+    from app.rag.docrag_answer import build_docrag_settings
+
+    docrag_settings = build_docrag_settings(
+        Settings(
+            oci_compartment_id="ocid1.compartment.oc1..example",
+            oci_genai_rerank_model="cohere.rerank-v4.0-fast",
+        ),
+        output_dir=tmp_path,
+    )
+
+    assert docrag_settings.oci_compartment_id == "ocid1.compartment.oc1..example"
+    assert docrag_settings.rerank_model == "cohere.rerank-v4.0-fast"
+    assert _rerank_configured(docrag_settings) is True
+
+
+async def test_docrag_rerank_enabled_calls_backend_rerank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rerank ON(既定)なら、検索候補を backend の Cohere rerank で並べ替える(#275)。
+
+    以前は docrag の Settings に compartment が渡らず、Rerank ON でも常に「未実行」だった。
+    """
+    import docrag.adapters.oci as docrag_oci
+
+    class RecordingGenAi(FakeGenAi):
+        def __init__(self) -> None:
+            self.rerank_calls: list[int] = []
+
+        async def rerank(
+            self, query: str, documents: list[str], top_n: int
+        ) -> list[tuple[int, float]]:
+            self.rerank_calls.append(len(documents))
+            return await super().rerank(query, documents, top_n)
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    genai = RecordingGenAi()
+    engine = DocragAnswerEngine(
+        Settings(
+            oci_compartment_id="ocid1.compartment.oc1..example",
+            rag_docrag_query_strategy="simple_retrieval",
+            rag_docrag_answer_flow="standard_rag",
+        ),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in outcome.answer
+    assert genai.rerank_calls, "Rerank ON なのに backend の rerank が呼ばれていない"
+
+
 def _pdf_with_figure() -> bytes:
     import fitz  # type: ignore[import-untyped]
 
