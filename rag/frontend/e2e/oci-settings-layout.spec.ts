@@ -429,3 +429,58 @@ test("秘密鍵ファイルは固定 path へ上書きアップロードでき�
   await expect(page.getByText("秘密鍵を読み込みました")).toBeVisible();
   expect(uploadContentType).toContain("multipart/form-data");
 });
+
+// #411: 通知は主操作を覆わない。以前は画面の右下に出ていたため、ページの末尾（スクロールしきると画面の下端）の
+// 保存ボタンを覆い、ポインタが通知に乗ると自動の消去が止まって（#351）押せなくなっていた。
+async function expectHitsItself(target: Locator) {
+  const hit = await target.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return top !== null && element.contains(top);
+  });
+  expect(hit).toBe(true);
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let objectStorageSaves = 0;
+    await mockApi(page, {
+      ociSettings: VALID_AUTH,
+      uploadStorageSettings: {
+        object_storage_region: "ap-tokyo-1",
+        object_storage_namespace: "env-namespace",
+        object_storage_bucket: "rag-bucket",
+      },
+      onOciObjectStorageUpdate: () => {
+        objectStorageSaves += 1;
+      },
+    });
+    await page.goto("/settings/oci");
+    await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+
+    await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+    const notice = page.getByRole("region", { name: "通知" }).getByRole("status").first();
+    await expect(notice).toBeVisible();
+
+    // ページの末尾までスクロールすると、最後の保存ボタンは画面の下端に来る（以前の通知の位置）。
+    await page.locator("main").evaluate((main) => {
+      main.scrollTop = main.scrollHeight;
+    });
+    const save = page.getByRole("button", { name: /Object Storage: 保存/ });
+    await expect(save).toBeInViewport();
+    const box = (await save.boundingBox())!;
+    expect(viewport.height - (box.y + box.height)).toBeLessThan(120);
+
+    // 通知にポインタを乗せて止めたまま（一時停止は維持）、覆われていない保存ボタンを押せる。
+    await notice.hover();
+    await expect(notice).toBeVisible();
+    await expectHitsItself(save);
+    await save.click({ timeout: 5_000 });
+    await expect.poll(() => objectStorageSaves).toBe(1);
+    await expectNoPageOverflow(page);
+  });
+}

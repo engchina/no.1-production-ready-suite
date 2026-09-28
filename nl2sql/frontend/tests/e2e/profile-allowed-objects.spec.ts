@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
-import { dismissToasts } from "./_helpers/toast";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 
@@ -1545,7 +1544,6 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   );
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
 
-  await dismissToasts(page);
   await status.getByRole("button", { name: "Oracle 反映を再試行" }).click();
 
   await expect(status).toHaveAttribute("data-job-status", "succeeded");
