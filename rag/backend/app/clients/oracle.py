@@ -573,8 +573,11 @@ class OracleClient:
         confidence 降順で node/edge を上限件数まで取り、端点が node 集合に含まれる
         edge のみ返す(部分グラフの整合)。グラフ未構築なら空を返す。
         """
+        # entity / relationship の knowledge_base_id は取込時の所属のスナップショットなので、
+        # KB から外した文書の要素を出さないよう、今も所属している文書の行だけに絞る(#274)。
         node_rows = await self._fetch_all(
-            """
+            _render_sql(
+                """
             SELECT * FROM (
                 SELECT
                     e.entity_id,
@@ -583,9 +586,12 @@ class OracleClient:
                     NVL(e.confidence, 1) AS confidence
                 FROM rag_graph_entities e
                 WHERE e.knowledge_base_id = :kb
+                  AND {membership_sql}
                 ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
+                membership_sql=_graph_current_membership_predicate("e"),
+            ),
             {"kb": knowledge_base_id, "limit": limit},
         )
         nodes: list[dict[str, object]] = [
@@ -601,7 +607,8 @@ class OracleClient:
         if not node_ids:
             return nodes, []
         edge_rows = await self._fetch_all(
-            """
+            _render_sql(
+                """
             SELECT * FROM (
                 SELECT
                     r.relationship_id,
@@ -611,9 +618,12 @@ class OracleClient:
                     NVL(r.confidence, 1) AS confidence
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
+                  AND {membership_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
             ) WHERE ROWNUM <= :limit
             """,
+                membership_sql=_graph_current_membership_predicate("r"),
+            ),
             {"kb": knowledge_base_id, "limit": limit},
         )
         edges: list[dict[str, object]] = [
@@ -10484,6 +10494,9 @@ def _oracle_graph_community_where(
         )
         clauses.append(knowledge_base_filter_sql)
         binds.update(knowledge_base_binds)
+    # community summary の knowledge_base_id は取込時点の所属のスナップショット。文書を KB から
+    # 外した後も行が残るため、今もその KB に所属している文書の summary だけに絞る(#274)。
+    clauses.append(_graph_current_membership_predicate("g"))
     explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
     if explicit_chunk_set_id:
         clauses.append("g.chunk_set_id = :graph_chunk_set_id")
@@ -10497,6 +10510,25 @@ def _oracle_graph_community_where(
             ")"
         )
     return " AND ".join(clauses), binds
+
+
+def _graph_current_membership_predicate(alias: str) -> str:
+    """graph 行の KB(取込時のスナップショット)に、元文書が今も所属しているかの predicate。
+
+    元文書は ``source_document_ids``(JSON 配列)で判定する。chunk_set を持たない旧来の行にも
+    効くよう、chunk_set 経由では判定しない。knowledge_base_id が NULL の行(取込時にどの KB にも
+    所属していなかった文書)は KB scope を持たないため、従来どおり KB 指定なしの検索だけが対象に
+    する(KB 指定・KB 権限の predicate が NULL を除外する)。
+    """
+    return (
+        f"({alias}.knowledge_base_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM rag_document_knowledge_bases member_dkb "
+        f"WHERE member_dkb.knowledge_base_id = {alias}.knowledge_base_id "
+        f"AND JSON_EXISTS({alias}.source_document_ids, "
+        "'$[*]?(@ == $member_document_id)' "
+        'PASSING member_dkb.document_id AS "member_document_id")'
+        "))"
+    )
 
 
 def _oracle_graph_local_match_predicate(query: str) -> tuple[str, dict[str, object]]:

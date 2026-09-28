@@ -1783,6 +1783,21 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def normalize_legacy_graph_enabled(self) -> Self:
+        """legacy RAG_GRAPH_ENABLED=true を起動時に RAG_GRAPH_PROFILE へ寄せる(#274)。
+
+        legacy フラグは profile off を full 相当に読み替える。フラグのまま残すと、取込の構築判定
+        (graph_adapter)は full なのに、文書の構築予定・実効設定の表示は rag_graph_profile(off)を
+        見て食い違い、文書レシピで「構築しない」を選んでも full で構築される。profile を唯一の
+        正本にするため、ここで profile へ移してフラグを下ろす。
+        """
+        if self.rag_graph_enabled:
+            if self.rag_graph_profile == "off":
+                self.rag_graph_profile = "full"
+            self.rag_graph_enabled = False
+        return self
+
+    @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
         """chunk size と各 chunking 戦略パラメータの整合性を起動時に検証する。"""
         self.rag_chunk_delimiter = self.rag_chunk_delimiter.strip()
