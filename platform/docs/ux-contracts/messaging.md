@@ -201,7 +201,8 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 - 同じ処理の詳細表示は 1 つだけ。**動くスピナーは同じ処理に 1 つだけ**にし、起点のボタンが `loading` を出している場合、詳細表示は `activityIcon="none"` で静的なラベル・経過時間・slow hint だけにする。同じ timer を複数のパネルに重ねない。
 - 実行中は `経過時間 00:00`、durable job や結果カードの完了後は `処理時間 00:00`。1 時間未満は `mm:ss`、1 時間以上は `h:mm:ss`。数字は `tabular-nums` で幅を固定する。
 - 10 秒を超えたら控えめな slow hint を足す。取り消せる処理は同じ領域に取消の action を置く。進捗が不明なら progress bar を出さず、総量が分かる場合だけ進捗率を並べる。
-- timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとに読み上げない。アニメーションは `prefers-reduced-motion` に従う。
+- timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとに読み上げない。アニメーションは `prefers-reduced-motion` に従う（スピナーは回転を止め、アークの濃さだけを変える。デザインシステム README §4「Spinner」）。
+- 回るアイコンは共有の `Spinner` だけを使う（lucide のアイコンに `animate-spin` を付けない。adherence の lint が検出する）。
 - 操作の key が変わったら client 側の開始時刻をリセットする。durable job はサーバーの `started_at` / `finished_at` / `elapsed_ms` を優先する。
 - timeout と取消は別の状態にする。timeout は今の選択を残した `ErrorState` に置き換えて再試行を示し、取消は timeout のエラーとして知らせない。
 - request の時間予算は製品の request policy に 1 か所で定義し、秒数をページの文言に直書きしない。予算を超える処理は durable job にする。

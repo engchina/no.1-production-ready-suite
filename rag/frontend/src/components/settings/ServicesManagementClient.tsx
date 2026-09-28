@@ -12,6 +12,7 @@ import {
   ProcessingIndicator,
   RowActionMenu,
   Skeleton,
+  Spinner,
   type EntityAction,
   TimedLoadingState,
   ListSkeleton,
@@ -851,7 +852,8 @@ export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus })
         meta.className
       )}
     >
-      <Icon size={14} className={meta.spin ? "animate-spin" : undefined} aria-hidden />
+      {/* 回すアイコンは共有の Spinner（全周トラック・reduced-motion 対応。#395） */}
+      {meta.spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {t(`settings.services.status.${status}` as I18nKey)}
     </span>
   );

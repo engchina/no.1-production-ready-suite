@@ -43,6 +43,8 @@
 
     --color-focus-ring: CanvasText;
     --scrim: Canvas;
+    /* 透過色は使えない。アーク（CanvasText / LinkText）と区別できるシステム色にする。 */
+    --color-spinner-track: GrayText;
   }
   /* 状態色は強制カラーモードでは表現できません。語とアイコンが意味を運びます
      （だから StatusBadge / Banner / Toast はアイコンを必須にしてあります）。 */
