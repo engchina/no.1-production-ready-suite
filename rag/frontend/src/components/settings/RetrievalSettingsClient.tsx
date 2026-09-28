@@ -10,9 +10,10 @@ import {
   Button,
   FormStatus,
   SelectField,
-  Skeleton,
   Switch,
   type SelectFieldOption,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
@@ -103,7 +104,14 @@ export function RetrievalSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-retrieval-load"
+          placement="page"
+          testId="settings-retrieval-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

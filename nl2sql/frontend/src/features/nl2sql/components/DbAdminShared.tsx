@@ -1,5 +1,4 @@
 import { IdentifierText } from "@/components/IdentifierText";
-import { Pagination } from "@/components/Pagination";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
   Button,
@@ -21,6 +20,11 @@ import {
   ActionResultRegion,
   ContentActionBar,
   DisclosureChevron,
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  Pagination,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -53,12 +57,6 @@ import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import {
-  INFORMATION_LIST_ROW_CLASS,
-  INFORMATION_LIST_SCROLL_CLASS,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
-} from "@/lib/list-density";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import type {
   DbAdminExecuteData,

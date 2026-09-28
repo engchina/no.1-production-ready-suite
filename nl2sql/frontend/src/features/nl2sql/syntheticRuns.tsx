@@ -8,13 +8,14 @@ import {
   StatusBadge,
   FormStatus,
   ProcessingIndicator,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
 } from "@engchina/production-ready-ui";
 import { apiGet } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useDatabaseStatus } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
-import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { useAuth } from "@/features/security/AuthProvider";
 import { syntheticRunPollingInterval } from "./syntheticRunPolling";
 import { DbObjectName } from "./components/DbObjectName";

@@ -158,7 +158,7 @@ test("狭い画面幅(375px)でもページ全体が横スクロール(崩れ)�
   expect(searchBox!.width).toBeLessThanOrEqual(375);
 });
 
-test("bounded-scroll-area はホイールの scroll chaining を遮断しない", async ({ page }) => {
+test("一覧のスクロール領域はホイールの scroll chaining を遮断しない", async ({ page }) => {
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
 
@@ -167,7 +167,8 @@ test("bounded-scroll-area はホイールの scroll chaining を遮断しない"
 
   // overscroll-behavior: contain が付くと、中身が少なくスクロール余地が無いときも
   // カード上の wheel がページへ伝播しなくなる(RAG検索の引用カードで実害)。復活をガードする。
-  const area = page.locator(".bounded-scroll-area, .bounded-scroll-area-lg").first();
+  // 一覧は DataTable の表示行数（visibleRows）で表の中を縦スクロールにする（#265）。
+  const area = page.getByTestId("knowledge-bases-scroll-region");
   await expect(area).toBeVisible();
   const behavior = await area.evaluate((el) => getComputedStyle(el).overscrollBehaviorY);
   expect(behavior).toBe("auto");
@@ -510,7 +511,10 @@ test("最後のページの KB をアーカイブすると、空の案内では�
   await expect(
     page.locator("tbody tr").first().locator('[data-status-variant="success"] svg')
   ).toBeVisible();
-  await page.getByRole("button", { name: "次へ" }).click();
+  // 共通の Pagination（10 件/ページ、#265）。最後の 3 ページ目へ移る。
+  const pagination = page.getByTestId("knowledge-bases-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(page.locator("tbody tr")).toHaveCount(1);
 
   const lastRow = page.locator("tbody tr").first();
@@ -522,9 +526,9 @@ test("最後のページの KB をアーカイブすると、空の案内では�
     .getByRole("button", { name: "アーカイブ" })
     .click();
 
-  await expect(page.locator("tbody tr")).toHaveCount(20);
+  await expect(page.locator("tbody tr")).toHaveCount(10);
   await expect(page.getByText("知識ベースがありません。")).toHaveCount(0);
-  await expect(page.getByText("1 - 20 / 20 件")).toBeVisible();
+  await expect(pagination).toContainText("11 - 20 / 20 件");
 });
 
 function createKnowledgeBaseState() {

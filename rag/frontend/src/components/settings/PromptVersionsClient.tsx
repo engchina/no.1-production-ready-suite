@@ -12,9 +12,10 @@ import {
   RequiredBadge,
   RowActionMenu,
   type EntityAction,
-  Skeleton,
   Switch,
   TextField,
+  TimedLoadingState,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
@@ -49,7 +50,14 @@ export function PromptVersionsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-prompts-load"
+          placement="page"
+          testId="settings-prompts-loading"
+        >
+          <ListSkeleton rowClassName="h-16" />
+        </TimedLoadingState>
       </PageBody>
     );
   }

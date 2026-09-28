@@ -72,6 +72,7 @@ import {
   Switch,
   Tabs,
   TextField,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -969,7 +970,18 @@ export function DocumentWorkspace({
   };
   if (focusSourceChanged) applyRequestedFocus();
 
-  if (query.isPending) return <Skeleton className="h-80 w-full rounded-lg" />;
+  if (query.isPending) {
+    return (
+      <TimedLoadingState
+        label={t("documents.detail.loading")}
+        operationKey="document-detail-load"
+        placement="page"
+        testId="document-detail-loading"
+      >
+        <Skeleton className="h-80 w-full rounded-lg" />
+      </TimedLoadingState>
+    );
+  }
   // 取得済みの文書がある間は、ポーリング中の一時的な失敗で画面全体（入力中の分類・KB の選択を含む）を
   // エラー表示に置き換えない。前の内容のまま次の取得で回復させる（#281）。
   if (query.isError && !query.data) {
@@ -1742,7 +1754,18 @@ function IngestionJobsPanel({
   vectorCount: number | null;
   embeddingLabel: string | null;
 }) {
-  if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
+  if (loading) {
+    return (
+      <TimedLoadingState
+        label={t("flow.jobs.loading")}
+        operationKey="document-jobs-load"
+        framed={false}
+        testId="document-jobs-loading"
+      >
+        <Skeleton className="h-24 w-full rounded-md" />
+      </TimedLoadingState>
+    );
+  }
   if (error) {
     return (
       <Banner severity="warning" title={t("flow.jobs.loadError")}>
@@ -2049,7 +2072,18 @@ function IngestionSegmentsPanel({
   retryStatus: { tone: "success" | "danger"; message: string } | null;
   onRetryFailedSegments: () => void;
 }) {
-  if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
+  if (loading) {
+    return (
+      <TimedLoadingState
+        label={t("flow.segments.loading")}
+        operationKey="document-segments-load"
+        framed={false}
+        testId="document-segments-loading"
+      >
+        <Skeleton className="h-24 w-full rounded-md" />
+      </TimedLoadingState>
+    );
+  }
   if (error) {
     return (
       <Banner severity="warning" title={t("flow.segments.loadError")}>
@@ -2207,7 +2241,15 @@ function DocumentExtractionExportPanel({
         <ExportMetric label={t("flow.extractionExport.chunks")} value={chunkCount} />
       </dl>
       {loading ? (
-        <Skeleton className="mt-3 h-36 w-full rounded-md" />
+        <TimedLoadingState
+          label={t("flow.extractionExport.loading")}
+          operationKey="document-extraction-export-load"
+          framed={false}
+          className="mt-3"
+          testId="document-extraction-export-loading"
+        >
+          <Skeleton className="h-36 w-full rounded-md" />
+        </TimedLoadingState>
       ) : error ? (
         <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
           {t("flow.extractionExport.loadErrorHint")}
@@ -2634,7 +2676,18 @@ function DocumentChunksPanel({
     scrollFocusedControlIntoView(selectedChunkRef.current, { focus: true });
   }, [focusRequestKey, selectedChunkId]);
 
-  if (loading) return <Skeleton className="h-80 w-full rounded-md" />;
+  if (loading) {
+    return (
+      <TimedLoadingState
+        label={t("flow.chunks.loading")}
+        operationKey="document-chunks-load"
+        framed={false}
+        testId="document-chunks-loading"
+      >
+        <Skeleton className="h-80 w-full rounded-md" />
+      </TimedLoadingState>
+    );
+  }
   if (error) {
     return (
       <Banner severity="warning" title={t("flow.chunks.loadError")}>

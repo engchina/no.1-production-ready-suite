@@ -31,15 +31,18 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("2 ページ目の最後の 1 件を削除したら、1 ページ目へ戻る", async ({ page }) => {
+test("最後のページの最後の 1 件を削除したら、1 つ前のページへ戻る", async ({ page }) => {
   const documents = Array.from({ length: 21 }, (_, index) =>
     documentSummary(`doc-${index + 1}`, `file-${String(index + 1).padStart(2, "0")}.txt`, "INDEXED")
   );
   await mockFileListApi(page, documents);
 
   await page.goto("/file-list");
-  await page.getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByText("21 - 21 / 21 件")).toBeVisible();
+  // 共通の Pagination（10 件/ページ、#265）。3 ページ目へ移る。
+  const pagination = page.getByTestId("file-list-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("21 - 21 / 21 件");
 
   const last = documents[20];
   await page.getByRole("button", { name: `${last.file_name} の操作` }).click();
@@ -49,9 +52,9 @@ test("2 ページ目の最後の 1 件を削除したら、1 ページ目へ戻�
     .getByRole("button", { name: "削除" })
     .click();
 
-  // 空の 2 ページ目に「該当なし」とだけ出してページ送りが消える状態にしない。
-  await expect(page.getByText("1 - 20 / 20 件")).toBeVisible();
-  await expect(page.getByRole("link", { name: "file-01.txt" })).toBeVisible();
+  // 空の 3 ページ目に「該当なし」とだけ出してページ送りが消える状態にしない。
+  await expect(pagination).toContainText("11 - 20 / 20 件");
+  await expect(page.getByRole("link", { name: "file-11.txt" })).toBeVisible();
   await expect(page.getByText("該当するドキュメントがありません。")).toHaveCount(0);
 });
 
@@ -141,8 +144,10 @@ test("検索欄から focus を外しただけでは選択とページを解除�
   await mockFileListApi(page, documents);
 
   await page.goto("/file-list");
-  await page.getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByText("21 - 21 / 21 件")).toBeVisible();
+  const pagination = page.getByTestId("file-list-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("21 - 21 / 21 件");
   await page.locator("tbody tr").filter({ hasText: "file-21.txt" }).getByRole("checkbox").check();
   await expect(page.getByText("1 件選択中")).toBeVisible();
 
@@ -151,7 +156,7 @@ test("検索欄から focus を外しただけでは選択とページを解除�
   await search.blur();
 
   await expect(page.getByText("1 件選択中")).toBeVisible();
-  await expect(page.getByText("21 - 21 / 21 件")).toBeVisible();
+  await expect(pagination).toContainText("21 - 21 / 21 件");
   await expect(search).toHaveAttribute("maxlength", "200");
 });
 
@@ -221,7 +226,7 @@ async function mockFileListApi(
     if (request.method() === "GET" && url.pathname === "/api/documents") {
       onList?.(url);
       const status = url.searchParams.get("status");
-      const limit = Number(url.searchParams.get("limit") ?? "20");
+      const limit = Number(url.searchParams.get("limit") ?? "10");
       const offset = Number(url.searchParams.get("offset") ?? "0");
       const filtered = documents.filter((document) => !status || document.status === status);
       await route.fulfill({

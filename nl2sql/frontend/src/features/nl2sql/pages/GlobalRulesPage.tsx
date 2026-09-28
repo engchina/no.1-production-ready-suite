@@ -1,4 +1,3 @@
-import { Pagination } from "@/components/Pagination";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
@@ -8,10 +7,12 @@ import {
   EmptyState,
   toast,
   usePagination,
+  DEFAULT_PAGE_SIZE,
   StatusBadge,
   PageHeader,
   PageBody,
   ProcessingIndicator,
+  Pagination,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -24,7 +25,7 @@ import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPane
 import type { LegacyLearningMaterialData } from "../types";
 
 const GLOBAL_RULES_ID = "global-rules";
-const RULES_PAGE_SIZE = 10;
+const RULES_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const RULE_PREVIEW_TEXT_CLASS =
   "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 

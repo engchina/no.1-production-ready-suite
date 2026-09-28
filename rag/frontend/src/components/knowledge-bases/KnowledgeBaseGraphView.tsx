@@ -6,7 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { Share2 } from "lucide-react";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Skeleton } from "@engchina/production-ready-ui";
+import { Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
 import { t } from "@/lib/i18n";
@@ -72,7 +72,13 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
         <div className="space-y-2 px-4 pb-4">
           <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.hint")}</p>
           {query.isPending ? (
-            <Skeleton className="h-[360px] w-full rounded-md" />
+            <TimedLoadingState
+              label={t("knowledgeBases.graph.loading")}
+              operationKey="knowledge-base-graph-load"
+              testId="knowledge-base-graph-loading"
+            >
+              <Skeleton className="h-[360px] w-full rounded-md" />
+            </TimedLoadingState>
           ) : query.isError ? (
             <ErrorState message={t("knowledgeBases.graph.error")} onRetry={() => void query.refetch()} />
           ) : isEmpty ? (

@@ -32,6 +32,7 @@ export type WorkspaceField =
   | "chat.composer"
   | "fileList.view"
   | "knowledgeBases.view"
+  | "knowledgeBases.documentsPage"
   | "businessViews.view"
   | "businessViews.draft"
   | "evaluation.requestJson"

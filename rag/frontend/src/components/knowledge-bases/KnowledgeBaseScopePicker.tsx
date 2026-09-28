@@ -4,7 +4,7 @@ import { Database } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
-import { Banner } from "@engchina/production-ready-ui";
+import { Banner, TimedLoadingState, Skeleton } from "@engchina/production-ready-ui";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -110,9 +110,14 @@ export function KnowledgeBaseScopePicker({
           </p>
         </Banner>
       ) : search.isPending ? (
-        <p className="text-xs text-fg-muted" role="status">
-          {t("knowledgeBaseScope.loading")}
-        </p>
+        <TimedLoadingState
+          label={t("knowledgeBaseScope.loading")}
+          operationKey="knowledge-base-scope-load"
+          framed={false}
+          testId="knowledge-base-scope-loading"
+        >
+          <Skeleton className="h-[var(--button-height-md)] w-full" />
+        </TimedLoadingState>
       ) : noKnowledgeBases && selectedIds.length === 0 ? (
         <p className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-xs text-fg-muted">
           {t("knowledgeBaseScope.empty")}

@@ -12,8 +12,13 @@ import {
   SelectField,
   type SelectFieldOption,
   StatusBadge,
+  Skeleton,
+  TableSkeleton,
+  TimedLoadingState,
   ToggleChip,
   useConfirm,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 import {
   BookmarkPlus,
@@ -32,7 +37,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
+import { EmptyState, ErrorState } from "@/components/StateViews";
 import { RagSplitPane, RowTitleButton } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
@@ -261,7 +266,19 @@ export function FeedbackClient() {
         </Card>
 
         {query.isLoading ? (
-          <LoadingState rows={8} label={t("feedback.page.title")} />
+          <TimedLoadingState
+            label={t("feedback.page.loading")}
+            operationKey="feedback-list-load"
+            testId="feedback-loading"
+          >
+            {/* 集計パネル（4 指標）と一覧の表の寸法を予約する。 */}
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 4 }, (_, index) => (
+                <Skeleton key={index} className="h-24" />
+              ))}
+            </div>
+            <TableSkeleton columns={4} />
+          </TimedLoadingState>
         ) : query.isError ? (
           <ErrorState message={t("feedback.page.loadError")} onRetry={() => void query.refetch()} />
         ) : data ? (
@@ -487,9 +504,15 @@ function FeedbackTable({
       getRowKey={(item) => item.feedback_id}
       onRowClick={(item) => onSelect(item.feedback_id)}
       selectedRowKey={selectedId}
-      rowProps={(item) => ({ className: "align-top", "data-testid": `feedback-row-${item.feedback_id}` })}
+      rowProps={(item) => ({
+        className: cn(INFORMATION_TABLE_ROW_CLASS, "align-top"),
+        "data-testid": `feedback-row-${item.feedback_id}`,
+      })}
       stickyHeader
-      className="hidden max-h-[60vh] overflow-auto md:block"
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      scrollAriaLabel={t("feedback.list.scrollLabel")}
+      scrollTestId="feedback-scroll-region"
+      className="hidden md:block"
       tableClassName="w-full min-w-[36rem] border-collapse"
       ariaLabel={t("feedback.list.title")}
     />
@@ -629,7 +652,16 @@ function FeedbackDetailPanel({
         </div>
         <div className="p-4 sm:p-5">
           {query.isLoading ? (
-            <LoadingState rows={6} label={t("feedback.detail.title")} />
+            <TimedLoadingState
+              label={t("feedback.detail.loading")}
+              operationKey={`feedback-detail-${feedbackId ?? ""}`}
+              framed={false}
+              testId="feedback-detail-loading"
+            >
+              <Skeleton className="h-6 w-2/3" />
+              <Skeleton className="h-24" />
+              <Skeleton className="h-40" />
+            </TimedLoadingState>
           ) : query.isError ? (
             <ErrorState message={t("feedback.detail.loadError")} onRetry={() => void query.refetch()} />
           ) : query.data ? (

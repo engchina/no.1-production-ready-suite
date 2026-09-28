@@ -8,6 +8,9 @@ import {
   SelectField,
   type SelectFieldOption,
   ToggleChip,
+  TimedLoadingState,
+  Skeleton,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 import { Check, ChevronDown, Pencil, Plus, SendHorizontal, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +21,7 @@ import { CitationCard } from "@/components/search/CitationCard";
 import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { useAuth } from "@/components/security/AuthProvider";
-import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
+import { EmptyState, ErrorState } from "@/components/StateViews";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
@@ -587,7 +590,14 @@ export function ChatClient() {
         <Card className="shrink-0">
           <CardContent className="p-4 sm:p-5">
             {businessViewLoading ? (
-              <LoadingState rows={1} label={t("chat.businessView.label")} />
+              <TimedLoadingState
+                label={t("chat.businessView.loading")}
+                operationKey="chat-business-views-load"
+                framed={false}
+                testId="chat-business-views-loading"
+              >
+                <Skeleton className="h-[var(--button-height-md)] w-full max-w-md" />
+              </TimedLoadingState>
             ) : noBusinessViews ? (
               <EmptyState
                 title={t("chat.businessView.empty")}
@@ -660,7 +670,14 @@ export function ChatClient() {
                 </Button>
               </div>
               {conversationsQuery.isLoading ? (
-                <LoadingState rows={3} label={t("chat.sessions.title")} />
+                <TimedLoadingState
+                  label={t("chat.sessions.loading")}
+                  operationKey="chat-conversations-load"
+                  framed={false}
+                  testId="chat-conversations-loading"
+                >
+                  <ListSkeleton rows={3} rowClassName="h-12" />
+                </TimedLoadingState>
               ) : conversationsQuery.isError ? (
                 <ErrorState
                   message={t("chat.sessions.error")}
@@ -789,7 +806,17 @@ export function ChatClient() {
                   hint={t("chat.messages.empty")}
                 />
               ) : conversationQuery.isLoading ? (
-                <LoadingState rows={4} label={t("chat.title")} />
+                <TimedLoadingState
+                  label={t("chat.messages.loading")}
+                  operationKey="chat-conversation-load"
+                  framed={false}
+                  testId="chat-messages-loading"
+                >
+                  {/* 質問と回答の吹き出しの寸法を予約する。 */}
+                  <Skeleton className="ml-auto h-12 w-2/3" />
+                  <Skeleton className="h-32 w-5/6" />
+                  <Skeleton className="ml-auto h-12 w-1/2" />
+                </TimedLoadingState>
               ) : conversationQuery.isError ? (
                 <ErrorState
                   message={t("chat.messages.error")}

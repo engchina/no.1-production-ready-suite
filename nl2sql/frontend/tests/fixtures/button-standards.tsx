@@ -10,8 +10,7 @@ import { DataTable, type DataTableSort } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Eye, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { Button, buttonVariants, FormActionBar, PageHeader } from "@engchina/production-ready-ui";
-import { Pagination } from "../../src/components/Pagination";
+import { Button, buttonVariants, FormActionBar, PageHeader, Pagination } from "@engchina/production-ready-ui";
 import { ErrorState } from "../../src/components/StateViews";
 import "../../src/globals.css";
 

@@ -9,7 +9,8 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Shuffle } from "lucide-react";
@@ -56,7 +57,14 @@ export function PreprocessSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-preprocess-load"
+          placement="page"
+          testId="settings-preprocess-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

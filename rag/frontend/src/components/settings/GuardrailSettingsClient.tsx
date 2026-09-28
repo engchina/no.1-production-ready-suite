@@ -9,7 +9,8 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldAlert } from "lucide-react";
@@ -57,7 +58,14 @@ export function GuardrailSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-guardrail-load"
+          placement="page"
+          testId="settings-guardrail-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

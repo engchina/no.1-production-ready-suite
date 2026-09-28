@@ -12,6 +12,8 @@ import {
   RowActionMenu,
   Skeleton,
   type EntityAction,
+  TimedLoadingState,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -133,8 +135,15 @@ export function ServicesManagementClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-40 w-full rounded-lg" />
-        <Skeleton className="h-40 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-services-load"
+          placement="page"
+          testId="settings-services-loading"
+        >
+          <Skeleton className="h-40 w-full rounded-lg" />
+          <Skeleton className="h-40 w-full rounded-lg" />
+        </TimedLoadingState>
       </PageBody>
     );
   }
@@ -718,10 +727,15 @@ function ServiceLogPanel({
         </div>
       </div>
       {logsQuery.isPending ? (
-        <div className="flex min-h-28 items-center gap-2 px-3 py-4 text-xs text-fg-muted">
-          <RefreshCw size={14} className="animate-spin" aria-hidden />
-          {t("settings.services.logs.loading")}
-        </div>
+        <TimedLoadingState
+          label={t("settings.services.logs.loading")}
+          operationKey="services-logs-load"
+          framed={false}
+          className="px-3 py-3"
+          testId="services-logs-loading"
+        >
+          <ListSkeleton rows={4} rowClassName="h-4" className="gap-2" />
+        </TimedLoadingState>
       ) : logsQuery.isError ? (
         <div className="px-3 py-4 text-xs text-danger-fg" role="alert">
           {logsQuery.error instanceof ApiError

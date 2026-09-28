@@ -4,6 +4,16 @@
 
 // --- lib ---
 export { cn } from "./lib/utils";
+export {
+  INFORMATION_LIST_VISIBLE_ROWS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+} from "./lib/list-density";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -23,7 +33,17 @@ export {
   CardDescription,
   CardContent,
 } from "./components/ui/card";
-export { Skeleton } from "./components/ui/skeleton";
+export {
+  Skeleton,
+  TableSkeleton,
+  ListSkeleton,
+  FormSkeleton,
+  SKELETON_CLASS,
+  type SkeletonRows,
+  type TableSkeletonProps,
+  type ListSkeletonProps,
+  type FormSkeletonProps,
+} from "./components/ui/skeleton";
 export { Switch, type SwitchProps } from "./components/ui/switch";
 export { ToggleChip } from "./components/ui/toggle-chip";
 export { FieldError } from "./components/ui/field-error";
@@ -116,9 +136,12 @@ export {
 export {
   Pagination,
   usePagination,
+  offsetPagination,
+  offsetForPage,
   DEFAULT_PAGE_SIZE,
   type PaginationProps,
   type PaginationRange,
+  type UsePaginationOptions,
 } from "./components/data/pagination";
 export {
   RowActionMenu,

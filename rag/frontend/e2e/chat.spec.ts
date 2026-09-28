@@ -515,7 +515,12 @@ test("会話一覧の読み込み中状態をカード内に表示する", async
   await page.getByRole("combobox", { name: "業務ビュー" }).click();
   await page.getByRole("option", { name: "経理アシスタント" }).click();
 
-  await expect(page.getByRole("status", { name: "会話" })).toBeVisible();
+  // 読み込み中は文言と経過時間（TimedLoadingState）と行の形の Skeleton を出す（#265）。
+  const loading = page.getByTestId("chat-conversations-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("会話を読み込んでいます");
+  await expect(loading.getByRole("timer")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "会話を読み込んでいます" })).toHaveCount(1);
   await expectChatWorkspaceLayout(page, "mobile");
   await expectNoPageOverflow(page);
 

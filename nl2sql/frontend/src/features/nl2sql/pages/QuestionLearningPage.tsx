@@ -1,5 +1,4 @@
 import { ErrorState } from "@/components/StateViews";
-import { Pagination } from "@/components/Pagination";
 import {
   Button,
   buttonVariants,
@@ -10,6 +9,7 @@ import {
   SelectField,
   toast,
   usePagination,
+  DEFAULT_PAGE_SIZE,
   StatusBadge,
   PageHeader,
   PageBody,
@@ -18,6 +18,9 @@ import {
   ProcessingIndicator,
   RowActionMenu,
   type EntityAction,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  Pagination,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -49,10 +52,6 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import {
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
-} from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -96,7 +95,7 @@ const controlClass =
   "min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-focus-ring";
 const linkButtonClass =
   "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover";
-const TRAINING_DATA_PAGE_SIZE = 10;
+const TRAINING_DATA_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const CANDIDATE_PAGE_SIZE = 20;
 const CANDIDATE_STATUS_VALUES = [
   "all",

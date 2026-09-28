@@ -9,8 +9,9 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
   TextField,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Workflow } from "lucide-react";
@@ -63,7 +64,14 @@ export function AgenticSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-agentic-load"
+          placement="page"
+          testId="settings-agentic-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

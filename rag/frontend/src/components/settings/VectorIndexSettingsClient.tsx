@@ -9,7 +9,8 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { Boxes, CheckCircle2, Database, RotateCcw, Save } from "lucide-react";
@@ -47,7 +48,14 @@ export function VectorIndexSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-vector-index-load"
+          placement="page"
+          testId="settings-vector-index-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

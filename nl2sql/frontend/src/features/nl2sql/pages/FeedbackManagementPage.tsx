@@ -1,4 +1,3 @@
-import { Pagination } from "@/components/Pagination";
 import {
   useEffect,
   useLayoutEffect,
@@ -23,6 +22,7 @@ import {
   Banner,
   EmptyState,
   Skeleton,
+  TableSkeleton,
   toast,
   DataTable,
   type DataTableColumn,
@@ -36,6 +36,9 @@ import {
   type EntityAction,
   FixedSplitPane,
   FormActionBar,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  Pagination,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -45,7 +48,6 @@ import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -1530,12 +1532,7 @@ function FeedbackEntriesListSkeleton() {
       <span className="sr-only" role="status">{t("feedbackManagement.entries.loading")}</span>
       <Skeleton className="h-6 w-44" />
       <Skeleton className="h-5 w-72 max-w-full" />
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
-        <Skeleton className="h-10 rounded-none" />
-        {Array.from({ length: 5 }, (_, index) => (
-          <Skeleton key={index} className="h-14 rounded-none border-t border-border" />
-        ))}
-      </div>
+      <TableSkeleton columns={2} />
     </section>
   );
 }

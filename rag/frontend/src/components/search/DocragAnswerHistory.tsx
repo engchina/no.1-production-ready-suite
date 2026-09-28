@@ -16,6 +16,8 @@ import {
   Skeleton,
   StatusBadge,
   useConfirm,
+  TimedLoadingState,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -107,12 +109,15 @@ export function DocragAnswerHistory({
       </CardHeader>
       <CardContent className="space-y-3">
         {list.isPending || movingToLastPage ? (
-          <div className="space-y-1" aria-hidden>
+          <TimedLoadingState
+            label={t("search.history.loading")}
+            operationKey="search-history-load"
+            framed={false}
+            testId="search-history-loading"
+          >
             {/* 1 ページ分の行の高さを予約する（読み込み後に表示がずれない）。 */}
-            <Skeleton className="h-14 w-full" />
-            <Skeleton className="h-14 w-full" />
-            <Skeleton className="h-14 w-full" />
-          </div>
+            <ListSkeleton rows={3} rowClassName="h-14" className="gap-1" />
+          </TimedLoadingState>
         ) : null}
         {list.isError ? (
           <FormStatus
@@ -226,7 +231,18 @@ export function SavedDocragAnswer({
     });
   }
 
-  if (detail.isPending) return <Skeleton className="h-24 w-full" />;
+  if (detail.isPending) {
+    return (
+      <TimedLoadingState
+        label={t("search.history.detailLoading")}
+        operationKey="search-history-detail-load"
+        framed={false}
+        testId="search-history-detail-loading"
+      >
+        <Skeleton className="h-24 w-full" />
+      </TimedLoadingState>
+    );
+  }
   if (detail.isError || !detail.data) {
     return (
       <FormStatus

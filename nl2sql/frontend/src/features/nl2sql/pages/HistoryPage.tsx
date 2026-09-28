@@ -28,6 +28,7 @@ import {
   Tabs,
   PageBody,
   ProcessingIndicator,
+  Skeleton,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -128,7 +129,7 @@ function engineTimingStatusVariant(status: EngineTiming["status"]): StatusVarian
 }
 
 function HistorySkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-surface-hover motion-reduce:animate-none ${className}`} aria-hidden="true" />;
+  return <Skeleton className={className} />;
 }
 
 function HistoryListSkeleton() {

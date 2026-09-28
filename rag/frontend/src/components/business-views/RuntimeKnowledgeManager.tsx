@@ -3,13 +3,14 @@ import { useState } from "react";
 
 import {
   Button,
-  DataTable,
   EmptyState,
   FormStatus,
   SelectField,
   StatusBadge,
   Switch,
+  TableSkeleton,
   TextField,
+  TimedLoadingState,
   toast,
   useConfirm,
   type SelectFieldOption,
@@ -24,6 +25,7 @@ import {
   type RuntimeKnowledgeKind,
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
+import { PagedDataTable } from "@/components/PagedDataTable";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
@@ -178,8 +180,22 @@ export function RuntimeKnowledgeManager({
     }
   };
 
-  const tableFor = (kind: RuntimeKnowledgeKind, rows: Row[]) => (
-    <DataTable<Row>
+  const tableFor = (kind: RuntimeKnowledgeKind, rows: Row[]) =>
+    query.isPending ? (
+      // 用語と規則は同じ 1 回の取得。経過時間は用語の表の位置だけに出し、規則は形だけにする（messaging.md §3.7）。
+      kind === "terms" ? (
+        <TimedLoadingState
+          label={t("businessViews.runtime.loading")}
+          operationKey={`runtime-knowledge-${businessViewId}`}
+          testId="runtime-knowledge-loading"
+        >
+          <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
+        </TimedLoadingState>
+      ) : (
+        <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
+      )
+    ) : (
+    <PagedDataTable<Row>
       columns={[
         {
           key: "name",
@@ -234,9 +250,16 @@ export function RuntimeKnowledgeManager({
       getRowKey={(row) => rowKey(kind, row)}
       onRowClick={(row) => load(formFromRow(kind, row))}
       selectedRowKey={form.kind === kind ? form.selected : null}
-      loading={query.isPending}
+      resetKey={businessViewId}
       dense
       empty={<EmptyState title={t("businessViews.runtime.empty")} />}
+      scrollAriaLabel={t(
+        kind === "terms"
+          ? "businessViews.runtime.termsScrollLabel"
+          : "businessViews.runtime.rulesScrollLabel",
+      )}
+      scrollTestId={`runtime-knowledge-${kind}-scroll-region`}
+      paginationTestId={`runtime-knowledge-${kind}-pagination`}
     />
   );
 

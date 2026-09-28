@@ -14,6 +14,9 @@ import {
   type SelectFieldOption,
   TextField,
   ToggleChip,
+  TimedLoadingState,
+  Skeleton,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 import {
   ChevronRight,
@@ -34,7 +37,7 @@ import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
 } from "@/components/feedback/FeedbackControls";
-import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
+import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,
   ApiError,
@@ -396,7 +399,15 @@ export function SearchClient() {
           {businessViewsQuery.isLoading ? (
             <Card>
               <CardContent className="pt-5">
-                <LoadingState rows={4} label={t("search.businessViewLoading")} />
+                <TimedLoadingState
+                  label={t("search.businessViewLoading")}
+                  operationKey="search-business-views-load"
+                  framed={false}
+                  testId="search-business-views-loading"
+                >
+                  <Skeleton className="h-[var(--button-height-md)] w-full max-w-md" />
+                  <ListSkeleton rows={3} rowClassName="h-10" />
+                </TimedLoadingState>
               </CardContent>
             </Card>
           ) : businessViewsQuery.isError ? (

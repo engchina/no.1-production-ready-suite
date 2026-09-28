@@ -11,6 +11,7 @@ import {
   type SelectFieldOption,
   Skeleton,
   ToggleChip,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import {
   ApiError,
@@ -322,10 +323,15 @@ export function DocumentProcessingConfigPanel({
       </div>
 
       {loading ? (
-        <div className="mt-3 space-y-2" role="status" aria-label={t("flow.buildConfig.loading")}>
+        <TimedLoadingState
+          label={t("flow.buildConfig.loading")}
+          operationKey="document-build-config-load"
+          framed={false}
+          className="mt-3"
+          testId="document-build-config-loading"
+        >
           <Skeleton className="h-20 w-full" />
-          <span className="sr-only">{t("flow.buildConfig.loading")}</span>
-        </div>
+        </TimedLoadingState>
       ) : error ? (
         <Banner severity="warning" title={t("flow.buildConfig.loadError")} className="mt-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
