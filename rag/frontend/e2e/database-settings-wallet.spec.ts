@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
+import { expectNoPageOverflow, SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 
 interface DatabaseSettingsData {
   user: string;
@@ -181,6 +181,51 @@ test("接続テストのタイムアウト診断を表示できる", async ({ pa
   await expect(page.getByText(/所要時間: 15001 ms/)).toBeVisible();
   await expect(page.getByText(/TCPS 1522/)).toBeVisible();
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 720 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`DB 接続テストの間は経過時間を出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    // 接続テストの応答を止めて、実行中の表示（#376、共通のシステム設定）を確かめてから返す。
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await mockDatabaseSettings(
+      page,
+      () => ({ ...databaseSettings, wallet_uploaded: true, available_services: ["ragdb_high"] }),
+      undefined,
+      undefined,
+      async () => {
+        await released;
+        return {
+          status: "success",
+          readiness: "ok",
+          message: "Oracle 26ai に接続できました。",
+          elapsed_ms: 1200,
+          troubleshooting: [],
+          details: {},
+          checked_at: "2026-06-14T00:00:00Z",
+        };
+      }
+    );
+
+    await page.goto("/settings/database");
+    await page.getByRole("button", { name: "DB接続テスト" }).click();
+
+    const processing = page.getByTestId("settings-database-test-processing");
+    await expect(processing).toContainText("データベースへの接続を確認しています");
+    await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+    await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+    await expectNoPageOverflow(page);
+
+    release();
+    await expect(page.getByText("Oracle 26ai に接続できました。")).toBeVisible();
+    await expect(processing).toHaveCount(0);
+  });
+}
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 720, collapseSidebar: false },

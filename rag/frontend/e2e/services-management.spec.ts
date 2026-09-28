@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 type ServiceStatus =
   | "running"
@@ -434,6 +434,38 @@ test("制御有効時は確認なしで起動できる", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Docling 停止" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Docling 起動" })).toHaveCount(0);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`起動の間は行に経過時間を出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page, { controlEnabled: true });
+    // 起動の応答を止めて、実行中の表示（#376）を確かめてから mockServices の応答へ渡す。
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/services/*/start", async (route) => {
+      await released;
+      await route.fallback();
+    });
+
+    await page.goto("/settings/services");
+    await page.getByRole("button", { name: "Docling 起動" }).click();
+
+    const processing = page.getByTestId("service-processing-parser-docling");
+    await expect(processing).toContainText("Docling を起動しています");
+    await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+    await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+    await expectNoPageOverflow(page);
+
+    release();
+    await expect(page.getByText("Docling を起動しました。")).toBeVisible();
+    await expect(processing).toHaveCount(0);
+  });
+}
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },

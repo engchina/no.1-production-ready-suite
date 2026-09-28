@@ -78,6 +78,7 @@ export const MODEL_MESSAGES = {
   "settings.model.test.aria": "{model} をテスト",
   "settings.model.test.failed":
     "モデルテストに失敗しました。入力値とバックエンド接続を確認してください。",
+  "settings.model.test.running": "{model} をテストしています",
 } as const;
 
 export type ModelMessageKey = keyof typeof MODEL_MESSAGES;

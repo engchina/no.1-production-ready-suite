@@ -9820,6 +9820,34 @@ test("question classifier model management shows a failure toast when training i
   await expectNoHorizontalScroll(page);
 });
 
+test("question classifier training shows the elapsed time while the model is trained", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  // 学習の応答を止めて、実行中の表示（#376）を確かめてから既定の mock へ渡す。
+  let release: () => void = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/nl2sql/classifier/train", async (route) => {
+    await released;
+    await route.fallback();
+  });
+
+  await page.goto("/question-classifier-models");
+  await page.getByRole("tab", { name: "モデル学習" }).click();
+  await page.getByRole("button", { name: "Classifier 学習" }).click();
+
+  const processing = page.getByTestId("qcm-train-processing");
+  await expect(processing).toContainText("質問の embedding を作成し、分類モデルを学習しています");
+  await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/u);
+  await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+  await expectNoHorizontalScroll(page);
+
+  release();
+  await expect(processing).toHaveCount(0);
+});
+
 test("learning candidates keep long query text clear of selection controls", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop project covers desktop and 375px geometry");
   await page.setViewportSize({ width: 1440, height: 1000 });

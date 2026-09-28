@@ -812,6 +812,8 @@ export const ja = {
   "settings.database.selectAiCredential.missing.unknown": "OCI 認証設定",
   "settings.database.selectAiCredential.action.refresh": "状態を再取得",
   "settings.database.selectAiCredential.action.create": "Credential を作成",
+  "settings.database.selectAiCredential.progress.creating": "Select AI の Credential を作成しています",
+  "settings.database.selectAiCredential.progress.recreating": "Select AI の Credential を再作成しています",
   "settings.database.selectAiCredential.action.recreate": "Credential を再作成",
   "settings.database.selectAiCredential.confirmation.createHelper":
     "作成するには確認語 {phrase} を入力してください。",

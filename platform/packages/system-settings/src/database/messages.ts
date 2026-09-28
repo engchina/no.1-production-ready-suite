@@ -38,6 +38,9 @@ export const DATABASE_MESSAGES = {
   "settings.adb.operational.lifecycle": "OCI ADB",
   "settings.adb.placeholder.ocidEmpty":
     "ADB OCID が設定されていません（platform/.env で設定）",
+  "settings.adb.processing.refresh": "Autonomous Database の情報と Wallet を取得しています",
+  "settings.adb.processing.start": "Autonomous Database を起動しています",
+  "settings.adb.processing.stop": "Autonomous Database を停止しています",
   "settings.adb.statusUnknown": "不明",
   "settings.adb.title": "Autonomous Database 管理",
   "settings.database.actions.save": "保存",
@@ -114,6 +117,7 @@ export const DATABASE_MESSAGES = {
     "{message} バックエンドとデータベースの起動状態を確認して再試行してください。",
   "settings.database.test.apiFailed":
     "DB 接続テスト API の呼び出しに失敗しました。バックエンドとデータベースの起動状態を確認して再試行してください。",
+  "settings.database.test.running": "データベースへの接続を確認しています",
   "settings.database.validation.invalidWalletZip":
     "ZIP 形式の Wallet ファイルを選択してください。",
   "settings.database.validation.passwordRequired":

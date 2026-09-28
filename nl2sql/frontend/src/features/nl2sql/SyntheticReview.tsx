@@ -5,6 +5,7 @@ import {
   toast,
   Button,
   FormStatus,
+  ProcessingIndicator,
   useConfirm,
 } from "@engchina/production-ready-ui";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
@@ -90,6 +91,8 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
           )}
         </div>
       )}
+      {/* 適用は生成したデータを本来の表へ INSERT するため、件数が多いと数十秒かかる（messaging.md §3.7）。 */}
+      {pending && pendingAction === "apply" && <ProcessingIndicator active label={t("syntheticPreview.progress.applying")} operationKey={`synthetic-apply-${run.run_id}`} placement="action" activityIcon="none" testId="synthetic-apply-processing" />}
     </>}
     {error && <FormStatus tone="danger" message={error} />}
   </section>;

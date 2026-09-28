@@ -1061,6 +1061,17 @@ function ModelTrainPanel({
           </Button>
         }
       />
+      {loading ? (
+        // 学習データの embedding と分類器の学習を順に行い、件数が多いと数十秒かかる（messaging.md §3.7）。
+        <ProcessingIndicator
+          active
+          label={t("qcm.train.progress")}
+          operationKey="qcm-train"
+          placement="action"
+          activityIcon="none"
+          testId="qcm-train-processing"
+        />
+      ) : null}
       <DbObjectStepIndicator
         steps={[t("qcm.train.stepData"), t("qcm.train.stepEmbedding"), t("qcm.train.stepFit")]}
         activeIndex={status?.ready ? 3 : canTrain ? 1 : 0}
@@ -1133,6 +1144,16 @@ function ModelTestPanel({
             </Button>
           }
         />
+        {loading ? (
+          <ProcessingIndicator
+            active
+            label={t("qcm.test.progress")}
+            operationKey="qcm-predict"
+            placement="action"
+            activityIcon="none"
+            testId="qcm-predict-processing"
+          />
+        ) : null}
         <label className={fieldClass}>
           <span>{t("qcm.test.text")}</span>
           <textarea
