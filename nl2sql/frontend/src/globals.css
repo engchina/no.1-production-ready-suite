@@ -11,13 +11,6 @@
 @source "../node_modules/@engchina/production-ready-ui/dist";
 @source "../node_modules/@engchina/production-ready-system-settings/dist";
 
-/* サイドバー内のローカル DEBUG 状態（暗い面のスコープ内で warning トークンを使う）。 */
-.sidebar-debug-status {
-  border-color: var(--color-warning-border);
-  background: var(--color-warning-subtle);
-  color: var(--color-warning-fg);
-}
-
 @layer base {
   /* Tailwind の既定等幅スタックをローカル配信のコード用フォントへ揃える。 */
   code,
