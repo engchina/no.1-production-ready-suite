@@ -3217,6 +3217,10 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  deleteConversation: (id: string) =>
+    request<null>(`/api/chat/conversations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   archiveConversation: (id: string) =>
     request<ConversationSummary>(
       `/api/chat/conversations/${encodeURIComponent(id)}/archive`,

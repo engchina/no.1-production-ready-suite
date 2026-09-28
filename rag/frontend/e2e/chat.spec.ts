@@ -211,6 +211,12 @@ async function mockChat(
       await route.fulfill({ json: pageEnvelope(summaries) });
       return;
     }
+    if (request.method() === "DELETE") {
+      created = false;
+      sent = false;
+      await route.fulfill({ json: { data: null, error_messages: [], warning_messages: [] } });
+      return;
+    }
     if (request.method() === "PATCH") {
       if (options.renameFails) {
         await route.fulfill({
@@ -568,6 +574,37 @@ for (const viewport of [
     await input.fill("保存しない名前");
     await input.press("Escape");
     await expect(sessions.getByText("経費精算ルール", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`会話を確認ダイアログを通して削除できる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockChat(page, "ready", [userMessage, assistantMessage]);
+    await page.goto("/chat");
+    await page.getByRole("combobox", { name: "業務ビュー" }).click();
+    await page.getByRole("option", { name: "経理アシスタント" }).click();
+
+    const sessions = page.getByRole("complementary", { name: "会話" });
+    const remove = sessions.getByRole("button", { name: "「経費の上限は？」を削除" });
+    if (viewport.name === "desktop") await sessions.getByRole("listitem").hover();
+
+    // 取消では消えない。
+    await remove.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("この操作は取り消せません");
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(sessions.getByRole("listitem")).toHaveCount(1);
+
+    if (viewport.name === "desktop") await sessions.getByRole("listitem").hover();
+    await remove.click();
+    await dialog.getByRole("button", { name: "削除" }).click();
+    await expect(page.getByText("会話を削除しました。")).toBeVisible();
+    await expect(sessions.getByText("まだ会話がありません。", { exact: false })).toBeVisible();
     await expectNoPageOverflow(page);
   });
 }
