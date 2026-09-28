@@ -78,19 +78,11 @@ const USER_ROLE_MENU_PERMISSIONS = {
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
+    // 日常の利用の画面。対話のチャットを先頭に置く（`/` はナビの順で最初に開ける画面へ移るので、既定はチャット。#399）。
     titleKey: "nav.section.rag",
     items: [
-      { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch, permission: MENU_PERMISSIONS.search },
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
-      {
-        href: APP_ROUTES.businessViews,
-        labelKey: "nav.businessViews",
-        sidebarLabelKey: "nav.businessViews.sidebar",
-        icon: UserCog,
-        permission: MENU_PERMISSIONS.businessViews,
-      },
-      { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical, permission: MENU_PERMISSIONS.evaluation },
-      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: MessageSquareHeart, permission: MENU_PERMISSIONS.feedback },
+      { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch, permission: MENU_PERMISSIONS.search },
     ],
   },
   {
@@ -105,6 +97,14 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: APP_ROUTES.fileList, labelKey: "nav.fileList", icon: FileStack, permission: MENU_PERMISSIONS.fileList },
       { href: APP_ROUTES.knowledgeBases, labelKey: "nav.knowledgeBases", icon: Library, permission: MENU_PERMISSIONS.knowledgeBases },
+      // 業務ビューはナレッジベースの上に検索の範囲を切り出すので、ナレッジベースの直下に置く（#402）。
+      {
+        href: APP_ROUTES.businessViews,
+        labelKey: "nav.businessViews",
+        sidebarLabelKey: "nav.businessViews.sidebar",
+        icon: UserCog,
+        permission: MENU_PERMISSIONS.businessViews,
+      },
     ],
   },
   {
@@ -200,6 +200,15 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Workflow,
         permission: MENU_PERMISSIONS.settingsAgentic,
       },
+    ],
+  },
+  {
+    // 回答の品質を確かめて直す画面。NL2SQL の「改善・運用」（nav.section.improve）と同じ名前・同じ位置
+    // （利用 → 準備 → 改善 → セキュリティ → 運用設定）にする（#409）。
+    titleKey: "nav.section.improve",
+    items: [
+      { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical, permission: MENU_PERMISSIONS.evaluation },
+      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: MessageSquareHeart, permission: MENU_PERMISSIONS.feedback },
     ],
   },
   {

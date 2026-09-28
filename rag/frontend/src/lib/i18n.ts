@@ -124,6 +124,7 @@ export const ja = {
   "nav.section.ingestion": "ナレッジ構築",
   "nav.section.rag": "業務ビュー",
   "nav.section.pipeline": "検索・回答設定",
+  "nav.section.improve": "改善・運用",
   "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観",
