@@ -480,3 +480,6 @@ class FakeFeedbackClient:
 
     async def get_feedback_detail(self, feedback_id: str) -> dict[str, object] | None:
         return self.detail if feedback_id == "feedback-1" else None
+
+    async def feedback_exists(self, feedback_id: str) -> bool:
+        return feedback_id == "feedback-1" and self.detail is not None

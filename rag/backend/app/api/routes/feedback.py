@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.clients.oracle import OracleClient
 from app.rag.business_view_knowledge import import_approved_faq
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.request_context import current_audit_request_context
 from app.schemas.common import ApiResponse, Page
 from app.schemas.evaluation import EvaluationCase
 from app.schemas.feedback import (
@@ -88,7 +89,11 @@ async def list_feedback(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[FeedbackDashboard]:
-    """管理者向けに有効な最新票を集計・一覧表示する。"""
+    """有効な最新票を集計・一覧表示する。
+
+    SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけ（#408）。一覧・件数・
+    集計は Oracle の SQL の条件で同じ範囲に絞る（`OracleClient.list_feedback_dashboard_rows`）。
+    """
     rows, total, groups, previous_groups = await OracleClient().list_feedback_dashboard_rows(
         business_view_id=business_view_id,
         target_type=target_type.value if target_type else None,
@@ -122,14 +127,8 @@ async def list_feedback(
 async def get_feedback_detail(
     feedback_id: str,
 ) -> ApiResponse[FeedbackDetail]:
-    """管理者向けに feedback の本文・根拠・実行診断を返す。"""
-    cleaned_id = feedback_id.strip()
-    if not cleaned_id or len(cleaned_id) > 64:
-        raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
-    row = await OracleClient().get_feedback_detail(cleaned_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
-    return ApiResponse(data=FeedbackDetail.model_validate(row))
+    """feedback の本文・根拠・実行診断を返す（SYSTEM_ADMIN 以外は自分が送った分だけ。#408）。"""
+    return ApiResponse(data=await _scoped_feedback_detail(OracleClient(), feedback_id))
 
 
 @router.post(
@@ -204,12 +203,30 @@ async def feedback_evaluation_case(
     )
 
 
-async def _promotable_feedback(oracle: OracleClient, feedback_id: str) -> FeedbackDetail:
+async def _scoped_feedback_detail(oracle: OracleClient, feedback_id: str) -> FeedbackDetail:
+    """見える範囲の feedback を返す。ない ID は 404、他人の分は 403（#408）。
+
+    詳細の SQL は送信者で絞る（SYSTEM_ADMIN 以外は自分の分だけ）。見つからなかったときだけ、
+    送信者で絞らない存在の確認をして、他人の分（送信者のない古い行を含む）を 403 にする
+    （NL2SQL のジョブ・フィードバックと同じ応答）。
+    """
     cleaned_id = feedback_id.strip()
-    row = await oracle.get_feedback_detail(cleaned_id) if 0 < len(cleaned_id) <= 64 else None
-    if row is None:
+    if not cleaned_id or len(cleaned_id) > 64:
         raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
-    detail = FeedbackDetail.model_validate(row)
+    row = await oracle.get_feedback_detail(cleaned_id)
+    if row is not None:
+        return FeedbackDetail.model_validate(row)
+    if not current_audit_request_context().feedback_all_users and await oracle.feedback_exists(
+        cleaned_id
+    ):
+        raise HTTPException(
+            status_code=403, detail="他の利用者のフィードバックを参照する権限がありません。"
+        )
+    raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
+
+
+async def _promotable_feedback(oracle: OracleClient, feedback_id: str) -> FeedbackDetail:
+    detail = await _scoped_feedback_detail(oracle, feedback_id)
     if detail.target_type != FeedbackTargetType.ANSWER:
         raise HTTPException(status_code=409, detail="回答のフィードバックだけを昇格できます。")
     return detail

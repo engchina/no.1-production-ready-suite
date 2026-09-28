@@ -4537,8 +4537,37 @@ class OracleClient:
             )
         return rows, _int_value((count_row or {}).get("total")), groups, previous_groups
 
+    async def feedback_exists(self, feedback_id: str) -> bool:
+        """送った利用者にかかわらず、利用できる業務ビューに feedback があるか（#408）。
+
+        詳細を送信者で絞って見つからなかったとき、他人の分（403）とない ID（404）を分けるために
+        使う（NL2SQL のジョブと同じ応答）。本文は読まない。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT 1 AS found
+                FROM rag_citation_feedback f
+                WHERE f.feedback_id = :feedback_id
+                  AND {tenant_sql}
+                  AND {scope_sql}
+                FETCH NEXT 1 ROWS ONLY
+                """,
+                tenant_sql=_oracle_tenant_predicate(alias="f"),
+                scope_sql=" AND ".join(
+                    _business_view_scope_predicates("f.business_view_id") or ["1 = 1"]
+                ),
+            ),
+            _with_business_view_scope_bind(_with_tenant_bind({"feedback_id": feedback_id})),
+        )
+        return row is not None
+
     async def get_feedback_detail(self, feedback_id: str) -> dict[str, object] | None:
-        """管理者 drawer 用に feedback 全文と trace 診断を返す。"""
+        """feedback 全文と trace 診断を返す。
+
+        SYSTEM_ADMIN 以外は、自分が送った feedback だけ（#408）。
+        """
+        owner_predicates, owner_binds = _feedback_owner_scope("f.user_id_hash")
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -4628,10 +4657,13 @@ class OracleClient:
                 audit_tenant_sql=_oracle_tenant_predicate(alias="a"),
                 feedback_tenant_sql=_oracle_tenant_predicate(alias="f"),
                 feedback_scope_sql=" AND ".join(
-                    _business_view_scope_predicates("f.business_view_id") or ["1 = 1"]
+                    [*_business_view_scope_predicates("f.business_view_id"), *owner_predicates]
+                    or ["1 = 1"]
                 ),
             ),
-            _with_business_view_scope_bind(_with_tenant_bind({"feedback_id": feedback_id})),
+            _with_business_view_scope_bind(
+                _with_tenant_bind({"feedback_id": feedback_id, **owner_binds})
+            ),
         )
         if row is None:
             return None
@@ -10266,9 +10298,12 @@ def _feedback_dashboard_filters(
     """列名を固定した feedback 一覧 filter を組み立てる。
 
     利用できる業務ビューが制限されているときは、その業務ビューの feedback だけにする（#214）。
+    SYSTEM_ADMIN 以外は、自分が送った feedback だけにする（#408）。一覧・件数・集計（今期と
+    前期）はすべてこの条件を使うので、集計の数字も同じ範囲になる。
     """
-    clauses = ["1 = 1", *_business_view_scope_predicates("f.business_view_id")]
-    binds: dict[str, object] = _with_business_view_scope_bind({})
+    owner_predicates, owner_binds = _feedback_owner_scope("f.user_id_hash")
+    clauses = ["1 = 1", *_business_view_scope_predicates("f.business_view_id"), *owner_predicates]
+    binds: dict[str, object] = _with_business_view_scope_bind(owner_binds)
     for column, value in (
         ("business_view_id", business_view_id),
         ("target_type", target_type),
@@ -11955,6 +11990,24 @@ def _business_view_scope_predicates(column: str) -> list[str]:
         f":access_business_view_id_{index}" for index, _ in enumerate(sorted(allowed))
     )
     return [f"{column} IN ({placeholders})"]
+
+
+def _feedback_owner_scope(column: str) -> tuple[list[str], dict[str, object]]:
+    """利用者フィードバックを、送った利用者で絞る条件と bind（#408。NL2SQL の実行履歴と同じ）。
+
+    SYSTEM_ADMIN（構成管理者・local の利用者を含む。`feedback_all_users`）は絞らない。それ以外は
+    自分の `user_id_hash` の行だけ。送信者のない古い行（`user_id_hash IS NULL`）は等号で落ちるので、
+    SYSTEM_ADMIN だけが見る。利用者の分からない context は、全件ではなく 0 件にする（fail-closed）。
+    """
+    context = current_audit_request_context()
+    if context.feedback_all_users:
+        return [], {}
+    if context.user_id_hash is None:
+        return ["1 = 0"], {}
+    return (
+        [f"{column} = :feedback_owner_user_id_hash"],
+        {"feedback_owner_user_id_hash": context.user_id_hash},
+    )
 
 
 def _answer_record_owner_hash() -> str | None:

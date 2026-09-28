@@ -40,6 +40,10 @@ class AuditRequestContext:
     # 保存済みの回答（`rag_answer_records`）を持ち主にかかわらず扱えるか（#304）。False のときは
     # `user_id_hash` の利用者の回答だけ。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は True。
     answer_records_unrestricted: bool = False
+    # 利用者フィードバックを、送った利用者にかかわらず見られるか（#408。NL2SQL の実行履歴と同じ）。
+    # SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけ True。False のときは `user_id_hash` の
+    # 利用者が送ったものだけ（`rag.feedback.manage` を持っていても同じ）。
+    feedback_all_users: bool = False
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -111,6 +115,7 @@ def audit_request_context_for_principal(
     settings: Settings | None = None,
     service_token_claims: Mapping[str, object] | None = None,
     answer_records_unrestricted: bool = False,
+    feedback_all_users: bool = False,
 ) -> AuditRequestContext:
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
@@ -141,6 +146,7 @@ def audit_request_context_for_principal(
         allowed_business_view_ids=allowed_business_view_ids,
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
         answer_records_unrestricted=answer_records_unrestricted,
+        feedback_all_users=feedback_all_users,
     )
 
 
