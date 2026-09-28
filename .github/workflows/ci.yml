@@ -377,12 +377,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # lock を持たないため pyproject.toml を key にする。
+      # lock（#387）から入れる。PyPI の索引（/simple/）が落ちても、lock の中のファイルの URL から取れる。
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: rag/packages/docrag_core/pyproject.toml
+          cache-dependency-glob: rag/packages/docrag_core/uv.lock
           cache-suffix: docrag-core
           save-cache: ${{ github.event_name == 'push' }}
 
@@ -395,9 +395,8 @@ jobs:
       # docling/torch は入れず、PDF 描画・日本語分割・Excel の任意依存だけを入れる。
       - name: Test docrag_core
         run: |
-          uv venv -p 3.12 .venv
-          uv pip install -p .venv/bin/python -e ".[pdf,japanese,excel,oracle]" pytest
-          .venv/bin/python -m pytest -q tests
+          uv sync --locked --extra pdf --extra japanese --extra excel --extra oracle
+          uv run --locked --no-sync python -m pytest -q tests
 
   rag-frontend:
     name: RAG / Frontend
