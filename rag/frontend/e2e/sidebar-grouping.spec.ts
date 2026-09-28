@@ -39,18 +39,20 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     "回答スタイル",
     "回答プロンプト",
     "安全チェック",
-    "品質評価",
+    "評価の基準",
   ]) {
     await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // セクションは NL2SQL と同じ並び方で「… → 検索・回答設定 → RAG セキュリティ → 運用設定 →
+  // セクションは NL2SQL と同じ並び方で「… → 検索・回答設定 → 改善・運用 → RAG セキュリティ → 運用設定 →
   // ユーザーとロール → システム設定」の順に並ぶ（#80 / #214）。
   const sectionIds = await sidebar
     .locator('[id^="nav-section-nav-section-"]')
     .evaluateAll((elements) => elements.map((element) => element.id));
-  expect(sectionIds.slice(-5)).toEqual([
+  // 「改善・運用」（品質評価・フィードバック）は検索・回答設定の後、RAG セキュリティの前（#409）。
+  expect(sectionIds.slice(-6)).toEqual([
     "nav-section-nav-section-pipeline",
+    "nav-section-nav-section-improve",
     "nav-section-nav-section-security",
     "nav-section-nav-section-operations",
     "nav-section-nav-section-userRoles",

@@ -49,11 +49,12 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     await expect(evalLink).toHaveCount(1);
 
     // 折りたたむと visibility:hidden + inert で a11y ツリーから外れ、role として見えなくなる。
-    await sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" }).click();
+    // 品質評価は「改善・運用」セクションにある（#409）。
+    await sidebar.getByRole("button", { name: "改善・運用 を折りたたむ" }).click();
     await expect(evalLink).toHaveCount(0);
 
     // 展開で復帰する。
-    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).click();
+    await sidebar.getByRole("button", { name: "改善・運用 を展開" }).click();
     await expect(evalLink).toHaveCount(1);
   });
 

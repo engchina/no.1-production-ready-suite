@@ -167,8 +167,9 @@ export const ja = {
   "nav.settingsGuardrail.sidebar": "安全チェック",
   "nav.settingsVectorIndex": "検索インデックス",
   "nav.settingsVectorIndex.sidebar": "検索インデックス",
-  "nav.settingsEvaluation": "品質評価",
-  "nav.settingsEvaluation.sidebar": "品質評価",
+  // 評価を実行する「品質評価」（改善・運用）と区別する（#409）。
+  "nav.settingsEvaluation": "評価の基準",
+  "nav.settingsEvaluation.sidebar": "評価の基準",
   "nav.settingsGraph": "関係情報の構築",
   "nav.settingsAgentic": "高度な検索",
   "nav.settingsModel": "モデル設定",
