@@ -72,7 +72,8 @@ describe("streamSearch", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         sseResponse([
-          `event: delta\ndata: ${JSON.stringify({ text: "最終チャンク" })}`,
+          `event: delta\ndata: ${JSON.stringify({ text: "最終チャンク" })}\n\n`,
+          `event: done\ndata: ${JSON.stringify({ trace_id: "t1" })}`,
         ])
       )
     );
@@ -94,6 +95,7 @@ describe("streamSearch", () => {
       vi.fn().mockResolvedValue(
         sseResponse([
           `event: delta\r\ndata: ${JSON.stringify({ text: "CRLF" })}\r\n\r\n`,
+          `event: done\r\ndata: ${JSON.stringify({ trace_id: "t1" })}\r\n\r\n`,
         ])
       )
     );
@@ -121,5 +123,75 @@ describe("streamSearch", () => {
       status: 504,
       messages: ["タイムアウトしました。"],
     });
+  });
+
+  it("error event（timeout）は 504 の ApiError として投げ、その後の event は流さない", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          `event: stage\ndata: ${JSON.stringify({ trace_id: "t1", stage: "retrieval", outcome: "started", elapsed_ms: 0, attributes: {} })}\n\n`,
+          `event: error\ndata: ${JSON.stringify({ trace_id: "t1", message: "検索処理がタイムアウトしました。条件を絞って再度お試しください。", error_type: "TimeoutError" })}\n\n`,
+          `event: delta\ndata: ${JSON.stringify({ text: "流してはいけない" })}\n\n`,
+        ])
+      )
+    );
+
+    let answer = "";
+    let done = false;
+    await expect(
+      streamSearch(
+        { query: "x" },
+        { onDelta: (text) => (answer += text), onDone: () => (done = true) }
+      )
+    ).rejects.toMatchObject({
+      status: 504,
+      messages: ["検索処理がタイムアウトしました。条件を絞って再度お試しください。"],
+    });
+    expect(answer).toBe("");
+    expect(done).toBe(false);
+  });
+
+  it("error event（回答形式の検証の失敗）は 502、その他は 500 にする", async () => {
+    const errorBody = (payload: Record<string, unknown>) =>
+      sseResponse([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          errorBody({ message: "回答形式の検証に失敗しました。", error_type: "GenerationContractError" })
+        )
+        .mockResolvedValueOnce(errorBody({ error_type: "RuntimeError" }))
+    );
+
+    await expect(streamSearch({ query: "x" }, {})).rejects.toMatchObject({
+      status: 502,
+      messages: ["回答形式の検証に失敗しました。"],
+    });
+    await expect(streamSearch({ query: "x" }, {})).rejects.toMatchObject({
+      status: 500,
+      messages: ["検索処理中にエラーが発生しました。時間をおいて再度お試しください。"],
+    });
+  });
+
+  it("done を受けずに終わった stream は途中終了のエラーにする", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([`event: delta\ndata: ${JSON.stringify({ text: "途中まで" })}\n\n`])
+      )
+    );
+
+    let answer = "";
+    await expect(
+      streamSearch({ query: "x" }, { onDelta: (text) => (answer += text) })
+    ).rejects.toMatchObject({
+      status: 502,
+      messages: [
+        "回答の受信が途中で途切れました。通信状態を確認して、もう一度検索してください。",
+      ],
+    });
+    expect(answer).toBe("途中まで");
   });
 });
