@@ -367,7 +367,7 @@ export const ja = {
     "章節→文→文字の順に固定長で分割(LangChain 風)",
   "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子階層",
   "settings.chunking.strategy.docrag_small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書では分割が失敗します）",
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書は構造認識で分割します）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -643,6 +643,10 @@ export const ja = {
   "settings.retrieval.toggles": "検索オプション",
   "settings.retrieval.toggles.description":
     "選択した検索モードに合成できるオプションです。組み合わせは自由です。",
+  "settings.retrieval.docragUnused.mode":
+    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は質問拡張戦略で作った検索文ごとにハイブリッド検索します。",
+  "settings.retrieval.docragUnused.toggles":
+    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の質問拡張と補正は、業務ビューの「DocRAG の質問拡張戦略」「DocRAG の回答生成フロー」で選びます。",
   "settings.retrieval.selected": "選択中",
   "settings.retrieval.recommendedFor": "推奨用途",
   "settings.retrieval.source": "設定元",
@@ -711,6 +715,8 @@ export const ja = {
   "settings.grounding.overview.description":
     "取得候補をスコアとメタデータ(ACL・版・矛盾状態)で利用可否判定し、根拠・補助に分けて Context Builder へ渡します。",
   "settings.grounding.pipeline": "処理方式",
+  "settings.grounding.docragUnused":
+    "この画面の設定は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の根拠確認は、業務ビューの「DocRAG の回答生成フロー」（補正 RAG / 通常 RAG）で選びます。",
   "settings.grounding.selected": "選択中",
   "settings.grounding.recommendedFor": "推奨用途",
   "settings.grounding.source": "設定元",
@@ -785,6 +791,8 @@ export const ja = {
   "settings.generation.overview.description":
     "検索根拠だけを使う回答スタイルを OCI Enterprise AI へ決定論で再マップし、手動選択できます。",
   "settings.generation.profile": "回答スタイル",
+  "settings.generation.docragUnused":
+    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は「回答プロンプト」画面の「DocRAG の回答生成テンプレート」で回答します（下の「DocRAG 回答の保存期間」は使われます）。",
   "settings.generation.selected": "選択中",
   "settings.generation.recommendedFor": "推奨用途",
   "settings.generation.source": "設定元",
@@ -848,6 +856,8 @@ export const ja = {
   "settings.prompts.overview.title": "回答プロンプト版",
   "settings.prompts.overview.description":
     "新しい system prompt 版を追加します。有効化した版がカスタム回答スタイルに適用されます。",
+  "settings.prompts.docragUnused":
+    "ここで作る system prompt の版（カスタム回答スタイル）は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は下の「DocRAG の回答生成テンプレート」で回答します。",
   "settings.prompts.form.name": "版名",
   "settings.prompts.form.namePlaceholder": "例: 監査向け厳密版 v2",
   "settings.prompts.form.systemPrompt": "system prompt",
@@ -1243,7 +1253,7 @@ export const ja = {
   "businessViews.field.answerEngine": "回答エンジン",
   "businessViews.field.tokenizer": "全文検索の分割方式",
   "settings.retrieval.tokenizer.description":
-    "キーワード検索（Oracle Text）の検索語の切り出し方です。Sudachi は日本語を形態素で分割し、業務ビューのドメインキーワードを 1 語として優先します。業務ビューで個別に上書きできます。",
+    "キーワード検索（Oracle Text）の検索語の切り出し方です。Sudachi は日本語を形態素で分割し、業務ビューのドメインキーワードを 1 語として優先します。業務ビューで個別に上書きできます。回答エンジンが DocRAG の業務ビューでも使われます。",
   "businessViews.tokenizer.builtin": "標準（文字種の区切り）",
   "businessViews.tokenizer.sudachi": "Sudachi（形態素解析・DocRAG）",
   "businessViews.answerEngine.standard": "標準",
@@ -1254,6 +1264,8 @@ export const ja = {
   "businessViews.field.docragOptions": "DocRAG のオプション",
   "businessViews.field.docragRerank": "Rerank で検索候補を並べ替える",
   "businessViews.docrag.helper": "回答エンジンが DocRAG のときだけ使います。",
+  "businessViews.docragUnused.docrag": "回答エンジンが DocRAG のため、この設定は使われません。",
+  "businessViews.docragUnused.inherit": "回答エンジンが DocRAG のときは、この設定は使われません。",
   "businessViews.docragQueryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "businessViews.docragQueryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "businessViews.docragQueryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
@@ -1935,6 +1947,9 @@ export const ja = {
   "flow.inspector.details": "処理の詳細(診断)",
   "flow.chunks.title": "Chunk / Citation",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
+  "flow.chunks.docragFallbackTitle": "構造認識で分割しました",
+  "flow.chunks.docragFallback":
+    "DocRAG 親子階層を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
   "flow.chunks.pageRange": "p.{start}-{end}",

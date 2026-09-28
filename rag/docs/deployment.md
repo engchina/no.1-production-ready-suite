@@ -303,7 +303,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 
 ## 運用パラメータ
 
-- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。DocRAG 親子階層はこの 2 つを使わず、`RAG_DOCRAG_CHILD_TARGET_CHARS` などの 5 項目で分割する([DocRAG 移植機能ガイド](./docrag-port.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
+- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。DocRAG 親子階層はこの 2 つを使わず、`RAG_DOCRAG_CHILD_TARGET_CHARS` などの 5 項目で分割する(解析結果が Docling でない文書は構造認識へ縮退し、この 2 つを使う。[DocRAG 移植機能ガイド](./docrag-port.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
 - 見出し単位・ページ単位では、見出し/ページを第一境界として保つため 32,000 / 0 を推奨する。32,000 文字は長大な単位だけを同じ境界内で再分割する安全上限であり、chunk を常に大きくする目標値ではない。[Cohere Rerank 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-rerank-4-0.htm) の context は 32,000 token だが、文字数上限と token 上限は同一ではない。
 - `RAG_CONTEXT_WINDOW_CHARS`: LLM の入力制限と citation 数のバランスで決める。レスポンスの citations は実際に context へ入った chunk だけになるため、golden set で必要な引用数を確認して調整する。
 - `RAG_CONTEXT_DIVERSITY_LAMBDA`: rerank anchor の MMR 風 diversity 重み。既定 1.0 は rerank 順を維持する。0.2-0.8 を golden set で比較し、`diagnostics.context_diversified_count`、recall、answer keyword hit、context window からの引用落ちを見て調整する。

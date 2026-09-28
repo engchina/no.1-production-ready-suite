@@ -35,6 +35,16 @@ for (const viewport of [
     await expect(page.getByRole("switch", { name: "補正検索" })).toBeVisible();
     // 推奨用途チップは英語生トークンではなく日本語 i18n ラベルで表示する。
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toContainText("一般");
+    // 回答エンジンが DocRAG の業務ビューでは使われない欄に説明を出す。入力は残す(#300)。
+    await expect(page.getByRole("radiogroup", { name: "検索モード" })).toHaveAccessibleDescription(
+      /回答エンジンが DocRAG の業務ビューでは使われません/
+    );
+    await expect(page.getByRole("group", { name: "検索オプション" })).toHaveAccessibleDescription(
+      /回答エンジンが DocRAG の業務ビューでは使われません/
+    );
+    await expect(page.getByTestId("docrag-unused-note")).toHaveCount(2);
+    await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeEnabled();
+    await expect(page.getByText("回答エンジンが DocRAG の業務ビューでも使われます。", { exact: false })).toBeVisible();
     await expect(page.getByRole("link", { name: "検索方法" })).toHaveAttribute(
       "aria-current",
       "page"
@@ -58,6 +68,11 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /リーン/ })).toContainText("低遅延");
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toContainText("補正(CRAG)");
     await expect(page.getByRole("radio", { name: /リーン/ })).not.toContainText("low_latency");
+    // この画面の設定は回答エンジンが DocRAG の業務ビューでは使われない(#300)。
+    await expect(page.getByRole("radiogroup", { name: "処理方式" })).toHaveAccessibleDescription(
+      /回答エンジンが DocRAG の業務ビューでは使われません/
+    );
+    await expect(page.getByRole("radio", { name: /リーン/ })).toBeEnabled();
     await expect(page.getByRole("link", { name: "根拠確認" })).toHaveAttribute(
       "aria-current",
       "page"

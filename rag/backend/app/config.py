@@ -580,7 +580,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
-            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果が必要)、"
+            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果を使う。"
+            "解析結果が Docling でない文書は structure_aware で分割する)、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"
             "fixed_delimiter は指定文字列での固定分割。"
@@ -861,10 +862,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
     )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
-        default="generic",
+        default="legacy",
         description=(
-            "DocRAG の業務 profile。legacy は DOCRAG_DOMAIN_PROFILE_FILE の業務分類・"
-            "日本語問い合わせ規則を有効化する(既定 OFF)。"
+            "DocRAG の業務 profile。DocRAG の回答フローは docrag の current_profile()"
+            "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
+            " DOCRAG_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
+            "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"
+            "受け付けるが、回答フローには反映されない。"
         ),
     )
     rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(

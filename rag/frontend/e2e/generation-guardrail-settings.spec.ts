@@ -21,6 +21,10 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /構造化 JSON/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /逐句出典付与/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
+    // 回答エンジンが DocRAG の業務ビューでは使われない(#300)。
+    await expect(page.getByRole("group", { name: "回答スタイル" })).toHaveAccessibleDescription(
+      /回答エンジンが DocRAG の業務ビューでは使われません/
+    );
     await expect(page.getByRole("link", { name: "回答スタイル" })).toHaveAttribute(
       "aria-current",
       "page"

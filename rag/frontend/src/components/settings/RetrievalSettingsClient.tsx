@@ -18,6 +18,7 @@ import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import {
   ApiError,
   type RetrievalModeName,
@@ -173,12 +174,18 @@ export function RetrievalSettingsClient() {
             <FormStatus tone="info" message={t("settings.retrieval.legacyNotice")} />
           ) : null}
           <div className="space-y-2">
-            <div className="text-sm font-medium text-fg">
-              {t("settings.retrieval.mode")}
+            <div>
+              <div className="text-sm font-medium text-fg">
+                {t("settings.retrieval.mode")}
+              </div>
+              <DocragUnusedNote id="retrieval-mode-docrag-note">
+                {t("settings.retrieval.docragUnused.mode")}
+              </DocragUnusedNote>
             </div>
             <div
               role="radiogroup"
               aria-label={t("settings.retrieval.mode")}
+              aria-describedby="retrieval-mode-docrag-note"
               className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4"
             >
               {modes.map((item) => {
@@ -228,8 +235,16 @@ export function RetrievalSettingsClient() {
                 {t("settings.retrieval.toggles")}
               </div>
               <p className="text-xs text-fg-muted">{t("settings.retrieval.toggles.description")}</p>
+              <DocragUnusedNote id="retrieval-toggles-docrag-note">
+                {t("settings.retrieval.docragUnused.toggles")}
+              </DocragUnusedNote>
             </div>
-            <div className="divide-y divide-border rounded-md border border-border">
+            <div
+              role="group"
+              aria-label={t("settings.retrieval.toggles")}
+              aria-describedby="retrieval-toggles-docrag-note"
+              className="divide-y divide-border rounded-md border border-border"
+            >
               <ToggleRow
                 label={t("settings.retrieval.queryExpansion")}
                 description={t("settings.retrieval.toggle.queryExpansion.description")}
