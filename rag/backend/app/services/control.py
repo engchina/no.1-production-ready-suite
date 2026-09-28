@@ -38,6 +38,14 @@ ServiceLogsSource = Literal["docker"]
 # backend/app/services/control.py → parents[3] = リポジトリ root(services/<…> を解決する基点)。
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# compose の project 名。docker-compose.yml の top-level ``name:``・本番の init_script.sh の
+# wrapper(``--project-name``)・scripts/build-services.sh と同じ値にする(#310)。
+# 未指定だと compose ファイルのディレクトリ名から決まり、画面から操作・ログ取得する project と
+# 実際にコンテナが動いている project がずれる(ずれると logs は exit 0 で空を返す)。
+COMPOSE_PROJECT_NAME = "production-ready-rag"
+# 対象のコンテナが無いと成功扱いにならない操作(ログ取得は read_service_logs で別に確かめる)。
+_ACTIONS_REQUIRING_CONTAINER: frozenset[ServiceAction] = frozenset({"stop", "restart"})
+
 
 @dataclass(frozen=True)
 class ControlResult:
@@ -72,6 +80,48 @@ class ServiceLogsError(Exception):
     """サービスログ取得に失敗したことを表す(API は 502 へ正規化)。"""
 
 
+def _compose_project_directory(settings: Settings) -> Path | None:
+    """compose の project directory(build context・相対 volume の基点)。
+
+    dev はホストのリポジトリ root(``rag/``)。prod(backend もコンテナ)はマウントした compose
+    ファイルの場所が既定の project directory になるため指定しない(None)。
+    """
+    return REPO_ROOT if is_dev_mode(settings) else None
+
+
+def _compose_command(settings: Settings) -> list[str]:
+    """compose のベースコマンド(設定で差し替え可能。空なら ``docker compose``)。"""
+    return shlex.split(settings.rag_service_control_command) or ["docker", "compose"]
+
+
+def _compose_target_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
+    """ベースコマンドとサブコマンドの間に置く引数(project 名・directory・ファイル・profile)。
+
+    project 名は常に固定し(``COMPOSE_PROJECT_NAME``)、どの cwd から実行しても同じ project の
+    コンテナを操作する。dev は ``docker-compose.dev.yml`` を重ね、コンテナの 8000 を localhost の
+    dev_port へ公開してホスト backend が /health・/parse を叩けるようにする(ファイルは
+    project directory からの絶対パスで渡す)。prod(backend もコンテナ)は base compose のみ。
+    GPU サービスは compose の profile gate を越えるため ``--profile gpu`` を付ける。
+    """
+    project_args = ["--project-name", COMPOSE_PROJECT_NAME]
+    project_directory = _compose_project_directory(settings)
+    file_args: list[str] = []
+    if project_directory is not None:
+        project_args += ["--project-directory", str(project_directory)]
+        file_args = [
+            "-f",
+            str(project_directory / "docker-compose.yml"),
+            "-f",
+            str(project_directory / "docker-compose.dev.yml"),
+        ]
+    return [*project_args, *file_args, *_compose_profile_args(entry)]
+
+
+def _compose_base_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
+    """compose のサブコマンド前までの引数配列(ベースコマンド + 対象の指定)。"""
+    return [*_compose_command(settings), *_compose_target_args(settings, entry)]
+
+
 def _compose_args(
     settings: Settings,
     entry: ServiceCatalogEntry,
@@ -79,37 +129,25 @@ def _compose_args(
 ) -> list[str]:
     """compose コマンドの引数配列を組み立てる(shell 補間なし)。
 
-    GPU サービスは compose の profile gate を越えるため ``--profile gpu`` を付ける。
-    dev(backend がホスト)では、コンテナの 8000 を localhost の dev_port へ公開する
-    override(``docker-compose.dev.yml``)を重ね、ホスト backend が /health・/parse を
-    叩けるようにする。prod(backend もコンテナ)は base compose のみ。
     service 名は allowlist 済みエントリからのみ採る。
     """
-    base = shlex.split(settings.rag_service_control_command)
-    if not base:
-        base = ["docker", "compose"]
-    file_args = (
-        ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
-        if is_dev_mode(settings)
-        else []
-    )
-    profile_args = _compose_profile_args(entry)
+    prefix = _compose_base_args(settings, entry)
     if action == "start":
         # --no-build: 数 GB の build を start では走らせない(明示の build アクションで行う)。
         # 未ビルドなら compose が即エラーを返し、ユーザに事前 build を促す(timeout 回避)。
-        return [*base, *file_args, *profile_args, "up", "-d", "--no-build", entry.service_id]
+        return [*prefix, "up", "-d", "--no-build", entry.service_id]
     if action == "stop":
         # GPU サービスは profile gate に隠れるため stop でも --profile gpu を付ける
         # (付けても既存コンテナを止めるだけで無害)。
-        return [*base, *file_args, *profile_args, "stop", entry.service_id]
+        return [*prefix, "stop", entry.service_id]
     if action == "build":
         # 明示的なイメージ build。長時間になるため呼び出し側は build 用 timeout を使う。
-        return [*base, *file_args, *profile_args, "build", entry.service_id]
+        return [*prefix, "build", entry.service_id]
     if action == "remove":
         # コンテナ削除。-s で稼働中なら停止してから、-f で確認なしに削除する。
-        return [*base, *file_args, *profile_args, "rm", "-f", "-s", entry.service_id]
+        return [*prefix, "rm", "-f", "-s", entry.service_id]
     # restart も build しない(既存イメージを使う)。
-    return [*base, *file_args, *profile_args, "restart", entry.service_id]
+    return [*prefix, "restart", entry.service_id]
 
 
 def _compose_logs_args(
@@ -118,24 +156,29 @@ def _compose_logs_args(
     lines: int,
 ) -> list[str]:
     """docker compose logs の引数配列を組み立てる(shell 補間なし)。"""
-    base = shlex.split(settings.rag_service_control_command)
-    if not base:
-        base = ["docker", "compose"]
-    file_args = (
-        ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
-        if is_dev_mode(settings)
-        else []
-    )
     return [
-        *base,
-        *file_args,
-        *_compose_profile_args(entry),
+        *_compose_base_args(settings, entry),
         "logs",
         "--no-color",
         "--tail",
         str(lines),
         entry.service_id,
     ]
+
+
+def _compose_ps_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
+    """対象サービスのコンテナ ID(停止中を含む)を列挙する引数配列。"""
+    return [*_compose_base_args(settings, entry), "ps", "--all", "--quiet", entry.service_id]
+
+
+def _missing_container_message(entry: ServiceCatalogEntry) -> str:
+    """compose project に対象のコンテナが無いときの案内(操作・ログ共通)。"""
+    return (
+        f"{entry.service_id} のコンテナが compose project「{COMPOSE_PROJECT_NAME}」に"
+        "見つかりません。サービスを起動してから再実行してください。"
+        f"別の project 名で起動したコンテナは、停止してから「{COMPOSE_PROJECT_NAME}」で"
+        "作り直してください(rag/docs/deployment.md の既存環境の更新手順(#310))。"
+    )
 
 
 def _compose_env(settings: Settings) -> dict[str, str]:
@@ -178,12 +221,12 @@ def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
 
 
 def _build_command_hint(settings: Settings, entry: ServiceCatalogEntry) -> str:
-    """未ビルド時にユーザへ案内する build コマンド(dev は override・GPU は profile 付き)。"""
-    files = "-f docker-compose.yml -f docker-compose.dev.yml " if is_dev_mode(settings) else ""
-    profile = " ".join(_compose_profile_args(entry))
-    if profile:
-        profile = f"{profile} "
-    return f"docker compose {files}{profile}build {entry.service_id}"
+    """未ビルド時にユーザへ案内する build コマンド(実行する compose と同じ project・ファイル)。
+
+    案内は常に ``docker compose`` で示す(設定のベースコマンドは内部実装の差し替え用)。
+    """
+    target = _compose_target_args(settings, entry)
+    return shlex.join(["docker", "compose", *target, "build", entry.service_id])
 
 
 def _friendly_compose_error(detail: str, settings: Settings, entry: ServiceCatalogEntry) -> str:
@@ -198,6 +241,67 @@ def _friendly_compose_error(detail: str, settings: Settings, entry: ServiceCatal
     return detail
 
 
+@dataclass(frozen=True)
+class _ComposeOutput:
+    """compose subprocess の終了コードと出力(decode 済み)。"""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class _ComposeExecError(Exception):
+    """compose を実行できなかった(コマンド無し / timeout)。メッセージは利用者向け。"""
+
+
+async def _exec_compose(settings: Settings, args: list[str], timeout: float) -> _ComposeOutput:
+    """compose を shell なし・timeout 付きで実行する(操作・ログ・コンテナ確認で共通)。"""
+    # dev はホストのリポジトリ root から compose ファイル群を解決する。
+    # prod(コンテナ)は cwd を変えず、マウント済み compose を既定の cwd から解決する。
+    cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            env=_compose_env(settings),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise _ComposeExecError(f"compose コマンドが見つかりません: {exc}") from exc
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except TimeoutError as exc:
+        process.kill()
+        with _suppress_process_cleanup():
+            await process.wait()
+        raise _ComposeExecError(f"timeout({timeout}s)で打ち切りました。") from exc
+    return _ComposeOutput(
+        returncode=process.returncode if process.returncode is not None else -1,
+        stdout=(stdout or b"").decode("utf-8", "replace").strip(),
+        stderr=(stderr or b"").decode("utf-8", "replace").strip(),
+    )
+
+
+async def _service_container_exists(settings: Settings, entry: ServiceCatalogEntry) -> bool:
+    """compose project に対象サービスのコンテナ(停止中を含む)があるかを返す。
+
+    ``compose logs`` / ``stop`` / ``restart`` は、project にコンテナが無くても exit 0 で何もせず
+    終わるため、空のログや成功として返さないよう事前に確かめる(#310)。
+    確認そのものに失敗したら ``_ComposeExecError`` を送出する。
+    """
+    output = await _exec_compose(
+        settings,
+        _compose_ps_args(settings, entry),
+        float(settings.rag_service_control_timeout_seconds),
+    )
+    if output.returncode != 0:
+        raise _ComposeExecError(
+            output.stderr or output.stdout or "コンテナの状態を確認できませんでした。"
+        )
+    return bool(output.stdout)
+
+
 class DockerComposeDriver:
     """``docker compose`` CLI を subprocess で叩く driver(dev/prod とも)。"""
 
@@ -208,9 +312,6 @@ class DockerComposeDriver:
         action: ServiceAction,
     ) -> ControlResult:
         args = _compose_args(settings, entry, action)
-        # dev はホストのリポジトリ root から compose ファイル群を解決する。
-        # prod(コンテナ)は cwd を変えず、マウント済み compose を既定の cwd から解決する。
-        cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
         # build はイメージ生成で長時間になるため別枠の長い timeout を使う。
         timeout = float(
             settings.rag_service_build_timeout_seconds
@@ -222,41 +323,32 @@ class DockerComposeDriver:
             extra={"service_id": entry.service_id, "action": action, "argv": args},
         )
         try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                cwd=cwd,
-                env=_compose_env(settings),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError as exc:
+            if action in _ACTIONS_REQUIRING_CONTAINER and not await _service_container_exists(
+                settings, entry
+            ):
+                return ControlResult(
+                    ok=False,
+                    action=action,
+                    service_id=entry.service_id,
+                    detail=_missing_container_message(entry),
+                )
+            output = await _exec_compose(settings, args, timeout)
+        except _ComposeExecError as exc:
             return ControlResult(
                 ok=False,
                 action=action,
                 service_id=entry.service_id,
-                detail=f"compose コマンドが見つかりません: {exc}",
+                detail=str(exc),
             )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except TimeoutError:
-            process.kill()
-            with _suppress_process_cleanup():
-                await process.wait()
-            return ControlResult(
-                ok=False,
-                action=action,
-                service_id=entry.service_id,
-                detail=f"timeout({timeout}s)で打ち切りました。",
-            )
-        if process.returncode == 0:
+        if output.returncode == 0:
             return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-        raw = (stderr or stdout or b"").decode("utf-8", "replace").strip()
+        raw = output.stderr or output.stdout
         detail = _friendly_compose_error(raw, settings, entry)
         return ControlResult(
             ok=False,
             action=action,
             service_id=entry.service_id,
-            exit_code=process.returncode,
+            exit_code=output.returncode,
             detail=detail or None,
         )
 
@@ -310,33 +402,23 @@ async def read_service_logs(
     entry: ServiceCatalogEntry,
     lines: int,
 ) -> ServiceLogsResult:
-    """allowlist 済みサービスのログ末尾を ``docker compose logs`` から返す。"""
-    args = _compose_logs_args(settings, entry, lines)
-    cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
+    """allowlist 済みサービスのログ末尾を ``docker compose logs`` から返す。
+
+    compose project に対象のコンテナが無いときは ``ServiceLogsError`` にする(空のログとして
+    返さない)。コンテナがあってログが 0 行なら、空の本文をそのまま返す。
+    """
     timeout = float(settings.rag_service_control_timeout_seconds)
     try:
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            env=_compose_env(settings),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise ServiceLogsError(f"compose コマンドが見つかりません: {exc}") from exc
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError as exc:
-        process.kill()
-        with _suppress_process_cleanup():
-            await process.wait()
-        raise ServiceLogsError(f"timeout({timeout}s)で打ち切りました。") from exc
-    raw = (stdout or stderr or b"").decode("utf-8", "replace").strip()
-    if process.returncode != 0:
-        raise ServiceLogsError(raw or "ログ取得に失敗しました。")
+        if not await _service_container_exists(settings, entry):
+            raise ServiceLogsError(_missing_container_message(entry))
+        output = await _exec_compose(settings, _compose_logs_args(settings, entry, lines), timeout)
+    except _ComposeExecError as exc:
+        raise ServiceLogsError(str(exc)) from exc
+    if output.returncode != 0:
+        raise ServiceLogsError(output.stderr or output.stdout or "ログ取得に失敗しました。")
     return ServiceLogsResult(
         service_id=entry.service_id,
         source="docker",
         lines=lines,
-        content=raw,
+        content=output.stdout,
     )

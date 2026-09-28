@@ -33,3 +33,9 @@ MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
 
 > 依存(`rag-parser-core` path 依存)を変更したら、Docker build 前に各 pyproject の `uv lock` を
 > 再生成すること。build context はリポジトリ root(共有 package を含めるため)。
+
+> cv2 は headless 版(`opencv-python-headless`)だけを入れる(#310)。GUI 版(`opencv-python`)は
+> slim の base image に無い libxcb / libGL / glib を要し、`import cv2` が失敗する。依存が GUI 版を
+> 要求する parser(docling の rapidocr、unstructured の unstructured-inference)は pyproject の
+> `[tool.uv] exclude-dependencies = ["opencv-python"]` で外し、`uv.lock` に GUI 版を残さない。
+> Dockerfile は `uv sync --locked` で lock どおりに入れ、build の最後に `import cv2` を確かめる。

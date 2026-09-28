@@ -20,6 +20,7 @@ import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { DocragPromptCard } from "./DocragPromptEditor";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -138,6 +139,7 @@ export function PromptVersionsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <DocragUnusedNote>{t("settings.prompts.docragUnused")}</DocragUnusedNote>
           <TextField
             id="prompt-version-name"
             label={t("settings.prompts.form.name")}

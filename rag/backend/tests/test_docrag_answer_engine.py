@@ -355,6 +355,26 @@ def test_build_docrag_settings_configures_rerank(tmp_path: Any) -> None:
     assert _rerank_configured(docrag_settings) is True
 
 
+def test_docrag_profile_default_matches_answer_flow(tmp_path: Any) -> None:
+    """RAG_DOCRAG_PROFILE の既定は、回答フローが実際に使う profile(legacy)と一致する(#300)。
+
+    回答フローは docrag の current_profile()(runtime なしの既定 = legacy)を使い、
+    rag_poc と同じ日本語問い合わせ規則で動く。以前は既定が generic で、設定と挙動が食い違っていた。
+    """
+    from docrag.resources.runtime import current_profile
+
+    from app.rag.docrag_answer import build_docrag_settings
+
+    settings = Settings()
+    docrag_settings = build_docrag_settings(settings, output_dir=tmp_path)
+
+    assert Settings.model_fields["rag_docrag_profile"].default == "legacy"
+    assert settings.rag_docrag_profile == "legacy"
+    assert docrag_settings.profile == "legacy"
+    assert current_profile().name == docrag_settings.profile
+    assert current_profile().japanese_inquiry_rules is True
+
+
 async def test_docrag_rerank_enabled_calls_backend_rerank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

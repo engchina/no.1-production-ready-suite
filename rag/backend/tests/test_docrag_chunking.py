@@ -1,23 +1,35 @@
 """DocRAG Small-to-Big 分割(docrag_small_to_big)の backend Chunk 変換。"""
 
 import json
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
+from app.api.routes import documents as documents_route
 from app.api.routes.documents import (
     _processing_config_drift_groups,
     _snapshot_used_removed_chunking_strategy,
 )
 from app.clients.oracle import _chunk_search_text
+from app.config import Settings
+from app.main import app
 from app.rag.chunking_strategy import DocragChunkingParams, normalize_chunking_strategy
 from app.rag.docrag_chunking import (
+    CHUNK_STRATEGY_FALLBACK_REASON_KEY,
+    CHUNK_STRATEGY_REQUESTED_KEY,
     DOCRAG_SEARCH_TEXT_KEY,
     DocragLayoutMissingError,
     build_docrag_chunks,
     docrag_chunking_config,
+    docrag_fallback_needed,
     has_docrag_layout,
 )
+from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion_quality import build_ingestion_quality_report
+from app.schemas.document import DocumentDetail, FileStatus
 from app.schemas.extraction import StructuredExtraction
+from tests.support import AsgiTestClient
 
 
 def _record(seq: int, category: str, text: str, bbox: list[float]) -> dict[str, object]:
@@ -190,3 +202,131 @@ def test_snapshot_built_with_removed_strategy_is_reported_as_drift() -> None:
         }
     )
     assert not _snapshot_used_removed_chunking_strategy(None)
+
+
+def _pipeline(strategy: str) -> IngestionPipeline:
+    return IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, object()),
+        object_storage=cast(Any, object()),
+        settings=Settings(rag_chunking_strategy=strategy),
+    )
+
+
+async def _ingestion_chunks(strategy: str, extraction: StructuredExtraction) -> list[Any]:
+    return await _pipeline(strategy)._build_chunks_for_extraction(
+        trace_id="trace-300",
+        extraction=extraction,
+        quality_report=build_ingestion_quality_report(extraction),
+        parser_profile="unstructured",
+        source_name="policy.pdf",
+    )
+
+
+def _plain_extraction() -> StructuredExtraction:
+    """Docling 以外の解析結果(docrag_layout なし)。"""
+    body = "\n\n".join(
+        f"第{index}条 申請者は所定の様式で申請書を提出し、承認を受ける。" for index in range(1, 6)
+    )
+    return StructuredExtraction(raw_text=f"就業規則\n\n{body}")
+
+
+def test_docrag_fallback_needed_only_for_docrag_without_layout() -> None:
+    assert docrag_fallback_needed("docrag_small_to_big", _plain_extraction()) is True
+    assert docrag_fallback_needed("docrag_small_to_big", _extraction()) is False
+    assert docrag_fallback_needed("structure_aware", _plain_extraction()) is False
+
+
+async def test_ingestion_falls_back_to_structure_aware_without_docling_layout() -> None:
+    """Docling 以外の解析結果で DocRAG 親子階層を選んでも失敗させず、構造認識で分割する(#300)。
+
+    以前は DocragLayoutMissingError で Chunk 作成のジョブが失敗していた。
+    どの方式で分割したかは chunk の metadata に残す。
+    """
+    chunks = await _ingestion_chunks("docrag_small_to_big", _plain_extraction())
+
+    assert chunks
+    for chunk in chunks:
+        assert chunk.metadata["chunk_strategy"] == "structure_aware"
+        assert chunk.metadata[CHUNK_STRATEGY_REQUESTED_KEY] == "docrag_small_to_big"
+        assert chunk.metadata[CHUNK_STRATEGY_FALLBACK_REASON_KEY] == "docrag_layout_missing"
+        assert DOCRAG_SEARCH_TEXT_KEY not in chunk.metadata
+    # 縮退後の分割は、同じ設定で構造認識を選んだときと同じ本文になる。
+    direct = await _ingestion_chunks("structure_aware", _plain_extraction())
+    assert [chunk.text for chunk in chunks] == [chunk.text for chunk in direct]
+    assert CHUNK_STRATEGY_FALLBACK_REASON_KEY not in direct[0].metadata
+
+
+async def test_ingestion_uses_docrag_when_docling_layout_exists() -> None:
+    """Docling の解析結果があれば従来どおり DocRAG 親子階層で分割し、縮退の印は付けない。"""
+    chunks = await _ingestion_chunks("docrag_small_to_big", _extraction())
+
+    assert chunks
+    assert all(chunk.metadata["chunk_strategy"] == "docrag_small_to_big" for chunk in chunks)
+    assert all(CHUNK_STRATEGY_FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
+
+
+class _PreviewOracle:
+    """分割プレビュー route が読む OracleClient の部分集合(保存済みの抽出結果だけを返す)。"""
+
+    def __init__(self, extraction: StructuredExtraction) -> None:
+        self._extraction = extraction
+
+    async def get_document(self, document_id: str) -> DocumentDetail:
+        return DocumentDetail(
+            id=document_id,
+            file_name="policy.pdf",
+            status=FileStatus.REVIEW,
+            content_sha256="a" * 64,
+            uploaded_at=datetime.now(UTC),
+        )
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+        _ = document_id
+        return {
+            "recipe_id": recipe_id,
+            "status": "REVIEW",
+            "active_extraction_recipe_id": "er-1",
+            "processing_config": {},
+        }
+
+    async def get_document_extraction_artifact(self, **_: object) -> dict[str, object]:
+        return {"extraction_json": self._extraction.model_dump(mode="json")}
+
+
+@pytest.mark.parametrize(
+    ("extraction", "expected_strategy", "fallback"),
+    [
+        (_plain_extraction(), "structure_aware", True),
+        (_extraction(), "docrag_small_to_big", False),
+    ],
+)
+def test_chunk_preview_docrag_falls_back_without_docling_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    extraction: StructuredExtraction,
+    expected_strategy: str,
+    fallback: bool,
+) -> None:
+    """分割プレビューも取込と同じく、Docling の解析結果がなければ構造認識で分割する(#300)。
+
+    以前は「DocRAG 親子階層には Docling の解析結果が必要です。」の 422 だった。
+    """
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: _PreviewOracle(extraction))
+
+    response = AsgiTestClient(app).post(
+        "/api/documents/doc-1/recipes/recipe-1/chunk-preview",
+        json={"chunking_strategy": "docrag_small_to_big"},
+    )
+
+    assert response.status_code == 200, response.text
+    chunks = response.json()["data"]["chunks"]
+    assert chunks
+    for chunk in chunks:
+        metadata = chunk["metadata"]
+        assert metadata["chunk_strategy"] == expected_strategy
+        if fallback:
+            assert metadata[CHUNK_STRATEGY_REQUESTED_KEY] == "docrag_small_to_big"
+            assert metadata[CHUNK_STRATEGY_FALLBACK_REASON_KEY] == "docrag_layout_missing"
+        else:
+            assert CHUNK_STRATEGY_FALLBACK_REASON_KEY not in metadata

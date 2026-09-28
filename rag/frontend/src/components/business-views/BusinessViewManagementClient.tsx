@@ -33,6 +33,7 @@ import {
   RowTitleButton,
 } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
+import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -53,6 +54,7 @@ import {
   type RetrievalStrategyName,
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
+import { docragUnusedNoteKey } from "@/lib/docrag-unused";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useCustomLeaveGuard } from "@/lib/leave-guard";
@@ -729,6 +731,10 @@ function BusinessViewEditor({
       ? t("businessViews.knowledgeBasesRequired")
       : null;
 
+  // 回答エンジンが DocRAG(または継承)のとき、DocRAG が読まない欄に付ける補足(#300)。
+  const docragUnusedKey = docragUnusedNoteKey(config.query.answer_engine);
+  const docragUnusedNote = docragUnusedKey ? t(docragUnusedKey) : null;
+
   const updateQuery = (patch: Partial<KnowledgeBaseQueryConfig>) =>
     setConfig((current) => ({ ...current, query: { ...current.query, ...patch } }));
 
@@ -910,6 +916,7 @@ function BusinessViewEditor({
                 <div className="space-y-3">
                   <QuerySelectRow
                     id="business-view-retrieval"
+                    note={docragUnusedNote}
                     label={t("businessViews.field.retrieval")}
                     value={config.query.retrieval_strategy as RetrievalModeName | null}
                     options={RETRIEVAL_OPTIONS}
@@ -922,6 +929,9 @@ function BusinessViewEditor({
                       {t("settings.retrieval.toggles")}
                     </h3>
                     <div className="min-w-0 space-y-2">
+                      {docragUnusedNote ? (
+                        <DocragUnusedNote>{docragUnusedNote}</DocragUnusedNote>
+                      ) : null}
                       <QueryToggleRow
                         label={t("settings.retrieval.queryExpansion")}
                         value={config.query.retrieval_query_expansion}
@@ -965,6 +975,7 @@ function BusinessViewEditor({
                   />
                   <QuerySelectRow
                     id="business-view-grounding"
+                    note={docragUnusedNote}
                     label={t("businessViews.field.grounding")}
                     value={config.query.post_retrieval_pipeline}
                     options={GROUNDING_OPTIONS}
@@ -1036,6 +1047,7 @@ function BusinessViewEditor({
                   ) : null}
                   <QuerySelectRow
                     id="business-view-generation"
+                    note={docragUnusedNote}
                     label={t("businessViews.field.generation")}
                     value={config.query.generation_profile}
                     options={GENERATION_OPTIONS}
@@ -1048,6 +1060,11 @@ function BusinessViewEditor({
                       {t("businessViews.field.prompt")}
                     </h3>
                     <div className="min-w-0 space-y-3">
+                      {docragUnusedNote ? (
+                        <DocragUnusedNote id="business-view-prompt-docrag-note">
+                          {docragUnusedNote}
+                        </DocragUnusedNote>
+                      ) : null}
                       <div>
                         <label
                           htmlFor="business-view-system-prompt"
@@ -1065,6 +1082,9 @@ function BusinessViewEditor({
                             }))
                           }
                           placeholder={t("businessViews.field.systemPromptPlaceholder")}
+                          aria-describedby={
+                            docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
+                          }
                           rows={3}
                           disabled={pending}
                           className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
@@ -1091,6 +1111,9 @@ function BusinessViewEditor({
                               }))
                             }
                             placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+                            aria-describedby={
+                              docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
+                            }
                             disabled={pending}
                             className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                           />
@@ -1165,6 +1188,7 @@ function QuerySelectRow<T extends string>({
   options,
   defaultOnOverride,
   disabled = false,
+  note = null,
   onChange,
 }: {
   id: string;
@@ -1173,14 +1197,23 @@ function QuerySelectRow<T extends string>({
   options: readonly SelectFieldOption<T>[];
   defaultOnOverride: T;
   disabled?: boolean;
+  /** 欄の補足(例: 回答エンジンが DocRAG のときは使われない)。入力は残す。 */
+  note?: string | null;
   onChange: (value: T | null) => void;
 }) {
   const overriding = value !== null;
+  const noteId = note ? `${id}-note` : undefined;
   return (
     <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
       <h3 className="text-sm font-medium text-fg">{label}</h3>
       <div className="min-w-0 space-y-2">
-        <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
+        {note ? <DocragUnusedNote id={noteId}>{note}</DocragUnusedNote> : null}
+        <div
+          className="flex flex-wrap gap-1"
+          role="group"
+          aria-label={label}
+          aria-describedby={noteId}
+        >
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
             {t("businessViews.inherit")}
           </ToggleChip>
