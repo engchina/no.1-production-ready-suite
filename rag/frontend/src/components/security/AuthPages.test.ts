@@ -26,14 +26,31 @@ describe("loginEntryRoute", () => {
 });
 
 describe("isDatabaseGateExempt", () => {
-  it("設定ページは DB ゲートを通さないが、ユーザー・ロール・権限管理は通す", () => {
+  it("ゲートを通さないのはシステム設定の 5 画面だけ（NL2SQL と同じ）", () => {
     expect(isDatabaseGateExempt("/settings")).toBe(true);
-    expect(isDatabaseGateExempt(APP_ROUTES.settingsDatabase)).toBe(true);
-    expect(isDatabaseGateExempt(APP_ROUTES.settingsPipeline)).toBe(true);
-    expect(isDatabaseGateExempt(APP_ROUTES.securityUsers)).toBe(false);
-    expect(isDatabaseGateExempt(APP_ROUTES.securityRoles)).toBe(false);
-    expect(isDatabaseGateExempt(APP_ROUTES.securityPermissions)).toBe(false);
-    expect(isDatabaseGateExempt(APP_ROUTES.search)).toBe(false);
-    expect(isDatabaseGateExempt("/settingsx")).toBe(false);
+    for (const route of [
+      APP_ROUTES.settingsOci,
+      APP_ROUTES.settingsUploadStorage,
+      APP_ROUTES.settingsModel,
+      APP_ROUTES.settingsDatabase,
+      APP_ROUTES.settingsAppearance,
+    ]) {
+      expect(isDatabaseGateExempt(route)).toBe(true);
+    }
+    // RAG 固有の設定は DB に設定を持つため、他の業務画面と同じくゲートを通す。
+    for (const route of [
+      APP_ROUTES.settingsPipeline,
+      APP_ROUTES.settingsRetrieval,
+      APP_ROUTES.settingsGeneration,
+      APP_ROUTES.settingsServices,
+      APP_ROUTES.settingsPrompts,
+      APP_ROUTES.securityUsers,
+      APP_ROUTES.securityRoles,
+      APP_ROUTES.securityPermissions,
+      APP_ROUTES.search,
+      "/settingsx",
+    ]) {
+      expect(isDatabaseGateExempt(route)).toBe(false);
+    }
   });
 });

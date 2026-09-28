@@ -88,8 +88,13 @@ export function apiEnvelope<T>(data: T) {
 /** `GET /api/auth/me` のローカル DEBUG の応答。 */
 export const LOCAL_AUTH_ME = apiEnvelope(LOCAL_CURRENT_USER);
 
-/** `/api/auth/me` をローカル DEBUG の利用者（全権限・範囲の制限なし）にする。 */
+/**
+ * `/api/auth/me` をローカル DEBUG の利用者（全権限・範囲の制限なし）にする。
+ * DB ゲートを通す画面（RAG 固有の設定を含む。#325）を開けるよう、`/api/ready/database` も
+ * 既定で ok にする。DB の状態を変える spec は、この後に `page.route` で上書きする（後の route が優先）。
+ */
 export async function mockLocalAuth(page: Page): Promise<void> {
+  await mockDatabaseReady(page);
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: LOCAL_AUTH_ME }));
 }
 

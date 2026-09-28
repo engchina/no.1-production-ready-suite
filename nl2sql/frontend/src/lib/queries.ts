@@ -1,4 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  DATABASE_STATUS_QUERY_KEY,
+  useDatabaseStatus as useSharedDatabaseStatus,
+} from "@engchina/production-ready-system-settings";
 
 import {
   api,
@@ -7,7 +11,7 @@ import {
 } from "@/lib/api";
 
 export const queryKeys = {
-  databaseStatus: ["ready", "database"] as const,
+  databaseStatus: DATABASE_STATUS_QUERY_KEY,
   persistenceStatus: ["nl2sql", "persistence"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
@@ -20,34 +24,24 @@ export const queryKeys = {
 
 const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
+/** 接続先が変わったら、前の接続先の業務データ（NL2SQL・スキーマ）の cache を捨てる。 */
+export async function clearDatabaseContextQueries(qc: QueryClient) {
+  const business = {
+    predicate: (query: { queryKey: readonly unknown[] }) =>
+      ["nl2sql", "schema"].includes(String(query.queryKey[0])),
+  };
+  await qc.cancelQueries(business);
+  qc.removeQueries(business);
+}
+
+/** DB の状態（3製品共通の hook。#325）。接続先が変わったら業務データの cache を捨てる。 */
 export function useDatabaseStatus({
   enabled = true,
 }: { enabled?: boolean } = {}) {
   const qc = useQueryClient();
-  return useQuery({
-    queryKey: queryKeys.databaseStatus,
-    queryFn: async ({ signal }) => {
-      const next = await api.getDatabaseStatus({ signal });
-      const previous = qc.getQueryData<import("@/lib/api").DatabaseStatusData>(
-        queryKeys.databaseStatus,
-      );
-      if (
-        previous?.context_id &&
-        next.context_id &&
-        previous.context_id !== next.context_id
-      ) {
-        const business = {
-          predicate: (query: { queryKey: readonly unknown[] }) =>
-            ["nl2sql", "schema"].includes(String(query.queryKey[0])),
-        };
-        await qc.cancelQueries(business);
-        qc.removeQueries(business);
-      }
-      return next;
-    },
+  return useSharedDatabaseStatus(api, {
     enabled,
-    staleTime: 15_000,
-    retry: false,
+    onContextChange: () => clearDatabaseContextQueries(qc),
   });
 }
 

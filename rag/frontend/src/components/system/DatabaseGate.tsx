@@ -1,173 +1,45 @@
 import type { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { ArrowRight, Database, Loader2, RefreshCw, Settings } from "lucide-react";
+import {
+  DATABASE_GATE_MESSAGES,
+  DatabaseGate as SharedDatabaseGate,
+  isDatabaseGateExemptPath,
+  type DatabaseGateMessages,
+  type DatabaseGateRoutes,
+} from "@engchina/production-ready-system-settings";
 
-import { Button } from "@engchina/production-ready-ui";
-import { useDatabaseStatus } from "@/lib/queries";
+import { api } from "@/lib/api";
+import { ja, t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
-import { t, type I18nKey } from "@/lib/i18n";
-
-/** ユーザー管理・ロール管理・権限管理の URL の前置き（USER_ROLE_PATHS と権限管理）。 */
-const SECURITY_ROUTE_PREFIX = "/settings/security";
 
 /**
- * DB ゲート。設定ページ以外を開く前にデータベースの利用可否を確認する。
- *
- * - 未設定 / 未起動(到達不可)のときは、エラー画面ではなく落ち着いた案内を出し、
- *   データベース設定への導線を示す(取込・検索などの機能ページを保護する)。
- * - 設定ページ(/settings 配下)は DB が無くても到達できるよう、ゲートを通さない。
- *   ただしユーザー管理・ロール管理・権限管理(/settings/security 配下)はユーザーとロールを DB に持つため、
- *   DB が無いときは他の業務ページと同じ案内を出す(#214)。
- * - DB が利用可能なときだけ子(本来のページ)を表示する。
+ * DB ゲートの導線。ADB の起動はデータベース設定の ADB 管理、システムテーブルの作成・更新は
+ * データベース設定の中のシステムテーブル（RAG は独立した画面を持たない）。
  */
-export function isDatabaseGateExempt(pathname: string): boolean {
-  if (pathname === SECURITY_ROUTE_PREFIX || pathname.startsWith(`${SECURITY_ROUTE_PREFIX}/`)) {
-    return false;
-  }
-  return pathname === "/settings" || pathname.startsWith("/settings/");
-}
+export const DATABASE_GATE_ROUTES: DatabaseGateRoutes = {
+  databaseSettings: `${APP_ROUTES.settingsDatabase}#adb-management`,
+  systemTables: `${APP_ROUTES.settingsDatabase}#system-tables`,
+};
 
-export function DatabaseGate({ children }: { children: ReactNode }) {
-  const location = useLocation();
-  const isSettingsRoute = isDatabaseGateExempt(location.pathname);
-  const query = useDatabaseStatus({ enabled: !isSettingsRoute });
+/**
+ * ゲートを通さない画面（3製品共通。#325）。システム設定の 5 画面だけで、RAG 固有の設定
+ * （取込・検索・回答の設定など）やユーザー・ロール・権限管理は DB を使うのでゲートを通す。
+ */
+export const isDatabaseGateExempt = isDatabaseGateExemptPath;
 
-  // 設定ページは常に通す(DB 復旧の導線そのものなので塞がない)。
-  if (isSettingsRoute) return <>{children}</>;
-
-  if (query.isPending) {
-    return <GateChecking />;
-  }
-
-  // ステータス確認自体が失敗(主にバックエンド未起動)。
-  if (query.isError) {
-    return (
-      <GateNotice
-        tone="warning"
-        titleKey="dbGate.checkFailed.title"
-        messageKey="dbGate.checkFailed.message"
-        onRetry={() => void query.refetch()}
-        isRetrying={query.isFetching}
-      />
-    );
-  }
-
-  switch (query.data?.status) {
-    case "ok":
-      return <>{children}</>;
-    case "not_configured":
-      return (
-        <GateNotice
-          tone="info"
-          titleKey="dbGate.notConfigured.title"
-          messageKey="dbGate.notConfigured.message"
-        />
-      );
-    case "unreachable":
-      return (
-        <GateNotice
-          tone="warning"
-          titleKey="dbGate.unreachable.title"
-          messageKey="dbGate.unreachable.message"
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
-      );
-    case "setup_required":
-      return (
-        <GateNotice
-          tone="info"
-          titleKey="dbGate.setupRequired.title"
-          messageKey="dbGate.setupRequired.message"
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
-      );
-    default:
-      // data が無い/想定外: 状態を確認できないものとして扱う。
-      return (
-        <GateNotice
-          tone="warning"
-          titleKey="dbGate.checkFailed.title"
-          messageKey="dbGate.checkFailed.message"
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
-      );
-  }
-}
-
-/** 状態確認中のプレースホルダ。 */
-function GateChecking() {
-  return (
-    <div className="grid min-h-dvh place-items-center p-8">
-      <div
-        className="flex items-center gap-2 text-sm text-fg-muted"
-        role="status"
-        aria-live="polite"
-      >
-        <Loader2 size={16} className="animate-spin" aria-hidden />
-        {t("dbGate.checking")}
-      </div>
-    </div>
+/** 共通の DB ゲートの文言を、RAG の辞書にある値で上書きする（製品名の入る文言など）。 */
+export function databaseGateMessages(): Partial<DatabaseGateMessages> {
+  return Object.fromEntries(
+    Object.keys(DATABASE_GATE_MESSAGES)
+      .filter((key): key is I18nKey => key in ja)
+      .map((key) => [key, t(key)])
   );
 }
 
-const TONE_STYLES = {
-  info: {
-    ring: "bg-info-subtle text-info-fg",
-  },
-  warning: {
-    ring: "bg-warning-subtle text-warning-fg",
-  },
-} as const;
-
-/** DB が使えないときの落ち着いた案内(エラーではなく次のアクションを示す)。 */
-function GateNotice({
-  tone,
-  titleKey,
-  messageKey,
-  onRetry,
-  isRetrying = false,
-}: {
-  tone: keyof typeof TONE_STYLES;
-  titleKey: I18nKey;
-  messageKey: I18nKey;
-  onRetry?: () => void;
-  isRetrying?: boolean;
-}) {
+/** 設定ページ以外を開く前にデータベースの利用可否を確認する（3製品共通の部品。#325）。 */
+export function DatabaseGate({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-h-dvh place-items-center p-6">
-      <div className="w-full max-w-lg rounded-xl border border-border bg-surface p-8 text-center shadow-sm">
-        <div
-          className={`mx-auto grid size-12 place-items-center rounded-full ${TONE_STYLES[tone].ring}`}
-          aria-hidden
-        >
-          <Database size={24} />
-        </div>
-        <h1 className="mt-5 text-lg font-semibold text-fg">{t(titleKey)}</h1>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-fg-muted">{t(messageKey)}</p>
-
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
-          <Link
-            to={APP_ROUTES.settingsDatabase}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-emphasis px-4 text-sm font-medium leading-none text-fg-on-accent transition-colors hover:bg-accent-emphasis-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            <Settings size={16} aria-hidden />
-            {t("dbGate.openDatabaseSettings")}
-            <ArrowRight size={16} aria-hidden />
-          </Link>
-          {onRetry ? (
-            <Button variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
-              {t("common.retry")}
-            </Button>
-          ) : null}
-        </div>
-
-        <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-fg-muted">
-          {t("dbGate.settingsHint")}
-        </p>
-      </div>
-    </div>
+    <SharedDatabaseGate api={api} routes={DATABASE_GATE_ROUTES} messages={databaseGateMessages()}>
+      {children}
+    </SharedDatabaseGate>
   );
 }
