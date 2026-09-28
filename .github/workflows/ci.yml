@@ -358,8 +358,16 @@ jobs:
       # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
       # -n auto: pytest-xdist で並列に実行する。実 Oracle のテストは pyproject の
       # --dist loadgroup で 1 つの worker にまとまる（#344）。
+      # --assert=plain: pytest の assert の書き換え（失敗したときに比べた値を出す仕組み）を止める。
+      # CI にはテストの書き換え済みの .pyc が無く、worker ごとに全テスト（約 7 万行）を書き換えて、
+      # それだけで Test の約 3 分の 1（約 10 秒）を占めていた（#401）。失敗したときだけ、失敗した
+      # テストを書き換えありで流し直して詳細を出す（step の結果は失敗のまま）。
       - name: Test
-        run: uv run pytest -n auto
+        run: |
+          uv run pytest -n auto --assert=plain && exit 0
+          echo "失敗したテストを、assert の詳細付きで流し直します（--lf）。"
+          uv run pytest --lf --lfnf=none --maxfail=20 || true
+          exit 1
 
       - name: Security scan
         run: uv run bandit -c pyproject.toml -r app
