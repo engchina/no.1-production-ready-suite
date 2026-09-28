@@ -857,68 +857,23 @@ class OracleClient:
     # ------------------------------------------------------------------
 
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
-        """既存文書にレシピ1が無ければ文書 legacy 状態から補完する。"""
-        tenant = current_audit_request_context().tenant_id_hash
-        recipe_id = hashlib.sha256(f"{document_id}:recipe:1".encode()).hexdigest()
+        """レシピ1が無ければ文書 legacy 状態から補完する(書き込みの経路だけで呼ぶ)。
+
+        GET(`list_document_recipes` / `get_document_recipe`)からは呼ばない。レシピ1は文書の登録・
+        migration・ジョブの投入・レシピの追加と編集の transaction で作る(#341)。
+        """
 
         def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            config_row = _fetch_one(
-                connection,
-                "SELECT processing_config FROM rag_documents WHERE document_id = :document_id",
-                {"document_id": document_id},
-            )
-            _execute(
-                connection,
-                """
-                MERGE INTO rag_document_recipes r
-                USING (SELECT :document_id AS document_id, 1 AS slot_no FROM dual) s
-                ON (r.document_id = s.document_id AND r.slot_no = s.slot_no)
-                WHEN NOT MATCHED THEN INSERT (
-                    recipe_id, document_id, slot_no, tenant_id_hash, processing_config,
-                    status, preprocess_artifact, config_revision, materialized_revision,
-                    error_message, created_at, updated_at, finished_at
-                ) VALUES (
-                    :recipe_id, :document_id, 1, :tenant_id_hash, :processing_config,
-                    :status, :preprocess_artifact, 1, :materialized_revision,
-                    :error_message, :created_at, SYSTIMESTAMP, :finished_at
-                )
-                """,
-                {
-                    "recipe_id": recipe_id,
-                    "document_id": document_id,
-                    "tenant_id_hash": tenant,
-                    "processing_config": _json_bind(
-                        _json_loads((config_row or {}).get("processing_config"))
-                    ),
-                    "status": document.status.value,
-                    "preprocess_artifact": _json_bind(document.preprocess_artifact),
-                    "materialized_revision": 1 if document.status == FileStatus.INDEXED else None,
-                    "error_message": document.error_message,
-                    "created_at": document.uploaded_at,
-                    "finished_at": document.indexed_at,
-                },
-                input_sizes=_json_input_sizes("processing_config", "preprocess_artifact"),
-            )
-            row = _fetch_one(
-                connection,
-                """
-                SELECT r.* FROM rag_document_recipes r
-                WHERE r.document_id = :document_id AND r.slot_no = 1
-                """,
-                {"document_id": document_id},
-            )
-            if row is None:
-                raise RuntimeError("レシピ1の作成に失敗しました。")
-            return _document_recipe_row(row)
+            return _ensure_default_document_recipe_row(connection, document_id)
 
         return await self._run_transaction(operation)
 
     async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
-        """文書レシピを active chunk_set の件数とともに返す。"""
-        await self.ensure_default_document_recipe(document_id)
+        """文書レシピを active chunk_set の件数とともに返す(読み取りだけ。書き込まない)。
+
+        レシピ行が 1 件も無い既存の文書(migration 前に登録され、ジョブも未投入)は、文書の状態から
+        レシピ1を仮の行として返す。行は、最初の書き込み(設定の保存・ジョブの投入など)で作る。
+        """
         rows = await self._fetch_all(
             """
             SELECT
@@ -940,7 +895,40 @@ class OracleClient:
             """.format(document_access_sql=_oracle_access_predicate_sql(alias="d")),
             _with_tenant_bind({"document_id": document_id}),
         )
-        return [_document_recipe_row(row) for row in rows]
+        if rows:
+            return [_document_recipe_row(row) for row in rows]
+        virtual = await self._virtual_default_document_recipe(document_id)
+        if virtual is None:
+            raise KeyError(f"document_id={document_id} は存在しません。")
+        return [virtual]
+
+    async def _virtual_default_document_recipe(self, document_id: str) -> dict[str, object] | None:
+        """レシピ行が 1 件も無い文書のレシピ1を、文書の状態から組み立てる(書き込まない)。
+
+        文書が無い・見えない、またはレシピ行がある(レシピ1を削除して他のレシピだけがある)
+        ときは None。抽出結果などの大きな JSON 列は読まない。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT
+                    d.document_id, d.tenant_id_hash, d.status, d.processing_config,
+                    d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at,
+                    (
+                        SELECT COUNT(*) FROM rag_document_recipes r
+                        WHERE r.document_id = d.document_id
+                    ) AS recipe_count
+                FROM rag_documents d
+                WHERE d.document_id = :document_id
+                  AND {access_predicate}
+                """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        if row is None or _int_value(row.get("recipe_count")) > 0:
+            return None
+        return _document_recipe_row(_default_document_recipe_values(row))
 
     async def get_document_recipe(
         self, document_id: str, recipe_id: str
@@ -967,7 +955,12 @@ class OracleClient:
             """.format(document_access_sql=_oracle_access_predicate_sql(alias="d")),
             _with_tenant_bind({"document_id": document_id, "recipe_id": recipe_id}),
         )
-        return _document_recipe_row(row) if row is not None else None
+        if row is not None:
+            return _document_recipe_row(row)
+        if recipe_id != default_document_recipe_id(document_id):
+            return None
+        # レシピ行の無い既存の文書のレシピ1(読み取りでは作らない。#341)。
+        return await self._virtual_default_document_recipe(document_id)
 
     async def get_latest_recipe_chunk_set(
         self,
@@ -1074,6 +1067,7 @@ class OracleClient:
         """活動中 job が無いレシピの明示設定を保存し revision を進める。"""
 
         def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
+            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
             recipe = _select_document_recipe_for_update(connection, document_id, recipe_id)
             if recipe is None:
                 raise KeyError("レシピが見つかりません。")
@@ -1128,6 +1122,7 @@ class OracleClient:
             document = _select_document_for_update(connection, document_id)
             if document is None:
                 raise KeyError("ドキュメントが見つかりません。")
+            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
             if _select_document_recipe_for_update(connection, document_id, recipe_id) is None:
                 raise KeyError("レシピが見つかりません。")
             count_row = _fetch_one(
@@ -3653,8 +3648,48 @@ class OracleClient:
         return await self._document_stats_with_oracle()
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
-        """ドキュメント詳細を返す。"""
+        """ドキュメント詳細を返す(抽出結果などの JSON 列を含む)。"""
         return await self._get_document_with_oracle(document_id)
+
+    async def document_exists(self, document_id: str) -> bool:
+        """利用者から見える文書があるかだけを返す(JSON 列は読まない。#341)。"""
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT document_id
+                FROM rag_documents
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                access_predicate=_oracle_access_predicate_sql(),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return row is not None
+
+    async def get_document_summary(self, document_id: str) -> DocumentSummary | None:
+        """文書の状態・ファイル情報だけを返す(JSON 列と所属 KB は読まない。#341)。
+
+        ポーリングされる API の存在確認・状態確認に使う。抽出結果・分類・ファイル準備の成果物が
+        必要な経路は ``get_document`` を使う。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT
+                    {columns}
+                FROM rag_documents
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                columns=_DOCUMENT_STATE_COLUMNS_SQL.strip(),
+                access_predicate=_oracle_access_predicate_sql(),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        if row is None:
+            return None
+        return _to_document_summary(_stored_document_from_row(row))
 
     async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
         """文書単位の処理レシピ上書きを返す。未設定は全項目継承。"""
@@ -3692,7 +3727,7 @@ class OracleClient:
         payload = config.model_dump(mode="json", exclude_none=True)
 
         def operation(connection: OracleConnectionProtocol) -> DocumentProcessingConfig:
-            if _select_document(connection, document_id) is None:
+            if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             _execute(
                 connection,
@@ -5269,6 +5304,20 @@ class OracleClient:
                 document_id=document.id,
                 knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
             )
+            # レシピ1は登録と同じ transaction で作る。GET /recipes では作らない(#341)。
+            _merge_default_document_recipe(
+                connection,
+                _default_document_recipe_values(
+                    {
+                        "document_id": document.id,
+                        "tenant_id_hash": document.tenant_id_hash,
+                        "status": document.status.value,
+                        "error_message": None,
+                        "uploaded_at": document.uploaded_at,
+                        "indexed_at": None,
+                    }
+                ),
+            )
             return _to_document_detail(document).model_copy(
                 update={
                     "knowledge_bases": [
@@ -5910,7 +5959,7 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
             knowledge_base = _require_active_knowledge_base(connection, knowledge_base_id)
             for document_id in unique_document_ids:
-                if _select_document(connection, document_id) is None:
+                if _select_document_state(connection, document_id) is None:
                     raise KeyError(f"document_id={document_id} は存在しません。")
             _executemany(
                 connection,
@@ -5964,7 +6013,7 @@ class OracleClient:
             knowledge_base = _select_knowledge_base(connection, knowledge_base_id)
             if knowledge_base is None:
                 raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
-            if _select_document(connection, document_id) is None:
+            if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             # 文書は 1 つ以上の KB に所属させる（knowledge-base-management.md §6.2）。
             # 最後の所属を外すときは DEFAULT へ移し、未所属の文書を作らない
@@ -6014,7 +6063,7 @@ class OracleClient:
         unique_knowledge_base_ids = _unique_sequence(knowledge_base_ids)
 
         def operation(connection: OracleConnectionProtocol) -> list[KnowledgeBaseRef]:
-            if _select_document(connection, document_id) is None:
+            if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             knowledge_bases = [
                 _require_active_knowledge_base(connection, knowledge_base_id)
@@ -6186,9 +6235,10 @@ class OracleClient:
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob:
             if job.recipe_id is None:
-                if _select_document(connection, job.document_id) is None:
+                if _select_document_state(connection, job.document_id) is None:
                     raise KeyError(f"document_id={job.document_id} は存在しません。")
             else:
+                _ensure_recipe_row_if_default(connection, job.document_id, job.recipe_id)
                 recipe = _select_document_recipe_for_update(
                     connection, job.document_id, job.recipe_id
                 )
@@ -6417,7 +6467,7 @@ class OracleClient:
         )
 
         def operation(connection: OracleConnectionProtocol) -> list[IngestionSegment]:
-            if _select_document(connection, document_id) is None:
+            if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             recipe_scope_sql = "AND recipe_id = :recipe_id" if recipe_id is not None else ""
             delete_binds: dict[str, object] = {"document_id": document_id}
@@ -7337,30 +7387,18 @@ class OracleClient:
         if limit is not None:
             binds["limit"] = limit
             limit_clause += " FETCH NEXT :limit ROWS ONLY"
+        # 一覧は取込中にポーリングされる。要約に使わない JSON 列(抽出結果など)は読まない(#341)。
         rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
-                document_id,
-                file_name,
-                status,
-                tenant_id_hash,
-                category_name,
-                object_storage_path,
-                preprocess_artifact,
-                content_type,
-                file_size_bytes,
-                content_sha256,
-                duplicate_of_document_id,
-                extraction,
-                error_message,
-                uploaded_at,
-                indexed_at
+                {columns}
             FROM rag_documents
             WHERE {where_sql}
             ORDER BY uploaded_at DESC, document_id DESC
             {limit_clause}
             """,
+                columns=_DOCUMENT_STATE_COLUMNS_SQL.strip(),
                 where_sql=where_sql,
                 limit_clause=limit_clause,
             ),
@@ -7616,7 +7654,7 @@ class OracleClient:
         """Oracle document table の状態を更新する。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            existing = _select_document(connection, document_id)
+            existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             if status == FileStatus.INGESTING:
@@ -7764,7 +7802,7 @@ class OracleClient:
         """同一文書の再取込開始時に、旧実体化結果を transaction 内で初期化する。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            existing = _select_document(connection, document_id)
+            existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
 
@@ -7901,7 +7939,7 @@ class OracleClient:
         """同一文書の再 chunk 前に、chunk 以降を transaction 内で初期化する。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            existing = _select_document(connection, document_id)
+            existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
 
@@ -7993,7 +8031,7 @@ class OracleClient:
         """同一文書の再 index 前に、embedding/index/binding だけ初期化する。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            existing = _select_document(connection, document_id)
+            existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
 
@@ -8082,7 +8120,7 @@ class OracleClient:
         """Oracle document table と関連 chunk/vector/ingestion 行を同一 transaction で削除する。"""
 
         def operation(connection: OracleConnectionProtocol) -> bool:
-            existing = _select_document(connection, document_id)
+            existing = _select_document_state(connection, document_id)
             if existing is None:
                 return False
             graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
@@ -8357,7 +8395,7 @@ class OracleClient:
         """Oracle chunk/vector table へ chunk と embedding を保存する。"""
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
-            document = _select_document(connection, document_id)
+            document = _select_document_state(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             _execute(
@@ -8415,7 +8453,7 @@ class OracleClient:
         """
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
-            document = _select_document(connection, document_id)
+            document = _select_document_state(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             _execute(
@@ -8500,7 +8538,7 @@ class OracleClient:
         """Oracle GraphRAG-lite tables の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
-            if _select_document(connection, document_id) is None:
+            if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             if chunk_set_id is not None:
                 rows = _fetch_all(
@@ -8709,16 +8747,9 @@ class OracleClient:
         try:
             return cast(list[dict[str, object]], await self._db_call_runner(fetch))
         except Exception as exc:
-            error = exc.args[0] if exc.args else None
-            if not bool(getattr(error, "isrecoverable", False)):
+            if not is_transient_oracle_error(exc):
                 raise
-            logger.warning(
-                "oracle_read_retry",
-                extra={
-                    "error_type": type(exc).__name__,
-                    "oracle_error_code": getattr(error, "full_code", None),
-                },
-            )
+            logger.warning("oracle_read_retry", extra=oracle_error_log_fields(exc))
             return cast(list[dict[str, object]], await self._db_call_runner(fetch))
 
     async def _fetch_ingestion_job_rows(
@@ -8744,16 +8775,30 @@ class OracleClient:
         return cast(T, await self._db_call_runner(lambda: self._run_transaction_sync(operation)))
 
     def _run_transaction_sync(self, operation: Callable[[OracleConnectionProtocol], T]) -> T:
-        connection = self._acquire_connection()
-        try:
-            result = operation(connection)
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        """1 transaction を実行する。一時的な接続断は新しい接続で 1 回だけやり直す(#341)。
+
+        やり直すのは、commit の前(``operation`` の中)で一時的な接続断
+        (``is_session_dead`` / ``isrecoverable``)になった場合だけ。接続が切れた transaction は
+        DB 側で rollback されるため、``operation`` を最初から実行し直しても二重に反映しない。
+        commit の途中で切れた場合は反映済みか分からないため、やり直さずに例外を返す。
+        rollback / close の失敗(切断後の ``DPY-1001`` など)はログに残し、元の例外を隠さない。
+        """
+        for attempt in (1, 2):
+            connection = self._acquire_connection()
+            committing = False
+            try:
+                result = operation(connection)
+                committing = True
+                connection.commit()
+                return result
+            except Exception as exc:
+                _rollback_quietly(connection, exc)
+                if committing or attempt > 1 or not is_transient_oracle_error(exc):
+                    raise
+                logger.warning("oracle_transaction_retry", extra=oracle_error_log_fields(exc))
+            finally:
+                _close_quietly(connection)
+        raise RuntimeError("unreachable: transaction の再試行は 1 回まで")  # pragma: no cover
 
     def _run_with_connection(self, operation: Callable[[OracleConnectionProtocol], Any]) -> Any:
         connection = self._acquire_connection()
@@ -8834,6 +8879,62 @@ async def _run_db_test_call_in_thread(operation: Callable[[], Any]) -> Any:
     """接続テスト専用の小さい thread pool で DB 呼び出しを実行する。"""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_DB_TEST_EXECUTOR, operation)
+
+
+def _oracle_error_object(exc: BaseException) -> object | None:
+    """python-oracledb の例外が持つ ``_Error``(``exc.args[0]``)を返す。"""
+    return exc.args[0] if exc.args else None
+
+
+def is_transient_oracle_error(exc: BaseException) -> bool:
+    """新しい接続でやり直せる一時的な接続断か(python-oracledb の判定をそのまま使う)。
+
+    ``is_session_dead``(``DPY-4011`` など、接続が切れた)か ``isrecoverable``
+    (``ORA-01033`` など、DB が一時的に使えない)が立っている例外だけを一時的とみなす。
+    """
+    error = _oracle_error_object(exc)
+    return bool(getattr(error, "is_session_dead", False) or getattr(error, "isrecoverable", False))
+
+
+def oracle_error_log_fields(exc: BaseException) -> dict[str, object]:
+    """エラーログに必ず付ける Oracle のエラー情報(Oracle の例外でなければ値は None)。
+
+    ``oracle_error_code`` は Oracle のエラー番号(``ORA-00600`` なら 600、driver の ``DPY-*`` は 0)、
+    ``full_code`` は ``ORA-00600`` / ``DPY-4011`` のような接頭辞付きのコード。
+    """
+    error = _oracle_error_object(exc)
+    code = getattr(error, "code", None)
+    full_code = getattr(error, "full_code", None)
+    return {
+        "error_type": type(exc).__name__,
+        "oracle_error_code": code if isinstance(code, int) else None,
+        "full_code": full_code if isinstance(full_code, str) and full_code else None,
+        "is_session_dead": bool(getattr(error, "is_session_dead", False)),
+        "isrecoverable": bool(getattr(error, "isrecoverable", False)),
+    }
+
+
+def _rollback_quietly(connection: OracleConnectionProtocol, original: BaseException) -> None:
+    """rollback する。失敗しても(切断後の ``DPY-1001`` など)ログに残して元の例外を優先する。"""
+    try:
+        connection.rollback()
+    except Exception as rollback_error:  # noqa: BLE001 - 元の例外を隠さない
+        logger.warning(
+            "oracle_rollback_failed",
+            extra={
+                **oracle_error_log_fields(rollback_error),
+                "original_error_type": type(original).__name__,
+                "original_full_code": oracle_error_log_fields(original)["full_code"],
+            },
+        )
+
+
+def _close_quietly(connection: OracleConnectionProtocol) -> None:
+    """接続を pool に返す。切断済みの接続の close の失敗はログだけにする。"""
+    try:
+        connection.close()
+    except Exception as close_error:  # noqa: BLE001 - 結果・元の例外を優先する
+        logger.warning("oracle_connection_close_failed", extra=oracle_error_log_fields(close_error))
 
 
 def _fetch_all(
@@ -9844,6 +9945,49 @@ def _select_document(
     return None if not rows else _stored_document_from_row(rows[0])
 
 
+# rag_documents の JSON 列(extraction / preprocess_artifact / classification / processing_config)を
+# 除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列(行の外の LOB)を
+# 必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
+_DOCUMENT_STATE_COLUMNS_SQL = """
+            document_id,
+            file_name,
+            status,
+            tenant_id_hash,
+            category_name,
+            object_storage_path,
+            content_type,
+            file_size_bytes,
+            content_sha256,
+            duplicate_of_document_id,
+            error_message,
+            uploaded_at,
+            indexed_at
+"""
+
+
+def _select_document_state(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> StoredDocument | None:
+    """文書の状態だけを読む(JSON 列は読まない。``extraction`` 等は空のまま返す)。"""
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            {columns}
+        FROM rag_documents
+        WHERE document_id = :document_id
+          AND {access_predicate}
+        """,
+            columns=_DOCUMENT_STATE_COLUMNS_SQL.strip(),
+            access_predicate=_oracle_access_predicate_sql(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    return None if not rows else _stored_document_from_row(rows[0])
+
+
 def _select_document_for_update(
     connection: OracleConnectionProtocol,
     document_id: str,
@@ -9885,6 +10029,140 @@ def _select_document_recipe_for_update(
         ),
         _with_tenant_bind({"document_id": document_id, "recipe_id": recipe_id}),
     )
+
+
+def default_document_recipe_id(document_id: str) -> str:
+    """文書のレシピ1(slot 1)の決定論的な ID。migration の STANDARD_HASH と同じ値。"""
+    return hashlib.sha256(f"{document_id}:recipe:1".encode()).hexdigest()
+
+
+def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, object]:
+    """文書の legacy 状態(rag_documents の行)からレシピ1の値を組み立てる。"""
+    document_id = str(row["document_id"])
+    status = _file_status(row.get("status") or FileStatus.UPLOADED.value)
+    return {
+        "recipe_id": default_document_recipe_id(document_id),
+        "document_id": document_id,
+        "slot_no": 1,
+        "tenant_id_hash": row.get("tenant_id_hash"),
+        "processing_config": row.get("processing_config"),
+        "status": status.value,
+        "failed_phase": None,
+        "preprocess_artifact": row.get("preprocess_artifact"),
+        "active_extraction_recipe_id": None,
+        "config_revision": 1,
+        "materialized_revision": 1 if status == FileStatus.INDEXED else None,
+        "error_message": row.get("error_message"),
+        "started_at": None,
+        "finished_at": row.get("indexed_at"),
+        "created_at": row.get("uploaded_at"),
+        "updated_at": row.get("uploaded_at"),
+    }
+
+
+def _merge_default_document_recipe(
+    connection: OracleConnectionProtocol,
+    values: Mapping[str, object],
+) -> None:
+    """レシピ1が無ければ作る(あれば何もしない)。文書の登録と ensure の共通の書き込み。"""
+    _execute(
+        connection,
+        """
+        MERGE INTO rag_document_recipes r
+        USING (SELECT :document_id AS document_id, 1 AS slot_no FROM dual) s
+        ON (r.document_id = s.document_id AND r.slot_no = s.slot_no)
+        WHEN NOT MATCHED THEN INSERT (
+            recipe_id, document_id, slot_no, tenant_id_hash, processing_config,
+            status, preprocess_artifact, config_revision, materialized_revision,
+            error_message, created_at, updated_at, finished_at
+        ) VALUES (
+            :recipe_id, :document_id, 1, :tenant_id_hash, :processing_config,
+            :status, :preprocess_artifact, 1, :materialized_revision,
+            :error_message, :created_at, SYSTIMESTAMP, :finished_at
+        )
+        """,
+        {
+            "recipe_id": values["recipe_id"],
+            "document_id": values["document_id"],
+            "tenant_id_hash": values.get("tenant_id_hash"),
+            "processing_config": _json_bind(_json_loads(values.get("processing_config"))),
+            "status": values["status"],
+            "preprocess_artifact": _json_bind(
+                _json_loads(values.get("preprocess_artifact")) or None
+            ),
+            "materialized_revision": values.get("materialized_revision"),
+            "error_message": values.get("error_message"),
+            "created_at": values.get("created_at"),
+            "finished_at": values.get("finished_at"),
+        },
+        input_sizes=_json_input_sizes("processing_config", "preprocess_artifact"),
+    )
+
+
+def _select_default_document_recipe(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> dict[str, object] | None:
+    return _fetch_one(
+        connection,
+        _render_sql(
+            """
+        SELECT r.*
+        FROM rag_document_recipes r
+        JOIN rag_documents d ON d.document_id = r.document_id
+        WHERE r.document_id = :document_id
+          AND r.slot_no = 1
+          AND {access_predicate}
+        """,
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+
+
+def _ensure_default_document_recipe_row(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> dict[str, object]:
+    """書き込みの transaction の中で、レシピ1が無ければ文書の状態から作って返す。
+
+    レシピ1があれば MERGE もせず、文書の JSON 列も読まない(ジョブの投入のたびに書かない)。
+    """
+    existing = _select_default_document_recipe(connection, document_id)
+    if existing is not None:
+        return _document_recipe_row(existing)
+    document = _fetch_one(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            d.document_id, d.tenant_id_hash, d.status, d.processing_config,
+            d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at
+        FROM rag_documents d
+        WHERE d.document_id = :document_id
+          AND {access_predicate}
+        """,
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    if document is None:
+        raise KeyError(f"document_id={document_id} は存在しません。")
+    _merge_default_document_recipe(connection, _default_document_recipe_values(document))
+    created = _select_default_document_recipe(connection, document_id)
+    if created is None:
+        raise RuntimeError("レシピ1の作成に失敗しました。")
+    return _document_recipe_row(created)
+
+
+def _ensure_recipe_row_if_default(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+    recipe_id: str,
+) -> None:
+    """GET が仮の行で返したレシピ1を、最初の書き込みの transaction で実体化する。"""
+    if recipe_id == default_document_recipe_id(document_id):
+        _ensure_default_document_recipe_row(connection, document_id)
 
 
 def _select_knowledge_base(

@@ -492,6 +492,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_answer_records",
             sql=_answer_record_owner_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260928_003_default_document_recipes",
+            table_name="rag_document_recipes",
+            sql=_default_document_recipes_migration_sql(),
+        ),
     ]
 
 
@@ -1268,6 +1273,45 @@ BEGIN
     END;
 END;
 /
+""".strip()
+
+
+def _default_document_recipes_migration_sql() -> str:
+    """レシピ行が 1 件も無い文書に、文書の状態からレシピ1を作る(冪等。#341)。
+
+    以前はレシピ1を `GET /recipes` の中で遅延して作っていたため、20260630_003 の後に登録され、
+    まだ一覧も取込もしていない文書にはレシピ行が無い。GET から書き込みをなくすのに合わせて補う。
+    レシピ1を削除して他のレシピだけがある文書には作らない(削除したレシピを戻さない)。
+    """
+    return """
+MERGE INTO rag_document_recipes r
+USING (
+    SELECT
+        LOWER(RAWTOHEX(STANDARD_HASH(d.document_id || ':recipe:1', 'SHA256'))) AS recipe_id,
+        d.document_id,
+        d.tenant_id_hash,
+        d.processing_config,
+        d.status,
+        d.preprocess_artifact,
+        d.error_message,
+        d.uploaded_at,
+        d.indexed_at
+    FROM rag_documents d
+    WHERE NOT EXISTS (
+        SELECT 1 FROM rag_document_recipes existing
+        WHERE existing.document_id = d.document_id
+    )
+) d
+ON (r.document_id = d.document_id AND r.slot_no = 1)
+WHEN NOT MATCHED THEN INSERT (
+    recipe_id, document_id, slot_no, tenant_id_hash, processing_config, status,
+    preprocess_artifact, config_revision, materialized_revision, error_message,
+    created_at, updated_at, finished_at
+) VALUES (
+    d.recipe_id, d.document_id, 1, d.tenant_id_hash, d.processing_config, d.status,
+    d.preprocess_artifact, 1, CASE WHEN d.status = 'INDEXED' THEN 1 END, d.error_message,
+    d.uploaded_at, SYSTIMESTAMP, d.indexed_at
+);
 """.strip()
 
 
