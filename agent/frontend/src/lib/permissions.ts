@@ -11,7 +11,6 @@ import { useAuth, type HasPermission } from "@engchina/production-ready-system-s
  * システム設定・ユーザーとロールのコードは NL2SQL / RAG と同じ（3製品共通の画面）。
  */
 export const MENU_PERMISSIONS = {
-  dashboard: "menu.dashboard",
   agents: "menu.agents",
   skills: "menu.skills",
   runtimes: "menu.runtimes",

@@ -1919,25 +1919,6 @@
       ]
     }
   ],
-  "observabilityStatus": {
-    "metrics_enabled": true,
-    "prometheus_metrics_path": "/metrics",
-    "trace_events_enabled": true,
-    "trace_events_buffer_size": 500,
-    "trace_events_retention_seconds": 86400,
-    "trace_sample_rate": 1.0,
-    "trace_exporter_configured": false,
-    "trace_exporter_last_success_at": null,
-    "trace_exporter_last_error": null,
-    "retry_queue_size": 0,
-    "retry_queue_max_size": 100,
-    "retry_max_attempts": 3,
-    "retry_worker_enabled": true,
-    "retry_worker_running": true,
-    "retry_worker_interval_seconds": 5.0,
-    "langfuse_configured": false,
-    "opentelemetry_configured": false
-  },
   "tracePolicy": {
     "trace_events_enabled": true,
     "trace_events_buffer_size": 500,

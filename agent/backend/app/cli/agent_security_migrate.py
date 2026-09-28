@@ -3,7 +3,8 @@
     uv run python -m app.cli.agent_security_migrate
 
 共通 `.env`（platform/.env）の `PLATFORM_ORACLE_*` で接続し、3 製品共通の `PLATFORM_*`、
-Agent の `AGENT_ROLE_*`、組み込み SYSTEM_ADMIN ロールを用意する。何度実行してもよい。
+Agent の `AGENT_ROLE_*`、組み込み SYSTEM_ADMIN ロールを用意し、既存ロールに残る廃止済みの
+権限コード（`menu.dashboard` など）を削除する。何度実行してもよい。
 ユーザーは作らない（最初は構成管理者 `system_admin` でログインする）。
 """
 
@@ -19,6 +20,7 @@ from pr_system_settings.auth.migrations import PLATFORM_AUTH_DDL
 
 from app.oracle_connection import platform_oracle_connection
 from app.security.migrations import AGENT_SECURITY_DDL, apply_security_schema
+from app.security.permissions import RETIRED_PERMISSION_CODES
 
 
 def _summary(results: Sequence[dict[str, str]]) -> str:
@@ -39,14 +41,17 @@ def run(
     if not apply:
         return (
             f"mode=preview platform_statements={len(PLATFORM_AUTH_DDL)} "
-            f"agent_statements={len(AGENT_SECURITY_DDL)}"
+            f"agent_statements={len(AGENT_SECURITY_DDL)} "
+            f"retired_permission_codes={len(RETIRED_PERMISSION_CODES)}"
         )
     factory = connection_factory or platform_oracle_connection
     with factory() as connection:
         results = apply_security_schema(connection)
+    retired_rows = sum(int(item.get("deleted", "0")) for item in results.get("retired", []))
     return (
         f"mode=applied platform({_summary(results['platform'])}) "
-        f"agent({_summary(results['agent'])}) system_admin_role=ok"
+        f"agent({_summary(results['agent'])}) retired_permission_rows={retired_rows} "
+        "system_admin_role=ok"
     )
 
 

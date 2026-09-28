@@ -90,7 +90,7 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("Run の閲覧だけの利用者は、ダッシュボードと Run だけをナビに出し、他の URL は権限なしの画面へ移す", async ({
+    test("Run の閲覧だけの利用者は、Run だけをナビに出し、他の URL は権限なしの画面へ移す", async ({
       page,
       mockApi,
     }) => {
@@ -99,8 +99,8 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/runs");
       await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
-      // agent.runs.view は menu.dashboard / menu.runs を含む（implies）。項目が 0 件のセクションは出さない。
-      expect(await sidebarHrefs(page)).toEqual(["/", "/runs"]);
+      // agent.runs.view は menu.runs を含む（implies）。項目が 0 件のセクションは出さない。
+      expect(await sidebarHrefs(page)).toEqual(["/runs"]);
 
       // Run の作成と取消・再開・再実行は Run の実行・操作の権限が必要。
       await expect(page.getByRole("button", { name: "実行を作成" })).toHaveCount(0);
@@ -118,18 +118,16 @@ for (const viewport of VIEWPORTS) {
         await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
       }
       await expectNoPageOverflow(page);
-      // 「利用可能な画面へ戻る」はナビの最初の画面（ダッシュボード）へ。
+      // 「利用可能な画面へ戻る」は既定の入口（主画面の Run）へ。
       await page.getByRole("button", { name: "利用可能な画面へ戻る" }).click();
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByRole("heading", { name: "ダッシュボード", level: 1 })).toBeVisible();
-      // ダッシュボードの接続状況は、開けない画面へのリンクにしない。
-      await expect(page.getByRole("main").getByText("外部 RAG")).toBeVisible();
-      await expect(page.getByRole("main").locator('a[href="/settings/external-rag"]')).toHaveCount(0);
-      await expect(page.getByRole("main").locator('a[href="/agents"]')).toHaveCount(0);
+      await expect(page).toHaveURL(/\/runs$/);
+      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
 
-      // 未知の URL は既定の画面へ振り分ける。
+      // `/` と未知の URL も Run へ振り分ける（ダッシュボードは廃止。#262）。
+      await page.goto("/");
+      await expect(page).toHaveURL(/\/runs$/);
       await page.goto("/no-such-page");
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).toHaveURL(/\/runs$/);
     });
 
     test("Run の実行権限があれば Run の作成と取消を出す", async ({ page, mockApi }) => {
@@ -177,7 +175,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageOverflow(page);
     });
 
-    test("ダッシュボードを開けない利用者は、/ と未知の URL で開ける最初の画面へ移る", async ({ page, mockApi }) => {
+    test("Run を開けない利用者は、/ と未知の URL で開ける最初の画面へ移る", async ({ page, mockApi }) => {
       signIn(mockApi, dbUser({ permissions: ["menu.security_users"], allowed_agent_ids: [] }));
       mockApi.state.security.users = [];
 
@@ -188,6 +186,42 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/runs/unknown");
       await expect(page).toHaveURL(/\/settings\/security\/users$/);
+    });
+
+    test("/ はナビの並び順で最初に開ける画面、未知の URL は主画面の Run へ移り、履歴に / を残さない", async ({
+      page,
+      mockApi,
+    }) => {
+      // ダッシュボード（#262 で廃止）の項目・セクションはナビに出さない。
+      signIn(mockApi, dbUser({ permissions: ["menu.agents", "agent.runs.view"], allowed_agent_ids: ["default"] }));
+
+      await page.goto("/runs");
+      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      expect(await sidebarHrefs(page)).toEqual(["/agents", "/runs"]);
+      await expect(sidebar(page).getByText("ダッシュボード")).toHaveCount(0);
+      await expect(sidebar(page).locator('a[href="/"]')).toHaveCount(0);
+
+      // `/` はナビの並び順で最初に開ける画面（業務 Agent）へ置き換えで移る。戻ると `/` ではなく元の画面。
+      await page.goto("/");
+      await expect(page).toHaveURL(/\/agents$/);
+      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+      await page.goBack();
+      await expect(page).toHaveURL(/\/runs$/);
+
+      // 未知の URL は主画面の Run へ。
+      await page.goto("/no-such-page");
+      await expect(page).toHaveURL(/\/runs$/);
+      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+
+    test("どの画面も開けない利用者は、/ で権限なしの画面へ移る", async ({ page, mockApi }) => {
+      signIn(mockApi, dbUser({ permissions: [], allowed_agent_ids: [] }));
+
+      await page.goto("/");
+      await expect(page).toHaveURL(/\/forbidden$/);
+      await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+      await expectNoPageOverflow(page);
     });
 
     test("Agent 管理の権限がなければ業務 Agent は閲覧だけ（作成・保存・Binding の操作を出さない）", async ({

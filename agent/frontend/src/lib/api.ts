@@ -476,26 +476,6 @@ export interface MarketplaceListing {
   plugins: PluginManifest[];
 }
 
-export interface ObservabilityStatus {
-  metrics_enabled: boolean;
-  prometheus_metrics_path: string;
-  trace_events_enabled: boolean;
-  trace_events_buffer_size: number;
-  trace_events_retention_seconds: number;
-  trace_sample_rate: number;
-  trace_exporter_configured: boolean;
-  trace_exporter_last_success_at?: string | null;
-  trace_exporter_last_error?: string | null;
-  retry_queue_size: number;
-  retry_queue_max_size: number;
-  retry_max_attempts: number;
-  retry_worker_enabled: boolean;
-  retry_worker_running: boolean;
-  retry_worker_interval_seconds: number;
-  langfuse_configured: boolean;
-  opentelemetry_configured: boolean;
-}
-
 export interface TraceExportRetryData {
   attempted: number;
   succeeded: number;
@@ -955,8 +935,6 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  getObservabilityStatus: () =>
-    request<ObservabilityStatus>("/api/observability/status"),
   getTracePolicySettings: () =>
     request<TracePolicySettings>("/api/settings/trace-policy"),
   patchTracePolicySettings: (payload: Partial<TracePolicySettings>) =>
