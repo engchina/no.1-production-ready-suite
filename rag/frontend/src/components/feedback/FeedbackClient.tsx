@@ -55,6 +55,7 @@ import {
 import { toast } from "@/lib/toast";
 import { readWorkspace, writeWorkspace } from "@/lib/workspace-state";
 import { useValuesChanged } from "@/lib/render-sync";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -760,6 +761,8 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
 }
 
 function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
+  // 文書の詳細を開けない利用者には、引用元（文書の詳細）へのリンクを出さない（#303）。
+  const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
   return (
     <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
@@ -775,7 +778,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
               {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
-            <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link>
+            {canOpenDetail ? <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link> : null}
           </article>
         );
       }) : (

@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import { useAuth } from "@/components/security/AuthProvider";
 import type {
   FeedbackContentSnapshot,
   FeedbackSourceSurface,
@@ -24,6 +25,7 @@ import {
   type CitationMetadataChip,
 } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
 
@@ -50,6 +52,8 @@ export function CitationCard({
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
   const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const previewUrl = citationPreviewUrl(chunk);
+  // 文書の詳細を開けない利用者（検索・チャット・KB だけ）には詳細へのリンクを出さない（#303）。
+  const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -144,16 +148,18 @@ export function CitationCard({
             <Eye size={16} aria-hidden />
             {t("search.citation.previewOpen")}
           </button>
-          <Link
-            to={previewUrl}
-            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
-            aria-label={t("search.citation.openPreview", {
-              file: previewFileName,
-            })}
-          >
-            <LocateFixed size={16} aria-hidden />
-            {t("search.citation.openPreviewShort")}
-          </Link>
+          {canOpenDetail ? (
+            <Link
+              to={previewUrl}
+              className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
+              aria-label={t("search.citation.openPreview", {
+                file: previewFileName,
+              })}
+            >
+              <LocateFixed size={16} aria-hidden />
+              {t("search.citation.openPreviewShort")}
+            </Link>
+          ) : null}
         </div>
         {traceId && businessViewId ? (
           <FeedbackControls
@@ -188,12 +194,14 @@ export function CitationCard({
                 </span>
               </span>
               <div className="flex shrink-0 items-center gap-2">
-                <Link
-                  to={previewUrl}
-                  className="text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {t("search.citation.previewFullpage")}
-                </Link>
+                {canOpenDetail ? (
+                  <Link
+                    to={previewUrl}
+                    className="text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  >
+                    {t("search.citation.previewFullpage")}
+                  </Link>
+                ) : null}
                 <button
                   type="button"
                   onClick={closePreview}

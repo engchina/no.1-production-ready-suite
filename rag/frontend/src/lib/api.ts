@@ -515,6 +515,13 @@ export interface DocumentDeleteResult {
   artifact_delete_failed_count: number;
 }
 
+/** 削除の前に確認する影響（#303）。正本を参照する重複文書の件数と、その所属ナレッジベース。 */
+export interface DocumentDeleteImpact {
+  document_id: string;
+  duplicate_count: number;
+  knowledge_bases: KnowledgeBaseRef[];
+}
+
 export interface UploadResult {
   id: string;
   file_name: string;
@@ -2590,6 +2597,11 @@ export const api = {
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
     ),
+  getDocumentDeleteImpact: (ids: string[]) => {
+    const search = new URLSearchParams();
+    for (const id of ids) search.append("document_id", id);
+    return request<DocumentDeleteImpact[]>(`/api/documents/delete-impact?${search.toString()}`);
+  },
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",
