@@ -1235,6 +1235,34 @@ export function FormSkeleton({ fields = 4, title = true, actions = true, classNa
 )}
 ```
 
+クライアント側で全件を持つ一覧は、上の組み合わせを 1 つにした `PagedDataTable` を使います（#265。RAG・Agent が使う）。
+
+```tsx
+// packages/ui/src/components/data/paged-data-table.tsx
+export interface PaginationLabels {
+  summary: (range: PaginationRange) => string;               // 「1 - 10 / 42 件」
+  pageIndicator?: (page: number, totalPages: number) => string; // 「1 / 5 ページ」
+  prev: string;
+  next: string;
+  ariaLabel?: string;
+}
+
+<PagedDataTable
+  rows={rows}                 // 全件。表示する 10 件はこの部品が切り出す
+  columns={columns}
+  getRowKey={(row) => row.id}
+  paginationLabels={labels}   // 製品の i18n で作る（パッケージは i18n に依存しない）
+  scrollAriaLabel={t("xxx.scrollLabel")}
+  resetKey={query}            // 任意。検索語・絞り込みが変わったときだけ 1 ページ目へ戻す
+  page={page} onPageChange={setPage} // 任意。ページ番号を作業状態に残すとき
+/>
+```
+
+- `stickyHeader`・`visibleRows`（`INFORMATION_TABLE_VISIBLE_ROWS`）・行の最小高さ（`INFORMATION_TABLE_ROW_CLASS`。`rowProps` の className と合わせる）はこの部品が付けます。
+- `resetKey` を省くと、再取得で行が変わってもページを戻しません（Agent の Run・承認の 5 秒ごとの再取得など）。行が減って範囲外になったら表示だけ末尾のページに寄せます。
+- 製品は文言だけを渡す薄いラッパーを持ちます（RAG の `components/PagedDataTable.tsx`、Agent の `components/ListViews.tsx`。Agent はページ番号を `sessionStorage` の作業状態に残す `pageKey` を足している）。
+- サーバー側のページング（offset / limit / total）は `DataTable` + `Pagination` に `offsetPagination` の結果を渡します（Agent の監査、RAG の文書一覧）。
+
 ---
 
 ## ExecutionConfirmationField — **新規**（#379）

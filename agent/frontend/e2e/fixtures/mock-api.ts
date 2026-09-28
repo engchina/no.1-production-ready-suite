@@ -107,6 +107,8 @@ function createState() {
     skills: d.skills as unknown as Json[],
     tools: d.tools as unknown as Json[],
     memory: [] as Json[],
+    // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
+    auditRecords: [] as Json[],
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -440,7 +442,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     return entry;
   }
   if (method === "GET" && at("audit", "tool-calls")) {
-    return { total: 0, offset: 0, limit: 100, filters: {}, records: [] };
+    const offset = Number(query.get("offset") ?? 0);
+    const limit = Number(query.get("limit") ?? 100);
+    return {
+      total: state.auditRecords.length,
+      offset,
+      limit,
+      filters: {},
+      records: state.auditRecords.slice(offset, offset + limit),
+    };
   }
   if (method === "GET" && at("tools")) return { tools: state.tools };
   if (method === "POST" && at("memory", "search")) return { entries: state.memory };

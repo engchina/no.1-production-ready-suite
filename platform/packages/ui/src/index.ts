@@ -153,6 +153,11 @@ export {
   type UsePaginationOptions,
 } from "./components/data/pagination";
 export {
+  PagedDataTable,
+  type PagedDataTableProps,
+  type PaginationLabels,
+} from "./components/data/paged-data-table";
+export {
   RowActionMenu,
   ObjectActionBar,
   splitObjectActions,

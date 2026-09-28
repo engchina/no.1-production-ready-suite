@@ -979,10 +979,10 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  searchMemory: (query: string) =>
+  searchMemory: (query: string, limit = 20) =>
     request<{ entries: MemoryEntry[] }>("/api/memory/search", {
       method: "POST",
-      body: JSON.stringify({ query, limit: 20 }),
+      body: JSON.stringify({ query, limit }),
     }),
   addMemory: (payload: MemoryCreatePayload) =>
     request<MemoryEntry>("/api/memory", {

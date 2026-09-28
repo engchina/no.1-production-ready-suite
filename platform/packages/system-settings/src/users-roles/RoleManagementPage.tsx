@@ -40,6 +40,8 @@ import {
   type EntityAction,
   FormActionBar,
   entityActionToFormAction,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
@@ -47,8 +49,6 @@ import { FieldLabel } from "../oci/required-field";
 import { useRequestScope } from "../oci/useRequestScope";
 import { t } from "./messages";
 import {
-  SECURITY_TABLE_ROW_CLASS,
-  SECURITY_TABLE_VISIBLE_ROWS,
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityIdentityLines,
@@ -654,7 +654,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 }}
                 getRowKey={(role) => role.role_id}
                 rowProps={(role) => ({
-                  className: SECURITY_TABLE_ROW_CLASS,
+                  className: INFORMATION_TABLE_ROW_CLASS,
                   "aria-label": t("security.roles.showRole", { name: role.role_code }),
                 })}
                 ariaLabel={t("security.roles.list")}
@@ -664,7 +664,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 })}
                 scrollTestId="security-roles-scroll-region"
                 stickyHeader
-                visibleRows={SECURITY_TABLE_VISIBLE_ROWS}
+                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                 empty={
                   <EmptyState
                     title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")}

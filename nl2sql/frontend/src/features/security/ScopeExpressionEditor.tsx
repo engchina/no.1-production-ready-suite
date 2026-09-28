@@ -3,6 +3,7 @@ import { useDatabaseStatus } from "@/lib/queries";
 import {
   FieldError,
   Button,
+  ProcessingIndicator,
   useConfirm,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
@@ -448,10 +449,15 @@ function QueryStatus({
   error: Error | null;
   retry: () => void;
 }) {
+  // 入力欄は出したまま候補を取得するため、Skeleton ではなく経過時間つきの処理中の表示にする（#265）。
   return loading ? (
-    <p role="status" className="text-sm text-fg-muted">
-      {text("expression.loading")}
-    </p>
+    <ProcessingIndicator
+      active
+      label={text("expression.loading")}
+      placement="panel"
+      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+      testId="scope-expression-loading"
+    />
   ) : error ? (
     <ErrorState message={error.message} onRetry={retry} />
   ) : null;

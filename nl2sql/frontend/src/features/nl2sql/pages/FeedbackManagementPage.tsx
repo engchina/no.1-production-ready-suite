@@ -248,8 +248,10 @@ export function FeedbackManagementPage() {
     [appFeedbackItems]
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
+  // 初回の読み込み（loading === "load"）はタブ全体の Skeleton が出すため、ここは profile を切り替えて
+  // エントリがまだ無い間（#265。以前は "load" を条件にしていて、この分岐に入ることがなかった）。
   const initialEntriesLoading =
-    feedback === null && loading === "load";
+    feedback === null && loading === "feedback";
 
   const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
@@ -419,6 +421,8 @@ export function FeedbackManagementPage() {
 
   const changeProfile = (nextProfile: string) => {
     setProfileName(nextProfile);
+    // 前の profile のエントリを、切り替えた profile の見出しの下に出したままにしない。
+    setFeedback(null);
     void refreshSelectAiFeedback(nextProfile);
   };
 
@@ -793,10 +797,10 @@ export function FeedbackManagementPage() {
               </section>
 
               <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
-              {loading === "feedback" && feedback ? (
+              {loading === "feedback" ? (
                 <ProcessingIndicator
                   active
-                  label={t("feedbackManagement.entries.refreshing")}
+                  label={t(feedback ? "feedbackManagement.entries.refreshing" : "feedbackManagement.entries.loading")}
                   operationKey={profileName}
                   placement="workspace"
                   className="rounded-md border border-border bg-surface-sunken px-3 py-2"
@@ -1540,7 +1544,7 @@ function FeedbackEntriesListSkeleton() {
       aria-busy="true"
       data-testid="feedback-management-entries-list-skeleton"
     >
-      <span className="sr-only" role="status">{t("feedbackManagement.entries.loading")}</span>
+      {/* 読み込み中の文言と経過時間は、分割の上の ProcessingIndicator が 1 か所だけ出す。 */}
       <Skeleton className="h-6 w-44" />
       <Skeleton className="h-5 w-72 max-w-full" />
       <TableSkeleton columns={2} />

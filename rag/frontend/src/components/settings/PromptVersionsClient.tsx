@@ -16,10 +16,15 @@ import {
   TextField,
   TimedLoadingState,
   ListSkeleton,
+  DEFAULT_PAGE_SIZE,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+  usePagination,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
 
+import { ListPagination } from "@/components/ListPagination";
 import { ErrorState } from "@/components/StateViews";
 import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { DocragPromptCard } from "./DocragPromptEditor";
@@ -212,15 +217,7 @@ export function PromptVersionsClient() {
           {versions.length === 0 ? (
             <p className="py-6 text-center text-sm text-fg-muted">{t("settings.prompts.list.empty")}</p>
           ) : (
-            <ul className="space-y-2">
-              {versions.map((version) => (
-                <VersionRow
-                  key={version.version_id}
-                  version={version}
-                  actions={versionActions(version)}
-                />
-              ))}
-            </ul>
+            <VersionList versions={versions} actionsFor={versionActions} />
           )}
         </CardContent>
       </Card>
@@ -247,6 +244,43 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+/**
+ * 版の一覧（#265）。md 未満 5 行・md 以上 8 行の高さで中を縦スクロールにし、10 件/ページで送る。
+ * 有効化で行が変わってもページは保ち、版を作成して件数が変わったときだけ 1 ページ目へ戻す。
+ */
+function VersionList({
+  versions,
+  actionsFor,
+}: {
+  versions: PromptVersionData[];
+  actionsFor: (version: PromptVersionData) => EntityAction[];
+}) {
+  const { page, setPage, totalPages, pageItems, range } = usePagination(versions, DEFAULT_PAGE_SIZE, {
+    resetKey: versions.length,
+  });
+  return (
+    <div className="grid gap-2">
+      <ul
+        className={cn("space-y-2", INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)}
+        aria-label={t("settings.prompts.list.scrollLabel")}
+        tabIndex={0}
+        data-testid="prompt-version-list"
+      >
+        {pageItems.map((version) => (
+          <VersionRow key={version.version_id} version={version} actions={actionsFor(version)} />
+        ))}
+      </ul>
+      <ListPagination
+        page={page}
+        totalPages={totalPages}
+        range={range}
+        onPageChange={setPage}
+        testId="prompt-version-pagination"
+      />
+    </div>
   );
 }
 

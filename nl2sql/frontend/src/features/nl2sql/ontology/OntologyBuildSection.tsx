@@ -12,6 +12,7 @@ import {
   ContentActionBar,
   TimedLoadingState,
   DisclosureChevron,
+  ListSkeleton,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -534,9 +535,13 @@ function SavedSourceDocumentsList({
           ))}
         </ul>
       ) : loading ? (
-        <p className="text-sm text-fg-muted" data-testid="ontology-build-saved-files-loading">
-          {t("profiles.ontologyBuild.savedFilesLoading")}
-        </p>
+        // 文字だけにせず、経過時間とファイルの行の形の Skeleton を出す（#265）。
+        <TimedLoadingState
+          label={t("profiles.ontologyBuild.savedFilesLoading")}
+          testId="ontology-build-saved-files-loading"
+        >
+          <ListSkeleton rows={2} />
+        </TimedLoadingState>
       ) : (
         <p className="text-sm text-fg-muted" data-testid="ontology-build-saved-files-empty">
           {t("profiles.ontologyBuild.savedFilesEmpty")}
