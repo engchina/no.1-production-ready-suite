@@ -1,5 +1,6 @@
 """RAG 評価スキーマ。"""
 
+from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -377,3 +378,34 @@ def _sync_knowledge_base_filter(
         },
         resolved_knowledge_base_ids,
     )
+
+
+EvaluationJobKind = Literal["run", "compare"]
+EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
+
+
+class EvaluationJob(BaseModel):
+    """品質評価の job（非同期の実行・進捗・取り消し。#390）。
+
+    進捗は、終わったケースの数（比較では experiment × ケースの通しの数）と今のケースで示す。
+    結果は、成功（`SUCCEEDED`）のときだけ返す（評価は `run_result`、比較は `compare_result`）。
+    時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。query の本文は持たない。
+    """
+
+    job_id: str
+    kind: EvaluationJobKind
+    status: EvaluationJobStatus
+    total_cases: int
+    completed_cases: int
+    current_case_id: str | None = None
+    current_experiment_id: str | None = None
+    current_case_started_at: datetime | None = None
+    # job 全体の時間の上限（秒）。上限に達したら、残りのケースは実行せずに失敗として記録する。
+    time_limit_seconds: int
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    run_result: EvaluationMetrics | None = None
+    compare_result: EvaluationCompareResponse | None = None

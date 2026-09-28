@@ -193,6 +193,9 @@ jobs:
           # 通常実行は parser サービスを起動しないため、選択済み adapter の missing は記録だけになる。
           # strict(real-world staging を含む)では、前の step で起動した Docling のサービスで判定する(#366)。
           RAG_PARSER_READINESS_PROBE_ENABLED: "true"
+          # 評価 CLI は評価 job を投入して終わるまで待つ(#390)。job の既定の上限(1 時間)ではこの job の
+          # timeout-minutes(40 分)を超えるため、15 分で待つのをやめて job を取り消し、gate を失敗にする。
+          RAG_EVALUATION_TIMEOUT_SECONDS: "900"
           RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
           RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
           RAG_SEARCH_LOAD_TENANT_ID: ${{ vars.RAG_SEARCH_LOAD_TENANT_ID }}

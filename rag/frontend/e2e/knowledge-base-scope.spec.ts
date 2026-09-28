@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mockEvaluationJobs } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -74,19 +75,10 @@ test("文書インデックスは知識ベースで絞り込み、所属を表�
 });
 
 test("評価実行と比較実行は選択した知識ベースを使う", async ({ page }) => {
-  let runPayload: Record<string, unknown> | null = null;
-  let comparePayload: Record<string, unknown> | null = null;
-  await page.route("**/api/evaluation/run", async (route) => {
-    runPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
-      json: { data: evaluationMetrics(), error_messages: [], warning_messages: [] },
-    });
-  });
-  await page.route("**/api/evaluation/compare", async (route) => {
-    comparePayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
-      json: { data: comparisonResult(), error_messages: [], warning_messages: [] },
-    });
+  const jobs = await mockEvaluationJobs(page, {
+    runResult: () => evaluationMetrics(),
+    compareResult: () => comparisonResult(),
+    autoComplete: true,
   });
 
   await page.goto("/evaluation");
@@ -99,13 +91,13 @@ test("評価実行と比較実行は選択した知識ベースを使う", async
     .click();
   await kbCombo.press("Escape");
   await page.getByRole("button", { name: "評価実行" }).click();
-  await expect.poll(() => runPayload?.knowledge_base_ids).toEqual(["kb-1"]);
+  await expect.poll(() => jobs.runPayloads[0]?.knowledge_base_ids).toEqual(["kb-1"]);
   await expect(page.getByText("Segment artifact 再抽出").first()).toBeVisible();
   await expect(page.getByText("Segment artifact 再抽出: 1")).toBeVisible();
 
   await page.getByRole("button", { name: "比較実行" }).click();
   await expect.poll(() => {
-    const experiments = comparePayload?.experiments;
+    const experiments = jobs.comparePayloads[0]?.experiments;
     return Array.isArray(experiments)
       ? experiments.map((experiment) => (experiment as Record<string, unknown>).knowledge_base_ids)
       : null;

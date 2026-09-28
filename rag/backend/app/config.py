@@ -1151,6 +1151,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=30.0,
         description="OCI Guardrails 検査の接続・読取 timeout 秒。",
     )
+    rag_evaluation_job_timeout_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description=(
+            "品質評価の job（golden set の評価・比較。#390）の全体の時間の上限（秒）。"
+            "上限に達したら実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す。"
+            "1 ケースの上限は rag_answer_timeout_seconds。"
+        ),
+    )
     rag_evaluation_suite: EvaluationSuite = Field(
         default="request_only",
         description=(

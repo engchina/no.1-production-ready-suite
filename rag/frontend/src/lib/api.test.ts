@@ -5,7 +5,6 @@ import {
   ANSWER_GENERATION_TIMEOUT_MS,
   API_REQUEST_TIMEOUT_MS,
   ApiError,
-  EVALUATION_RUN_TIMEOUT_MS,
   api,
 } from "./api";
 import { t } from "./i18n";
@@ -143,40 +142,49 @@ describe("api.request envelope", () => {
     );
   });
 
-  // Issue 383: 品質評価は 1 ケースごとに回答を生成するため、評価全体の上限（600 秒）まで待つ。
+  // Issue 390: 品質評価は job で動く。投入・状態の取得・取り消しは通常の API の timeout に収まる。
   it.each([
-    ["runEvaluation", "/api/evaluation/run"],
-    ["compareEvaluation", "/api/evaluation/compare"],
-  ] as const)(
-    "品質評価（%s）は通常の timeout で打ち切らず、評価全体の上限より長く待つ",
-    async (method, path) => {
-      vi.useFakeTimers();
-      const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
-        const signal = init?.signal as AbortSignal | undefined;
-        return new Promise<Response>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => {
-            reject(new DOMException("The operation was aborted.", "AbortError"));
-          });
-        });
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      let settled = false;
-      // payload の中身はこのテストでは使わない（timeout だけを確かめる）。
-      const requestPromise = api[method]({} as never).catch((error: unknown) => {
-        settled = true;
-        return error;
-      });
+    ["submitRunEvaluationJob", "/api/evaluation/jobs/run"],
+    ["submitCompareEvaluationJob", "/api/evaluation/jobs/compare"],
+  ] as const)("品質評価の job の投入（%s）は job の API に POST する", async (method, path) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          data: { job_id: "job-1", status: "RUNNING", total_cases: 1, completed_cases: 0 },
+          error_messages: [],
+          warning_messages: [],
+        },
+        202
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-      // backend の評価全体の上限（600 秒）より長く待つ。通常の API の 30 秒では失敗にしない。
-      expect(EVALUATION_RUN_TIMEOUT_MS).toBeGreaterThan(600_000);
-      await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS + 1_000);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(EVALUATION_RUN_TIMEOUT_MS);
+    const job = await api[method]({ cases: [] } as never);
 
-      await expect(requestPromise).resolves.toMatchObject({ status: 408 });
-      expect(fetchMock).toHaveBeenCalledWith(path, expect.objectContaining({ method: "POST" }));
-    },
-  );
+    expect(job.job_id).toBe("job-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      path,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ cases: [] }) })
+    );
+  });
+
+  it("getEvaluationJob / cancelEvaluationJob は job id を path に入れる", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: { job_id: "job/1", status: "CANCELLED" },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getEvaluationJob("job/1");
+    await api.cancelEvaluationJob("job/1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/jobs/job%2F1");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/evaluation/jobs/job%2F1/cancel");
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "POST" }));
+  });
 
   it("listDocragAnswers はページングと trace_id の絞り込みを query string にする", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -1237,96 +1245,6 @@ describe("api.request envelope", () => {
     );
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
-  });
-
-  it("runEvaluation は golden set payload を評価 API へ送る", async () => {
-    const payload = {
-      cases: [
-        {
-          id: "case-1",
-          query: "承認フローは？",
-          relevant_document_ids: ["doc-1"],
-          expected_answer_keywords: ["承認"],
-        },
-      ],
-      top_k: 10,
-      rerank_top_n: 5,
-      mode: "hybrid" as const,
-      filters: { status: "INDEXED" },
-    };
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: {
-          case_count: 1,
-          error_count: 0,
-          evaluated_k: 10,
-          precision_at_k: 1,
-          recall_at_k: 1,
-          mrr: 1,
-          answer_keyword_hit_rate: 1,
-          groundedness_pass_rate: 1,
-          passed: true,
-          threshold_failures: [],
-          failure_reason_counts: {},
-          case_results: [],
-        },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await api.runEvaluation(payload);
-
-    expect(result.passed).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/evaluation/run",
-      expect.objectContaining({ method: "POST", body: JSON.stringify(payload) })
-    );
-  });
-
-  it("compareEvaluation は experiments payload を比較 API へ送る", async () => {
-    const payload = {
-      cases: [
-        {
-          id: "case-1",
-          query: "承認フローは？",
-          relevant_document_ids: ["doc-1"],
-          expected_answer_keywords: ["承認"],
-        },
-      ],
-      experiments: [
-        {
-          id: "hybrid",
-          top_k: 10,
-          rerank_top_n: 5,
-          mode: "hybrid" as const,
-          filters: {},
-          rag_overrides: {
-            rrf_k: 30,
-            context_diversity_lambda: 0.4,
-            context_neighbor_window: 1,
-          },
-        },
-      ],
-      ranking_metric: "mrr" as const,
-    };
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: { ranking_metric: "mrr", best_experiment_id: "hybrid", results: [] },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await api.compareEvaluation(payload);
-
-    expect(result.best_experiment_id).toBe("hybrid");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/evaluation/compare",
-      expect.objectContaining({ method: "POST", body: JSON.stringify(payload) })
-    );
   });
 });
 

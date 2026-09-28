@@ -127,6 +127,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "citation_feedback",
         "feedback_details",
         "evaluation_artifacts",
+        "evaluation_jobs",
         "role_access",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
@@ -304,7 +305,19 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "index_name = 'RAG_INGESTION_JOBS_LEASE_IDX'" in lease_migration
     assert "ON rag_ingestion_jobs (lease_owner, status)" in lease_migration
     assert "UPDATE rag_ingestion_jobs" not in lease_migration
-    assert len(statements) == 67
+    # 品質評価の job（#390）。表と index を無ければ作る（冪等）。query の本文の列は持たない。
+    jobs_migration = sql.split("-- migration: 20260928_005_evaluation_jobs", 1)[1]
+    assert "table_name = 'RAG_EVALUATION_JOBS'" in jobs_migration
+    assert "'CREATE TABLE rag_evaluation_jobs ('" in jobs_migration
+    assert "result_json JSON" in jobs_migration
+    assert "CHECK (status IN (''RUNNING'', ''SUCCEEDED'', ''FAILED'', ''CANCELLED''))" in (
+        jobs_migration
+    )
+    assert "index_name = 'RAG_EVALUATION_JOBS_STATUS_IDX'" in jobs_migration
+    assert "ON rag_evaluation_jobs (status, heartbeat_at)" in jobs_migration
+    assert "index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX'" in jobs_migration
+    assert "query" not in jobs_migration.lower()
+    assert len(statements) == 68
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -367,6 +380,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_002_answer_record_owner",
         "20260928_003_default_document_recipes",
         "20260928_004_ingestion_jobs_lease",
+        "20260928_005_evaluation_jobs",
     ]
 
 
