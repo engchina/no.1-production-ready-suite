@@ -19,7 +19,7 @@ export {
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
 export { Tooltip, type TooltipProps, type TooltipPlacement } from "./components/ui/tooltip";
 export { Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
-export { TextField } from "./components/ui/text-field";
+export { TextField, type TextFieldProps, type TextFieldSize } from "./components/ui/text-field";
 export {
   SecretField,
   type SecretFieldProps,

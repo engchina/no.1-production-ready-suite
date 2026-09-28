@@ -16,6 +16,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.common.active": "有効",
   "security.common.backToList": "一覧に戻る",
   "security.common.cancel": "キャンセル",
+  "security.common.clearSearch": "検索語をクリア",
   "security.common.create": "新規作成",
   "security.common.disabled": "無効",
   "security.common.discardConfirm": "破棄して移動",

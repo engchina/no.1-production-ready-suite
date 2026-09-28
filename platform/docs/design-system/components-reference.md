@@ -1309,3 +1309,92 @@ export declare function ExecutionConfirmationField(props: ExecutionConfirmationF
 
 - ルート要素は `data-testid="execution-confirmation-field"` と `data-confirmation-status`（`pending` / `mismatch` / `confirmed`）を持ちます。3 製品の E2E はこの testid で確認語欄を引きます。
 - 確認語はページを離れる・戻るとき、対象や入力が変わったときに呼び出し側で空に戻します（UX 契約 workspace-state.md）。
+
+## TextField — 変更（#384）
+
+先頭アイコン（`leadingIcon`）・後置スロット（`trailing`）・クリア（`onClear`）を足しました。検索欄は製品で手書きせず、これで作ります（決めたことの表は README §4「`TextField` の先頭アイコン・後置スロット」）。既存の props・id・aria は変えていません。
+
+```tsx
+import { TextField } from "@engchina/production-ready-ui";
+import { Search } from "lucide-react";
+
+// 一覧の絞り込み: 値があるときだけ末尾に「検索語をクリア」、Escape でも消える
+<TextField
+  id="feedback-search"
+  label={t("feedback.filters.search")}
+  type="search"
+  value={draft}
+  onValueChange={setDraft}
+  leadingIcon={Search}
+  onClear={() => setDraft("")}
+  clearLabel={t("common.clearSearch")}
+/>
+
+// blur / Enter で確定する検索欄: クリアは入力と確定済みの検索語の両方を消す
+<TextField
+  id="file-list-search"
+  label={t("fileList.searchPlaceholder")}
+  labelHidden
+  value={search}
+  onValueChange={setSearch}
+  onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+  onBlur={commit}
+  onClear={() => { setSearch(""); apply(""); }}
+  clearLabel={t("common.clearSearch")}
+  leadingIcon={Search}
+  className="w-56"
+/>
+
+// lg の Button と同じ行に並べる質問欄
+<div className="flex flex-col gap-2 sm:flex-row">
+  <TextField id="search-query" label={t("nav.search")} labelHidden size="lg" leadingIcon={Search}
+    value={query} onValueChange={setQuery} className="min-w-0 flex-1" />
+  <Button size="lg" icon={Search} loading={busy}>{t("search.button")}</Button>
+</div>
+
+// 単位・件数などの後置
+<TextField id="limit" label="取得件数上限" inputMode="numeric" value={limit} onValueChange={setLimit}
+  trailing={<span className="px-3 text-sm text-fg-muted">件</span>} />
+```
+
+### TextField の props（追加分）
+
+```ts
+export type TextFieldSize = "md" | "lg";
+
+export type TextFieldProps = {
+  /** label を sr-only にする（検索欄だけ。フォームの入力欄では使わない）。 */
+  labelHidden?: boolean;
+  /** 高さ。md = --field-height（36px、既定）、lg = --button-height-lg（40px、タッチ端末は 44px）。 */
+  size?: TextFieldSize;
+  /** 44px（--control-height-touch）。44px の Button・select と同じ行に並べるとき。size より優先。 */
+  touchTarget?: boolean;
+  /** 先頭の 16px のアイコン（lucide-react）。aria-hidden・pointer-events: none。 */
+  leadingIcon?: LucideIcon;
+  /** 末尾の任意の要素（単位・件数・ボタン）。実際の幅だけ文字の右の余白を空ける。 */
+  trailing?: ReactNode;
+  /** 値を消す。値があるときだけクリアボタンを出し、Escape でも消す。value を制御して使う。 */
+  onClear?: () => void;
+  /** クリアボタンの読み上げ名と Tooltip（翻訳済み）。onClear と一緒に渡す。 */
+  clearLabel?: string;
+  // …既存の id / label / helper / error / required / requiredLabel / className / inputClassName / onValueChange / ref
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "id" | "required" | "size">;
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 入力欄を常に `div.relative` で包み、先頭アイコンは入力欄の**後ろ**（DOM 上）に置いて `peer-disabled:` で色を変える | クリアボタンの出し入れで入力欄が作り直されない（フォーカスと IME の変換を失わない）。`peer` は前の兄弟にしか効かない |
+| 後置スロットは枠線の内側（`inset-y-px right-px`）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない |
+| クリアボタンは `aria-controls` で入力欄を指し、`mousedown` を止める。押したら `onClear()` の後に入力欄へ `focus()` | ボタンが消えてもフォーカスが body に落ちない。blur で確定する検索欄が消す前の値を確定しない |
+| 強制カラーモードでは、クリアボタンの輪郭のうち上・右・下を `Canvas` にし、左の区切りだけ残す | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
+| `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #33） |
+
+- 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。
+- 検索欄の E2E は `getByRole("searchbox" | "textbox", { name })` で引きます。先頭アイコンは入力欄の親（`xpath=..`）の `[data-text-field-slot="leading"]`、後置は `[data-text-field-slot="trailing"]` です。
+
+## Tabs — 変更（#374）
+
+強制カラーモードで、選ばれていないタブの下線を `Canvas`（`forced-colors:border-b-[Canvas]`）、選んだタブの下線を `Highlight`（`forced-colors:aria-selected:border-b-[Highlight]`）にしました。props・id・aria・キー操作は変えていません。
+
+- 強制カラーモードでは `border-color: transparent` も `CanvasText` に置き換わります（Chromium で確認）。system color を明示すればそのまま使われます。
+- 単体テストは `packages/ui/tests/text-field-slots.test.tsx`（class）、実ブラウザは RAG の `e2e/feedback.spec.ts`（`page.emulateMedia({ forcedColors: "active" })`）。

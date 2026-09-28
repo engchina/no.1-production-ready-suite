@@ -14,6 +14,7 @@ import {
   StatusBadge,
   Skeleton,
   TableSkeleton,
+  TextField,
   TimedLoadingState,
   ToggleChip,
   useConfirm,
@@ -210,22 +211,19 @@ export function FeedbackClient() {
               </Button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-              <label className="sm:col-span-2 xl:col-span-2">
-                <span className="mb-1 block text-xs font-medium text-fg">
-                  {t("feedback.filters.search")}
-                </span>
-                <span className="relative block">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-muted" aria-hidden />
-                  <input
-                    type="search"
-                    value={searchDraft}
-                    maxLength={200}
-                    placeholder={t("feedback.filters.searchPlaceholder")}
-                    className="h-9 w-full rounded-md border border-border-control bg-surface pl-9 pr-3 text-sm text-fg placeholder:text-fg-muted"
-                    onChange={(event) => setSearchDraft(event.target.value)}
-                  />
-                </span>
-              </label>
+              <TextField
+                id="feedback-search"
+                label={t("feedback.filters.search")}
+                type="search"
+                value={searchDraft}
+                maxLength={200}
+                placeholder={t("feedback.filters.searchPlaceholder")}
+                leadingIcon={Search}
+                onValueChange={setSearchDraft}
+                onClear={() => setSearchDraft("")}
+                clearLabel={t("common.clearSearch")}
+                className="sm:col-span-2 xl:col-span-2"
+              />
               <SelectField
                 id="feedback-business-view"
                 label={t("feedback.filters.businessView")}

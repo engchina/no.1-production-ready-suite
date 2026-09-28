@@ -8,6 +8,7 @@ import adherence from "../../../platform/docs/design-system/adherence.oxlintrc.j
 
 const LOADING_ICON = "loading を渡す Button には icon を渡す";
 const FOCUS_RING = "フォーカスの表示を ring";
+const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -66,5 +67,29 @@ const d = <div className="peer-focus-visible:outline-2 focus-within:outline-2">x
 const e = "string with focus ring words";
 `);
     expect(linesWith(messages, FOCUS_RING)).toEqual([]);
+  });
+});
+
+describe("adherence: 手書きの検索欄（#384）", () => {
+  it("アイコンの分の左の余白（pl-7〜12 / ps-* / 任意値）を持つ input を検出する", async () => {
+    const messages = await lint(`
+const a = <input className="h-9 w-full rounded-md border pl-9 pr-3" />;
+const b = <input className={\`\${INPUT_CLASS} pl-9\`} />;
+const c = <input className={cn("w-full", "pl-8")} />;
+const d = <input className="md:pl-10" />;
+const e = <input className="ps-9" />;
+const f = <input className="pl-[2.25rem]" />;
+`);
+    expect(linesWith(messages, HANDWRITTEN_SEARCH)).toEqual([2, 3, 4, 5, 6, 7]);
+  });
+
+  it("TextField・小さい余白の input・input 以外は許す", async () => {
+    const messages = await lint(`
+const a = <TextField id="q" label="検索" leadingIcon={Search} />;
+const b = <input className="px-3 pl-2" />;
+const c = <div className="pl-9">入れ子の行</div>;
+const d = <textarea className="pl-3" />;
+`);
+    expect(linesWith(messages, HANDWRITTEN_SEARCH)).toEqual([]);
   });
 });

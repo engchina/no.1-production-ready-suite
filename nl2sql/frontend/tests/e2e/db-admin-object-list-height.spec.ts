@@ -1162,7 +1162,8 @@ for (const scenario of scenarios) {
 
     const search = page.getByRole("searchbox", { name: "検索" });
     await expect(search).toHaveAttribute("placeholder", "名前・コメントを入力");
-    await expect(search.locator("xpath=ancestor::label").locator("svg.lucide-search")).toBeVisible();
+    // 検索欄は共有 TextField の先頭アイコン（入力欄と同じ枠の中。#384）。
+    await expect(search.locator("xpath=..").locator('svg.lucide-search[data-text-field-slot="leading"]')).toBeVisible();
 
     const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
     await search.fill("_01");

@@ -69,6 +69,10 @@
           {
             "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:(?:peer|group)-)?focus(?:-visible|-within)?:(?:ring(?:-[\\w\\[\\]-]+)?|outline-none)(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:(?:peer|group)-)?focus(?:-visible|-within)?:(?:ring(?:-[\\w\\[\\]-]+)?|outline-none)(?![\\w-])/])",
             "message": "フォーカスの表示を ring（box-shadow）で作らず、focus / focus-visible で outline を消さない。表示はグローバルの :focus-visible（outline）に任せ、形の調整は focus-visible:outline-* / focus-visible:-outline-offset-* で行う（docs/design-system/README.md §4「フォーカスの表示」）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='input'] > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:pl|ps)-(?:7|8|9|10|11|12|\\[)/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:pl|ps)-(?:7|8|9|10|11|12|\\[)/])",
+            "message": "アイコン付きの入力欄（検索欄）を手書きしない（絶対配置のアイコン + input の pl-*）。TextField の leadingIcon / trailing / onClear を使う（docs/design-system/README.md §4「TextField」）。"
           }
         ]
       }

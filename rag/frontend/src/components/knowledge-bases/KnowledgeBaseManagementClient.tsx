@@ -107,6 +107,11 @@ export function KnowledgeBaseManagementClient() {
     const next = search.trim();
     if (next !== q) resetView(() => setQ(next));
   };
+  // クリアは入力と適用中の検索語の両方を消す（blur を待たずに一覧を戻す）。
+  const clearSearch = () => {
+    setSearch("");
+    if (q !== "") resetView(() => setQ(""));
+  };
 
   // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す。
   // 範囲外のまま「ナレッジベースがありません」を出さない。
@@ -148,25 +153,22 @@ export function KnowledgeBaseManagementClient() {
               </ToggleChip>
             ))}
           </div>
-          <div className="relative w-full sm:w-auto">
-            <Search
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
-              aria-hidden
-            />
-            <input
-              type="text"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") applySearch();
-              }}
-              onBlur={applySearch}
-              placeholder={t("knowledgeBases.search.placeholder")}
-              aria-label={t("knowledgeBases.search.placeholder")}
-              className="h-9 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring sm:w-64"
-            />
-          </div>
+          <TextField
+            id="knowledge-base-search"
+            label={t("knowledgeBases.search.placeholder")}
+            labelHidden
+            value={search}
+            onValueChange={setSearch}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") applySearch();
+            }}
+            onBlur={applySearch}
+            onClear={clearSearch}
+            clearLabel={t("common.clearSearch")}
+            placeholder={t("knowledgeBases.search.placeholder")}
+            leadingIcon={Search}
+            className="w-full sm:w-64"
+          />
         </div>
 
         {query.isError ? (

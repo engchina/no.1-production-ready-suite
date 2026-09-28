@@ -154,6 +154,8 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
   - 出し分けはスクロール位置と大きさ（`ResizeObserver`）で `data-scroll-start` / `data-scroll-end` を付け外しする。動きは持たない（`prefers-reduced-motion` でも同じ）
   - 強制カラーモードでは文字を透かさず（mask を外す）、代わりに細いスクロールバーを出す
   - キーボード（← → / Home / End）・クリック・呼び出し側の変更で選んだタブは、**フェードの外まで**タブの列の中だけでスクロールして見せる（`scroll-padding-inline` = フェードの幅。ページ全体は動かさない）
+- **強制カラーモードでは、選んだタブだけに `Highlight` の下線を出す**（#374）。選ばれていないタブの下線は透明の枠線で消していましたが、強制カラーモードでは透明の枠線も `CanvasText` に塗られ、すべてのタブに下線が出て選んだタブと区別できませんでした。選ばれていないタブは `forced-colors:border-b-[Canvas]`（背景と同じ system color）にします。選択は太字と `aria-selected` でも伝わります
+  - 色の `transition` の途中の値は system color ではないため、強制カラーモードでは一瞬 `CanvasText` になります（150ms）。E2E は下線の色を `expect.poll` で待ちます
 
 > **タブ＝同じ対象の別の見方に切り替える。チップ（`ToggleChip`）＝データを絞り込む。**
 > 意味が違うので、下線（タブ）と pill（チップ）で見た目を明確に分けています。**流用しないこと。**
@@ -375,6 +377,51 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 必須表示を**アプリで再実装しない**でください（赤い `*`・warning バッジ・info バッジが3アプリに混在していました）。`TextField` で表せない入力には `RequiredBadge` を置きます
 - ネイティブの `required` 検証は付けません。未入力の検出と `FieldError` の表示はアプリ側で行います（従来どおり）
 
+### `TextField` の先頭アイコン・後置スロット（変更）— ★ 検索欄を手書きしない（#384）
+
+検索欄などの「アイコン付きの入力欄」を、製品が `relative` + 絶対配置の `Search` + `<input className="pl-9">` で手書きしていました（RAG 5・NL2SQL 3・system-settings 1 の 9 箇所）。高さが 31.5 / 35 / 38.5 / 44px、アイコンの位置が 0.625 / 0.75rem、地が surface / surface-sunken とばらばらでした（14px ルートでは `h-9` = 31.5px・`h-11` = 38.5px で、どのコントロールの高さのトークンにも合いません）。`TextField` にスロットを足し、共有部品で作ります。
+
+```jsx
+import { Search } from "lucide-react";
+
+// 一覧の絞り込み（見出しがある）: 先頭アイコン + クリア
+<TextField id="feedback-search" label="問題・回答・コメントを検索" type="search" value={q}
+  onValueChange={setQ} leadingIcon={Search} onClear={() => setQ("")} clearLabel="検索語をクリア" />
+
+// 見出しを出さない検索欄（アイコンとプレースホルダで目的が分かる toolbar の中だけ）
+<TextField id="kb-search" label="名前・説明で検索" labelHidden placeholder="名前・説明で検索" … />
+
+// lg の Button と同じ行: size="lg"。44px の Button・select と同じ行: touchTarget
+<TextField id="search-query" label="RAG 検索" labelHidden size="lg" leadingIcon={Search} … />
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| **高さはトークンだけ。** 既定は `--field-height`（36px）。同じ行に `lg` の Button を置くときは `size="lg"`（`--button-height-lg`）、44px の Button・select と並べるときは `touchTarget`（`--control-height-touch`）。Button の `size` / `touchTarget` と同じ考え方 | 並ぶ操作部品と上端・下端がそろう。製品で `h-9` / `h-11` を書かない |
+| 先頭アイコン（`leadingIcon`）は 16px（`--icon-md`）、左 `--space-3`、`--color-fg-muted`（無効の入力欄では `--color-fg-disabled`）。`aria-hidden`、`pointer-events: none` | 読み上げは label が担う。アイコンを押しても下の入力欄にフォーカスが入る |
+| 文字の開始位置 = `--space-3` + `--icon-md` + `--button-gap`（34.5px） | アイコン付きの Button と同じ、アイコンと文字の間の 8px |
+| クリア（`onClear` + `clearLabel`）は、**値があるときだけ**末尾に `ghost` の `iconOnly` Button（`X`）を出す。入力欄の枠線の内側に、入力欄の高さの正方形で置き、外側の角だけ `--radius-control` − 1px | 空の欄に押せない × を出さない。ホバーの地が入力欄の枠線に重ならない。`iconOnly` なので既定で Tooltip が出る |
+| クリアボタンは入力欄の直後の Tab 順。押すと値を消して**入力欄にフォーカスを戻す**。ポインタで押したときは入力欄からフォーカスを外さない（`mousedown` を止める） | ボタンは値が空になると消えるので、戻さないとフォーカスが body へ落ちる。blur で検索語を確定する一覧（RAG のファイル一覧・ナレッジベース）が、消す前の値を確定しない |
+| Escape でも消す。値があるときだけで、IME の変換中は消さない。消したときは囲むダイアログ・メニューに Escape を伝えない | 空の欄の Escape はダイアログを閉じる操作として残す。変換の取り消しと取り違えない |
+| `type="search"` のブラウザ既定のクリア（`::-webkit-search-cancel-button`）を出さない | Chromium・Safari にしか無く、キーボードで届かず、読み上げ名を訳せない。共有のクリアと二重にしない |
+| `trailing` は任意の要素（単位・件数・ボタン）。実際の幅（`ResizeObserver`）だけ文字の右の余白を空ける | 幅の決まらない要素でも文字と重ならない |
+| `labelHidden` は label を `sr-only` にする。**検索欄でだけ使う**（フォームの入力欄では使わない） | 見出しの無い toolbar の検索欄。プレースホルダをラベルの代わりにしない |
+
+- **adherence の lint が、アイコンの分の左の余白（`pl-7`〜`pl-12` / `ps-*` / `pl-[…]`、variant 付きを含む）を持つ `<input>` を検出します。** 検索欄は `TextField` で作ってください。
+- 対象外（手書きのまま）: 枠の中に枠なしの入力欄を置く**複合部品**（NL2SQL のオントロジーのグラフのツールバーの検索欄、RAG の `MultiSelectCombobox`）。外枠に `focus-within:outline-*` を付ける型（§4「フォーカスの表示」）で、`pl-*` を使いません。
+
+### 操作部品の角丸（新設）— `--radius-control`（#384）
+
+| トークン | 値 | 使う部品 |
+|---|---|---|
+| `--radius-control`（utility `rounded-control`） | **6px**（px。ルート非依存） | 入力欄（`TextField` / `SecretField`）・`SelectField`・`Button`・`Pagination` の「N / M ページ」 |
+| `--button-radius` / `--input-radius` | `var(--radius-control)` の別名 | 旧名。新規コードは `rounded-control` |
+
+- 3 つとも同じ値にします。以前は Button が 6px、入力欄・SelectField が `rounded-md`（0.375rem = 5.25px）で、隣に並べると角の形が違いました。高さ（`--button-height-*` / `--field-height`）と同じく px にし、ルートの文字サイズで変わらないようにします。
+- 入力欄の中に置くボタン（クリア・`SecretField` の表示の切り替え）は、内側の角を `rounded-l-none`、外側の角を入力欄と同じ（枠線の内側なら 1px 小さく）にします。
+- カード・バナー（`--radius-lg`）、ダイアログ（`--radius-xl`）、バッジ・チップ（`--radius-pill`）は操作部品ではないので別の値のままです。
+- `cn()`（tailwind-merge）に `rounded-control` を角丸として登録しているので、呼び出し側の `rounded-none` / `rounded-full` などで上書きできます。
+
 ### `DataTable`（変更）
 
 - **ソートの当たり判定を `<th>` 全体に**（`.pr-sort-header`）。旧実装は `<button>` が文字高（約15px）しかなく、**24px 最小タップ領域も割っていました**。hover も無く押せると分かりませんでした
@@ -583,7 +630,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**30点あります。**
+QA に事前共有してください。**34点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -617,6 +664,10 @@ QA に事前共有してください。**30点あります。**
 | 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
 | 29 | **md 未満のナビがドロワーになる**（#367。案 A に決定） | 375px などで 56px のアイコン列（展開すると本文を押し出す）→ **上端のバーの「メニュー」ボタンで開くドロワー**（scrim・フォーカスの閉じ込め・Escape / scrim / ナビの選択で閉じる）。本文は画面の全幅（375 − 56 = 319px → 375px）。md 以上は変わらない | 狭い画面で本文の幅を削らない。Material の modal navigation drawer と同じ型（§4 `AppShell`。2026-09-28 に案 A に決定） |
 | 30 | **確認語欄が 1 つの実装になる** | Agent の実行時スナップショットの置換の確認語は `danger` の枠線の区画に素の入力欄（`h-10`・`bg-surface-sunken`）と説明だけ、置換ボタンは区画の下（`md`）→ 共有の `ExecutionConfirmationField`（中立の面・「入力条件: REPLACE」と状態のバッジ・44px の入力欄・区切り線の下に `lg` の置換ボタン、375px では全幅）。見出しの「確認入力」と説明の文言は変えない。system-settings のシステムテーブルの確認語欄は、確認語が `_` の直後で折り返すようになる（旧: 任意の位置）。NL2SQL は変わらない | 製品のコードと system-settings のコピーを `packages/ui` に一本化し、3 製品の確認語欄を同じ見た目・振る舞いにする。破壊的な操作の確認面を中立にする（UX 契約 buttons.md / messaging §3.5、§4「`ExecutionConfirmationField`」、#379） |
+| 31 | 入力欄・SelectField の角丸が Button と同じになる | `rounded-md`（0.375rem = 5.25px）→ **6px**（`--radius-control`）。Button・`Pagination` の「N / M ページ」も同じトークン（値は 6px のまま） | 隣に並べた操作部品の角の形をそろえる（§4「操作部品の角丸」、#384） |
+| 32 | **検索欄の高さ・アイコンの位置・地がそろう** | 手書きの 9 箇所: RAG のフィードバック 31.5px・ファイル一覧 35px・ナレッジベース 31.5px・検索と検索テスト 38.5px（地は `surface-sunken`）、NL2SQL のスキーマ参照 31.5px・DB 管理 38.5px、ユーザー・ロール管理と Deep Data Security 38.5px → 共有 `TextField`: **36px**（`--field-height`）。隣に lg の Button がある検索・検索テストは **40px**（`--button-height-lg`）、NL2SQL の DB オブジェクトの検索・所有者は **44px**（`touchTarget`、以前と同じ）。アイコンは左 0.75rem、文字は 34.5px から。地は `surface`。NL2SQL の DB オブジェクトの種類の select は枠線を `border-border` → `border-border-control`、角丸を `--radius-control` にし、検索・所有者とそろえた。RAG のナレッジベース詳細の「追加する文書を検索」（既に `TextField`）は先頭アイコンとクリアを足し、同じ行の SelectField・Button の `h-9`（31.5px）を外して 36px にそろえた | 並ぶ SelectField・Button と上端・下端がそろう。入力できるものの輪郭は 3:1（§4「`TextField` の先頭アイコン・後置スロット」、#384） |
+| 33 | **検索欄のクリアが共有のボタンになる** | `type="search"` のブラウザ既定の ×（Chromium・Safari だけ。キーボードで届かない）→ 値があるときだけ入力欄の右端に「検索語をクリア」（NL2SQL の所有者の前方一致は「入力をクリア」）の × ボタン。Tab で届き、ホバー・フォーカスで Tooltip。Escape でも消える | どのブラウザでも同じ操作で消せる。キーボード・読み上げで使える（#384） |
+| 34 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
 
 ### API の非互換
 
@@ -634,6 +685,8 @@ QA に事前共有してください。**30点あります。**
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
+| `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
+| `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
 
 ---
 
@@ -723,6 +776,8 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - [ ] タブが ← → / Home / End で操作できる
 - [ ] タッチ端末（`pointer: coarse`）で `ToggleChip` / `Switch` の当たり判定が 44px 以上、見た目の大きさとマウス環境の当たり判定は変わらない
 - [ ] 375px でタブが入りきらないとき、スクロールできる方向の端だけがフェードし、キーボードで選んだタブがフェードに隠れない
+- [ ] 強制カラーモードで、選んだタブだけに下線（`Highlight`）が出る
+- [ ] 検索欄が `TextField`（手書きの検索欄の adherence の lint の違反 0 件）で、高さが隣の操作部品と同じトークン。クリアボタンに Tab で届き、押すと入力欄にフォーカスが戻る
 
 ---
 

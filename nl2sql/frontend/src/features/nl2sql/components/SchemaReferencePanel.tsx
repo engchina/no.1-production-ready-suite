@@ -1,5 +1,5 @@
 import { ListPlus, Plus, RefreshCw, Search, Table2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import {
   Button,
@@ -7,6 +7,7 @@ import {
   Skeleton,
   TimedLoadingState,
   DisclosureChevron,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
@@ -77,6 +78,11 @@ export function SchemaReferencePanel({
 }) {
   const [localQuery, setLocalQuery] = useState("");
   const query = searchQuery ?? localQuery;
+  const searchId = useId();
+  const setQuery = (value: string) => {
+    if (onSearchQueryChange) onSearchQueryChange(value);
+    else setLocalQuery(value);
+  };
   // アコーディオン: 同時に展開できる表は 1 つだけ（外側スクロール量を抑える）。
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
 
@@ -150,25 +156,19 @@ export function SchemaReferencePanel({
         </span>
       </p>
 
-      <span className="relative min-w-0 max-w-full">
-        <Search
-          size={16}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted"
-          aria-hidden="true"
-        />
-        <input
-          value={query}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            if (onSearchQueryChange) onSearchQueryChange(value);
-            else setLocalQuery(value);
-          }}
-          className="min-h-9 min-w-0 w-full rounded-md border border-border-control bg-surface py-1.5 pl-8 pr-3 text-sm focus:border-focus-ring"
-          placeholder={t("nl2sql.schema.searchPlaceholder")}
-          aria-label={t("nl2sql.schema.search")}
-          disabled={disabled}
-        />
-      </span>
+      <TextField
+        id={`nl2sql-schema-search-${searchId}`}
+        label={t("nl2sql.schema.search")}
+        labelHidden
+        value={query}
+        onValueChange={setQuery}
+        onClear={() => setQuery("")}
+        clearLabel={t("common.clearSearch")}
+        leadingIcon={Search}
+        placeholder={t("nl2sql.schema.searchPlaceholder")}
+        disabled={disabled}
+        className="min-w-0 max-w-full"
+      />
 
       {loading && (
         <TimedLoadingState

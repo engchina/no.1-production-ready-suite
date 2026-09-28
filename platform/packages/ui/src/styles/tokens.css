@@ -91,6 +91,9 @@
   --color-graph-line: var(--color-graph-line);
   --font-sans: var(--font-sans);
 
+  /* 操作部品（入力欄・SelectField・Button）の角丸（rounded-control、radius.css。#384）。 */
+  --radius-control: var(--radius-control);
+
   /* 文字サイズは px（ルート非依存）。14px ルートのままだと rem の text-sm が 12.25px になるため、
      Tailwind の --text-* を typography.css の px トークンに向ける。余白（rem）は動かさない。 */
   --text-xs: var(--font-size-xs);

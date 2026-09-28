@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus2, Files, Save, Unlink } from "lucide-react";
+import { FilePlus2, Files, Save, Search, Unlink } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
@@ -359,6 +359,12 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
             if (event.key === "Enter") applyCandidateSearch();
           }}
           onBlur={applyCandidateSearch}
+          onClear={() => {
+            setCandidateSearch("");
+            setCandidateQuery("");
+          }}
+          clearLabel={t("common.clearSearch")}
+          leadingIcon={Search}
           className="w-full min-w-0 sm:w-64"
         />
         <SelectField
@@ -369,7 +375,6 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           onValueChange={setDocumentId}
           placeholder={t("knowledgeBases.assignment.noOptions")}
           className="w-full min-w-0 sm:w-80"
-          buttonClassName="h-9"
         />
         <Button
           type="button"
@@ -378,7 +383,7 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           onClick={handleAssign}
           loading={assign.isPending}
           disabled={!documentId}
-          className="h-9 shrink-0" icon={FilePlus2}>
+          className="shrink-0" icon={FilePlus2}>
           {t("knowledgeBases.actions.assign")}
         </Button>
       </div>
