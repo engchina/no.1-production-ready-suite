@@ -1478,7 +1478,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
-                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
                   format={exportFormat}
@@ -2220,7 +2220,8 @@ function DocumentExtractionExportPanel({
 }) {
   const formats: DocumentExtractionExportFormat[] = ["markdown", "html", "json", "chunks"];
   return (
-    <section className="mt-4 rounded-lg border border-border bg-surface-sunken p-4">
+    // xl 以上は内容の表示をペインの下端（左の原本プレビューの下端）まで伸ばす（#436）。
+    <section className="mt-4 rounded-lg border border-border bg-surface-sunken p-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
       <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Braces size={16} className="text-accent-fg" aria-hidden />
         {t("flow.extractionExport.title")}
@@ -2240,7 +2241,12 @@ function DocumentExtractionExportPanel({
         onChange={(value) => onFormatChange(value as DocumentExtractionExportFormat)}
         items={formats.map((item) => ({ id: item, label: extractionExportFormatLabel(item) }))}
       />
-      <TabPanel id={format} value={format} idPrefix="extraction-export" className="mt-3">
+      <TabPanel
+        id={format}
+        value={format}
+        idPrefix="extraction-export"
+        className="mt-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      >
         {loading ? (
           <TimedLoadingState
             label={t("flow.extractionExport.loading")}
@@ -2255,7 +2261,7 @@ function DocumentExtractionExportPanel({
             {t("flow.extractionExport.loadErrorHint")}
           </Banner>
         ) : (
-          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg">
+          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg xl:max-h-none xl:min-h-40 xl:flex-1">
             <code>{content || t("flow.extractionExport.empty")}</code>
           </pre>
         )}
