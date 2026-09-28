@@ -64,6 +64,28 @@ def test_routing_adds_ocr_engines_for_pdf_and_image() -> None:
     assert image_order == ("unstructured", "docling", "dots_ocr", "mineru")
 
 
+def test_routing_only_offers_backends_that_declare_the_source_kind() -> None:
+    """routing の候補は、対応形式の正本(ADAPTER_CAPABILITIES)が宣言する backend だけ(#366)。
+
+    Docling の parser サービスは PDF と画像だけを解析する。office / html / unknown に
+    Docling を候補として出すと、strict の contract が必ず fallback で落ち、scorecard も
+    「対応している」と誤って示す。
+    """
+    from rag_parser_core.routing import ADAPTER_ORDER_BY_SOURCE_KIND
+
+    for source_kind, order in ADAPTER_ORDER_BY_SOURCE_KIND.items():
+        for backend in order:
+            assert SourceModality(source_kind) in ADAPTER_CAPABILITIES[backend].modalities, (
+                backend,
+                source_kind,
+            )
+    for source_kind in ("office", "html", "email", "text", "unknown"):
+        assert "docling" not in adapter_order_for_source_kind(source_kind)
+    assert adapter_order_for_source_kind("office") == ("unstructured", "mineru")
+    assert adapter_order_for_source_kind("html") == ("unstructured",)
+    assert adapter_order_for_source_kind("unknown") == ("unstructured",)
+
+
 def test_readiness_reports_missing_when_package_absent() -> None:
     snapshot = parser_adapter_runtime_settings(
         Settings.model_construct(

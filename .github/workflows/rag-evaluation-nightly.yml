@@ -74,7 +74,11 @@ jobs:
     # job 名の "RAG / " は ci-failure-issue.yml が Issue の製品 label を決めるのに使う。
     name: RAG / Golden set and search load
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 通常実行は 1 分未満。strict は Docling の parser サービスの準備(ローカルの実測: 空のキャッシュからの sync と
+    # モデルの取得で約 60 秒、run の再 sync と起動で約 11 秒)と gate(約 30〜40 秒)が加わる。負荷の高いマシンでは
+    # それぞれ約 160 秒・45 秒・180 秒だった。runner の速度差と real-world staging の分を見込んで、以前の 30 分に
+    # 10 分を足している(#366)。
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: rag/backend
@@ -86,7 +90,11 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: rag/backend/uv.lock
+          # strict では Docling の parser サービスの venv も作る(#366)。setup-uv は保存前に
+          # `uv cache prune --ci` で PyPI から取れる wheel を落とし、source から build したものだけを残す。
+          cache-dependency-glob: |
+            rag/backend/uv.lock
+            rag/services/parsers/docling/uv.lock
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -98,6 +106,73 @@ jobs:
         # backend は HTTP で委譲する(#286)。backend の venv に parser の extra を入れても
         # contract / staging の判定は変わらないため入れない(#343)。
         run: uv sync --locked --dev
+
+      - name: Resolve parser adapter contract mode
+        id: mode
+        env:
+          INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
+          INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
+          INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST: ${{ github.event.inputs.require_real_world_file_processing_manifest }}
+        run: |
+          set -euo pipefail
+          adapter_contract_strict_enabled=false
+          if [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ]; then
+            adapter_contract_strict_enabled=true
+          fi
+          if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ] && \
+             [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
+            adapter_contract_strict_enabled=true
+          fi
+          echo "adapter_contract_strict=${adapter_contract_strict_enabled}" >> "$GITHUB_OUTPUT"
+
+      # strict(real-world staging を含む)は、選んだ adapter(Docling)の parser サービスへ runner から
+      # 届く必要がある(#343 / #366)。本番と同じ services/parsers/docling を job の中で前面起動する。
+      # Unstructured は strict でも選択されない(status は ignored で blocking にならない)ため起動しない。
+      - name: Restore Docling models
+        id: docling-models
+        if: steps.mode.outputs.adapter_contract_strict == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          # docling-tools models download の置き場(~/.cache/docling/models)と HF の metadata。
+          # モデルの版は docling の版(uv.lock)で決まる。取り直すときは v1 を上げる。
+          path: |
+            ~/.cache/docling
+            ~/.cache/huggingface
+          key: rag-docling-models-v1-${{ hashFiles('rag/services/parsers/docling/uv.lock') }}
+
+      - name: Start Docling parser service
+        if: steps.mode.outputs.adapter_contract_strict == 'true'
+        working-directory: rag
+        timeout-minutes: 15
+        env:
+          # GPU の無い runner では CUDA の wheel(約 2.7GB)を入れず、CPU 版の torch を使う。
+          RAG_SERVICES_TORCH: cpu
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          started=$SECONDS
+          scripts/rag-services.sh sync parser-docling
+          echo "parser-docling の sync: $((SECONDS - started)) 秒"
+          # run は sync(差分だけ)の後に gunicorn を exec する。ログは artifact に残す。
+          nohup scripts/rag-services.sh run parser-docling > artifacts/parser-docling-service.log 2>&1 &
+          pid=$!
+          echo "RAG_PARSER_DOCLING_PID=${pid}" >> "$GITHUB_ENV"
+          started=$SECONDS
+          until curl -fs --max-time 2 http://127.0.0.1:18020/health; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::parser-docling が起動中に終了しました。"
+              tail -n 50 artifacts/parser-docling-service.log || true
+              exit 1
+            fi
+            if [ $((SECONDS - started)) -ge 300 ]; then
+              echo "::error::parser-docling の /health が 300 秒以内に ok になりませんでした。"
+              tail -n 50 artifacts/parser-docling-service.log || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo
+          echo "parser-docling の起動(/health まで): $((SECONDS - started)) 秒"
 
       - name: Run evaluation and search load gates
         env:
@@ -112,11 +187,11 @@ jobs:
           INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
           INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST: ${{ github.event.inputs.require_real_world_file_processing_manifest }}
           INPUT_RUN_PARSER_ADAPTER_CONTRACT: ${{ github.event.inputs.run_parser_adapter_contract }}
-          INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
+          ADAPTER_CONTRACT_STRICT: ${{ steps.mode.outputs.adapter_contract_strict }}
           INPUT_PARSER_ADAPTER_CONTRACT_SOURCE_KINDS: ${{ github.event.inputs.parser_adapter_contract_source_kinds }}
           # adapter の可用性は parser サービスの /health で判定する(本番の systemd の unit と同じ。#343)。
-          # 通常実行は parser サービスを起動しないため、選択済み adapter の missing は記録だけになり、
-          # strict(real-world staging を含む)では到達できる parser サービスが必要になる。
+          # 通常実行は parser サービスを起動しないため、選択済み adapter の missing は記録だけになる。
+          # strict(real-world staging を含む)では、前の step で起動した Docling のサービスで判定する(#366)。
           RAG_PARSER_READINESS_PROBE_ENABLED: "true"
           RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
           RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
@@ -130,14 +205,7 @@ jobs:
           file_processing_manifest_path="${INPUT_FILE_PROCESSING_MANIFEST_PATH:-docs/evaluation/file-processing-golden-set.json}"
           file_processing_trend_baseline_path="${INPUT_FILE_PROCESSING_TREND_BASELINE_PATH:-}"
           file_processing_staging_trend_baseline_path="${INPUT_FILE_PROCESSING_STAGING_TREND_BASELINE_PATH:-}"
-          adapter_contract_strict_enabled=false
-          if [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ]; then
-            adapter_contract_strict_enabled=true
-          fi
-          if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ] && \
-             [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
-            adapter_contract_strict_enabled=true
-          fi
+          adapter_contract_strict_enabled="${ADAPTER_CONTRACT_STRICT:-false}"
           mkdir -p ../artifacts
 
           parser_adapter_contract_status=0
@@ -298,6 +366,26 @@ jobs:
             echo "::error::search load gate failed with exit code ${search_load_status}"
             exit "$search_load_status"
           fi
+
+      - name: Stop Docling parser service
+        if: always() && env.RAG_PARSER_DOCLING_PID != ''
+        run: |
+          kill "${RAG_PARSER_DOCLING_PID}" 2>/dev/null || true
+          for _ in $(seq 1 30); do
+            kill -0 "${RAG_PARSER_DOCLING_PID}" 2>/dev/null || exit 0
+            sleep 1
+          done
+          kill -9 "${RAG_PARSER_DOCLING_PID}" 2>/dev/null || true
+
+      - name: Save Docling models
+        # gate が失敗しても、取得したモデルは次の strict で使えるように保存する。
+        if: always() && steps.docling-models.outcome == 'success' && steps.docling-models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/docling
+            ~/.cache/huggingface
+          key: ${{ steps.docling-models.outputs.cache-primary-key }}
 
       - name: Upload RAG gate artifacts
         if: always()

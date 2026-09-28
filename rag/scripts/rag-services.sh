@@ -20,6 +20,12 @@
 #   --all   すべて
 #   <service_id>  個別に指定（例: parser-docling）
 #
+# 環境変数:
+#   RAG_SERVICES_TORCH=cpu  torch を lock に持つサービス（parser-docling・parser-unstructured）に、
+#                           CUDA の wheel（torch・torchvision・triton・nvidia-* / cuda-*。docling で約 2.7GB）を入れず、
+#                           PyTorch の CPU 版の index から lock と同じ版の torch / torchvision を入れる
+#                           （GPU の無い CI・検証用。#366）。未設定なら lock どおり（本番の init_script.sh も lock どおり）。
+#
 # unit は現在のユーザー（sudo で実行したときは SUDO_USER）で動き、backend と同じユーザーの
 # ~/.cache にモデルを置く。起動 / 停止の状態は systemd の enable / disable で保ち、install を
 # 再実行しても最後に操作した状態に戻す（初めて登録する unit は起動する）。
@@ -41,6 +47,8 @@ SUDOERS_DIR="${SUDOERS_DIR:-/etc/sudoers.d}"
 RUNTIME_ENV_FILE="${RAG_DIR}/backend/service-runtime.env"
 PLATFORM_ENV_FILE="${SUITE_DIR}/platform/.env"
 BACKEND_ENV_FILE="${RAG_DIR}/backend/.env"
+TORCH_VARIANT="${RAG_SERVICES_TORCH:-}"
+TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
 
 CPU_SERVICES=(
   preprocess-office-to-pdf
@@ -120,16 +128,63 @@ warn_missing_os_tools() {
   done
 }
 
+# uv.lock の package の版（無ければ空）。
+lock_package_version() {
+  awk -v name="$2" '$0 == "name = \"" name "\"" { getline; gsub(/^version = "|"$/, ""); print; exit }' "$1"
+}
+
+# RAG_SERVICES_TORCH=cpu で、このサービスに CPU 版の torch を入れるか。
+use_cpu_torch() {
+  local dir="$1"
+  [ "${TORCH_VARIANT}" = "cpu" ] && [ -n "$(lock_package_version "${dir}/uv.lock" torch)" ]
+}
+
+# CPU 版に置き換えるときに uv sync で入れない package（torch 本体と CUDA の wheel）。
+cuda_torch_packages() {
+  sed -n 's/^name = "\(torch\|torchvision\|torchaudio\|triton\|nvidia-[^"]*\|cuda-[^"]*\)"$/\1/p' "$1"
+}
+
+# lock と同じ版の torch / torchvision を CPU 版の index から入れる（依存は uv sync が lock どおりに入れた）。
+install_cpu_torch() {
+  local service="$1"
+  local dir="$2"
+  local name version
+  local specs=()
+  for name in torch torchvision torchaudio; do
+    version="$(lock_package_version "${dir}/uv.lock" "${name}")"
+    if [ -n "${version}" ]; then
+      specs+=("${name}==${version}")
+    fi
+  done
+  log "${service}: CPU 版の ${specs[*]} を入れます（${TORCH_CPU_INDEX_URL}）。"
+  (cd "${dir}" && uv pip install --python .venv/bin/python --no-deps --index-url "${TORCH_CPU_INDEX_URL}" "${specs[@]}")
+}
+
 sync_services() {
-  local service dir extra model_command
+  local service dir extra model_command package
   local sync_args=()
   require_uv
+  case "${TORCH_VARIANT}" in
+    "" | cpu) ;;
+    *)
+      log "RAG_SERVICES_TORCH は cpu だけを指定できます（未設定なら lock どおり）: ${TORCH_VARIANT}"
+      exit 2
+      ;;
+  esac
   warn_missing_os_tools
   for service in "${SELECTED[@]}"; do
     dir="${RAG_DIR}/$(rag_service_dir "${service}")"
     mapfile -t sync_args < <(rag_uv_sync_args "${service}")
+    if use_cpu_torch "${dir}"; then
+      while IFS= read -r package; do
+        sync_args+=(--no-install-package "${package}")
+      done < <(cuda_torch_packages "${dir}/uv.lock")
+    fi
     log "${service}: uv ${sync_args[*]}"
     (cd "${dir}" && uv "${sync_args[@]}")
+    if use_cpu_torch "${dir}"; then
+      install_cpu_torch "${service}" "${dir}"
+    fi
     extra="$(rag_service_venv_extra_command "${service}")"
     if [ -n "${extra}" ]; then
       (cd "${dir}" && bash -c "${extra}")

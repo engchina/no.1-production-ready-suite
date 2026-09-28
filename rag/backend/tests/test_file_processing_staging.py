@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.config import Settings
@@ -46,6 +47,25 @@ from app.schemas.search import (
 from tests.support import shared_thin_wallet_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _parser_service_health_follows_package_info(monkeypatch: MonkeyPatch) -> None:
+    """parser サービスの /health を、各テストが差し替える `_package_info` の結果で代用する。
+
+    staging CLI は adapter の可用性を parser サービスの /health で判定する(#366)。テストは
+    実サービス(127.0.0.1:18020 など)へ問い合わせず、`_package_info` の差し替えを
+    「サービスの応答」として使う。
+    """
+
+    def probe(
+        _settings: Settings,
+        backend: parser_adapter_readiness.ParserAdapterName,
+    ) -> tuple[bool, str | None, str | None]:
+        spec = parser_adapter_readiness.ADAPTER_PACKAGES[backend]
+        return parser_adapter_readiness._package_info(spec.import_name, spec.distribution_names)
+
+    monkeypatch.setattr(parser_adapter_readiness, "_probe_service_health", probe)
 
 
 async def test_file_processing_staging_runner_closes_pending_gates_with_evidence() -> None:
@@ -1759,8 +1779,8 @@ def test_report_payload_source_routes_are_contract_aware(
         blocking_failure_count=0,
         cases=(
             _contract_passed_case("docling", "pdf"),
-            _contract_passed_case("docling", "office"),
-            _contract_passed_case("docling", "html"),
+            _contract_passed_case("unstructured", "office"),
+            _contract_passed_case("unstructured", "html"),
             _contract_passed_case("unstructured", "email"),
             _contract_passed_case("unstructured", "image"),
         ),
@@ -1801,7 +1821,13 @@ def test_report_payload_source_routes_are_contract_aware(
     assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured", "mineru")
     assert route_by_kind["pdf"]["selected_backend"] == "docling"
     assert "selected_adapter_supported_for_source" in route_by_kind["pdf"]["reason_codes"]
-    assert route_by_kind["office"]["selected_backend"] == "docling"
+    # Docling は PDF と画像だけを解析するため、Docling を選んでも office は
+    # Docling に回らない(#366)。取込では parser_source_guard が取込前に止めて案内する
+    # (自動で Unstructured へ振り分けない)。
+    assert route_by_kind["office"]["candidate_order"] == ("unstructured", "mineru")
+    assert route_by_kind["office"]["selected_backend"] == "local"
+    assert "selected_adapter_unsupported_for_source" in route_by_kind["office"]["reason_codes"]
+    assert "docling_adapter_source_unsupported" in route_by_kind["office"]["warning_codes"]
     assert route_by_kind["email"]["selected_backend"] == "local"
     assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == ["image"]
     assert (
