@@ -163,6 +163,9 @@ def test_wallet_upload_installs_securely_and_lists_services(tmp_path: Path) -> N
         (wallet_zip({"tnsnames.ora": TNSNAMES}), "wallet.zip", 400),
         (wallet_zip({"../evil.ora": "x"}), "wallet.zip", 400),
     ],
+    # 生成した zip の bytes は作成時刻を含む。xdist の worker ごとにテスト ID が
+    # 変わらないよう ID を固定する（#344）。
+    ids=["not-zip-name", "empty", "not-a-zip", "missing-files", "path-traversal"],
 )
 def test_wallet_upload_rejects_unsafe_files_and_keeps_previous_wallet(
     tmp_path: Path, data: bytes, name: str, status: int

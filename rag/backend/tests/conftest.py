@@ -1,5 +1,6 @@
 """pytest 共通 fixture。"""
 
+import fcntl
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -30,13 +31,30 @@ from tests import _ai_stubs, _oracle_test_db
 from tests.support import TEST_REQUEST_HEADERS
 
 
+# xdist の worker が nodeid に group 名を付ける hook より先に marker を付ける。
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """実 Oracle を使うテスト（`oracle_db`）は、xdist でも 1 つの worker で直列に実行する（#344）。
+
+    `cleanup_to_baseline` は baseline にない行をすべて消すため、別の worker の実 Oracle の
+    テストと同時に動くと互いの行を消す。`--dist loadgroup`（pyproject の addopts）で効く。
+    """
+    for item in items:
+        if "oracle_db" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.xdist_group("oracle"))
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _oracle_db_session() -> None:
+def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
     """実 Oracle が使えるならスキーマを保証し baseline を記録する。"""
     if not _oracle_test_db.db_available():
         return
     _oracle_test_db.apply_real_oracle_settings(get_settings())
-    _oracle_test_db.ensure_schema()
+    # xdist の worker は同時に起動するため、スキーマの作成（DDL）は 1 つずつにする（#344）。
+    lock_path = tmp_path_factory.getbasetemp().parent / "rag-oracle-schema.lock"
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        _oracle_test_db.ensure_schema()
     _oracle_test_db.capture_baseline()
 
 

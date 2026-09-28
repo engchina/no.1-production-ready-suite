@@ -135,6 +135,11 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **すべての job に `timeout-minutes` を付ける**（通常 10〜15 分、e2e は実測の倍程度）。既定の 360 分のまま止まると、runner と PR の待ちを長く塞ぐ。
 - キャッシュ（#339）: uv は main の push だけが保存し PR は復元だけ（repo の上限 10 GB を PR の cache で埋めないため）、`.mypy_cache` は lock とブランチを key に main から復元、共有 UI の dist は `.github/actions/platform-ui`（platform の frontend のソースの hash）、Playwright のブラウザは `.github/actions/playwright-browsers`（Playwright の版）がキャッシュする。
 - Agent は `Agent / Backend`・`Agent / Frontend`（lint・build）・`Agent / E2E smoke` の 3 job に分けている（#339）。
+- backend の pytest は、CI では pytest-xdist で並列に実行する（`uv run pytest -n auto`。Agent は `scripts/check-all.sh` に `PYTEST_ARGS="-n auto"` を渡す。#344）。テストは並列でも直列でも通るように書く。
+  - 書き出すファイルは `tmp_path` に置く（backend 直下など固定のパスを、別のテストと共有しない）。
+  - `parametrize` のテスト ID を、実行のたびに変わる値（作成時刻を含む zip / xlsx / docx の bytes 等）から作らない。worker ごとに ID が変わり収集が失敗するので、`ids=` で固定する。
+  - retry / backoff の待ちは `time.sleep` を直接呼ばず、module 変数などで差し替えられるようにし、テストは conftest で待たない関数にする（例: NL2SQL の `reverse_generation._retry_sleep`）。
+  - 同時に動かせないテスト（RAG の実 Oracle のテスト）は `xdist_group` で 1 つの worker にまとめる（RAG は `--dist loadgroup` を pyproject の `addopts` に入れている）。
 - `pip-audit` は、その backend の `uv.lock` / `pyproject.toml`（または `ci.yml`）が変わったときだけ PR / main の CI で実行する。全件は `.github/workflows/dependency-audit-nightly.yml` が毎晩実行する。`bandit` は毎回実行する。
 - nightly（`e2e-nightly.yml`・`rag-evaluation-nightly.yml`・`dependency-audit-nightly.yml`）と main の push の CI が失敗すると、`ci-failure-issue.yml` が Issue（label `ci-failure` と製品の label）を作る。同じ workflow・製品の open な Issue があれば comment で追記する。schedule の workflow を追加したら、`ci-failure-issue.yml` の `workflows` にも追加する。
 - secret 検出は root の `.gitleaks.toml` / `.gitleaksignore`（pre-commit hook は `.pre-commit-config.yaml`）。CI の gitleaks-action は gitleaks 8.24 系のため、allowlist は単一の `[allowlist]` で書く（`[[allowlists]]` は解釈されない）。誤検知の除外は fingerprint 単位で `.gitleaksignore` に理由付きで追加する。
@@ -228,7 +233,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービス検証は手動 / ステージングで行う。
 - 実装と同時に対応するテストを追加・更新し、変更後は該当範囲の lint・型チェック・テストを実行して結果を報告する。
 - **ローカルの検証の範囲（#339）**：ローカルでは変更した範囲だけを検査し、全件は CI に任せる。
-  - backend: 変更したファイルの `ruff check` / `black --check`、関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と、直前に失敗したもの（`uv run pytest --lf -x`）。`mypy` は変更したパッケージを渡してよい。全テスト・全体の `mypy`・`pip-audit` は CI が実行する。
+  - backend: 変更したファイルの `ruff check` / `black --check`、関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と、直前に失敗したもの（`uv run pytest --lf -x`）。`mypy` は変更したパッケージを渡してよい。全テスト・全体の `mypy`・`pip-audit` は CI が実行する。ローカルで全テストを流すときは `uv run pytest -n auto`（または `-n 4`）で並列にしてよい（既定は直列のまま）。
   - frontend: `npm run lint` と `npm run build`（型検査を兼ねる）。単体テストは関係するものだけ（Vitest は `npx vitest related <変更したファイル>` か `npx vitest --changed`、NL2SQL のロジックテストは `node --import jiti/register --test tests/<対象>.test.ts`）。
   - e2e: 変更に関係する Playwright の spec だけ（「UI 変更の検証」の e2e の量）。
   - PR の `検証結果` には、ローカルで実行した command と、CI の job 結果（全件の検査）を分けて書く。

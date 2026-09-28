@@ -236,8 +236,9 @@ jobs:
       - name: Type check
         run: uv run mypy src
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest --cov=pr_backend_core
+        run: uv run pytest -n auto --cov=pr_backend_core
 
       - name: Security scan
         run: uv run bandit -r src
@@ -292,8 +293,9 @@ jobs:
       - name: Type check
         run: uv run mypy src
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest --cov=pr_system_settings
+        run: uv run pytest -n auto --cov=pr_system_settings
 
       - name: Security scan
         run: uv run bandit -r src
@@ -352,8 +354,10 @@ jobs:
         run: uv run mypy .
 
       # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
+      # -n auto: pytest-xdist で並列に実行する。実 Oracle のテストは pyproject の
+      # --dist loadgroup で 1 つの worker にまとまる（#344）。
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -c pyproject.toml -r app
@@ -686,8 +690,9 @@ jobs:
       - name: Type check
         run: uv run mypy .
 
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -r app
@@ -746,6 +751,8 @@ jobs:
           SKIP_FRONTEND: "1"
           SKIP_AUDIT: ${{ needs.changes.outputs.agent_deps == 'true' && '0' || '1' }}
           UV_SYNC_ARGS: "--locked --dev"
+          # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
+          PYTEST_ARGS: "-n auto"
 
   agent-frontend:
     name: Agent / Frontend
