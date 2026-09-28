@@ -61,7 +61,7 @@ backend/
 - 応答: `{status: ok|not_configured|unreachable|setup_required, check, detail, context_id, schema_status, adb_lifecycle_state}`。常に HTTP 200。
 - 判定の順: `short_circuit`（DB を使わない構成）→ システム設定画面と同じ `database_readiness`（`ok` 以外は `not_configured`。接続は試さない）→ 製品の `test_connection`（bounded。失敗は `unreachable`）→ 製品の `schema_probe`（準備状態の確認）→ `ok`。
 - `detail` は接続先・資格情報・Wallet の path を返さない（ORA / DPY / DPI のコードだけ）。`context_id` は接続先の値の SHA-256 で、生値は返さない。
-- 製品が注入するもの: `test_connection`（接続 pool と接続処理は製品が持つ）、`extra_readiness`（システム設定画面の `build_database_router` と同じもの）、`schema_probe`（RAG の system schema、NL2SQL の incremental store）、`short_circuit`（NL2SQL の memory モード）、`context_fields`（NL2SQL は実行モード・保存モードも含める）。
+- 製品が注入するもの: `test_connection`（接続 pool と接続処理は製品が持つ）、`extra_readiness`（システム設定画面の `build_database_router` と同じもの）、`schema_probe`（RAG の system schema、NL2SQL の incremental store）、`short_circuit`（NL2SQL の memory モード、Agent のローカル認証）、`context_fields`（NL2SQL は実行モード・保存モードも含める）。
 - 各製品の `/api/ready` の `oracle` check も同じ `database_readiness` を使う。
 - 画面側は `@engchina/production-ready-system-settings` の `DatabaseGate` / `useDatabaseStatus` / `DatabaseUnavailableNotice` を使う（製品は API・導線・製品名の入る文言だけを渡す）。ゲートを通さない画面は3製品ともシステム設定の 5 画面（OCI 認証・アップロード保存先・モデル・データベース・外観）だけ。NL2SQL の保存領域の確認のような製品固有の確認は `secondaryGate` で差し込む。
 

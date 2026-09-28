@@ -85,6 +85,8 @@ async function installControlPlaneApi(page: Page, options?: { unbound?: boolean 
 
     // ローカルの全権限の利用者（#215）。spec は `page.unroute("**/api/**")` で fixture の handler も外すため、ここで返す。
     if (path === "/api/auth/me") return respond(LOCAL_CURRENT_USER);
+    // DB ゲートの状態 API（#325）。この spec は DB が使える前提。
+    if (path === "/api/ready/database") return respond({ status: "ok", check: "ok", detail: null });
     if (path === "/api/agents") {
       if (method === "POST") return respond(agent);
       return respond({ agents: [agent] });
