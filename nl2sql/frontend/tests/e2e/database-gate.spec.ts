@@ -537,6 +537,43 @@ test("明示 memory モードでは利用を許可し再起動で失う警告を
   await expect(page.getByText("保存済みプロファイル")).toBeVisible();
 });
 
+test("接続設定の不備は診断コードと補足を示し、ok の診断コードは出さない", async ({ page }) => {
+  let check = "walletless_tls_dsn_required";
+  await page.route("**/api/ready/database", (route) =>
+    fulfill(route, check === "ok"
+      ? { status: "unreachable", check, detail: "Oracle connection probe failed (ORA-12514)." }
+      : { status: "not_configured", check, detail: null })
+  );
+
+  await page.goto("/profiles");
+  await expectDatabaseGate(page, {
+    title: "データベースの接続情報が未設定です",
+    message:
+      "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+  });
+  await expect(page.getByText("診断コード: walletless_tls_dsn_required", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Walletless TLS では、Wallet のサービス名ではなく ADB の TCPS 接続文字列または Easy Connect の DSN を指定してください。",
+      { exact: true }
+    )
+  ).toBeVisible();
+
+  // DeepSec の設定の不備は NL2SQL の文言で補足する。
+  check = "invalid_configuration";
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByText("診断コード: invalid_configuration", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Oracle Deep Data Security は python-oracledb の Thin mode でだけ使えます/)).toBeVisible();
+
+  // 設定は揃っていて接続できないだけのとき（check=ok）は、診断コードも ORA コードも出さない。
+  check = "ok";
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByRole("heading", { name: "データベースを起動してください" })).toBeVisible();
+  await expect(page.getByText(/診断コード/)).toHaveCount(0);
+  await expect(page.getByText(/ORA-12514/)).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("バックエンドの状態確認失敗でも設定入口と再試行を残す", async ({ page }) => {
   await page.route("**/api/ready/database", (route) =>
     route.fulfill({

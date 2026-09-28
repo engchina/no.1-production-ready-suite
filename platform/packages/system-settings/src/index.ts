@@ -107,6 +107,48 @@ export {
   type DatabaseWalletDownloadData,
 } from "./database/types";
 
+// DB ゲート（DB の状態 API・全画面の案内・banner。RAG / NL2SQL から共通化。#325）
+export {
+  DATABASE_GATE_LOADING_TEST_ID,
+  DatabaseGate,
+  DatabaseGateChecking,
+  databaseGateView,
+  databaseNoticeStatus,
+  isDatabaseGateExemptPath,
+  type DatabaseGateNoticeOptions,
+  type DatabaseGateProps,
+  type DatabaseGateView,
+  type DatabaseSecondaryGateProps,
+} from "./database-gate/DatabaseGate";
+export {
+  DATABASE_UNAVAILABLE_TITLE_ID,
+  DatabaseUnavailableNotice,
+  databaseReasonCode,
+  type DatabaseUnavailableNoticeProps,
+} from "./database-gate/DatabaseUnavailableNotice";
+export {
+  DATABASE_GATE_MESSAGES,
+  databaseCheckMessageKey,
+  type DatabaseGateMessageKey,
+  type DatabaseGateMessages,
+} from "./database-gate/messages";
+export {
+  DATABASE_STATUS_STALE_TIME_MS,
+  useDatabaseStatus,
+  type DatabaseContextChangeHandler,
+  type UseDatabaseStatusOptions,
+} from "./database-gate/useDatabaseStatus";
+export {
+  DATABASE_STATUS_QUERY_KEY,
+  DATABASE_UNAVAILABLE_EVENT,
+  type DatabaseAvailability,
+  type DatabaseGateRoutes,
+  type DatabaseNoticeStatus,
+  type DatabaseStatusApi,
+  type DatabaseStatusData,
+  type DatabaseUnavailableEventDetail,
+} from "./database-gate/types";
+
 // ユーザー管理・ロール管理（NL2SQL から移設。#206）
 export { UserManagementPage, type UserManagementPageProps } from "./users-roles/UserManagementPage";
 export {

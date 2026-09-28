@@ -42,7 +42,7 @@ test("文書インデックスは DB 停止時も空状態 + 縮退バナーで�
   // 復旧導線: 再試行 + データベース設定リンク
   await expect(page.getByRole("button", { name: "再試行" }).first()).toBeVisible();
   const settingsLink = page.getByRole("link", { name: /データベース設定を開く/ });
-  await expect(settingsLink).toHaveAttribute("href", "/settings/database");
+  await expect(settingsLink).toHaveAttribute("href", "/settings/database#adb-management");
 });
 
 test("知識ベース管理は DB 停止時も作成フォーム + 縮退バナーで開ける", async ({ page }) => {
@@ -53,5 +53,5 @@ test("知識ベース管理は DB 停止時も作成フォーム + 縮退バナ�
   // 作成フォームは利用可能(ページが死んでいない)
   await expect(page.getByRole("button", { name: /作成/ })).toBeVisible();
   const settingsLink = page.getByRole("link", { name: /データベース設定を開く/ });
-  await expect(settingsLink).toHaveAttribute("href", "/settings/database");
+  await expect(settingsLink).toHaveAttribute("href", "/settings/database#adb-management");
 });

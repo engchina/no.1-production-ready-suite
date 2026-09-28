@@ -1,177 +1,39 @@
-import { ArrowRight, Database, DatabaseZap, RefreshCw, Settings } from "lucide-react";
-import { Link } from "react-router-dom";
-
 import {
-  Banner,
-  Button,
-  buttonVariants,
-} from "@engchina/production-ready-ui";
+  DATABASE_GATE_MESSAGES,
+  DatabaseUnavailableNotice as SharedDatabaseUnavailableNotice,
+  type DatabaseGateMessages,
+  type DatabaseGateRoutes,
+  type DatabaseUnavailableNoticeProps,
+} from "@engchina/production-ready-system-settings";
 
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
-const DATABASE_SETTINGS_TARGET = `${APP_ROUTES.settingsDatabase}#adb-management`;
-const SYSTEM_TABLES_TARGET = APP_ROUTES.settingsSystemTables;
-
-export type DatabaseNoticeStatus =
-  | "not_configured"
-  | "setup_required"
-  | "unreachable"
-  | "check_failed"
-  | "persistence";
-
-const NOTICE_COPY: Record<
-  DatabaseNoticeStatus,
-  { title: I18nKey; message: I18nKey }
-> = {
-  not_configured: {
-    title: "dbGate.notConfigured.title",
-    message: "dbGate.notConfigured.message",
-  },
-  setup_required: {
-    title: "dbGate.setupRequired.title",
-    message: "dbGate.setupRequired.message",
-  },
-  unreachable: {
-    title: "dbGate.unreachable.title",
-    message: "dbGate.unreachable.message",
-  },
-  check_failed: {
-    title: "dbGate.checkFailed.title",
-    message: "dbGate.checkFailed.message",
-  },
-  persistence: {
-    title: "dbGate.persistenceFailed.title",
-    message: "dbGate.persistenceFailed.message",
-  },
+/** DB ゲートの導線（ADB の起動はデータベース設定の ADB 管理、初期化はシステムテーブル）。 */
+export const DATABASE_GATE_ROUTES: DatabaseGateRoutes = {
+  databaseSettings: `${APP_ROUTES.settingsDatabase}#adb-management`,
+  systemTables: APP_ROUTES.settingsSystemTables,
 };
 
-export function DatabaseUnavailableNotice({
-  mode = "gate",
-  returnTo,
-  onRetry,
-  isRetrying = false,
-  status = "unreachable",
-  reasonCode,
-}: {
-  mode?: "gate" | "banner";
-  returnTo?: string;
-  onRetry: () => void;
-  isRetrying?: boolean;
-  status?: DatabaseNoticeStatus;
-  reasonCode?: string | null;
-}) {
-  const copy = NOTICE_COPY[status];
-  if (mode === "banner") {
-    return (
-      <Banner
-        severity="warning"
-        title={t(copy.title)}
-        action={
-          <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
-            {t("common.retry")}
-          </Button>
-        }
-      />
-    );
-  }
-
-  const action =
-    status === "setup_required"
-      ? {
-          href: SYSTEM_TABLES_TARGET,
-          labelKey: "dbGate.openSystemTables",
-          icon: DatabaseZap,
-          hintKey: "dbGate.setupRequired.settingsHint",
-        }
-      : {
-          href: DATABASE_SETTINGS_TARGET,
-          labelKey: "dbGate.openDatabaseSettings",
-          icon: Settings,
-          hintKey: "dbGate.settingsHint",
-        };
-
-  return (
-    <div className="grid min-h-dvh place-items-center p-4 sm:p-6">
-      <section
-        className="w-full max-w-lg rounded-xl border border-border bg-surface p-6 text-center shadow-sm sm:p-8"
-        aria-labelledby="database-unavailable-title"
-      >
-        <div
-          className="mx-auto grid size-12 place-items-center rounded-full bg-warning-subtle text-warning-fg"
-          aria-hidden
-        >
-          <Database size={24} />
-        </div>
-        <h1
-          id="database-unavailable-title"
-          className="mt-5 text-lg font-semibold text-fg"
-        >
-          {t(copy.title)}
-        </h1>
-        <NoticeContent
-          returnTo={returnTo}
-          onRetry={onRetry}
-          isRetrying={isRetrying}
-          messageKey={copy.message}
-          reasonCode={reasonCode}
-          primaryAction={action}
-        />
-      </section>
-    </div>
+/** 共通の DB ゲートの文言を、NL2SQL の辞書にある値で上書きする（製品名の入る文言など）。 */
+export function databaseGateMessages(): Partial<DatabaseGateMessages> {
+  return Object.fromEntries(
+    Object.keys(DATABASE_GATE_MESSAGES).flatMap((key) => {
+      const value = t(key);
+      return value === key ? [] : [[key, value]];
+    })
   );
 }
 
-function NoticeContent({
-  returnTo,
-  onRetry,
-  isRetrying,
-  messageKey,
-  reasonCode,
-  primaryAction,
-}: {
-  returnTo?: string;
-  onRetry: () => void;
-  isRetrying: boolean;
-  messageKey: I18nKey;
-  reasonCode?: string | null;
-  primaryAction: {
-    href: string;
-    labelKey: I18nKey;
-    icon: typeof Settings;
-    hintKey: I18nKey;
-  };
-}) {
-  const PrimaryActionIcon = primaryAction.icon;
+/** NL2SQL の導線と文言を束ねた、共通の DB の案内（全画面 / banner。#325）。 */
+export function DatabaseUnavailableNotice(
+  props: Omit<DatabaseUnavailableNoticeProps, "routes" | "messages">
+) {
   return (
-    <>
-      <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-fg-muted">
-        {t(messageKey)}
-      </p>
-      {reasonCode ? (
-        <p className="mt-2 text-xs text-fg-muted" role="status">
-          {t("dbGate.reasonCode", { code: reasonCode })}
-        </p>
-      ) : null}
-
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-        <Link
-          to={primaryAction.href}
-          state={returnTo ? { returnTo } : undefined}
-          className={buttonVariants({ variant: "primary", size: "md" })}
-        >
-          <PrimaryActionIcon size={16} aria-hidden />
-          {t(primaryAction.labelKey)}
-          <ArrowRight size={16} aria-hidden />
-        </Link>
-        <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
-          {t("common.retry")}
-        </Button>
-      </div>
-
-      <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-fg-muted">
-        {t(primaryAction.hintKey)}
-      </p>
-    </>
+    <SharedDatabaseUnavailableNotice
+      routes={DATABASE_GATE_ROUTES}
+      messages={databaseGateMessages()}
+      {...props}
+    />
   );
 }

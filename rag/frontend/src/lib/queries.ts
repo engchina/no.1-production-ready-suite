@@ -2,6 +2,7 @@
  * TanStack Query フック。query key を一元管理する。
  */
 
+import { DATABASE_STATUS_QUERY_KEY } from "@engchina/production-ready-system-settings";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -100,7 +101,8 @@ import {
 } from "./upload-requests";
 
 export const queryKeys = {
-  databaseStatus: ["system", "database-status"] as const,
+  // DB の状態は3製品共通の query key（#325）。
+  databaseStatus: DATABASE_STATUS_QUERY_KEY,
   documents: (params: {
     status?: FileStatus;
     q?: string;
@@ -356,18 +358,6 @@ export function documentWorkspaceShouldRefresh({
   return Boolean(
     (watchProcessing || localWatchProcessing) && !terminal && !stageReview,
   );
-}
-
-/** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
-export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
-  return useQuery({
-    queryKey: queryKeys.databaseStatus,
-    queryFn: api.getDatabaseStatus,
-    enabled: options.enabled ?? true,
-    retry: false,
-    // 短時間はキャッシュし、ページ遷移ごとの再プローブを避ける。
-    staleTime: 15_000,
-  });
 }
 
 /**

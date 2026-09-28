@@ -13,22 +13,27 @@ export const ja = {
   "common.degraded.title": "データベースに接続できません",
   "common.degraded.fallback":
     "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
-  "common.degraded.openDatabaseSettings": "データベース設定を開く",
+  // DB ゲート（3製品共通の部品。#325）。製品名の入る文言だけ RAG の値にし、他は NL2SQL と同じ文言にそろえる。
   "dbGate.checking": "データベースの状態を確認しています…",
   "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
   "dbGate.notConfigured.message":
-    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面を利用できます。",
-  "dbGate.unreachable.title": "データベースに接続できません",
+    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+  "dbGate.unreachable.title": "データベースを起動してください",
   "dbGate.unreachable.message":
-    "データベースの起動状態、ネットワーク到達性、Wallet サービス名、認証情報を確認してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
+    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
   "dbGate.setupRequired.message":
-    "Oracle 26ai には接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定で「作成・更新」を実行してください。",
+    "Oracle 26ai には接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
+  "dbGate.openSystemTables": "システムテーブルを開く",
+  "dbGate.settingsHint":
+    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
+  "dbGate.setupRequired.settingsHint":
+    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",
   "dbGate.checkFailed.message":
     "バックエンドの起動状態を確認して再試行してください。",
+  "dbGate.reasonCode": "診断コード: {code}",
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",

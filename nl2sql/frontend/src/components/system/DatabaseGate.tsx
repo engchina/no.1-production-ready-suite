@@ -1,192 +1,106 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "react-router-dom";
 
-import { Banner, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
+import { Banner, PageBody } from "@engchina/production-ready-ui";
+import {
+  DatabaseGate as SharedDatabaseGate,
+  type DatabaseSecondaryGateProps,
+} from "@engchina/production-ready-system-settings";
 
-import { DatabaseUnavailableNotice, type DatabaseNoticeStatus } from "@/components/system/DatabaseUnavailableNotice";
+import {
+  DATABASE_GATE_ROUTES,
+  databaseGateMessages,
+} from "@/components/system/DatabaseUnavailableNotice";
 import {
   DATABASE_UNAVAILABLE_EVENT,
   supersedeDatabaseUnavailableProbe,
   type DatabaseOperationalFailure,
 } from "@/lib/database-load-error";
-import { t, type I18nKey } from "@/lib/i18n";
-import { APP_ROUTES } from "@/lib/routes";
+import { api } from "@/lib/api";
+import { t } from "@/lib/i18n";
 import {
-  useDatabaseStatus,
+  clearDatabaseContextQueries,
+  queryKeys,
   usePersistenceStatus,
   useRecoverPersistence,
-  queryKeys,
 } from "@/lib/queries";
 
-const DATABASE_GATE_EXEMPT_ROUTES = [
-  APP_ROUTES.settingsOci,
-  APP_ROUTES.settingsUploadStorage,
-  APP_ROUTES.settingsModel,
-  APP_ROUTES.settingsDatabase,
-  APP_ROUTES.settingsAppearance,
-] as const;
-
-function isDatabaseGateExemptRoute(pathname: string) {
-  if (pathname === "/settings") return true;
-  return DATABASE_GATE_EXEMPT_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`)
-  );
-}
-
-function isSystemTablesRoute(pathname: string) {
-  return (
-    pathname === APP_ROUTES.settingsSystemTables ||
-    pathname.startsWith(`${APP_ROUTES.settingsSystemTables}/`)
-  );
-}
-
-/** DB と persisted snapshot の両方が復旧するまで業務ページを描画しない。 */
+/**
+ * DB と保存済みの業務データ（保存領域）の両方が使えるまで業務ページを描画しない。
+ * DB の確認・全画面の案内・ゲートを通さない画面は3製品共通のゲート（#325）、
+ * 保存領域の確認と自動復旧は NL2SQL 固有なので secondaryGate で差し込む。
+ */
 export function DatabaseGate({ children }: { children: ReactNode }) {
-  const location = useLocation();
   const queryClient = useQueryClient();
-  const isGateExemptRoute = isDatabaseGateExemptRoute(location.pathname);
-  const isSystemTablesGateRoute = isSystemTablesRoute(location.pathname);
-  const [reportedFailure, setReportedFailure] = useState<{
-    at: number;
-    failure: DatabaseOperationalFailure;
-  } | null>(null);
-  const database = useDatabaseStatus({ enabled: !isGateExemptRoute });
-  const databaseStatus = database.data?.status;
-  const databaseReady = databaseStatus === "ok";
-  const systemTablesRouteReady =
-    isSystemTablesGateRoute &&
-    (databaseStatus === "ok" || databaseStatus === "setup_required");
-  const shouldCheckPersistence =
-    !isGateExemptRoute && !isSystemTablesGateRoute && databaseReady;
-  const persistence = usePersistenceStatus({
-    enabled: shouldCheckPersistence,
-  });
+  return (
+    <SharedDatabaseGate
+      api={api}
+      routes={DATABASE_GATE_ROUTES}
+      messages={databaseGateMessages()}
+      onContextChange={() => clearDatabaseContextQueries(queryClient)}
+      onBeforeRetry={supersedeDatabaseUnavailableProbe}
+      secondaryGate={PersistenceGate}
+    >
+      {children}
+    </SharedDatabaseGate>
+  );
+}
+
+/** 保存領域（persisted snapshot / incremental store）の確認と自動復旧。 */
+function PersistenceGate({
+  children,
+  renderNotice,
+  renderChecking,
+}: DatabaseSecondaryGateProps) {
+  const queryClient = useQueryClient();
+  const persistence = usePersistenceStatus();
   const recover = useRecoverPersistence();
 
+  // 業務 API の失敗から保存領域の不通を確かめた通知で、今の状態を置き換える。
   useEffect(() => {
-    const handleDatabaseUnavailable = (event: Event) => {
+    const handle = (event: Event) => {
       const failure = (event as CustomEvent<DatabaseOperationalFailure>).detail;
-      const at = Date.now();
-      setReportedFailure({ at, failure });
-      if (failure.kind === "database") {
-        queryClient.setQueryData(queryKeys.databaseStatus, failure.database);
-      } else {
-        queryClient.setQueryData(queryKeys.persistenceStatus, (current: unknown) => ({
-          ...(typeof current === "object" && current !== null ? current : {}),
-          ...failure.persistence,
-        }));
-      }
+      if (failure?.kind !== "persistence") return;
+      queryClient.setQueryData(queryKeys.persistenceStatus, (current: unknown) => ({
+        ...(typeof current === "object" && current !== null ? current : {}),
+        ...failure.persistence,
+      }));
     };
-    window.addEventListener(DATABASE_UNAVAILABLE_EVENT, handleDatabaseUnavailable);
-    return () =>
-      window.removeEventListener(DATABASE_UNAVAILABLE_EVENT, handleDatabaseUnavailable);
+    window.addEventListener(DATABASE_UNAVAILABLE_EVENT, handle);
+    return () => window.removeEventListener(DATABASE_UNAVAILABLE_EVENT, handle);
   }, [queryClient]);
 
-  // 通知された障害より新しい取得で回復を確認できたレンダーで、障害の表示を消す（effect で setState しない）。
-  const reportedFailureRecovered =
-    reportedFailure !== null &&
-    (((isGateExemptRoute || systemTablesRouteReady) &&
-      database.dataUpdatedAt > reportedFailure.at) ||
-      (databaseStatus === "ok" &&
-        database.dataUpdatedAt > reportedFailure.at &&
-        Boolean(persistence.data?.ready) &&
-        persistence.dataUpdatedAt > reportedFailure.at));
-  if (reportedFailureRecovered) setReportedFailure(null);
-
   useEffect(() => {
-    if (
-      !shouldCheckPersistence ||
-      !persistence.data ||
-      persistence.data.ready ||
-      recover.isPending ||
-      recover.isError
-    ) {
+    if (!persistence.data || persistence.data.ready || recover.isPending || recover.isError) {
       return;
     }
     recover.mutate();
-  }, [shouldCheckPersistence, persistence.data, recover]);
+  }, [persistence.data, recover]);
 
-  if (isGateExemptRoute) return <>{children}</>;
-
-  const returnTo = `${location.pathname}${location.search}${location.hash}`;
   const retry = async () => {
     supersedeDatabaseUnavailableProbe();
     recover.reset();
-    const databaseResult = await database.refetch();
-    const databaseOkForRoute =
-      databaseResult.data?.status === "ok" ||
-      (isSystemTablesGateRoute && databaseResult.data?.status === "setup_required");
-    if (!databaseOkForRoute) return;
-    if (isSystemTablesGateRoute) {
-      setReportedFailure(null);
+    const result = await persistence.refetch();
+    if (result.data?.ready) return;
+    try {
+      await recover.mutateAsync();
+    } catch {
       return;
     }
-
-    let persistenceResult = await persistence.refetch();
-    if (!persistenceResult.data?.ready) {
-      try {
-        await recover.mutateAsync();
-      } catch {
-        return;
-      }
-      persistenceResult = await persistence.refetch();
-    }
-    if (persistenceResult.data?.ready) setReportedFailure(null);
+    await persistence.refetch();
   };
 
-  if (reportedFailure !== null && !systemTablesRouteReady) {
-    const reportedStatus: DatabaseNoticeStatus =
-      reportedFailure.failure.kind === "persistence"
-        ? "persistence"
-        : noticeStatusForDatabase(reportedFailure.failure.database.status);
-    const reasonCode =
-      reportedFailure.failure.kind === "persistence"
-        ? reportedFailure.failure.persistence.reason_code
-        : reportedFailure.failure.database.check;
-    return (
-      <DatabaseUnavailableNotice
-        returnTo={returnTo}
-        onRetry={() => void retry()}
-        isRetrying={database.isFetching || persistence.isFetching || recover.isPending}
-        status={reportedStatus}
-        reasonCode={reasonCode}
-      />
-    );
-  }
-
-  if (database.isPending) return <GateChecking />;
-  if (database.isError || (databaseStatus !== "ok" && !systemTablesRouteReady)) {
-    return (
-      <DatabaseUnavailableNotice
-        returnTo={returnTo}
-        onRetry={() => void retry()}
-        isRetrying={database.isFetching}
-        status={
-          database.isError
-            ? "check_failed"
-            : noticeStatusForDatabase(databaseStatus)
-        }
-        reasonCode={database.data?.check}
-      />
-    );
-  }
-
-  if (systemTablesRouteReady) return <>{children}</>;
-
   if (persistence.isPending || recover.isPending) {
-    return <GateChecking labelKey="dbGate.recovering" />;
+    return renderChecking(t("dbGate.recovering"), "dbGate.recovering");
   }
   if (persistence.isError || recover.isError || !persistence.data?.ready) {
-    return (
-      <DatabaseUnavailableNotice
-        returnTo={returnTo}
-        onRetry={() => void retry()}
-        isRetrying={persistence.isFetching || recover.isPending}
-        status="persistence"
-        reasonCode={persistence.data?.reason_code}
-      />
-    );
+    return renderNotice({
+      title: t("dbGate.persistenceFailed.title"),
+      message: t("dbGate.persistenceFailed.message"),
+      reasonCode: persistence.data?.reason_code,
+      onRetry: () => void retry(),
+      isRetrying: persistence.isFetching || recover.isPending,
+    });
   }
 
   return (
@@ -201,26 +115,5 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
       ) : null}
       {children}
     </>
-  );
-}
-
-function noticeStatusForDatabase(
-  status: "ok" | "not_configured" | "setup_required" | "unreachable" | undefined
-): DatabaseNoticeStatus {
-  return status === "not_configured" || status === "setup_required" || status === "unreachable"
-    ? status
-    : "check_failed";
-}
-
-function GateChecking({ labelKey = "dbGate.checking" }: { labelKey?: I18nKey }) {
-  return (
-    <div className="grid min-h-dvh place-items-center p-6">
-      <TimedLoadingState
-        label={t(labelKey)}
-        operationKey={labelKey}
-        placement="page"
-        testId="database-gate-loading"
-      />
-    </div>
   );
 }

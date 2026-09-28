@@ -1,11 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LOCAL_AUTH_ME } from "./_helpers";
+import { DB_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/auth/me") {
       await route.fulfill({ json: LOCAL_AUTH_ME });
+      return;
+    }
+    // 検索・回答設定は DB ゲートを通す（#325）。
+    if (url.pathname === "/api/ready/database") {
+      await route.fulfill({ json: DB_STATUS_OK });
       return;
     }
     await route.fulfill({ json: { data: null, error_messages: [], warning_messages: [] } });
