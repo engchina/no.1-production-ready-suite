@@ -4,6 +4,7 @@ import type { OntologyBuildJob } from "./types";
 import type { WorkflowProgressStepStatus } from "../components/WorkflowProgressStrip";
 
 import { conceptKinds } from "./conceptModel";
+import { Disclosure } from "@engchina/production-ready-ui";
 export { conceptKinds, conceptGraph, nodeConceptKind } from "./conceptModel";
 export type { ConceptKind } from "./conceptModel";
 
@@ -81,19 +82,19 @@ export function orderedBuildProgress(
       open: status === "running" || status === "error",
       content: <div className="grid gap-3">
         {id === "concepts" && <div className="grid gap-2 text-sm">
-          {[conceptKinds.slice(0, 6), conceptKinds.slice(6)].map((kinds, i) => <details key={i}>
-            <summary>{t(i ? "markdownOntology.auxConcepts" : "markdownOntology.mainConcepts")}</summary>
+          {[conceptKinds.slice(0, 6), conceptKinds.slice(6)].map((kinds, i) => <Disclosure key={i} variant="plain" summary={t(i ? "markdownOntology.auxConcepts" : "markdownOntology.mainConcepts")}>
             <ul className="grid gap-1 pl-4">{kinds.map(kind => {
               const coverage = job.concept_coverage?.find(c => c.kind === kind);
               return <li key={kind}>{conceptLabel(kind)} · {coverage?.count ? t("profiles.ontologyBuild.concepts.count", {count: coverage.count}) : coverage?.reason_ja || t("ontologyResults.phaseStatus.pending")}</li>;
             })}</ul>
-          </details>)}
+          </Disclosure>)}
         </div>}
-        {children.map(step => <details key={step.id} open={step.open} data-testid={step.testId} data-step-status={step.dataStatus} className="min-w-0">
-          <summary className="cursor-pointer text-sm">{step.label} · {step.statusLabel}{step.elapsedLabel ? ` · ${step.elapsedLabel}` : ""}</summary>
+        {/* 実行中・失敗の工程は開く（状態が変わったときに開き直す）。 */}
+        {children.map(step => <Disclosure key={`${step.id}:${step.open ? "open" : "closed"}`} variant="plain" defaultOpen={step.open} data-testid={step.testId} data-step-status={step.dataStatus}
+          summary={`${step.label} · ${step.statusLabel}${step.elapsedLabel ? ` · ${step.elapsedLabel}` : ""}`} summaryClassName="font-normal">
           <p className="text-sm text-fg-muted">{step.description}</p>
           {step.content}
-        </details>)}
+        </Disclosure>)}
         {phases.filter(p => buildEventStage(p.name) === id && p.detail_ja && !children.some(child => child.id === p.name)).map(p => <p key={p.name} className="text-sm text-fg-muted">{p.detail_ja}</p>)}
         {stageEvents[id]}
       </div>,

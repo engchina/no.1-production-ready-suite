@@ -6,7 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { Share2 } from "lucide-react";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
+import { DisclosureChevron, Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
 import { t } from "@/lib/i18n";
@@ -62,14 +62,16 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
       <button
         type="button"
         aria-expanded={open}
+        aria-controls="knowledge-base-graph"
         onClick={() => setOpen((value) => !value)}
         className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         <Share2 size={16} className="text-accent-fg" aria-hidden />
         {open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
+        <DisclosureChevron expanded={open} size={16} className="ml-auto text-fg-muted" />
       </button>
       {open ? (
-        <div className="space-y-2 px-4 pb-4">
+        <div id="knowledge-base-graph" className="space-y-2 px-4 pb-4">
           <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.hint")}</p>
           {query.isPending ? (
             <TimedLoadingState

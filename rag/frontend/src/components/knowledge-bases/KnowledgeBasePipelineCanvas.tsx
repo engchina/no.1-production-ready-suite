@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Background, Controls, Position, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Workflow } from "lucide-react";
+import { DisclosureChevron } from "@engchina/production-ready-ui";
 
 import type { KnowledgeBaseAdapterConfig } from "@/lib/api";
 import { ja, t, type I18nKey } from "@/lib/i18n";
@@ -147,14 +148,16 @@ export function KnowledgeBasePipelineCanvas({ config }: { config: KnowledgeBaseA
       <button
         type="button"
         aria-expanded={open}
+        aria-controls="knowledge-base-pipeline-canvas"
         onClick={() => setOpen((value) => !value)}
         className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         <Workflow size={16} className="text-accent-fg" aria-hidden />
         {open ? t("settings.pipelineCanvas.hide") : t("settings.pipelineCanvas.show")}
+        <DisclosureChevron expanded={open} size={16} className="ml-auto text-fg-muted" />
       </button>
       {open ? (
-        <div className="space-y-2 px-4 pb-4">
+        <div id="knowledge-base-pipeline-canvas" className="space-y-2 px-4 pb-4">
           <p className="text-xs text-fg-muted">{t("settings.pipelineCanvas.hint")}</p>
           <div
             role="region"

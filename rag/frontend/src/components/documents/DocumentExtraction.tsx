@@ -1,7 +1,6 @@
 import {
   BookOpen,
   Check,
-  ChevronRight,
   CircleAlert,
   Clipboard,
   Hash,
@@ -16,6 +15,7 @@ import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   Banner,
   Button,
+  Disclosure,
   FormStatus,
 } from "@engchina/production-ready-ui";
 import type {
@@ -240,18 +240,13 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   return (
-    <details className="group rounded-md border border-border bg-surface" data-testid={testId}>
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-        <ChevronRight
-          size={14}
-          className="text-fg-muted transition-transform group-open:rotate-90"
-          aria-hidden
-        />
-        {title}
-        <span className="tnum text-xs font-normal text-fg-muted">{formatNumber(count)}</span>
-      </summary>
-      <div className="border-t border-border p-3">{children}</div>
-    </details>
+    <Disclosure
+      summary={title}
+      meta={<span className="tnum text-xs font-normal text-fg-muted">{formatNumber(count)}</span>}
+      data-testid={testId}
+    >
+      {children}
+    </Disclosure>
   );
 }
 
@@ -627,25 +622,27 @@ function VisionDetails({
   cropUrl: string | null;
 }) {
   return (
-    <details className="mt-1 rounded-md border border-border bg-surface px-3 py-2">
-      <summary className="cursor-pointer text-xs font-medium text-fg">
-        {t("flow.extraction.vision.details")}
-      </summary>
+    <Disclosure
+      summary={t("flow.extraction.vision.details")}
+      size="sm"
+      className="mt-1"
+      contentClassName="space-y-2"
+    >
       {cropUrl ? (
         <img
           src={cropUrl}
           alt={t("flow.extraction.vision.cropAlt")}
           loading="lazy"
-          className="mt-2 max-h-48 max-w-full rounded border border-border bg-surface-sunken object-contain"
+          className="max-h-48 max-w-full rounded border border-border bg-surface-sunken object-contain"
         />
       ) : null}
       {details.excludedReason ? (
-        <p className="mt-2 text-xs text-fg-muted">
+        <p className="text-xs text-fg-muted">
           {t("flow.extraction.vision.excludedReason", { reason: details.excludedReason })}
         </p>
       ) : null}
       {details.lines.length ? (
-        <dl className="mt-2 space-y-1.5 text-xs">
+        <dl className="space-y-1.5 text-xs">
           {details.lines.map((line) => (
             <div key={line.field}>
               <dt className="font-medium text-fg">
@@ -656,7 +653,7 @@ function VisionDetails({
           ))}
         </dl>
       ) : null}
-    </details>
+    </Disclosure>
   );
 }
 

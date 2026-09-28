@@ -1469,3 +1469,87 @@ export type TextFieldProps = {
 
 - E2E: 1 画面に `tabpanel` が複数になる。`page.getByRole("tabpanel")` で引いていたテストは、ペイン（`getByTestId("document-inspector-pane")`）やパネルの名前（`{ name: "抽出エクスポート" }`）で絞る。
 - 単体テストは `packages/ui/tests/components.test.tsx`（役割・選択・無効の理由・キー操作）、実ブラウザは RAG の `e2e/document-workspace-file-processing.spec.ts`（「処理前/処理後と抽出エクスポートの形式は共有の Tabs で…」）。
+
+## Disclosure — **新規** / DisclosureChevron — 変更（#397）
+
+開閉できる領域の標準形です。ネイティブの `<details>` / `<summary>` を包み、見出しの行全体を押せる領域にし、開閉の状態を右端（`plain` は見出しの直後）の `DisclosureChevron` で示します。**製品で `<details>` / `<summary>` を手書きしないでください**（adherence の lint が JSX の `<details>` を検出します）。見た目と振る舞いの決定は README §4「`Disclosure`」。
+
+```
+┌───────────────────────────────────────────────┐  card（既定）
+│ [icon] 見出し                    [meta]  ›    │  ← summary（行全体を押せる。hover で地が付く）
+├───────────────────────────────────────────────┤  ← 開いているときだけ区切り線
+│ 内容（p-3）                                    │
+└───────────────────────────────────────────────┘
+見出し ›                                             plain（枠なし。Chevron は見出しの直後）
+```
+
+```tsx
+import { Disclosure } from "@engchina/production-ready-ui";
+import { Wrench } from "lucide-react";
+
+// 受控: 開閉を URL や作業状態に残すとき
+<Disclosure
+  summary={t("flow.inspector.details")}
+  icon={Wrench}
+  open={diagnosticsOpen}
+  onOpenChange={setDiagnosticsOpen}
+  data-testid="document-diagnostics"
+  contentClassName="space-y-5"
+>
+  <SourceProfilePanel … />
+</Disclosure>
+
+// 非受控 + 件数（meta）+ 面の上に重ねる（sunken）
+<Disclosure summary="構造化要素" meta={<span className="tnum text-xs text-fg-muted">{count}</span>} surface="sunken">…</Disclosure>
+
+// 状態が変わったら開き直す（失敗したら開く）: key を状態で変え、defaultOpen を渡す
+<Disclosure key={failed ? "failed" : "active"} defaultOpen={failed} tone="warning" summary={`警告 (${n})`}>…</Disclosure>
+
+// 表のセルの中・回答の補足: plain + sm。summary に data-testid を付けるときは summaryProps
+<Disclosure variant="plain" size="sm" summary="分析" summaryProps={{ "data-testid": "analysis-toggle" }}>…</Disclosure>
+```
+
+### Disclosure の props
+
+```ts
+export type DisclosureVariant = "card" | "plain";
+export type DisclosureSurface = "surface" | "sunken";
+export type DisclosureTone = "neutral" | "warning" | "danger";
+export type DisclosureSize = "md" | "sm";
+
+export interface DisclosureProps
+  extends Omit<DetailsHTMLAttributes<HTMLDetailsElement>, "open" | "onToggle" | "title" | "children"> {
+  summary: ReactNode;            // 見出し。操作できる要素（ボタン・リンク）を入れない
+  icon?: LucideIcon;             // 先頭のアイコン（md 16px / sm 14px、--color-fg-muted）
+  description?: ReactNode;       // 見出しの下の補足（card のみ、12px）
+  meta?: ReactNode;              // 見出しと Chevron の間（件数・StatusBadge）
+  open?: boolean;                // 受控。渡すときは onOpenChange も渡す
+  defaultOpen?: boolean;         // 非受控の初期状態
+  onOpenChange?: (open: boolean) => void;
+  variant?: DisclosureVariant;   // 既定 "card"
+  surface?: DisclosureSurface;   // card の地。既定 "surface"
+  tone?: DisclosureTone;         // card の状態色。既定 "neutral"
+  size?: DisclosureSize;         // 見出しの文字。md 14px / sm 12px
+  summaryProps?: HTMLAttributes<HTMLElement>;  // data-testid など
+  summaryClassName?: string;     // 見出しの局所的な調整（sticky・余白など）
+  contentClassName?: string;     // 内容の領域。card の既定は border-t + p-3、plain は pt-2
+  children?: ReactNode;
+}
+```
+
+- ルートの `<details>` は `data-state="open" | "closed"`、Chevron は `data-state="expanded" | "collapsed"` を持ちます。E2E は `summary` を押して、`details` の `open` 属性か Chevron の `data-state` で確かめます（Chevron に独自の testid を付けない）。
+- 見出しの高さは `--button-height-lg`（card、タッチ端末 44px）/ `--button-height-sm`（plain）。hover の地は `--color-surface-hover`（`tone` のときは文字色の 5%）。フォーカスは outline（card は枠の内側）。
+- summary のクリックは部品が状態を切り替えます（ブラウザの切り替えを止める）。`summaryProps.onClick` で `preventDefault()` すると開閉しません。
+- 内容は閉じている間もマウントされたままです（ページ内検索で見つかる）。重い内容を開いたときだけ取得するなら、`onOpenChange` で状態を持ち、取得の `enabled` に渡します。
+
+### DisclosureChevron の props（変更）
+
+```ts
+export interface DisclosureChevronProps extends Omit<LucideProps, "aria-hidden"> {
+  /** boolean（推奨）か、`group/disclosure` を付けた <details> に CSS で追従する "group"（入れ子に弱いので新規コードでは使わない）。 */
+  expanded: boolean | "group";
+}
+```
+
+- 折りたたみ = `-rotate-90`（右向き）、展開 = `rotate-0`（下向き）。`transition-transform duration-200 ease-out`、`motion-reduce:transition-none`。`aria-hidden` / `focusable="false"` で読み上げない（状態は `<details>` か `aria-expanded` が伝える）。
+- **button + region の開閉**（`Disclosure` で表せないもの）: `aria-expanded` と `aria-controls` を付けたボタンの中に `<DisclosureChevron expanded={open} size={16} />` を置きます（`Button` なら子の末尾。`icon` / `trailingIcon` は回らないので使わない）。共有 `Sidebar` のセクション、`FormActionBar` / `ObjectActionBar` の「その他の操作」も同じ部品です。

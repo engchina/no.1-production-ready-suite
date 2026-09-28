@@ -612,7 +612,7 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
     .getByRole("button", { name: "全文表示" })
     .locator('svg[data-state="collapsed"]');
   await expect(darkModeChevron).toBeVisible();
-  await expect.poll(() => darkModeChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  await expect.poll(() => darkModeChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
   await expectDenseLayoutContained(page);
 });
 

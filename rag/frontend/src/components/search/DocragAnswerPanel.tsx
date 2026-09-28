@@ -1,4 +1,4 @@
-import { StatusBadge } from "@engchina/production-ready-ui";
+import { Disclosure, StatusBadge } from "@engchina/production-ready-ui";
 
 import { confidenceVariant, parseDocragDiagnostics } from "@/lib/docrag-answer";
 import { t } from "@/lib/i18n";
@@ -51,11 +51,8 @@ export function DocragAnswerPanel({
           {t("search.docrag.insufficient", { reason: data.insufficientReason })}
         </p>
       ) : null}
-      <details>
-        <summary className="cursor-pointer text-sm font-medium text-fg">
-          {t("search.docrag.evidence")}（{data.tree.length}）
-        </summary>
-        <ol className="mt-2 space-y-2">
+      <Disclosure variant="plain" summary={`${t("search.docrag.evidence")}（${data.tree.length}）`}>
+        <ol className="space-y-2">
           {data.tree.map((parent) => (
             <li
               key={parent.parentId}
@@ -87,12 +84,9 @@ export function DocragAnswerPanel({
             </li>
           ))}
         </ol>
-      </details>
-      <details>
-        <summary className="cursor-pointer text-sm font-medium text-fg">
-          {t("search.docrag.steps")}（{data.steps.length}）
-        </summary>
-        <ol className="mt-2 space-y-1 text-xs text-fg-muted">
+      </Disclosure>
+      <Disclosure variant="plain" summary={`${t("search.docrag.steps")}（${data.steps.length}）`}>
+        <ol className="space-y-1 text-xs text-fg-muted">
           {data.steps.map((step, index) => (
             <li key={`${step.name}-${index}`} className="flex flex-wrap gap-2">
               <span className="text-fg">{step.name}</span>
@@ -113,7 +107,7 @@ export function DocragAnswerPanel({
             {t("search.docrag.queries")}: {data.generatedQueries.join(" / ")}
           </p>
         ) : null}
-      </details>
+      </Disclosure>
       {traceId ? (
         <DocragAnswerEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />
       ) : null}

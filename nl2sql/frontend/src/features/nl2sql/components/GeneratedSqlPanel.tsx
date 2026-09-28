@@ -1,13 +1,13 @@
-import { lazy, Suspense, useMemo, useState, type SyntheticEvent } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Copy, FileText, ListOrdered, Network, Play } from "lucide-react";
 
 import {
   Button,
   Banner,
+  Disclosure,
   toast,
   StatusBadge,
   ContentActionBar,
-  DisclosureChevron,
 } from "@engchina/production-ready-ui";
 
 import { LogicalStepsList } from "./LogicalStepsList";
@@ -333,8 +333,6 @@ function ShowPromptArtifactPanel({
 }: {
   artifact?: Nl2SqlShowPromptArtifact | null;
 }) {
-  const [promptOpen, setPromptOpen] = useState(false);
-
   if (!artifact) return null;
   if (!artifact.available) {
     return (
@@ -344,38 +342,23 @@ function ShowPromptArtifactPanel({
     );
   }
 
-  const handlePromptToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
-    setPromptOpen(event.currentTarget.open);
-  };
-
   return (
-    <details
-      className="rounded-md border border-border bg-surface-sunken p-3"
+    <Disclosure
+      surface="sunken"
+      icon={FileText}
+      summary={t("nl2sql.showPrompt.title")}
       data-testid="nl2sql-show-prompt-panel"
-      onToggle={handlePromptToggle}
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-        <span className="flex min-w-0 items-center gap-2">
-          <FileText size={16} className="shrink-0" aria-hidden="true" />
-          <span>{t("nl2sql.showPrompt.title")}</span>
-        </span>
-        <DisclosureChevron
-          expanded={promptOpen}
-          size={16}
-          className="text-fg-muted"
-          data-testid="nl2sql-show-prompt-chevron"
-        />
-      </summary>
       {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
       <pre data-surface="code"
         tabIndex={0}
         role="region"
         aria-label={t("nl2sql.showPrompt.title")}
-        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-3 text-xs leading-5 text-fg"
+        className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-3 text-xs leading-5 text-fg"
       >
         <code>{artifact.prompt}</code>
       </pre>
-    </details>
+    </Disclosure>
   );
 }
 

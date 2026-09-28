@@ -2,6 +2,7 @@ import {
   Button,
   DataTable,
   type DataTableColumn,
+  Disclosure,
   FormStatus,
   ProcessingIndicator,
   StatusBadge,
@@ -170,11 +171,11 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
         </p>
       ) : null}
       {evaluation.coverage.length ? (
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-fg">
-            {t("search.evaluation.coverage", { count: evaluation.coverage.length })}
-          </summary>
-          <ul className="mt-2 space-y-2">
+        <Disclosure
+          variant="plain"
+          summary={t("search.evaluation.coverage", { count: evaluation.coverage.length })}
+        >
+          <ul className="space-y-2">
             {evaluation.coverage.map((item) => (
               <li key={item.index} className="space-y-1 text-xs">
                 <div className="flex flex-wrap items-center gap-2">
@@ -192,14 +193,14 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
               </li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       ) : null}
       {evaluation.claims.length ? (
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-fg">
-            {t("search.evaluation.claims", { count: evaluation.claims.length })}
-          </summary>
-          <ul className="mt-2 space-y-2">
+        <Disclosure
+          variant="plain"
+          summary={t("search.evaluation.claims", { count: evaluation.claims.length })}
+        >
+          <ul className="space-y-2">
             {evaluation.claims.map((claim, index) => (
               <li key={index} className="space-y-1 text-xs">
                 <p className="font-medium text-fg">
@@ -210,7 +211,7 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
               </li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       ) : null}
     </div>
   );

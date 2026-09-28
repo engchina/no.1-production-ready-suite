@@ -8,6 +8,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Disclosure,
   FormStatus,
   toast,
   StatusBadge,
@@ -17,7 +18,6 @@ import {
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
-  DisclosureChevron,
   ExecutionConfirmationField,
   ListSkeleton,
   TimedLoadingState,
@@ -694,16 +694,7 @@ function DeepSecPlanSteps({
         </CardHeader>
         <CardContent className="space-y-4">
           {step.error_message ? <Banner severity="danger">{step.error_message}</Banner> : null}
-          <details className="group/disclosure min-w-0 rounded-md border border-border bg-surface-sunken">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-              <span>{t("security.deepsec.sqlDetails")}</span>
-              <DisclosureChevron
-                expanded="group"
-                size={16}
-                className="text-fg-muted"
-              />
-            </summary>
-            <div className="space-y-4 border-t border-border p-3">
+          <Disclosure surface="sunken" summary={t("security.deepsec.sqlDetails")} contentClassName="space-y-4">
               <p className="text-sm leading-6 text-fg-muted">{t("security.deepsec.sqlReadonly")}</p>
               <div className="space-y-1">
                 <p className="text-xs font-medium text-fg-muted">{t("security.deepsec.checksum")}</p>
@@ -722,8 +713,7 @@ function DeepSecPlanSteps({
                   </pre>
                 ))}
               </div>
-            </div>
-          </details>
+            </Disclosure>
         </CardContent>
       </Card>
     );
@@ -2542,26 +2532,17 @@ export function SecurityDeepSecPage() {
                           data-testid="security-deepsec-entitlement-action-region"
                         >
                           {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
-                          <details
+                          <Disclosure
                             open={entitlementSqlPreviewOpen}
-                            className="group/disclosure max-h-[min(28rem,45dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface-sunken"
+                            onOpenChange={setEntitlementSqlPreviewOpen}
+                            surface="sunken"
+                            summary={t("security.deepsec.entitlements.sqlPreview")}
+                            // 長い SQL は枠の中でスクロールし、見出しは上端に留める。
+                            className="max-h-[min(28rem,45dvh)] overflow-y-auto overscroll-contain"
+                            summaryClassName="sticky top-0 z-10 bg-surface-sunken"
+                            contentClassName="space-y-3"
                             data-testid="security-deepsec-sql-preview"
                           >
-                            <summary
-                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-surface-sunken px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                setEntitlementSqlPreviewOpen((current) => !current);
-                              }}
-                            >
-                              <span>{t("security.deepsec.entitlements.sqlPreview")}</span>
-                              <DisclosureChevron
-                                expanded="group"
-                                size={16}
-                                className="text-fg-muted"
-                              />
-                            </summary>
-                            <div className="space-y-3 border-t border-border p-3">
                               <div
                                 className="grid min-w-0 gap-2"
                                 data-testid="security-deepsec-sql-preview-toolbar"
@@ -2678,8 +2659,7 @@ export function SecurityDeepSecPage() {
                                   {t("security.deepsec.entitlements.sqlEmpty")}
                                 </p>
                               )}
-                            </div>
-                          </details>
+                            </Disclosure>
                           <ExecutionConfirmationField
                             value={entitlementApplyConfirmation}
                             onChange={(value) => {
