@@ -540,6 +540,23 @@ import { Search } from "lucide-react";
   - md 以上は従来どおり（サイドバーを本文の左に置き、折りたたみの状態を ui-store に保持する）。md 未満でドロワーを開閉しても ui-store の `sidebarCollapsed` は変えない
   - 文言は `navDrawerLabels`（既定 `{ menu: "メニュー", close: "メニューを閉じる" }`）で上書きできる。サイドバーの `footer` に置く部品は、`collapsed` を `useSidebarCollapsed(collapsed)` に通して使う（ドロワーの中で `false` になる。共通の `SidebarAccountFooter` / `SidebarAccountSection` は対応済み）
 
+### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
+
+通知（Toast）は**主操作を覆わない位置**に出します。置き場所は `Toaster` が決め、製品では変えません（`placement` プロップは削除）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。考え方は「画面の上端の見出しの面（`PageHeader` / 上端のバー）に重ね、その面の操作は覆わない」です。
+
+| 幅 | 置き場所（`data-toast-placement`） |
+|---|---|
+| md 以上 | `page-header`: `PageHeader`（`<header data-page-header>`）に重ね、ページの操作（`[data-page-header-actions]`）のすぐ左に右端をそろえる（間 1rem）。上端は `PageHeader` の上端 + 1rem、幅は `min(22rem, 操作の左の幅)`。ページの操作が無い、または操作がタイトルの下へ折り返して左にある（lg 未満）ときは、画面の右端から 1rem |
+| md 以上（狭い） | `below-page-header`: ページの操作の左右のどちらにも 14rem が取れないときは、`PageHeader` の下端 + 1rem の右 |
+| md 以上（見出しなし） | `top-right`: `PageHeader` がスクロールで見えない（lg 未満）・無い画面は、画面の右上（上端・右端から 1rem） |
+| md 未満 | `top-bar`: 上端の全幅（右 1rem）。上端のバーに重ねて上端から 0.5rem。左はメニューのボタン（左の余白 0.5rem + 44px）の後ろ `calc(1rem + var(--control-height-touch))` から（上端のバーが無い画面は 1rem） |
+
+- **下端・右上（`PageHeader` の下）に置かない。** 操作は `PageHeader` の右端、内容の面の右上（`ObjectActionBar` / `ContentActionBar`。`PageHeader` のすぐ下に来やすい）、内容の末尾（`FormActionBar`。ページの末尾の操作は必ず画面の下端に来る）に集まる。右下の通知は末尾の操作を覆い、ポインタが乗ると一時停止（#351）で消えなくなり、閉じるまで押せなかった（#391 / #411）。`PageHeader` の下の右上は、内容の面の右上の操作を覆う（Agent の連携機能の詳細の「その他の操作」で確認）。`PageHeader` のタイトルの面と上端のバーの製品名には操作が無い
+- 一時停止（ホバー・フォーカス中はすべての通知の自動消滅を止める）と表示時間は変えない
+- 位置は通知が出ている間だけ、スクロール（祖先のどれでも）・リサイズ・`PageHeader` の大きさの変化に追従する（`requestAnimationFrame` でまとめる）。計算は `lib/toast-placement.ts` の `resolveToastPlacement`
+- 新しい通知は下に足す（DOM の順 = 読み上げ・Tab の順 = 見た目の順）。登場は上から降りる（`toast-in`: `translateY(-0.5rem)` → 0、200ms、reduced-motion では動かさない）
+- それでも覆いうるもの: 2 件以上積んだときの下の通知（本文の先頭。desktop は右寄り、375px は `PageHeader`）、lg 未満で `PageHeader` の「その他の操作」のメニューが左へ広がったときのメニューの上端、desktop のページのタイトル（一時的）
+
 ### 削除
 
 - **`.pr-icon-button` クラス。** 中身が hover ルールだけで、サイズ・radius・focus・disabled が未定義だったため製品ごとにサイズが違っていました。`<Button variant="ghost" iconOnly>` に一本化
@@ -718,7 +735,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**42点あります。**
+QA に事前共有してください。**43点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -763,7 +780,8 @@ QA に事前共有してください。**42点あります。**
 | 39 | **Chevron の折りたたみの向きが右になる** | `DisclosureChevron`（NL2SQL の SQL 詳細・実行オプション・Show Prompt・全文表示・スキーマの表・評価の分析、system-settings のシステムテーブルの詳細、「その他の操作」メニューなど）: 閉じているとき**左向き** → **右向き**（開いているときの下向きは同じ）。共有 `Sidebar` のセクションは元から右向きで、同じ部品にした | 同じ「開閉」が画面ごとに逆を向いていた。ブラウザ標準の ▸ / ▾・APG の例と同じ向きにそろえる（#397） |
 | 40 | **その場の実行と停止が 1 つのボタンになる**（RAG。#413） | RAG 検索: 質問欄の右に「検索」、実行中は押せない「検索」（スピナー）の右に「停止」（`X`）→ 検索のボタンはフォームの最後（「詳細条件」の下の区切り線の下、左寄せ。375px は全幅）に移り、実行中は**同じ位置・同じ要素のまま** `secondary` の「停止」（`Square`）になる。質問欄は隣の lg のボタンが無くなったため 40px → 既定の 36px。進捗の表示（「回答を生成しています」）がスピナーを出す（以前はボタンのスピナーだけ）。ナレッジベースの検索テストも同じ 1 つのボタン（文言「中止」→「停止」、幅は「検索テスト」の幅を保つ）で、処理中は今の工程と経過時間を出す。チャットの送信 / 停止は同じ要素になり、高さの手書き（38.5px / 31.5px）→ `md`（36px、タッチ 44px）、送信できない間は `aria-disabled`、生成中も入力欄に書ける。NL2SQL・Agent は変わらない（止められる操作はバックグラウンドの job で、開始と別の「中止」のまま） | 実行中に押せる操作は停止だけにし、押した位置にそのまま停止を出す。フォーカスを保つ。詳細条件を変えた後に上へ戻らずに検索できる（UX 契約 buttons.md §3.1） |
 | 41 | **RAG の chunk・会話一覧、NL2SQL の評価・履歴・プロファイル・訓練データの一覧が、5 / 8 行と共通のページ送りになる** | RAG の文書詳細の chunk はページの高さで全件を表示、抽出セグメントは `bounded-scroll-area`（22rem）、チャットの会話一覧は 50 件で打ち切り（`max-h-56`）。NL2SQL の SQL生成評価は独自の「前へ / 次へ」だけ（件数なし、結果明細は 25 件/ページ）、読み込み中は文言だけ。実行履歴は 42rem、プロファイル一覧は 20rem / 30.5rem、質問分類の訓練データは 42rem の手書きの高さ → chunk（xl 未満）・抽出セグメント・会話一覧（lg 未満）・実行履歴は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）で中をスクロール。chunk は xl 以上ではプレビューと同じ高さのタブのパネルがスクロールし、選んだ chunk をそのスクロール領域の中だけで見せる。会話一覧は lg 以上で会話エリアの高さに合わせる。会話一覧は 10 件/ページの `Pagination`（offset / limit、ページは作業状態に残る）。プロファイル一覧・訓練データは `visibleRows`（実測で 5 / 8 行）。SQL生成評価は共通の `Pagination`（件数と「N / M ページ」、10 件/ページ）と、経過時間 + 形の Skeleton の読み込み中 | NL2SQL の基準にそろえる。基準から外す一覧（選択と連動する chunk、カーソル型の「さらに読み込む」、フィードバックの件数の切り替え、評価の結果明細の高さ）は UX 契約 `page-archetypes.md` に理由を書いた（#403） |
-| 42 | **一覧の行の題名のボタンが 3 製品で同じ見た目になる** | NL2SQL のプロファイル・DB オブジェクト（DB 管理の一覧と対象の選択）の名前は常にアクセント色（`text-accent-fg`）、フィードバック管理のエントリはホバーでアクセント色。ユーザー・ロール・ロール権限の一覧は選択中だけアクセント色。RAG / Agent は `--color-fg` + ホバーの下線。フォーカスの outline は画面ごとに offset が 0 / 2px、タッチ端末の当たり判定は NL2SQL の対象の選択が md 未満で `min-h-11`、ほかは文字の高さ → 共有 `RowTitleButton`: 題名は `--color-fg` / 500 + ホバーの下線、選択の見た目は行の淡アクセント面 + 左バーだけ、outline は 2px / offset 2px、タッチ端末（`pointer: coarse`）で当たり判定 44px 以上（見た目の大きさは変えない。NL2SQL の対象の選択は md 未満でも行の高さが 44px 固定でなくなる）。プロファイル名の太さは 600 → 500（DB オブジェクト名は等幅・600 のまま、色だけ `--color-fg`）。Agent のメモリの内容は 80 文字で「…」 → 2 行で切り詰め、Tooltip で先頭 120 文字まで（全文は詳細）。NL2SQL のフィードバックのエントリは 3 行の切り詰めのまま、全文を Tooltip で見せる | 3 製品で同じ役割の部品を 1 つにする。アクセントを「現在の項目」の印に限り、選択行と区別しやすくする（§4「`RowTitleButton`」、#421） |
+| 42 | **通知が右下ではなく上端の見出しの面に出る** | 画面の右下（下 1rem・右 1rem、幅 `min(92vw, 22rem)`）に積み、下から上がってくる → md 以上は `PageHeader` に重ね、ページの操作のすぐ左（上端は `PageHeader` の上端 + 1rem、幅 22rem まで）。`PageHeader` が見えなければ画面の右上。md 未満は上端の全幅（上端のバーに重ね、メニューのボタンは覆わない）。上から降りてくる。`Toaster` の `placement` プロップは削除 | ページの末尾の操作（NL2SQL の「SQL 生成」など）は画面の下端に来るため、右下の通知が覆い、一時停止（#351）と重なって押せなかった。`PageHeader` の下の右上は内容の面の右上の操作を覆う（§4「Toaster」、#411） |
+| 43 | **一覧の行の題名のボタンが 3 製品で同じ見た目になる** | NL2SQL のプロファイル・DB オブジェクト（DB 管理の一覧と対象の選択）の名前は常にアクセント色（`text-accent-fg`）、フィードバック管理のエントリはホバーでアクセント色。ユーザー・ロール・ロール権限の一覧は選択中だけアクセント色。RAG / Agent は `--color-fg` + ホバーの下線。フォーカスの outline は画面ごとに offset が 0 / 2px、タッチ端末の当たり判定は NL2SQL の対象の選択が md 未満で `min-h-11`、ほかは文字の高さ → 共有 `RowTitleButton`: 題名は `--color-fg` / 500 + ホバーの下線、選択の見た目は行の淡アクセント面 + 左バーだけ、outline は 2px / offset 2px、タッチ端末（`pointer: coarse`）で当たり判定 44px 以上（見た目の大きさは変えない。NL2SQL の対象の選択は md 未満でも行の高さが 44px 固定でなくなる）。プロファイル名の太さは 600 → 500（DB オブジェクト名は等幅・600 のまま、色だけ `--color-fg`）。Agent のメモリの内容は 80 文字で「…」 → 2 行で切り詰め、Tooltip で先頭 120 文字まで（全文は詳細）。NL2SQL のフィードバックのエントリは 3 行の切り詰めのまま、全文を Tooltip で見せる | 3 製品で同じ役割の部品を 1 つにする。アクセントを「現在の項目」の印に限り、選択行と区別しやすくする（§4「`RowTitleButton`」、#421） |
 
 ### API の非互換
 
@@ -788,6 +806,7 @@ QA に事前共有してください。**42点あります。**
 | `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
 | `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
 | `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
+| `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |

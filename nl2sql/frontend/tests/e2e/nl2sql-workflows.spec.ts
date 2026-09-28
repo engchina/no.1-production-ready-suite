@@ -12,6 +12,7 @@ import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { expectToastStackAtTop } from "./_helpers/toast";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -138,14 +139,6 @@ async function expectButtonBelowInput(input: Locator, button: Locator) {
   expect(inputBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
-}
-
-async function dismissToasts(page: Page) {
-  const closeButtons = page.getByRole("region", { name: "通知" }).getByRole("button", { name: "閉じる" });
-  for (let index = 0; index < 5; index += 1) {
-    if ((await closeButtons.count()) === 0) return;
-    await closeButtons.first().click();
-  }
 }
 
 async function expectButtonsSameHeight(primary: Locator, secondary: Locator) {
@@ -2827,17 +2820,6 @@ async function expectQuestionClamp(locator: Locator, fullText: string, lines: nu
 
 const SPLIT_PANE_RENDER_TIMEOUT_MS = 15_000;
 
-async function expectToastStackBottomRight(page: Page) {
-  const region = page.getByRole("region", { name: "通知" });
-  const [box, viewport] = await Promise.all([region.boundingBox(), page.viewportSize()]);
-  expect(box).not.toBeNull();
-  expect(viewport).not.toBeNull();
-  expect(viewport!.width - (box!.x + box!.width)).toBeGreaterThanOrEqual(0);
-  expect(viewport!.width - (box!.x + box!.width)).toBeLessThanOrEqual(24);
-  expect(viewport!.height - (box!.y + box!.height)).toBeGreaterThanOrEqual(0);
-  expect(viewport!.height - (box!.y + box!.height)).toBeLessThanOrEqual(24);
-}
-
 function expectedInformationRows(testInfo: TestInfo) {
   return testInfo.project.name === "mobile-375" ? 5 : 8;
 }
@@ -4285,12 +4267,10 @@ test("query workbench generates SQL through the job flow and shows results", asy
 
   // 「違う」= negative。利用者コメント未入力なら送信をブロックする。
   await page.getByLabel("利用者コメント（feedback_content）").fill("");
-  await dismissToasts(page);
   await page.getByRole("button", { name: "違う", exact: true }).click();
   await expect(page.getByText("「違う」の場合は利用者コメントの入力が必須です。")).toBeVisible();
 
   await page.getByLabel("利用者コメント（feedback_content）").fill("列を請求金額だけに修正");
-  await dismissToasts(page);
   await page.getByRole("button", { name: "違う", exact: true }).click();
   expect(api.feedbackPayload).toEqual({
     history_id: "hist-001",
@@ -10734,7 +10714,6 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     } else {
       await expect(inputPanel.getByRole("combobox", { name: "操作", exact: true })).toHaveCount(0);
     }
-    await dismissToasts(page);
     const generateButton = inputPanel.getByRole("button", { name: "SQL 生成", exact: true });
     await expectLargeActionButton(generateButton);
     await generateButton.focus();
@@ -10756,7 +10735,6 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     await page.getByRole("button", { name: "情報を取得", exact: true }).click();
     const inputPanel = page.locator(`#${pageId}-panel-input`);
     await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
-    await dismissToasts(page);
 
     await page.reload();
     await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -10826,7 +10804,6 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   commentDetailGate.release();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
-  await dismissToasts(page);
   const commentInputPanel = page.locator("#comment-management-panel-input");
   await expect(commentInputPanel).toBeVisible();
 
@@ -10860,7 +10837,6 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
-  await dismissToasts(page);
   const annotationInputPanel = page.locator("#annotation-management-panel-input");
   await expect(annotationInputPanel).toBeVisible();
   const annotationGenerateGate = createRequestGate();
@@ -11058,7 +11034,6 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
-  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#comment-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON COLUMN/);
   expect(api.metadataSamplesPayload?.targets).toEqual([
@@ -11086,7 +11061,6 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.getByRole("checkbox", { name: /V_PAGE_101_VIEW/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
-  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
 });
@@ -11112,7 +11086,6 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await dismissToasts(page);
   const inputPanel = page.locator("#comment-management-panel-input");
   await expect(inputPanel).toBeVisible();
   await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
@@ -11122,7 +11095,6 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   );
   await expect(sqlTextarea).toHaveValue(generatedSql);
   await sqlTextarea.fill("COMMENT ON TABLE BROKEN IS '手編集';");
-  await dismissToasts(page);
   await page.getByRole("tab", { name: "入力確認・SQL生成", exact: true }).click();
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.getByRole("tab", { name: "SQL実行", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -11143,7 +11115,6 @@ test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り
   const inputPanel = page.locator("#domain-management-panel-input");
   await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
   await expect.poll(() => inventoryCount).toBe(1);
-  await dismissToasts(page);
   await inputPanel.getByRole("button", { name: "SQL 生成", exact: true }).click();
   const executePanel = page.locator("#domain-management-panel-execute");
   await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/CREATE DOMAIN/);
@@ -11163,7 +11134,6 @@ test("コメント管理は画面遷移後も生成 SQL と実行結果を保持
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await dismissToasts(page);
   const inputPanel = page.locator("#comment-management-panel-input");
   await expect(inputPanel).toBeVisible();
   await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
@@ -11676,7 +11646,7 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   expect(submits).toBe(0);
 });
 
-test("synthetic completion uses a bottom-right toast without a result action or another generation", async ({ page }, testInfo) => {
+test("synthetic completion uses a top toast without a result action or another generation", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let status = "running";
   let writes = 0;
@@ -11706,10 +11676,8 @@ test("synthetic completion uses a bottom-right toast without a result action or 
   await expect(page.getByText("合成データの生成が完了しました", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "結果を確認" })).toHaveCount(0);
   expect((await heading.boundingBox())?.y).toBe(before?.y);
-  const box = await notifications.boundingBox();
-  const inset = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
-  expect(box!.x + box!.width).toBeCloseTo(page.viewportSize()!.width - inset, 0);
-  expect(box!.y + box!.height).toBeCloseTo(page.viewportSize()!.height - inset, 0);
+  // #411: 通知は上端の見出しの面に出す（desktop は PageHeader に重ねてページの操作の左、375px は上端のバー）。
+  await expectToastStackAtTop(page);
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-completion-toast.png") });
   await notifications.getByRole("button", { name: "閉じる", exact: true }).focus();
@@ -11857,7 +11825,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const syntheticResultsSection = syntheticPanel.locator("section[aria-labelledby='synthetic-results-heading']");
   await expect(syntheticResultsSection.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   await expect(syntheticResultsSection.getByText("生成後に結果テーブルを選択すると表示できます。").first()).toBeVisible();
-  await expectToastStackBottomRight(page);
+  await expectToastStackAtTop(page);
 
   const resultsGate = createRequestGate();
   const syntheticResultsRequests: URL[] = [];
@@ -11922,7 +11890,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect.poll(() => syntheticResultsRequests.length).toBe(2);
   expect(syntheticResultsRequests[1].searchParams.get("limit")).toBe("100000");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
-  await expectToastStackBottomRight(page);
+  await expectToastStackAtTop(page);
   await expectNoHorizontalScroll(page);
 });
 
@@ -11951,7 +11919,7 @@ test("synthetic data reports preflight rejection beside the generate action", as
       "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
     )
   ).toBeVisible();
-  await expectToastStackBottomRight(page);
+  await expectToastStackAtTop(page);
   await expectNoHorizontalScroll(page);
 });
 
@@ -14471,7 +14439,6 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByLabel("サンプル件数").fill("10");
-  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(10);
   await expect.poll(() => api.commentGeneratePayload?.sample_text).toContain(
@@ -14496,7 +14463,6 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await dismissToasts(page);
   const inputPanel = page.locator("#annotation-management-panel-input");
   await expect(inputPanel).toBeVisible();
   await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
@@ -14725,7 +14691,6 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
 
   const executePanel = page.locator("#annotation-management-panel-execute");
@@ -14816,7 +14781,6 @@ for (const scenario of [
     await copyButton.press("Enter");
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(scenario.exampleSql);
     await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーしました");
-    await dismissToasts(page);
     await copyButton.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`${scenario.pageId}-sql-recovery.png`) });
     await expect(sqlInput).toHaveValue(scenario.sql);
@@ -14863,7 +14827,6 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await page.getByLabel("サンプル件数").fill("0");
-  await dismissToasts(page);
   const commentInputPanel = page.locator("#comment-management-panel-input");
   await expect(commentInputPanel).toBeVisible();
   await commentInputPanel.getByRole("button", { name: "SQL 生成" }).click();
@@ -14882,7 +14845,6 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await dismissToasts(page);
   const annotationInputPanel = page.locator("#annotation-management-panel-input");
   await expect(annotationInputPanel).toBeVisible();
   await annotationInputPanel.getByRole("button", { name: "SQL 生成" }).click();
@@ -15326,7 +15288,6 @@ test("workspace: コメントの手編集を保持して対象の失効を再検
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
-  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
   const panel = page.locator("#comment-management-panel-execute");
   const sql = panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
@@ -16146,7 +16107,6 @@ for (const mode of ["comment", "annotation"] as const) {
       page.on("request", (request) => { if (request.url().endsWith(generationPath)) calls += 1; });
       await page.route(`**${delayedPath}`, async (route) => { await gate.promise; await route.fallback(); });
       const request = page.waitForRequest(`**${delayedPath}`);
-      await dismissToasts(page);
       await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
       await request;
       if (phase === "samples") {

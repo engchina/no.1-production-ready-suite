@@ -288,6 +288,8 @@ export function PageHeader({
 
   return (
     <header
+      // 通知（Toaster）はこの面に重ねて出す（#411。ページの操作は覆わない）。
+      data-page-header=""
       className={cn(
         // 貼り付くのは lg 以上だけ。狭い画面では文字の折り返しでヘッダーが高くなり、貼り付くと本文の表示領域を常に削るため。
         "flex flex-col border-b border-border bg-surface lg:sticky lg:top-0 lg:z-[var(--z-sticky)]",
@@ -306,7 +308,14 @@ export function PageHeader({
           {meta ? <div className="mt-1 text-xs text-fg-muted">{meta}</div> : null}
         </div>
         {actionNodes ? (
-          <div role="group" aria-label={actionsLabel} data-testid={actionsTestId} className="flex min-w-0 flex-wrap items-center gap-2">
+          <div
+            role="group"
+            aria-label={actionsLabel}
+            data-testid={actionsTestId}
+            // 通知（Toaster）はこの並びのすぐ左に右端をそろえ、ページの操作を覆わない（#411）。
+            data-page-header-actions=""
+            className="flex min-w-0 flex-wrap items-center gap-2"
+          >
             {actionNodes}
           </div>
         ) : null}
