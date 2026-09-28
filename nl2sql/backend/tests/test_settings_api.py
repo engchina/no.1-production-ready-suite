@@ -1654,7 +1654,8 @@ def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> N
     settings = Settings(_env_file=None)
 
     assert settings.local_storage_dir == "/u01/data/production-ready-nl2sql"
-    assert settings.object_storage_bucket == "nl2sql-originals"
+    # バケットは 3 製品で共通の既定名（#283）。
+    assert settings.object_storage_bucket == "production-ready"
 
 
 def test_update_model_settings_persists_v2_json_and_env_secret(
