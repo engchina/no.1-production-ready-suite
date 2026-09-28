@@ -68,7 +68,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 - SaaS / 業務ツールとして、静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォーム状態を優先する。
 - UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。
 - ナビゲーションは折りたたみ可能なサイドナビを正とし、主要セクションは以下とする。
-  - **ナレッジ構築**: ダッシュボード、文書アップロード、文書インデックス、ナレッジベース。
+  - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース。
   - **業務ビュー**: RAG 検索、業務ビュー、品質評価。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、GraphRAG、エージェント計画。
   - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。
@@ -152,7 +152,7 @@ backend/                  FastAPI アプリ
   app/
     main.py               エントリ(CORS, ルーター, lifespan)
     config.py             設定(pydantic-settings)
-    api/routes/           health / dashboard / documents / search / knowledge_bases /
+    api/routes/           health / documents / search / knowledge_bases /
                           business_views / evaluation / settings / services
     clients/              OCI / Oracle / Object Storage clients
     rag/                  ingestion / parsing / chunking / retrieval / grounding /

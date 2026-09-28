@@ -64,7 +64,7 @@ test("権限のある画面だけをナビとコマンドパレットに出し�
     permissions: ["menu.search", "menu.chat", "menu.upload", "menu.security_users"],
   });
 
-  // ダッシュボードの権限が無いので、`/` はナビの並びで最初に開ける画面（RAG 検索）へ。
+  // `/` はナビの並びで最初に開ける画面（RAG 検索）へ。
   await page.goto("/");
   await expect(page).toHaveURL(/\/search$/);
   await openSidebarIfCollapsed(page);
@@ -77,7 +77,6 @@ test("権限のある画面だけをナビとコマンドパレットに出し�
   for (const section of ["検索・回答設定", "RAG セキュリティ", "運用設定", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toHaveCount(0);
   }
-  await expect(sidebar.getByRole("link", { name: "ダッシュボード" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 
   await page.keyboard.press(`${modifier}+KeyK`);
@@ -92,7 +91,7 @@ test("権限のない URL を直接開くと権限なしの画面を出し、利
   await mockApi(page);
   await mockAuthUser(page, { permissions: ["menu.chat", "menu.feedback"] });
 
-  for (const path of ["/settings/oci", "/settings/security/permissions", "/knowledge-bases/kb-1", "/dashboard"]) {
+  for (const path of ["/settings/oci", "/settings/security/permissions", "/knowledge-bases/kb-1"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/forbidden$/);
     await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
@@ -108,10 +107,37 @@ test("権限のない URL を直接開くと権限なしの画面を出し、利
   await expect(page).toHaveURL(/\/documents\/doc-1$/);
 });
 
+test("廃止したダッシュボードの旧 URL と未知の URL は既定の入口へ置き換えて移す（#261）", async ({ page }) => {
+  await mockApi(page);
+  const setUser = await mockAuthUser(page, { permissions: ["menu.search", "menu.chat"] });
+
+  // RAG 検索を開ける利用者は RAG 検索へ。履歴を置き換えるので、戻ると旧 URL ではなく直前の画面。
+  await page.goto("/chat");
+  await expect(page).toHaveURL(/\/chat$/);
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/chat$/);
+  await page.goto("/no-such-page");
+  await expect(page).toHaveURL(/\/search$/);
+
+  // RAG 検索を開けない利用者は `/` 経由でナビの並びで最初に開ける画面へ（権限なしの画面にしない）。
+  setUser(dbUser({ permissions: ["menu.upload", "menu.file_list"] }));
+  for (const path of ["/dashboard", "/", "/no-such-page"]) {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/upload$/);
+  }
+  await openSidebarIfCollapsed(page);
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "ダッシュボード" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("API の 403 は権限なしの画面へ移し、調査用の request ID を示す", async ({ page }) => {
   await mockApi(page);
-  await mockAuthUser(page, { permissions: ["menu.dashboard"] });
-  await page.route("**/api/dashboard/summary", (route) =>
+  await mockAuthUser(page, { permissions: ["menu.settings_huggingface"] });
+  await page.route("**/api/settings/huggingface**", (route) =>
     route.fulfill({
       status: 403,
       headers: { "X-Request-ID": "req-forbidden-1" },
@@ -119,7 +145,7 @@ test("API の 403 は権限なしの画面へ移し、調査用の request ID �
     })
   );
 
-  await page.goto("/dashboard");
+  await page.goto("/settings/huggingface");
   await expect(page).toHaveURL(/\/forbidden$/);
   await expect(page.getByText("req-forbidden-1")).toBeVisible();
 });

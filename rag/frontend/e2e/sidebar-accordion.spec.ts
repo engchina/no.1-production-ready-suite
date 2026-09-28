@@ -16,7 +16,7 @@ test.describe("サイドナビのセクション折りたたみ", () => {
   test("キーボード（Enter / Space）で開閉でき aria-expanded が反映される", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await mockApi(page);
-    await page.goto("/dashboard");
+    await page.goto("/settings/appearance");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     const ragItem = sidebar.getByText("RAG 検索", { exact: true });
@@ -40,7 +40,7 @@ test.describe("サイドナビのセクション折りたたみ", () => {
   test("折りたたんだセクションの項目はアクセシビリティツリー / タブ順から除外される", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await mockApi(page);
-    await page.goto("/dashboard");
+    await page.goto("/settings/appearance");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     const evalLink = sidebar
@@ -60,7 +60,7 @@ test.describe("サイドナビのセクション折りたたみ", () => {
   test("狭幅（375px・icon-only）ではアコーディオン無効で全項目を表示する", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await mockApi(page);
-    await page.goto("/dashboard");
+    await page.goto("/settings/appearance");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     // icon-only 幅ではセクション開閉ボタンは出さず、全リンクを表示する。

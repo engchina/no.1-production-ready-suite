@@ -18,7 +18,6 @@ export function DatabaseSettingsClient() {
       errorMessage={(error) => (error instanceof ApiError ? error.message : undefined)}
       onDatabaseChanged={async () => {
         await queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
       }}
     >
       {/* カードごとに描画例外を閉じ込め、1 枚の失敗で他カードが消えないようにする(#67)。 */}

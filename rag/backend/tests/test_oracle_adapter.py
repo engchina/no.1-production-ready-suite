@@ -1852,55 +1852,6 @@ async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> Non
     assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
 
 
-async def test_oci_list_chunk_metadata_adds_traceable_lineage() -> None:
-    """metadata 一覧も citation 可視化に必要な chunk lineage を補完する。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:4",
-                    "chunk_index": 4,
-                    "metadata_json": json.dumps(
-                        {
-                            "content_kind": "table",
-                            "element_ids": "tbl-1",
-                            "page_start": 2,
-                            "page_end": 3,
-                            "bbox": "[0.1,0.2,0.8,0.9]",
-                            "chunk_group_id": "grp-table",
-                            "source_parser": "marker",
-                        }
-                    ),
-                }
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    metadata = await client.list_chunk_metadata()
-
-    assert metadata == [
-        {
-            "document_id": "doc-1",
-            "chunk_id": "doc-1:4",
-            "chunk_index": 4,
-            "content_kind": "table",
-            "element_ids": "tbl-1",
-            "page_start": 2,
-            "page_end": 3,
-            "bbox": "[0.1,0.2,0.8,0.9]",
-            "chunk_group_id": "grp-table",
-            "source_parser": "marker",
-        }
-    ]
-    call = pool.connection.calls[0]
-    assert "c.document_id" in call.statement
-    assert "c.chunk_id" in call.statement
-    assert "c.chunk_index" in call.statement
-    assert "c.metadata_json" in call.statement
-
-
 async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_metadata() -> None:
     """chunk view は JSON array element_ids と table row-group metadata を保持する。"""
     pool = FakeOraclePool(
@@ -2673,12 +2624,12 @@ async def test_local_delete_document_removes_chunks_and_is_idempotent() -> None:
         [[1.0, 0.0, 0.0]],
     )
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
 
     assert await client.delete_document(document.id) is True
     assert await client.delete_document(document.id) is False
     assert await client.get_document(document.id) is None
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
 
 
 @IN_MEMORY_ORACLE_REMOVED
@@ -3193,15 +3144,15 @@ async def test_non_searchable_status_clears_existing_chunks() -> None:
         [Chunk(index=0, text="社内規程 クラウド利用料", start_offset=0, end_offset=10)],
         [[1.0, 0.0, 0.0]],
     )
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
 
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1)
 
     await client.update_document_status(document.id, FileStatus.ERROR, "再分析に失敗しました。")
 
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
 
 
@@ -3522,11 +3473,11 @@ async def test_analyzing_status_removes_stale_chunks_during_reindex() -> None:
         [[1.0, 0.0, 0.0]],
     )
     await client.update_document_status(document.id, FileStatus.INDEXED)
-    assert await client.count_chunks() == 1
+    assert await client.count_document_chunks(document.id) == 1
 
     await client.update_document_status(document.id, FileStatus.INGESTING)
 
-    assert await client.count_chunks() == 0
+    assert await client.count_document_chunks(document.id) == 0
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
 
 

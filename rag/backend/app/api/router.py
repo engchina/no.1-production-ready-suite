@@ -11,7 +11,6 @@ from app.api.routes import (
     business_view_knowledge,
     business_views,
     chat,
-    dashboard,
     documents,
     evaluation,
     feedback,
@@ -29,7 +28,6 @@ api_router = APIRouter(dependencies=[Depends(authorize_api_request)])
 api_router.include_router(health.router, tags=["health"])
 # 認証（/auth/*）・ユーザー管理・ロール管理（platform の共通 router）と RAG の権限管理。
 api_router.include_router(security_router)
-api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(
     knowledge_bases.router,

@@ -12,7 +12,7 @@
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 業務ビュー（`/business-views`） | 文書とナレッジベースは一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。業務ビューは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。 |
 | B. マスタ詳細の閲覧 | フィードバック（`/feedback`） | 一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。 |
-| D. ダッシュボード / 状態 | ダッシュボード（`/dashboard`）/ 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/grounding` `/settings/generation` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph` `/settings/agentic`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
+| D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/grounding` `/settings/generation` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph` `/settings/agentic`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
 
 ### 1.1 業務ビューの全画面エディタ（`?id=`）
 

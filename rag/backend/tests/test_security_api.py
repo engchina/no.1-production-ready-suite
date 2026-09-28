@@ -22,7 +22,6 @@ from pr_system_settings.auth.errors import (
 from pytest import MonkeyPatch
 
 from app.api.routes import business_views as business_views_route
-from app.api.routes import dashboard as dashboard_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.config import get_settings
 from app.main import app
@@ -149,26 +148,6 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
     return enable_production_auth(monkeypatch)
 
 
-class FakeDashboardOracle:
-    async def list_documents(self, **_: object) -> list[object]:
-        return []
-
-    async def count_chunks(self) -> int:
-        return 0
-
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        return []
-
-    async def list_chunk_metadata(self) -> list[dict[str, object]]:
-        return []
-
-
-@pytest.fixture
-def fake_dashboard(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(dashboard_route, "OracleClient", lambda *_a, **_k: FakeDashboardOracle())
-    monkeypatch.setattr(dashboard_route, "readiness_checks", lambda _settings: {"oracle": "ok"})
-
-
 # ---------------------------------------------------------------------------
 # manifest
 # ---------------------------------------------------------------------------
@@ -276,19 +255,19 @@ def test_capabilities_imply_their_menu() -> None:
 
 
 def test_unclassified_route_is_denied_even_for_logged_in_user(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth, fake_dashboard: None
+    monkeypatch: MonkeyPatch, auth: ProductionAuth
 ) -> None:
     """manifest が未登録を返す route は、ログイン済みでも 403（SYSTEM_ADMIN も同じ）。"""
     auth.create_user("root", system_admin=True)
     headers = login(client, "root")
-    assert client.get("/api/dashboard/summary", headers=headers).status_code == 200
+    assert client.get("/api/security/permissions", headers=headers).status_code == 200
 
     monkeypatch.setattr(
         security_dependencies,
         "permission_for_route",
         lambda method, path: frozenset({UNCLASSIFIED_PERMISSION}),
     )
-    response = client.get("/api/dashboard/summary", headers=headers)
+    response = client.get("/api/security/permissions", headers=headers)
     assert response.status_code == 403
     assert response.json()["error_messages"] == ["この API は権限一覧に登録されていません。"]
 
@@ -299,7 +278,7 @@ def test_unclassified_route_is_denied_even_for_logged_in_user(
 
 
 def test_production_rejects_protected_api_without_session(auth: ProductionAuth) -> None:
-    response = client.get("/api/dashboard/summary")
+    response = client.get("/api/security/permissions")
     assert response.status_code == 401
     assert response.json()["error_messages"] == ["ログインしてください。"]
 
@@ -359,7 +338,7 @@ def test_login_rejects_invalid_credentials(auth: ProductionAuth) -> None:
 
 
 def test_configured_system_admin_login_has_all_permissions_and_no_scope(
-    auth: ProductionAuth, fake_dashboard: None
+    auth: ProductionAuth,
 ) -> None:
     response = client.post(
         "/api/auth/login",
@@ -374,7 +353,7 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     # 構成管理者の token は RAG 固有の接頭辞（他製品の token と混ざらない）。
     assert str(response.cookies.get("rag_session")).startswith("rag-system-admin-v1.")
     headers = session_headers(response)
-    assert client.get("/api/dashboard/summary", headers=headers).status_code == 200
+    assert client.get("/api/security/permissions", headers=headers).status_code == 200
 
 
 def test_configured_admin_rejects_wrong_password(auth: ProductionAuth) -> None:
@@ -384,26 +363,25 @@ def test_configured_admin_rejects_wrong_password(auth: ProductionAuth) -> None:
     assert response.status_code == 401
 
 
-def test_permission_denied_returns_403(auth: ProductionAuth, fake_dashboard: None) -> None:
+def test_permission_denied_returns_403(auth: ProductionAuth) -> None:
     auth.user_with_permissions("searcher", ["menu.search"])
-    auth.user_with_permissions("builder", ["menu.dashboard"])
+    auth.user_with_permissions("builder", ["menu.security_permissions"])
     searcher = login(client, "searcher")
-    response = client.get("/api/dashboard/summary", headers=searcher)
+    response = client.get("/api/security/permissions", headers=searcher)
     assert response.status_code == 403
     assert response.json()["error_messages"] == ["この機能を利用する権限がありません。"]
     builder = login(client, "builder")
-    assert client.get("/api/dashboard/summary", headers=builder).status_code == 200
+    assert client.get("/api/security/permissions", headers=builder).status_code == 200
 
 
 def test_user_without_roles_is_denied_everything_except_auth(
-    auth: ProductionAuth, fake_dashboard: None, scoped_oracle: ScopedFakeOracle
+    auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
 ) -> None:
     """ロールのない利用者は既定で何もできない（ログイン系だけ使える）。"""
     auth.create_user("nobody")
     headers = login(client, "nobody")
     assert client.get("/api/auth/me", headers=headers).status_code == 200
     for method, path in (
-        ("GET", "/api/dashboard/summary"),
         ("GET", "/api/business-views"),
         ("GET", "/api/knowledge-bases"),
         ("GET", "/api/security/permissions"),
@@ -434,14 +412,12 @@ def test_state_changing_request_requires_csrf_token(
     assert created.json()["data"]["permissions"] == []
 
 
-def test_forced_password_change_blocks_other_apis(
-    auth: ProductionAuth, fake_dashboard: None
-) -> None:
-    role = auth.create_role(["menu.dashboard"])
+def test_forced_password_change_blocks_other_apis(auth: ProductionAuth) -> None:
+    role = auth.create_role(["menu.security_permissions"])
     auth.create_user("new-user", [role], force_password_change=True)
     headers = login(client, "new-user")
     assert client.get("/api/auth/me", headers=headers).status_code == 200
-    response = client.get("/api/dashboard/summary", headers=headers)
+    response = client.get("/api/security/permissions", headers=headers)
     assert response.status_code == 403
     assert response.json()["error_messages"] == ["初回パスワード変更を完了してください。"]
     assert response.json()["error_code"] == PASSWORD_CHANGE_REQUIRED_CODE
@@ -676,6 +652,49 @@ def test_role_access_update_validates_input(
     assert _put_access(headers, "missing-role").status_code == 404
 
 
+def test_retired_permission_code_left_in_store_is_ignored(
+    auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
+) -> None:
+    """DB に残った廃止済みの権限コード（`menu.dashboard`。#261）は、実効権限・権限管理の表示・
+    ロールの割り当て・保存のどれでも無視し、エラーにしない（migration の適用前でも壊れない）。"""
+    stale = auth.create_role(["menu.search", "menu.dashboard"], business_view_ids=["bv-1"])
+    auth.create_user("member", [stale])
+    member, _token, _csrf = auth.service.login("member", USER_PASSWORD)
+    assert member.permissions == {"menu.search"}
+
+    # 範囲の限られた管理者も、古いコードが残ったロールを割り当てられる（昇格とみなさない）。
+    auth.user_with_permissions(
+        "user-admin", ["menu.security_users", "menu.search"], business_view_ids=["bv-1"]
+    )
+    delegate = login(client, "user-admin")
+    assigned = client.post(
+        "/api/security/users",
+        json={
+            "login_user_id": "member-2",
+            "display_name": "member-2",
+            "role_ids": [stale.role_id],
+            "temporary_password": "TempPassword!2026",
+        },
+        headers=delegate,
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    headers = login_configured_admin(client)
+    listed = client.get("/api/security/roles", headers=headers)
+    by_id = {item["role_id"]: item for item in listed.json()["data"]}
+    assert by_id[stale.role_id]["permissions"] == ["menu.search"]
+    catalog = client.get("/api/security/permissions", headers=headers).json()["data"]
+    assert "menu.dashboard" not in {item["code"] for item in catalog}
+
+    # 権限管理画面は表示したコードをそのまま保存する。保存後は古いコードも消える。
+    saved = _put_access(
+        headers, stale.role_id, permissions=["menu.search"], business_view_ids=["bv-1"]
+    )
+    assert saved.status_code == 200, saved.text
+    stored = auth.store.get_role(stale.role_id)
+    assert stored is not None and stored.permissions == {"menu.search"}
+
+
 def test_manage_permission_clears_target_lists(
     auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
 ) -> None:
@@ -706,7 +725,7 @@ def test_role_access_update_prevents_permission_escalation(
     headers = login(client, "delegate")
 
     # 自分が持たない権限（メニュー・capability）は足せない。
-    for permissions in (["menu.dashboard"], ["rag.business_views.manage"]):
+    for permissions in (["menu.upload"], ["rag.business_views.manage"]):
         response = _put_access(headers, role.role_id, permissions=permissions)
         assert response.status_code == 403
         assert "権限" in response.json()["error_messages"][0]
@@ -773,7 +792,7 @@ def test_principal_scope_is_union_of_active_roles(auth: ProductionAuth) -> None:
         ["menu.search"], business_view_ids=["bv-1"], knowledge_base_ids=["kb-1"]
     )
     second = auth.create_role(["menu.chat"], business_view_ids=["bv-2"])
-    archived = auth.create_role(["menu.dashboard"], business_view_ids=["bv-3"])
+    archived = auth.create_role(["menu.upload"], business_view_ids=["bv-3"])
     auth.create_user("member", [first, second, archived])
     # アーカイブしたロールの権限・対象範囲は実効に含めない。
     auth.store.archive_role(archived.role_id, expected_version=1)

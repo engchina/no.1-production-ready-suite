@@ -24,7 +24,7 @@
 - `category_name` は廃止せず、タグ/カテゴリ相当の軽量 facet として残す。
 - ナレッジベースは `rag_knowledge_bases` として独立管理する。
 - 文書とナレッジベースは多対多の関連表で管理し、同じ文書・chunk・embedding を物理複製しない。
-- 検索、評価、ダッシュボード、監査、認可はナレッジベース ID をスコープとして扱う。
+- 検索、評価、監査、認可はナレッジベース ID をスコープとして扱う。
 - UI 表示名は日本語で「ナレッジベース」とし、i18n key 経由で管理する。
 
 ## 2. 参考プロジェクトから取り込む考え方
@@ -416,10 +416,9 @@ X-RAG-Allowed-Knowledge-Base-Ids: kb_1,kb_2
 
 推奨順:
 
-1. ダッシュボード
-2. ナレッジベース
-3. アップロード
-4. 文書インデックス
+1. ナレッジベース
+2. アップロード
+3. 文書インデックス
 
 理由:
 
@@ -641,7 +640,6 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 - `UploadWorkspace` に `KnowledgeBasePicker` を追加。
 - `FileListClient` に knowledge base filter / column / membership action を追加。
 - `SearchClient` に search scope picker を追加。
-- `DashboardClient` に knowledge base metrics を追加するか、Phase 1 ではリンクだけ追加する。
 
 i18n key 例:
 
@@ -756,7 +754,6 @@ Playwright 実行時は dev server を起動し、desktop と mobile viewport �
 - upload に `KnowledgeBasePicker`。
 - file list に filter / column。
 - search に scope picker。
-- dashboard に metrics / link。
 - mobile / desktop / keyboard / empty-loading-error state を Playwright で確認。
 
 ### Step 5: Migration and ops

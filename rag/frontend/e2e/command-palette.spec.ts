@@ -17,7 +17,7 @@ const modifier = process.platform === "darwin" ? "Meta" : "Control";
 test("Cmd/Ctrl+K で開き、絞り込み → Enter で対象ページへ遷移する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
   // アプリ（CommandPalette の keydown リスナー）が mount 済みになるまで待つ。
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toBeVisible();
 
@@ -42,7 +42,7 @@ test("Cmd/Ctrl+K で開き、絞り込み → Enter で対象ページへ遷移�
 test("一致なしの空状態を表示し、Esc で閉じる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toBeVisible();
 
   await page.keyboard.press(`${modifier}+KeyK`);
@@ -57,7 +57,7 @@ test("一致なしの空状態を表示し、Esc で閉じる", async ({ page })
 test("サイドバーの検索トリガーから開ける（375px・タッチ導線）", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 });
   await mockApi(page);
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await sidebar.getByRole("button", { name: "コマンドパレット" }).click();
@@ -74,7 +74,7 @@ test("サイドバーの検索トリガーから開ける（375px・タッチ導
 test("クリアボタンで入力をリセットし、件数フッターを更新する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
-  await page.goto("/dashboard");
+  await page.goto("/settings/appearance");
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toBeVisible();
 
   await page.keyboard.press(`${modifier}+KeyK`);
@@ -90,7 +90,7 @@ test("クリアボタンで入力をリセットし、件数フッターを更�
   await dialog.getByRole("button", { name: "検索をクリア" }).click();
   await expect(input).toHaveValue("");
   await expect(input).toBeFocused();
-  // 全件 = NAV_SECTIONS の総項目数(業務ビュー5[チャット・フィードバック含む]+ナレッジ構築4+検索・回答設定13[概要+12工程]
-  // +RAG セキュリティ1+運用設定2+ユーザーとロール2+システム設定5=32)。ローカル DEBUG は全権限なので全項目が出る。
-  await expect(dialog.getByText("32 件", { exact: true })).toBeVisible();
+  // 全件 = NAV_SECTIONS の総項目数(業務ビュー5[チャット・フィードバック含む]+ナレッジ構築3+検索・回答設定13[概要+12工程]
+  // +RAG セキュリティ1+運用設定2+ユーザーとロール2+システム設定5=31)。ローカル DEBUG は全権限なので全項目が出る。
+  await expect(dialog.getByText("31 件", { exact: true })).toBeVisible();
 });

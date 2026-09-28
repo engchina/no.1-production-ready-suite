@@ -52,7 +52,6 @@ MENU_CHAT = "menu.chat"
 MENU_BUSINESS_VIEWS = "menu.business_views"
 MENU_EVALUATION = "menu.evaluation"
 MENU_FEEDBACK = "menu.feedback"
-MENU_DASHBOARD = "menu.dashboard"
 MENU_UPLOAD = "menu.upload"
 MENU_FILE_LIST = "menu.file_list"
 MENU_KNOWLEDGE_BASES = "menu.knowledge_bases"
@@ -109,7 +108,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "フィードバックの一覧・詳細を表示し、評価ケースを作成できます"
         "（利用できる業務ビューのフィードバックだけ）。",
     ),
-    _menu_permission(MENU_DASHBOARD, _GROUP_INGESTION, "ダッシュボード"),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
@@ -251,13 +249,11 @@ _BV = "/business-views/{business_view_id}"
 
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
-    # ---- ナレッジ構築: ダッシュボード ----
-    ("GET", "/dashboard/summary"): _any(MENU_DASHBOARD),
     # ---- ナレッジ構築: 文書（アップロード・文書インデックス） ----
     ("POST", "/documents/upload"): _any(MENU_UPLOAD),
     ("POST", "/documents/batch-upload"): _any(MENU_UPLOAD),
     ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),
-    ("GET", "/documents/stats"): _any(MENU_DASHBOARD, MENU_FILE_LIST),
+    ("GET", "/documents/stats"): _any(MENU_FILE_LIST),
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
     ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,
