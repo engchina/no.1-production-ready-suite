@@ -273,7 +273,6 @@ def create_chunking_app(
             strategy=request.strategy,
             chunk_size=request.chunk_size,
             overlap=request.overlap,
-            child_size=request.child_size,
             min_chars=request.min_chars,
             delimiter=request.delimiter,
         )

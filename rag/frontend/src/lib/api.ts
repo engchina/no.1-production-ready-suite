@@ -604,18 +604,26 @@ export interface ChunkSetExperimentRequest {
   chunking_strategy?: string;
   chunk_size?: number;
   chunk_overlap?: number;
-  chunk_child_size?: number;
   chunk_min_chars?: number;
   chunk_delimiter?: string;
+  docrag_child_target_chars?: number;
+  docrag_table_child_target_chars?: number;
+  docrag_parent_target_chars?: number;
+  docrag_parent_max_pages?: number;
+  docrag_parent_max_children?: number;
 }
 
 export interface DocumentChunkPreviewRequest {
   chunking_strategy?: ChunkingStrategyName;
   chunk_size?: number;
   chunk_overlap?: number;
-  chunk_child_size?: number;
   chunk_min_chars?: number;
   chunk_delimiter?: string;
+  docrag_child_target_chars?: number;
+  docrag_table_child_target_chars?: number;
+  docrag_parent_target_chars?: number;
+  docrag_parent_max_pages?: number;
+  docrag_parent_max_children?: number;
   chunk_context_header_enabled?: boolean;
 }
 
@@ -724,8 +732,13 @@ export interface KnowledgeBaseIngestionConfig {
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
-  chunk_child_size: number | null;
   chunk_min_chars: number | null;
+  /** DocRAG 親子階層の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。 */
+  docrag_child_target_chars?: number | null;
+  docrag_table_child_target_chars?: number | null;
+  docrag_parent_target_chars?: number | null;
+  docrag_parent_max_pages?: number | null;
+  docrag_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   field_extraction_enabled: boolean | null;
   asset_summary_enabled: boolean | null;
@@ -1741,12 +1754,11 @@ export interface ParserAdapterSettingsUpdate {
 export type ChunkingStrategyName =
   | "structure_aware"
   | "recursive_character"
-  | "hierarchical_parent_child"
+  | "docrag_small_to_big"
   | "markdown_heading"
   | "page_level"
   | "fixed_size"
-  | "fixed_delimiter"
-  | "docrag_small_to_big";
+  | "fixed_delimiter";
 
 // --- 設定: 前処理(Preprocess)アダプター ---
 export type PreprocessProfileName =
@@ -1857,17 +1869,21 @@ export interface ChunkingStrategyStatusData {
   origin: string;
   recommended_for: string[];
   selected: boolean;
-  uses_child_size: boolean;
 }
 
 export interface ChunkingSettingsData {
   strategy: ChunkingStrategyName;
   chunk_size: number;
   overlap: number;
-  child_size: number;
   min_chars: number;
   delimiter: string;
   context_header_enabled: boolean;
+  /** DocRAG 親子階層の分割パラメータ(rag_poc と同じ 5 項目)。 */
+  docrag_child_target_chars: number;
+  docrag_table_child_target_chars: number;
+  docrag_parent_target_chars: number;
+  docrag_parent_max_pages: number;
+  docrag_parent_max_children: number;
   strategies: ChunkingStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1876,10 +1892,15 @@ export interface ChunkingSettingsUpdate {
   strategy: ChunkingStrategyName;
   chunk_size: number;
   overlap: number;
-  child_size: number;
   min_chars: number;
   delimiter: string;
   context_header_enabled: boolean;
+  /** DocRAG 親子階層の分割パラメータ(rag_poc と同じ 5 項目)。 */
+  docrag_child_target_chars: number;
+  docrag_table_child_target_chars: number;
+  docrag_parent_target_chars: number;
+  docrag_parent_max_pages: number;
+  docrag_parent_max_children: number;
 }
 
 // --- 設定: Retrieval アダプター ---
