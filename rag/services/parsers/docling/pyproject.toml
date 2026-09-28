@@ -10,7 +10,15 @@ dependencies = [
     "docling==2.129.0",
     # DocRAG 解析は RapidOCR(ONNX)で OCR する。docling は onnxruntime を必須依存に含めない。
     "onnxruntime>=1.20",
+    # rapidocr と docling の TableFormer が import する cv2 は、GUI 版ではなく headless 版で入れる
+    # (#310)。GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
+    "opencv-python-headless>=4.10,<5.0",
 ]
+
+[tool.uv]
+# rapidocr が要求する GUI 版の opencv-python を入れない(cv2 は上の headless 版が提供する)。
+# 両方を入れると同じ cv2 パッケージを上書きし合うため、依存の解決から外す(uv.lock にも残らない)。
+exclude-dependencies = ["opencv-python"]
 
 [tool.uv.sources]
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
