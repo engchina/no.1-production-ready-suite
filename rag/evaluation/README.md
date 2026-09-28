@@ -1,22 +1,36 @@
 # Golden Set Evaluation
 
-`golden-set.example.json` は `POST /api/evaluation/run` に渡す評価ファイルのテンプレートです。
+`golden-set.example.json` は評価（`POST /api/evaluation/jobs/run`）に渡す評価ファイルのテンプレートです。
 実データ投入後、各 `relevant_document_ids` を環境内の document id に置き換えて `golden-set.json` として管理します。
+
+評価は job で動きます（#390）。投入すると `202` で job（`job_id`・`status=RUNNING`・`total_cases`）を返し、
+`GET /api/evaluation/jobs/{job_id}` で進捗（`completed_cases` / `total_cases`・実行中のケース `current_case_id`）と、
+終わったら結果（評価は `run_result`、比較は `compare_result`）を返します。実行中の job は
+`POST /api/evaluation/jobs/{job_id}/cancel` で取り消せます。job は投入した利用者だけが見られます。
 
 ```bash
 cp evaluation/golden-set.example.json evaluation/golden-set.json
-curl -X POST http://localhost:8000/api/evaluation/run \
+curl -X POST http://localhost:8000/api/evaluation/jobs/run \
   -H 'Content-Type: application/json' \
   -d @evaluation/golden-set.json
+# 返った job_id で、status が RUNNING でなくなるまで取得する
+curl http://localhost:8000/api/evaluation/jobs/<job_id>
 ```
+
+job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒）です。1 ケースは回答生成の上限
+（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 300 秒）で打ち切り、時間切れになった工程を `error_stage` / `error_message` に
+残して次のケースへ進みます。全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに
+`error_type=EvaluationTimeBudgetExceeded` の失敗として結果を返します（job は `SUCCEEDED`、評価は `passed=false`）。
+同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run`・`/compare` は、外部から直接呼ぶ
+利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
 CI / staging gate では `thresholds` を必ず設定し、レスポンスの `passed=false`、`error_count>0`、または `threshold_failures` 非空を失敗条件にします。`groundedness_pass_rate` は回答が citation context に支えられている case の割合で、検索命中だけでなく根拠付き回答の品質も gate できます。`failure_reason_counts` は case 単位の失敗理由分布で、`retrieval_miss`、`partial_recall`、`answer_keyword_miss`、`low_groundedness` などから次に調整すべき RAG stage を切り分けます。
 
 単発の `/run` でも任意の `rag_overrides` を指定でき、RRF 定数、context window、Oracle vector target accuracy などの非 secret RAG 設定を一時的に上書きできます。標準値を固める前の staging smoke では、`golden-set.example.json` のように明示した値で gate を固定しておくと、環境変数差分による評価ぶれを追いやすくなります。
 
-複数設定の比較には `POST /api/evaluation/compare` を使います。`compare.example.json` のように `experiments` に `mode`、`top_k`、`rerank_top_n`、`filters`、必要に応じて `rag_overrides` の候補を並べると、同じ golden set で評価し、`ranking_metric` に基づく `best_experiment_id` と順位付き結果を返します。`rag_overrides` では RRF 定数、query expansion、context window、context diversity、隣接 context、context compression、Oracle vector target accuracy を一時的に上書きできます。AutoRAG 的な調整では、まず `recall_at_k` で retrieval 候補を絞り、次に `mrr` / `groundedness_pass_rate` で context 構成・rerank・prompt の候補を比較します。
+複数設定の比較には `POST /api/evaluation/jobs/compare` を使います（進捗の件数は experiment × ケース）。`compare.example.json` のように `experiments` に `mode`、`top_k`、`rerank_top_n`、`filters`、必要に応じて `rag_overrides` の候補を並べると、同じ golden set で評価し、`ranking_metric` に基づく `best_experiment_id` と順位付き結果を返します。`rag_overrides` では RRF 定数、query expansion、context window、context diversity、隣接 context、context compression、Oracle vector target accuracy を一時的に上書きできます。AutoRAG 的な調整では、まず `recall_at_k` で retrieval 候補を絞り、次に `mrr` / `groundedness_pass_rate` で context 構成・rerank・prompt の候補を比較します。
 
-CI / nightly では CLI を使うと、評価結果 JSON を artifact として保存しつつ終了コードで gate できます。CLI は入力 JSON に `experiments` があれば compare request として検証し、未指定時の送信先も `/api/evaluation/compare` に切り替えます。compare の gate 判定は rank 1 の best experiment の metrics を使います。
+CI / nightly では CLI を使うと、評価結果 JSON を artifact として保存しつつ終了コードで gate できます。CLI は評価の job を投入し、終わるまで状態を取得して（`--poll-interval`、既定 5 秒）、結果を `{"data": 結果, "job": job の状態}` として保存します。入力 JSON に `experiments` があれば compare request として検証し、未指定時の送信先も `/api/evaluation/jobs/compare` に切り替えます。compare の gate 判定は rank 1 の best experiment の metrics を使います。
 
 ```bash
 cd backend
@@ -49,7 +63,7 @@ uv run python -m app.rag.search_load_cli \
 - `2`: golden set / search load scenario ファイルや CLI 引数が不正。
 - `3`: 評価 CLI で API 接続、HTTP 応答、レスポンス形式の問題が起きた。
 
-`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（既定 630 秒。評価 API は評価全体を 600 秒で打ち切り、残りのケースを失敗として返すため、それより長く待つ。#383）、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/run` または `/api/evaluation/compare` を付与します。tenant/user の raw 値は CLI 出力には表示しません。
+`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（job の終わりを待つ秒数。既定 3900 秒。job の既定の上限 3600 秒で打ち切った結果を受け取れるよう、それより長く待つ。超えたら job を取り消して終了コード 3 を返す。#390）、`RAG_EVALUATION_POLL_INTERVAL_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/jobs/run` または `/api/evaluation/jobs/compare` を付与します。`--api-url` や `RAG_EVALUATION_*_API_URL` に以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を指定していても、job の API に読み替えます。nightly（`RAG Evaluation Nightly`）は、workflow の timeout に収まるよう `RAG_EVALUATION_TIMEOUT_SECONDS=900` で待ちます。tenant/user の raw 値は CLI 出力には表示しません。
 
 `RAG_SEARCH_LOAD_API_BASE_URL`、`RAG_SEARCH_LOAD_API_URL`、`RAG_SEARCH_LOAD_TIMEOUT_SECONDS`、`RAG_SEARCH_LOAD_TENANT_ID`、`RAG_SEARCH_LOAD_USER_ID` でも検索 load CLI を指定できます。GitHub Actions の `RAG Evaluation Nightly` workflow は evaluation trend と search-load trend を同じ `rag-evaluation-nightly` artifact に保存します。`workflow_dispatch` の `search_load_path` を空文字にすると search load gate だけを skip できます。
 

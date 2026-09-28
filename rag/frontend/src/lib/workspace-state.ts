@@ -40,6 +40,8 @@ export type WorkspaceField =
   | "evaluation.rankingMetric"
   | "evaluation.knowledgeBaseIds"
   | "evaluation.suite"
+  | "evaluation.runJobId"
+  | "evaluation.compareJobId"
   | "feedback.search";
 
 interface StoredRecord {

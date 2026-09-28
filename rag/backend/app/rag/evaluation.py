@@ -90,6 +90,24 @@ class SearchPipeline(Protocol):
         """
 
 
+class EvaluationProgressCallback(Protocol):
+    """評価の進捗の通知先（評価 job の進捗の保存に使う。#390）。
+
+    ケースを始める前に、終わったケースの数と今のケースの id を渡す。最後のケースの後は
+    `current_case_id=None` で呼ぶ。比較（`compare`）では、experiment をまたいだ通しの件数と
+    今の experiment の id を渡す。
+    """
+
+    async def __call__(
+        self,
+        *,
+        completed_cases: int,
+        current_case_id: str | None,
+        current_experiment_id: str | None,
+    ) -> None:
+        """進捗を受け取る。"""
+
+
 class IngestionQualitySource(Protocol):
     """評価 runner が corpus の取込品質を読むための最小インターフェース。"""
 
@@ -126,13 +144,15 @@ class EvaluationRunner:
         rag_overrides: EvaluationRagOverrides | None = None,
         *,
         time_budget_seconds: float | None = None,
+        progress: EvaluationProgressCallback | None = None,
     ) -> EvaluationMetrics:
         """評価ケースを実行し、集計指標を返す。
 
         1 ケースは回答生成の上限（`rag_answer_timeout_seconds`）で打ち切り、時間切れになった工程を
         ケースの結果に残して次のケースへ進む（#383）。`time_budget_seconds` を渡すと、評価全体を
         その秒数で打ち切る（同期の HTTP の待ちを超えないため）。上限に達したら実行中のケースを
-        打ち切り、残りのケースは実行せずに失敗として記録する。
+        打ち切り、残りのケースは実行せずに失敗として記録する。`progress` には、ケースを始める
+        前と最後のケースの後に進捗を渡す（評価 job。#390）。
         """
         deadline = _deadline(time_budget_seconds)
         effective_settings = _settings_with_rag_overrides(self._settings, rag_overrides)
@@ -194,7 +214,13 @@ class EvaluationRunner:
         case_results: list[EvaluationCaseResult] = []
         failure_reason_counts: dict[EvaluationFailureReason, int] = {}
 
-        for case in cases:
+        for case_index, case in enumerate(cases):
+            if progress is not None:
+                await progress(
+                    completed_cases=case_index,
+                    current_case_id=case.id,
+                    current_experiment_id=None,
+                )
             request = SearchRequest(
                 query=case.query,
                 top_k=top_k,
@@ -382,6 +408,12 @@ class EvaluationRunner:
             )
 
         case_count = len(cases)
+        if progress is not None:
+            await progress(
+                completed_cases=case_count,
+                current_case_id=None,
+                current_experiment_id=None,
+            )
         aggregate_values = {
             "precision_at_k": round(precision_total / case_count, 4),
             "recall_at_k": round(recall_total / case_count, 4),
@@ -426,14 +458,16 @@ class EvaluationRunner:
         ranking_metric: EvaluationMetricName = "mrr",
         thresholds: EvaluationThresholds | None = None,
         time_budget_seconds: float | None = None,
+        progress: EvaluationProgressCallback | None = None,
     ) -> EvaluationCompareResponse:
         """同じ golden set で複数 RAG 設定を評価し、安定した順位を返す。
 
-        `time_budget_seconds`（評価全体の上限。#383）は experiment の間で共有する。
+        `time_budget_seconds`（評価全体の上限。#383）は experiment の間で共有する。`progress` には
+        experiment をまたいだ通しのケースの件数を渡す（#390）。
         """
         deadline = _deadline(time_budget_seconds)
         results: list[EvaluationExperimentResult] = []
-        for experiment in experiments:
+        for experiment_index, experiment in enumerate(experiments):
             remaining = _remaining_seconds(deadline)
             metrics = await self.run(
                 cases=cases,
@@ -445,6 +479,11 @@ class EvaluationRunner:
                 thresholds=thresholds,
                 rag_overrides=experiment.rag_overrides,
                 time_budget_seconds=None if remaining is None else max(0.0, remaining),
+                progress=_experiment_progress(
+                    progress,
+                    offset=experiment_index * len(cases),
+                    experiment_id=experiment.id,
+                ),
             )
             results.append(
                 EvaluationExperimentResult(
@@ -464,6 +503,32 @@ class EvaluationRunner:
             best_experiment_id=ranked_results[0].experiment.id if ranked_results else None,
             results=ranked_results,
         )
+
+
+def _experiment_progress(
+    progress: EvaluationProgressCallback | None,
+    *,
+    offset: int,
+    experiment_id: str,
+) -> EvaluationProgressCallback | None:
+    """比較の 1 experiment の進捗を、experiment をまたいだ通しの件数に直して渡す。"""
+    if progress is None:
+        return None
+
+    async def report(
+        *,
+        completed_cases: int,
+        current_case_id: str | None,
+        current_experiment_id: str | None,
+    ) -> None:
+        del current_experiment_id
+        await progress(
+            completed_cases=offset + completed_cases,
+            current_case_id=current_case_id,
+            current_experiment_id=experiment_id if current_case_id is not None else None,
+        )
+
+    return report
 
 
 def _settings_with_rag_overrides(

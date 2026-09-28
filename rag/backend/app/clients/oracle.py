@@ -4682,6 +4682,312 @@ class OracleClient:
         )
         return evaluation_run_id
 
+    def is_connection_configured(self) -> bool:
+        """実 DB に接続する設定（または明示の pool）があるかを返す。"""
+        return _oracle_connection_configured(self)
+
+    async def create_evaluation_job(self, job: Mapping[str, object]) -> None:
+        """品質評価の job を RUNNING で作る（#390）。heartbeat の時刻は DB の時計にする。"""
+
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_evaluation_jobs (
+                    job_id,
+                    kind,
+                    status,
+                    tenant_id_hash,
+                    user_id_hash,
+                    total_cases,
+                    completed_cases,
+                    lease_owner,
+                    heartbeat_at,
+                    time_limit_seconds,
+                    created_at,
+                    started_at,
+                    updated_at
+                ) VALUES (
+                    :job_id,
+                    :kind,
+                    'RUNNING',
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :total_cases,
+                    0,
+                    :lease_owner,
+                    SYSTIMESTAMP,
+                    :time_limit_seconds,
+                    SYSTIMESTAMP,
+                    SYSTIMESTAMP,
+                    SYSTIMESTAMP
+                )
+                """,
+                {
+                    "job_id": job["job_id"],
+                    "kind": job["kind"],
+                    "tenant_id_hash": job.get("tenant_id_hash"),
+                    "user_id_hash": job.get("user_id_hash"),
+                    "total_cases": job["total_cases"],
+                    "lease_owner": job["lease_owner"],
+                    "time_limit_seconds": job["time_limit_seconds"],
+                },
+            )
+        )
+
+    async def get_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        tenant_id_hash: str | None,
+        user_id_hash: str | None,
+    ) -> dict[str, object] | None:
+        """投入した利用者（tenant と user の hash）の品質評価の job を 1 件返す。"""
+        return await self._fetch_one(
+            f"""
+            SELECT
+                job_id,
+                kind,
+                status,
+                total_cases,
+                completed_cases,
+                current_case_id,
+                current_experiment_id,
+                current_case_started_at,
+                time_limit_seconds,
+                error_message,
+                result_json,
+                evaluation_run_id,
+                created_at,
+                started_at,
+                finished_at,
+                heartbeat_at
+            FROM rag_evaluation_jobs
+            WHERE job_id = :job_id
+              AND {_EVALUATION_JOB_OWNER_SQL}
+            """,
+            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+        )
+
+    async def update_evaluation_job_progress(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        completed_cases: int,
+        current_case_id: str | None,
+        current_experiment_id: str | None,
+    ) -> bool:
+        """自分の lease の RUNNING job の進捗と heartbeat を更新する。更新できなければ False。
+
+        取り消し・時間切れの回復で RUNNING でなくなった job には書かない。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                UPDATE rag_evaluation_jobs
+                SET completed_cases = :completed_cases,
+                    current_case_id = :current_case_id,
+                    current_experiment_id = :current_experiment_id,
+                    current_case_started_at =
+                        CASE WHEN :case_started = 1 THEN SYSTIMESTAMP ELSE NULL END,
+                    heartbeat_at = SYSTIMESTAMP,
+                    updated_at = SYSTIMESTAMP
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND lease_owner = :lease_owner
+                """,
+                {
+                    "job_id": job_id,
+                    "lease_owner": lease_owner,
+                    "completed_cases": completed_cases,
+                    "current_case_id": current_case_id,
+                    "current_experiment_id": current_experiment_id,
+                    "case_started": 1 if current_case_id is not None else 0,
+                },
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def heartbeat_evaluation_job(self, job_id: str, *, lease_owner: str) -> bool:
+        """自分の lease の RUNNING job の heartbeat を DB の時刻で更新する。
+
+        更新できなければ（RUNNING でなくなった） False。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                UPDATE rag_evaluation_jobs
+                SET heartbeat_at = SYSTIMESTAMP
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND lease_owner = :lease_owner
+                """,
+                {"job_id": job_id, "lease_owner": lease_owner},
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def finish_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        status: str,
+        result: Mapping[str, object] | None,
+        error_message: str | None,
+        evaluation_run_id: str | None,
+    ) -> bool:
+        """自分の lease の RUNNING job を終わらせる（成功・失敗）。書けなければ False。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            cursor_count = _execute_count_with_input_sizes(
+                connection,
+                """
+                UPDATE rag_evaluation_jobs
+                SET status = :status,
+                    result_json = :result_json,
+                    error_message = :error_message,
+                    evaluation_run_id = :evaluation_run_id,
+                    completed_cases = CASE
+                        WHEN :status = 'SUCCEEDED' THEN total_cases
+                        ELSE completed_cases
+                    END,
+                    current_case_id = NULL,
+                    current_experiment_id = NULL,
+                    current_case_started_at = NULL,
+                    lease_owner = NULL,
+                    finished_at = SYSTIMESTAMP,
+                    updated_at = SYSTIMESTAMP
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND lease_owner = :lease_owner
+                """,
+                {
+                    "job_id": job_id,
+                    "lease_owner": lease_owner,
+                    "status": status,
+                    "result_json": _json_bind(dict(result)) if result is not None else None,
+                    "error_message": _truncate_text(error_message, 2000),
+                    "evaluation_run_id": evaluation_run_id,
+                },
+                input_sizes=_json_input_sizes("result_json"),
+            )
+            return cursor_count
+
+        return await self._run_transaction(operation) > 0
+
+    async def cancel_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        tenant_id_hash: str | None,
+        user_id_hash: str | None,
+        error_message: str,
+    ) -> bool:
+        """投入した利用者の RUNNING job を取り消す。取り消せなければ False。
+
+        実行中のプロセスは、次の heartbeat か進捗の更新で RUNNING でなくなったことを知り、
+        評価を止める（別のプロセスが実行している場合も止まる）。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                f"""
+                UPDATE rag_evaluation_jobs
+                SET status = 'CANCELLED',
+                    error_message = :error_message,
+                    current_case_id = NULL,
+                    current_experiment_id = NULL,
+                    current_case_started_at = NULL,
+                    lease_owner = NULL,
+                    finished_at = SYSTIMESTAMP,
+                    updated_at = SYSTIMESTAMP
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND {_EVALUATION_JOB_OWNER_SQL}
+                """,
+                {
+                    "job_id": job_id,
+                    "tenant_id_hash": tenant_id_hash,
+                    "user_id_hash": user_id_hash,
+                    "error_message": _truncate_text(error_message, 2000),
+                },
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def fail_stale_evaluation_jobs(
+        self,
+        *,
+        stale_seconds: float,
+        error_message: str,
+        lease_owner: str | None = None,
+    ) -> int:
+        """heartbeat が途絶えた RUNNING job を失敗にする（DB の時計で判定する）。
+
+        `lease_owner` を渡すと、heartbeat にかかわらずその lease の job だけを失敗にする
+        （backend の停止で、実行中の評価を打ち切ったとき）。
+        """
+        if lease_owner is not None:
+            condition = "lease_owner = :lease_owner"
+            binds: dict[str, object] = {"lease_owner": lease_owner}
+        else:
+            condition = (
+                "(heartbeat_at IS NULL "
+                "OR heartbeat_at < SYSTIMESTAMP - NUMTODSINTERVAL(:stale_seconds, 'SECOND'))"
+            )
+            binds = {"stale_seconds": float(stale_seconds)}
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                f"""
+                UPDATE rag_evaluation_jobs
+                SET status = 'FAILED',
+                    error_message = :error_message,
+                    current_case_id = NULL,
+                    current_experiment_id = NULL,
+                    current_case_started_at = NULL,
+                    lease_owner = NULL,
+                    finished_at = SYSTIMESTAMP,
+                    updated_at = SYSTIMESTAMP
+                WHERE status = 'RUNNING'
+                  AND {condition}
+                """,
+                {**binds, "error_message": _truncate_text(error_message, 2000)},
+            )
+
+        return await self._run_transaction(operation)
+
+    async def count_running_evaluation_jobs(self) -> int:
+        """実行中（RUNNING）の品質評価の job の数を返す（同時に動かす数の上限の判定）。"""
+        row = await self._fetch_one(
+            "SELECT COUNT(*) AS running_count FROM rag_evaluation_jobs WHERE status = 'RUNNING'"
+        )
+        return int(cast(int, row.get("running_count") or 0)) if row else 0
+
+    async def purge_evaluation_jobs(self, *, retention_days: int) -> int:
+        """保持期間を過ぎた、終わった品質評価の job を消す（結果は評価 artifact に残る）。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                DELETE FROM rag_evaluation_jobs
+                WHERE status <> 'RUNNING'
+                  AND created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:retention_days, 'DAY')
+                """,
+                {"retention_days": int(retention_days)},
+            )
+
+        return await self._run_transaction(operation)
+
     async def agent_memory_search(
         self,
         query: str,
@@ -9324,6 +9630,41 @@ def _execute_count(
     try:
         normalized = _normalize_sql(statement)
         # `_with_tenant_bind` の予防的な bind を含めて渡せるよう、SQL に現れる名前へ絞る。
+        cursor.execute(normalized, _binds_for_sql(normalized, binds))
+        return int(getattr(cursor, "rowcount", 0) or 0)
+    finally:
+        cursor.close()
+
+
+# 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
+# hash が無い（認証なしの開発環境など）場合は、hash の無い job だけを対象にする。
+_EVALUATION_JOB_OWNER_SQL = (
+    "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL)) "
+    "AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
+)
+
+
+def _truncate_text(value: str | None, limit: int) -> str | None:
+    """VARCHAR2 の列に収まるように文字数で切る。"""
+    if value is None:
+        return None
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _execute_count_with_input_sizes(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    binds: Mapping[str, object],
+    *,
+    input_sizes: Mapping[str, object],
+) -> int:
+    """JSON 列などの input size を指定して DML を実行し、影響行数を返す。"""
+    cursor = connection.cursor()
+    try:
+        normalized = _normalize_sql(statement)
+        filtered_input_sizes = _binds_for_sql(normalized, input_sizes)
+        if filtered_input_sizes:
+            cursor.setinputsizes(**filtered_input_sizes)
         cursor.execute(normalized, _binds_for_sql(normalized, binds))
         return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
@@ -13996,6 +14337,49 @@ CREATE INDEX {table_name}_best_experiment_idx
 
 CREATE INDEX {table_name}_result_hash_idx
     ON {table_name} (result_sha256);
+""".strip()
+
+
+def oracle_evaluation_job_schema_sql(
+    table_name: str = "rag_evaluation_jobs",
+) -> str:
+    """品質評価の job（非同期の実行・進捗・取り消し。#390）の table DDL を返す。
+
+    評価の入力（query の本文）は保存しない。job は投入を受けた backend のプロセスで動き、
+    そのプロセスが止まったら heartbeat が途絶えて失敗になる（別のプロセスは引き継がない）。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    job_id                  VARCHAR2(64) PRIMARY KEY,
+    kind                    VARCHAR2(16) NOT NULL,
+    status                  VARCHAR2(16) NOT NULL,
+    tenant_id_hash          VARCHAR2(64),
+    user_id_hash            VARCHAR2(64),
+    total_cases             NUMBER(10) DEFAULT 0 NOT NULL,
+    completed_cases         NUMBER(10) DEFAULT 0 NOT NULL,
+    current_case_id         VARCHAR2(200 CHAR),
+    current_experiment_id   VARCHAR2(80 CHAR),
+    current_case_started_at TIMESTAMP WITH TIME ZONE,
+    lease_owner             VARCHAR2(128),
+    heartbeat_at            TIMESTAMP WITH TIME ZONE,
+    time_limit_seconds      NUMBER(10) NOT NULL,
+    error_message           VARCHAR2(2000 CHAR),
+    result_json             JSON,
+    evaluation_run_id       VARCHAR2(64),
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    started_at              TIMESTAMP WITH TIME ZONE,
+    finished_at             TIMESTAMP WITH TIME ZONE,
+    updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'compare')),
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
+);
+
+CREATE INDEX {table_name}_status_idx
+    ON {table_name} (status, heartbeat_at);
+
+CREATE INDEX {table_name}_owner_created_idx
+    ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC)
 """.strip()
 
 

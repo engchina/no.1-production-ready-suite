@@ -13,7 +13,8 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   ProcessingIndicator,
   SelectField,
-  Skeleton,
+  StatusBadge as UiStatusBadge,
+  useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import {
@@ -27,7 +28,7 @@ import {
   Settings2,
   XCircle,
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { PagedDataTable } from "@/components/PagedDataTable";
@@ -35,6 +36,9 @@ import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   ApiError,
+  type EvaluationJob,
+  type EvaluationJobKind,
+  type EvaluationJobStatus,
   type EvaluationCaseResult,
   type EvaluationCompareResponse,
   type EvaluationExperimentResult,
@@ -47,10 +51,29 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
-import { useCompareEvaluation, useEvaluationSettings, useRunEvaluation } from "@/lib/queries";
+import {
+  useCancelEvaluationJob,
+  useEvaluationJob,
+  useEvaluationSettings,
+  useSubmitCompareEvaluationJob,
+  useSubmitRunEvaluationJob,
+} from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { qualityCodeLabel } from "@/lib/source-profile-labels";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+
+import {
+  evaluationCaseErrorSummary,
+  isEvaluationJobActive,
+  isEvaluationJobId,
+} from "./evaluation-job";
+import {
+  EvaluationJobError,
+  EvaluationJobLoading,
+  EvaluationJobPanel,
+  EvaluationResultSkeleton,
+} from "./EvaluationJobPanel";
 
 /** suite セレクタの「設定の既定に従う」を表す擬似値(suite を送らない)。 */
 const DEFAULT_SUITE_VALUE = "__default__" as const;
@@ -130,9 +153,13 @@ const RANKING_METRIC_OPTIONS = RANKING_METRICS.map((metric) => ({
 
 /** RAG golden set 評価画面。 */
 export function EvaluationClient() {
-  const runMutation = useRunEvaluation();
-  const compareMutation = useCompareEvaluation();
+  const runMutation = useSubmitRunEvaluationJob();
+  const compareMutation = useSubmitCompareEvaluationJob();
   const settingsQuery = useEvaluationSettings();
+  // 評価と比較は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
+  // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
+  const runJob = useEvaluationJobState("run");
+  const compareJob = useEvaluationJobState("compare");
   // 評価の入力（JSON・指標・KB スコープ・スイート）は、ページを行き来しても再読込しても残す
   // （workspace-state.md）。評価結果は保存せず、戻っただけで評価を送り直さない。
   const [requestJson, setRequestJson] = useWorkspaceState("evaluation.requestJson", SAMPLE_REQUEST);
@@ -159,8 +186,10 @@ export function EvaluationClient() {
 
   const parsedRequest = useMemo(() => parseEvaluationRequest(requestJson), [requestJson]);
   const parsedExperiments = useMemo(() => parseExperiments(experimentsJson), [experimentsJson]);
-  const canRun = parsedRequest.ok;
-  const canCompare = parsedRequest.ok && parsedExperiments.ok;
+  const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
+  const compareActive = compareMutation.isPending || isEvaluationJobActive(compareJob.job);
+  const canRun = parsedRequest.ok && !runActive;
+  const canCompare = parsedRequest.ok && parsedExperiments.ok && !compareActive;
 
   const globalSuite = settingsQuery.data?.suite ?? null;
   const suiteStatuses = settingsQuery.data?.suites ?? [];
@@ -175,9 +204,11 @@ export function EvaluationClient() {
     runMutation.reset();
     try {
       const body = applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds);
-      await runMutation.mutateAsync(
+      const job = await runMutation.mutateAsync(
         suite === DEFAULT_SUITE_VALUE ? body : { ...body, suite }
       );
+      runJob.start(job);
+      toast.info(t("evaluation.toast.started"));
     } catch (error) {
       setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
     }
@@ -189,13 +220,15 @@ export function EvaluationClient() {
     setCompareError("");
     compareMutation.reset();
     try {
-      await compareMutation.mutateAsync({
+      const job = await compareMutation.mutateAsync({
         cases: parsedRequest.value.cases,
         thresholds: parsedRequest.value.thresholds ?? null,
         experiments: applyExperimentKnowledgeBaseScope(parsedExperiments.value, knowledgeBaseIds),
         ranking_metric: rankingMetric,
         ...(suite === DEFAULT_SUITE_VALUE ? {} : { suite }),
       });
+      compareJob.start(job);
+      toast.info(t("evaluation.toast.startedCompare"));
     } catch (error) {
       setCompareError(error instanceof ApiError ? error.message : t("evaluation.error.compare"));
     }
@@ -266,11 +299,11 @@ export function EvaluationClient() {
                   </Button>
                 </div>
                 {runMutation.isPending ? (
-                  // 評価は golden set の件数だけ検索・生成を繰り返すため数十秒かかる。ボタンの loading が
-                  // スピナーを担うので、ここは文言と経過時間だけを出す（messaging.md §3.7）。
+                  // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
+                  // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
                   <ProcessingIndicator
                     active
-                    label={t("evaluation.actions.running")}
+                    label={t("evaluation.actions.starting")}
                     operationKey="evaluation-run"
                     placement="action"
                     activityIcon="none"
@@ -320,7 +353,7 @@ export function EvaluationClient() {
                 {compareMutation.isPending ? (
                   <ProcessingIndicator
                     active
-                    label={t("evaluation.actions.comparing")}
+                    label={t("evaluation.actions.startingCompare")}
                     operationKey="evaluation-compare"
                     placement="action"
                     activityIcon="none"
@@ -332,26 +365,16 @@ export function EvaluationClient() {
           </Card>
         </div>
 
-        {runMutation.isPending ? (
-          // 結果の領域は前の結果や空の案内を消し、結果の形の Skeleton で寸法を予約する。
-          // 経過時間はフォームの中（操作の直下）に出しているため、ここでは重ねない。
-          <section
-            className="min-w-0 space-y-4"
-            aria-busy="true"
-            aria-label={t("evaluation.actions.running")}
-            data-testid="evaluation-result-loading"
-          >
-            <Skeleton className="h-6 w-40" aria-hidden="true" />
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Skeleton className="h-20 w-full" aria-hidden="true" />
-              <Skeleton className="h-20 w-full" aria-hidden="true" />
-              <Skeleton className="h-20 w-full" aria-hidden="true" />
-              <Skeleton className="h-20 w-full" aria-hidden="true" />
-            </div>
-            <Skeleton className="h-48 w-full" aria-hidden="true" />
-          </section>
-        ) : runMutation.data ? (
-          <EvaluationResult metrics={runMutation.data} />
+        {runJob.jobId ? (
+          <EvaluationJobSection
+            kind="run"
+            state={runJob}
+            renderResult={(job) =>
+              job.run_result ? <EvaluationResult metrics={job.run_result} /> : null
+            }
+          />
+        ) : runMutation.isPending ? (
+          <EvaluationResultSkeleton kind="run" />
         ) : (
           <Card>
             <CardContent className="pt-5">
@@ -363,9 +386,122 @@ export function EvaluationClient() {
           </Card>
         )}
 
-        {compareMutation.data ? <CompareResult comparison={compareMutation.data} /> : null}
+        {compareJob.jobId ? (
+          <EvaluationJobSection
+            kind="compare"
+            state={compareJob}
+            renderResult={(job) =>
+              job.compare_result ? <CompareResult comparison={job.compare_result} /> : null
+            }
+          />
+        ) : null}
       </PageBody>
     </div>
+  );
+}
+
+interface EvaluationJobState {
+  jobId: string;
+  job: EvaluationJob | null;
+  query: ReturnType<typeof useEvaluationJob>;
+  start: (job: EvaluationJob) => void;
+  cancel: (job: EvaluationJob) => Promise<void>;
+  cancelling: boolean;
+}
+
+/**
+ * 評価（run）・比較（compare）の job の状態。job id を作業状態に残し、実行中は状態を取得し続ける。
+ * 実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
+ */
+function useEvaluationJobState(kind: EvaluationJobKind): EvaluationJobState {
+  const [jobId, setJobId] = useWorkspaceState<string>(
+    kind === "compare" ? "evaluation.compareJobId" : "evaluation.runJobId",
+    "",
+    isEvaluationJobId
+  );
+  const query = useEvaluationJob(jobId || null);
+  const cancelMutation = useCancelEvaluationJob();
+  const confirm = useConfirm();
+  const job = query.data ?? null;
+  const observed = useRef<{ jobId: string; status: EvaluationJobStatus } | null>(null);
+
+  useEffect(() => {
+    if (!job) return;
+    const previous = observed.current;
+    observed.current = { jobId: job.job_id, status: job.status };
+    if (previous?.jobId !== job.job_id || previous.status !== "RUNNING") return;
+    if (job.status === "SUCCEEDED") {
+      toast.success(
+        t(kind === "compare" ? "evaluation.toast.succeededCompare" : "evaluation.toast.succeeded")
+      );
+    } else if (job.status === "FAILED") {
+      toast.error(t("evaluation.toast.failed"));
+    }
+  }, [job, kind]);
+
+  const cancel = async (target: EvaluationJob) => {
+    const confirmed = await confirm({
+      title: t("evaluation.job.cancelConfirm.title"),
+      description: t("evaluation.job.cancelConfirm.description"),
+      confirmLabel: t("evaluation.job.cancelConfirm.confirm"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    cancelMutation.mutate(target.job_id, {
+      onSuccess: () => toast.success(t("evaluation.toast.cancelled")),
+      onError: (error) =>
+        toast.error(error instanceof ApiError ? error.message : t("evaluation.error.cancel")),
+    });
+  };
+
+  return {
+    jobId,
+    job,
+    query,
+    start: (started) => {
+      observed.current = { jobId: started.job_id, status: started.status };
+      setJobId(started.job_id);
+    },
+    cancel,
+    cancelling: cancelMutation.isPending,
+  };
+}
+
+/** job の実行状況と、実行中は結果の Skeleton、成功したら結果を出す。 */
+function EvaluationJobSection({
+  kind,
+  state,
+  renderResult,
+}: {
+  kind: EvaluationJobKind;
+  state: EvaluationJobState;
+  renderResult: (job: EvaluationJob) => ReactNode;
+}) {
+  const { job, query } = state;
+  if (!job) {
+    if (query.isError) {
+      const error = query.error;
+      return (
+        <EvaluationJobError
+          notFound={error instanceof ApiError && error.status === 404}
+          message={error instanceof ApiError ? error.message : null}
+          onRetry={() => void query.refetch()}
+        />
+      );
+    }
+    return <EvaluationJobLoading kind={kind} />;
+  }
+  return (
+    <>
+      <EvaluationJobPanel
+        kind={kind}
+        job={job}
+        onCancel={(target) => void state.cancel(target)}
+        cancelling={state.cancelling}
+      />
+      {job.status === "RUNNING" ? <EvaluationResultSkeleton kind={kind} /> : null}
+      {job.status === "SUCCEEDED" ? renderResult(job) : null}
+    </>
   );
 }
 
@@ -727,7 +863,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             header: t("evaluation.case.id"),
             rowHeader: true,
             className: "break-words font-medium text-fg",
-            render: (result) => result.case_id,
+            render: (result) => <CaseIdCell result={result} />,
           },
           {
             key: "precision",
@@ -781,6 +917,29 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         tableClassName="w-full min-w-[680px] text-sm"
       />
     </section>
+  );
+}
+
+/**
+ * ケースの id と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
+ * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく id の列に出す。
+ */
+function CaseIdCell({ result }: { result: EvaluationCaseResult }) {
+  const error = evaluationCaseErrorSummary(result);
+  if (!error) return <>{result.case_id}</>;
+  return (
+    <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">
+      <span>{result.case_id}</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <UiStatusBadge variant="danger" label={t("evaluation.case.error")} />
+        {error.stageLabel ? (
+          <span className="inline-flex items-center rounded-md bg-surface-sunken px-2 py-0.5 text-xs font-medium text-fg-muted ring-1 ring-border">
+            {t("evaluation.case.errorStage", { stage: error.stageLabel })}
+          </span>
+        ) : null}
+      </div>
+      <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
+    </div>
   );
 }
 

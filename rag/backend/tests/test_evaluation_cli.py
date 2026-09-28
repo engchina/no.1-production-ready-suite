@@ -25,6 +25,7 @@ def test_evaluation_gate_cli_passes_and_writes_output_file(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         observed.update(
             {
@@ -86,6 +87,7 @@ def test_evaluation_gate_cli_returns_one_when_gate_fails(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         return {"data": _metrics_payload(passed=False, error_count=1)}
 
@@ -118,6 +120,7 @@ def test_evaluation_gate_cli_detects_compare_request_and_gates_best_experiment(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         observed.update({"api_url": api_url, "payload": payload})
         return {"data": _compare_payload(best_passed=True)}
@@ -151,6 +154,7 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         del api_url, payload, timeout, headers
         return {"data": _compare_payload(best_passed=True)}
@@ -189,6 +193,7 @@ def test_evaluation_gate_cli_uses_base_url_for_compare_request(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         observed["api_url"] = api_url
         return {"data": _compare_payload(best_passed=True)}
@@ -200,7 +205,7 @@ def test_evaluation_gate_cli_uses_base_url_for_compare_request(
     )
 
     assert exit_code == 0
-    assert observed["api_url"] == "https://staging.example.test/api/evaluation/compare"
+    assert observed["api_url"] == "https://staging.example.test/api/evaluation/jobs/compare"
 
 
 def test_evaluation_gate_cli_prefers_explicit_api_url_over_base_url(
@@ -217,6 +222,7 @@ def test_evaluation_gate_cli_prefers_explicit_api_url_over_base_url(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         observed["api_url"] = api_url
         return {"data": _metrics_payload(passed=True)}
@@ -256,6 +262,7 @@ def test_evaluation_gate_cli_uses_compare_specific_env_url(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         observed["api_url"] = api_url
         return {"data": _compare_payload(best_passed=True)}
@@ -282,6 +289,7 @@ def test_evaluation_gate_cli_compare_returns_one_when_best_experiment_fails(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         return {"data": _compare_payload(best_passed=False)}
 
@@ -325,6 +333,7 @@ def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         raise AssertionError("invalid golden set は API へ送らない")
 
@@ -353,6 +362,7 @@ def test_evaluation_gate_cli_returns_three_on_api_error(
         payload: dict[str, Any],
         timeout: float,
         headers: dict[str, str],
+        poll_interval: float,
     ) -> dict[str, Any]:
         raise evaluation_cli.EvaluationGateError(
             "評価 API に接続できませんでした: gaierror",
@@ -501,8 +511,142 @@ def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
     }
 
 
-def test_evaluation_gate_cli_waits_longer_than_evaluation_time_budget() -> None:
-    """CLI の既定の timeout は、評価 API の全体の上限より長い（打ち切った結果を受け取る。#383）。"""
-    from app.api.routes.evaluation import EVALUATION_RUN_TIMEOUT_SECONDS
+def test_evaluation_gate_cli_waits_longer_than_evaluation_job_time_limit() -> None:
+    """CLI の既定の待ち時間は、評価 job の既定の上限より長い（打ち切った結果を受け取る。#390）。"""
+    from app.config import Settings
 
-    assert evaluation_cli.DEFAULT_TIMEOUT_SECONDS > EVALUATION_RUN_TIMEOUT_SECONDS
+    job_limit = Settings.model_fields["rag_evaluation_job_timeout_seconds"].default
+    assert job_limit < evaluation_cli.DEFAULT_TIMEOUT_SECONDS
+
+
+class _FakeJobServer:
+    """評価 job の API（投入・状態・取り消し）の fake。"""
+
+    def __init__(self, statuses: list[dict[str, Any]]) -> None:
+        self.statuses = statuses
+        self.requests: list[tuple[str, str]] = []
+
+    def handler(self, request: Any) -> Any:
+        import httpx
+
+        self.requests.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path.endswith("/cancel"):
+            return httpx.Response(200, json={"data": {**self.statuses[0], "status": "CANCELLED"}})
+        if request.method == "POST":
+            submitted = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            return httpx.Response(202, json={"data": submitted})
+        current = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        return httpx.Response(200, json={"data": current})
+
+
+def _job(status: str, completed: int, **extra: Any) -> dict[str, Any]:
+    return {
+        "job_id": "job-1",
+        "kind": "run",
+        "status": status,
+        "total_cases": 2,
+        "completed_cases": completed,
+        **extra,
+    }
+
+
+def test_post_evaluation_request_polls_job_until_result(
+    capsys: CaptureFixture[str],
+) -> None:
+    """投入 → 状態の取得を繰り返し、成功したら結果と job の状態を返す（#390）。"""
+    import httpx
+
+    server = _FakeJobServer(
+        [
+            _job("RUNNING", 0),
+            _job("RUNNING", 1, current_case_id="c2"),
+            _job("SUCCEEDED", 2, run_result=_metrics_payload(passed=True)),
+        ]
+    )
+    sleeps: list[float] = []
+
+    result = evaluation_cli._post_evaluation_request(
+        api_url="http://rag.example.test/api/evaluation/run",
+        payload={"cases": []},
+        timeout=60,
+        headers={"X-User-ID": "user"},
+        poll_interval=0.5,
+        transport=httpx.MockTransport(server.handler),
+        sleep=sleeps.append,
+    )
+
+    # 以前の同期 API の URL は job の API に読み替える。
+    assert server.requests[0] == ("POST", "/api/evaluation/jobs/run")
+    assert server.requests[1:] == [("GET", "/api/evaluation/jobs/job-1")] * 2
+    assert sleeps == [0.5, 0.5]
+    assert result["data"]["passed"] is True
+    assert result["job"]["status"] == "SUCCEEDED"
+    assert "run_result" not in result["job"]
+    err = capsys.readouterr().err
+    assert "評価 job job-1: 0 / 2 件" in err
+    assert "評価 job job-1: 1 / 2 件" in err
+
+
+def test_post_evaluation_request_cancels_job_after_timeout() -> None:
+    """待つ時間を超えたら job を取り消し、exit 3 の失敗にする。"""
+    import httpx
+    import pytest
+
+    server = _FakeJobServer([_job("RUNNING", 0)])
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    with pytest.raises(evaluation_cli.EvaluationGateError) as raised:
+        evaluation_cli._post_evaluation_request(
+            api_url="http://rag.example.test/api/evaluation/jobs/run",
+            payload={"cases": []},
+            timeout=10,
+            headers={},
+            poll_interval=4,
+            transport=httpx.MockTransport(server.handler),
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+
+    assert raised.value.exit_code == 3
+    assert "取り消しました" in str(raised.value)
+    assert server.requests[-1] == ("POST", "/api/evaluation/jobs/job-1/cancel")
+
+
+def test_post_evaluation_request_fails_when_job_is_not_succeeded() -> None:
+    import httpx
+    import pytest
+
+    server = _FakeJobServer(
+        [_job("RUNNING", 0), _job("FAILED", 1, error_message="品質評価の実行に失敗しました。")]
+    )
+    with pytest.raises(evaluation_cli.EvaluationGateError) as raised:
+        evaluation_cli._post_evaluation_request(
+            api_url="http://rag.example.test/api/evaluation/jobs/compare",
+            payload={"cases": []},
+            timeout=60,
+            headers={},
+            poll_interval=1,
+            transport=httpx.MockTransport(server.handler),
+            sleep=lambda _: None,
+        )
+    assert raised.value.exit_code == 3
+    assert "FAILED" in str(raised.value)
+    assert "品質評価の実行に失敗しました。" in str(raised.value)
+
+
+def test_job_urls_are_derived_from_submit_url() -> None:
+    assert (
+        evaluation_cli._job_submit_url("https://h.example/prefix/api/evaluation/compare/")
+        == "https://h.example/prefix/api/evaluation/jobs/compare"
+    )
+    assert (
+        evaluation_cli._job_submit_url("https://h.example/api/evaluation/jobs/run")
+        == "https://h.example/api/evaluation/jobs/run"
+    )
+    assert (
+        evaluation_cli._job_status_url("https://h.example/api/evaluation/jobs/run", "abc")
+        == "https://h.example/api/evaluation/jobs/abc"
+    )

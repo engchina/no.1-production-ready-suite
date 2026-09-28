@@ -113,12 +113,10 @@ export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
 export const ANSWER_GENERATION_TIMEOUT_MS = 630_000;
 
 /**
- * 品質評価（golden set。`POST /api/evaluation/run`・`/compare`）の timeout（#383）。評価は 1 ケースごとに
- * LLM で回答を生成するため、通常の API の 30 秒では足りない。backend は評価全体を 600 秒
- * （`EVALUATION_RUN_TIMEOUT_SECONDS`）で打ち切り、残りのケースを失敗として結果を返すので、画面は
- * それより 30 秒長く待ち、打ち切った結果を表示する。Nginx はさらに長い 660 秒にしている。
+ * 品質評価の job の状態を取得する間隔（#390）。評価は job（投入 → 状態の取得 → 結果）で動き、
+ * 投入と状態の取得は通常の API の timeout に収まる。
  */
-export const EVALUATION_RUN_TIMEOUT_MS = 630_000;
+export const EVALUATION_JOB_POLL_INTERVAL_MS = 2_000;
 
 /** チャットが会話の回答の保存有無を一度に引き当てる trace_id の上限（backend と同じ）。 */
 export const ANSWER_TRACE_ID_FILTER_MAX = 100;
@@ -1536,6 +1534,32 @@ export interface EvaluationCompareResponse {
   ranking_metric: EvaluationMetricName;
   best_experiment_id: string | null;
   results: EvaluationExperimentResult[];
+}
+
+export type EvaluationJobKind = "run" | "compare";
+export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+/**
+ * 品質評価の job（#390）。進捗は終わったケースの数（比較は experiment × ケースの通しの数）と
+ * 今のケース。結果は成功のときだけ（評価は `run_result`、比較は `compare_result`）。
+ */
+export interface EvaluationJob {
+  job_id: string;
+  kind: EvaluationJobKind;
+  status: EvaluationJobStatus;
+  total_cases: number;
+  completed_cases: number;
+  current_case_id: string | null;
+  current_experiment_id: string | null;
+  current_case_started_at: string | null;
+  time_limit_seconds: number;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  heartbeat_at: string | null;
+  run_result: EvaluationMetrics | null;
+  compare_result: EvaluationCompareResponse | null;
 }
 
 // --- 設定: モデル ---
@@ -3271,16 +3295,17 @@ export const api = {
     request<EvaluationCase>(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`),
 
   // 評価
-  runEvaluation: (body: EvaluationRunRequestBody) =>
-    request<EvaluationMetrics>("/api/evaluation/run", jsonBody(body), {
-      timeoutMs: EVALUATION_RUN_TIMEOUT_MS,
+  // 品質評価は job で実行する（#390）。同期の /api/evaluation/run・/compare は画面から使わない。
+  submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
+    request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
+  submitCompareEvaluationJob: (body: EvaluationCompareRequestBody) =>
+    request<EvaluationJob>("/api/evaluation/jobs/compare", jsonBody(body)),
+  getEvaluationJob: (jobId: string) =>
+    request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
+  cancelEvaluationJob: (jobId: string) =>
+    request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
     }),
-  compareEvaluation: (body: EvaluationCompareRequestBody) =>
-    request<EvaluationCompareResponse>(
-      "/api/evaluation/compare",
-      jsonBody(body),
-      { timeoutMs: EVALUATION_RUN_TIMEOUT_MS },
-    ),
 
   // 設定: モデル
   getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),

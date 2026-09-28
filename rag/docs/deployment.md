@@ -306,6 +306,17 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#390 品質評価の job）
+
+品質評価（評価・比較）を job にした。画面と評価 CLI（nightly を含む）は job の API を使う。
+
+1. システムテーブルを更新する（migration `20260928_005_evaluation_jobs`。表 `rag_evaluation_jobs` と index
+   `rag_evaluation_jobs_status_idx`・`rag_evaluation_jobs_owner_created_idx` を無ければ作るだけで、既存の表は変えない）。
+   更新するまで、評価の実行は表が無いためエラーになる（同期の `/api/evaluation/run`・`/compare` は引き続き使える）。
+2. backend を再起動する。job 全体の上限を変える場合は `backend/.env` の `RAG_EVALUATION_JOB_TIMEOUT_SECONDS` を設定する。
+3. 評価 CLI を自前の CI から呼んでいる場合は、待つ時間（`--timeout` / `RAG_EVALUATION_TIMEOUT_SECONDS`、既定 3900 秒）が
+   その CI の job の timeout に収まるようにする。以前の同期 API の URL を指定していても、CLI が job の API に読み替える。
+
 ## 既存環境の更新手順（#357 取込 job の lease と heartbeat）
 
 取込 job（`rag_ingestion_jobs`）に lease の列（`lease_owner` / `heartbeat_at`）を追加し、実行中かどうかを
@@ -468,9 +479,11 @@ RAG 品質:
 ```bash
 cp evaluation/golden-set.example.json evaluation/golden-set.json
 # document id と期待キーワードを対象環境に合わせて編集してから実行する
-curl -X POST http://localhost:8000/api/evaluation/run \
+# 評価は job で動く（#390）。投入して返った job_id で、終わるまで状態を取得する。
+curl -X POST http://localhost:8000/api/evaluation/jobs/run \
   -H 'Content-Type: application/json' \
   -d @evaluation/golden-set.json
+curl http://localhost:8000/api/evaluation/jobs/<job_id>
 ```
 
 CI / nightly / staging 昇格では curl ではなく評価 gate CLI を使い、レスポンス JSON を artifact として保存する。
@@ -540,7 +553,9 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 300 秒、上限は LLM 1 回の timeout の上限と同じ 600 秒。#375 / #383）。agentic（検索の計画・multi_hop の再分解）を使う業務ビューでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`init_script.sh` が生成する回答生成・評価・MCP の `location`）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
-- 品質評価（golden set。`/api/evaluation/run`・`/compare`）は同期の HTTP で、1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。評価全体は 600 秒（固定。LLM 1 回の timeout の上限と同じ）で打ち切り、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。画面と評価 CLI（`RAG_EVALUATION_TIMEOUT_SECONDS`、既定 630 秒）は 630 秒、Nginx は 660 秒待つ（#383）。ケースが多く 600 秒に収まらない golden set は、分けて評価する。
+- 品質評価（golden set）は job（`/api/evaluation/jobs/run`・`/jobs/compare`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒、60〜86400）で打ち切り、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（既定 3900 秒）まで待ち、超えたら job を取り消す。
+  - job は投入を受けた backend のプロセスの中で動き、状態は `rag_evaluation_jobs` に保存する（Gunicorn の別の worker に状態の取得・取り消しが届いても同じ結果になる）。backend の停止・再起動では実行中の job を失敗にし（別のプロセスは引き継がない）、プロセスが落ちて heartbeat が 120 秒途絶えた job も、次の状態の取得で失敗にする。同時に実行できる job は 2 件まで（全プロセスの合計）。終わった job は 7 日で消す（結果は評価 artifact の `rag_evaluation_runs` にも残る）。
+  - 以前の同期の `/api/evaluation/run`・`/compare` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
 - `RAG_SEARCH_TIMEOUT_SECONDS`（品質評価の 1 ケースの上限、既定 30 秒）は #383 で削除した。品質評価の 1 ケースも `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切る。既存の `rag/backend/.env` に残っていても読まれない（害はない）ので、次に編集するときに消す。
 - `RAG_STREAM_REALTIME_ENABLED`: 廃止予定の互換設定。値にかかわらず回答の完全生成、PII マスク、groundedness、回答検査が終わるまで SSE `delta` は送信しない。次リリースで削除する。
 - `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。

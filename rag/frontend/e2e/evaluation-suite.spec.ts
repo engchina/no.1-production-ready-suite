@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { mockEvaluationJobs } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -37,22 +38,15 @@ for (const viewport of [
 test("既定スイートのまま評価実行すると suite を送らず適用スイートを表示する", async ({
   page,
 }) => {
-  let runPayload: Record<string, unknown> | null = null;
-  await page.route("**/api/evaluation/run", async (route) => {
-    runPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
-      json: {
-        data: evaluationMetrics((runPayload.suite as string) ?? "balanced"),
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
+  const jobs = await mockEvaluationJobs(page, {
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    autoComplete: true,
   });
 
   await page.goto("/evaluation");
   await page.getByRole("button", { name: "評価実行" }).click();
 
-  await expect.poll(() => runPayload && "suite" in runPayload).toBe(false);
+  await expect.poll(() => jobs.runPayloads[0] && "suite" in jobs.runPayloads[0]).toBe(false);
   await expect(page.getByText("適用スイート: バランス")).toBeVisible();
 });
 
@@ -60,49 +54,107 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`評価の実行中は経過時間と結果の Skeleton を出す (${viewport.name})`, async ({ page }) => {
+  test(`評価の job は進捗・今のケース・経過時間を出し、完了したら結果を出す (${viewport.name})`, async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    // 応答を止めて、実行中の表示（#376）を確かめてから返す。
-    let release: () => void = () => {};
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await page.route("**/api/evaluation/run", async (route) => {
-      await released;
-      await route.fulfill({
-        json: { data: evaluationMetrics("balanced"), error_messages: [], warning_messages: [] },
-      });
+    const jobs = await mockEvaluationJobs(page, {
+      runResult: () => evaluationMetrics("balanced"),
     });
 
     await page.goto("/evaluation");
     await page.getByRole("button", { name: "評価実行" }).click();
 
-    const processing = page.getByTestId("evaluation-run-processing");
-    await expect(processing).toContainText("評価を実行しています");
-    await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
-    // スピナーはボタンの loading だけにする（二重のスピナーにしない）。
-    await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+    // 実行状況（#390）: 状態・件数・今のケース・経過時間（placement="job"）と取り消し。
+    const panel = page.getByTestId("evaluation-run-job");
+    await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
+    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+    await expect(page.getByTestId("evaluation-run-job-current-case")).toHaveText(
+      "実行中のケース: policy-approval-flow-basic"
+    );
+    const timing = page.getByTestId("evaluation-run-job-timing");
+    await expect(timing).toHaveAttribute("data-processing-placement", "job");
+    await expect(timing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+    await expect(panel.getByRole("button", { name: "取り消し" })).toBeVisible();
+    // 実行中は同じ評価を重ねて投入しない。
+    await expect(page.getByRole("button", { name: "評価実行" })).toBeDisabled();
     await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
     await expectNoPageOverflow(page);
 
-    release();
+    jobs.complete("run");
     await expect(page.getByText("適用スイート: バランス")).toBeVisible();
-    await expect(processing).toHaveCount(0);
+    await expect(panel.locator("[data-status-variant]")).toHaveText("完了");
+    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("1 / 1 件（100%）");
+    await expect(timing.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
+    await expect(panel.getByRole("button", { name: "取り消し" })).toHaveCount(0);
     await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "評価実行" })).toBeEnabled();
+    await expectNoPageOverflow(page);
+  });
+
+  test(`失敗したケースは理由と時間切れになった工程を表に出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockEvaluationJobs(page, {
+      runResult: () => evaluationMetricsWithTimedOutCase(),
+      autoComplete: true,
+    });
+
+    await page.goto("/evaluation");
+    await page.getByRole("button", { name: "評価実行" }).click();
+
+    const error = page.getByTestId("evaluation-case-error");
+    await expect(error).toContainText("case-slow");
+    await expect(error).toContainText("エラー");
+    await expect(error).toContainText("工程: 検索の計画");
+    await expect(error).toContainText(
+      "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。"
+    );
+    await expectNoPageOverflow(page);
   });
 }
 
+test("実行中の評価は確認してから取り消せる", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("balanced") });
+
+  await page.goto("/evaluation");
+  await page.getByRole("button", { name: "評価実行" }).click();
+  const panel = page.getByTestId("evaluation-run-job");
+  await panel.getByRole("button", { name: "取り消し" }).click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("評価を取り消しますか？");
+  await dialog.getByRole("button", { name: "取り消す" }).click();
+
+  await expect.poll(() => jobs.cancelled.length).toBe(1);
+  await expect(panel.locator("[data-status-variant]")).toHaveText("取り消し済み");
+  await expect(panel.getByText("評価を取り消しました。")).toBeVisible();
+  await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "評価実行" })).toBeEnabled();
+});
+
+test("再読込しても実行中の評価の job の状態を表示し、失敗の理由を出す", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("balanced") });
+
+  await page.goto("/evaluation");
+  await page.getByRole("button", { name: "評価実行" }).click();
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+
+  // 戻っただけで評価を送り直さず、保存した job id でサーバーの状態を確かめる（workspace-state.md）。
+  await page.reload();
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+  expect(jobs.runPayloads).toHaveLength(1);
+
+  jobs.fail("run", "品質評価の実行に失敗しました（RuntimeError）。");
+  const panel = page.getByTestId("evaluation-run-job");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("失敗");
+  await expect(panel.getByText("評価を最後まで実行できませんでした。")).toBeVisible();
+  await expect(panel.getByText("品質評価の実行に失敗しました（RuntimeError）。")).toBeVisible();
+});
+
 test("スイートを選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
-  let runPayload: Record<string, unknown> | null = null;
-  await page.route("**/api/evaluation/run", async (route) => {
-    runPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
-      json: {
-        data: evaluationMetrics((runPayload.suite as string) ?? "balanced"),
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
+  const jobs = await mockEvaluationJobs(page, {
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    autoComplete: true,
   });
 
   await page.goto("/evaluation");
@@ -119,7 +171,7 @@ test("スイートを選ぶと閾値プレビューを更新し suite を送る"
 
   await page.getByRole("button", { name: "評価実行" }).click();
 
-  await expect.poll(() => runPayload?.suite).toBe("strict_ci");
+  await expect.poll(() => jobs.runPayloads[0]?.suite).toBe("strict_ci");
   await expect(page.getByText("適用スイート: 厳格 CI")).toBeVisible();
   await expectNoPageOverflow(page);
 });
@@ -251,6 +303,40 @@ function evaluationMetrics(suite: string) {
         error_type: null,
         error_message: null,
       },
+    ],
+  };
+}
+
+function evaluationMetricsWithTimedOutCase() {
+  const metrics = evaluationMetrics("balanced");
+  const [success] = metrics.case_results;
+  return {
+    ...metrics,
+    case_count: 2,
+    error_count: 1,
+    passed: false,
+    failure_reason_counts: { case_error: 1 },
+    case_results: [
+      {
+        ...success,
+        case_id: "case-slow",
+        trace_id: "trace-slow",
+        status: "error",
+        retrieved_document_ids: [],
+        hit_document_ids: [],
+        precision_at_k: 0,
+        recall_at_k: 0,
+        reciprocal_rank: 0,
+        answer_keyword_hit: false,
+        groundedness_passed: false,
+        failure_reasons: ["case_error"],
+        elapsed_ms: 300000,
+        error_type: "TimeoutError",
+        error_stage: "agentic_planning",
+        error_message:
+          "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。trace_id で監査ログを確認してください。",
+      },
+      success,
     ],
   };
 }

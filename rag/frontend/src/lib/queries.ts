@@ -19,6 +19,7 @@ import {
 
 import {
   ANSWER_TRACE_ID_FILTER_MAX,
+  EVALUATION_JOB_POLL_INTERVAL_MS,
   api,
   ApiError,
   type BatchUploadFailedItem,
@@ -39,6 +40,7 @@ import {
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
+  type EvaluationJob,
   type EvaluationRunRequestBody,
   type ExternalParserBackendName,
   type ExternalParserConnectionStatusData,
@@ -1705,19 +1707,54 @@ export function useCancelIngestionJob() {
   });
 }
 
-/** RAG golden set 評価。 */
-export function useRunEvaluation() {
+/** 品質評価の job の query key（#390）。 */
+export const evaluationJobQueryKey = (jobId: string) => ["evaluation", "jobs", jobId] as const;
+
+/** RAG golden set 評価を job として投入する（#390）。 */
+export function useSubmitRunEvaluationJob() {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: EvaluationRunRequestBody) =>
-      api.runEvaluation(payload),
+    mutationFn: (payload: EvaluationRunRequestBody) => api.submitRunEvaluationJob(payload),
+    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
   });
 }
 
-/** RAG 設定比較。 */
-export function useCompareEvaluation() {
+/** RAG 設定比較を job として投入する（#390）。 */
+export function useSubmitCompareEvaluationJob() {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: EvaluationCompareRequestBody) =>
-      api.compareEvaluation(payload),
+    mutationFn: (payload: EvaluationCompareRequestBody) => api.submitCompareEvaluationJob(payload),
+    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+  });
+}
+
+/** 実行中の品質評価の job は状態を取得し続け、終わったら止める。 */
+export function evaluationJobRefetchInterval(job: EvaluationJob | undefined): number | false {
+  return job?.status === "RUNNING" ? EVALUATION_JOB_POLL_INTERVAL_MS : false;
+}
+
+/**
+ * 品質評価の job の状態（進捗・結果）。画面を離れて戻っても、保存した job id でサーバーの状態を
+ * 確かめる（workspace-state.md）。見つからない job（404）は再試行しない。
+ */
+export function useEvaluationJob(jobId: string | null) {
+  return useQuery({
+    queryKey: evaluationJobQueryKey(jobId ?? ""),
+    queryFn: () => api.getEvaluationJob(jobId ?? ""),
+    enabled: Boolean(jobId),
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    refetchInterval: (query) =>
+      query.state.error ? false : evaluationJobRefetchInterval(query.state.data),
+  });
+}
+
+/** 品質評価の job を取り消す。 */
+export function useCancelEvaluationJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => api.cancelEvaluationJob(jobId),
+    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
   });
 }
 
