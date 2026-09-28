@@ -147,16 +147,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         model_cache_path="/home/appuser/.cache",
     ),
     ServiceCatalogEntry(
-        service_id="parser-marker",
-        category="parser",
-        profile="cpu",
-        url_field="rag_parser_marker_service_url",
-        label_key="settings.services.item.parserMarker",
-        working_dir="services/parsers/marker",
-        dev_port=18021,
-        model_cache_path="/home/appuser/.cache",
-    ),
-    ServiceCatalogEntry(
         service_id="parser-unstructured",
         category="parser",
         profile="cpu",

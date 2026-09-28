@@ -1,12 +1,11 @@
 # parser は独立マイクロサービス化している(services/parsers/<name>)。
 # backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
 # HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
-# CPU parser(docling/marker/unstructured)は既定起動、ローカル GPU は ASR だけを opt-in する。
-# Unlimited-OCR / MinerU / Dots.OCR / GLM-OCR は外部 API を文書解析設定で指定する。
+# CPU parser(docling/unstructured)は既定起動、ローカル GPU は ASR だけを opt-in する。
+# MinerU / Dots.OCR は外部 API を文書解析設定で指定する。
 
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
-  RAG_PARSER_MARKER_SERVICE_URL: http://parser-marker:8000
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
   # OCI クラウド parser(薄いプロキシ・`--profile oci` で opt-in)。
   RAG_PARSER_OCI_GENAI_VISION_SERVICE_URL: http://parser-oci-genai-vision:8000
@@ -189,14 +188,6 @@ services:
       OCI_ENTERPRISE_AI_PROJECT_OCID: ${PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID:-}
       OCI_ENTERPRISE_AI_VLM_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL:-}
       OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
-    restart: unless-stopped
-
-  parser-marker:
-    build:
-      context: .
-      dockerfile: services/parsers/marker/Dockerfile
-      args: *hf-build-args
-    environment: *hf-env
     restart: unless-stopped
 
   parser-unstructured:

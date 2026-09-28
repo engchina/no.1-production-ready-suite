@@ -59,15 +59,8 @@ export const ja = {
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
-  "settings.preview.env.title": ".env プレビュー",
-  "settings.preview.json.title": "JSON プレビュー",
-  "settings.preview.env.copy": ".env をコピー",
-  "settings.preview.json.copy": "JSON をコピー",
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
-  "settings.preview.ops.title": "運用メモ",
-  "settings.preview.secret.saved": "<保存済み secret>",
-  "settings.preview.secret.entered": "<入力済み secret>",
 
   // ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品（AUTH_MESSAGES）が持つ（#214）。
 
@@ -198,12 +191,9 @@ export const ja = {
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Unstructured へ正規化",
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
-  "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
-  "settings.parserAdapters.backend.unlimited_ocr.description": "外部 Unlimited-OCR API を使用",
   "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
-  "settings.parserAdapters.backend.glm_ocr.description": "外部 GLM-OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.oci_genai_vision.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
@@ -533,7 +523,7 @@ export const ja = {
   "settings.services.commands.description":
     "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
   "settings.services.commands.buildAll.label": "CPU サービスを事前ビルド(前処理 / Parser CPU / pipeline)",
-  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(例: GLM-OCR)",
+  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(ASR 音声文字起こし)",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
@@ -559,7 +549,7 @@ export const ja = {
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
   "settings.services.cpuNote":
-    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling / Marker は明示選択した場合のみ使用します。",
+    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling は明示選択した場合のみ使用します。",
   "settings.services.gpuNote": "GPU 構成(docker compose --profile gpu で opt-in)。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
@@ -628,7 +618,6 @@ export const ja = {
   "settings.services.item.preprocessImageEnhance": "画像補正",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
-  "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
@@ -1089,10 +1078,14 @@ export const ja = {
 
   "settings.huggingface.subtitle":
     "parser のモデルダウンロード認証 token・ミラー endpoint を設定します。",
-  "settings.huggingface.loadError": "HuggingFace 設定の取得に失敗しました。",
+  "settings.huggingface.loading": "HuggingFace 設定を読み込んでいます",
+  "settings.huggingface.loadError":
+    "HuggingFace 設定を取得できませんでした。backend の状態を確認して再試行してください。",
   "settings.huggingface.saveError":
     "HuggingFace 設定の保存に失敗しました。入力値とサーバー側 .env の書き込み権限を確認してください。",
   "settings.huggingface.cardTitle": "HuggingFace モデルダウンロード",
+  "settings.huggingface.cardDescription":
+    "どちらも任意です。空欄なら公式 hub から token なし（匿名）でダウンロードします。",
   "settings.huggingface.field.endpoint": "ミラー endpoint(任意)",
   "settings.huggingface.placeholder.endpoint": "https://hf-mirror.com",
   "settings.huggingface.helper.endpoint":
@@ -1104,28 +1097,17 @@ export const ja = {
     "gated モデルや rate limit 緩和のための HuggingFace アクセス token。各 parser コンテナへ env で渡します。",
   "settings.huggingface.helper.tokenSaved": "token は保存済みです。変更する場合だけ入力してください。",
   "settings.huggingface.secrets.saved": "保存済み",
+  "settings.huggingface.secrets.notSet": "未設定",
   "settings.huggingface.secrets.clearToken": "保存済み token を削除する",
   "settings.huggingface.secrets.show": "token を表示",
   "settings.huggingface.secrets.hide": "token を隠す",
-  "settings.huggingface.actions.save": "保存する",
-  "settings.huggingface.actions.saving": "保存中…",
-  "settings.huggingface.actions.saved": "保存しました",
+  "settings.huggingface.actions.label": "HuggingFace 設定の操作",
+  "settings.huggingface.actions.save": "保存",
+  "settings.huggingface.actions.saved": "HuggingFace 設定を保存しました",
   "settings.huggingface.hint":
-    "保存した値は backend/.env に書き込まれ、サービス起動時に各 parser へ供給されます。既存コンテナは再作成で反映されます。",
-  "settings.huggingface.env.description": "保存される backend/.env のプレビュー(token はマスク)。",
-  "settings.huggingface.ops.description": "保存後の挙動。",
-  "settings.huggingface.ops.persist":
-    "値は backend の .env に保存します(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)。",
-  "settings.huggingface.ops.mount":
-    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。",
-  "settings.huggingface.ops.bake": "prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時 DL/認証にのみ使います。",
-  "settings.huggingface.status.title": "ダウンロード設定の状態",
-  "settings.huggingface.status.description": "現在の token / ミラーの設定状況。",
-  "settings.huggingface.status.token": "認証 token",
-  "settings.huggingface.status.tokenConfigured": "設定済み",
-  "settings.huggingface.status.tokenNotConfigured": "未設定(匿名 DL)",
-  "settings.huggingface.status.endpoint": "ミラー endpoint",
-  "settings.huggingface.status.endpointDefault": "公式 hub",
+    "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。既存のコンテナは再作成で反映されます。",
+  "settings.huggingface.hintCache":
+    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.database.readiness.ok": "OK",
   "settings.database.readiness.missing": "未設定",
@@ -1242,6 +1224,18 @@ export const ja = {
   "fileList.delete.confirm.confirm": "削除",
   "fileList.delete.toast.deleted": "「{name}」を削除しました。",
   "fileList.delete.toast.failed": "ドキュメントの削除に失敗しました。",
+  "fileList.delete.toast.deletedWithWarning":
+    "「{name}」を削除しましたが、保存先のファイルの後始末に一部失敗しました。",
+  "fileList.loadError": "文書の一覧を取得できませんでした。接続を確認して再試行してください。",
+  "fileList.ingest.toast.queued": "「{name}」のファイル準備を開始しました。状態は一覧に反映されます。",
+  "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",
+  "fileList.ingest.toast.failed": "「{name}」のファイル準備を開始できませんでした。",
+  "fileList.ingest.toast.failedHint": "文書の状態を確認してから再試行してください。",
+  "fileList.bulkQueue.toast.queued": "{count} 件のファイル準備を開始しました。状態は一覧に反映されます。",
+  "fileList.bulkQueue.toast.partial":
+    "{total} 件中 {queued} 件のファイル準備を開始しました。開始できなかった文書があります。",
+  "fileList.bulkQueue.toast.failed": "選択した文書のファイル準備を開始できませんでした。",
+  "fileList.bulkQueue.toast.detail": "スキップ {skipped} 件・失敗 {failed} 件。{reason}",
   "pager.prev": "前へ",
   "pager.next": "次へ",
   "pager.range": "{start} - {end} / {total} 件",
@@ -1660,9 +1654,14 @@ export const ja = {
   "upload.dropzone":
     "PDF・画像・テキスト・HTML・メール・Office をここにドラッグ＆ドロップ",
   "upload.dropzoneHint":
-    "複数ファイルをまとめて選択できます（最大 200 MB / ファイル）。音声は保存のみで取込はスキップされます。",
+    "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。音声は保存のみで取込はスキップされます。",
   "upload.selectFile": "ファイルを選択",
-  "upload.uploading": "アップロード中…",
+  "upload.uploading": "{count} 件のファイルをアップロードしています",
+  "upload.error.failed": "アップロードに失敗しました。時間をおいて、もう一度お試しください。",
+  "upload.error.fileTooLarge":
+    "ファイルサイズが上限（{size} / ファイル）を超えるため、送信しませんでした。",
+  "upload.error.requestTooLarge":
+    "送信サイズが上限を超えたため、アップロードできませんでした。ファイルを分けてアップロードするか、管理者にアップロード上限の設定を確認してください。",
   "upload.duplicate": "同一内容のドキュメントが既に登録されています（重複の可能性）。",
   "upload.duplicateDetail":
     "同一内容の文書が既に登録されています。重複元: {name} / {status} / アップロード {uploadedAt}",
@@ -1670,9 +1669,9 @@ export const ja = {
     "内容が同じでも別文書として処理したい場合は、重複を無視して取込できます。",
   "upload.uploadAnother": "別のドキュメントをアップロード",
   "upload.batch.title": "アップロード結果",
-  "upload.batch.total": "アップロード",
-  "upload.batch.queued": "処理待ち",
-  "upload.batch.skipped": "スキップ",
+  "upload.batch.total": "選択したファイル",
+  "upload.batch.uploaded": "保存済み",
+  "upload.batch.duplicates": "重複の可能性",
   "upload.batch.failed": "失敗",
   "upload.batch.failedTitle": "一部のファイルをアップロードできませんでした",
   "upload.batch.open": "{name} を表示",
@@ -1715,6 +1714,7 @@ export const ja = {
     "登録先にできる知識ベースがありません。管理者に知識ベースの利用権限を依頼してください。",
   "upload.knowledgeBases.loadWarningRequiredHint":
     "登録先の知識ベースを選択できないため、アップロードできません。再読み込みしてください。",
+  "upload.knowledgeBases.reload": "再読み込み",
 
   "sourceProfile.title": "原本の処理情報",
   "sourceProfile.documentWorkspaceTitle": "原本情報",
@@ -2006,6 +2006,8 @@ export const ja = {
   "documents.recipes.create": "追加する",
   "documents.recipes.delete": "レシピを削除",
   "documents.recipes.deleteDisabledMin": "レシピを削除（少なくとも1件必要です）",
+  "documents.recipes.deleteFailed":
+    "レシピを削除できませんでした。処理中でないことを確認して再試行してください。",
   "documents.recipes.deleteTitle": "この処理レシピを削除しますか？",
   "documents.recipes.deleteDescription":
     "このレシピの処理結果と検索索引を削除します。この操作は元に戻せません。",

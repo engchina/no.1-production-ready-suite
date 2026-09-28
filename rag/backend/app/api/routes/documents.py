@@ -35,6 +35,7 @@ from app.config import (
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     Settings,
     get_settings,
+    normalize_parser_adapter_backend_value,
 )
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -130,8 +131,27 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+UPLOAD_STORAGE_FAILED_MESSAGE = (
+    "原本を保存先に保存できませんでした。システム設定 > アップロード保存先 の設定を確認してから、"
+    "もう一度アップロードしてください。"
+)
+# rag_documents.file_name は VARCHAR2(512)（BYTE 長）。日本語の長いファイル名が DB の INSERT で
+# 失敗しないよう、表示・保存用のファイル名は文字数と UTF-8 のバイト数の両方で切り詰める（#280）。
+MAX_UPLOAD_FILE_NAME_CHARS = 255
+MAX_UPLOAD_FILE_NAME_BYTES = 512
+_MAX_PRESERVED_SUFFIX_CHARS = 16
 CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
+# ブラウザが開くとスクリプトを実行しうる形式。原本配信では CSP sandbox を付ける。
+SCRIPTABLE_CONTENT_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/xml",
+        "application/xml",
+    }
+)
 DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
     {FileStatus.UPLOADED, FileStatus.INDEXED, FileStatus.ERROR}
 )
@@ -150,12 +170,9 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_adapter_backend",
         "parser_docling_enabled",
         "parser_docling_vision_enabled",
-        "parser_marker_enabled",
         "parser_unstructured_enabled",
-        "parser_unlimited_ocr_enabled",
         "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
-        "parser_glm_ocr_enabled",
     ),
     "chunking_strategy": (
         "chunking_strategy",
@@ -368,11 +385,19 @@ async def _store_uploaded_document(
         data=data,
     )
     key = f"uploaded/{uuid4().hex}/{file_name}"
-    object_path = await storage.put(
-        key=key,
-        data=data,
-        content_type=content_type,
-    )
+    try:
+        object_path = await storage.put(
+            key=key,
+            data=data,
+            content_type=content_type,
+        )
+    except Exception as exc:
+        # 保存先の未設定・認証切れ・容量不足などは、原因の分かる 503 にする（#280）。
+        logger.exception(
+            "upload_storage_put_failed",
+            extra={"file_name": file_name, "exception_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail=UPLOAD_STORAGE_FAILED_MESSAGE) from exc
     try:
         detail = await oracle.create_document(
             file_name=file_name,
@@ -383,10 +408,15 @@ async def _store_uploaded_document(
             duplicate_of_document_id=duplicate.id if duplicate is not None else None,
             knowledge_base_ids=selected_knowledge_base_ids or None,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        # 文書行を作れなかった原本は、どの文書からも参照されず保存先に残り続ける。
+        # 範囲外・アーカイブ済みの KB や DB の失敗でも、保存した原本を消してから返す（#280）。
+        await _delete_orphan_upload_object(storage, object_path)
+        if isinstance(exc, KeyError):
+            raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
     return UploadResult(
         id=detail.id,
         file_name=detail.file_name,
@@ -397,6 +427,19 @@ async def _store_uploaded_document(
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
     )
+
+
+async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path: str) -> None:
+    """文書行を作れなかったアップロードの原本を best-effort で削除する。"""
+    try:
+        await storage.delete(object_path)
+    except Exception:
+        # 後始末の失敗で元のエラーを隠さない。残った原本はログから追えるようにする。
+        logger.warning(
+            "upload_orphan_object_cleanup_failed",
+            extra={"object_storage_path": object_path},
+            exc_info=True,
+        )
 
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
@@ -1542,6 +1585,12 @@ def _experiment_candidate_settings(base: Settings, overrides: dict[str, object])
     """global 設定に実験ジョブの候補レシピ上書きを重ねた Settings を返す(既知キーのみ)。"""
     allowed = {"rag_preprocess_profile", "rag_parser_adapter_backend"}
     filtered = {key: value for key, value in overrides.items() if key in allowed}
+    if "rag_parser_adapter_backend" in filtered:
+        # model_copy は validator を通さないため、削除済みエンジン(#270)が残る旧ジョブの
+        # snapshot もここで既定エンジンへ寄せる。
+        filtered["rag_parser_adapter_backend"] = normalize_parser_adapter_backend_value(
+            filtered["rag_parser_adapter_backend"]
+        )
     return base.model_copy(update=filtered)
 
 
@@ -1918,12 +1967,9 @@ def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> boo
         return False
     aliases = {
         "docling": {"docling", "docling_adapter"},
-        "marker": {"marker", "marker_adapter"},
         "unstructured": {"unstructured", "unstructured_adapter"},
-        "unlimited_ocr": {"unlimited_ocr", "unlimited_ocr_adapter"},
         "mineru": {"mineru", "mineru_adapter"},
         "dots_ocr": {"dots_ocr", "dots_ocr_adapter"},
-        "glm_ocr": {"glm_ocr", "glm_ocr_adapter"},
         "oci_genai_vision": {"oci_genai_vision", "enterprise_ai_vlm"},
         "enterprise_ai_vlm": {"oci_genai_vision", "enterprise_ai_vlm"},
     }
@@ -3640,6 +3686,10 @@ async def _enqueue_ingestion_job_for_document(
         FileStatus.INDEXING,
     ):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
+    # 投入直後の job は worker が拾うまで QUEUED のまま文書は UPLOADED 等に見えるため、
+    # 状態だけでは二重投入を止められない。出力の初期化より前に、同じ(既定)レシピの
+    # 待機中・実行中 job を確かめる(#281)。
+    await _raise_if_default_recipe_job_active(oracle, document_id)
 
     source_profile = _source_profile_for_detail(detail)
     # 重複スキップは初回取込(PREPROCESS)の入口だけに適用する。PREPROCESSED 以降の段階進行
@@ -3708,6 +3758,29 @@ async def _enqueue_ingestion_job_for_document(
     )
     _dispatch_ingestion_job(job.id, force=force)
     return job
+
+
+async def _raise_if_default_recipe_job_active(oracle: OracleClient, document_id: str) -> None:
+    """文書単位の投入先(既定レシピ)に待機中・実行中の job があれば 409 にする。
+
+    Oracle の job 作成も同じレシピの QUEUED / RUNNING を拒否するが、それより前に行う出力の初期化
+    (`_reset_document_outputs_for_extract`)で待機中 job の前提を壊さないよう、ここで先に止める。
+    """
+    default_recipe_id: str | None = None
+    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+    if callable(ensure_recipe):
+        recipe = await ensure_recipe(document_id)
+        default_recipe_id = str(recipe["recipe_id"])
+    jobs = await oracle.list_document_ingestion_jobs(document_id)
+    if any(
+        job.status in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}
+        and job.recipe_id in {None, default_recipe_id}
+        for job in jobs
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="このドキュメントは取込待ちまたは取込中です。完了してから再実行してください。",
+        )
 
 
 async def _enqueue_index_phase_job_for_document(
@@ -3904,7 +3977,12 @@ async def _create_ingestion_job_record(
         queued_at=queued_at,
         finished_at=queued_at if status == IngestionJobStatus.SKIPPED else None,
     )
-    return await oracle.create_ingestion_job(job)
+    try:
+        return await oracle.create_ingestion_job(job)
+    except ValueError as exc:
+        # 同じレシピの待機中・実行中 job がある / レシピ設定が更新された、は競合(409)として返す。
+        # 以前は文書単位の投入経路で 500 になっていた(#281)。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 async def _reset_document_outputs_for_extract(
@@ -4930,17 +5008,19 @@ async def _document_content_response(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bad_path_message) from exc
 
-    return Response(
-        content=data,
-        media_type=_content_type_header(content_type, data),
-        headers={
-            # 非 ASCII ファイル名は RFC 5987 でエンコードする
-            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
-            # MIME sniffing による取り違えを防ぐ
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=60",
-        },
-    )
+    media_type = _content_type_header(content_type, data)
+    headers = {
+        # 非 ASCII ファイル名は RFC 5987 でエンコードする
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
+        # MIME sniffing による取り違えを防ぐ
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=60",
+    }
+    if media_type.split(";", 1)[0].strip().lower() in SCRIPTABLE_CONTENT_TYPES:
+        # 利用者がアップロードした HTML / SVG を同じ origin で開いてもスクリプトを動かさない(#281)。
+        # 画面のプレビューは本文をテキストとして取得するので、表示には影響しない。
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:
@@ -4959,12 +5039,36 @@ async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:
 
 
 def _safe_display_filename(file_name: str | None) -> str:
-    """表示・保存用のファイル名を安全な basename にする。"""
+    """表示・保存用のファイル名を安全な basename にする。
+
+    長すぎる名前は拡張子を残したまま、文字数（255）と UTF-8 のバイト数（512。
+    `rag_documents.file_name` の列長）の両方に収まるよう末尾側を切り詰める。
+    """
     name = PurePath((file_name or "document.bin").replace("\\", "/")).name.strip()
     name = re.sub(r"[\x00-\x1f\x7f]+", "_", name).strip(" .")
     if not name:
         return "document.bin"
-    return name[:255]
+    return _truncate_file_name(name)
+
+
+def _truncate_file_name(name: str) -> str:
+    """拡張子を残して、ファイル名を文字数とバイト数の上限に収める。"""
+    if (
+        len(name) <= MAX_UPLOAD_FILE_NAME_CHARS
+        and len(name.encode("utf-8")) <= MAX_UPLOAD_FILE_NAME_BYTES
+    ):
+        return name
+    suffix = PurePath(name).suffix
+    if not suffix or len(suffix) > _MAX_PRESERVED_SUFFIX_CHARS:
+        suffix = ""
+    stem = name[: len(name) - len(suffix)] if suffix else name
+    max_stem_chars = MAX_UPLOAD_FILE_NAME_CHARS - len(suffix)
+    max_stem_bytes = MAX_UPLOAD_FILE_NAME_BYTES - len(suffix.encode("utf-8"))
+    stem = stem[:max_stem_chars]
+    while stem and len(stem.encode("utf-8")) > max_stem_bytes:
+        stem = stem[:-1]
+    stem = stem.rstrip(" .")
+    return f"{stem}{suffix}" if stem else f"document{suffix}"
 
 
 def _normalized_content_type(content_type: str | None) -> str:

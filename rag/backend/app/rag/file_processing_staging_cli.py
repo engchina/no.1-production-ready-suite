@@ -226,7 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--parser-adapter-contract-strict",
         action="store_true",
         help=(
-            "Docling / Marker / Unstructured の feature flag を staging smoke 用に "
+            "Docling / Unstructured の feature flag を staging smoke 用に "
             "有効化し、preflight / 実 staging / adapter contract artifact を同じ "
             "strict 設定で検証する。"
         ),
@@ -900,7 +900,7 @@ def _parser_scorecard_promotion_blockers(
     if scorecard.metrics_applied_to is None:
         return []
     selected = scorecard.selected_backend
-    if selected not in {"docling", "marker", "unstructured"}:
+    if selected not in {"docling", "unstructured"}:
         return []
     if scorecard.recommended_backend == selected:
         return []
@@ -997,7 +997,7 @@ def _adapter_golden_gate(
     if route_contract_gap_source_kinds:
         blocker_codes.append("adapter_golden_gate_source_route_contract_missing")
     if (
-        parser_scorecard.selected_backend in {"docling", "marker", "unstructured"}
+        parser_scorecard.selected_backend in {"docling", "unstructured"}
         and parser_scorecard.metrics_applied_to != parser_scorecard.selected_backend
     ):
         blocker_codes.append("adapter_golden_gate_selected_adapter_not_measured")

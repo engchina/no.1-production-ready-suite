@@ -444,12 +444,12 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_regression(
             "blocking_failure_scenarios": [],
             "backend_passed_source_kinds": {
                 "docling": ["html", "office", "pdf"],
-                "marker": ["image", "pdf"],
+                "mineru": ["image", "pdf"],
                 "unstructured": ["email", "html", "image", "office", "pdf"],
             },
             "adapter_package_version_pairs": [
                 "docling|docling|2.103.0",
-                "marker|marker-pdf|1.10.2",
+                "mineru|mineru_file_parse|3.4.0",
                 "unstructured|unstructured|0.18.32",
             ],
             "missing_source_kinds": [],
@@ -475,7 +475,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_regression(
             "blocking_failure_scenarios": ["simple_pdf_text"],
             "backend_passed_source_kinds": {
                 "docling": ["html", "office", "pdf"],
-                "marker": ["image"],
+                "mineru": ["image"],
                 "unstructured": ["email", "html", "image", "office", "pdf"],
             },
             "adapter_package_version_pairs": [
@@ -524,7 +524,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_bad_set_repl
         "case_count": 6,
         "blocking_failure_count": 2,
         "source_kinds": ["pdf", "office", "image"],
-        "backends": ["docling", "marker", "unstructured"],
+        "backends": ["docling", "mineru", "unstructured"],
         "scenarios": ["image_ocr_receipt", "japanese_docx_layout"],
         "passed_scenarios": [],
         "passed_source_kinds": ["pdf"],
@@ -532,7 +532,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_bad_set_repl
         "missing_scenarios": ["image_ocr_receipt"],
         "blocking_failure_source_kinds": ["image"],
         "blocking_failure_scenarios": ["image_ocr_receipt"],
-        "blocking_failure_backends": ["marker"],
+        "blocking_failure_backends": ["mineru"],
         "backend_passed_source_kinds": {"docling": ["pdf"]},
         "backend_passed_scenarios": {},
         "backend_source_status_counts": {"docling": {"pdf": {"passed": 1}}},
@@ -592,7 +592,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_evidence_set
         "case_count": 6,
         "blocking_failure_count": 0,
         "source_kinds": ["pdf", "office"],
-        "backends": ["docling", "marker"],
+        "backends": ["docling", "mineru"],
         "scenarios": ["scanned_pdf_ocr", "two_column_pdf_reading_order"],
         "passed_scenarios": ["scanned_pdf_ocr", "two_column_pdf_reading_order"],
         "passed_source_kinds": ["pdf", "office"],
@@ -648,7 +648,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_evidence_set
     }
     output_text = output_path.read_text(encoding="utf-8")
     assert "two_column_pdf_reading_order" not in output_text
-    assert "marker" not in output_text
+    assert "mineru" not in output_text
 
 
 def test_file_processing_trend_cli_fails_on_parser_adapter_contract_case_ref_replacement(
@@ -735,11 +735,11 @@ def test_file_processing_trend_cli_fails_on_backend_scenario_pair_regression(
             "blocking_failure_scenarios": [],
             "backend_passed_source_kinds": {
                 "docling": ["pdf"],
-                "marker": ["pdf"],
+                "mineru": ["pdf"],
             },
             "backend_passed_scenarios": {
                 "docling": ["scanned_pdf_ocr", "two_column_pdf_reading_order"],
-                "marker": ["scanned_pdf_ocr"],
+                "mineru": ["scanned_pdf_ocr"],
             },
             "missing_source_kinds": [],
             "blocking_failure_source_kinds": [],
@@ -760,11 +760,11 @@ def test_file_processing_trend_cli_fails_on_backend_scenario_pair_regression(
             "blocking_failure_scenarios": [],
             "backend_passed_source_kinds": {
                 "docling": ["pdf"],
-                "marker": ["pdf"],
+                "mineru": ["pdf"],
             },
             "backend_passed_scenarios": {
                 "docling": ["scanned_pdf_ocr"],
-                "marker": ["scanned_pdf_ocr", "two_column_pdf_reading_order"],
+                "mineru": ["scanned_pdf_ocr", "two_column_pdf_reading_order"],
             },
             "missing_source_kinds": [],
             "blocking_failure_source_kinds": [],
@@ -1282,7 +1282,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_scorecard_regression(
                     warning_codes=[],
                 ),
                 _parser_adapter_scorecard_entry(
-                    "marker",
+                    "mineru",
                     rank=2,
                     score=82.0,
                     status="eligible",
@@ -1440,9 +1440,9 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_regressi
         parser_adapter_source_routes=[
             {
                 "source_kind": "pdf",
-                "candidate_order": ["docling", "marker", "unstructured"],
+                "candidate_order": ["docling", "mineru", "unstructured"],
                 "attempted_order": ["docling"],
-                "active_order": ["docling", "marker"],
+                "active_order": ["docling", "mineru"],
                 "selected_backend": "docling",
                 "reason_codes": ["contract_aware_source_route"],
                 "warning_codes": [],
@@ -1464,7 +1464,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_regressi
         parser_adapter_source_routes=[
             {
                 "source_kind": "pdf",
-                "candidate_order": ["marker"],
+                "candidate_order": ["mineru"],
                 "attempted_order": [],
                 "active_order": [],
                 "selected_backend": "local",
@@ -1510,12 +1510,12 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_code_rep
         parser_adapter_source_routes=[
             {
                 "source_kind": "pdf",
-                "candidate_order": ["docling", "marker", "unstructured"],
+                "candidate_order": ["docling", "mineru", "unstructured"],
                 "attempted_order": ["docling"],
-                "active_order": ["docling", "marker"],
+                "active_order": ["docling", "mineru"],
                 "selected_backend": "docling",
                 "reason_codes": ["contract_aware_source_route"],
-                "warning_codes": ["marker_adapter_contract_unverified_for_source"],
+                "warning_codes": ["mineru_adapter_contract_unverified_for_source"],
             },
         ],
     )
@@ -1525,9 +1525,9 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_code_rep
         parser_adapter_source_routes=[
             {
                 "source_kind": "pdf",
-                "candidate_order": ["docling", "marker", "unstructured"],
+                "candidate_order": ["docling", "mineru", "unstructured"],
                 "attempted_order": ["docling"],
-                "active_order": ["docling", "marker"],
+                "active_order": ["docling", "mineru"],
                 "selected_backend": "docling",
                 "reason_codes": ["local_fallback_due_to_contract_gap"],
                 "warning_codes": ["docling_adapter_contract_unverified_for_source"],
@@ -1563,9 +1563,9 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_evidence
         parser_adapter_source_routes=[
             {
                 "source_kind": "pdf",
-                "candidate_order": ["docling", "marker"],
-                "attempted_order": ["docling", "marker"],
-                "active_order": ["docling", "marker"],
+                "candidate_order": ["docling", "mineru"],
+                "attempted_order": ["docling", "mineru"],
+                "active_order": ["docling", "mineru"],
                 "selected_backend": "docling",
                 "reason_codes": [],
                 "warning_codes": [],
@@ -1603,7 +1603,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_evidence
         "parser_adapter_source_route_active_backends_removed",
     }
     output_text = output_path.read_text(encoding="utf-8")
-    assert "marker" not in output_text
+    assert "mineru" not in output_text
     assert "unstructured" not in output_text
 
 

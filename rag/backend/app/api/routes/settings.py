@@ -1202,17 +1202,9 @@ def _parser_adapter_settings_candidate(
             payload.docling_vision_enabled,
             base.rag_parser_docling_vision_enabled,
         ),
-        "rag_parser_marker_enabled": _optional_bool(
-            payload.marker_enabled,
-            base.rag_parser_marker_enabled,
-        ),
         "rag_parser_unstructured_enabled": _optional_bool(
             payload.unstructured_enabled,
             base.rag_parser_unstructured_enabled,
-        ),
-        "rag_parser_unlimited_ocr_enabled": _optional_bool(
-            payload.unlimited_ocr_enabled,
-            base.rag_parser_unlimited_ocr_enabled,
         ),
         "rag_parser_mineru_enabled": _optional_bool(
             payload.mineru_enabled,
@@ -1221,10 +1213,6 @@ def _parser_adapter_settings_candidate(
         "rag_parser_dots_ocr_enabled": _optional_bool(
             payload.dots_ocr_enabled,
             base.rag_parser_dots_ocr_enabled,
-        ),
-        "rag_parser_glm_ocr_enabled": _optional_bool(
-            payload.glm_ocr_enabled,
-            base.rag_parser_glm_ocr_enabled,
         ),
     }
     for connection in payload.connections:

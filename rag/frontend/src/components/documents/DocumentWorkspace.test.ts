@@ -15,6 +15,7 @@ import {
   resolvePhaseRows,
   resolveStatusMessageSlot,
   shouldShowProcessingWatchBanner,
+  shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
 import {
   resolveDocumentFailureView,
@@ -398,20 +399,20 @@ describe("resolveIngestionProgressSummary", () => {
 describe("resolveIngestionErrorDisplayPlan", () => {
   it("job の原因を優先し、同じ原因の segment と document banner を隠す", () => {
     const plan = resolveIngestionErrorDisplayPlan({
-      latestJobErrorMessage: " unlimited_ocr_adapter_failed ",
+      latestJobErrorMessage: " dots_ocr_adapter_failed ",
       segments: [
         {
           segment_id: "segment-1",
           status: "FAILED",
-          error_message: "unlimited_ocr_adapter_failed",
+          error_message: "dots_ocr_adapter_failed",
         },
       ],
-      documentErrorMessage: "unlimited_ocr_adapter_failed",
-      queuedJobErrorMessage: "unlimited_ocr_adapter_failed",
-      retriedSegmentJobErrorMessage: "unlimited_ocr_adapter_failed",
+      documentErrorMessage: "dots_ocr_adapter_failed",
+      queuedJobErrorMessage: "dots_ocr_adapter_failed",
+      retriedSegmentJobErrorMessage: "dots_ocr_adapter_failed",
     });
 
-    expect(plan.jobMessage).toBe("unlimited_ocr_adapter_failed");
+    expect(plan.jobMessage).toBe("dots_ocr_adapter_failed");
     expect(Array.from(plan.segmentIds)).toEqual([]);
     expect(plan.documentMessage).toBeNull();
     expect(plan.queuedJobMessage).toBeNull();
@@ -556,16 +557,93 @@ describe("shouldShowProcessingWatchBanner", () => {
 
 describe("ingestConflictBannerIsStale", () => {
   it("取込進行中の 409 は stale ではない(banner を残す)", () => {
-    expect(ingestConflictBannerIsStale({ errorStatus: 409, hasActiveJob: true })).toBe(false);
+    expect(
+      ingestConflictBannerIsStale({ errorStatus: 409, hasActiveJob: true, observedActiveJob: true })
+    ).toBe(false);
   });
 
-  it("取込完了後に残った 409 は stale として消す", () => {
-    expect(ingestConflictBannerIsStale({ errorStatus: 409, hasActiveJob: false })).toBe(true);
+  it("進行中ジョブを観測した後、それが無くなった 409 は stale として消す", () => {
+    expect(
+      ingestConflictBannerIsStale({ errorStatus: 409, hasActiveJob: false, observedActiveJob: true })
+    ).toBe(true);
+  });
+
+  it("進行中ジョブをまだ観測していない 409 は出した瞬間に消さない", () => {
+    expect(
+      ingestConflictBannerIsStale({ errorStatus: 409, hasActiveJob: false, observedActiveJob: false })
+    ).toBe(false);
   });
 
   it("409 以外のエラーは消さない", () => {
-    expect(ingestConflictBannerIsStale({ errorStatus: 500, hasActiveJob: false })).toBe(false);
-    expect(ingestConflictBannerIsStale({ errorStatus: null, hasActiveJob: false })).toBe(false);
+    expect(
+      ingestConflictBannerIsStale({ errorStatus: 500, hasActiveJob: false, observedActiveJob: true })
+    ).toBe(false);
+    expect(
+      ingestConflictBannerIsStale({ errorStatus: null, hasActiveJob: false, observedActiveJob: true })
+    ).toBe(false);
+  });
+});
+
+describe("shouldStopLocalProcessingWatch", () => {
+  it("進行中の job がある間はやめない", () => {
+    expect(
+      shouldStopLocalProcessingWatch({
+        activeSubmittedJob: true,
+        documentStatus: "UPLOADED",
+        submittedJobStatus: "QUEUED",
+      })
+    ).toBe(false);
+  });
+
+  it("確認待ち・完了・失敗になったらやめる", () => {
+    for (const documentStatus of ["INDEXED", "ERROR", "PREPROCESSED", "REVIEW"] as const) {
+      expect(
+        shouldStopLocalProcessingWatch({
+          activeSubmittedJob: false,
+          documentStatus,
+          submittedJobStatus: "SUCCEEDED",
+        })
+      ).toBe(true);
+    }
+  });
+
+  it("待機中にキャンセルされ UPLOADED のままになったらやめる", () => {
+    expect(
+      shouldStopLocalProcessingWatch({
+        activeSubmittedJob: false,
+        documentStatus: "UPLOADED",
+        submittedJobStatus: "CANCELLED",
+      })
+    ).toBe(true);
+  });
+
+  it("job が失敗・成功しただけで、文書の状態がまだ UPLOADED ならやめない（次の取得で ERROR などへ進む）", () => {
+    for (const submittedJobStatus of ["FAILED", "SUCCEEDED"] as const) {
+      expect(
+        shouldStopLocalProcessingWatch({
+          activeSubmittedJob: false,
+          documentStatus: "UPLOADED",
+          submittedJobStatus,
+        })
+      ).toBe(false);
+    }
+  });
+
+  it("投入した job がまだ分からない UPLOADED と、処理中の状態ではやめない", () => {
+    expect(
+      shouldStopLocalProcessingWatch({
+        activeSubmittedJob: false,
+        documentStatus: "UPLOADED",
+        submittedJobStatus: null,
+      })
+    ).toBe(false);
+    expect(
+      shouldStopLocalProcessingWatch({
+        activeSubmittedJob: false,
+        documentStatus: "CHUNKING",
+        submittedJobStatus: "SUCCEEDED",
+      })
+    ).toBe(false);
   });
 });
 

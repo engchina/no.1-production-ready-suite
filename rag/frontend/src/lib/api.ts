@@ -97,6 +97,9 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   30_000,
 );
 
+/** アップロードの送信は時間で打ち切らない（0 = タイムアウトなし。#280）。 */
+export const UPLOAD_REQUEST_TIMEOUT_MS = 0;
+
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
 export type JsonValue =
@@ -165,12 +168,9 @@ export type EvaluationMetricName =
 export type ParserAdapterBackend =
   | "local"
   | "docling"
-  | "marker"
   | "unstructured"
-  | "unlimited_ocr"
   | "mineru"
   | "dots_ocr"
-  | "glm_ocr"
   | "oci_genai_vision"
   // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
   | "enterprise_ai_vlm"
@@ -179,14 +179,10 @@ export type ParserServiceBackendName =
   "oci_genai_vision" | "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
-  | "marker"
   | "unstructured"
-  | "unlimited_ocr"
   | "mineru"
-  | "dots_ocr"
-  | "glm_ocr";
-export type ExternalParserBackendName =
-  "unlimited_ocr" | "mineru" | "dots_ocr" | "glm_ocr";
+  | "dots_ocr";
+export type ExternalParserBackendName = "mineru" | "dots_ocr";
 export type ExternalParserProtocol =
   "mineru_file_parse" | "openai_chat_completions";
 export type ExternalParserConnectionStatus =
@@ -723,12 +719,9 @@ export interface KnowledgeBaseIngestionConfig {
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_docling_vision_enabled?: boolean | null;
-  parser_marker_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
-  parser_unlimited_ocr_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
-  parser_glm_ocr_enabled: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
@@ -1741,12 +1734,9 @@ export interface ParserAdapterSettingsUpdate {
   adapter_backend: ParserAdapterBackend;
   docling_enabled?: boolean;
   docling_vision_enabled?: boolean;
-  marker_enabled?: boolean;
   unstructured_enabled?: boolean;
-  unlimited_ocr_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
-  glm_ocr_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
 }
 
@@ -2588,10 +2578,12 @@ export const api = {
     request<IngestionSegment[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-segments`,
     ),
+  // 削除は成功しても原本・artifact の後始末の失敗を warning_messages で返すため、併せて返す（#281）。
   deleteDocument: (id: string) =>
-    request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    }),
+    requestDegradable<DocumentDeleteResult>(
+      `/api/documents/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
   getDocumentStats: () =>
     requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>
@@ -2627,10 +2619,13 @@ export const api = {
       form.append("knowledge_base_ids", id);
     }
     form.append("ingestion_mode", ingestionMode);
-    return request<UploadResult>("/api/documents/upload", {
-      method: "POST",
-      body: form,
-    });
+    return request<UploadResult>(
+      "/api/documents/upload",
+      { method: "POST", body: form },
+      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
+      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
+      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
   },
   batchUploadDocuments: (
     files: File[],
@@ -2645,10 +2640,13 @@ export const api = {
       form.append("knowledge_base_ids", id);
     }
     form.append("ingestion_mode", ingestionMode);
-    return request<BatchUploadResult>("/api/documents/batch-upload", {
-      method: "POST",
-      body: form,
-    });
+    return request<BatchUploadResult>(
+      "/api/documents/batch-upload",
+      { method: "POST", body: form },
+      // 大きなファイルの送信・保存は既定の 30 秒を超える。途中で打ち切ると、backend では保存済みなのに
+      // 画面は失敗と表示し、再送で同じ文書が二重に登録される（#280）。送信は打ち切らない。
+      { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS },
+    );
   },
   ingestDocument: (
     id: string,

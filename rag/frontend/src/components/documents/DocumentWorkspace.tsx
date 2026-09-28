@@ -47,6 +47,7 @@ import {
   resolvePhaseRows,
   resolveStatusMessageSlot,
   shouldShowProcessingWatchBanner,
+  shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
 import {
   normalizeIngestionErrorMessage,
@@ -291,6 +292,10 @@ export function DocumentWorkspace({
     setSearchParams(next, { replace: true });
     setSelectedChunkId(null);
     setSelectedElementId(null);
+    // 前のレシピへの投入・承認・再試行の結果（エラーや実行中の job）を次のレシピへ持ち越さない（#281）。
+    enqueueIngestion.reset();
+    approveDocument.reset();
+    retryFailedSegments.reset();
   };
   const chunksQuery = useDocumentRecipeChunks(documentId, selectedRecipeId);
   const chunkPreview = usePreviewDocumentRecipeChunks();
@@ -578,10 +583,24 @@ export function DocumentWorkspace({
     setPreviewVariant("original");
   }
   const resetEnqueueIngestion = enqueueIngestion.reset;
+  // 409 の後に進行中ジョブを観測したか。観測する前の 409 は消さない（#281）。
+  const conflictObservedActiveJobRef = useRef(false);
   useEffect(() => {
     const errorStatus =
       enqueueIngestion.error instanceof ApiError ? enqueueIngestion.error.status : null;
-    if (ingestConflictBannerIsStale({ errorStatus, hasActiveJob: activeSubmittedJob })) {
+    if (errorStatus !== 409) {
+      conflictObservedActiveJobRef.current = false;
+      return;
+    }
+    if (activeSubmittedJob) conflictObservedActiveJobRef.current = true;
+    if (
+      ingestConflictBannerIsStale({
+        errorStatus,
+        hasActiveJob: activeSubmittedJob,
+        observedActiveJob: conflictObservedActiveJobRef.current,
+      })
+    ) {
+      conflictObservedActiveJobRef.current = false;
       resetEnqueueIngestion();
     }
   }, [enqueueIngestion.error, activeSubmittedJob, resetEnqueueIngestion]);
@@ -751,14 +770,14 @@ export function DocumentWorkspace({
   );
 
   // ジョブの有無か状態が変わったレンダーで、処理が終わっていれば投入直後の監視をやめる。
-  const watchSourceChanged = useValuesChanged([activeSubmittedJob, status]);
+  const watchSourceChanged = useValuesChanged([activeSubmittedJob, status, queuedIngestionJobStatus]);
   if (
     watchSourceChanged &&
-    !activeSubmittedJob &&
-    (status === "INDEXED" ||
-      status === "ERROR" ||
-      status === "PREPROCESSED" ||
-      status === "REVIEW")
+    shouldStopLocalProcessingWatch({
+      activeSubmittedJob,
+      documentStatus: status,
+      submittedJobStatus: queuedIngestionJobStatus,
+    })
   ) {
     setLocalWatchProcessing(false);
   }
@@ -908,7 +927,9 @@ export function DocumentWorkspace({
   if (focusSourceChanged) applyRequestedFocus();
 
   if (query.isPending) return <Skeleton className="h-80 w-full rounded-lg" />;
-  if (query.isError) {
+  // 取得済みの文書がある間は、ポーリング中の一時的な失敗で画面全体（入力中の分類・KB の選択を含む）を
+  // エラー表示に置き換えない。前の内容のまま次の取得で回復させる（#281）。
+  if (query.isError && !query.data) {
     return (
       <ErrorState
         message={errorMessage(query.error, t("workspace.notFound"))}
@@ -1359,7 +1380,9 @@ export function DocumentWorkspace({
                   ) : null}
                   <DocumentChunksPanel
                     chunks={displayedChunks}
-                    loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isPending)}
+                    // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
+                    // 実際に取得している間（isLoading）だけ読込中にする（#281）。
+                    loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isLoading)}
                     error={!chunkPreview.data && chunksQuery.isError}
                     selectedChunkId={selectedChunkId}
                     focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
@@ -1603,7 +1626,9 @@ export function DocumentWorkspace({
                 </Button>
               ))}
             </div>
-            {enqueueIngestion.isError && !documentFailure.errored ? (
+            {/* 投入の失敗は文書の失敗状態とは別の出来事。ERROR の文書で「再試行」が失敗したときも
+                ボタンの直下に出す（以前は ERROR のときだけ何も表示されなかった。#281）。 */}
+            {enqueueIngestion.isError ? (
               <FormStatus
                 tone="danger"
                 message={submissionErrorMessage}

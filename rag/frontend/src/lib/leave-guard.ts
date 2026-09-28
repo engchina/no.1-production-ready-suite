@@ -39,10 +39,13 @@ function useRegisterLeaveGuard(enabled: boolean, confirmLeave: () => Promise<boo
   }, [enabled]);
 }
 
-/** 編集画面の標準ガード。dirty のときだけ離脱を確認し、戻り値は画面内の移動前に呼ぶ確認関数。 */
-export function useLeaveGuard(isDirty: boolean): () => Promise<boolean> {
-  const confirmLeave = useSettingsDraftGuard(isDirty, false, draftGuardMessages());
-  useRegisterLeaveGuard(isDirty, confirmLeave);
+/**
+ * 編集画面の標準ガード。dirty のときは離脱を確認し、戻り値は画面内の移動前に呼ぶ確認関数。
+ * `busy`（保存中など）の間は、共通のシステム設定の画面と同じく離脱そのものを止める。
+ */
+export function useLeaveGuard(isDirty: boolean, busy = false): () => Promise<boolean> {
+  const confirmLeave = useSettingsDraftGuard(isDirty, busy, draftGuardMessages());
+  useRegisterLeaveGuard(isDirty || busy, confirmLeave);
   return confirmLeave;
 }
 

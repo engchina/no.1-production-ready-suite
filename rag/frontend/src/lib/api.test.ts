@@ -131,6 +131,32 @@ describe("api.request envelope", () => {
     expect(page.warning_messages).toEqual([]);
   });
 
+  it.each([
+    ["uploadDocument", () => api.uploadDocument(new File(["test"], "policy.txt"))],
+    ["batchUploadDocuments", () => api.batchUploadDocuments([new File(["test"], "policy.txt")])],
+  ])("%s は既定の API タイムアウトで送信を打ち切らない", async (_name, send) => {
+    vi.useFakeTimers();
+    let aborted = false;
+    let resolveFetch: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+      });
+      return new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = send();
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS * 4);
+    expect(aborted).toBe(false);
+
+    resolveFetch(jsonResponse({ data: { items: [] }, error_messages: [], warning_messages: [] }));
+    await expect(pending).resolves.toBeTruthy();
+  });
+
   it("uploadDocument は knowledge_base_ids と ingestion_mode を multipart に含める", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -374,12 +400,9 @@ describe("api.request envelope", () => {
       preprocess_profile: null,
       parser_adapter_backend: "mineru",
       parser_docling_enabled: null,
-      parser_marker_enabled: null,
       parser_unstructured_enabled: null,
-      parser_unlimited_ocr_enabled: null,
       parser_mineru_enabled: null,
       parser_dots_ocr_enabled: null,
-      parser_glm_ocr_enabled: null,
       chunking_strategy: null,
       chunk_size: 512,
       chunk_overlap: null,
@@ -642,11 +665,11 @@ describe("api.request envelope", () => {
           warning_code: null,
         },
         {
-          backend: "marker",
-          package_name: "marker",
-          import_name: "marker",
+          backend: "dots_ocr",
+          package_name: "dots_ocr",
+          import_name: "dots_ocr",
           distribution_name: null,
-          install_package: "marker-pdf[full]==1.10.2",
+          install_package: "git+https://github.com/rednote-hilab/dots.ocr.git",
           enabled: true,
           selected: false,
           installed: false,
@@ -660,19 +683,6 @@ describe("api.request envelope", () => {
           import_name: "unstructured",
           distribution_name: null,
           install_package: "unstructured[all-docs]==0.23.1",
-          enabled: false,
-          selected: false,
-          installed: false,
-          status: "disabled",
-          version: null,
-          warning_code: null,
-        },
-        {
-          backend: "unlimited_ocr",
-          package_name: "sglang",
-          import_name: "sglang",
-          distribution_name: null,
-          install_package: "sglang + lmsysorg/sglang sidecar (baidu/Unlimited-OCR)",
           enabled: false,
           selected: false,
           installed: false,
@@ -745,14 +755,7 @@ describe("api.request envelope", () => {
       source_routes: [
         {
           source_kind: "pdf",
-          candidate_order: [
-            "docling",
-            "marker",
-            "unstructured",
-            "unlimited_ocr",
-            "mineru",
-            "glm_ocr",
-          ],
+          candidate_order: ["docling", "unstructured", "mineru", "dots_ocr"],
           attempted_order: ["docling"],
           active_order: ["docling"],
           selected_backend: "docling",
@@ -769,7 +772,7 @@ describe("api.request envelope", () => {
         route_evidence: [],
       },
       capabilities: [
-        { backend: "marker", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+        { backend: "docling", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
       ],
       config_source: "runtime",
     };
@@ -787,7 +790,7 @@ describe("api.request envelope", () => {
     expect(result.adapter_backend).toBe("docling");
     expect(result.effective_order).toEqual(["docling"]);
     expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
-    expect(result.adapters.map((adapter) => adapter.backend)).toContain("unlimited_ocr");
+    expect(result.adapters.map((adapter) => adapter.backend)).toContain("dots_ocr");
     expect(result.adapters.map((adapter) => adapter.backend)).toContain("mineru");
     expect(result.service_backends[0].backend).toBe("oci_genai_vision");
     expect(result.source_routes[0].candidate_order).toContain("mineru");
@@ -894,12 +897,9 @@ describe("api.request envelope", () => {
     const requestPayload = {
       adapter_backend: "docling" as const,
       docling_enabled: true,
-      marker_enabled: false,
       unstructured_enabled: true,
-      unlimited_ocr_enabled: false,
       mineru_enabled: false,
       dots_ocr_enabled: false,
-      glm_ocr_enabled: false,
     };
     const responsePayload = {
       adapter_backend: "docling",
@@ -919,19 +919,6 @@ describe("api.request envelope", () => {
           warning_code: "adapter_package_missing",
         },
         {
-          backend: "marker",
-          package_name: "marker",
-          import_name: "marker",
-          distribution_name: null,
-          install_package: "marker-pdf[full]==1.10.2",
-          enabled: false,
-          selected: false,
-          installed: false,
-          status: "disabled",
-          version: null,
-          warning_code: null,
-        },
-        {
           backend: "unstructured",
           package_name: "unstructured",
           import_name: "unstructured",
@@ -943,19 +930,6 @@ describe("api.request envelope", () => {
           status: "ignored",
           version: null,
           warning_code: "adapter_flag_ignored_by_backend",
-        },
-        {
-          backend: "unlimited_ocr",
-          package_name: "sglang",
-          import_name: "sglang",
-          distribution_name: null,
-          install_package: "sglang + lmsysorg/sglang sidecar (baidu/Unlimited-OCR)",
-          enabled: false,
-          selected: false,
-          installed: false,
-          status: "disabled",
-          version: null,
-          warning_code: null,
         },
         {
           backend: "dots_ocr",
@@ -1003,7 +977,7 @@ describe("api.request envelope", () => {
     const result = await api.updateParserAdapterSettings(requestPayload);
 
     expect(result.effective_order).toEqual(["docling"]);
-    expect(result.adapters.map((adapter) => adapter.backend)).toContain("unlimited_ocr");
+    expect(result.adapters.map((adapter) => adapter.backend)).toContain("dots_ocr");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({

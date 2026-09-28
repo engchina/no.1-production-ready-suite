@@ -20,23 +20,17 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
 
 const PARSER_BACKEND_ALIASES: Record<string, string> = {
   docling_adapter: "docling",
-  marker_adapter: "marker",
   unstructured_adapter: "unstructured",
-  unlimited_ocr_adapter: "unlimited_ocr",
   mineru_adapter: "mineru",
   dots_ocr_adapter: "dots_ocr",
-  glm_ocr_adapter: "glm_ocr",
   enterprise_ai_vlm: "oci_genai_vision",
 };
 
 const PARSER_BACKEND_LABELS: Record<string, string> = {
   docling: "Docling",
-  marker: "Marker",
   unstructured: "Unstructured",
-  unlimited_ocr: "Unlimited-OCR",
   mineru: "MinerU",
   dots_ocr: "Dots.OCR",
-  glm_ocr: "GLM-OCR",
   oci_genai_vision: "OCI Generative AI Vision",
   oci_document_understanding: "OCI Document Understanding",
   enterprise_ai: "OCI Enterprise AI",
@@ -132,6 +126,15 @@ export function unsupportedReasonLabel(reason: string | null | undefined): strin
   if (!reason) return "";
   const key = UNSUPPORTED_REASON_KEYS[reason];
   return key ? t(key) : reason;
+}
+
+/** 取込 job の skip_reason（重複・未対応形式など）を利用者向けの文に直す。 */
+export function ingestionSkipReasonLabel(reason: string | null | undefined): string {
+  if (reason === "duplicate_content") return t("sourceProfile.warning.duplicate");
+  return (
+    unsupportedReasonLabel(reason) ||
+    t("flow.phase.skipped", { phase: t("flow.jobs.phase.preprocess") })
+  );
 }
 
 export function qualityCodeLabel(value: string): string {

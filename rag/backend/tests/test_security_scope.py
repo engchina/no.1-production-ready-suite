@@ -536,3 +536,12 @@ async def test_conversations_are_scoped_to_allowed_business_views() -> None:
     for call in pool.connection.calls:
         assert "business_view_id IN (:access_business_view_id_0)" in call.statement
         assert call.parameters["access_business_view_id_0"] == "bv-1"
+
+
+@pytest.mark.anyio
+async def test_document_list_orders_by_unique_key_for_stable_paging() -> None:
+    """#281: 同じ uploaded_at の文書が OFFSET ページングで重複・欠落しないよう一意キーで並べる。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    with _scope():
+        await _client(pool).list_documents(limit=20, offset=20)
+    assert "ORDER BY uploaded_at DESC, document_id DESC" in pool.connection.calls[0].statement

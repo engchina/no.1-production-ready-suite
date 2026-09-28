@@ -1173,10 +1173,10 @@ def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> Ingest
 def test_partition_source_preflight_blocks_unsupported_format(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """marker × Office は microservice を呼ぶ前に対応形式入りエラーで停止する。"""
+    """dots_ocr × Office は外部 API を呼ぶ前に対応形式入りエラーで停止する。"""
     from app.clients.parser_service import ParserServiceUnavailableError
 
-    pipeline = _preflight_pipeline("marker", monkeypatch)
+    pipeline = _preflight_pipeline("dots_ocr", monkeypatch)
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         pipeline._partition_source(
@@ -1186,7 +1186,7 @@ def test_partition_source_preflight_blocks_unsupported_format(
         )
 
     assert exc_info.value.reason == "adapter_source_unsupported"
-    assert exc_info.value.warning_code == "marker_adapter_source_unsupported"
+    assert exc_info.value.warning_code == "dots_ocr_adapter_source_unsupported"
     assert "対応形式: PDF・画像" in str(exc_info.value)
 
 
@@ -1231,8 +1231,8 @@ def test_partition_source_blocks_historical_removed_engine(
 def test_partition_source_preflight_passes_converted_pdf(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """office_to_pdf 変換後(content_type=application/pdf)は marker でも通過する。"""
-    pipeline = _preflight_pipeline("marker", monkeypatch)
+    """office_to_pdf 変換後(content_type=application/pdf)は dots_ocr でも通過する。"""
+    pipeline = _preflight_pipeline("dots_ocr", monkeypatch)
 
     def _runner(
         self: object,
@@ -1246,7 +1246,7 @@ def test_partition_source_preflight_passes_converted_pdf(
         return ParserRegistryResult(
             extraction=_canned_extraction(),
             parser_backend=backend,
-            parser_version="marker_test",
+            parser_version="dots_ocr_test",
         )
 
     monkeypatch.setattr(
@@ -1261,7 +1261,7 @@ def test_partition_source_preflight_passes_converted_pdf(
         content_type="application/pdf",
     )
 
-    assert result.parser_backend == "marker"
+    assert result.parser_backend == "dots_ocr"
     assert result.extraction is not None
 
 

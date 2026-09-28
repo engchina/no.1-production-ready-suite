@@ -58,7 +58,6 @@ locals {
       "parser-unstructured",
     ],
     var.rag_enable_parser_docling ? ["parser-docling"] : [],
-    var.rag_enable_parser_marker ? ["parser-marker"] : [],
     var.rag_enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],
   )
 
