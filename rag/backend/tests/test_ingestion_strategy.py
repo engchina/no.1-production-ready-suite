@@ -1045,9 +1045,11 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
     checks = 0
 
     async def cancel_after_extraction() -> bool:
+        # 開始・ファイル準備後・INGESTING の前後・segment 準備後の順に確かめる(#305)。
+        # 5 回目 = 解析の直前で取り消す。
         nonlocal checks
         checks += 1
-        return checks >= 3
+        return checks >= 5
 
     with pytest.raises(IngestionCancelledError):
         await pipeline.ingest(
@@ -1063,6 +1065,100 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
     assert oracle.atomic_index_save_count == 0
     assert oracle.saved_extraction is None
     assert oracle.saved_chunk_count == 0
+
+
+async def test_ingestion_pipeline_cancel_during_preprocess_does_not_write_later_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ファイル準備中に cancel されたら、PREPROCESSED を書かずに取り消しで止める(#305)。"""
+    oracle = FakeOracle()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=False,
+        ),
+    )
+    cancelled = False
+    original_preprocess = pipeline._preprocess_source
+
+    async def preprocess_then_cancel(**kwargs: Any) -> Any:
+        nonlocal cancelled
+        result = await original_preprocess(**kwargs)
+        cancelled = True
+        return result
+
+    async def cancel_checker() -> bool:
+        return cancelled
+
+    monkeypatch.setattr(pipeline, "_preprocess_source", preprocess_then_cancel)
+
+    with pytest.raises(IngestionCancelledError):
+        await pipeline.ingest(
+            "doc-cancel-preprocess",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+            cancel_checker=cancel_checker,
+        )
+
+    assert oracle.statuses == [FileStatus.PREPROCESSING]
+
+
+@pytest.mark.parametrize("recipe_id", [None, "recipe-2"])
+async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
+    monkeypatch: pytest.MonkeyPatch,
+    recipe_id: str | None,
+) -> None:
+    """REVIEW を書く直前に cancel されたら、REVIEW と抽出の切り替えを書かない(#305)。"""
+    oracle = FakeOracle()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=True,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
+        recipe_id=recipe_id,
+        recipe_revision=1 if recipe_id is not None else None,
+    )
+    cancelled = False
+    original_attach = pipeline._attach_navigation_tree
+
+    async def attach_then_cancel(*args: Any, **kwargs: Any) -> Any:
+        nonlocal cancelled
+        result = await original_attach(*args, **kwargs)
+        cancelled = True
+        return result
+
+    async def cancel_checker() -> bool:
+        return cancelled
+
+    monkeypatch.setattr(pipeline, "_attach_navigation_tree", attach_then_cancel)
+
+    with pytest.raises(IngestionCancelledError):
+        await pipeline.ingest(
+            "doc-cancel-review",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+            cancel_checker=cancel_checker,
+        )
+
+    assert FileStatus.REVIEW not in oracle.statuses
+    assert oracle.saved_extraction is None
+    if recipe_id is not None:
+        row = oracle.recipe_rows.get(recipe_id, {})
+        assert row.get("status") != FileStatus.REVIEW.value
+        assert "active_extraction_recipe_id" not in row
 
 
 async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
