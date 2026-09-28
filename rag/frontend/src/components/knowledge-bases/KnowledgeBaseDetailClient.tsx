@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
+import { useAuth } from "@/components/security/AuthProvider";
 import {
   Button,
   Card,
@@ -34,6 +35,7 @@ import {
   useKnowledgeBase,
   useRemoveDocumentFromKnowledgeBase,
 } from "@/lib/queries";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
@@ -356,16 +358,24 @@ function KnowledgeBaseDocumentRow({
   onRemove: () => void;
   removing: boolean;
 }) {
+  // 文書の詳細を開けない利用者（KB の権限だけ）には、名前をリンクにしない（#303）。
+  const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
   return (
     <li className="flex items-center gap-2 px-3 py-2">
       <Files className="size-4 shrink-0 text-fg-muted" aria-hidden />
-      <Link
-        to={`${APP_ROUTES.documents}/${document.id}`}
-        className="min-w-0 flex-1 truncate text-sm font-medium text-accent-fg hover:underline"
-        title={document.file_name}
-      >
-        {document.file_name}
-      </Link>
+      {canOpenDetail ? (
+        <Link
+          to={`${APP_ROUTES.documents}/${document.id}`}
+          className="min-w-0 flex-1 truncate text-sm font-medium text-accent-fg hover:underline"
+          title={document.file_name}
+        >
+          {document.file_name}
+        </Link>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg" title={document.file_name}>
+          {document.file_name}
+        </span>
+      )}
       <RowActionMenu
         actions={[
           {

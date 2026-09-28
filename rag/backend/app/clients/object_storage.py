@@ -1,11 +1,14 @@
 """OCI Object Storage クライアント。原本ファイルの保管。"""
 
 import asyncio
+import contextlib
 import importlib
+import os
 import re
 from collections.abc import Awaitable, Callable
+from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 from uuid import uuid4
 
 from app.clients.oci_auth import load_oci_config_without_prompt
@@ -14,6 +17,8 @@ from app.config import Settings, get_settings
 MAX_OBJECT_KEY_LENGTH = 1024
 MAX_OBJECT_KEY_DEPTH = 16
 MAX_OBJECT_KEY_PART_LENGTH = 255
+# prefix 単位の削除で許す最も浅い階層（`artifacts/` のような保存先全体の削除を防ぐ。#303）。
+MIN_DELETE_PREFIX_DEPTH = 2
 type SdkCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 
 
@@ -45,6 +50,21 @@ class ObjectStorageSdkClientProtocol(Protocol):
         object_name: str,
     ) -> Any:
         """OCI Object Storage delete_object を呼び出す。"""
+
+    def list_objects(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        **kwargs: object,
+    ) -> Any:
+        """OCI Object Storage list_objects を呼び出す。"""
+
+
+class PrefixDeleteResult(NamedTuple):
+    """prefix 単位の削除の結果。"""
+
+    deleted: int
+    failed: int
 
 
 class ObjectStorageClient:
@@ -91,6 +111,18 @@ class ObjectStorageClient:
             return await self._delete_from_oci(key)
         return self._delete_from_local(key)
 
+    async def delete_prefix(self, prefix: str) -> PrefixDeleteResult:
+        """prefix（末尾 `/` で終わるディレクトリ単位）配下のオブジェクトをすべて削除する。
+
+        文書の削除で、参照が残っていない過去の取込の成果物を後始末するために使う（#303）。
+        対象は今の保存先（local / OCI）だけ。一覧の取得に失敗したら例外を送出し、
+        個々のオブジェクトの削除の失敗は数えて残りを続ける。
+        """
+        safe_prefix = _delete_prefix_key(prefix)
+        if self._settings.upload_storage_backend == "oci":
+            return await self._delete_prefix_from_oci(safe_prefix)
+        return self._delete_prefix_from_local(safe_prefix)
+
     def _put_to_local(self, safe_key: str, data: bytes) -> str:
         """ローカル保存先へ保存する。"""
         root = Path(self._settings.local_storage_dir).expanduser().resolve()
@@ -120,6 +152,82 @@ class ObjectStorageClient:
         existed = path.exists()
         path.unlink(missing_ok=True)
         return existed
+
+    def _delete_prefix_from_local(self, safe_prefix: str) -> PrefixDeleteResult:
+        """ローカル保存先の prefix ディレクトリ配下を削除する。symlink は辿らずリンクだけ消す。"""
+        objects_root = (Path(self._settings.local_storage_dir).expanduser() / "objects").resolve()
+        base = (objects_root / safe_prefix.rstrip("/")).resolve()
+        if not base.is_relative_to(objects_root) or base == objects_root:
+            raise ValueError("削除 prefix が不正です。")
+        if not base.is_dir():
+            return PrefixDeleteResult(deleted=0, failed=0)
+        deleted = 0
+        failed = 0
+        for dirpath, dirnames, filenames in os.walk(base, topdown=False):
+            current = Path(dirpath)
+            for name in filenames:
+                try:
+                    (current / name).unlink()
+                    deleted += 1
+                except OSError:
+                    failed += 1
+            for name in dirnames:
+                child = current / name
+                try:
+                    if child.is_symlink():
+                        child.unlink()
+                        deleted += 1
+                    else:
+                        child.rmdir()
+                except OSError:
+                    # 消せなかったファイルが残るディレクトリは残す（失敗はファイル側で数えている）。
+                    continue
+        with contextlib.suppress(OSError):
+            base.rmdir()
+        return PrefixDeleteResult(deleted=deleted, failed=failed)
+
+    async def _delete_prefix_from_oci(self, safe_prefix: str) -> PrefixDeleteResult:
+        """OCI Object Storage の prefix 配下を一覧してから 1 件ずつ削除する。"""
+        namespace, bucket = self._require_oci_location()
+        object_names: list[str] = []
+        start: str | None = None
+        while True:
+            response = await self._sdk_call_runner(
+                partial(self._list_objects_page, namespace, bucket, safe_prefix, start)
+            )
+            data = getattr(response, "data", None)
+            for summary in getattr(data, "objects", None) or []:
+                name = getattr(summary, "name", None)
+                # prefix 外の名前は返らない前提だが、念のため削除対象から外す。
+                if isinstance(name, str) and name.startswith(safe_prefix):
+                    object_names.append(name)
+            next_start = getattr(data, "next_start_with", None)
+            if not isinstance(next_start, str) or not next_start or next_start == start:
+                break
+            start = next_start
+        deleted = 0
+        failed = 0
+        for object_name in object_names:
+            try:
+                await self._sdk_call_runner(
+                    partial(self._delete_oci_object, namespace, bucket, object_name)
+                )
+                deleted += 1
+            except Exception:  # noqa: BLE001 - 個々の失敗は数えて残りを続ける
+                failed += 1
+        return PrefixDeleteResult(deleted=deleted, failed=failed)
+
+    def _list_objects_page(
+        self, namespace: str, bucket: str, prefix: str, start: str | None
+    ) -> Any:
+        """OCI Object Storage の object 名を 1 ページ分一覧する（SDK 呼び出しは thread で行う）。"""
+        return self._client().list_objects(
+            namespace, bucket, prefix=prefix, start=start, fields="name"
+        )
+
+    def _delete_oci_object(self, namespace: str, bucket: str, object_name: str) -> Any:
+        """OCI Object Storage の object を 1 件削除する（SDK 呼び出しは thread で行う）。"""
+        return self._client().delete_object(namespace, bucket, object_name)
 
     async def _put_to_oci(self, key: str, data: bytes, content_type: str) -> str:
         """OCI Object Storage へ保存する。"""
@@ -218,6 +326,23 @@ def _local_storage_key(key: str) -> str:
     if "://" in key:
         raise ValueError("保存先キーに URI は指定できません。")
     return _safe_key(key)
+
+
+def _delete_prefix_key(prefix: str) -> str:
+    """prefix 単位の削除の対象を `a/b/` の形へ正規化する。
+
+    浅すぎる prefix・URI・相対パス要素と、`/` で終わらない（ファイル名の前方一致になる）
+    ものは拒否する。
+    """
+    normalized = prefix.strip().replace("\\", "/")
+    if "://" in normalized:
+        raise ValueError("削除 prefix に URI は指定できません。")
+    if not normalized.endswith("/"):
+        raise ValueError("削除 prefix は `/` で終わるディレクトリ単位で指定してください。")
+    safe_prefix = _safe_key(normalized, reject_relative_segments=True)
+    if len(safe_prefix.split("/")) < MIN_DELETE_PREFIX_DEPTH:
+        raise ValueError("削除 prefix の階層が浅すぎます。")
+    return f"{safe_prefix}/"
 
 
 def _oci_object_key(reference: str, *, namespace: str, bucket: str) -> str:

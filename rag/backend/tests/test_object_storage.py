@@ -190,6 +190,90 @@ async def test_oci_delete_uses_object_storage_sdk_for_matching_uri() -> None:
     }
 
 
+async def test_local_delete_prefix_removes_only_objects_under_the_directory(
+    tmp_path: Path,
+) -> None:
+    """prefix 単位の削除は配下の object と空のディレクトリを消し、名前が前方一致する隣は残す。"""
+    client = ObjectStorageClient(
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
+    )
+    targets = [
+        await client.put("artifacts/extractions/doc-1/trace-a.json", b"a", "application/json"),
+        await client.put(
+            "artifacts/extractions/doc-1/trace-b/segments/p1.json", b"b", "application/json"
+        ),
+    ]
+    sibling = await client.put("artifacts/extractions/doc-10/trace-a.json", b"c", "text/plain")
+
+    result = await client.delete_prefix("artifacts/extractions/doc-1/")
+
+    assert result.deleted == 2
+    assert result.failed == 0
+    for target in targets:
+        with pytest.raises(FileNotFoundError):
+            await client.get(target)
+    assert await client.get(sibling) == b"c"
+    assert not (tmp_path / "objects" / "artifacts" / "extractions" / "doc-1").exists()
+    # 無い prefix は 0 件で終わる（冪等）。
+    assert await client.delete_prefix("artifacts/extractions/doc-1/") == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "message"),
+    [
+        ("artifacts/", "浅すぎ"),
+        ("artifacts/extractions/doc-1", "ディレクトリ単位"),
+        ("artifacts/../extractions/", "相対パス要素"),
+        ("oci://namespace/bucket/artifacts/doc-1/", "URI"),
+    ],
+)
+async def test_delete_prefix_rejects_unsafe_prefix(
+    tmp_path: Path, prefix: str, message: str
+) -> None:
+    """保存先全体・相対パス・URI・ファイル名の前方一致になる prefix は削除しない。"""
+    client = ObjectStorageClient(
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
+    )
+    kept = await client.put("artifacts/extractions/doc-1/trace.json", b"a", "application/json")
+
+    with pytest.raises(ValueError, match=message):
+        await client.delete_prefix(prefix)
+
+    assert await client.get(kept) == b"a"
+
+
+async def test_oci_delete_prefix_lists_all_pages_and_counts_failures() -> None:
+    """OCI は prefix で一覧（ページ送り）してから 1 件ずつ消し、個々の失敗は数えて続ける。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.object_names = [
+        "artifacts/canonical/doc-1/trace-a/canonical.pdf",
+        "artifacts/canonical/doc-1/trace-b/canonical.pdf",
+        "artifacts/canonical/doc-1/trace-c/canonical.pdf",
+        "artifacts/canonical/doc-10/trace-a/canonical.pdf",
+    ]
+    sdk.failing_object_names = {"artifacts/canonical/doc-1/trace-b/canonical.pdf"}
+    client = ObjectStorageClient(
+        settings=_oci_settings(),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    result = await client.delete_prefix("artifacts/canonical/doc-1/")
+
+    assert result.deleted == 2
+    assert result.failed == 1
+    assert sdk.deleted_object_names == [
+        "artifacts/canonical/doc-1/trace-a/canonical.pdf",
+        "artifacts/canonical/doc-1/trace-b/canonical.pdf",
+        "artifacts/canonical/doc-1/trace-c/canonical.pdf",
+    ]
+    assert [request["prefix"] for request in sdk.list_requests] == [
+        "artifacts/canonical/doc-1/",
+        "artifacts/canonical/doc-1/",
+    ]
+    assert sdk.list_requests[1]["start"] == "artifacts/canonical/doc-1/trace-c/canonical.pdf"
+
+
 async def test_get_oci_uri_uses_oci_even_when_upload_storage_is_local() -> None:
     """保存先を local に切り替えた後も、既存 OCI URI は取得できる。"""
     sdk = FakeObjectStorageSdkClient(
@@ -391,6 +475,10 @@ class FakeObjectStorageSdkClient:
         self.last_put_request: dict[str, object] | None = None
         self.last_get_request: dict[str, object] | None = None
         self.last_delete_request: dict[str, object] | None = None
+        self.object_names: list[str] = []
+        self.failing_object_names: set[str] = set()
+        self.deleted_object_names: list[str] = []
+        self.list_requests: list[dict[str, object]] = []
 
     def put_object(
         self,
@@ -436,7 +524,31 @@ class FakeObjectStorageSdkClient:
             "bucket_name": bucket_name,
             "object_name": object_name,
         }
+        self.deleted_object_names.append(object_name)
+        if object_name in self.failing_object_names:
+            raise RuntimeError("delete failed")
         return SimpleNamespace(data=None)
+
+    def list_objects(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        **kwargs: object,
+    ) -> object:
+        """`object_names` を prefix で絞り、2 件ずつのページで返す（next_start_with 付き）。"""
+        self.list_requests.append(kwargs)
+        prefix = str(kwargs.get("prefix") or "")
+        start = kwargs.get("start")
+        names = sorted(name for name in self.object_names if name.startswith(prefix))
+        if isinstance(start, str):
+            names = [name for name in names if name >= start]
+        page, rest = names[:2], names[2:]
+        return SimpleNamespace(
+            data=SimpleNamespace(
+                objects=[SimpleNamespace(name=name) for name in page],
+                next_start_with=rest[0] if rest else None,
+            )
+        )
 
 
 def _oci_settings() -> Settings:
