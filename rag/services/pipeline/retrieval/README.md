@@ -10,7 +10,7 @@ backend が実行**し、本サービスは戦略の「決定」のみを担う(
 | 項目 | 値 |
 |---|---|
 | stage | `retrieval` |
-| 既定 URL | `http://pipeline-retrieval:8000` / dev port 8038 |
+| 既定 URL | `http://127.0.0.1:18038` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`RetrievalStageRequest{strategy, settings_query_expansion}` → `RetrievalStageResponse`)。

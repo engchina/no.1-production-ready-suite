@@ -52,7 +52,8 @@ from app.settings import get_settings
 SERVER_NAME = "production-ready-nl2sql"
 DEFAULT_ROW_LIMIT = 100
 MAX_ROW_LIMIT = 1000
-# gunicorn の `--timeout 60`（Dockerfile）を超えないよう、待ちの上限は 45 秒にする。
+# 1 回の MCP 呼び出しで worker を長く塞がないよう、待ちの上限は 45 秒にする
+# （gunicorn の worker の timeout より十分短くする。unit は init_script.sh の `--timeout 300`）。
 MAX_WAIT_SECONDS = 45
 JOB_POLL_INTERVAL_SECONDS = 0.5
 _TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.ERROR})

@@ -673,7 +673,7 @@ variables:
     required: true
     visible: deploy_rag
     title: "RAG boot volume size (GB)"
-    description: "Docker images of the parsers are large. 200 GB or more is recommended."
+    description: "The per-service Python environments and models of the parsers are large. 200 GB or more is recommended."
     default: 200
 
   nl2sql_app_environment:

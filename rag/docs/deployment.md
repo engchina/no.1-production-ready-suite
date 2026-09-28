@@ -42,7 +42,7 @@ BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /a
 | parser-oci-genai-vision / parser-oci-document-understanding | `services/parsers/oci_*` | 18027 / 18028 |
 
 backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
-`backend/.env` に以前の docker 名（`http://parser-docling:8000` など）が残っていても、development では `127.0.0.1:<port>` へ読み替える。
+`backend/.env` に以前の Docker Compose の service 名（`http://parser-docling:8000` など）が残っている場合は `127.0.0.1:<port>` に直す（#356 から読み替えない）。
 
 1. OS のコマンドを入れる（Ubuntu。使うサービスの分だけでよい）。
 
@@ -100,7 +100,8 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
 - 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 
-`docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は段階的に廃止する（後続の PR で削除する）。配備・画面・スクリプトは使わない。
+自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
+「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
 
 ### ローカル保存ディレクトリ(`PLATFORM_LOCAL_STORAGE_DIR`)
 
@@ -111,7 +112,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 以前の既定値は `/u01/production-ready-rag` だった。backend は**ファイルを自動で移動しない**。
 
 - 共通 `.env`（`platform/.env`）などで `PLATFORM_LOCAL_STORAGE_DIR` を明示設定している環境は、そのまま従来のディレクトリを使い続ける。
-- Docker Compose の named volume `backend-local-storage` はマウント先が変わるだけで、中身(原本)は保持される(`model-settings.json` は #211 以降 `platform/` に置く)。
+- 以前の Docker Compose の配備の named volume `backend-local-storage` の中身は、#286 の移行で `/u01/data/production-ready-rag` へ写す(`model-settings.json` は #211 以降 `platform/` に置く)。
 - `PLATFORM_LOCAL_STORAGE_DIR` 未設定(既定値)で起動し、旧ディレクトリにデータが残っている場合は、起動時に警告ログ `legacy_local_storage_dir_detected` を出す。旧ディレクトリが新ディレクトリへの symlink になっていれば警告は出ない。
 
 旧ディレクトリの原本を引き続き参照するには、次のいずれかを行う(NL2SQL の `init_script.sh` と同じく、コピー後に旧ディレクトリを退避して symlink を張る)。
@@ -130,7 +131,7 @@ ln -s "${NEW}" "${OLD}"
 ```
 
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
-コンテナ healthcheck は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
+readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
 ## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
@@ -200,16 +201,26 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ### ローカル（Docker Compose で前処理 / parser を動かしていた環境）
 
-1. 以前のコンテナを止めて消す（port 18010〜18038 を空ける）。
+1. 以前のコンテナを止めて消す（port 18010〜18038 を空ける）。#310 より前の project 名（旧 repo の
+   `no1-production-ready-rag`、monorepo の `rag/` で compose を使った場合の `rag`）のコンテナも同じく消す。
+   label で絞るので、別 project（例: 外部の MinerU API）のコンテナは消えない。
 
    ```bash
-   docker ps -aq --filter label=com.docker.compose.project=production-ready-rag | xargs -r docker rm -f
+   for project in production-ready-rag no1-production-ready-rag rag; do
+     docker ps -aq --filter "label=com.docker.compose.project=${project}" | xargs -r docker rm -f
+   done
    ```
 
 2. 「[ローカル開発 › 前処理 / parser](#前処理--parseruv-の-venv--systemd286)」の手順で unit と sudoers を登録する
-   （`scripts/rag-services.sh install`）。`scripts/build-services.sh` は削除した。
-3. `backend/.env` の `RAG_SERVICE_CONTROL_COMMAND` はもう読まない（削除してよい）。サービスの URL を docker 名で書いていても
-   development では `127.0.0.1:<port>` に読み替えるが、`backend/.env.example` と同じ `127.0.0.1:<port>` に直しておく。
+   （`scripts/rag-services.sh install`）。`scripts/build-services.sh`、compose ファイル、Dockerfile は削除した（#356）。
+3. `backend/.env` の `RAG_SERVICE_CONTROL_COMMAND` はもう読まない（削除してよい）。サービスの URL
+   （`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）を docker 名（`http://parser-docling:8000` など）で
+   書いている場合は、`backend/.env.example` と同じ `127.0.0.1:<port>` に直すか行を消す（#356 から読み替えない）。
+4. backend をコンテナで動かしていた場合は、named volume（`production-ready-rag_backend-local-storage` など）の中身を
+   `PLATFORM_LOCAL_STORAGE_DIR`（既定 `/u01/data/production-ready-rag`）へ写す。モデルのキャッシュの volume は写さなくてよい
+   （ネイティブのサービスは初回に実行ユーザーの `~/.cache` へ取得する）。確認後に volume と image を消してよい
+   （`docker volume ls -q | grep -E '^(production-ready-rag|no1-production-ready-rag|rag)_'`、
+   `docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^(production-ready-rag|no1-production-ready-rag)-'`）。
 
 ### 既定の解析エンジンの変更（Unstructured → Docling）
 
@@ -224,8 +235,9 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 #211 で、3製品共通の設定は共通 `.env`（`platform/.env`、`PLATFORM_*`）、RAG 固有の設定は `backend/.env`（`RAG_*`）に分けた。
 旧名は読まないため、この版へ更新する環境では次の手順で `.env` を移す。
 
-1. backend と ingestion-worker を停止する（Compute の stack では `sudo systemctl stop production-ready-rag.service`、
-   Docker Compose では `docker compose stop backend ingestion-worker`、ローカルでは uvicorn を止める）。
+1. backend と ingestion-worker を停止する（Compute の stack では
+   `sudo systemctl stop production-ready-rag-backend.service production-ready-rag-ingestion-worker.service`、
+   ローカルでは uvicorn を止める）。
 2. 移行内容を確認する（書き換えない）。リポジトリ root で実行する。
 
    ```bash
@@ -244,28 +256,13 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
        python platform/scripts/migrate_env_to_platform.py --product rag --apply
    ```
 
-4. Docker Compose で動かしている環境では、画面から保存したモデル設定とモデル・parser の API key が named volume
-   `backend-local-storage`（`/u01/data/production-ready-rag/model-settings.json` と同じディレクトリの `.env`）にある。
-   `model-settings.json` を `platform/` へ、`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`（旧 `OCI_ENTERPRISE_AI_API_KEY`）を
-   `platform/.env` へ、`RAG_PARSER_*_API_KEY` を `backend/.env` へ移す（またはシステム設定画面で入力し直す）。
-
-   ```bash
-   docker compose cp backend:/u01/data/production-ready-rag/model-settings.json ../platform/model-settings.json
-   docker compose run --rm --no-deps -T --entrypoint cat backend /u01/data/production-ready-rag/.env   # key を確認して移す
-   ```
-
-5. 再配備または再起動する（以下は #286 より前の Docker Compose の配備の手順。#286 以降は `init_script.sh` を実行し直す）。
-   Compute の stack では更新した `rag/` を取得したうえで、共通 `.env` を container の
-   `appuser` が読み書きできるようにしてから起動する（`init_script.sh` の `prepare_container_permissions` と同じ）。
-
-   ```bash
-   sudo chown "$(sudo /usr/local/bin/rag-compose run --rm --no-deps -T --entrypoint id backend -u)" \
-       /u01/aipoc/no.1-production-ready-suite/platform /u01/aipoc/no.1-production-ready-suite/platform/.env
-   sudo /usr/local/bin/rag-compose build backend ingestion-worker
-   sudo systemctl restart production-ready-rag.service
-   ```
-
-   Docker Compose では `docker compose up -d --build`、ローカルでは uvicorn を起動し直す。
+4. 以前の Docker Compose の配備から移した環境では、画面から保存したモデル設定とモデル・parser の API key が
+   `PLATFORM_LOCAL_STORAGE_DIR`（既定 `/u01/data/production-ready-rag`）の `model-settings.json` と同じディレクトリの `.env` に
+   残っていることがある（#286 の移行で named volume `backend-local-storage` から写したもの）。`model-settings.json` を `platform/` へ、
+   `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`（旧 `OCI_ENTERPRISE_AI_API_KEY`）を `platform/.env` へ、`RAG_PARSER_*_API_KEY` を
+   `backend/.env` へ移す（またはシステム設定画面で入力し直す）。
+5. 再配備または再起動する。Compute の stack では更新した tag で `init_script.sh` を実行し直す（#286 の手順）。
+   ローカルでは uvicorn を起動し直す。
 6. `/api/ready` がすべて `ok` になること、システム設定画面（OCI 認証・アップロード保存先・モデル・データベース）に
    移行前の値が表示されることを確認する。確認後に `*.bak-211` を削除する。
 
@@ -324,102 +321,18 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. 使われなくなった設定を削除する（読まないので残っていても害はない）。
    - `backend/.env`: `RAG_PARSER_MARKER_ENABLED` / `RAG_PARSER_MARKER_SERVICE_URL` / `RAG_PARSER_UNLIMITED_OCR_*` / `RAG_PARSER_GLM_OCR_*`
      （画面から保存した `RAG_PARSER_UNLIMITED_OCR_API_KEY` / `RAG_PARSER_GLM_OCR_API_KEY` を含む）。
-3. Docker Compose から `parser-marker` を外したので、起動中のコンテナを削除する。compose は定義に無いコンテナを
-   orphan として警告する。
-
-   ```bash
-   docker ps -aq --filter label=com.docker.compose.service=parser-marker | xargs -r docker rm -f
-   docker volume ls -q | grep parser-marker-model-cache | xargs -r docker volume rm   # dev compose のモデル cache
-   ```
-
-   Terraform の stack で `rag_enable_parser_marker=true` にして配備した Compute では、`${APP_ROOT}/props/compose_services.txt`
-   と systemd unit（`production-ready-rag.service`）に `parser-marker` が残る。このまま新しい版の compose で起動すると
-   `parser-marker` が見つからず失敗し、`init_script.sh` も許可していない service として拒否する。
-   `compose_services.txt` から `parser-marker` を消してから `init_script.sh` を実行し直すか、stack を更新して Compute を作り直す。
-   stack の入力 `rag_enable_parser_marker` は削除した。
+3. 以前の Docker Compose の環境で `parser-marker` のコンテナが残っていれば、#286 の移行（上の「ローカル」の手順 1 は
+   project のコンテナをすべて消す）で消える。Terraform の stack で `rag_enable_parser_marker=true` にして配備した Compute は、
+   `${APP_ROOT}/props/compose_services.txt` から `parser-marker` を消してから `init_script.sh` を実行し直すか
+   （許可していない service として拒否されるため）、stack を更新して Compute を作り直す。stack の入力 `rag_enable_parser_marker` は削除した。
 
 ## 既存環境の更新手順（#310 compose の project 名の固定と parser image の作り直し）
 
-> #286 より前の Docker Compose の環境向けの手順。#286 以降は Docker を使わない（上の #286 の手順で移行する）。
-
-#310 で次の2点を変えた。既存のローカル環境は、旧 project のコンテナを止めてから新しい名前で作り直す。
-
-- **compose の project 名を `production-ready-rag` に固定した。** `docker-compose.yml` の top-level `name:`、
-  当時のサービス管理（`backend/app/services/control.py`）、`scripts/build-services.sh`、本番の `init_script.sh` の
-  wrapper（`rag-compose`）が同じ名前を使っていた（#286 でどれも Docker を使わなくなった）。
-  以前は project 名が compose ファイルのディレクトリ名から決まり（monorepo では `rag`、archive 済みの旧 repo
-  `no.1-production-ready-rag` では `no1-production-ready-rag`）、サービス管理の「ログ」は別 project の
-  コンテナを探して空の結果を返していた。今は対象の project にコンテナが無ければ、ログ・停止・再起動は
-  エラー（HTTP 502）になる。
-- **parser-docling / parser-unstructured の cv2 を headless 版（`opencv-python-headless`）にした。**
-  GUI 版（`opencv-python`）は slim の base image に無い libxcb / libGL / glib を要し、Docling の
-  TableFormer の `import cv2` が `ImportError: libxcb.so.1` で失敗していた（全 PDF が `docling_adapter_failed`）。
-  image の作り直しが必要。parser-unstructured の apt の `libgl1` / `libglib2.0-0` も外した。
-
-### ローカル（dev: backend はホスト、parser / 前処理はコンテナ）
-
-1. 旧 project のコンテナを確認する。`com.docker.compose.project` label が `no1-production-ready-rag`（旧 repo）や
-   `rag`（#310 より前に monorepo の `rag/` で compose を使った場合）のものが対象。
-
-   ```bash
-   docker ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Status}}' \
-     | grep -E $'\t(no1-production-ready-rag|rag)\t'
-   ```
-
-2. 旧 project のコンテナを止めて削除する（dev port 18010〜18038 を新しいコンテナへ空ける）。
-   label で絞るので、別 project（例: 外部の MinerU API）のコンテナは消えない。
-
-   ```bash
-   for project in no1-production-ready-rag rag; do
-     docker ps -aq --filter "label=com.docker.compose.project=${project}" | xargs -r docker rm -f
-   done
-   ```
-
-3. 新しい project 名で image を作り、起動する（`rag/` で実行）。起動はサービス管理画面の「起動」でもよい。
-
-   ```bash
-   docker compose --project-name production-ready-rag --project-directory "$PWD" \
-     -f docker-compose.yml -f docker-compose.dev.yml build \
-     parser-docling parser-unstructured preprocess-office-to-pdf preprocess-pdf-to-page-images
-   docker compose --project-name production-ready-rag --project-directory "$PWD" \
-     -f docker-compose.yml -f docker-compose.dev.yml \
-     up -d --no-build parser-docling parser-unstructured \
-     preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-csv-to-json preprocess-excel-to-json
-   ```
-
-4. 確認する。
-   - サービス管理画面で parser-docling の「ログ」に起動ログが出る。
-   - `rag/evaluation/file-processing-fixtures/policy-ja.pdf` を Docling で解析すると成功する
-     （`curl -F file=@evaluation/file-processing-fixtures/policy-ja.pdf -F content_type=application/pdf http://127.0.0.1:18020/parse`
-     の `extraction` が `null` でなく、`warnings` に `docling_adapter_failed` / `docling_unavailable` が無い）。
-
-5. 旧 project の volume と image を片付ける（任意）。named volume と image は project 名が接頭辞になるため、
-   新しい project からは使われない。
-   - モデルキャッシュ（`no1-production-ready-rag_parser-*-model-cache`、`no1-production-ready-rag_hf-cache`）:
-     Docling のモデルは image に焼き込むため、新しい `production-ready-rag_parser-docling-model-cache` は
-     初回起動時に image の内容で初期化される（再ダウンロードは不要）。旧 volume は削除してよい。
-     MinerU / GLM-OCR などの volume は削除済みのエンジン（#270）のもの。
-   - `no1-production-ready-rag_backend-local-storage` / `no1-production-ready-rag_oci-config`: backend を
-     コンテナで動かしていた場合だけ中身がある。必要なら新しい volume へ写してから削除する。
-
-   ```bash
-   docker volume ls -q | grep '^no1-production-ready-rag_'           # 対象を確認する
-   # backend のローカル保存を引き継ぐ場合（例）
-   docker volume create production-ready-rag_backend-local-storage
-   docker run --rm -v no1-production-ready-rag_backend-local-storage:/from:ro \
-     -v production-ready-rag_backend-local-storage:/to python:3.12-slim cp -a /from/. /to/
-   docker volume ls -q | grep '^no1-production-ready-rag_' | xargs -r docker volume rm
-   docker images --format '{{.Repository}}:{{.Tag}}' | grep '^no1-production-ready-rag-' | xargs -r docker rmi
-   ```
-
-### OCI Compute（`init_script.sh` で配備した環境）
-
-project 名は以前から `production-ready-rag` なので、コンテナの作り直しは不要。parser の image だけ作り直す。
-
-```bash
-sudo rag-compose build parser-docling parser-unstructured
-sudo rag-compose up -d parser-docling parser-unstructured
-```
+#310 は Docker Compose の環境向けの変更（compose の project 名を `production-ready-rag` に固定し、parser-docling /
+parser-unstructured の cv2 を headless 版の `opencv-python-headless` にして image を作り直す）だった。#286 以降は Docker を
+使わないため、この手順は不要。旧 project（`no1-production-ready-rag` / `rag`）のコンテナ・volume・image が残っている環境は、
+「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」の「ローカル」の手順で消す。
+cv2 の headless 版は各サービスの `uv.lock` に固定されている（venv を作れば反映される）。
 
 ## 本番構成
 
@@ -473,8 +386,8 @@ sudo systemctl status production-ready-rag-backend.service
 
 規模が大きくなった場合の推奨:
 
-- Frontend: Vite build artifact を配信する nginx を OCI Container Instances または OKE に配置。
-- Backend: FastAPI + Uvicorn/Gunicorn を OKE に配置。
+- Frontend / Backend: 同じネイティブ配備（uv の venv + systemd + Nginx）の Compute を増やし、OCI Load Balancer で振り分ける
+  （自前のコードの Docker イメージは作らない。#286 / #356）。取込 worker は row lock で二重実行しないので、別の Compute に並べてよい。
 - Storage: OCI Object Storage。
 - DB: Oracle 26ai。RAG チャンクは `VECTOR(1536, FLOAT32)`。
 - LLM/VLM: OCI Enterprise AI。
@@ -608,7 +521,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS`: OpenAI-compatible Responses payload の `max_output_tokens`。既定値は LLM 1200、VLM/OCR 65536。`status=incomplete` / `reason=max_output_tokens` は取込エラーとして利用者に返す。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS`: PDF 取込時に元 PDF を page segment へ分けて VLM へ送る。既定は有効、10 ページ/segment、最大 300 segment。segment が `max_output_tokens` で途切れた場合は単ページに分割して再試行する。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle 26ai、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
-- `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、標準 backend image と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `unstructured[all-docs]==0.23.1`)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `GET /api/settings/parser-adapters/contract` で確認し、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
+- `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `unstructured[all-docs]==0.23.1`)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `GET /api/settings/parser-adapters/contract` で確認し、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
   - Unstructured adapter は対応する runtime では `include_page_breaks=true`、PDF/画像では `strategy=auto` と `infer_table_structure=true` を要求する。adapter 関数の signature を見て未対応 kwargs は渡さないため、古い Unstructured API でも不要な fallback を増やさない。
   - 外部 adapter の block metadata に `parent_id` / `section_path` / heading level が含まれる場合は `DocumentElement.parent_id` / `section_path` へ再マップする。metadata が不足する場合も title block の reading order から section stack を補完し、citation / chunk lineage を保持する。
   - 外部 adapter が `FigureCaption` / `TableCaption` を parent_id なしで返す場合は、reading order 上の直前 figure / table へ parent-child lineage を補完する。figure caption は同一 chunk の `dependency_edges` へ入り、table caption も `content_kind=table` として filter / citation lineage に残す。
@@ -624,11 +537,12 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `rag-file-processing-staging` の metrics は staging gate の実測値に加えて、local contract で証明済みの `parser_routing_accuracy`、`parser_warning_taxonomy_coverage`、`reading_order_consistency`、`table_structure_fidelity`、`visual_chunk_metadata_completeness` などを同じ artifact に統合する。これにより OCI / Oracle が必要な gate と local parser/chunker で十分検証できる gate を分離しつつ、promotion 判定は 1 つの metrics payload で完結する。
 - file-processing staging の通常実行 payload には `chunk_template_scorecard` も含まれる。manifest の `expected_chunk_template` と staging/golden metrics を使い、`pdf_layout` / `office_slide` / `office_sheet` / `markdown_by_heading` / `html_semantic` / `email_thread` / `table_preserve_rows` / `ocr_page` などの template 健康度を評価する。`chunk_block_integrity`、`chunk_contextual_coherence`、`chunk_size_compliance` などの core 指標が低い場合は `chunk_template_scorecard_blocked` を promotion blocker として返す。さらに template ごとの expected / measured case count、covered / missing source kinds、covered / missing scenarios を artifact に残し、ある template の未測定を別 template の良好な aggregate 指標で隠さない。
 - `RAG_INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `RAG_INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` / `RAG_INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にできる。job の状態遷移（cancel・完了・失敗）は遷移元の status を条件にした UPDATE で行い、cancel 済み job を `SUCCEEDED` / `FAILED` で上書きせず、完了済み job を `CANCELLED` で上書きしない（後者は 409）。cancel API は job の状態だけを変え、文書・レシピの status は cancel を検知した worker が戻す（レシピの job はレシピ行だけを戻し、文書の status には触れない）。取り消した job の次工程は自動投入しない。`/api/documents/ingestion-jobs/{job_id}/retry` は、レシピの job なら同じレシピの job として再投入し、他のレシピの出力は初期化しない（#305）。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。取込中に Oracle の接続が一時的に切れた場合（python-oracledb の `is_session_dead` / `isrecoverable`。`DPY-4011` など）は、`attempt_count < RAG_INGESTION_JOB_MAX_ATTEMPTS` なら文書・レシピの status を工程の前に戻して job を `QUEUED` に戻し、再実行する（使い切ったら `FAILED`）。DB の transaction も、commit の前に接続が切れた場合だけ新しい接続で 1 回やり直す。ログ（`ingestion_job_failed` / `ingestion_job_requeued_transient_db_error` / `oracle_transaction_retry` / `oracle_rollback_failed`）には `oracle_error_code` と `full_code` を出す（#341）。
-- `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一コンテナでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセスへ切り出す場合は `python -m app.rag.ingestion_worker` を別途起動する(本番は systemd の `production-ready-rag-ingestion-worker.service`)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、`replicas` を増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
+- `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一プロセスでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセスへ切り出す場合は `python -m app.rag.ingestion_worker` を別途起動する(本番は systemd の `production-ready-rag-ingestion-worker.service`)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、worker のプロセスを増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。
-- `WEB_CONCURRENCY`: backend container の Gunicorn worker 数。OKE / Container Instances の CPU 割当、OCI / Oracle の p95 latency、同時実行数から決める。
-- `GUNICORN_TIMEOUT` / `GUNICORN_GRACEFUL_TIMEOUT` / `GUNICORN_KEEP_ALIVE`: worker timeout、停止猶予、keep-alive 秒数。`RAG_SEARCH_TIMEOUT_SECONDS` より短くしない。
+- backend の Gunicorn の worker 数・timeout: `init_script.sh` が作る unit（`production-ready-rag-backend.service`）の
+  `--workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5`。worker 数は Compute の CPU、OCI / Oracle の p95 latency、
+  同時実行数から決める。timeout は `RAG_SEARCH_TIMEOUT_SECONDS` より短くしない。
 - `RAG_TRACE_EXPORT_HTTP_ENDPOINT`: 空なら構造化ログ + Prometheus のみ。設定時は `rag.trace_span` event を OpenTelemetry / Langfuse gateway へ非同期 POST する。query 本文、context 本文、OCR 原文、prompt、例外 message は送らない。
 - `RAG_TRACE_EXPORT_HTTP_BEARER_TOKEN` / `RAG_TRACE_EXPORT_TIMEOUT_SECONDS` / `RAG_TRACE_EXPORT_QUEUE_SIZE`: trace export の認証、送信 timeout、queue 上限。queue full や送信失敗は `rag_trace_export_dropped` / `rag_trace_export_failed` として記録し、RAG request は失敗させない。
 - `RAG_GUARDRAIL_MAX_QUERY_CHARS`: UI 側の入力制限と合わせる。
@@ -642,7 +556,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 
 ## OCI へ切り替えるときの順序
 
-1. Oracle 26ai に document / chunk / audit tables を作成する。まず backend container または CI runner で `uv run python -m app.rag.oracle_schema --output ../artifacts/oracle-schema.sql --manifest-output ../artifacts/oracle-schema.manifest.json` を実行し、DDL 成果物と manifest の hash / statement 数をレビューする。既存 DB を現行 DDL 契約へ寄せる場合は `uv run python -m app.rag.oracle_schema --migration --output ../artifacts/oracle-schema-migration.sql --manifest-output ../artifacts/oracle-schema-migration.manifest.json` を実行し、migration artifact をレビューして適用する。V3 の構築 artifact(`rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、`rag_chunks.chunk_set_id`)を既存データへ反映する場合は、あわせて `uv run python -m app.rag.variant_backfill_cli --format sql --checks-only --output ../artifacts/variant-backfill-checks.sql` と `uv run python -m app.rag.variant_backfill_cli --format json --output ../artifacts/variant-backfill.manifest.json` を生成し、[oracle-variant-backfill-runbook.md](./oracle-variant-backfill-runbook.md) の acceptance を staging artifact として保存する。生成 SQL は document table に `content_sha256`、`file_size_bytes`、`duplicate_of_document_id`、`tenant_id_hash` を含め、`content_sha256` と `tenant_id_hash, status, uploaded_at` に索引を作る。chunk table は `VECTOR(1536, FLOAT32)`、HNSW ベクトル索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)、`tenant_id_hash`、`document_id + chunk_index`、`chunk_set_id + chunk_index` 用索引を含め、retrieval で tenant 条件、request access scope 条件、KB serving chunk_set 条件を必ず適用できるようにする。audit table は query 本文、OCR 原文、tenant/user id の raw 値を保存せず、hash、request id、trace id、guardrail code、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression 節約文字数、context 文字数、設定 fingerprint、error type を保存する。レビュー済み SQL を SQLcl や管理された migration 手順で適用してから次へ進む。
+1. Oracle 26ai に document / chunk / audit tables を作成する。まず backend の venv（`rag/backend`）または CI runner で `uv run python -m app.rag.oracle_schema --output ../artifacts/oracle-schema.sql --manifest-output ../artifacts/oracle-schema.manifest.json` を実行し、DDL 成果物と manifest の hash / statement 数をレビューする。既存 DB を現行 DDL 契約へ寄せる場合は `uv run python -m app.rag.oracle_schema --migration --output ../artifacts/oracle-schema-migration.sql --manifest-output ../artifacts/oracle-schema-migration.manifest.json` を実行し、migration artifact をレビューして適用する。V3 の構築 artifact(`rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、`rag_chunks.chunk_set_id`)を既存データへ反映する場合は、あわせて `uv run python -m app.rag.variant_backfill_cli --format sql --checks-only --output ../artifacts/variant-backfill-checks.sql` と `uv run python -m app.rag.variant_backfill_cli --format json --output ../artifacts/variant-backfill.manifest.json` を生成し、[oracle-variant-backfill-runbook.md](./oracle-variant-backfill-runbook.md) の acceptance を staging artifact として保存する。生成 SQL は document table に `content_sha256`、`file_size_bytes`、`duplicate_of_document_id`、`tenant_id_hash` を含め、`content_sha256` と `tenant_id_hash, status, uploaded_at` に索引を作る。chunk table は `VECTOR(1536, FLOAT32)`、HNSW ベクトル索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)、`tenant_id_hash`、`document_id + chunk_index`、`chunk_set_id + chunk_index` 用索引を含め、retrieval で tenant 条件、request access scope 条件、KB serving chunk_set 条件を必ず適用できるようにする。audit table は query 本文、OCR 原文、tenant/user id の raw 値を保存せず、hash、request id、trace id、guardrail code、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression 節約文字数、context 文字数、設定 fingerprint、error type を保存する。レビュー済み SQL を SQLcl や管理された migration 手順で適用してから次へ進む。
 
    回答生成設定を Oracle 正本へ切り替えるリリースでは、schema migration 適用後に
    `uv run python -m app.rag.generation_settings_migration --format json` で旧 `.env` profile と

@@ -9,7 +9,7 @@ store)/ persona override は backend が担う。外部 LLM provider は導入�
 | 項目 | 値 |
 |---|---|
 | stage | `generation` |
-| 既定 URL | `http://pipeline-generation:8000` / dev port 8033 |
+| 既定 URL | `http://127.0.0.1:18033` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`GenerationStageRequest{profile}` → `GenerationStageResponse{system_prompt, structured_output}`)。

@@ -59,7 +59,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 - 観測性: Langfuse + Prometheus + OpenTelemetry。
 - 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: 自前のコードは Docker を使わずネイティブで動かす(#286)。backend・取込 worker・前処理・parser はサービスごとの uv の venv(Python 3.12、`uv sync --locked --no-dev --python 3.12`)と systemd の unit で動かし、unit の定義は `scripts/rag-systemd.sh`(本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う)に置く。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB、CPU parser のみ)で配備する。`docker-compose*.yml` と Dockerfile は段階的に廃止する(後続の PR で削除)。OKE / Container Instances は規模が決まってから検討する(#136)。
+- インフラ: 自前のコードは Docker を使わずネイティブで動かす(#286)。backend・取込 worker・前処理・parser はサービスごとの uv の venv(Python 3.12、`uv sync --locked --no-dev --python 3.12`)と systemd の unit で動かし、unit の定義は `scripts/rag-systemd.sh`(本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う)に置く。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB、CPU parser のみ)で配備する。自前のコードの `docker-compose*.yml`・Dockerfile は #356 で削除した(作り直さない)。開発の起動は backend が `uv run uvicorn`、前処理 / parser が `scripts/rag-services.sh`、frontend が `npm run dev`(docs/deployment.md の「ローカル開発」)。以前の Docker の環境からの移行は docs/deployment.md の #286 の手順。
 - サービス管理画面は systemd の unit を操作する(起動 = `enable --now`、停止 = `disable --now` で最後に操作した状態を保つ)。backend が実行してよいのは、sudoers で許可した allowlist の unit の `systemctl` / `journalctl` だけ(argv 固定・shell を通さない。`app/services/systemd.py`)。前処理 / parser を足すときは、catalog・`scripts/rag-systemd.sh` の `RAG_MICROSERVICES`・URL 設定の既定値(`127.0.0.1:<port>`)をそろえる(テストで照合する)。
 
 ## UI/UX 開発ルール

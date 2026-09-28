@@ -1,88 +1,27 @@
 name: production-ready-agent-control-plane
 
-# 設定ファイル（#211）
-# - 3製品共通の設定（PLATFORM_*）は monorepo の `platform/.env`。システム設定画面の保存先でもあるため、
-#   env_file では渡さず（環境変数が `.env` より優先され、画面で保存した値が反映されなくなる）、
-#   `platform/` を書き込み可能でマウントして PLATFORM_ENV_FILE で場所を指定する。
-#   画面から保存する model-settings.json も同じディレクトリに置かれる。
-# - Agent 固有の設定（AGENT_*）は `backend/.env`。画面からは書かないので env_file で渡す。
+# 第三者の Agent Runtime（OpenClaw・Hermes・DeerFlow）を、公式の構築済みイメージ（`image@sha256` で固定）で
+# 起動する compose。自前のコード（Control Plane の backend・runtime-dispatcher・frontend）は Docker を使わず、
+# ネイティブ（開発は `uv run`、本番は systemd）で動かす（#286 / #356。agent/README.md）。
+# project 名は以前（Control Plane も compose で動かしていた頃）と同じにして、Runtime の volume を引き継ぐ。
+#
+# - 各 Runtime は profile（openclaw / hermes / deerflow）で opt-in する。Docker socket は mount しない。
+# - Control Plane の Runtime サービスの起動・停止（`AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=true` のときだけ）は、
+#   agent/ でこの compose に `docker compose --profile <profile> ...` を実行する。
 # - この compose の `.env`（`.env.runtime.example` から作る）は下の ${...} の補間にだけ使う。
-x-control-plane-environment: &control-plane-environment
-  PLATFORM_ENV_FILE: /app/platform/.env
-  # 認証（#215）。既定は production（共通認証のログインが必要。Cookie のないリクエストは
-  # AGENT_RBAC_ENABLED=true かつ信頼できる identity（HMAC 署名 header / JWT / 外部 policy）があるときだけ
-  # 判定し、それ以外は 401）。
-  # 開発で全権限のローカル利用者にするときだけ、compose の .env で AGENT_AUTH_MODE=local にする。
-  AGENT_AUTH_MODE: ${AGENT_AUTH_MODE:-production}
-  AGENT_RUNTIME_REPOSITORY_BACKEND: ${AGENT_RUNTIME_REPOSITORY_BACKEND:-memory}
-  AGENT_RUNTIME_DISPATCH_MODE: ${AGENT_RUNTIME_DISPATCH_MODE:-in_process}
-  AGENT_RUNTIME_BINDINGS_DIR: /var/lib/control-plane/bindings
-  AGENT_CONTROL_PLANE_PUBLIC_BASE_URL: ${AGENT_CONTROL_PLANE_PUBLIC_BASE_URL:-http://control-plane:8000/api}
-  AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET: ${AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET:-}
-  AGENT_RUNTIME_SERVICE_CONTROL_ENABLED: "false"
-  AGENT_RUNTIME_ORACLE_DSN: ${AGENT_RUNTIME_ORACLE_DSN:-}
-  AGENT_RUNTIME_ORACLE_USER: ${AGENT_RUNTIME_ORACLE_USER:-}
-  AGENT_RUNTIME_ORACLE_PASSWORD: ${AGENT_RUNTIME_ORACLE_PASSWORD:-}
-  # Runtime API 認証。Runtime 定義の auth_secret_ref はこの環境変数名を参照する。
-  AGENT_OPENCLAW_GATEWAY_TOKEN: ${AGENT_OPENCLAW_GATEWAY_TOKEN:-}
-  AGENT_HERMES_API_SERVER_KEY: ${AGENT_HERMES_API_SERVER_KEY:-}
-  AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN: ${AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+#   Runtime API の認証値は Control Plane（backend）と同じ値にする（Runtime 定義の auth_secret_ref が参照する）。
+# - Control Plane が Binding ごとに書き出す Skill / MCP の閉包（AGENT_RUNTIME_BINDINGS_DIR）を、各 Runtime へ
+#   読み取り専用で渡す。host 側の場所は AGENT_RUNTIME_BINDINGS_HOST_DIR（既定は開発の backend の既定と同じ
+#   `backend/.agent-runtime-bindings`）。
+# - Runtime から host で動く Control Plane（Binding MCP）へは host.docker.internal で届く
+#   （AGENT_CONTROL_PLANE_PUBLIC_BASE_URL。agent/README.md）。
 
-x-control-plane-env-file: &control-plane-env-file
-  - path: ./backend/.env
-    required: false
+x-runtime-bindings-volume: &runtime-bindings-volume "${AGENT_RUNTIME_BINDINGS_HOST_DIR:-./backend/.agent-runtime-bindings}:/var/lib/control-plane/bindings:ro"
+
+x-runtime-extra-hosts: &runtime-extra-hosts
+  - "host.docker.internal:host-gateway"
 
 services:
-  control-plane:
-    build:
-      context: ..
-      dockerfile: agent/backend/Dockerfile
-    image: production-ready-agent-control-plane:local
-    restart: unless-stopped
-    env_file: *control-plane-env-file
-    environment: *control-plane-environment
-    ports:
-      - "${CONTROL_PLANE_PORT:-8000}:8000"
-    volumes:
-      - control-plane-state:/var/lib/control-plane
-      - ../platform:/app/platform
-    networks:
-      - control-plane-internal
-      - runtime-egress
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    security_opt:
-      - no-new-privileges:true
-
-  runtime-dispatcher:
-    profiles: [dispatcher]
-    image: production-ready-agent-control-plane:local
-    restart: unless-stopped
-    command: ["python", "-m", "app.features.agent.runtime_dispatcher"]
-    env_file: *control-plane-env-file
-    environment:
-      <<: *control-plane-environment
-      AGENT_RUNTIME_DISPATCH_MODE: external
-    volumes:
-      - control-plane-state:/var/lib/control-plane
-      - ../platform:/app/platform
-    networks:
-      - control-plane-internal
-      - runtime-egress
-    depends_on:
-      control-plane:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-
   runtime-openclaw:
     profiles: [openclaw]
     image: ghcr.io/openclaw/openclaw@sha256:af7ea052cf216f581fb18fabada01552356c53717461c0399b623cba7ecad4b1
@@ -103,10 +42,8 @@ services:
     volumes:
       - openclaw-state:/home/node/.openclaw
       - openclaw-auth:/home/node/.config/openclaw
-      - control-plane-state:/var/lib/control-plane:ro
-    networks:
-      - control-plane-internal
-      - runtime-egress
+      - *runtime-bindings-volume
+    extra_hosts: *runtime-extra-hosts
     healthcheck:
       test:
         - CMD
@@ -134,10 +71,8 @@ services:
       - "${HERMES_PORT:-8642}:8642"
     volumes:
       - hermes-state:/opt/data
-      - control-plane-state:/var/lib/control-plane:ro
-    networks:
-      - control-plane-internal
-      - runtime-egress
+      - *runtime-bindings-volume
+    extra_hosts: *runtime-extra-hosts
     healthcheck:
       test:
         - CMD
@@ -162,10 +97,8 @@ services:
       - "${DEERFLOW_PORT:-2026}:2026"
     volumes:
       - deerflow-state:/app/.deer-flow
-      - control-plane-state:/var/lib/control-plane:ro
-    networks:
-      - control-plane-internal
-      - runtime-egress
+      - *runtime-bindings-volume
+    extra_hosts: *runtime-extra-hosts
     healthcheck:
       test:
         - CMD
@@ -179,13 +112,7 @@ services:
     security_opt:
       - no-new-privileges:true
 
-networks:
-  control-plane-internal:
-    internal: true
-  runtime-egress:
-
 volumes:
-  control-plane-state:
   openclaw-state:
   openclaw-auth:
   hermes-state:

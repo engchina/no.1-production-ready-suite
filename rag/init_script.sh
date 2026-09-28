@@ -665,7 +665,7 @@ build_frontend() {
   test -f "${FRONTEND_DIR}/dist/index.html"
 }
 
-# backend と ingestion-worker の unit。RAG_ENVIRONMENT などは以前の docker-compose.yml の environment と同じ値。
+# backend と ingestion-worker の unit。RAG_ENVIRONMENT などは以前の Docker Compose の配備（#286 より前）の environment と同じ値。
 write_backend_unit() {
   local unit_path="$1"
   local description="$2"

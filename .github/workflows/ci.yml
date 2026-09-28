@@ -39,7 +39,7 @@ jobs:
       platform_backend: >-
         ${{ steps.filter.outputs.platform_backend == 'true' || steps.filter.outputs.ci == 'true'
         || steps.filter.outputs.platform_other == 'true' }}
-      # platform のどこか（Markdown だけの変更を除く）。compose・配備スクリプト・Terraform の検証が使う。
+      # platform のどこか（Markdown だけの変更を除く）。配備スクリプト・Terraform の検証が使う。
       platform: >-
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.platform_backend == 'true'
         || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
@@ -486,22 +486,6 @@ jobs:
           path: rag/frontend/test-results
           retention-days: 7
 
-  rag-compose:
-    name: RAG / Docker Compose
-    needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: rag
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Validate compose config
-        run: docker compose config --quiet
-
   # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ RAG の init_script.sh を検証する（#217）。
   rag-init-script:
     name: RAG / Compute init script
@@ -877,7 +861,8 @@ jobs:
   # ---------------------------------------------------------------- terraform
 
   # OCI Resource Manager の統合 stack（#217）。ADB 1つ＋選んだ製品ごとの Compute。
-  # 契約検証は各製品の init_script.sh・Settings・docker-compose.yml も読むため、どの製品の変更でも実行する。
+  # 契約検証は各製品の init_script.sh・Settings と、自前の Dockerfile・compose が無いこと（Agent の第三者 Runtime の
+  # compose だけ。#356）も確かめるため、どの製品の変更でも実行する。
   # 実テナンシーへの配備確認は手動で行う。
   suite-terraform:
     name: Suite / Terraform
@@ -939,7 +924,6 @@ jobs:
       - rag-docrag-core
       - rag-frontend
       - rag-e2e
-      - rag-compose
       - rag-init-script
       - nl2sql-deploy-scripts
       - nl2sql-frontend

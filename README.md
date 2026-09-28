@@ -9,7 +9,7 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 | [`nl2sql/`](./nl2sql/) | Production Ready NL2SQL — SQL 専用の自然言語問い合わせ |
 | [`agent/`](./agent/) | Production Control Plane for AI Agents — Business Agent・Skill・Runtime の管理 |
 
-- 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / Docker image / 配備はそれぞれ独立しています。
+- 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / 実行環境（uv の venv）/ 配備はそれぞれ独立しています。
 - 開発・起動方法は各ディレクトリの `README.md` を参照してください。
 
 ## 開発ルール

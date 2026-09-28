@@ -1,4 +1,4 @@
-"""配布物(ネイティブ配備と、段階的に廃止するコンテナ)の最低限の本番運用契約を固定するテスト。"""
+"""配布物(ネイティブ配備: uv の venv + systemd + Nginx。#286)の最低限の本番運用契約のテスト。"""
 
 from pathlib import Path
 
@@ -7,91 +7,99 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SUITE_ROOT = REPO_ROOT.parent
 
 
-def test_frontend_image_uses_reproducible_build_install() -> None:
-    """frontend build image は lockfile で再現可能に依存解決する。"""
-    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
-
-    # 共有パッケージ（platform）と frontend の両方を lockfile から入れる（#177）。
-    assert "RUN cd platform && npm ci && npm run build\n" in dockerfile
-    assert "RUN cd rag/frontend && npm ci\n" in dockerfile
-    assert "npm install" not in dockerfile
+def _init_script() -> str:
+    return (REPO_ROOT / "init_script.sh").read_text(encoding="utf-8")
 
 
-def test_frontend_image_resolves_platform_packages() -> None:
-    """compose は platform を別 context で渡す（frontend の file: 依存のため。#177）。"""
-    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+def _function_body(script: str, name: str) -> str:
+    """bash の関数 ``name() { ... }`` の本文を返す(行頭の ``}`` まで)。"""
+    import re
 
-    assert "COPY --from=platform package.json package-lock.json ./platform/" in dockerfile
-    assert "platform: ../platform" in compose
-
-
-def test_frontend_image_serves_static_assets_with_unprivileged_nginx() -> None:
-    """frontend runtime image は非 root Nginx で静的 assets を配信する。"""
-    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
-
-    assert "FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner" in dockerfile
-    assert "COPY --from=builder /src/rag/frontend/dist /usr/share/nginx/html" in dockerfile
-    assert "node_modules /" not in dockerfile
+    match = re.search(rf"(?ms)^{name}\(\) {{\n(.*?)^}}$", script)
+    assert match is not None, f"{name} が見つからない"
+    return match.group(1)
 
 
-def test_backend_image_runs_as_non_root_app_user() -> None:
-    """backend runtime image は専用の非 root ユーザーで起動する。"""
-    dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+def test_frontend_build_uses_reproducible_install() -> None:
+    """frontend は lockfile で再現可能に依存解決して build する(#177)。"""
+    build = _function_body(_init_script(), "build_frontend")
 
-    assert "useradd --create-home --shell /usr/sbin/nologin appuser" in dockerfile
-    assert "USER appuser" in dockerfile
+    # 共有パッケージ(platform)を先に build し、frontend の file: 依存を解決する。
+    steps = [
+        '"${PLATFORM_DIR}" "npm ci"',
+        '"${PLATFORM_DIR}" "npm run build"',
+        '"${FRONTEND_DIR}" "npm ci"',
+        '"${FRONTEND_DIR}" "npm run build"',
+    ]
+    positions = [build.index(step) for step in steps]
+    assert positions == sorted(positions)
+    assert "npm install" not in _init_script()
 
 
-def test_backend_image_is_pinned_and_excludes_heavy_parser_adapters() -> None:
-    """backend runtime image は latest tag を使わず、重い parser 依存を載せない。
+def test_frontend_is_served_as_static_assets_by_nginx() -> None:
+    """frontend は build 済みの静的 assets を host の Nginx が配信する(node_modules は出さない)。"""
+    nginx = _function_body(_init_script(), "configure_nginx")
 
-    外部 parser は services/parsers/<name> の独立サービスへ切り出したため、runtime image は
-    `--extra parser-adapters` を同期しない(共有 contract package のみ取り込む)。
+    assert "root ${FRONTEND_DIR}/dist;" in nginx
+    assert "node_modules" not in nginx
+
+
+def test_services_run_as_dedicated_non_root_user() -> None:
+    """backend・取込 worker・前処理 / parser は専用の非 root ユーザーで動く。"""
+    init_script = _init_script()
+
+    assert 'SERVICE_USER="${SERVICE_USER:-ragsvc}"' in init_script
+    assert "User=${SERVICE_USER}" in _function_body(init_script, "write_backend_unit")
+    assert "User=${user}" in _systemd_script()
+    assert "User=root" not in init_script + _systemd_script()
+
+
+def test_backend_venv_is_locked_and_excludes_heavy_parser_adapters() -> None:
+    """backend の venv は lock どおり(開発用の依存なし)で、重い parser 依存を載せない。
+
+    外部 parser は services/parsers/<name> の独立サービスへ切り出したため、backend は
+    `--extra parser-adapters` などの parser の extra を同期しない(HTTP 委譲)。
     """
-    dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    venvs = _function_body(_init_script(), "install_service_venvs")
 
-    assert "FROM python:3.12.11-slim AS base" in dockerfile
-    assert "COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/" in dockerfile
-    assert "uv sync --frozen --no-dev --no-install-project" in dockerfile
-    # runtime image は重い parser 依存を持たない(HTTP 委譲)。
-    assert "--extra parser-adapters" not in dockerfile
-    # 共有 contract package を repo 相対レイアウトで取り込む(path 依存解決のため)。
-    assert "COPY packages/rag_parser_core /build/packages/rag_parser_core" in dockerfile
-    assert ":latest" not in dockerfile
-
-
-def test_backend_image_uses_gunicorn_uvicorn_worker() -> None:
-    """backend production image は Gunicorn で Uvicorn worker を管理する。"""
-    dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    assert '"${BACKEND_DIR}" "uv sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"' in venvs
+    assert "--extra" not in venvs
+    assert "--extra" not in _function_body(_systemd_script(), "rag_uv_sync_args")
+    # backend は共有 contract package を path 依存で取り込む(uv.lock に固定される)。
     pyproject = (REPO_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "rag-parser-core" in pyproject
+    assert "../packages/rag_parser_core" in pyproject
+
+
+def test_backend_unit_uses_gunicorn_uvicorn_worker() -> None:
+    """backend の unit は Gunicorn で Uvicorn worker を管理する。"""
+    pyproject = (REPO_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+    configure = _function_body(_init_script(), "configure_systemd")
 
     assert '"gunicorn>=26,<27"' in pyproject
-    assert "exec uv run --no-sync gunicorn app.main:app" in dockerfile
-    # gunicorn 26 の control socket は既定で /run/user/<uid> に作られる。非 root の appuser では
-    # 作れない場所なので、使わない control interface は無効にする。
-    assert "--no-control-socket" in dockerfile
-    assert "--worker-class uvicorn.workers.UvicornWorker" in dockerfile
-    assert "--workers ${WEB_CONCURRENCY:-2}" in dockerfile
-    assert "--timeout ${GUNICORN_TIMEOUT:-60}" in dockerfile
-    assert "--graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30}" in dockerfile
-    assert "WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}" in compose
-    assert "GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}" in compose
+    exec_start = next(
+        line for line in configure.splitlines() if ".venv/bin/gunicorn app.main:app" in line
+    )
+    # gunicorn 26 の control socket は既定で /run/user/<uid> に作られる。system user の ragsvc には
+    # 無い場所なので、使わない control interface は無効にする。
+    assert "--no-control-socket" in exec_start
+    assert "--worker-class uvicorn.workers.UvicornWorker" in exec_start
+    assert "--workers 2" in exec_start
+    assert "--timeout 60" in exec_start
+    assert "--graceful-timeout 30" in exec_start
+    assert "--bind ${BACKEND_HOST}:${BACKEND_PORT}" in exec_start
 
 
-def test_docker_contexts_exclude_local_build_artifacts() -> None:
-    """Docker context には local cache、依存物、secret env を含めない。"""
-    frontend_ignore = (REPO_ROOT / "frontend" / ".dockerignore").read_text(encoding="utf-8")
-    backend_ignore = (REPO_ROOT / "backend" / ".dockerignore").read_text(encoding="utf-8")
-
-    assert "node_modules" in frontend_ignore
-    assert "dist" in frontend_ignore
-    assert "*.tsbuildinfo" in frontend_ignore
-    assert ".env.*" in frontend_ignore
-    assert ".venv" in backend_ignore
-    assert "tests" in backend_ignore
-    assert ".env.*" in backend_ignore
+def test_own_code_has_no_container_image() -> None:
+    """自前のコードは Docker イメージを作らない(#286 / #356)。配備は systemd の unit だけ。"""
+    ignored = {"node_modules", ".venv", "dist"}
+    leftovers = [
+        path
+        for pattern in ("Dockerfile*", ".dockerignore", "docker-compose*.yml")
+        for path in REPO_ROOT.rglob(pattern)
+        if not ignored.intersection(path.relative_to(REPO_ROOT).parts)
+    ]
+    assert leftovers == []
 
 
 def test_frontend_build_does_not_fetch_remote_fonts() -> None:

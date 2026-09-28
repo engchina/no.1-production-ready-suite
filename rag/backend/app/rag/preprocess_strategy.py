@@ -134,8 +134,8 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
 def preprocess_service_url(settings: Settings, profile: PreprocessProfileName) -> str | None:
     """profile に対応する前処理マイクロサービスの base URL を返す(無ければ None)。
 
-    dev では catalog の dev_port から 127.0.0.1:<port> に解決する(/health プローブと
-    取込の HTTP 委譲で同じ URL を使う)。prod は設定値そのまま。
+    既定は 127.0.0.1:<port>(ネイティブ配備)。/health プローブと取込の HTTP 委譲で同じ解決
+    (``resolve_service_base_url``)を使う。
     """
     attr = PREPROCESS_SERVICE_URL_ATTRS.get(profile)
     if attr is None:

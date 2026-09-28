@@ -12,9 +12,10 @@ uv run uvicorn app.main:app --reload
 # -> http://localhost:8000/docs（Swagger UI）
 ```
 
-Dockerfile の production entrypoint は Gunicorn + `uvicorn.workers.UvicornWorker` です。
-`WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、`PORT` で worker 数と timeout を調整できます。
-local 開発だけ `uvicorn --reload` を使います。
+本番は `rag/init_script.sh` が作る systemd の unit（`production-ready-rag-backend.service`）で、
+Gunicorn + `uvicorn.workers.UvicornWorker`（`127.0.0.1:8000`、workers 2、timeout 60 秒）として動きます。
+取込キューは別の unit（`production-ready-rag-ingestion-worker.service`）が消費します。Docker は使いません（#286 / #356）。
+local 開発だけ `uvicorn --reload` を使います。前処理 / parser の開発環境は `../scripts/rag-services.sh`（[docs/deployment.md](../docs/deployment.md)）。
 
 外部 parser(Docling / Unstructured / MinerU / Dots.OCR)は **backend には載せず**、
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
@@ -26,7 +27,7 @@ local 開発だけ `uvicorn --reload` を使います。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保存済みの設定・文書レシピ・KB 構築設定に
 これらのエンジンが残っていても、読み込み時に既定の解析エンジン(レシピと KB は global 既定の継承)として扱います。
 > 依存(`rag-parser-core` path 依存)を追加・変更したら **`uv lock` の再生成**が必要です
-> (Docker build context はリポジトリ root)。
+> (配備は `uv sync --locked` で lock どおりに venv を作ります)。
 
 ## 開発コマンド
 

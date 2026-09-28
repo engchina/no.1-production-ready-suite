@@ -1,7 +1,7 @@
 # 選んだ製品ごとの Compute（1製品 1台）。ADB と Wallet は adb.tf の1つを全 Compute で共有する。
-# - RAG: Docker Compose で backend / ingestion-worker / 前処理 / CPU parser を動かし、host の Nginx が frontend を配信する
-#   （GPU の parser 用 Compute は含めない）。
-# - NL2SQL / Agent: Nginx + systemd に直接配備する（Docker は使わない）。
+# - 3製品とも Docker を使わず、uv の venv + systemd + Nginx に直接配備する（#286 / #356）。
+# - RAG: backend / ingestion-worker / 前処理 / CPU parser をサービスごとの venv と systemd の unit で動かし、host の Nginx が
+#   frontend を配信する（GPU の parser 用 Compute は含めない）。
 # 各製品の配備手順は <製品>/init_script.sh が持ち、cloud-init はそれを呼ぶだけにする。
 # RAG / NL2SQL は for_each の "product"、Agent は "agent" で作る。Agent の backend/.env が RAG / NL2SQL の
 # private IP（MCP の URL。#233）を使うため、同じ resource にすると自分自身を参照してしまう。

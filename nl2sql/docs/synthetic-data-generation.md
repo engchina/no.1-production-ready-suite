@@ -60,7 +60,7 @@ Oracle が結果を一意に返せない場合は自動再実行しない。新�
 1. 既存のシステムテーブル初期化フローで migration 019 を適用する。
    `cd backend && uv run python -m app.cli.nl2sql_system_schema --initialize`
 2. ローカルは `NL2SQL_SYNTHETIC_WORKER_MODE=inprocess`（既定）。生成の本体は API の要求処理外で動く。
-3. Compose は `synthetic-data-worker`、新規 systemd 配置は `production-ready-nl2sql-synthetic-worker.service`。
+3. 新規 systemd 配置は `production-ready-nl2sql-synthetic-worker.service`（ローカルで専用 worker を試す場合は下の `uv run`）。
    専用 worker 構成では backend を `NL2SQL_SYNTHETIC_WORKER_MODE=external` にする。
 4. 旧 systemd 配置に専用 unit が無い場合、更新スクリプトは backend の inprocess 動作を維持する。
    手動で external に変更した場合は専用 worker も起動する。

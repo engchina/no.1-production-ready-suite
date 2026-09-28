@@ -9,7 +9,7 @@ backend が担う。
 | 項目 | 値 |
 |---|---|
 | stage | `grounding` |
-| 既定 URL | `http://pipeline-grounding:8000` / dev port 8036 |
+| 既定 URL | `http://127.0.0.1:18036` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`GroundingStageRequest{pipeline}` → `GroundingStageResponse`)。

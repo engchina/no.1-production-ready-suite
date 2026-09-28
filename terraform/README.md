@@ -182,7 +182,8 @@ python terraform/scripts/verify_stack_contract.py terraform/dist/production-read
 出力は `terraform/dist/production-ready-suite-terraform-stack.zip` です。この zip を Resource Manager へ upload して stack を作成します。
 `verify_stack_contract.py` は、フォーム（`schema.yaml`）と Terraform 変数の一致、製品選択の契約、製品ごとの `backend/.env` の key が各製品の Settings にあること、
 RAG の前処理 / parser（`rag/scripts/rag-systemd.sh` の unit の定義と uv.lock があること）、各製品の `init_script.sh` の配備契約
-（Docker を入れないこと、RAG の sudoers・状態の保持を含む）を検証します。
+（Docker を入れないこと、RAG の sudoers・状態の保持を含む）と、自前のコードの Dockerfile・compose が無いこと（Agent の第三者 Runtime の
+`agent/docker-compose.yml` だけ。digest 固定。#356）を検証します。
 
 CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` / `terraform validate`（Terraform 1.5.7）と上の2つを実行します。
 各製品の `init_script.sh` のテスト（`<製品>/scripts/tests/init-script-deployment.test.sh`）は製品ごとの job が実行します。実テナンシーへの配備確認は手動で行います。

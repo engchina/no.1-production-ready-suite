@@ -8,7 +8,7 @@ GraphRAG プロファイル(off/entities/full)+ legacy フラグ → KG 構築�
 | 項目 | 値 |
 |---|---|
 | stage | `graphrag` |
-| 既定 URL | `http://pipeline-graphrag:8000` / dev port 8032 |
+| 既定 URL | `http://127.0.0.1:18032` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`GraphStageRequest{profile, legacy_enabled}` → `GraphStageResponse`)。

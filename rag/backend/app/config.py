@@ -557,7 +557,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=True,
         description=(
             "in-process ワーカーが job 本体を subprocess で実行し、Docling/OCR/CUDA 初期化を "
-            "API プロセスから隔離する。専用 worker container では False にして直接実行できる。"
+            "API プロセスから隔離する。専用の取込 worker(別プロセス)では False にして"
+            "直接実行できる。"
         ),
     )
     ingestion_job_subprocess_timeout_seconds: float = Field(

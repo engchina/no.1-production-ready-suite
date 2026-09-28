@@ -8,7 +8,7 @@
 | 項目 | 値 |
 |---|---|
 | stage | `evaluation` |
-| 既定 URL | `http://pipeline-evaluation:8000` / dev port 8037 |
+| 既定 URL | `http://127.0.0.1:18037` |
 | profile 種別 | CPU(dev は uv プロセス) |
 
 - `POST /run`(`EvaluationStageRequest{suite}` → `EvaluationStageResponse{thresholds}`)。

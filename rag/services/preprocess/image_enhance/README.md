@@ -9,7 +9,7 @@
 |---|---|
 | profile | `image_enhance` |
 | 主依存 | opencv-python-headless + numpy(純ローカル CPU) |
-| 既定 URL | `http://preprocess-image-enhance:8000` |
+| 既定 URL | `http://127.0.0.1:18015` |
 | dev port | 8015 |
 | profile 種別 | CPU(dev は uv プロセス) |
 
@@ -32,7 +32,7 @@
 
 ```bash
 # dev(ホストの uv プロセス)
-uv run --directory services/preprocess/image_enhance uvicorn app.main:app --port 8015
+uv run --directory services/preprocess/image_enhance uvicorn app.main:app --port 18015
 
 # rag-services.sh(サービスの venv を作って前面で起動)
 scripts/rag-services.sh run preprocess-image-enhance   # rag/ で実行(uv の venv。systemd は install)

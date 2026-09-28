@@ -5,7 +5,7 @@ parse の **前** に CSV 原本を決定論で構造化 JSON(ヘッダ列をキ
 
 - 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)
 - readiness: `GET /health`(外部依存なしで常時 ready)
-- 純 Python(`csv` + `json`)のみ。LibreOffice / PyMuPDF を含まない軽量イメージ。
+- 純 Python(`csv` + `json`)のみ。LibreOffice / PyMuPDF を含まない軽量な venv。
 
 ## 変換仕様
 
@@ -21,13 +21,13 @@ parse の **前** に CSV 原本を決定論で構造化 JSON(ヘッダ列をキ
 ```bash
 # repo root から(共有 package の path source を解決するため)
 uv run --directory services/preprocess/csv_to_json \
-  uvicorn app.main:app --host 0.0.0.0 --port 8012
+  uvicorn app.main:app --host 127.0.0.1 --port 18012
 ```
 
 ## 起動(uv の venv + systemd。#286)
 
 サービスごとの uv の venv(`uv sync --locked --no-dev --python 3.12`)で動き、本番・開発とも systemd の unit
-(`production-ready-rag-preprocess-csv-to-json.service`)で起動 / 停止する。Docker は使わない(`Dockerfile` は後続の PR で削除する)。
+(`production-ready-rag-preprocess-csv-to-json.service`)で起動 / 停止する。Docker は使わない(Dockerfile は #356 で削除した)。
 
 ```bash
 # rag/ で実行する

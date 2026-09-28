@@ -842,6 +842,49 @@ def _verify_init_scripts(init_sources: dict[str, str]) -> None:
             raise AssertionError(f"{product} is deployed directly with systemd and must not require Docker")
 
 
+# 自前のコードは Docker イメージを作らない（#286 / #356）。Docker を使うのは、第三者の構築済みイメージ（digest 固定）で
+# Agent の Runtime を起動する agent/docker-compose.yml だけ。
+THIRD_PARTY_RUNTIME_COMPOSE = "agent/docker-compose.yml"
+THIRD_PARTY_RUNTIME_SERVICES = {"runtime-openclaw", "runtime-hermes", "runtime-deerflow"}
+_IGNORED_SOURCE_DIRS = {"node_modules", ".venv", "dist", ".git"}
+
+
+def _repo_files(pattern: str) -> list[str]:
+    files = []
+    for top in (*PRODUCTS, "platform", "terraform"):
+        for path in (REPO_ROOT / top).rglob(pattern):
+            relative = path.relative_to(REPO_ROOT)
+            if not _IGNORED_SOURCE_DIRS.intersection(relative.parts):
+                files.append(relative.as_posix())
+    return sorted(files)
+
+
+def _verify_no_own_container_images() -> None:
+    leftovers = _repo_files("Dockerfile*") + _repo_files(".dockerignore") + [
+        path
+        for pattern in ("docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml")
+        for path in _repo_files(pattern)
+        if path != THIRD_PARTY_RUNTIME_COMPOSE
+    ]
+    if (REPO_ROOT / ".dockerignore").exists():
+        leftovers.append(".dockerignore")
+    if leftovers:
+        raise AssertionError(f"own code must not build Docker images (#356): {', '.join(leftovers)}")
+    compose = (REPO_ROOT / THIRD_PARTY_RUNTIME_COMPOSE).read_text(encoding="utf-8")
+    if re.search(r"(?m)^\s+build:", compose):
+        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} must not build images")
+    services_block = compose.split("\nservices:\n", 1)[-1].split("\nvolumes:\n", 1)[0]
+    services = set(re.findall(r"(?m)^  ([a-z0-9-]+):$", services_block))
+    if services != THIRD_PARTY_RUNTIME_SERVICES:
+        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} must only run the third-party runtimes: {sorted(services)}")
+    images = re.findall(r"(?m)^    image: (\S+)$", compose)
+    if len(images) != len(THIRD_PARTY_RUNTIME_SERVICES) or not all("@sha256:" in image for image in images):
+        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} images must be pinned by digest")
+    rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+    if re.search(r"\bdocker\b", rag_systemd):
+        raise AssertionError("rag/scripts/rag-systemd.sh must not use Docker")
+
+
 def _verify_boundaries(sources: dict[str, str]) -> None:
     combined = "\n".join(sources.values())
     for name, source in sources.items():
@@ -891,6 +934,7 @@ def verify(package_path: Path) -> None:
         if removed in stack_sources:
             raise AssertionError(f"removed RAG stack input / output remains: {removed}")
     _verify_init_scripts(init_sources)
+    _verify_no_own_container_images()
     _verify_boundaries({**sources, "bootstrap": bootstrap, **{f"{p}/init_script.sh": s for p, s in init_sources.items()}})
 
 

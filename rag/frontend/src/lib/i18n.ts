@@ -217,7 +217,7 @@ export const ja = {
     "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
-    "GPU 解析エンジンは外部 API を直接呼びます。この画面から Docker イメージの構築や起動は行いません。",
+    "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.connection.title": "外部 GPU 解析エンジンの接続",
   "settings.parserAdapters.connection.description":
     "接続先とモデルを保存してから接続を確認します。API key は再表示されず、空欄のまま保存すると現在値を保持します。",
@@ -1134,9 +1134,9 @@ export const ja = {
   "settings.huggingface.actions.save": "保存",
   "settings.huggingface.actions.saved": "HuggingFace 設定を保存しました",
   "settings.huggingface.hint":
-    "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。既存のコンテナは再作成で反映されます。",
+    "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。起動中のサービスは再起動で反映されます。",
   "settings.huggingface.hintCache":
-    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
+    "モデルは各 parser の実行ユーザーのキャッシュ(~/.cache)へ保存します。本番は配備時にモデルを取得済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.database.readiness.ok": "OK",
   "settings.database.readiness.missing": "未設定",

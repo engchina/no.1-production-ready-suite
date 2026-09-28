@@ -148,7 +148,6 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     locals_tf = (repo_root.parent / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
     init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
-    dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
 
     backend_env = _terraform_env_body("nl2sql_backend_env")
     platform_env = _terraform_env_body("platform_env")
@@ -159,7 +158,8 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     assert re.search(r"platform_env\s+=\s+base64gzip\(local\.platform_envs\[product\]\)", locals_tf)
     assert '"${app_root}/props/platform.env" "${platform_repo_dir}/.env"' in init_script
     assert "instantclient" not in init_script
-    assert "instantclient" not in dockerfile
+    # 自前のコードは Docker イメージを作らない（#356）。配備は init_script.sh の unit だけ。
+    assert not (repo_root / "backend" / "Dockerfile").exists()
 
 
 def _terraform_env_body(name: str) -> str:

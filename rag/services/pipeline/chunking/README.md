@@ -8,7 +8,7 @@ pipeline 各ステージの remote 実行プラグイン。
 |---|---|
 | stage | `chunking` |
 | 主依存 | rag_pipeline_core(pydantic + rag_parser_core のみ) |
-| 既定 URL | `http://pipeline-chunking:8000` |
+| 既定 URL | `http://127.0.0.1:18030` |
 | dev port | 18030 |
 | profile 種別 | CPU(dev は uv プロセス) |
 
@@ -29,7 +29,4 @@ remote が応答した後の HTTP error / 不正応答は壊れたサービス�
 ```bash
 # dev(ホストの uv プロセス)
 uv run --directory services/pipeline/chunking uvicorn app.main:app --port 18030
-
-# Docker(build context = リポジトリ root)
-docker compose up pipeline-chunking
 ```

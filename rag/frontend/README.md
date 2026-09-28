@@ -25,10 +25,10 @@ npm run typecheck
 npm run build
 ```
 
-## コンテナ
+## 本番配信
 
-本番用 Docker image は `package-lock.json` を前提に `npm ci` で再現可能に依存解決する。
-runtime stage は Vite の `dist/` を nginx で配信し、`/api/*` は `BACKEND_URL` へリバースプロキシする。
+本番（`rag/init_script.sh`）は `package-lock.json` を前提に `npm ci` で再現可能に依存解決して build し、
+host の Nginx が Vite の `dist/` を配信して `/api/*` を backend へリバースプロキシする（Docker は使わない。#286 / #356）。
 
 ## 構成
 
