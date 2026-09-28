@@ -1,10 +1,9 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useSidebarAccount } from "@engchina/production-ready-system-settings";
+import { SidebarAccountSection } from "@engchina/production-ready-system-settings";
 
 import {
   Sidebar as UiSidebar,
-  SidebarAccountFooter,
   type NavSection as UiNavSection,
   type SidebarLabels,
 } from "@engchina/production-ready-ui";
@@ -24,10 +23,6 @@ import { visibleNavSections } from "./nav-config";
 export function AppSidebar() {
   const { pathname } = useLocation();
   const { hasPermission } = useAuth();
-  // 表示名・ロール・パスワード変更・ログアウトは共通の helper が作る（#220）。
-  const account = useSidebarAccount({
-    routes: { login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange },
-  });
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
@@ -55,34 +50,20 @@ export function AppSidebar() {
     aria: t("nav.sidebar.aria"),
     expand: t("nav.sidebar.expand"),
     collapse: t("nav.sidebar.collapse"),
-    commandOpen: t("nav.command.open"),
     sectionContainsActive: t("nav.section.containsActive"),
     sectionToggleExpand: (section) => t("nav.section.toggle.expand", { section }),
     sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
   };
 
-  // ローカル（ログイン省略）はログインしていないため、アカウント欄を出さない（agent/AGENTS.md）。
-  const logout = account?.onLogout;
-  const footer =
-    account && !account.debugMode ? (
-      <SidebarAccountFooter
-        name={account.name}
-        roles={account.roles}
-        collapsed={collapsed}
-        labels={account.labels}
-        actions={account.actions}
-        onLogout={
-          logout
-            ? () => {
-                // ログアウトは画面を離れる操作。未保存の編集があれば先に確認する。
-                void confirmPendingLeave().then((confirmed) => {
-                  if (confirmed) logout();
-                });
-              }
-            : undefined
-        }
-      />
-    ) : undefined;
+  // 表示名・ロール・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307）。
+  // ログアウトは画面を離れる操作なので、未保存の編集があれば先に確認する。
+  const footer = (
+    <SidebarAccountSection
+      routes={{ login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange }}
+      collapsed={collapsed}
+      confirmLeave={confirmPendingLeave}
+    />
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") {

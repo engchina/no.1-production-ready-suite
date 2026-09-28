@@ -149,16 +149,7 @@ export const ja = {
   "nav.section.toggle.collapse": "{section} を折りたたむ",
   "nav.section.toggle.expand": "{section} を展開",
   "nav.section.containsActive": "現在のページを含む",
-  "nav.command.open": "コマンドパレットを開く",
-  "command.title": "ページへ移動",
-  "command.search.placeholder": "ページ名で検索（Parser、検索、評価 など）",
-  "command.empty": "一致するページがありません。",
-  "command.empty.hint": "別のキーワードをお試しください。",
-  "command.clear": "検索をクリア",
   "command.count": "{count} 件",
-  "command.hint.navigate": "移動",
-  "command.hint.select": "開く",
-  "command.hint.close": "閉じる",
 
   "settings.oci.subtitle": "OCI API キー認証情報を設定します。",
   "settings.parserAdapters.subtitle":
