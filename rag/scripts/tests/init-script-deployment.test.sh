@@ -498,4 +498,43 @@ if bash "${REPO_DIR}/scripts/rag-services.sh" render "${TEST_TMP_DIR}/dev-unknow
 fi
 test ! -e "${REPO_DIR}/scripts/build-services.sh" || fail "Docker のイメージを build するスクリプトが残っている"
 
+# --- RAG_SERVICES_TORCH=cpu: CUDA の wheel を入れず、lock と同じ版の CPU 版 torch を入れる（#366） ---
+# スクリプトと lock だけを一時の rag/ に写し、手元の venv やモデルに触れないようにする（uv は fake）。
+torch_rag_dir="${TEST_TMP_DIR}/torch-cpu/rag"
+mkdir -p "${torch_rag_dir}/scripts" "${torch_rag_dir}/services/parsers/docling" "${torch_rag_dir}/services/preprocess/csv_to_json" \
+  "${TEST_TMP_DIR}/torch-cpu/bin"
+cp "${REPO_DIR}/scripts/rag-services.sh" "${REPO_DIR}/scripts/rag-systemd.sh" "${torch_rag_dir}/scripts/"
+cp "${REPO_DIR}/services/parsers/docling/uv.lock" "${torch_rag_dir}/services/parsers/docling/"
+cp "${REPO_DIR}/services/preprocess/csv_to_json/uv.lock" "${torch_rag_dir}/services/preprocess/csv_to_json/"
+cat > "${TEST_TMP_DIR}/torch-cpu/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FAKE_UV_LOG}"
+EOF
+chmod +x "${TEST_TMP_DIR}/torch-cpu/bin/uv"
+torch_uv_log="${TEST_TMP_DIR}/torch-cpu/uv.log"
+FAKE_UV_LOG="${torch_uv_log}" PATH="${TEST_TMP_DIR}/torch-cpu/bin:${PATH}" RAG_SERVICES_TORCH=cpu \
+  bash "${torch_rag_dir}/scripts/rag-services.sh" sync parser-docling preprocess-csv-to-json \
+  > "${TEST_TMP_DIR}/torch-cpu/sync.log" 2>&1 || fail "RAG_SERVICES_TORCH=cpu の sync が失敗した"
+docling_sync="$(grep -m1 '^sync ' "${torch_uv_log}")"
+for package in torch torchvision triton nvidia-cublas nvidia-cudnn-cu13 cuda-toolkit; do
+  [[ " ${docling_sync} " == *" --no-install-package ${package} "* ]] \
+    || fail "RAG_SERVICES_TORCH=cpu で ${package} を uv sync から外していない: ${docling_sync}"
+done
+[[ "${docling_sync}" == "sync --locked --no-dev --python 3.12 "* ]] || fail "CPU 版でも lock どおりに sync していない: ${docling_sync}"
+torch_version="$(awk '$0 == "name = \"torch\"" { getline; gsub(/^version = "|"$/, ""); print; exit }' "${torch_rag_dir}/services/parsers/docling/uv.lock")"
+grep -Fqx "pip install --python .venv/bin/python --no-deps --index-url https://download.pytorch.org/whl/cpu torch==${torch_version} torchvision==$(awk '$0 == "name = \"torchvision\"" { getline; gsub(/^version = "|"$/, ""); print; exit }' "${torch_rag_dir}/services/parsers/docling/uv.lock")" \
+  "${torch_uv_log}" || fail "lock と同じ版の CPU 版 torch を入れていない"
+grep -Fqx "sync --locked --no-dev --python 3.12" "${torch_uv_log}" \
+  || fail "torch を持たないサービス（preprocess-csv-to-json）の sync を変えた"
+test "$(grep -c '^pip install' "${torch_uv_log}")" -eq 1 || fail "torch を持たないサービスにも CPU 版 torch を入れた"
+: > "${torch_uv_log}"
+FAKE_UV_LOG="${torch_uv_log}" PATH="${TEST_TMP_DIR}/torch-cpu/bin:${PATH}" \
+  bash "${torch_rag_dir}/scripts/rag-services.sh" sync parser-docling > /dev/null 2>&1 || fail "既定の sync が失敗した"
+grep -Fqx "sync --locked --no-dev --python 3.12" "${torch_uv_log}" || fail "既定（RAG_SERVICES_TORCH 未設定）で lock どおりに sync していない"
+! grep -q '^pip install' "${torch_uv_log}" || fail "既定で CPU 版 torch を入れた"
+if FAKE_UV_LOG="${torch_uv_log}" PATH="${TEST_TMP_DIR}/torch-cpu/bin:${PATH}" RAG_SERVICES_TORCH=cuda \
+  bash "${torch_rag_dir}/scripts/rag-services.sh" sync parser-docling > /dev/null 2>&1; then
+  fail "RAG_SERVICES_TORCH に cpu 以外を受け付けた"
+fi
+
 echo "rag init_script deployment behavior verified."

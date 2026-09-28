@@ -457,6 +457,8 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """schema remap が返っても package distribution/version 証跡がなければ失敗にする。"""
+    # html を宣言する Unstructured で検証する
+    # (Docling は PDF と画像だけで、html に routing されない。#366)。
     fixture_root = tmp_path / "fixtures"
     fixture_root.mkdir()
     (fixture_root / "manual.html").write_text("<h1>検索運用</h1>", encoding="utf-8")
@@ -464,7 +466,7 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "docling",
+            import_name == "unstructured",
             None,
             None,
         ),
@@ -479,13 +481,13 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
                         kind="title",
                         text="非機密 artifact には入れない本文",
                         element_id="adapter-html-1",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                         section_path=["検索運用"],
                     )
                 ],
             ),
-            parser_backend="docling",
-            parser_version="docling_adapter_v1",
+            parser_backend="unstructured",
+            parser_version="unstructured_adapter_v1",
             template="html_semantic",
         )
 
@@ -496,8 +498,8 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="docling",
-            rag_parser_docling_enabled=True,
+            rag_parser_adapter_backend="unstructured",
+            rag_parser_unstructured_enabled=True,
         ),
         fixture_root=fixture_root,
         fixture_specs=(
@@ -509,7 +511,7 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
                 scenario="html_semantic_blocks",
             ),
         ),
-        backends=["docling"],
+        backends=["unstructured"],
         require_backend_evidence=True,
     )
 
@@ -517,7 +519,7 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
     assert matrix.passed is False
     assert matrix.blocking_failure_count == 1
     assert case.status == "failed"
-    assert case.adapter_import_name == "docling"
+    assert case.adapter_import_name == "unstructured"
     assert case.adapter_distribution_name is None
     assert case.adapter_package_version is None
     assert case.element_count == 1
@@ -532,6 +534,8 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """strict manifest では source kind を正向き fixture 不足で黙って縮小しない。"""
+    # html を宣言する Unstructured で検証する
+    # (Docling は PDF と画像だけで、html に routing されない。#366)。
     fixture_root = tmp_path / "fixtures"
     fixture_root.mkdir()
     (fixture_root / "manual.html").write_text("<h1>検索運用</h1>", encoding="utf-8")
@@ -557,9 +561,9 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "docling",
-            "2.103.0" if import_name == "docling" else None,
-            import_name if import_name == "docling" else None,
+            import_name == "unstructured",
+            "0.23.1" if import_name == "unstructured" else None,
+            import_name if import_name == "unstructured" else None,
         ),
     )
 
@@ -572,13 +576,13 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
                         kind="title",
                         text="非機密 artifact には入れない本文",
                         element_id="adapter-html-1",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                         section_path=["検索運用"],
                     )
                 ],
             ),
-            parser_backend="docling",
-            parser_version="2.103.0",
+            parser_backend="unstructured",
+            parser_version="0.23.1",
             template="html_semantic",
         )
 
@@ -589,13 +593,13 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="docling",
-            rag_parser_docling_enabled=True,
+            rag_parser_adapter_backend="unstructured",
+            rag_parser_unstructured_enabled=True,
         ),
         fixture_root=fixture_root,
         source_kinds=["pdf", "html"],
         fixture_specs=parser_adapter_fixture_specs_from_manifest(manifest),
-        backends=["docling"],
+        backends=["unstructured"],
         require_backend_evidence=True,
     )
 
@@ -742,13 +746,15 @@ def test_compatibility_matrix_accepts_docx_heading_lineage(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """DOCX は page がなくても heading/section lineage があれば Office contract とする。"""
+    # Office を宣言する Unstructured で検証する
+    # (Docling は PDF と画像だけで、office に routing されない。#366)。
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "docling",
-            "2.103.0" if import_name == "docling" else None,
-            import_name if import_name == "docling" else None,
+            import_name == "unstructured",
+            "0.23.1" if import_name == "unstructured" else None,
+            import_name if import_name == "unstructured" else None,
         ),
     )
 
@@ -761,7 +767,7 @@ def test_compatibility_matrix_accepts_docx_heading_lineage(
                         kind="title",
                         text="経費ポリシー",
                         element_id="adapter-title-1",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                         metadata={
                             "chunk_template": "office_document",
                             "section_level": 1,
@@ -772,12 +778,12 @@ def test_compatibility_matrix_accepts_docx_heading_lineage(
                         kind="text",
                         text="本文",
                         element_id="adapter-body-1",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                     ),
                 ],
             ),
-            parser_backend="docling",
-            parser_version="2.103.0",
+            parser_backend="unstructured",
+            parser_version="0.23.1",
             template="office_document",
         )
 
@@ -788,11 +794,11 @@ def test_compatibility_matrix_accepts_docx_heading_lineage(
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="docling",
-            rag_parser_docling_enabled=True,
+            rag_parser_adapter_backend="unstructured",
+            rag_parser_unstructured_enabled=True,
         ),
         source_kinds=["office"],
-        backends=["docling"],
+        backends=["unstructured"],
     )
 
     assert matrix.passed is True
@@ -805,13 +811,15 @@ def test_compatibility_matrix_accepts_office_pages_lineage(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """PPTX などは elements の page_number がなくても pages[] で slide lineage とする。"""
+    # Office を宣言する Unstructured で検証する
+    # (Docling は PDF と画像だけで、office に routing されない。#366)。
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "docling",
-            "2.103.0" if import_name == "docling" else None,
-            import_name if import_name == "docling" else None,
+            import_name == "unstructured",
+            "0.23.1" if import_name == "unstructured" else None,
+            import_name if import_name == "unstructured" else None,
         ),
     )
 
@@ -828,18 +836,18 @@ def test_compatibility_matrix_accepts_office_pages_lineage(
                         kind="text",
                         text="Slide 1",
                         element_id="slide-text-1",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                     ),
                     DocumentElement(
                         kind="text",
                         text="Slide 2",
                         element_id="slide-text-2",
-                        source_parser="docling_adapter",
+                        source_parser="unstructured_adapter",
                     ),
                 ],
             ),
-            parser_backend="docling",
-            parser_version="2.103.0",
+            parser_backend="unstructured",
+            parser_version="0.23.1",
             template="office_slide",
         )
 
@@ -850,11 +858,11 @@ def test_compatibility_matrix_accepts_office_pages_lineage(
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="docling",
-            rag_parser_docling_enabled=True,
+            rag_parser_adapter_backend="unstructured",
+            rag_parser_unstructured_enabled=True,
         ),
         source_kinds=["office"],
-        backends=["docling"],
+        backends=["unstructured"],
     )
 
     assert matrix.passed is True

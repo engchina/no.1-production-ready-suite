@@ -249,10 +249,12 @@ def test_source_routes_follow_selected_adapter_support(
     assert by_kind["image"].candidate_order == ("unstructured", "docling", "dots_ocr", "mineru")
     assert by_kind["image"].attempted_order == ("unstructured",)
     assert by_kind["image"].selected_backend == "unstructured"
-    assert by_kind["office"].candidate_order == ("docling", "unstructured", "mineru")
+    # Docling は PDF と画像だけを解析する(capabilities.ADAPTER_CAPABILITIES)ため、office / html の
+    # 候補に出さない(#366)。以前は候補に出し、取込では source_unsupported で必ず fallback していた。
+    assert by_kind["office"].candidate_order == ("unstructured", "mineru")
     assert by_kind["office"].attempted_order == ("unstructured",)
     assert by_kind["office"].selected_backend == "unstructured"
-    assert by_kind["html"].candidate_order == ("docling", "unstructured")
+    assert by_kind["html"].candidate_order == ("unstructured",)
     assert by_kind["html"].attempted_order == ("unstructured",)
     assert by_kind["html"].selected_backend == "unstructured"
     assert by_kind["email"].candidate_order == ("unstructured",)
@@ -288,7 +290,8 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
     route = build_parser_adapter_source_routes(runtime, source_kinds=["html"])[0]
 
     assert route.source_kind == "html"
-    assert route.candidate_order == ("docling", "unstructured")
+    # html の候補は、html を宣言する Unstructured だけ(Docling は PDF と画像だけ。#366)。
+    assert route.candidate_order == ("unstructured",)
     assert route.attempted_order == ()
     assert route.selected_backend == "local"
     assert "selected_adapter_unsupported_for_source" in route.reason_codes

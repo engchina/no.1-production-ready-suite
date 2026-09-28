@@ -30,6 +30,7 @@ from app.rag.parser_adapter_contract import (
     parser_adapter_contract_summary,
     parser_adapter_fixture_root_from_manifest,
     parser_adapter_fixture_specs_from_manifest,
+    parser_service_probe_settings,
     run_parser_adapter_compatibility_matrix,
     strict_parser_adapter_settings,
 )
@@ -250,7 +251,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         manifest = _load_manifest(args.manifest)
-        settings = get_settings()
+        # adapter の可用性は、parse を委譲する parser サービスの /health で判定する。
+        # 手で実行するときも RAG_PARSER_READINESS_PROBE_ENABLED の指定に依らない(#343 / #366)。
+        settings = parser_service_probe_settings(get_settings())
         effective_settings = (
             strict_parser_adapter_settings(settings)
             if args.parser_adapter_contract_strict

@@ -158,6 +158,46 @@ def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
     )
 
 
+def test_nightly_rag_workflow_starts_docling_service_for_strict() -> None:
+    """strict では job の中で Docling の parser サービスを起動してから gate を実行する(#366)。"""
+    workflow = (SUITE_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
+        encoding="utf-8"
+    )
+    # step ごとの本文("      - name: <名前>" から次の step まで)。
+    blocks = workflow.split("\n      - name: ")[1:]
+    steps = {block.split("\n", 1)[0]: block for block in blocks}
+    names = list(steps)
+    strict = "if: steps.mode.outputs.adapter_contract_strict == 'true'"
+
+    start = steps["Start Docling parser service"]
+    assert strict in start
+    assert "RAG_SERVICES_TORCH: cpu" in start
+    assert "timeout-minutes:" in start
+    assert "scripts/rag-services.sh sync parser-docling" in start
+    assert "scripts/rag-services.sh run parser-docling > artifacts/" in start
+    # backend の既定の URL(RAG_PARSER_DOCLING_SERVICE_URL)と unit のポートで待つ。
+    _directory, port, _timeout = _script_microservices()["parser-docling"]
+    assert f"http://127.0.0.1:{port}/health" in start
+    config = (REPO_ROOT / "backend" / "app" / "config.py").read_text(encoding="utf-8")
+    assert f'default="http://127.0.0.1:{port}"' in config
+    assert strict in steps["Restore Docling models"]
+    assert "hashFiles('rag/services/parsers/docling/uv.lock')" in steps["Restore Docling models"]
+    assert "if: always()" in steps["Stop Docling parser service"]
+    assert "if: always()" in steps["Save Docling models"]
+
+    assert names.index("Resolve parser adapter contract mode") < names.index(
+        "Start Docling parser service"
+    )
+    assert names.index("Start Docling parser service") < names.index(
+        "Run evaluation and search load gates"
+    )
+    assert names.index("Run evaluation and search load gates") < names.index(
+        "Stop Docling parser service"
+    )
+    gate = steps["Run evaluation and search load gates"]
+    assert "ADAPTER_CONTRACT_STRICT: ${{ steps.mode.outputs.adapter_contract_strict }}" in gate
+
+
 # --- ネイティブ配備(uv の venv + systemd。#286) --------------------------------
 
 
