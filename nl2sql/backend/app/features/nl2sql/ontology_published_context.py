@@ -43,6 +43,28 @@ def require_current_scope(
     return bundle
 
 
+def legacy_markdown_in_scope(
+    markdown: str,
+    *,
+    profile_objects: Iterable[str],
+    allowed_tables: Iterable[str],
+    allowed_columns: Mapping[str, Iterable[str]],
+) -> str:
+    """旧形式の公開 Markdown は、Profile 全体を許可した実行にだけ渡す。
+
+    自由記述で概念単位に絞れないため、表や列を絞った実行に全文を渡すと
+    許可外の業務記述・物理名が prompt に入る。
+    """
+
+    if any(list(columns) for columns in allowed_columns.values()):
+        return ""
+    requested = {object_match_key(name) for name in allowed_tables}
+    required = {object_match_key(name) for name in profile_objects}
+    if requested and not required <= requested:
+        return ""
+    return markdown
+
+
 def _expressions_visible(
     definition: Any, allowed: dict[str, set[str]], definitions: dict[str, Any] | None = None
 ) -> bool:

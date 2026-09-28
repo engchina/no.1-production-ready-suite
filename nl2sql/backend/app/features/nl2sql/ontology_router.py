@@ -2771,14 +2771,21 @@ class OntologyApiRuntime:
         from .ontology_markdown_workspace import MarkdownOntologyWorkspace
         from .ontology_published_context import published_context
 
-        business_release_id = str(
-            MarkdownOntologyWorkspace(self).head(request.profile_id)["snapshot_id"]
-        )
-        if business_release_id:
-            published_context(self, request.profile_id, business_release_id)
         with self._lock:
             profile = self._strict_profile(request.profile_id)
             ontology = self._query_ontology(request.profile_id)
+            # 公開 head は ontology を取った後に読み、同じ版を指すことを確かめる。
+            # 別々に読むと、間に公開が入ったとき新しい版のグラフと古い版の公開文脈が混ざる。
+            business_release_id = str(
+                MarkdownOntologyWorkspace(self).head(request.profile_id)["snapshot_id"]
+            )
+            if business_release_id and business_release_id != ontology.revision.id:
+                raise OntologyVersionConflictError(
+                    "ONTOLOGY_REVISION_CHANGED",
+                    "Ontology revision が更新されました。もう一度実行してください。",
+                )
+            if business_release_id:
+                published_context(self, request.profile_id, business_release_id)
             recommendation_id = self._validate_profile_confirmation(request, ontology)
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(
@@ -3230,9 +3237,24 @@ class OntologyApiRuntime:
             "metric_definitions": [item.model_dump(mode="json") for item in metric_definitions],
             "warnings_ja": warnings,
         }
-        published_markdown = self.published_markdown_for_revision(
-            ontology.revision.id,
-            profile_id=session.profile_id,
+        from .ontology_published_context import legacy_markdown_in_scope
+
+        profile = self._strict_profile(session.profile_id)
+        profile_object_names = getattr(self.legacy_service, "profile_allowed_object_names", None)
+        profile_objects = (
+            profile_object_names(profile)
+            if callable(profile_object_names)
+            else [*profile.allowed_tables, *profile.allowed_views]
+        )
+        published_markdown = legacy_markdown_in_scope(
+            self.published_markdown_for_revision(
+                ontology.revision.id,
+                profile_id=session.profile_id,
+            ),
+            # session の view は今回の範囲に絞り込み済みなので、Profile 全体の許可 object と比べる。
+            profile_objects=profile_objects,
+            allowed_tables=runtime_context.allowed_objects.table_names,
+            allowed_columns=runtime_context.allowed_objects.columns,
         )
         if session.business_release_id:
             from .ontology_published_context import published_context
