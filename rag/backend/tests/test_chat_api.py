@@ -519,9 +519,25 @@ class _SlowPlanningPipeline(_FakePipeline):
 class _SlowAnswerPipeline(_FakePipeline):
     """検索だけの上限より長く、回答生成の上限より短くかかる pipeline。"""
 
-    async def run(self, request, trace_id=None, **kwargs):  # type: ignore[no-untyped-def]
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
         await asyncio.sleep(0.1)
-        return await super().run(request, trace_id, **kwargs)
+        return await super().run(  # type: ignore[no-untyped-call]
+            request,
+            trace_id,
+            progress_callback,
+            token_callback,
+            history=history,
+            query_guardrail_result=query_guardrail_result,
+        )
 
 
 def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyPatch) -> None:
