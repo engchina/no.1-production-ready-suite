@@ -530,8 +530,20 @@ test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・�
   // --field-height（36px）。タッチ端末でも入力欄は 36px（Button だけが 44px になる）。
   expect(Math.round(searchBox!.height)).toBe(36);
   expect(Math.abs(searchBox!.height - selectBox!.height)).toBeLessThanOrEqual(0.5);
-  // 同じ行の SelectField と上端がそろう（desktop の横並び）。
-  if (testInfo.project.name === "desktop") expect(Math.abs(searchBox!.y - selectBox!.y)).toBeLessThanOrEqual(0.5);
+  // 選択欄 5 つが 1 行目、検索欄は 2 行目（#405）。検索欄は選択欄の行の下にあり、左端がそろう。
+  expect(searchBox!.y).toBeGreaterThan(selectBox!.y + selectBox!.height);
+  expect(Math.abs(searchBox!.x - selectBox!.x)).toBeLessThanOrEqual(0.5);
+  if (testInfo.project.name === "desktop") {
+    // desktop（1280px）では選択欄 5 つが 1 行に並び、値が省略されない幅を持つ。
+    const lastSelect = page.getByRole("combobox", { name: "並び順" });
+    const lastBox = await lastSelect.boundingBox();
+    expect(Math.abs(lastBox!.y - selectBox!.y)).toBeLessThanOrEqual(0.5);
+    // Tab の順も見た目の順と同じ: 並び順の次に検索欄へ移る。
+    await lastSelect.focus();
+    await page.keyboard.press("Tab");
+    await expect(search).toBeFocused();
+    await search.blur();
+  }
   // 角丸は Button・SelectField と同じ --radius-control（6px）。
   expect(await search.evaluate((node) => getComputedStyle(node).borderTopLeftRadius)).toBe("6px");
   expect(await select.evaluate((node) => getComputedStyle(node).borderTopLeftRadius)).toBe("6px");
