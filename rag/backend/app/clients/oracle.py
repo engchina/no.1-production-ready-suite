@@ -3496,11 +3496,22 @@ class OracleClient:
         *,
         stale_before: datetime,
         limit: int,
+        heartbeat_stale_before: datetime | None = None,
+        exclude_lease_owner: str | None = None,
     ) -> list[IngestionJob]:
-        """stale RUNNING job を再キューまたは失敗へ戻し、対象 job を返す。"""
+        """stale RUNNING job を再キューまたは失敗へ戻し、戻した job を返す。
+
+        - heartbeat のある job は、heartbeat が ``heartbeat_stale_before`` より前で途絶えたもの
+          (lease の TTL 切れ)を stale とする(#357)。省略時は ``stale_before`` を使う。
+        - heartbeat の無い job(lease 導入前の行・lease を持たない実行)は、従来どおり開始が
+          ``stale_before`` より前のものを stale とする。
+        - ``exclude_lease_owner`` の lease の job(呼び出した worker 自身が実行中の job)は戻さない。
+        """
         return await self._recover_stale_ingestion_jobs_with_oracle(
             stale_before=stale_before,
+            heartbeat_stale_before=heartbeat_stale_before or stale_before,
             limit=limit,
+            exclude_lease_owner=exclude_lease_owner,
         )
 
     async def claim_ingestion_job(
@@ -3508,9 +3519,51 @@ class OracleClient:
         job_id: str,
         *,
         started_at: datetime,
+        lease_owner: str | None = None,
     ) -> IngestionJob | None:
-        """QUEUED job を row lock 付きで RUNNING へ遷移し、実行権を獲得する。"""
-        return await self._claim_ingestion_job_with_oracle(job_id, started_at=started_at)
+        """QUEUED job を row lock 付きで RUNNING へ遷移し、実行権を獲得する。
+
+        ``lease_owner``(取込 worker の識別子)を渡すと lease を取り、``heartbeat_at`` を
+        ``started_at`` にする。以後は worker の heartbeat で lease を延長する(#357)。
+        """
+        return await self._claim_ingestion_job_with_oracle(
+            job_id, started_at=started_at, lease_owner=lease_owner
+        )
+
+    async def heartbeat_ingestion_jobs(
+        self,
+        *,
+        lease_owner: str,
+        heartbeat_at: datetime,
+    ) -> int:
+        """``lease_owner`` の lease の RUNNING job の heartbeat を更新し、更新件数を返す(#357)。"""
+        return await self._heartbeat_ingestion_jobs_with_oracle(
+            lease_owner=lease_owner, heartbeat_at=heartbeat_at
+        )
+
+    async def requeue_leased_ingestion_jobs(self, *, lease_owner: str) -> list[IngestionJob]:
+        """``lease_owner`` の lease の RUNNING job を QUEUED に戻し、戻した job を返す(#357)。
+
+        worker の停止で実行を打ち切った job を、次の worker が最初からやり直せるようにする。
+        claim で増やした attempt は戻す(停止は job の失敗ではないため)。文書・レシピの status は
+        stale の回復と同じく工程を始める前の状態へ戻す(レシピの job はレシピ行だけ)。
+        """
+        return await self._requeue_leased_ingestion_jobs_with_oracle(lease_owner=lease_owner)
+
+    async def list_dispatchable_ingestion_jobs(
+        self,
+        *,
+        limit: int,
+        exclude_job_ids: Sequence[str] = (),
+    ) -> list[IngestionJob]:
+        """worker が今 claim できる QUEUED job を古い順(FIFO)に返す(#357)。
+
+        同じ文書の別の job が RUNNING の job(claim は必ず失敗する)と、``exclude_job_ids``
+        (呼び出した worker が実行中の job)を除き、後ろの QUEUED job が流れるようにする。
+        """
+        return await self._list_dispatchable_ingestion_jobs_with_oracle(
+            limit=limit, exclude_job_ids=exclude_job_ids
+        )
 
     async def update_ingestion_job(
         self,
@@ -6712,7 +6765,9 @@ class OracleClient:
         self,
         *,
         stale_before: datetime,
+        heartbeat_stale_before: datetime,
         limit: int,
+        exclude_lease_owner: str | None,
     ) -> list[IngestionJob]:
         """stale RUNNING job を QUEUED/FAILED へ戻し、固着した文書状態も復旧する。
 
@@ -6728,8 +6783,19 @@ class OracleClient:
           PREPROCESSING/INGESTING/CHUNKING/INDEXING で取り残された文書(過去の
           デッドロックで FAILED になった job しか持たない等)は ERROR へ戻し、
           利用者が再試行できるようにする。
+
+        stale の判定は heartbeat の TTL(heartbeat の無い行は開始からの経過時間)で行い、
+        job を戻す UPDATE にも同じ条件を入れる。SELECT の後に heartbeat が打たれた job や、
+        完了した job は戻さない(#357)。
         """
         now = datetime.now(UTC)
+        stale_binds: dict[str, object] = {
+            "stale_before": stale_before,
+            "heartbeat_stale_before": heartbeat_stale_before,
+        }
+        if exclude_lease_owner is not None:
+            stale_binds["exclude_lease_owner"] = exclude_lease_owner
+        exclude_own_lease = exclude_lease_owner is not None
         stale_error_message = "取込ジョブが規定回数を超えて停止しました。"
         orphan_error_message = "取込処理が中断されたため停止しました。再実行してください。"
 
@@ -6759,20 +6825,23 @@ class OracleClient:
                 JOIN rag_documents d
                   ON d.document_id = j.document_id
                 WHERE j.status = 'RUNNING'
-                  AND COALESCE(j.started_at, j.queued_at) < :stale_before
+                  AND {stale_predicate}
                   AND {document_access_sql}
-                ORDER BY COALESCE(j.started_at, j.queued_at) ASC, j.job_id ASC
+                ORDER BY COALESCE(j.heartbeat_at, j.started_at, j.queued_at) ASC, j.job_id ASC
                 FETCH FIRST :limit ROWS ONLY
                 """,
+                    stale_predicate=_stale_running_ingestion_job_predicate_sql(
+                        alias="j", exclude_own_lease=exclude_own_lease
+                    ),
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
-                _with_tenant_bind({"stale_before": stale_before, "limit": limit}),
+                _with_tenant_bind({**stale_binds, "limit": limit}),
                 default_max_attempts=self._settings.ingestion_job_max_attempts,
             )
-            stale_jobs = [_ingestion_job_from_row(row) for row in rows]
-            for job in stale_jobs:
+            stale_jobs: list[IngestionJob] = []
+            for job in (_ingestion_job_from_row(row) for row in rows):
                 if job.attempt_count >= job.max_attempts:
-                    _execute(
+                    failed_count = _execute_count(
                         connection,
                         _render_sql(
                             """
@@ -6781,6 +6850,8 @@ class OracleClient:
                             error_message = :error_message,
                             finished_at = :finished_at
                         WHERE job_id = :job_id
+                          AND status = 'RUNNING'
+                          AND {stale_predicate}
                           AND EXISTS (
                               SELECT 1
                               FROM rag_documents d
@@ -6788,16 +6859,24 @@ class OracleClient:
                                 AND {document_access_sql}
                           )
                         """,
+                            stale_predicate=_stale_running_ingestion_job_predicate_sql(
+                                alias=None, exclude_own_lease=exclude_own_lease
+                            ),
                             document_access_sql=_oracle_access_predicate_sql(alias="d"),
                         ),
                         _with_tenant_bind(
                             {
+                                **stale_binds,
                                 "job_id": job.id,
                                 "error_message": stale_error_message,
                                 "finished_at": now,
                             }
                         ),
                     )
+                    if failed_count == 0:
+                        # SELECT の後に heartbeat が打たれた・完了した job は戻さない。
+                        continue
+                    stale_jobs.append(job)
                     if job.recipe_id is not None:
                         self._reset_document_recipe_status_inline(
                             connection,
@@ -6814,7 +6893,7 @@ class OracleClient:
                             error_message=stale_error_message,
                         )
                     continue
-                _execute(
+                requeued_count = _execute_count(
                     connection,
                     _render_sql(
                         """
@@ -6822,8 +6901,12 @@ class OracleClient:
                     SET status = 'QUEUED',
                         error_message = NULL,
                         started_at = NULL,
-                        finished_at = NULL
+                        finished_at = NULL,
+                        lease_owner = NULL,
+                        heartbeat_at = NULL
                     WHERE job_id = :job_id
+                      AND status = 'RUNNING'
+                      AND {stale_predicate}
                       AND EXISTS (
                           SELECT 1
                           FROM rag_documents d
@@ -6831,25 +6914,17 @@ class OracleClient:
                             AND {document_access_sql}
                       )
                     """,
+                        stale_predicate=_stale_running_ingestion_job_predicate_sql(
+                            alias=None, exclude_own_lease=exclude_own_lease
+                        ),
                         document_access_sql=_oracle_access_predicate_sql(alias="d"),
                     ),
-                    _with_tenant_bind({"job_id": job.id}),
+                    _with_tenant_bind({**stale_binds, "job_id": job.id}),
                 )
-                if job.recipe_id is not None:
-                    self._reset_document_recipe_status_inline(
-                        connection,
-                        recipe_id=job.recipe_id,
-                        phase=job.phase,
-                        status=_restore_recipe_status_for_job_phase(job.phase),
-                        error_message=None,
-                    )
-                else:
-                    self._reset_document_status_inline(
-                        connection,
-                        document_id=job.document_id,
-                        status=_restore_status_for_job_phase(job.phase),
-                        error_message=None,
-                    )
+                if requeued_count == 0:
+                    continue
+                stale_jobs.append(job)
+                self._restore_statuses_for_requeued_job_inline(connection, job)
 
             # QUEUED/RUNNING の job が無いのに active status で取り残された文書を
             # ERROR へ戻す(過去のデッドロックで固着した文書の自己復旧)。
@@ -6922,6 +6997,32 @@ class OracleClient:
             return stale_jobs
 
         return await self._run_transaction(operation)
+
+    @classmethod
+    def _restore_statuses_for_requeued_job_inline(
+        cls,
+        connection: OracleConnectionProtocol,
+        job: IngestionJob,
+    ) -> None:
+        """QUEUED に戻した job の対象を、工程を始める前の状態へ戻す(同じトランザクション内)。
+
+        レシピの job はレシピ行だけを戻し、文書(全レシピの集約)には触れない(#305)。
+        """
+        if job.recipe_id is not None:
+            cls._reset_document_recipe_status_inline(
+                connection,
+                recipe_id=job.recipe_id,
+                phase=job.phase,
+                status=_restore_recipe_status_for_job_phase(job.phase),
+                error_message=None,
+            )
+            return
+        cls._reset_document_status_inline(
+            connection,
+            document_id=job.document_id,
+            status=_restore_status_for_job_phase(job.phase),
+            error_message=None,
+        )
 
     @staticmethod
     def _reset_document_status_inline(
@@ -7015,8 +7116,14 @@ class OracleClient:
         job_id: str,
         *,
         started_at: datetime,
+        lease_owner: str | None,
     ) -> IngestionJob | None:
-        """QUEUED job をロックして RUNNING へ遷移する。"""
+        """QUEUED job をロックして RUNNING へ遷移し、lease を取る。
+
+        lease を持たない実行(``lease_owner`` なし)は ``heartbeat_at`` を NULL にし、stale の判定を
+        従来どおり開始からの経過時間にする(heartbeat を打つ worker がいないため)。
+        """
+        heartbeat_at = started_at if lease_owner is not None else None
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
             queued = _fetch_one(
@@ -7092,7 +7199,9 @@ class OracleClient:
                     attempt_count = :attempt_count,
                     started_at = :started_at,
                     error_message = NULL,
-                    finished_at = NULL
+                    finished_at = NULL,
+                    lease_owner = :lease_owner,
+                    heartbeat_at = :heartbeat_at
                 WHERE job_id = :job_id
                   AND EXISTS (
                       SELECT 1
@@ -7108,6 +7217,8 @@ class OracleClient:
                         "job_id": job_id,
                         "attempt_count": attempt_count,
                         "started_at": started_at,
+                        "lease_owner": lease_owner,
+                        "heartbeat_at": heartbeat_at,
                     }
                 ),
             )
@@ -7122,6 +7233,181 @@ class OracleClient:
             )
 
         return await self._run_transaction(operation)
+
+    async def _heartbeat_ingestion_jobs_with_oracle(
+        self,
+        *,
+        lease_owner: str,
+        heartbeat_at: datetime,
+    ) -> int:
+        """自分の lease の RUNNING job の heartbeat_at を更新する。
+
+        lease_owner は worker プロセスごとに一意(host・pid・乱数)なので、tenant の条件は付けない
+        (worker は request の文脈を持たない)。RUNNING でなくなった job(完了・取り消し・回復済み)
+        には書かない。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                UPDATE rag_ingestion_jobs
+                SET heartbeat_at = :heartbeat_at
+                WHERE lease_owner = :lease_owner
+                  AND status = 'RUNNING'
+                """,
+                {"lease_owner": lease_owner, "heartbeat_at": heartbeat_at},
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _requeue_leased_ingestion_jobs_with_oracle(
+        self,
+        *,
+        lease_owner: str,
+    ) -> list[IngestionJob]:
+        """自分の lease の RUNNING job を QUEUED に戻し、文書・レシピも工程の前へ戻す。"""
+
+        def operation(connection: OracleConnectionProtocol) -> list[IngestionJob]:
+            rows = _fetch_ingestion_job_rows(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    j.job_id,
+                    j.document_id,
+                    j.recipe_id,
+                    j.recipe_revision,
+                    j.status,
+                    j.phase,
+                    j.parser_profile,
+                    j.quality_warnings,
+                    j.settings_overrides,
+                    j.skip_reason,
+                    j.error_message,
+                    j.attempt_count,
+                    j.max_attempts,
+                    j.queued_at,
+                    j.started_at,
+                    j.finished_at
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.status = 'RUNNING'
+                  AND j.lease_owner = :lease_owner
+                  AND {document_access_sql}
+                ORDER BY j.job_id ASC
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"lease_owner": lease_owner}),
+                default_max_attempts=self._settings.ingestion_job_max_attempts,
+            )
+            requeued: list[IngestionJob] = []
+            for job in (_ingestion_job_from_row(row) for row in rows):
+                # claim で増やした attempt を戻す(停止は job の失敗ではない)。RUNNING かつ自分の
+                # lease のときだけ書き、その間に完了・取り消し・回復された job は戻さない。
+                count = _execute_count(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_ingestion_jobs
+                    SET status = 'QUEUED',
+                        attempt_count = CASE
+                            WHEN attempt_count > 0 THEN attempt_count - 1
+                            ELSE 0
+                        END,
+                        error_message = NULL,
+                        started_at = NULL,
+                        finished_at = NULL,
+                        lease_owner = NULL,
+                        heartbeat_at = NULL
+                    WHERE job_id = :job_id
+                      AND status = 'RUNNING'
+                      AND lease_owner = :lease_owner
+                      AND EXISTS (
+                          SELECT 1
+                          FROM rag_documents d
+                          WHERE d.document_id = rag_ingestion_jobs.document_id
+                            AND {document_access_sql}
+                      )
+                    """,
+                        document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                    ),
+                    _with_tenant_bind({"job_id": job.id, "lease_owner": lease_owner}),
+                )
+                if count == 0:
+                    continue
+                self._restore_statuses_for_requeued_job_inline(connection, job)
+                requeued.append(
+                    job.model_copy(
+                        update={
+                            "status": IngestionJobStatus.QUEUED,
+                            "attempt_count": max(job.attempt_count - 1, 0),
+                            "error_message": None,
+                            "started_at": None,
+                            "finished_at": None,
+                        }
+                    )
+                )
+            return requeued
+
+        return await self._run_transaction(operation)
+
+    async def _list_dispatchable_ingestion_jobs_with_oracle(
+        self,
+        *,
+        limit: int,
+        exclude_job_ids: Sequence[str],
+    ) -> list[IngestionJob]:
+        """claim できる QUEUED job を古い順に返す(同じ文書の job が RUNNING のものを除く)。"""
+        binds: dict[str, object] = {"limit": limit}
+        exclude_clause = ""
+        unique_excluded = _unique_optional_sequence(exclude_job_ids)
+        if unique_excluded:
+            in_sql, in_binds = _oracle_in_predicate("j.job_id", "exclude_job_id", unique_excluded)
+            exclude_clause = f"AND NOT ({in_sql})"
+            binds.update(in_binds)
+        rows = await self._fetch_ingestion_job_rows(
+            _render_sql(
+                """
+            SELECT
+                j.job_id,
+                j.document_id,
+                j.recipe_id,
+                j.recipe_revision,
+                j.status,
+                j.phase,
+                j.parser_profile,
+                j.quality_warnings,
+                j.settings_overrides,
+                j.skip_reason,
+                j.error_message,
+                j.attempt_count,
+                j.max_attempts,
+                j.queued_at,
+                j.started_at,
+                j.finished_at
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE j.status = 'QUEUED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM rag_ingestion_jobs active_job
+                  WHERE active_job.document_id = j.document_id
+                    AND active_job.status = 'RUNNING'
+              )
+              {exclude_clause}
+              AND {document_access_sql}
+            ORDER BY j.queued_at ASC, j.job_id ASC
+            FETCH FIRST :limit ROWS ONLY
+            """,
+                exclude_clause=exclude_clause,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds),
+        )
+        return [_ingestion_job_from_row(row) for row in rows]
 
     async def _update_ingestion_job_with_oracle(
         self,
@@ -9813,6 +10099,32 @@ def _bounded_float(value: object, *, default: float) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
         return default
     return min(1.0, max(0.0, float(value)))
+
+
+def _stale_running_ingestion_job_predicate_sql(
+    *,
+    alias: str | None,
+    exclude_own_lease: bool,
+) -> str:
+    """RUNNING job が stale(worker が止まった)かを判定する SQL 条件(#357)。
+
+    - heartbeat のある job: heartbeat が ``:heartbeat_stale_before`` より前(lease の TTL 切れ)。
+    - heartbeat の無い job(lease 導入前の行など): 開始が ``:stale_before`` より前。
+    - ``exclude_own_lease``: ``:exclude_lease_owner`` の lease の job は stale にしない。
+    """
+    prefix = f"{alias}." if alias else ""
+    predicate = (
+        "("
+        f"({prefix}heartbeat_at IS NULL"
+        f" AND COALESCE({prefix}started_at, {prefix}queued_at) < :stale_before)"
+        f" OR {prefix}heartbeat_at < :heartbeat_stale_before"
+        ")"
+    )
+    if exclude_own_lease:
+        predicate += (
+            f" AND ({prefix}lease_owner IS NULL OR {prefix}lease_owner <> :exclude_lease_owner)"
+        )
+    return predicate
 
 
 def _fetch_ingestion_job_rows(
@@ -12869,6 +13181,8 @@ CREATE TABLE {table_name} (
     queued_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at       TIMESTAMP WITH TIME ZONE,
     finished_at      TIMESTAMP WITH TIME ZONE,
+    lease_owner      VARCHAR2(128),
+    heartbeat_at     TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck
@@ -12893,6 +13207,9 @@ CREATE INDEX {table_name}_document_idx
 
 CREATE INDEX {table_name}_recipe_idx
     ON {table_name} (recipe_id, status, queued_at DESC);
+
+CREATE INDEX {table_name}_lease_idx
+    ON {table_name} (lease_owner, status);
 """.strip()
 
 

@@ -497,6 +497,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_document_recipes",
             sql=_default_document_recipes_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260928_004_ingestion_jobs_lease",
+            table_name="rag_ingestion_jobs",
+            sql=_ingestion_jobs_lease_migration_sql(),
+        ),
     ]
 
 
@@ -995,6 +1000,51 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (settings_overrides JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _ingestion_jobs_lease_migration_sql() -> str:
+    """rag_ingestion_jobs に取込 worker の lease 列を追加する(冪等。#357)。
+
+    lease_owner(worker の識別子)と heartbeat_at、自分の lease の job を引く index を足す。
+
+    既存の行は NULL のままにする。heartbeat_at が NULL の RUNNING job は、従来どおり開始からの
+    経過時間(RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS)で stale を判定する。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'LEASE_OWNER';
+
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (lease_owner VARCHAR2(128))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'HEARTBEAT_AT';
+
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD (heartbeat_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_INGESTION_JOBS_LEASE_IDX';
+
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_ingestion_jobs_lease_idx '
+            || 'ON rag_ingestion_jobs (lease_owner, status)';
     END IF;
 END;
 /

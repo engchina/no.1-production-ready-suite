@@ -326,8 +326,14 @@ async def test_process_isolation_runner_uses_job_subprocess_timeout(
     """process isolation は parser HTTP timeout ではなく job 全体 timeout を使う。"""
     captured: dict[str, float | None] = {}
 
-    async def fake_run(job_id: str, *, timeout_seconds: float | None = None) -> None:
+    async def fake_run(
+        job_id: str,
+        *,
+        timeout_seconds: float | None = None,
+        lease_owner: str | None = None,
+    ) -> None:
         assert job_id == "job-subprocess-timeout"
+        assert lease_owner is None
         captured["timeout_seconds"] = timeout_seconds
 
     monkeypatch.setattr(ingestion_worker, "run_ingestion_job_subprocess", fake_run)
@@ -514,8 +520,8 @@ async def test_mark_running_job_failed_restores_cancelled_recipe_job(
     assert fake.recipe_status == FileStatus.UPLOADED
 
 
-async def test_default_fetch_uses_fifo_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """キュー消費は古い順(FIFO)で取り出し、滞留 job を starvation させない。"""
+async def test_default_fetch_excludes_inflight_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """キュー消費は claim できる QUEUED job を取り、自分が実行中の job は除く(#357)。"""
     captured: dict[str, object] = {}
 
     async def fake_list(self: object, **kwargs: object) -> Sequence[IngestionJob]:
@@ -523,15 +529,15 @@ async def test_default_fetch_uses_fifo_order(monkeypatch: pytest.MonkeyPatch) ->
         return []
 
     monkeypatch.setattr(
-        "app.clients.oracle.OracleClient.list_ingestion_jobs",
+        "app.clients.oracle.OracleClient.list_dispatchable_ingestion_jobs",
         fake_list,
     )
-    result = await ingestion_worker._default_fetch_queued(5)
+    worker = IngestionQueueWorker(settings=get_settings(), schema_ready=_schema_ready)
+    worker._inflight.update({"job-b", "job-a"})
+    result = await worker._default_fetch_queued(5)
 
     assert result == []
-    assert captured["oldest_first"] is True
-    assert captured["status"] is IngestionJobStatus.QUEUED
-    assert captured["limit"] == 5
+    assert captured == {"limit": 5, "exclude_job_ids": ["job-a", "job-b"]}
 
 
 async def test_worker_recovers_stale_jobs_before_consuming() -> None:

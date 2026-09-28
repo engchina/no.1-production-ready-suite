@@ -30,6 +30,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "active_prompt_version_id" in sql
     assert "-- section: ingestion_jobs" in sql
     assert "CREATE TABLE rag_ingestion_jobs" in sql
+    assert "lease_owner      VARCHAR2(128)," in sql
+    assert "heartbeat_at     TIMESTAMP WITH TIME ZONE," in sql
+    assert "CREATE INDEX rag_ingestion_jobs_lease_idx" in sql
     assert "-- section: ingestion_segments" in sql
     assert "CREATE TABLE rag_ingestion_segments" in sql
     assert "CREATE TABLE rag_chunks" in sql
@@ -289,7 +292,19 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # レシピ行の無い文書にだけレシピ1を補う（#341）。削除したレシピ1は戻さない。
     assert "-- migration: 20260928_003_default_document_recipes" in sql
     assert "SELECT 1 FROM rag_document_recipes existing" in sql
-    assert len(statements) == 66
+    # 取込 worker の lease 列（#357）。既存の行は NULL のまま（heartbeat の無い行は従来の判定）。
+    lease_migration = sql.split("-- migration: 20260928_004_ingestion_jobs_lease", 1)[1]
+    assert "column_name = 'LEASE_OWNER'" in lease_migration
+    assert "ALTER TABLE rag_ingestion_jobs ADD (lease_owner VARCHAR2(128))" in lease_migration
+    assert "column_name = 'HEARTBEAT_AT'" in lease_migration
+    assert (
+        "ALTER TABLE rag_ingestion_jobs ADD (heartbeat_at TIMESTAMP WITH TIME ZONE)"
+        in lease_migration
+    )
+    assert "index_name = 'RAG_INGESTION_JOBS_LEASE_IDX'" in lease_migration
+    assert "ON rag_ingestion_jobs (lease_owner, status)" in lease_migration
+    assert "UPDATE rag_ingestion_jobs" not in lease_migration
+    assert len(statements) == 67
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -351,6 +366,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_001_retire_dashboard_permission",
         "20260928_002_answer_record_owner",
         "20260928_003_default_document_recipes",
+        "20260928_004_ingestion_jobs_lease",
     ]
 
 

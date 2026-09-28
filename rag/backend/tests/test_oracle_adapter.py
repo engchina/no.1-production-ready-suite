@@ -1105,8 +1105,11 @@ async def test_oracle_client_transition_ingestion_job_returns_none_when_no_row_m
     assert "status IN (:from_status_0)" in pool.connection.calls[0].statement
 
 
-async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
+async def test_oracle_client_recovers_stale_ingestion_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """stale RUNNING job は試行回数に応じて再キューまたは失敗へ戻す。"""
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
     pool = FakeOraclePool(
         execute_results=[
@@ -1136,11 +1139,24 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     select_call = pool.connection.calls[0]
     assert "j.status = 'RUNNING'" in select_call.statement
     assert "COALESCE(j.started_at, j.queued_at) < :stale_before" in select_call.statement
+    # heartbeat のある job は lease の TTL で判定する(#357)。省略時は stale_before と同じ。
+    assert "j.heartbeat_at IS NULL" in select_call.statement
+    assert "j.heartbeat_at < :heartbeat_stale_before" in select_call.statement
+    assert "exclude_lease_owner" not in select_call.statement
     assert select_call.parameters["stale_before"] == stale_at
+    assert select_call.parameters["heartbeat_stale_before"] == stale_at
     assert select_call.parameters["limit"] == 10
-    update_statements = [call.statement for call in pool.connection.calls[1:]]
-    assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
-    assert any("SET status = 'FAILED'" in statement for statement in update_statements)
+    update_calls = [
+        call for call in pool.connection.calls[1:] if "UPDATE rag_ingestion_jobs" in call.statement
+    ]
+    requeue_call = next(call for call in update_calls if "SET status = 'QUEUED'" in call.statement)
+    assert any("SET status = 'FAILED'" in call.statement for call in update_calls)
+    # 戻す UPDATE も RUNNING かつ stale のときだけ書き、lease を外す。
+    for call in update_calls:
+        assert "AND status = 'RUNNING'" in call.statement
+        assert "heartbeat_at < :heartbeat_stale_before" in call.statement
+    assert "lease_owner = NULL" in requeue_call.statement
+    assert "heartbeat_at = NULL" in requeue_call.statement
     # 固着防止: 再キュー/失敗時は文書状態も復旧する。
     document_updates = [
         call for call in pool.connection.calls if "UPDATE rag_documents" in call.statement
@@ -1151,8 +1167,11 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     assert not any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
 
 
-async def test_oracle_client_recovers_stale_recipe_jobs_without_touching_document() -> None:
+async def test_oracle_client_recovers_stale_recipe_jobs_without_touching_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """recipe job の再試行/上限超過は対象 recipe の状態だけを復旧する。"""
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
     retry_job = {
         **_oracle_ingestion_job_row(
@@ -1261,8 +1280,11 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
     assert pool.connection.commits == 1
 
 
-async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_column() -> None:
+async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """旧 queue table では既定 max_attempts を補って stale job を回復する。"""
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
     pool = FakeOraclePool(
         execute_results=[
@@ -1296,6 +1318,205 @@ async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_
     assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
 
 
+async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> None:
+    """SELECT の後に heartbeat が打たれた(0 行更新)job は、文書も戻さず回復の結果に含めない。"""
+    stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
+    heartbeat_stale_at = datetime(2026, 1, 2, 1, 3, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                _oracle_ingestion_job_row(
+                    status="RUNNING",
+                    attempt_count=1,
+                    max_attempts=3,
+                    started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                )
+            ],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    recovered = await client.recover_stale_ingestion_jobs(
+        stale_before=stale_at,
+        heartbeat_stale_before=heartbeat_stale_at,
+        limit=10,
+        exclude_lease_owner="host:1:worker",
+    )
+
+    assert recovered == []
+    select_call = pool.connection.calls[0]
+    assert "j.lease_owner <> :exclude_lease_owner" in select_call.statement
+    assert select_call.parameters["exclude_lease_owner"] == "host:1:worker"
+    assert select_call.parameters["heartbeat_stale_before"] == heartbeat_stale_at
+    requeue_call = next(
+        call for call in pool.connection.calls if "SET status = 'QUEUED'" in call.statement
+    )
+    assert "lease_owner <> :exclude_lease_owner" in requeue_call.statement
+    assert requeue_call.parameters["exclude_lease_owner"] == "host:1:worker"
+    assert not any("UPDATE rag_documents" in call.statement for call in pool.connection.calls)
+
+
+async def test_oracle_client_claims_ingestion_job_with_lease() -> None:
+    """lease_owner を渡した claim は lease を取り、heartbeat_at を開始時刻にする(#357)。"""
+    started_at = datetime(2026, 1, 2, 0, 2, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [{"document_id": "doc-1"}],
+            [{"document_id": "doc-1"}],
+            [_oracle_ingestion_job_row()],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    claimed = await client.claim_ingestion_job(
+        "job-1", started_at=started_at, lease_owner="host:1:worker"
+    )
+
+    assert claimed is not None
+    update_call = pool.connection.calls[3]
+    assert "lease_owner = :lease_owner" in update_call.statement
+    assert "heartbeat_at = :heartbeat_at" in update_call.statement
+    assert update_call.parameters["lease_owner"] == "host:1:worker"
+    assert update_call.parameters["heartbeat_at"] == started_at
+
+
+async def test_oracle_client_heartbeats_own_running_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """heartbeat は自分の lease の RUNNING job だけを更新する。"""
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 2, raising=False)
+    heartbeat_at = datetime(2026, 1, 2, 0, 3, tzinfo=UTC)
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.heartbeat_ingestion_jobs(
+        lease_owner="host:1:worker", heartbeat_at=heartbeat_at
+    )
+
+    assert updated == 2
+    [call] = pool.connection.calls
+    assert "SET heartbeat_at = :heartbeat_at" in call.statement
+    assert "WHERE lease_owner = :lease_owner" in call.statement
+    assert "AND status = 'RUNNING'" in call.statement
+    assert call.parameters == {"lease_owner": "host:1:worker", "heartbeat_at": heartbeat_at}
+    assert pool.connection.commits == 1
+
+
+async def test_oracle_client_requeues_own_leased_jobs_without_consuming_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """停止時は自分の lease の RUNNING job を QUEUED に戻し、claim で増やした attempt を戻す。"""
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
+    recipe_job = {
+        **_oracle_ingestion_job_row(
+            job_id="job-recipe",
+            status="RUNNING",
+            attempt_count=1,
+            started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        ),
+        "recipe_id": "recipe-2",
+        "recipe_revision": 1,
+        "phase": "EXTRACT",
+    }
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                _oracle_ingestion_job_row(
+                    status="RUNNING",
+                    attempt_count=2,
+                    started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                ),
+                recipe_job,
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    requeued = await client.requeue_leased_ingestion_jobs(lease_owner="host:1:worker")
+
+    assert [(job.id, job.status, job.attempt_count) for job in requeued] == [
+        ("job-1", IngestionJobStatus.QUEUED, 1),
+        ("job-recipe", IngestionJobStatus.QUEUED, 0),
+    ]
+    select_call = pool.connection.calls[0]
+    assert "j.status = 'RUNNING'" in select_call.statement
+    assert "j.lease_owner = :lease_owner" in select_call.statement
+    job_updates = [
+        call for call in pool.connection.calls if "UPDATE rag_ingestion_jobs" in call.statement
+    ]
+    assert len(job_updates) == 2
+    for call in job_updates:
+        assert "SET status = 'QUEUED'" in call.statement
+        assert "WHEN attempt_count > 0 THEN attempt_count - 1" in call.statement
+        assert "AND status = 'RUNNING'" in call.statement
+        assert "AND lease_owner = :lease_owner" in call.statement
+        assert "lease_owner = NULL" in call.statement
+        assert call.parameters["lease_owner"] == "host:1:worker"
+    # 文書単位の job は文書を、レシピの job はレシピ行だけを工程の前へ戻す(#305)。
+    document_update = next(
+        call for call in pool.connection.calls if "UPDATE rag_documents" in call.statement
+    )
+    assert document_update.parameters["document_id"] == "doc-1"
+    assert document_update.parameters["status"] == "UPLOADED"
+    recipe_update = next(
+        call for call in pool.connection.calls if "UPDATE rag_document_recipes r" in call.statement
+    )
+    assert recipe_update.parameters["recipe_id"] == "recipe-2"
+    assert recipe_update.parameters["status"] == "PREPROCESSED"
+    assert pool.connection.commits == 1
+
+
+async def test_oracle_client_requeue_skips_job_finished_after_select() -> None:
+    """SELECT の後に完了・取り消し・回復された(0 行更新)job は戻さず、文書にも触れない。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                _oracle_ingestion_job_row(
+                    status="RUNNING",
+                    attempt_count=1,
+                    started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                )
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    requeued = await client.requeue_leased_ingestion_jobs(lease_owner="host:1:worker")
+
+    assert requeued == []
+    assert not any("UPDATE rag_documents" in call.statement for call in pool.connection.calls)
+
+
+async def test_oracle_client_lists_dispatchable_ingestion_jobs() -> None:
+    """dispatch は同じ文書の job が RUNNING の QUEUED job と、自分が実行中の job を除く。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row(job_id="job-2")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    jobs = await client.list_dispatchable_ingestion_jobs(
+        limit=2, exclude_job_ids=["job-1", "job-3", "job-1"]
+    )
+
+    assert [job.id for job in jobs] == ["job-2"]
+    [call] = pool.connection.calls
+    assert "j.status = 'QUEUED'" in call.statement
+    assert "active_job.status = 'RUNNING'" in call.statement
+    assert "NOT (j.job_id IN (:exclude_job_id_0, :exclude_job_id_1))" in call.statement
+    assert "ORDER BY j.queued_at ASC, j.job_id ASC" in call.statement
+    assert "FETCH FIRST :limit ROWS ONLY" in call.statement
+    assert call.parameters["exclude_job_id_0"] == "job-1"
+    assert call.parameters["exclude_job_id_1"] == "job-3"
+    assert call.parameters["limit"] == 2
+
+
+async def test_oracle_client_lists_dispatchable_jobs_without_exclusions() -> None:
+    """実行中の job が無ければ除外の条件を付けない。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    assert await client.list_dispatchable_ingestion_jobs(limit=1) == []
+    assert "exclude_job_id" not in pool.connection.calls[0].statement
+
+
 async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     """取込 job 実行前に QUEUED 行を row lock 付きで claim する。"""
     started_at = datetime(2026, 1, 2, 0, 2, tzinfo=UTC)
@@ -1324,6 +1545,9 @@ async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     assert "SET status = 'RUNNING'" in update_call.statement
     assert update_call.parameters["attempt_count"] == 1
     assert update_call.parameters["started_at"] == started_at
+    # lease を持たない実行は heartbeat を NULL にし、従来の経過時間で stale を判定する(#357)。
+    assert update_call.parameters["lease_owner"] is None
+    assert update_call.parameters["heartbeat_at"] is None
 
 
 async def test_oracle_client_replaces_and_lists_ingestion_segments() -> None:
