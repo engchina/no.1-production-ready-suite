@@ -63,8 +63,6 @@ ALLOWED_COMPOSE_SERVICES=(
   parser-marker
   parser-oci-genai-vision
   parser-oci-document-understanding
-  pipeline-generation
-  pipeline-retrieval
 )
 REQUIRED_COMPOSE_SERVICES=(backend ingestion-worker parser-unstructured)
 COMPOSE_SERVICES=()

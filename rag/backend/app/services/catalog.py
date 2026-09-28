@@ -238,6 +238,9 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/generation",
         dev_port=18033,
         execution_policy="in_process_when_disabled",
+        # 処理は backend 内の実装と同じで、起動・停止は処理の場所を変えるだけ。他のステージと同じく
+        # 操作を出さず、配備もしない（#278）。
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-guardrail",
@@ -292,6 +295,9 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/retrieval",
         dev_port=18038,
         execution_policy="in_process_when_disabled",
+        # 処理は backend 内の実装と同じで、起動・停止は処理の場所を変えるだけ。他のステージと同じく
+        # 操作を出さず、配備もしない（#278）。
+        deployable=False,
     ),
 )
 
