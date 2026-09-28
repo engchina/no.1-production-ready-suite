@@ -47,7 +47,10 @@ for (const theme of ["light", "dark"] as const) {
         const style = getComputedStyle(element);
         return { background: style.backgroundColor, color: style.color, cursor: style.cursor };
       });
-    expect(await look("save")).toEqual(await look("disabled"));
+    // Button は transition-colors で色を変えるため、loading に入った直後（CI では約 100ms 後に読んでいた）は
+    // まだ途中の色になっている。遷移が終わるのを待って比べる（#391）。
+    const disabledLook = await look("disabled");
+    await expect.poll(() => look("save")).toEqual(disabledLook);
     await expect(save).toContainText("保存");
     await page.screenshot({ path: testInfo.outputPath(`button-loading-${theme}.png`) });
 
