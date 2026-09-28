@@ -169,6 +169,29 @@ def test_chunk_preview_reuses_review_extraction_without_state_change(
     )
 
 
+def test_chunk_preview_docrag_requires_docling_layout(monkeypatch: MonkeyPatch) -> None:
+    """DocRAG 親子階層のプレビューは、Docling 以外の解析結果なら理由付きの 422 にする。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    recipe_id = _first_recipe_id(document_id)
+    job_response = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs")
+    assert job_response.status_code == 200
+    _run_job(cast(str, job_response.json()["data"]["id"]))
+
+    out_of_range = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
+        json={"chunking_strategy": "docrag_small_to_big", "docrag_child_target_chars": 2000},
+    )
+    response = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
+        json={"chunking_strategy": "docrag_small_to_big", "docrag_child_target_chars": 600},
+    )
+
+    assert out_of_range.status_code == 422
+    assert response.status_code == 422
+    assert "Docling" in str(response.json())
+
+
 def test_chunk_preview_rejects_recipe_without_review_artifact(
     monkeypatch: MonkeyPatch,
 ) -> None:

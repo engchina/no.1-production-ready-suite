@@ -373,7 +373,7 @@ export const ja = {
   "settings.chunking.overview.description":
     "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、backend 内処理または pipeline-chunking へ渡す方式として選択できます。",
   "settings.chunking.serviceNote":
-    "ここで選ぶ 7 個は分割方式です。pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
+    "ここで選ぶ 7 個は分割方式です。DocRAG 親子階層は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
   "settings.chunking.selected": "選択中",
   "settings.chunking.recommendedFor": "推奨用途",
@@ -385,9 +385,9 @@ export const ja = {
   "settings.chunking.strategy.recursive_character": "再帰文字分割",
   "settings.chunking.strategy.recursive_character.description":
     "章節→文→文字の順に固定長で分割(LangChain 風)",
-  "settings.chunking.strategy.hierarchical_parent_child": "親子階層",
-  "settings.chunking.strategy.hierarchical_parent_child.description":
-    "親 chunk を子 chunk へ再分割し子を索引(AutoMerging 風)",
+  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子階層",
+  "settings.chunking.strategy.docrag_small_to_big.description":
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書では分割が失敗します）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -400,12 +400,26 @@ export const ja = {
   "settings.chunking.strategy.fixed_delimiter": "固定分割符",
   "settings.chunking.strategy.fixed_delimiter.description":
     "指定した分割符文字列で機械的に分割",
-  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子分割",
-  "settings.chunking.strategy.docrag_small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出し、親の節を回答文脈に使う（文書解析が Docling のときに利用）",
   "settings.chunking.params.title": "戦略別パラメータ",
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",
+  "settings.chunking.params.docragDescription":
+    "DocRAG 親子階層で使う子 chunk と親 chunk の大きさを設定します。既定値は rag_poc と同じです。親は番号付きの機能見出しもまたぎません。",
+  "settings.chunking.params.docragChildTargetChars": "子チャンク目標文字数",
+  "settings.chunking.params.docragChildTargetCharsHint":
+    "検索に使う子の大きさ（300〜1,600、既定 1,000）。超える本文は文末で分けます。",
+  "settings.chunking.params.docragTableChildTargetChars": "表の子チャンク目標文字数",
+  "settings.chunking.params.docragTableChildTargetCharsHint":
+    "この文字数を超える表だけ行グループに分け、列見出しを繰り返し付けます（300〜8,000、既定 3,000）。",
+  "settings.chunking.params.docragParentTargetChars": "親チャンク目標文字数",
+  "settings.chunking.params.docragParentTargetCharsHint":
+    "回答文脈に使う親の大きさ（1,200〜10,000、既定 6,000）。",
+  "settings.chunking.params.docragParentMaxPages": "親チャンク最大ページ数",
+  "settings.chunking.params.docragParentMaxPagesHint":
+    "1 つの親がまたげるページ数（1〜5、既定 3）。",
+  "settings.chunking.params.docragParentMaxChildren": "親チャンク最大 child 数",
+  "settings.chunking.params.docragParentMaxChildrenHint":
+    "1 つの親に入れる子の数（3〜20、既定 12）。",
   "settings.chunking.params.fixedSizeDescription":
     "固定長戦略で使う chunk サイズと overlap を設定します。",
   "settings.chunking.params.delimiterTitle": "固定分割符",
@@ -428,9 +442,7 @@ export const ja = {
   "settings.chunking.params.semanticSummary": "{size}文字超のみ再分割 / {overlap}",
   "settings.chunking.params.noOverlap": "重複なし",
   "settings.chunking.params.withOverlap": "重複 {overlap}文字",
-  "settings.chunking.params.childSize": "子 chunk サイズ(文字)",
   "settings.chunking.params.minChars": "最小 chunk 文字数",
-  "settings.chunking.params.childSizeHint": "親子階層戦略でのみ使用します。",
   "settings.chunking.params.minCharsHint": "0 で微小 chunk の吸収を無効化します。",
   "settings.chunking.params.contextHeader": "文脈ヘッダを検索対象へ追加",
   "settings.chunking.params.contextHeaderHint":
@@ -820,13 +832,13 @@ export const ja = {
   "settings.generation.recommended.tuning": "調整",
   "settings.generation.profile.grounded_concise": "根拠重視・簡潔",
   "settings.generation.profile.grounded_concise.description":
-    "現行の標準 system prompt(既定)",
+    "質問へ直接答え、必要な根拠だけを簡潔にまとめる(既定)",
   "settings.generation.profile.detailed_cited": "詳細・出典明示",
   "settings.generation.profile.detailed_cited.description":
-    "根拠ごとに出典 ID を明示する詳細回答",
+    "段落ごとに出典 ID を明示する詳細回答",
   "settings.generation.profile.strict_extractive": "厳密抽出",
   "settings.generation.profile.strict_extractive.description":
-    "context の事実のみ・推測禁止・無ければ無いと回答",
+    "根拠の文をそのまま抜き出す・推測禁止・無ければ無いと回答",
   "settings.generation.profile.structured_json": "構造化 JSON",
   "settings.generation.profile.structured_json.description":
     "answer/evidence/sources を JSON で返す",
@@ -845,7 +857,7 @@ export const ja = {
   "settings.generation.actions.reset": "変更を破棄",
   "settings.generation.actions.unsaved": "未保存の変更があります。",
   "settings.generation.actions.conflict":
-    "別の操作で設定が更新されました。画面を再読み込みしてから保存してください。",
+    "別の操作で回答スタイルが更新されたため、最新の設定を読み込みました。内容を確認し、必要ならもう一度選んで保存してください。",
   "settings.generation.loadError": "回答スタイル設定を取得できませんでした。",
   "settings.generation.saveError": "回答スタイル設定を保存できませんでした。",
   "settings.generation.custom.manageLink": "プロンプト版を管理 →",

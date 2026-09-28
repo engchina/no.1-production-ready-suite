@@ -20,10 +20,14 @@ class _OciGuardrailsLike(Protocol):
     def inspect_text(self, text: str) -> GuardrailInspection | None: ...
 
 
+# 英語の複合語は空白だけでなく `_` / `-` 区切りや連結(system_prompt / system-prompt /
+# systemprompt)でも同じ対象として扱う。
+_WORD_SEP = r"[\s_\-]*"
 PROMPT_INJECTION_TARGET_PATTERN = re.compile(
-    r"(?:system\s+(?:prompt|instructions?)|your\s+prompt|developer\s+message|"
-    r"hidden\s+(?:prompt|instruction)s?|(?:previous|prior)\s+instructions?|"
-    r"safety\s+(?:rules|instructions?)|システム\s*プロンプト|開発者\s*メッセージ|"
+    rf"(?:system{_WORD_SEP}(?:prompt|instructions?)|your{_WORD_SEP}prompt|"
+    rf"developer{_WORD_SEP}message|hidden{_WORD_SEP}(?:prompt|instruction)s?|"
+    rf"(?:previous|prior){_WORD_SEP}instructions?|safety{_WORD_SEP}(?:rules|instructions?)|"
+    r"システム\s*プロンプト|開発者\s*メッセージ|"
     r"(?:これまで|以前|前)\s*の?\s*指示|(?:内部|安全)\s*(?:指示|ルール)|"
     r"隠(?:し|された)\s*(?:指示|プロンプト))",
     re.IGNORECASE,
@@ -37,7 +41,7 @@ PROMPT_INJECTION_ACTION_PATTERN = re.compile(
 PROMPT_DIRECT_DISCLOSURE_PATTERN = re.compile(
     r"(?:(?:システム\s*プロンプト|開発者\s*メッセージ|内部\s*指示)"
     r"\s*(?:の\s*内容\s*)?(?:を\s*)?(?:教え|見せ)|"
-    r"(?:tell|give)\s+me\s+(?:your|the)\s+(?:system\s+)?prompt)",
+    rf"(?:tell|give)\s+me\s+(?:your|the)\s+(?:system{_WORD_SEP})?prompt)",
     re.IGNORECASE,
 )
 GROUNDING_TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
@@ -57,9 +61,14 @@ MIN_GROUNDING_RATIO = 0.12
 SENSITIVE_VALUE_MASK = "[機微情報]"
 SENSITIVE_IDENTIFIER_MESSAGE = "個人番号や口座番号などの機微な識別子をマスクしました。"
 SENSITIVE_LABEL_SEPARATOR = r"\s*(?:[:：#-]|は|が|を|は、)?\s*"
-PERSONAL_NUMBER_VALUE = r"(?<!\d)(?:\d[\s-]?){11}\d(?!\d)"
-BANK_ACCOUNT_VALUE = r"(?<!\d)(?:\d[\s-]?){6,7}\d(?!\d)"
-PHONE_NUMBER_VALUE = r"(?<!\d)0\d{1,4}[\s-]?\d{1,4}[\s-]?\d{3,4}(?!\d)"
+# 数字の区切り。ASCII の `-` に加え、日本語入力で混ざりやすい全角ハイフン・長音記号・
+# ダッシュ類も区切りとして扱う(区切りの違いでマスクをすり抜けないようにする)。
+DIGIT_SEPARATOR = r"[\s\-\u2010-\u2015\u2212\u30fc\uff0d]"
+PERSONAL_NUMBER_VALUE = rf"(?<!\d)(?:\d{DIGIT_SEPARATOR}?){{11}}\d(?!\d)"
+BANK_ACCOUNT_VALUE = rf"(?<!\d)(?:\d{DIGIT_SEPARATOR}?){{6,7}}\d(?!\d)"
+PHONE_NUMBER_VALUE = (
+    rf"(?<!\d)0\d{{1,4}}{DIGIT_SEPARATOR}?\d{{1,4}}{DIGIT_SEPARATOR}?\d{{3,4}}(?!\d)"
+)
 SENSITIVE_IDENTIFIER_PATTERNS = [
     re.compile(
         rf"(?P<label>(?:マイナンバー|個人番号){SENSITIVE_LABEL_SEPARATOR})"
@@ -203,7 +212,7 @@ class GuardrailPolicy:
     def _local_validate_answer(self, answer: str, context: str | None = None) -> GuardrailResult:
         """in-process(local)決定論ガードレール(回答側)。"""
         findings: list[GuardrailFinding] = []
-        if "OCI_SECRET" in answer or "ORACLE_PASSWORD" in answer:
+        if _looks_like_secret_leakage(answer):
             return GuardrailResult(
                 allowed=False,
                 sanitized_text="機密情報を含む可能性があるため回答を表示できません。",
@@ -337,9 +346,27 @@ def _looks_like_sql_mutation(text: str) -> bool:
     return bool(SQL_MUTATION_INTENT_PATTERN.search(text))
 
 
+SECRET_MARKERS = ("OCI_SECRET", "ORACLE_PASSWORD")
+
+
+def _looks_like_secret_leakage(text: str) -> bool:
+    """secret らしき文字列を、全角・不可視文字の変体も含めて検出する。"""
+    normalized = _strip_invisible(unicodedata.normalize("NFKC", text)).upper()
+    return any(marker in normalized for marker in SECRET_MARKERS)
+
+
+def _strip_invisible(text: str) -> str:
+    """ゼロ幅空白・ソフトハイフンなど表示されない書式文字(Unicode Cf)を取り除く。
+
+    NFKC はこれらを残すため、`sys\u200btem prompt` のように語の途中へ挟むと
+    検出パターンをすり抜けられる。安全判定用の文字列からだけ取り除く。
+    """
+    return "".join(char for char in text if unicodedata.category(char) != "Cf")
+
+
 def _normalize_for_safety(text: str) -> str:
-    """NFKC・空白・大小文字を正規化し、全角変体による回避を防ぐ。"""
-    normalized = unicodedata.normalize("NFKC", text)
+    """NFKC・不可視文字・空白・大小文字を正規化し、変体文字による回避を防ぐ。"""
+    normalized = _strip_invisible(unicodedata.normalize("NFKC", text))
     return _normalize_query_text(normalized).casefold()
 
 
@@ -382,13 +409,19 @@ def _mask_spans(text: str, spans: tuple[object, ...]) -> str:
 
 
 def _mask_sensitive_identifiers(text: str) -> tuple[str, list[GuardrailFinding]]:
-    """個人番号・口座番号などの機微な識別子をマスクする。"""
-    masked = text
-    matched = False
-    for pattern in SENSITIVE_IDENTIFIER_PATTERNS:
-        masked, count = pattern.subn(_sensitive_replacement, masked)
-        matched = matched or count > 0
-    if not matched:
+    """個人番号・口座番号などの機微な識別子をマスクする。
+
+    全角英数字・全角記号(`＠` `－`)や不可視文字を挟んだ値もマスクするため、NFKC と
+    不可視文字の除去をした文字列でも検出する。そちらで同数以上を検出できたときは、
+    正規化した文字列をマスクして返す(原文の表記は保てないが、機微な値を残さない)。
+    """
+    masked, count = _apply_sensitive_patterns(text)
+    normalized = _strip_invisible(unicodedata.normalize("NFKC", text))
+    if normalized != text:
+        normalized_masked, normalized_count = _apply_sensitive_patterns(normalized)
+        if normalized_count > 0 and normalized_count >= count:
+            masked, count = normalized_masked, normalized_count
+    if count == 0:
         return masked, []
     return masked, [
         GuardrailFinding(
@@ -397,6 +430,16 @@ def _mask_sensitive_identifiers(text: str) -> tuple[str, list[GuardrailFinding]]
             message=SENSITIVE_IDENTIFIER_MESSAGE,
         )
     ]
+
+
+def _apply_sensitive_patterns(text: str) -> tuple[str, int]:
+    """機微な識別子のパターンを順に適用し、マスク後の文字列と置換件数を返す。"""
+    masked = text
+    total = 0
+    for pattern in SENSITIVE_IDENTIFIER_PATTERNS:
+        masked, count = pattern.subn(_sensitive_replacement, masked)
+        total += count
+    return masked, total
 
 
 def _sensitive_replacement(match: re.Match[str]) -> str:

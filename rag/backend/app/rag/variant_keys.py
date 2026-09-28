@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from app.config import Settings
+from app.config import DOCRAG_CHUNKING_SETTING_FIELDS, Settings
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v4"
@@ -68,11 +68,14 @@ _CHUNK_SET_FIELDS: tuple[str, ...] = (
     "rag_chunking_strategy",
     "rag_chunk_size",
     "rag_chunk_overlap",
-    "rag_chunk_child_size",
     "rag_chunk_min_chars",
     "rag_chunk_delimiter",
     "rag_chunk_context_header_enabled",
 )
+# 削除した親子階層(#271)の子 chunk サイズ(rag_chunk_child_size の既定値)。hash 入力から
+# 外すと既存の chunk_set_id がすべて変わるため、固定値で残して ID を保つ。
+_REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE = 320
+_DOCRAG_CHUNKING_STRATEGY = "docrag_small_to_big"
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
 _METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled", "rag_asset_summary_enabled")
@@ -95,6 +98,24 @@ def _digest(prefix: str, payload: dict[str, object]) -> str:
 def _fields(settings: Settings, names: tuple[str, ...]) -> dict[str, object]:
     """Settings から対象フィールド値を取り出す(欠落は None)。"""
     return {name: getattr(settings, name, None) for name in names}
+
+
+def chunk_set_subset(settings: Settings) -> dict[str, object]:
+    """chunk_set_id を決める分割軸を返す。
+
+    DocRAG 親子階層のパラメータは、その方式のときだけ、しかも既定値から変えた項目だけを
+    加える。既定値のままなら追加前と同じ ID になり、既存の chunk_set をそのまま使える。
+    """
+    subset: dict[str, object] = {
+        **_fields(settings, _CHUNK_SET_FIELDS),
+        "rag_chunk_child_size": _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE,
+    }
+    if getattr(settings, "rag_chunking_strategy", None) == _DOCRAG_CHUNKING_STRATEGY:
+        for name in DOCRAG_CHUNKING_SETTING_FIELDS:
+            value = getattr(settings, name, None)
+            if value != Settings.model_fields[name].default:
+                subset[name] = value
+    return subset
 
 
 def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
@@ -146,7 +167,7 @@ def compute_chunk_set_id(source_sha256: str, settings: Settings) -> str:
     payload: dict[str, object] = {
         "v": KEY_VERSION,
         "er": extraction_recipe_id,
-        **_fields(settings, _CHUNK_SET_FIELDS),
+        **chunk_set_subset(settings),
     }
     return _digest("cs", payload)
 

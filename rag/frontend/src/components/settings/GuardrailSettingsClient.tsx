@@ -86,11 +86,13 @@ export function GuardrailSettingsClient() {
   const selectedStatus = policies.find((item) => item.name === policy);
   const summaryOverlap = selectedStatus?.grounding_min_overlap ?? settings.grounding_min_overlap;
   const summaryRatio = selectedStatus?.grounding_min_ratio ?? settings.grounding_min_ratio;
+  // OCI の注意は、選択中(未保存を含む)の検査方式が OCI Guardrails のときだけ出す。
+  // oci_warning_code は保存中の方式に関係なく未設定の理由を返す(#277)。
   const ociWarning =
-    ociWarningMessage(settings.oci_warning_code) ??
-    (backend === "oci_guardrails" && !settings.oci_configured
-      ? t("settings.guardrail.ociWarning.credentialsInvalid")
-      : null);
+    backend === "oci_guardrails"
+      ? (ociWarningMessage(settings.oci_warning_code) ??
+        (!settings.oci_configured ? t("settings.guardrail.ociWarning.credentialsInvalid") : null))
+      : null;
 
   function selectPolicy(next: GuardrailPolicyName) {
     save.reset();

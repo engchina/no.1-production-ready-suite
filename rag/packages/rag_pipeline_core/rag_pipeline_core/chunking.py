@@ -225,7 +225,6 @@ def chunk_extraction(
 CHUNKING_STRATEGIES: tuple[str, ...] = (
     "structure_aware",
     "recursive_character",
-    "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
     "fixed_size",
@@ -246,7 +245,6 @@ def chunk_extraction_with_strategy(
     strategy: str = _DEFAULT_CHUNKING_STRATEGY,
     chunk_size: int = 800,
     overlap: int = 120,
-    child_size: int = 320,
     min_chars: int = 0,
     delimiter: str = _DEFAULT_FIXED_DELIMITER,
 ) -> list[Chunk]:
@@ -264,13 +262,6 @@ def chunk_extraction_with_strategy(
         _validate_chunk_settings(chunk_size, overlap)
     if normalized_strategy == "recursive_character":
         chunks = _chunk_recursive_character(extraction, chunk_size=chunk_size, overlap=overlap)
-    elif normalized_strategy == "hierarchical_parent_child":
-        chunks = _chunk_hierarchical_parent_child(
-            extraction,
-            chunk_size=chunk_size,
-            overlap=overlap,
-            child_size=max(1, min(child_size, chunk_size - 1)),
-        )
     elif normalized_strategy == "markdown_heading":
         chunks = _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "page_level":
@@ -447,71 +438,6 @@ def _chunk_markdown_heading(
             )
         )
     final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
-    return _with_chunk_size_compliance_metadata(
-        final_chunks,
-        chunk_size=chunk_size,
-        overlap=overlap,
-    )
-
-
-def _chunk_hierarchical_parent_child(
-    extraction: StructuredExtraction,
-    *,
-    chunk_size: int,
-    overlap: int,
-    child_size: int,
-) -> list[Chunk]:
-    """LlamaIndex AutoMerging 風に親 chunk を子 chunk へ再分割し、子を索引する。"""
-    parents = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
-    children: list[Chunk] = []
-    for parent in parents:
-        parent_sha = str(parent.metadata.get("text_sha256") or "")
-        parent_id = (
-            str(parent.metadata.get("chunk_group_id") or "")
-            or parent_sha
-            or f"parent-{parent.index:04d}"
-        )[:32]
-        if parent.metadata.get("content_kind") == "table" or len(parent.text) <= child_size:
-            parts = [parent.text]
-        else:
-            normalized = re.sub(r"\s+", " ", parent.text).strip()
-            sub_chunks = _chunk_normalized_text(
-                normalized,
-                chunk_size=child_size,
-                overlap=min(overlap, child_size - 1),
-                base_offset=parent.start_offset,
-                metadata={},
-                start_index=0,
-            )
-            parts = [chunk.text for chunk in sub_chunks] or [parent.text]
-        part_count = len(parts)
-        for part_index, part in enumerate(parts, start=1):
-            metadata = {
-                key: value
-                for key, value in parent.metadata.items()
-                if key not in {"text_sha256", "text_chars"}
-            }
-            metadata.update(
-                {
-                    "chunk_level": "child",
-                    "parent_chunk_id": parent_id,
-                    "parent_chunk_chars": len(parent.text),
-                    "chunk_group_id": parent_id,
-                    "chunk_group_kind": "parent_child",
-                    "chunk_part_index": part_index,
-                    "chunk_part_count": part_count,
-                }
-            )
-            children.append(
-                Chunk(
-                    text=part,
-                    index=len(children),
-                    start_offset=parent.start_offset,
-                    end_offset=parent.start_offset + len(part),
-                    metadata=metadata,
-                )
-            )
-    final_chunks = [_with_chunk_metadata(chunk) for chunk in children]
     return _with_chunk_size_compliance_metadata(
         final_chunks,
         chunk_size=chunk_size,
