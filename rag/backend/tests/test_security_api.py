@@ -153,6 +153,11 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
 # ---------------------------------------------------------------------------
 
 
+# OpenAPI の生成（`app.openapi()`）は 1 回 1〜3 秒かかり、結果は app に保存される。
+# `-n`（xdist）でも manifest のテストを同じ worker で流し、生成を 1 回にする（#401）。
+_OPENAPI_GROUP = pytest.mark.xdist_group("rag-openapi")
+
+
 def _api_operations() -> list[tuple[str, str]]:
     operations: list[tuple[str, str]] = []
     for path, methods in app.openapi()["paths"].items():
@@ -164,6 +169,7 @@ def _api_operations() -> list[tuple[str, str]]:
     return operations
 
 
+@_OPENAPI_GROUP
 def test_every_api_route_is_classified_by_manifest() -> None:
     """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
     operations = _api_operations()
@@ -184,6 +190,7 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     )
 
 
+@_OPENAPI_GROUP
 def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:
     """manifest の明示登録は実在する route だけで、権限コードはカタログにあるもの。"""
     operations = set(_api_operations())

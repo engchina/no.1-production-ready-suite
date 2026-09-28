@@ -1,5 +1,6 @@
 """保存済み DocRAG 回答の一覧・詳細 API。"""
 
+import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -197,9 +198,14 @@ def test_evaluate_saved_answer_times_out_without_saving(
 ) -> None:
     """評価が時間の上限を超えたら 504 と理由を返し、評価を保存しない（#304）。"""
 
+    finished = threading.Event()
+
     def slow_evaluate(*_args: Any) -> Any:
-        time.sleep(0.5)
-        return {"status": "completed", "total_score": 18, "max_score": 20, "passed": True}
+        try:
+            time.sleep(0.3)  # 上限（0.05 秒）の 6 倍。
+            return {"status": "completed", "total_score": 18, "max_score": 20, "passed": True}
+        finally:
+            finished.set()
 
     monkeypatch.setattr(search_route, "evaluate_answer_record", slow_evaluate)
     monkeypatch.setattr(search_route, "ANSWER_EVALUATION_TIMEOUT_SECONDS", 0.05)
@@ -210,7 +216,9 @@ def test_evaluate_saved_answer_times_out_without_saving(
 
     assert response.status_code == 504
     assert response.json()["error_messages"] == [search_route.ANSWER_EVALUATION_TIMEOUT_MESSAGE]
-    time.sleep(0.6)  # worker thread の評価が終わっても保存しない。
+    # worker thread の評価が終わっても保存しない。テストの client（`anyio.run`）は、504 を返した後も
+    # worker thread の終了を待ってから戻るため、固定の時間は待たない（#401）。
+    assert finished.wait(timeout=5)
     assert fake_oracle.evaluations == {}
 
 

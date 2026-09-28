@@ -1,34 +1,68 @@
-"""pytest 共通 fixture。"""
+"""pytest 共通 fixture。
 
+アプリ（`app`）と、アプリを import するテスト補助（`tests._ai_stubs` など）は、fixture の中で
+import する。conftest は xdist（`-n`）の controller も読み込むが、controller はテストを収集・
+実行しない。module の先頭で import すると、worker の起動の前に約 2 秒の import を直列に待つ
+（#401）。
+"""
+
+from __future__ import annotations
+
+import atexit
 import fcntl
+import gc
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
-from app import config as app_config
-from app.api.routes import settings as settings_routes
-from app.clients.oracle import reset_local_store
-from app.config import (
-    DEFAULT_MODEL_SETTINGS_FILE,
-    Settings,
-    get_settings,
-    load_persisted_model_settings,
-)
-from app.rag.guardrail_adapter import reset_guardrail_static_cache
-from app.rag.rate_limit import reset_rate_limiter
-from app.rag.request_context import (
-    AuditRequestContext,
-    audit_request_context_from_headers,
-    current_audit_request_context,
-    reset_audit_request_context,
-    set_audit_request_context,
-)
-from app.security.service import set_security_service
-from app.services import control as service_control
-from app.services.systemd import CommandUnavailableError
-from tests import _ai_stubs, _oracle_test_db
-from tests.support import TEST_REQUEST_HEADERS
+if TYPE_CHECKING:
+    from app.config import Settings
+    from app.rag.request_context import AuditRequestContext
+
+# プロセスの終了時（pytest の後始末と、ほかの atexit の処理の後）に、残っているオブジェクトを GC の
+# 対象から外す。Python の終了処理の GC が、アプリとテストで作った大量のオブジェクトをたどって
+# 1 プロセス 1〜2 秒かかり、xdist の controller は全 worker の終了をこれだけ待っていた（#401）。
+# 循環参照のごみの `__del__` が終了時に呼ばれなくなるだけで、テストの結果には影響しない。
+atexit.register(gc.freeze)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _shared_httpx_default_tls_context() -> Iterator[None]:
+    """httpx の既定の TLS 設定（CA 証明書の読み込み）を worker ごとに 1 回だけ作り、使い回す。
+
+    `httpx.Client()` は作るたびに certifi の CA 証明書を読み込む（約 20ms）。検索・取込のステージ
+    （chunking・retrieval 等）の remote 委譲は既定で ON（`http://127.0.0.1:1803x`）で、
+    `Settings.model_construct(...)` などで作ったテストの設定では、パイプラインを 1 回流すごとに
+    数回 `httpx.Client()` を作り、接続を拒否されて in-process へ縮退する。この読み込みだけで
+    全体の約 6 秒を占めていた（#401）。既定（`verify=True`・`cert=None`・`trust_env=True`、
+    `SSL_CERT_FILE` / `SSL_CERT_DIR` なし）のときだけ同じ設定を返し、それ以外は httpx に任せる。
+    """
+    import os
+    import ssl
+
+    import httpx
+    from httpx._transports import default as httpx_transports
+
+    original = httpx_transports.create_ssl_context  # type: ignore[attr-defined]
+    shared: list[ssl.SSLContext] = []
+
+    def create_ssl_context(
+        verify: ssl.SSLContext | str | bool = True,
+        cert: object = None,
+        trust_env: bool = True,
+    ) -> ssl.SSLContext:
+        uses_default = verify is True and cert is None and trust_env
+        if not uses_default or os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+            return original(verify=verify, cert=cert, trust_env=trust_env)  # type: ignore[arg-type]
+        if not shared:
+            shared.append(httpx.create_ssl_context())
+        return shared[0]
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(httpx_transports, "create_ssl_context", create_ssl_context)
+        yield
 
 
 # xdist の worker が nodeid に group 名を付ける hook より先に marker を付ける。
@@ -47,6 +81,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
     """実 Oracle が使えるならスキーマを保証し baseline を記録する。"""
+    from app.config import get_settings
+    from tests import _oracle_test_db
+
     if not _oracle_test_db.db_available():
         return
     _oracle_test_db.apply_real_oracle_settings(get_settings())
@@ -61,6 +98,15 @@ def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
 @pytest.fixture(autouse=True)
 def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """各テストで保存先とテスト補助 store を分離する。"""
+    from app import config as app_config
+    from app.api.routes import settings as settings_routes
+    from app.clients.oracle import reset_local_store
+    from app.config import get_settings
+    from app.rag.guardrail_adapter import reset_guardrail_static_cache
+    from app.rag.rate_limit import reset_rate_limiter
+    from app.security.service import set_security_service
+    from app.services import control as service_control
+
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     # 共通 .env（モデルの API key・OCI / DB / 保存先の画面保存先）と RAG の backend/.env
     # （parser の API key・RAG 固有の画面保存先）は tmp へ分離する（#211）。
@@ -82,6 +128,8 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
+    from app.services.systemd import CommandUnavailableError
+
     raise CommandUnavailableError(f"{argv[0]} はテストでは実行しません。")
 
 
@@ -93,6 +141,16 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     `isolated_local_state` が Oracle 接続設定を初期化した後に実値を再適用するため、
     autouse より後に動く本 fixture で上書きしている。
     """
+    from app.config import DEFAULT_MODEL_SETTINGS_FILE, get_settings, load_persisted_model_settings
+    from app.rag.request_context import (
+        audit_request_context_from_headers,
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+    from tests import _ai_stubs, _oracle_test_db
+    from tests.support import TEST_REQUEST_HEADERS
+
     if not _oracle_test_db.db_available():
         pytest.skip("実 Oracle 26ai に未到達のため統合テストをスキップします。")
     settings = get_settings()
