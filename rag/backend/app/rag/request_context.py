@@ -37,6 +37,9 @@ class AuditRequestContext:
     allowed_knowledge_base_ids: frozenset[str] | None = field(default=None, repr=False)
     # 利用できる業務ビュー（None は制限なし）。production では認証済みの利用者から決める（#214）。
     allowed_business_view_ids: frozenset[str] | None = field(default=None, repr=False)
+    # 保存済みの回答（`rag_answer_records`）を持ち主にかかわらず扱えるか（#304）。False のときは
+    # `user_id_hash` の利用者の回答だけ。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は True。
+    answer_records_unrestricted: bool = False
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -107,6 +110,7 @@ def audit_request_context_for_principal(
     allowed_knowledge_base_ids: frozenset[str] | None,
     settings: Settings | None = None,
     service_token_claims: Mapping[str, object] | None = None,
+    answer_records_unrestricted: bool = False,
 ) -> AuditRequestContext:
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
@@ -136,6 +140,7 @@ def audit_request_context_for_principal(
         base,
         allowed_business_view_ids=allowed_business_view_ids,
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
+        answer_records_unrestricted=answer_records_unrestricted,
     )
 
 

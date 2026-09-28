@@ -7,7 +7,7 @@
 設計:
 
 * 参照 KB は多対多。1 つの KB を複数の業務ビューから共有できる。逆も可。
-* query 上書き(Retrieval / Grounding / Generation / Guardrail / Evaluation)は
+* query 上書き(Retrieval / Grounding / Generation / Guardrail)は
   KB の :class:`KnowledgeBaseQueryConfig` を再利用する。複数 KB の query 設定は競合するため、
   検索時はこの**業務ビュー 1 枚から**解決する。KB 個別の query legacy 値は使わない。
 * persona / 既定言語は Generation profile を置換せず、公共制約と形式制約の間へ合成する。

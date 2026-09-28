@@ -256,6 +256,12 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   const actions = detail.getByTestId("feedback-detail-actions");
   await expect(actions.getByRole("button", { name: "品質評価のケースに追加" })).toBeVisible();
   await expect(actions.getByRole("button", { name: "Approved FAQ に登録" })).toHaveCount(0);
+
+  // 文書の詳細を開けない利用者には、根拠から引用元（文書の詳細）へのリンクを出さない（#303）。
+  await detail.getByRole("tab", { name: "根拠" }).click();
+  const evidence = page.getByRole("tabpanel", { name: "根拠" });
+  await expect(evidence.locator("article").first()).toBeVisible();
+  await expect(evidence.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 });
 
 for (const width of [1280, 1920]) {

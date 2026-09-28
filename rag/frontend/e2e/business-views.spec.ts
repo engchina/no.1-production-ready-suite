@@ -46,13 +46,14 @@ for (const viewport of [
       "回答スタイル",
       "回答プロンプト",
       "安全チェック",
-      "品質評価",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
-    // 継承 chip: セレクト10行(分割方式・回答エンジン・DocRAG 3 行を含む)
+    // 品質評価は業務ビューで上書きしない(評価はグローバル設定だけで決まる。#301)。
+    await expect(settings.getByRole("heading", { name: "品質評価" })).toHaveCount(0);
+    // 継承 chip: セレクト9行(分割方式・回答エンジン・DocRAG 3 行を含む)
     // + 三値トグル6行(検索オプション5行 + DocRAG の Rerank)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
-    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(10);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
+    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(9);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     // 回答エンジンを継承しているあいだは、DocRAG が読まない欄に条件付きの説明を出す(#300)。
     const notes = settings.getByTestId("docrag-unused-note");
@@ -572,7 +573,6 @@ async function mockBusinessViews(
             post_retrieval_pipeline: null,
             generation_profile: null,
             guardrail_policy: null,
-            evaluation_suite: null,
           },
           system_prompt: null,
           default_language: null,
@@ -711,7 +711,6 @@ async function mockDefaultBusinessView(
       post_retrieval_pipeline: null,
       generation_profile: null,
       guardrail_policy: null,
-      evaluation_suite: null,
     },
     system_prompt: null,
     default_language: null,

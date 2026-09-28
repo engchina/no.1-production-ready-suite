@@ -12,6 +12,19 @@ server {
   proxy_send_timeout 600s;
   proxy_read_timeout 600s;
 
+  # 保存済みの回答の評価（標準回答による評価。LLM を複数回呼ぶ）だけ待ち時間をさらに延ばす（#304）。
+  # backend の上限（LLM 1 回の timeout の設定の上限 600 秒）と画面の timeout（630 秒）より長くし、
+  # nginx が先に 504 を返して、画面の失敗の後で backend が評価を保存するのを防ぐ。
+  # 正規表現の location では proxy_pass に URI を付けない（受けた URI をそのまま渡す）。
+  location ~ ^/api/search/answers/[^/]+/evaluation$ {
+    proxy_pass ${BACKEND_URL};
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_send_timeout 660s;
+    proxy_read_timeout 660s;
+  }
+
   location /api/ {
     proxy_pass ${BACKEND_URL}/api/;
     proxy_http_version 1.1;

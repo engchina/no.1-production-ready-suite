@@ -7,13 +7,14 @@ from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
-from app.config import Settings, get_settings
+from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
@@ -29,7 +30,7 @@ from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
-from app.schemas.common import ApiResponse
+from app.schemas.common import ApiResponse, Page
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
     AnswerEvaluationRequest,
@@ -45,6 +46,17 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
 STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
+# 保存済みの回答の評価（標準回答による 4 軸評価）の時間の上限（秒。#304）。
+# 評価は LLM を複数回呼ぶため、検索の timeout（`rag_search_timeout_seconds`）ではなく、LLM 1 回の
+# timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を評価全体の上限にする。
+# 画面の timeout（frontend の `ANSWER_EVALUATION_TIMEOUT_MS` = 630 秒）と nginx の待ち時間（660 秒。
+# `frontend/nginx.conf.template`・`init_script.sh`）はこれより長くし、backend の 504 と理由が画面に
+# 届くようにする（画面が先に諦めた後で backend が評価を保存する、を起こさない）。
+ANSWER_EVALUATION_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+ANSWER_EVALUATION_TIMEOUT_MESSAGE = (
+    "標準回答による評価が時間内に終わりませんでした。評価は保存していません。"
+    "時間をおいて再度お試しください。"
+)
 
 
 @router.post("", response_model=ApiResponse[SearchResponse])
@@ -139,8 +151,11 @@ async def _resolve_query_context(
             kb_ids = _merge_business_view_knowledge_base_ids(
                 view.config.normalized_knowledge_base_ids() for view in views
             )
+            # 参照 KB が 0 件の業務ビューで利用者の全 KB を検索しない（#304）。
+            if not request.knowledge_base_ids:
+                ensure_business_view_has_knowledge_bases(kb_ids)
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
-            if not request.knowledge_base_ids and kb_ids:
+            if not request.knowledge_base_ids:
                 effective_request = _with_knowledge_base_ids(request, kb_ids)
             # 利用者の KB 範囲との積集合にする（request で範囲外の KB を読めないようにする）。
             effective_request = _scope_request_knowledge_bases(
@@ -194,6 +209,10 @@ async def _resolve_query_context(
     return request, settings, None, None
 
 
+BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE = (
+    "この業務ビューには参照するナレッジベースがありません。"
+    "業務ビューの設定でナレッジベースを追加してください。"
+)
 BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
 )
@@ -208,6 +227,16 @@ def permitted_knowledge_base_ids(knowledge_base_ids: Iterable[str]) -> list[str]
     if allowed is None:
         return None
     return [item for item in knowledge_base_ids if item in allowed]
+
+
+def ensure_business_view_has_knowledge_bases(knowledge_base_ids: Sequence[str]) -> None:
+    """業務ビューの参照 KB が 0 件なら検索・チャットをしない（409。#304）。
+
+    KB を絞らずに検索すると利用者が使える全 KB を検索してしまい、画面の説明（選択した業務
+    ビューに紐づく KB を検索する）と合わない。理由を返し、画面はその場で表示する。
+    """
+    if not knowledge_base_ids:
+        raise HTTPException(status_code=409, detail=BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE)
 
 
 def ensure_business_view_knowledge_bases_permitted(knowledge_base_ids: Sequence[str]) -> None:
@@ -494,17 +523,53 @@ def _sse_event(event: str, data: object) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-@router.get("/answers", response_model=ApiResponse[list[AnswerRecordSummary]])
+# チャットが会話の回答を引き当てるときに一度に渡せる trace_id の上限。
+ANSWER_TRACE_ID_FILTER_MAX = 100
+
+
+@router.get("/answers", response_model=ApiResponse[Page[AnswerRecordSummary]])
 async def list_docrag_answers(
     business_view_id: str | None = Query(default=None, max_length=128),
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-) -> ApiResponse[list[AnswerRecordSummary]]:
-    """保存済み DocRAG 回答を新しい順に返す(業務ビューで絞り込み可)。"""
-    rows = await OracleClient().list_answer_records(
-        business_view_id=business_view_id, limit=limit, offset=offset
+    trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
+) -> ApiResponse[Page[AnswerRecordSummary]]:
+    """保存済み DocRAG 回答を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
+
+    持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件）。`trace_id` を
+    繰り返して渡すと、その回答だけにする（チャットが会話の回答の保存有無を引き当てる）。
+    """
+    trace_ids = _normalize_trace_id_filter(trace_id)
+    oracle = OracleClient()
+    rows = await oracle.list_answer_records(
+        business_view_id=business_view_id, limit=limit, offset=offset, trace_ids=trace_ids
     )
-    return ApiResponse(data=[AnswerRecordSummary.model_validate(row) for row in rows])
+    total = await oracle.count_answer_records(
+        business_view_id=business_view_id, trace_ids=trace_ids
+    )
+    return ApiResponse(
+        data=Page(
+            items=[AnswerRecordSummary.model_validate(row) for row in rows],
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_next=offset + len(rows) < total,
+        )
+    )
+
+
+def _normalize_trace_id_filter(values: list[str] | None) -> list[str] | None:
+    """trace_id の絞り込みを空白除去・重複排除する。長すぎる ID は 422。"""
+    if values is None:
+        return None
+    normalized: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned or len(cleaned) > 64:
+            raise HTTPException(status_code=422, detail="trace_id の指定が正しくありません。")
+        if cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
 
 
 @router.get("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDetail])
@@ -548,9 +613,16 @@ async def evaluate_docrag_answer(
             status_code=409,
             detail="この回答には評価に必要な記録がありません。もう一度回答を生成してから評価してください。",
         )
-    evaluation = await asyncio.to_thread(
-        evaluate_answer_record, evaluation_input, body.standard_answer, get_settings()
-    )
+    try:
+        # worker thread の評価は止められないため、時間切れのときは結果を捨てて保存しない。
+        evaluation = await asyncio.wait_for(
+            asyncio.to_thread(
+                evaluate_answer_record, evaluation_input, body.standard_answer, get_settings()
+            ),
+            timeout=ANSWER_EVALUATION_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=ANSWER_EVALUATION_TIMEOUT_MESSAGE) from exc
     saved = {
         **evaluation,
         "standard_answer": body.standard_answer,

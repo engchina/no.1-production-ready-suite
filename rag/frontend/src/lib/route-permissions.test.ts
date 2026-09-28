@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { NAV_ITEMS, NAV_SECTIONS, visibleNavSections } from "@/components/layout/nav-config";
 import { CAPABILITY_PERMISSIONS, MENU_PERMISSIONS } from "./permissions";
 import {
+  canOpenDocumentDetail,
   canOpenRoute,
   defaultEntryRoute,
   firstAllowedRoute,
@@ -93,7 +94,10 @@ describe("ルートの権限", () => {
     expect(routeRequiredPermissions("/knowledge-bases/kb-1")).toEqual([
       MENU_PERMISSIONS.knowledgeBases,
     ]);
-    expect(routeRequiredPermissions("/documents/doc-1")).toContain(MENU_PERMISSIONS.chat);
+    expect(routeRequiredPermissions("/documents/doc-1")).toEqual([
+      MENU_PERMISSIONS.upload,
+      MENU_PERMISSIONS.fileList,
+    ]);
     expect(routeRequiredPermissions("/")).toBeUndefined();
     expect(routeRequiredPermissions("/unknown")).toBeUndefined();
     expect(routeRequiredPermissions("/documents/")).toBeUndefined();
@@ -104,10 +108,24 @@ describe("ルートの権限", () => {
     expect(canOpenRoute(APP_ROUTES.chat, hasPermission)).toBe(true);
     expect(canOpenRoute(APP_ROUTES.search, hasPermission)).toBe(false);
     expect(canOpenRoute(APP_ROUTES.securityUsers, hasPermission)).toBe(false);
-    // 引用カードから開く文書の詳細は、チャットの権限でも開ける。
-    expect(canOpenRoute("/documents/doc-1", hasPermission)).toBe(true);
+    // 文書の詳細はワークスペース専用の API を使うため、チャットの権限だけでは開けない（#303）。
+    expect(canOpenRoute("/documents/doc-1", hasPermission)).toBe(false);
+    expect(canOpenRoute("/documents/doc-1", allow(MENU_PERMISSIONS.fileList))).toBe(true);
     expect(canOpenRoute("/knowledge-bases/kb-1", hasPermission)).toBe(false);
     expect(canOpenRoute("/", hasPermission)).toBe(true);
+  });
+
+  it("文書の詳細へのリンクは、アップロードか文書インデックスの権限があるときだけ出す", () => {
+    expect(canOpenDocumentDetail(allow(MENU_PERMISSIONS.upload))).toBe(true);
+    expect(canOpenDocumentDetail(allow(MENU_PERMISSIONS.fileList))).toBe(true);
+    for (const permission of [
+      MENU_PERMISSIONS.search,
+      MENU_PERMISSIONS.chat,
+      MENU_PERMISSIONS.knowledgeBases,
+      MENU_PERMISSIONS.feedback,
+    ]) {
+      expect(canOpenDocumentDetail(allow(permission))).toBe(false);
+    }
   });
 
   it("既定の入口は RAG 検索、開けなければ `/`（NL2SQL と同じ）", () => {

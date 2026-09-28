@@ -3177,6 +3177,24 @@ def _safe_artifact_key_part(value: str) -> str:
     return cleaned[:160] or "segment"
 
 
+def document_artifact_prefixes(settings: object, document_id: str) -> list[str]:
+    """文書の取込の成果物（正規化原本・抽出 artifact・segment artifact）を置く prefix を返す。
+
+    成果物の key は `{prefix}/{document_id}/{trace_id}...` なので、この prefix を消せば
+    参照が残っていない過去の取込の成果物も含めて後始末できる（文書の削除。#303）。
+    """
+    document_key = _safe_artifact_key_part(document_id)
+    prefixes = [
+        _safe_artifact_prefix(
+            getattr(settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
+        ),
+        _safe_artifact_prefix(
+            getattr(settings, "rag_extraction_artifact_prefix", "artifacts/extractions")
+        ),
+    ]
+    return list(dict.fromkeys(f"{prefix}/{document_key}/" for prefix in prefixes))
+
+
 def _safe_artifact_prefix(value: object) -> str:
     """Object Storage artifact prefix を監査しやすい key path へ正規化する。"""
     raw = str(value or "").replace("\\", "/")

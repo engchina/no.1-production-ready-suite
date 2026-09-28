@@ -20,14 +20,18 @@ from app.services.catalog import (
     service_model_cache_volume_name,
 )
 from app.services.control import (
+    COMPOSE_PROJECT_NAME,
+    REPO_ROOT,
     ControlResult,
     DockerComposeDriver,
     ServiceControlClient,
     ServiceControlError,
+    ServiceLogsError,
     ServiceLogsResult,
     _compose_args,
     _compose_env,
     _compose_logs_args,
+    _compose_ps_args,
     read_service_logs,
 )
 from app.services.status import probe_service_status, probe_service_statuses
@@ -387,6 +391,22 @@ def test_probe_non_deployable_returns_in_process_without_http(monkeypatch: Monke
 
 # --- 制御層 -----------------------------------------------------------------
 
+# compose の project 名と project directory は常に固定する(#310)。未指定だと cwd の
+# ディレクトリ名から project 名が決まり、別 project のコンテナのログが空で返る。
+_PROD_PREFIX = ["docker", "compose", "--project-name", "production-ready-rag"]
+_DEV_PREFIX = [
+    "docker",
+    "compose",
+    "--project-name",
+    "production-ready-rag",
+    "--project-directory",
+    str(REPO_ROOT),
+    "-f",
+    str(REPO_ROOT / "docker-compose.yml"),
+    "-f",
+    str(REPO_ROOT / "docker-compose.dev.yml"),
+]
+
 
 def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
@@ -395,8 +415,7 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     assert asr is not None
     args = _compose_args(settings, asr, "start")
     assert args == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "--profile",
         "gpu",
         "up",
@@ -406,16 +425,14 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     ]
     # GPU は profile gate に隠れるため stop / restart でも --profile gpu を付ける。
     assert _compose_args(settings, asr, "stop") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "--profile",
         "gpu",
         "stop",
         "parser-asr",
     ]
     assert _compose_args(settings, asr, "restart") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "--profile",
         "gpu",
         "restart",
@@ -430,16 +447,14 @@ def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
     assert docling is not None
     # start は --no-build(制御リクエスト内で build しない)。
     assert _compose_args(settings, docling, "start") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "up",
         "-d",
         "--no-build",
         "parser-docling",
     ]
     assert _compose_args(settings, docling, "stop") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "stop",
         "parser-docling",
     ]
@@ -452,15 +467,13 @@ def test_compose_args_build_and_remove(monkeypatch: MonkeyPatch) -> None:
     assert docling is not None
     # build はイメージ生成。明示アクションで実行する。
     assert _compose_args(settings, docling, "build") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "build",
         "parser-docling",
     ]
     # remove はコンテナ削除(稼働中なら停止してから force 削除)。
     assert _compose_args(settings, docling, "remove") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "rm",
         "-f",
         "-s",
@@ -470,8 +483,7 @@ def test_compose_args_build_and_remove(monkeypatch: MonkeyPatch) -> None:
     asr = get_catalog_entry("parser-asr")
     assert asr is not None
     assert _compose_args(settings, asr, "build") == [
-        "docker",
-        "compose",
+        *_PROD_PREFIX,
         "--profile",
         "gpu",
         "build",
@@ -489,7 +501,8 @@ def test_build_uses_longer_build_timeout(monkeypatch: MonkeyPatch) -> None:
     assert docling is not None
 
     async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
-        return _FakeProcess(returncode=0)
+        # stop の前のコンテナ確認(ps)にもコンテナ ID を返す。
+        return _FakeProcess(returncode=0, stdout=b"abc123\n")
 
     used: list[float] = []
     real_wait_for = asyncio.wait_for
@@ -503,7 +516,8 @@ def test_build_uses_longer_build_timeout(monkeypatch: MonkeyPatch) -> None:
     driver = DockerComposeDriver()
     asyncio.run(driver.run(settings, docling, "build"))
     asyncio.run(driver.run(settings, docling, "stop"))
-    assert used == [1800.0, 60.0]
+    # build はコンテナ確認なし。stop は ps(通常 timeout)→ stop(通常 timeout)。
+    assert used == [1800.0, 60.0, 60.0]
 
 
 def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
@@ -513,12 +527,7 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
     assert docling is not None
     # dev は port 公開 override を重ねてホスト backend から到達可能にする。
     assert _compose_args(settings, docling, "start") == [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.yml",
-        "-f",
-        "docker-compose.dev.yml",
+        *_DEV_PREFIX,
         "up",
         "-d",
         "--no-build",
@@ -528,12 +537,7 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
     assert asr is not None
     # GPU は override に加えて --profile gpu。
     assert _compose_args(settings, asr, "start") == [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.yml",
-        "-f",
-        "docker-compose.dev.yml",
+        *_DEV_PREFIX,
         "--profile",
         "gpu",
         "up",
@@ -549,18 +553,60 @@ def test_compose_logs_args_dev_adds_tail_and_override(monkeypatch: MonkeyPatch) 
     docling = get_catalog_entry("parser-docling")
     assert docling is not None
     assert _compose_logs_args(settings, docling, 123) == [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.yml",
-        "-f",
-        "docker-compose.dev.yml",
+        *_DEV_PREFIX,
         "logs",
         "--no-color",
         "--tail",
         "123",
         "parser-docling",
     ]
+
+
+def test_compose_project_name_matches_compose_file_and_init_script() -> None:
+    """control.py の project 名は compose の name・init_script・build-services.sh と同じ。"""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert f"\nname: {COMPOSE_PROJECT_NAME}\n" in compose
+    init_script = (REPO_ROOT / "init_script.sh").read_text(encoding="utf-8")
+    assert f'COMPOSE_PROJECT_NAME="{COMPOSE_PROJECT_NAME}"' in init_script
+    build_script = (REPO_ROOT / "scripts" / "build-services.sh").read_text(encoding="utf-8")
+    assert f'COMPOSE_PROJECT_NAME="{COMPOSE_PROJECT_NAME}"' in build_script
+    assert '--project-name "${COMPOSE_PROJECT_NAME}"' in build_script
+    assert '--project-directory "${ROOT_DIR}"' in build_script
+
+
+def test_compose_ps_args_pin_project(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
+    # GPU は profile gate に隠れるため ps でも --profile gpu を付ける。
+    assert _compose_ps_args(settings, asr) == [
+        *_PROD_PREFIX,
+        "--profile",
+        "gpu",
+        "ps",
+        "--all",
+        "--quiet",
+        "parser-asr",
+    ]
+
+
+def test_build_command_hint_uses_same_project(monkeypatch: MonkeyPatch) -> None:
+    from app.services.control import _build_command_hint
+
+    settings = get_settings()
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+    monkeypatch.setattr(settings, "environment", "prod")
+    assert _build_command_hint(settings, docling) == (
+        "docker compose --project-name production-ready-rag build parser-docling"
+    )
+    monkeypatch.setattr(settings, "environment", "dev")
+    hint = _build_command_hint(settings, docling)
+    assert hint.startswith(
+        "docker compose --project-name production-ready-rag --project-directory "
+    )
+    assert hint.endswith("docker-compose.dev.yml build parser-docling")
 
 
 def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> None:
@@ -621,19 +667,97 @@ def test_control_client_raises_on_nonzero_exit(monkeypatch: MonkeyPatch) -> None
     assert exc.value.result.detail == "boom"
 
 
+def _install_fake_compose(
+    monkeypatch: MonkeyPatch,
+    *,
+    ps_stdout: bytes = b"abc123\n",
+    stdout: bytes = b"",
+    returncode: int = 0,
+) -> list[dict[str, Any]]:
+    """compose subprocess を差し替える。``ps`` はコンテナ ID を、それ以外は ``stdout`` を返す。"""
+    calls: list[dict[str, Any]] = []
+
+    async def fake_exec(*args: str, **kwargs: Any) -> _FakeProcess:
+        calls.append({"args": list(args), "kwargs": kwargs})
+        if "ps" in args:
+            return _FakeProcess(returncode=0, stdout=ps_stdout)
+        return _FakeProcess(returncode=returncode, stdout=stdout)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return calls
+
+
+def _subcommands(calls: list[dict[str, Any]], service_id: str) -> list[str]:
+    """記録した argv から、service_id の直前までのサブコマンド部分(先頭語)を取り出す。"""
+    result: list[str] = []
+    for call in calls:
+        args = call["args"]
+        # サブコマンドは profile / file 指定の後ろ、先頭の非オプション語。
+        index = args.index(service_id)
+        head = [arg for arg in args[:index] if arg in {"ps", "logs", "stop", "restart", "up"}]
+        result.append(head[0] if head else "")
+    return result
+
+
 def test_control_client_success(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")  # docker driver 経路
     entry = get_catalog_entry("parser-docling")
     assert entry is not None
 
-    async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
-        return _FakeProcess(returncode=0)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    calls = _install_fake_compose(monkeypatch)
     result = asyncio.run(ServiceControlClient().control(settings, entry, "stop"))
     assert isinstance(result, ControlResult)
     assert result.ok is True
+    # stop の前に、project にコンテナがあるかを確かめる。
+    assert _subcommands(calls, "parser-docling") == ["ps", "stop"]
+    assert calls[0]["args"] == _compose_ps_args(settings, entry)
+
+
+@pytest.mark.parametrize("action", ["stop", "restart"])
+def test_control_fails_when_container_missing(
+    monkeypatch: MonkeyPatch, action: Literal["stop", "restart"]
+) -> None:
+    """project にコンテナが無い stop / restart は、exit 0 でも成功にしない(#310)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+
+    calls = _install_fake_compose(monkeypatch, ps_stdout=b"")
+    with pytest.raises(ServiceControlError) as exc:
+        asyncio.run(ServiceControlClient().control(settings, entry, action))
+    assert exc.value.result.ok is False
+    assert exc.value.result.action == action
+    assert exc.value.result.detail is not None
+    assert "parser-docling のコンテナ" in exc.value.result.detail
+    assert COMPOSE_PROJECT_NAME in exc.value.result.detail
+    # 確認だけして、stop / restart 自体は実行しない。
+    assert _subcommands(calls, "parser-docling") == ["ps"]
+
+
+def test_control_start_does_not_require_existing_container(monkeypatch: MonkeyPatch) -> None:
+    """start はコンテナを作るため、事前のコンテナ確認をしない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+
+    calls = _install_fake_compose(monkeypatch, ps_stdout=b"")
+    result = asyncio.run(ServiceControlClient().control(settings, entry, "start"))
+    assert result.ok is True
+    assert _subcommands(calls, "parser-docling") == ["up"]
+
+
+def test_control_api_stop_missing_container_is_502(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    _install_fake_compose(monkeypatch, ps_stdout=b"")
+
+    resp = client.post("/api/services/parser-docling/stop")
+    assert resp.status_code == 502
+    assert COMPOSE_PROJECT_NAME in resp.text
 
 
 def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
@@ -641,14 +765,8 @@ def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "environment", "prod")
     entry = get_catalog_entry("parser-docling")
     assert entry is not None
-    captured: dict[str, Any] = {}
 
-    async def fake_exec(*args: str, **kwargs: Any) -> _FakeProcess:
-        captured["args"] = list(args)
-        captured["kwargs"] = kwargs
-        return _FakeProcess(returncode=0, stdout=b"line1\nline2\n")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    calls = _install_fake_compose(monkeypatch, stdout=b"line1\nline2\n")
     result = asyncio.run(read_service_logs(settings, entry, 50))
 
     assert result == ServiceLogsResult(
@@ -657,8 +775,49 @@ def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
         lines=50,
         content="line1\nline2",
     )
-    assert captured["args"][-5:] == ["logs", "--no-color", "--tail", "50", "parser-docling"]
-    assert captured["kwargs"]["cwd"] is None
+    assert _subcommands(calls, "parser-docling") == ["ps", "logs"]
+    logs_call = calls[-1]
+    assert logs_call["args"] == [
+        *_PROD_PREFIX,
+        "logs",
+        "--no-color",
+        "--tail",
+        "50",
+        "parser-docling",
+    ]
+    assert logs_call["kwargs"]["cwd"] is None
+
+
+def test_read_service_logs_missing_container_raises(monkeypatch: MonkeyPatch) -> None:
+    """project にコンテナが無ければ、空のログではなくエラーにする(#310)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+
+    calls = _install_fake_compose(monkeypatch, ps_stdout=b"", stdout=b"")
+    with pytest.raises(ServiceLogsError) as exc:
+        asyncio.run(read_service_logs(settings, entry, 50))
+    assert "parser-docling のコンテナ" in str(exc.value)
+    assert COMPOSE_PROJECT_NAME in str(exc.value)
+    assert _subcommands(calls, "parser-docling") == ["ps"]
+    # dev は固定の project 名と project directory で確かめる。
+    assert calls[0]["args"] == [*_DEV_PREFIX, "ps", "--all", "--quiet", "parser-docling"]
+    assert calls[0]["kwargs"]["cwd"] == str(REPO_ROOT)
+
+
+def test_read_service_logs_ps_failure_raises(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _FakeProcess:
+        return _FakeProcess(returncode=1, stderr=b"Cannot connect to the Docker daemon")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(ServiceLogsError, match="Cannot connect to the Docker daemon"):
+        asyncio.run(read_service_logs(settings, entry, 50))
 
 
 # --- API --------------------------------------------------------------------
@@ -780,6 +939,28 @@ def test_get_service_logs_returns_tail(monkeypatch: MonkeyPatch) -> None:
         "lines": 50,
         "content": "ready",
     }
+
+
+def test_get_service_logs_missing_container_is_502(monkeypatch: MonkeyPatch) -> None:
+    """別 project のコンテナしか無いとき、200 の空ログではなく 502 を返す(#310)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    _install_fake_compose(monkeypatch, ps_stdout=b"", stdout=b"")
+
+    resp = client.get("/api/services/parser-docling/logs?lines=200")
+    assert resp.status_code == 502
+    assert "parser-docling のコンテナ" in resp.text
+
+
+def test_get_service_logs_zero_lines_is_200_empty(monkeypatch: MonkeyPatch) -> None:
+    """コンテナがあってログが 0 行なら、従来どおり 200 で空の本文を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    _install_fake_compose(monkeypatch, ps_stdout=b"abc123\n", stdout=b"")
+
+    resp = client.get("/api/services/parser-docling/logs?lines=200")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["content"] == ""
 
 
 def test_get_service_logs_unknown_service_is_404() -> None:

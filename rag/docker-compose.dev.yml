@@ -5,7 +5,8 @@
 # dev_port(catalog の ServiceCatalogEntry.dev_port)へ公開する。ポートは catalog と一致させる。
 #
 # サービス管理画面(dev)は内部で次を実行する:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d <service_id>
+#   docker compose --project-name production-ready-rag --project-directory <rag> \
+#     -f <rag>/docker-compose.yml -f <rag>/docker-compose.dev.yml up -d --no-build <service_id>
 # GPU ASR は base 側の profiles:["gpu"] を継承するため
 # --profile gpu が併用される。oci parser は profiles:["oci"]。
 # 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。

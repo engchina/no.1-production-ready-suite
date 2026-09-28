@@ -49,7 +49,6 @@ import {
   type BusinessViewDetail,
   type BusinessViewStatus,
   type BusinessViewSummary,
-  type EvaluationSuiteName,
   type GenerationProfileName,
   type GuardrailPolicyName,
   type KnowledgeBaseQueryConfig,
@@ -237,13 +236,6 @@ const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "lenient", label: t("settings.guardrail.policy.lenient") },
   { value: "regulated", label: t("settings.guardrail.policy.regulated") },
 ];
-const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
-  { value: "request_only", label: t("settings.evaluation.suite.request_only") },
-  { value: "retrieval_focused", label: t("settings.evaluation.suite.retrieval_focused") },
-  { value: "balanced", label: t("settings.evaluation.suite.balanced") },
-  { value: "strict_ci", label: t("settings.evaluation.suite.strict_ci") },
-  { value: "ragas_like", label: t("settings.evaluation.suite.ragas_like") },
-];
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {
     retrieval_strategy: null,
@@ -255,7 +247,6 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
     post_retrieval_pipeline: null,
     generation_profile: null,
     guardrail_policy: null,
-    evaluation_suite: null,
   };
 }
 
@@ -1191,15 +1182,6 @@ function BusinessViewEditor({
                     defaultOnOverride="strict"
                     disabled={pending}
                     onChange={(value) => updateQuery({ guardrail_policy: value })}
-                  />
-                  <QuerySelectRow
-                    id="business-view-evaluation"
-                    label={t("businessViews.field.evaluation")}
-                    value={config.query.evaluation_suite}
-                    options={EVALUATION_OPTIONS}
-                    defaultOnOverride="balanced"
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ evaluation_suite: value })}
                   />
                 </div>
               </fieldset>

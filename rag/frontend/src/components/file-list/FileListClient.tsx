@@ -27,6 +27,7 @@ import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,
   ApiError,
+  type DocumentDeleteImpact,
   type DocumentSummary,
   type FileStatus,
   type IngestionJob,
@@ -56,6 +57,7 @@ import {
   summarizeEnqueueOutcomes,
   type EnqueueOutcome,
 } from "./FileListClient.logic";
+import { deleteConfirmDescription } from "./document-delete-impact";
 
 const LIMIT = 20;
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
@@ -76,6 +78,8 @@ export function FileListClient() {
   const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
   const [bulkIngest, setBulkIngest] = useState<{ done: number; total: number } | null>(null);
   const [bulkDelete, setBulkDelete] = useState<{ done: number; total: number } | null>(null);
+  // 削除の影響（正本を参照する重複文書）を確かめている間は、ほかの操作と同じ削除を止める（#303）。
+  const [deleteImpactPending, setDeleteImpactPending] = useState(false);
 
   const selection = useSelection<string>();
   const status = filter === "ALL" ? undefined : filter;
@@ -140,7 +144,7 @@ export function FileListClient() {
     }
   }, [correctedOffset, setView]);
   const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
-  const bulkBusy = bulkIngest !== null || bulkDelete !== null;
+  const bulkBusy = bulkIngest !== null || bulkDelete !== null || deleteImpactPending;
   const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
     () => [
       { value: "ALL", label: t("fileList.knowledgeBaseFilter.all") },
@@ -213,12 +217,33 @@ export function FileListClient() {
     notifyBulkEnqueued(summarizeEnqueueOutcomes(outcomes), targets.length);
   };
 
+  const loadDeleteImpacts = async (ids: string[]): Promise<DocumentDeleteImpact[] | null> => {
+    setDeleteImpactPending(true);
+    try {
+      return await api.getDocumentDeleteImpact(ids);
+    } catch (error) {
+      toast.error(t("fileList.delete.impact.loadFailed"), {
+        description:
+          error instanceof ApiError ? error.message : t("fileList.delete.impact.loadFailedHint"),
+      });
+      return null;
+    } finally {
+      setDeleteImpactPending(false);
+    }
+  };
+
   const runBulkDelete = async () => {
     const targets = selectedDocuments.map((doc) => doc.id);
     if (targets.length === 0 || bulkBusy) return;
+    const impacts = await loadDeleteImpacts(targets);
+    if (!impacts) return;
     const confirmed = await confirm({
       title: t("fileList.bulkDelete.confirm.title", { count: targets.length }),
-      description: t("fileList.bulkDelete.confirm.description", { count: targets.length }),
+      description: deleteConfirmDescription(
+        t("fileList.bulkDelete.confirm.description", { count: targets.length }),
+        impacts,
+        { bulk: true }
+      ),
       confirmLabel: t("fileList.bulkDelete.confirm.confirm"),
       tone: "danger",
       dismissOnOverlay: false,
@@ -262,9 +287,16 @@ export function FileListClient() {
   };
 
   const runDelete = async (doc: DocumentSummary) => {
+    if (deleteImpactPending) return;
+    const impacts = await loadDeleteImpacts([doc.id]);
+    if (!impacts) return;
     const confirmed = await confirm({
       title: t("fileList.delete.confirm.title"),
-      description: t("fileList.delete.confirm.description", { name: doc.file_name }),
+      description: deleteConfirmDescription(
+        t("fileList.delete.confirm.description", { name: doc.file_name }),
+        impacts,
+        { bulk: false }
+      ),
       confirmLabel: t("fileList.delete.confirm.confirm"),
       tone: "danger",
       dismissOnOverlay: false,
