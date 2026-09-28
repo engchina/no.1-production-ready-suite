@@ -34,6 +34,8 @@ import {
   ListSkeleton,
   FormSkeleton,
   ExecutionConfirmationField,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -457,13 +459,16 @@ function ProfileList({
           onSortChange={(next) => onSortChange(next.key as ProfileListSortKey)}
           selectedRowKey={selectedProfileId}
           onRowClick={onSelect}
+          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
           testId="profile-management-grid"
           tableClassName="w-full min-w-0 table-fixed"
           // 名前・カテゴリの 2 行セルが並ぶ一覧。横スクロールは出さず、縦だけ内部スクロールにする。
-          className="max-h-[20rem] max-w-full overflow-x-hidden md:max-h-[30.5rem]"
+          // 高さは md 未満 5 行・md 以上 8 行の実測（#403。以前は手書きの 20rem / 30.5rem）。
+          className="max-w-full overflow-x-hidden"
           scrollAriaLabel={t("profiles.list.scrollLabel")}
           scrollTestId="profile-management-list"
           stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
       )}
       {!loading && profiles.length > 0 && (hasNextPage || loadMoreError) && (

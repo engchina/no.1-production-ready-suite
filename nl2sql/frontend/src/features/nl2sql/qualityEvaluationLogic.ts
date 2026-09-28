@@ -102,3 +102,37 @@ export function qualityEvaluationAttemptTimedOut(
   const timeoutSeconds = Math.max(1, Number(job.attempt_timeout_seconds || 0));
   return startedAt + timeoutSeconds * 1000 <= nowMs;
 }
+
+/**
+ * カーソル型の API（next_cursor と total を返す）のページを、共通の Pagination の
+ * page / totalPages / range に直す（#403）。前へ戻るためのカーソルは画面が積んで持つ。
+ * - `depth`: 今までに「次へ」で進んだ回数（積んだカーソルの数）。
+ * - `total` がカーソルの位置と合わない（取得の間に件数が変わった）ときも、次のカーソルがあれば次のページを数える。
+ */
+export function cursorPagination({
+  depth,
+  limit,
+  total,
+  count,
+  hasNext,
+}: {
+  depth: number;
+  limit: number;
+  total: number;
+  count: number;
+  hasNext: boolean;
+}) {
+  const size = Math.max(1, limit);
+  const page = Math.max(0, depth) + 1;
+  const offset = (page - 1) * size;
+  const totalPages = Math.max(page + (hasNext ? 1 : 0), Math.ceil(Math.max(0, total) / size), 1);
+  return {
+    page,
+    totalPages,
+    range: {
+      start: count === 0 ? 0 : offset + 1,
+      end: count === 0 ? 0 : offset + count,
+      total: Math.max(total, offset + count),
+    },
+  };
+}

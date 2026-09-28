@@ -1242,6 +1242,72 @@ test("抽出セグメントが多い場合は高さ固定で内部スクロー�
   await expectNoHorizontalOverflow(page);
 });
 
+test("chunk が多い場合は 5 / 8 行の高さで中をスクロールし、選んだ chunk を一覧の中で見せる", async ({ page }) => {
+  await mockDocumentWorkspace(page, { extraChunkCount: 23 });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "Chunk / Citation", exact: false }).click();
+
+  const list = page.getByTestId("document-chunk-list");
+  await expect(list.getByRole("button")).toHaveCount(25);
+  const width = page.viewportSize()?.width ?? 1440;
+  const metrics = await list.evaluate((element) => ({
+    maxHeight: getComputedStyle(element).maxHeight,
+    rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    scrollable: element.scrollHeight > element.clientHeight + 1,
+    panelScrollable: (() => {
+      const panel = element.closest('[role="tabpanel"]') as HTMLElement;
+      return getComputedStyle(panel).overflowY === "auto" && panel.scrollHeight > panel.clientHeight + 1;
+    })(),
+  }));
+  if (width >= 1280) {
+    // xl 以上はプレビューの横に並び、プレビューと同じ高さのタブのパネルがスクロールする（二重のスクロールにしない）。
+    expect(metrics.maxHeight).toBe("none");
+    expect(metrics.panelScrollable).toBe(true);
+  } else {
+    const expectedRem = width >= 768 ? 28 : 17.5;
+    expect(Math.abs(Number.parseFloat(metrics.maxHeight) - expectedRem * metrics.rem)).toBeLessThanOrEqual(1);
+    expect(metrics.scrollable).toBe(true);
+  }
+
+  // 末尾の chunk を選び、別のタブへ移って戻っても、選んだ chunk がスクロール領域の中で見える位置にある。
+  const lastChunk = list.getByRole("button").last();
+  await lastChunk.scrollIntoViewIfNeeded();
+  await lastChunk.click();
+  await expect(lastChunk).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("tab", { name: "抽出エクスポート", exact: false }).click();
+  await page.getByRole("tab", { name: "Chunk / Citation", exact: false }).click();
+  const selected = page.getByTestId("document-chunk-list").locator('button[aria-pressed="true"]');
+  await expect(selected).toContainText("#25");
+  await expect.poll(() => selectedChunkVisibleInScrollArea(page)).toBe(true);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("引用の deep-link は一覧の中の chunk までスクロールしてフォーカスする", async ({ page }) => {
+  await mockDocumentWorkspace(page, { extraChunkCount: 23 });
+  await page.goto("/documents/doc-1?chunk_id=doc-1:20");
+
+  const target = page.getByTestId("document-chunk-list").locator('button[aria-pressed="true"]');
+  await expect(target).toContainText("#21");
+  await expect(target).toBeFocused();
+  await expect.poll(() => selectedChunkVisibleInScrollArea(page)).toBe(true);
+});
+
+/** 選んだ chunk が、それを囲む縦スクロールの領域（一覧自身か、xl 以上はタブのパネル）の見える範囲にある。 */
+function selectedChunkVisibleInScrollArea(page: Page) {
+  return page.getByTestId("document-chunk-list").evaluate((list) => {
+    const selected = list.querySelector('button[aria-pressed="true"]');
+    if (!selected) return false;
+    let container: HTMLElement | null = list as HTMLElement;
+    while (container && !(getComputedStyle(container).overflowY === "auto" && container.scrollHeight > container.clientHeight + 1)) {
+      container = container.parentElement;
+    }
+    if (!container) return false;
+    const box = container.getBoundingClientRect();
+    const item = selected.getBoundingClientRect();
+    return container.scrollTop > 0 && item.top >= box.top - 1 && item.bottom <= box.bottom + 1;
+  });
+}
+
 async function mockDocumentWorkspace(
   page: Page,
   options: {
@@ -1257,6 +1323,8 @@ async function mockDocumentWorkspace(
     docragRegions?: boolean;
     segmentError?: boolean;
     segmentCount?: number;
+    /** 既定の 2 件の後ろに足す chunk の数（一覧の内部スクロールの検証用。#403）。 */
+    extraChunkCount?: number;
     mineruSegment?: boolean;
     latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
     latestJobPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
@@ -1736,6 +1804,21 @@ async function mockDocumentWorkspace(
                     }
                   : { chunk_profile: "structure_v1" },
           },
+          ...Array.from({ length: options.extraChunkCount ?? 0 }, (_, index) => ({
+            document_id: "doc-1",
+            chunk_id: `doc-1:${index + 2}`,
+            chunk_index: index + 2,
+            text: `追加の chunk ${index + 3} の本文です。`,
+            page_start: 1,
+            page_end: 1,
+            bbox: null,
+            section_path: "経費申請",
+            content_kind: "text",
+            chunk_group_id: `grp-extra-${index}`,
+            source_parser: "local_text_structure",
+            element_ids: [],
+            metadata: { chunk_profile: "structure_v1" },
+          })),
         ],
         error_messages: [],
         warning_messages: [],

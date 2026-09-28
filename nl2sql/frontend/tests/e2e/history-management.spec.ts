@@ -683,6 +683,18 @@ test("実行履歴一覧はサーバページをローカルで二重ページ�
   const listSurface = page.getByTestId("history-list-surface");
   const loadMore = page.getByTestId("history-load-more");
   await expect(rows).toHaveCount(12);
+  // 一覧は手書きの 42rem ではなく、md 未満 5 行・md 以上 8 行（3.5rem/行）の高さで中を縦スクロールする（#403）。
+  const list = page.getByTestId("history-list");
+  const listMetrics = await list.evaluate((element) => ({
+    maxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
+    rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    scrollable: element.scrollHeight > element.clientHeight + 1,
+    overflowY: getComputedStyle(element).overflowY,
+  }));
+  const expectedRows = (page.viewportSize()?.width ?? 1280) >= 768 ? 8 : 5;
+  expect(Math.abs(listMetrics.maxHeight - expectedRows * 3.5 * listMetrics.rem)).toBeLessThanOrEqual(1);
+  expect(listMetrics.scrollable).toBe(true);
+  expect(listMetrics.overflowY).toBe("auto");
   await expect(page.getByTestId("history-pagination")).toHaveCount(0);
   await expect(loadMore).toContainText("12 / 12 件を読込済み");
   await expect(listSurface.getByTestId("history-pagination")).toHaveCount(0);
