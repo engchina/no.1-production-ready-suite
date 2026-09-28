@@ -961,7 +961,8 @@ def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
 def _persist_huggingface_settings(settings: Settings) -> None:
     """HuggingFace 設定を backend/.env へ永続化する。
 
-    parser コンテナの huggingface_hub へは、サービス管理が HF_TOKEN / HF_ENDPOINT として渡す。
+    parser の huggingface_hub へは、サービス管理が起動/再起動の前に HF_TOKEN / HF_ENDPOINT として
+    サービス実行用の env ファイルへ書いて渡す(#286)。
     """
     _write_env_values(
         BACKEND_ENV_FILE,

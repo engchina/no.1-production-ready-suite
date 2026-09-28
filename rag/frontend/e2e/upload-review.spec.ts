@@ -490,3 +490,54 @@ test("送信中は送信済み / 合計のバイト数と割合を示し、送�
   await expect(sending).toHaveCount(0);
   await expect(page.getByText("保存先に保存できませんでした。")).toBeVisible();
 });
+
+// 既定の文書解析エンジン Docling は PDF と画像だけを解析する（#286）。それ以外の形式は、
+// アップロードの結果で「処理レシピで Unstructured を選ぶ」ように案内する（取込は始めない）。
+// desktop / mobile（375px）は playwright.config.ts の project で両方実行する。
+test("Docling で解析できない形式は、アップロードの結果で案内する", async ({ page }) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  const message =
+    "文書解析エンジン Docling（既定の解析エンジン）はこのファイル形式（.txt）を解析できないため、取込を開始しませんでした。" +
+    "この文書の「処理レシピ」で「文書解析」を Unstructured に変えてから「処理を開始」してください。";
+  await page.route("**/api/documents/batch-upload", async (route) => {
+    await route.fulfill({
+      json: apiEnvelope({
+        items: [
+          {
+            ...uploadResult("memo.txt"),
+            parser_notice: {
+              code: "parser_source_unsupported",
+              backend: "docling",
+              file_format: ".txt",
+              suggested_backend: "unstructured",
+              message,
+            },
+          },
+          uploadResult("policy.txt"),
+        ],
+        failed_items: [],
+        total_count: 2,
+        uploaded_count: 2,
+        failed_count: 0,
+        queued_count: 0,
+        skipped_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+  await page.locator('input[type="file"]').setInputFiles([textFile("memo.txt", 6), textFile("policy.txt", 6)]);
+
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
+  // 一覧の行に短い案内、選択中の文書に理由と対処を出す。
+  await expect(
+    page.getByText("既定の Docling では解析できない形式です（処理レシピで Unstructured を選択）")
+  ).toHaveCount(1);
+  await expect(page.getByText("このままでは取込を開始できません")).toBeVisible();
+  await expect(page.getByTestId("upload-parser-notice")).toHaveText(message);
+  await expectNoPageOverflow(page);
+  // 案内の無い文書を選ぶと消える。
+  await page.getByRole("button", { name: "policy.txt を表示" }).click();
+  await expect(page.getByTestId("upload-parser-notice")).toHaveCount(0);
+});

@@ -1397,7 +1397,7 @@ describe("api.services", () => {
       jsonResponse({
         data: {
           service_id: "parser-docling",
-          source: "docker",
+          source: "journald",
           lines: 200,
           content: "ready",
         },
@@ -1410,6 +1410,7 @@ describe("api.services", () => {
     const result = await api.getServiceLogs("parser-docling", 200);
 
     expect(result.content).toBe("ready");
+    expect(result.source).toBe("journald");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/services/parser-docling/logs?lines=200",
       expect.anything()

@@ -45,6 +45,7 @@ import {
   ApiError,
   type BatchUploadFailedItem,
   type IngestionJob,
+  type ParserSourceNotice,
   type UploadResult,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -193,6 +194,7 @@ export function UploadWorkspace() {
                 onSelect={setUploaded}
               />
             ) : null}
+            <UploadParserNotice notice={uploaded.parser_notice} />
             <DocumentWorkspace
               documentId={uploaded.id}
               watchProcessing={uploaded.ingestion_started}
@@ -205,6 +207,21 @@ export function UploadWorkspace() {
         )}
       </PageBody>
     </div>
+  );
+}
+
+/**
+ * 既定の文書解析エンジン（Docling）で扱えない形式の案内（#286）。取込は始めていないので warning で、
+ * 対処（処理レシピで Unstructured を選ぶ・サービスを起動する）を backend の文言のまま出す。
+ */
+function UploadParserNotice({ notice }: { notice: ParserSourceNotice | null | undefined }) {
+  if (!notice) return null;
+  return (
+    <Banner severity="warning" title={t("upload.parserNotice.title")}>
+      <p className="text-sm" data-testid="upload-parser-notice">
+        {notice.message}
+      </p>
+    </Banner>
   );
 }
 
@@ -257,6 +274,12 @@ function BatchUploadSummary({
                     <p className="mt-1 text-xs text-fg-muted">
                       {t("sourceProfile.parser")}: {t(parserProfileKey(item.source_profile.parser_profile))}
                     </p>
+                    {item.parser_notice ? (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-warning-fg">
+                        <AlertTriangle size={14} className="shrink-0" aria-hidden />
+                        {t("upload.parserNotice.short")}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">

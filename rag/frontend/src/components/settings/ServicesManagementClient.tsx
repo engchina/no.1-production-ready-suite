@@ -19,20 +19,21 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  CircleDashed,
   CircleSlash,
+  CircleX,
   Clipboard,
-  Container,
   Cpu,
   HardDriveDownload,
-  Hammer,
+  Hourglass,
   MinusCircle,
   Play,
   RefreshCw,
+  RotateCw,
   Server,
   SlidersHorizontal,
   Square,
   TerminalSquare,
-  Trash2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -103,11 +104,19 @@ export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey |
 
 /**
  * 行に常に表示する起動 / 停止のどちらか 1 つを状態から決める（#158）。
- * 稼働中・一部異常は「停止」、それ以外（停止中・未設定・状態の取得中 / 失敗）は「起動」。
+ * 稼働中・一部異常・起動中（unit は動いている）は「停止」、それ以外（停止中・起動失敗・未登録・
+ * 未設定・状態の取得中 / 失敗）は「起動」。
  */
 export function servicePrimaryAction(status: DisplayRuntimeStatus): "start" | "stop" {
-  return status === "running" || status === "degraded" ? "stop" : "start";
+  return status === "running" || status === "degraded" || status === "starting" ? "stop" : "start";
 }
+
+/** 再起動を出す状態（unit が動いているときだけ。停止中は「起動」を使う）。 */
+export function serviceCanRestart(status: DisplayRuntimeStatus): boolean {
+  return status === "running" || status === "degraded" || status === "starting";
+}
+
+type ServiceControlAction = "start" | "stop" | "restart";
 
 /** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
 export function ServicesManagementClient() {
@@ -195,18 +204,14 @@ export function ServicesManagementClient() {
     return { category, label, groups };
   });
 
-  async function act(
-    service: DisplayServiceData,
-    action: "start" | "stop" | "build" | "remove"
-  ) {
-    if (action === "stop" || action === "remove") {
-      const key = action === "stop" ? "stop" : "remove";
+  async function act(service: DisplayServiceData, action: ServiceControlAction) {
+    if (action === "stop") {
       const ok = await confirm({
-        title: t(`settings.services.confirm.${key}.title` as I18nKey),
-        description: t(`settings.services.confirm.${key}.description` as I18nKey, {
+        title: t("settings.services.confirm.stop.title"),
+        description: t("settings.services.confirm.stop.description", {
           service: serviceLabel(service),
         }),
-        confirmLabel: t(`settings.services.confirm.${key}.confirm` as I18nKey),
+        confirmLabel: t("settings.services.confirm.stop.confirm"),
         cancelLabel: t("settings.services.confirm.cancel"),
         tone: "danger",
       });
@@ -220,11 +225,9 @@ export function ServicesManagementClient() {
           const toastKey: I18nKey =
             action === "start"
               ? "settings.services.toast.started"
-              : action === "build"
-                ? "settings.services.toast.built"
-                : action === "remove"
-                  ? "settings.services.toast.removed"
-                  : "settings.services.toast.stopped";
+              : action === "restart"
+                ? "settings.services.toast.restarted"
+                : "settings.services.toast.stopped";
           toast.success(t(toastKey, { service: serviceLabel(service) }));
         },
         onError: (error) => {
@@ -330,7 +333,7 @@ export function ServicesManagementClient() {
                     : stage.label
                 }
                 note={
-                  // CPU note(Unstructured 既定)は解析(parser)ステージのみ。前処理 CPU には出さない。
+                  // CPU note(Docling 既定)は解析(parser)ステージのみ。前処理 CPU には出さない。
                   g.noteKey && (g.profile !== "cpu" || stage.category === "parser")
                     ? t(g.noteKey)
                     : undefined
@@ -351,20 +354,33 @@ export function ServicesManagementClient() {
   );
 }
 
-/** 起動前に推奨するビルド/準備コマンドを、RAG 検索の詳細条件と同じ折りたたみで提示する(既定で閉じる)。 */
+/**
+ * サーバー上で状態・ログを確かめるコマンドを、RAG 検索の詳細条件と同じ折りたたみで提示する(既定で閉じる)。
+ * 開発環境では unit と sudoers を登録するコマンドも出す(rag/scripts/rag-services.sh)。
+ */
 function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
   const [open, setOpen] = useState(false);
-  // dev は override を重ねた compose、prod は base のみ(control.py の build hint と一致)。
-  const files = mode === "dev" ? "-f docker-compose.yml -f docker-compose.dev.yml " : "";
   const commands = [
     {
-      label: t("settings.services.commands.buildAll.label"),
-      command: `docker compose ${files}build`,
+      label: t("settings.services.commands.status.label"),
+      command: "systemctl list-units --all 'production-ready-rag-*'",
     },
     {
-      label: t("settings.services.commands.buildGpu.label"),
-      command: `docker compose ${files}--profile gpu build parser-asr`,
+      label: t("settings.services.commands.logs.label"),
+      command: "sudo journalctl -u production-ready-rag-parser-docling.service -f",
     },
+    ...(mode === "dev"
+      ? [
+          {
+            label: t("settings.services.commands.install.label"),
+            command: "scripts/rag-services.sh install",
+          },
+          {
+            label: t("settings.services.commands.installGpu.label"),
+            command: "scripts/rag-services.sh install --gpu",
+          },
+        ]
+      : []),
   ];
   return (
     <div className="rounded-md border border-border bg-surface-sunken">
@@ -452,7 +468,7 @@ function ServiceGroup({
   pending: string | null;
   logsServiceId: string | null;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
+  onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   if (services.length === 0) return null;
@@ -496,7 +512,7 @@ function ServiceRow({
   pending: string | null;
   logsOpen: boolean;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
+  onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   const deployable = service.deployable;
@@ -505,15 +521,18 @@ function ServiceRow({
   const statusError = service.status === "error";
   const required = service.execution_policy === "required_no_fallback";
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
+  const notInstalled = service.status === "not_installed";
+  const failed = service.status === "failed";
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
-  const buildPending = pending === `${service.service_id}:build`;
-  const removePending = pending === `${service.service_id}:remove`;
-  // ponytail: このサービス自身の操作中だけ自分の起動/停止/build/削除を排他する(他サービスは無関係)
-  const thisPending = startPending || stopPending || buildPending || removePending;
+  const restartPending = pending === `${service.service_id}:restart`;
+  // ponytail: このサービス自身の操作中だけ自分の起動/停止/再起動を排他する(他サービスは無関係)
+  const thisPending = startPending || stopPending || restartPending;
   let controlHint: string | undefined;
   if (!controlEnabled) {
     controlHint = t("settings.services.controlDisabled.hint");
+  } else if (notInstalled) {
+    controlHint = t("settings.services.notInstalledHint");
   } else if (statusLoading) {
     controlHint = t("settings.services.statusLoadingHint");
   } else if (statusError) {
@@ -525,9 +544,7 @@ function ServiceRow({
   const logsPanelId = `service-logs-${service.service_id}`;
   const primaryAction = servicePrimaryAction(service.status);
   const primaryPending = primaryAction === "start" ? startPending : stopPending;
-  // degraded は停止を主操作にするが、従来どおり起動(再作成)もメニューから選べる。
-  const secondaryStartPending = primaryAction === "stop" && startPending;
-  // ログ・ビルド・削除などの副操作は行に 1 個の RowActionMenu にまとめる（buttons.md §5.1）。
+  // ログ・再起動などの副操作は行に 1 個の RowActionMenu にまとめる（buttons.md §5.1）。
   const rowActions: EntityAction[] = [
     {
       id: "logs",
@@ -537,32 +554,14 @@ function ServiceRow({
       onSelect: () => onToggleLogs(service),
     },
     {
-      id: "start",
-      label: t("settings.services.action.start"),
-      icon: Play,
-      visible: service.status === "degraded",
-      loading: secondaryStartPending,
-      disabled: !controlEnabled || !service.statusReady || (thisPending && !startPending),
-      onSelect: () => onAct(service, "start"),
-    },
-    {
-      id: "build",
-      label: t("settings.services.action.build"),
-      icon: Hammer,
-      loading: buildPending,
-      disabled: !controlEnabled || (thisPending && !buildPending),
-      testId: `service-action-build-${service.service_id}`,
-      onSelect: () => onAct(service, "build"),
-    },
-    {
-      id: "remove",
-      label: t("settings.services.action.remove"),
-      icon: Trash2,
-      tone: "danger",
-      loading: removePending,
-      disabled: !controlEnabled || (thisPending && !removePending),
-      testId: `service-action-remove-${service.service_id}`,
-      onSelect: () => onAct(service, "remove"),
+      id: "restart",
+      label: t("settings.services.action.restart"),
+      icon: RotateCw,
+      visible: serviceCanRestart(service.status),
+      loading: restartPending,
+      disabled: !controlEnabled || !service.statusReady || (thisPending && !restartPending),
+      testId: `service-action-restart-${service.service_id}`,
+      onSelect: () => onAct(service, "restart"),
     },
   ];
 
@@ -576,6 +575,12 @@ function ServiceRow({
           </div>
           <p className="font-mono text-xs text-fg-muted">{service.service_id}</p>
           {service.model_cache ? <ServiceModelCacheRow cache={service.model_cache} /> : null}
+          {notInstalled || failed ? (
+            <p className="mt-1 flex items-center gap-1 text-xs text-fg-muted">
+              <AlertTriangle size={14} aria-hidden />
+              {t(notInstalled ? "settings.services.notInstalledHint" : "settings.services.failedHint")}
+            </p>
+          ) : null}
           {stoppedHintKey ? (
             <p
               className={cn(
@@ -603,7 +608,12 @@ function ServiceRow({
                   tone={primaryAction === "stop" ? "danger" : "default"}
                   size="sm"
                   loading={primaryPending}
-                  disabled={!controlEnabled || !service.statusReady || (thisPending && !primaryPending)}
+                  disabled={
+                    !controlEnabled ||
+                    !service.statusReady ||
+                    notInstalled ||
+                    (thisPending && !primaryPending)
+                  }
                   onClick={() => onAct(service, primaryAction)}
                   aria-label={`${serviceLabel(service)} ${t(`settings.services.action.${primaryAction}` as I18nKey)}`}
                   icon={primaryAction === "stop" ? Square : Play}
@@ -615,7 +625,7 @@ function ServiceRow({
               <RowActionMenu
                 actions={rowActions}
                 ariaLabel={t("common.objectActions.aria", { name: serviceLabel(service) })}
-                loading={buildPending || removePending || secondaryStartPending}
+                loading={restartPending}
                 testId={`service-row-actions-${service.service_id}`}
               />
             </>
@@ -656,7 +666,6 @@ function ServiceLogPanel({
   logsQuery: UseQueryResult<ServiceLogsData>;
 }) {
   const content = logsQuery.data?.content ?? "";
-  const sourceKey = "settings.services.logs.source.docker";
 
   async function copyLogs() {
     try {
@@ -680,7 +689,10 @@ function ServiceLogPanel({
           </p>
           {logsQuery.data ? (
             <p className="mt-0.5 text-xs text-fg-muted">
-              {t(sourceKey as I18nKey, { lines: String(logsQuery.data.lines) })}
+              {t("settings.services.logs.source.journald", {
+                unit: service.systemd_unit ?? service.service_id,
+                lines: String(logsQuery.data.lines),
+              })}
             </p>
           ) : null}
         </div>
@@ -729,9 +741,9 @@ function ServiceLogPanel({
   );
 }
 
-/** 配備モード(dev/prod とも docker compose。dev は dev override でポート公開)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
+/** 配備モード(dev/prod とも systemd の unit を操作する)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
 function ModeBadge({ mode }: { mode: DeploymentMode }) {
-  const Icon = mode === "dev" ? TerminalSquare : Container;
+  const Icon = mode === "dev" ? TerminalSquare : Server;
   return (
     <span
       className={cn(
@@ -782,7 +794,10 @@ const STATUS_META: Record<
 > = {
   running: { className: "bg-success-subtle text-success-fg", icon: CheckCircle2 },
   degraded: { className: "bg-warning-subtle text-warning-fg", icon: AlertTriangle },
+  starting: { className: "bg-info-subtle text-info-fg", icon: Hourglass },
+  failed: { className: "bg-danger-subtle text-danger-fg", icon: CircleX },
   stopped: { className: "bg-surface-hover text-fg-muted", icon: CircleSlash },
+  not_installed: { className: "bg-surface-hover text-fg-muted", icon: CircleDashed },
   unconfigured: { className: "bg-surface-hover text-fg-muted", icon: MinusCircle },
   in_process: { className: "bg-info-subtle text-info-fg", icon: Cpu },
   loading: { className: "bg-surface-hover text-fg-muted", icon: RefreshCw, spin: true },
@@ -810,7 +825,7 @@ function serviceLabel(service: ServiceCatalogItemData): string {
   return t(service.label_key as I18nKey);
 }
 
-/** モデルキャッシュの Docker volume とコンテナ内パスを表示する行。 */
+/** モデルキャッシュの場所(サービスの実行ユーザーの ~/.cache)を表示する行。 */
 function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
   return (
     <p
@@ -819,9 +834,7 @@ function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
     >
       <HardDriveDownload size={14} aria-hidden />
       <span className="text-fg-muted">{t("settings.services.modelCache.label")}:</span>
-      <span className="font-mono break-all text-fg">{cache.volume_name}</span>
-      <span aria-hidden>→</span>
-      <span className="font-mono break-all text-fg">{cache.container_path}</span>
+      <span className="font-mono break-all text-fg">{cache.path}</span>
       <span className="rounded-sm bg-surface-hover px-1.5 py-0.5 text-xs font-medium text-fg-muted">
         {t("settings.services.modelCache.readonly")}
       </span>

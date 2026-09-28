@@ -18,7 +18,9 @@ local 開発だけ `uvicorn --reload` を使います。
 
 外部 parser(Docling / Unstructured / MinerU / Dots.OCR)は **backend には載せず**、
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
-`app.clients.parser_service` で HTTP 委譲し、未達時は local / Enterprise AI VLM へ fallback します。
+`app.clients.parser_service` で HTTP 委譲します。未達・空振り時は別経路へ縮退せず取込を止めます。
+既定の解析エンジンは Docling(`RAG_PARSER_ADAPTER_BACKEND=docling`、#286)です。Unstructured などは
+「検索・回答設定 › 文書解析」で明示的に選びます。
 重い parser 依存は runtime / 既定 `uv sync` に入りません。必要時のみ単一 adapter を per-adapter extra
 (`uv sync --extra docling` 等、ローカルデバッグ用)で導入できます。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保存済みの設定・文書レシピ・KB 構築設定に
@@ -174,7 +176,7 @@ Object Storage client の key は保存時に安全な文字へ正規化しま�
 
 `POST /api/documents/{id}/ingest` と `POST /api/documents/{id}/ingestion-jobs` は、どちらも HTTP リクエスト内では取込を実行せず、永続化済み `IngestionJob` を返します。`UPLOADED` / `ERROR` は `EXTRACT` job として `QUEUED`、`REVIEW` 承認後は `INDEX` job として `QUEUED`、`INDEXED` は既定で `SKIPPED(already_indexed)`、`force=true` では再取込用の `QUEUED` になります。`INGESTING` / `INDEXING` は二重実行を避けるため 409 を返します。実際の OCR/本文抽出、chunking、embedding、Oracle 26ai 索引は `IngestionQueueWorker` が消費します。
 
-ローカル開発の既定では `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED=true` です。API process 内の worker は軽量 dispatcher として動き、job 本体は `python -m app.rag.ingestion_job_runner <job_id>` の subprocess で実行されます。Docling / OCR / CUDA 初期化が API event loop や他画面の設定 API を塞がないようにするためです。Docker Compose / 本番では `backend` と `ingestion-worker` service を分け、worker container は `RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED=false` で直接 job を実行します。
+ローカル開発の既定では `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED=true` です。API process 内の worker は軽量 dispatcher として動き、job 本体は `python -m app.rag.ingestion_job_runner <job_id>` の subprocess で実行されます。Docling / OCR / CUDA 初期化が API event loop や他画面の設定 API を塞がないようにするためです。本番（#286 以降の systemd の配備）では `production-ready-rag-backend.service`（`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false`）と `production-ready-rag-ingestion-worker.service` を分け、取込ジョブの consumer は worker の unit だけにします（process isolation は既定の true のまま）。
 
 取込前に Object Storage から取得した原本 bytes を `file_size_bytes` / `content_sha256` と照合します。不一致の場合は OCR/索引へ進まず `ERROR` 状態にし、409 を返します。
 

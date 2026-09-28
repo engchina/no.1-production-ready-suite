@@ -1,3 +1,6 @@
+# 【段階的に廃止】本番と開発の標準はネイティブ配備(uv の venv + systemd。#286)。配備・サービス管理画面・
+# スクリプトはこの compose を使わない(rag/docs/deployment.md)。このファイルと Dockerfile は後続の PR で削除する。
+#
 # parser は独立マイクロサービス化している(services/parsers/<name>)。
 # backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
 # HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
@@ -6,8 +9,8 @@
 
 # compose の project 名を固定する(#310)。未指定だと compose ファイルのディレクトリ名(`rag`)から
 # 決まり、旧 repo(`no1-production-ready-rag`)や本番(`production-ready-rag`)と別の project になる。
-# 本番の init_script.sh の wrapper(--project-name)・サービス管理(backend/app/services/control.py)・
-# scripts/build-services.sh も同じ名前を使う。image 名は `production-ready-rag-<service>`、
+# 以前の本番(init_script.sh の wrapper `rag-compose`)も同じ名前を使っていた(#286 の移行で止める)。
+# image 名は `production-ready-rag-<service>`、
 # volume 名は `production-ready-rag_<volume>` になる。
 name: production-ready-rag
 
@@ -22,6 +25,10 @@ x-parser-service-urls: &parser-service-urls
   RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL: http://preprocess-pdf-to-page-images:8000
   RAG_PREPROCESS_CSV_TO_JSON_SERVICE_URL: http://preprocess-csv-to-json:8000
   RAG_PREPROCESS_EXCEL_TO_JSON_SERVICE_URL: http://preprocess-excel-to-json:8000
+  # backend の既定値はネイティブ配備の 127.0.0.1:<port>(#286)。compose では service 名を明示する。
+  RAG_PREPROCESS_URL_TO_MARKDOWN_SERVICE_URL: http://preprocess-url-to-markdown:8000
+  RAG_PREPROCESS_IMAGE_ENHANCE_SERVICE_URL: http://preprocess-image-enhance:8000
+  RAG_PREPROCESS_PII_REDACT_SERVICE_URL: http://preprocess-pii-redact:8000
 
 # HuggingFace の DL ミラー/認証を各モデル parser へ供給する。
 # - build 時(焼き込み)はミラーのみ渡す。token は image 履歴へ残さないため build-arg にしない
@@ -58,7 +65,7 @@ services:
         required: false
     environment:
       <<: [*parser-service-urls, *platform-env]
-      # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
+      # コンテナ運用は prod モード。
       RAG_ENVIRONMENT: prod
       PLATFORM_LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
       PLATFORM_OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -73,17 +80,10 @@ services:
       RAG_PARSER_READINESS_PROBE_ENABLED: "true"
       # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
       RAG_PREPROCESS_ENABLED: "true"
-      # サービス管理画面: 既定は稼働状態の可視化のみ(/api/services は各 /health を集約)。
-      # 画面から起動/停止(docker compose 制御)も使う場合は、backend から docker CLI を
-      # 実行できるようにした上で RAG_SERVICE_CONTROL_ENABLED: "true" を設定する。
-      # コンテナ運用では docker socket + docker CLI のマウントが必要(下記コメント参照)。
-      # RAG_SERVICE_CONTROL_ENABLED: "true"
+      # サービス管理画面は systemd の unit を操作する(#286)。コンテナの中には systemd が無いため、
+      # この compose では稼働状態の可視化(/health)だけになる。
     ports:
       - "8000:8000"
-    # サービス管理画面から起動/停止を行う場合のみ、docker socket と compose ファイルを
-    # backend へマウントする(既定はコメントアウト=可視化のみで socket 非公開)。
-    #   - /var/run/docker.sock:/var/run/docker.sock
-    #   - ./docker-compose.yml:/app/docker-compose.yml:ro
     # OCI 設定は権限調整済みの named volume に一度だけ seed して使う。
     volumes:
       - /u01/aipoc/wallet:/u01/aipoc/wallet

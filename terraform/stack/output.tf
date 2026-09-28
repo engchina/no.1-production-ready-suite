@@ -35,9 +35,9 @@ output "rag_ssh_to_instance" {
   value       = contains(keys(local.instance_access_ips), "rag") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["rag"]}" : null
 }
 
-output "rag_compose_services" {
-  description = "docker compose services built and started on the RAG Compute instance."
-  value       = var.deploy_rag ? join(", ", local.rag_compose_services) : null
+output "rag_services" {
+  description = "Preprocessing and parser services installed as systemd units (production-ready-rag-<service>.service) on the RAG Compute instance."
+  value       = var.deploy_rag ? join(", ", local.rag_services) : null
 }
 
 output "nl2sql_application_url" {

@@ -59,7 +59,8 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 - 観測性: Langfuse + Prometheus + OpenTelemetry。
 - 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: Docker Compose(開発)。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB + Docker Compose、CPU parser のみ)で配備する。OKE / Container Instances は規模が決まってから検討する(#136)。
+- インフラ: 自前のコードは Docker を使わずネイティブで動かす(#286)。backend・取込 worker・前処理・parser はサービスごとの uv の venv(Python 3.12、`uv sync --locked --no-dev --python 3.12`)と systemd の unit で動かし、unit の定義は `scripts/rag-systemd.sh`(本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う)に置く。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB、CPU parser のみ)で配備する。`docker-compose*.yml` と Dockerfile は段階的に廃止する(後続の PR で削除)。OKE / Container Instances は規模が決まってから検討する(#136)。
+- サービス管理画面は systemd の unit を操作する(起動 = `enable --now`、停止 = `disable --now` で最後に操作した状態を保つ)。backend が実行してよいのは、sudoers で許可した allowlist の unit の `systemctl` / `journalctl` だけ(argv 固定・shell を通さない。`app/services/systemd.py`)。前処理 / parser を足すときは、catalog・`scripts/rag-systemd.sh` の `RAG_MICROSERVICES`・URL 設定の既定値(`127.0.0.1:<port>`)をそろえる(テストで照合する)。
 
 ## UI/UX 開発ルール
 
@@ -99,7 +100,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 文書は中身に加えて **1〜3 件の独立した処理レシピ(preprocess / parser / chunking)** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
 - ファイル準備(preprocess)。
-- 文書解析(parser / OCR engine)。
+- 文書解析(parser / OCR engine)。global の既定エンジンは Docling(#286。PDF と画像だけ)。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない(判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない)。
 - 文書分割(chunking strategy、chunk size、overlap、parent-child)。
 - 索引構築(vector index build、GraphRAG、navigation summary、asset summary、field extraction)。
 - 品質 gate(解析品質、chunk 品質、公開前チェック)。

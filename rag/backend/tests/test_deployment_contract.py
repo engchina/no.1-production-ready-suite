@@ -1,4 +1,4 @@
-"""コンテナ配布物の最低限の本番運用契約を固定するテスト。"""
+"""配布物(ネイティブ配備と、段階的に廃止するコンテナ)の最低限の本番運用契約を固定するテスト。"""
 
 from pathlib import Path
 
@@ -147,3 +147,95 @@ def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
     assert workflow.index("app.rag.parser_adapter_contract_cli") < workflow.index(
         "app.rag.file_processing_golden_cli"
     )
+
+
+# --- ネイティブ配備(uv の venv + systemd。#286) --------------------------------
+
+
+def _systemd_script() -> str:
+    return (REPO_ROOT / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+
+
+def _script_microservices() -> dict[str, tuple[str, int, int]]:
+    """rag/scripts/rag-systemd.sh の RAG_MICROSERVICES(id|dir|port|timeout)を読む。"""
+    import re
+
+    block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", _systemd_script())
+    assert block is not None, "RAG_MICROSERVICES が見つからない"
+    services: dict[str, tuple[str, int, int]] = {}
+    for line in block.group(1).splitlines():
+        service_id, directory, port, timeout = line.strip().strip('"').split("|")
+        services[service_id] = (directory, int(port), int(timeout))
+    return services
+
+
+def test_systemd_units_match_service_catalog() -> None:
+    """unit を作るスクリプトのサービス・ディレクトリ・ポートは、backend のカタログと同じ。"""
+    from app.services.catalog import SERVICE_CATALOG, SYSTEMD_UNIT_PREFIX
+
+    services = _script_microservices()
+    deployable = {entry.service_id: entry for entry in SERVICE_CATALOG if entry.deployable}
+    assert set(services) == set(deployable)
+    for service_id, (directory, port, _timeout) in services.items():
+        entry = deployable[service_id]
+        assert directory == entry.working_dir, service_id
+        assert port == entry.port, service_id
+        assert (REPO_ROOT / directory / "pyproject.toml").is_file(), service_id
+        assert (REPO_ROOT / directory / "uv.lock").is_file(), service_id
+    assert f'RAG_UNIT_PREFIX="{SYSTEMD_UNIT_PREFIX}"' in _systemd_script()
+
+
+def test_systemd_sudoers_matches_backend_argv() -> None:
+    """sudoers は backend が sudo -n で実行する argv と引数まで同じ(違うと操作が拒否される)。"""
+    from app.services.systemd import (
+        JOURNAL_FETCH_LINES,
+        JOURNALCTL,
+        SYSTEMCTL,
+        journalctl_argv,
+        systemctl_action_argv,
+    )
+
+    script = _systemd_script()
+    assert f'RAG_SYSTEMCTL="{SYSTEMCTL}"' in script
+    assert f'RAG_JOURNALCTL="{JOURNALCTL}"' in script
+    assert f"RAG_JOURNAL_FETCH_LINES={JOURNAL_FETCH_LINES}" in script
+    unit = "production-ready-rag-parser-docling.service"
+    templates = {
+        '"${RAG_SYSTEMCTL} enable --now ${unit}"': systemctl_action_argv("start", unit),
+        '"${RAG_SYSTEMCTL} disable --now ${unit}"': systemctl_action_argv("stop", unit),
+        '"${RAG_SYSTEMCTL} restart ${unit}"': systemctl_action_argv("restart", unit),
+        '"${RAG_JOURNALCTL} -u ${unit} -n ${RAG_JOURNAL_FETCH_LINES} --no-pager -o short-iso"': (
+            journalctl_argv(unit)
+        ),
+    }
+    for template, argv in templates.items():
+        assert template in script
+        # sudo -n の後ろが sudoers の 1 行と同じ。
+        assert argv[:2] == ["/usr/bin/sudo", "-n"]
+        rendered = (
+            template.strip('"')
+            .replace("${RAG_SYSTEMCTL}", SYSTEMCTL)
+            .replace("${RAG_JOURNALCTL}", JOURNALCTL)
+            .replace("${RAG_JOURNAL_FETCH_LINES}", str(JOURNAL_FETCH_LINES))
+            .replace("${unit}", unit)
+        )
+        assert rendered == " ".join(argv[2:])
+
+
+def test_native_deployment_defaults_match_backend_settings() -> None:
+    """init_script.sh が前提にする既定値(upload 上限・実行用 env・保存先)は Settings と同じ。"""
+    from app.config import BACKEND_ROOT, DEFAULT_LOCAL_STORAGE_DIR, Settings
+
+    init_script = (REPO_ROOT / "init_script.sh").read_text(encoding="utf-8")
+    fields = Settings.model_fields
+    assert f"RAG_DEFAULT_MAX_UPLOAD_BYTES={fields['max_upload_bytes'].default}" in init_script
+    assert fields["rag_service_runtime_env_file"].default == str(
+        BACKEND_ROOT / "service-runtime.env"
+    )
+    assert 'SERVICE_RUNTIME_ENV_FILE="${BACKEND_DIR}/service-runtime.env"' in init_script
+    assert f'DATA_DIR="${{DATA_DIR:-{DEFAULT_LOCAL_STORAGE_DIR}}}"' in init_script
+    # 配備は Docker を入れず、サービスごとの venv を Python 3.12 で作る。
+    assert "docker-ce" not in init_script
+    assert "docker compose" not in init_script
+    assert 'RAG_PYTHON_VERSION="3.12"' in _systemd_script()
+    assert "sync --locked --no-dev --python" in _systemd_script()

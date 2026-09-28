@@ -43,7 +43,7 @@ from app.clients.parser_service import (
 )
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
-from app.config import Settings, get_settings
+from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings, get_settings
 from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -232,7 +232,7 @@ class IngestionPipeline:
         - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
         - OCI service backend(Vision / Document Understanding)も sentinel を返し、
           ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
-        - それ以外(既定 ``unstructured`` 含む)は runner を fail-fast で実行する。
+        - それ以外(既定 ``docling`` 含む)は runner を fail-fast で実行する。
           抽出が空なら ``ParserServiceUnavailableError`` を送出し、別経路へ縮退しない。
         """
         unsupported_reason = (
@@ -255,15 +255,21 @@ class IngestionPipeline:
                 unsupported_reason="audio_transcription_not_configured",
             )
         backend = (
-            str(getattr(self._settings, "rag_parser_adapter_backend", "unstructured"))
+            str(
+                getattr(
+                    self._settings,
+                    "rag_parser_adapter_backend",
+                    DEFAULT_PARSER_ADAPTER_BACKEND,
+                )
+            )
             .strip()
             .casefold()
-            or "unstructured"
+            or DEFAULT_PARSER_ADAPTER_BACKEND
         )
-        # 廃止済み baseline 値 local / local_partition は既定 unstructured サービスへマップする
+        # 廃止済み baseline 値 local / local_partition は既定エンジンのサービスへマップする
         # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
         if backend in {"local", "local_partition"}:
-            backend = "unstructured"
+            backend = DEFAULT_PARSER_ADAPTER_BACKEND
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -503,7 +509,7 @@ class IngestionPipeline:
                 if extraction is not None:
                     pass
                 elif parser_result.extraction is not None:
-                    # 既定 unstructured を含む parser マイクロサービスの抽出をそのまま使う。
+                    # 既定 docling を含む parser マイクロサービスの抽出をそのまま使う。
                     extraction = parser_result.extraction
                 else:
                     # local fallback / Office セグメント / 暗黙 VLM-OCR は持たない。

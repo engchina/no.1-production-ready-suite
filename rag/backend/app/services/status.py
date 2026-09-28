@@ -1,8 +1,8 @@
-"""サービス稼働状態プローブ。
+"""サービス稼働状態プローブ(``systemctl show`` + /health。#286)。
 
-各マイクロサービスの ``GET /health`` を bounded timeout で並列に問い合わせ、稼働状態を
-``running / degraded / stopped / unconfigured`` に正規化する。
-``parser_adapter_readiness._probe_service_health`` の best-effort パターンを async 化したもの。
+各マイクロサービスの systemd の unit の状態と ``GET /health``(bounded timeout)を並列に問い合わせ、
+稼働状態を正規化する。systemd を使えない環境(コンテナ・systemd なしの開発環境)では
+/health だけで判定する(従来どおり)。
 """
 
 from __future__ import annotations
@@ -19,50 +19,85 @@ from app.services.catalog import (
     ServiceCatalogEntry,
     service_health_url,
 )
+from app.services.control import read_unit_state
 
 logger = logging.getLogger(__name__)
 
-# - running: /health が status=ok(正常稼働)
+# - running: unit が active で /health が status=ok(正常稼働)
 # - degraded: 到達したが status!=ok(例: LibreOffice 未導入)
-# - stopped: 接続拒否/timeout(コンテナ停止と解釈)
+# - starting: unit は active / activating だが /health にまだ到達できない(起動中・モデル読込中)
+# - failed: unit が失敗して止まった(journalctl -u <unit> で原因を確認する)
+# - stopped: unit が止まっている(systemd を使えない環境では /health の接続拒否 / timeout)。
+#   unit の外のプロセスが同じポートで応答しているときは、その /health の状態を返す
+# - not_installed: systemd の unit が登録されていない(配備で選ばなかったサービスなど)
 # - unconfigured: URL 未設定
 # - in_process: deployable=False のステージ。backend 内処理で動作し、サービス化は将来対応
-#   (/health を叩かず固定で返す)。
+#   (/health も systemctl も叩かず固定で返す)。
 ServiceRuntimeStatus = Literal[
     "running",
     "degraded",
+    "starting",
+    "failed",
     "stopped",
+    "not_installed",
     "unconfigured",
     "in_process",
 ]
+HealthStatus = Literal["ok", "degraded", "unreachable"]
+_ACTIVE_STATES = {"active", "reloading", "activating"}  # unit が動いている(起動中を含む)
 
 
-async def probe_service_status(
-    settings: Settings, entry: ServiceCatalogEntry
-) -> ServiceRuntimeStatus:
-    """1 サービスの /health を問い合わせて稼働状態を返す(例外は安全に縮退)。"""
-    # deployable=False は backend 内処理で動作するため、HTTP を叩かず固定で in_process を返す。
-    if not entry.deployable:
-        return "in_process"
-    url = service_health_url(settings, entry)
-    if not url:
-        return "unconfigured"
+async def probe_health(settings: Settings, url: str, service_id: str) -> HealthStatus:
+    """/health を 1 回だけ問い合わせる(例外は unreachable へ縮退)。"""
     timeout = float(settings.rag_service_status_probe_timeout_seconds)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(f"{url}/health")
             response.raise_for_status()
             payload = response.json()
-    except Exception as exc:  # noqa: BLE001 - 到達不可は stopped へ正規化する境界
+    except Exception as exc:  # noqa: BLE001 - 到達不可は unreachable へ正規化する境界
         logger.debug(
-            "service status probe failed: service=%s url=%s error=%s",
-            entry.service_id,
-            url,
-            exc,
+            "service status probe failed: service=%s url=%s error=%s", service_id, url, exc
         )
-        return "stopped"
+        return "unreachable"
     status = str(payload.get("status", "")).strip().lower() if isinstance(payload, dict) else ""
-    return "running" if status == "ok" else "degraded"
+    return "ok" if status == "ok" else "degraded"
+
+
+def _from_health(health: HealthStatus) -> ServiceRuntimeStatus:
+    if health == "ok":
+        return "running"
+    if health == "degraded":
+        return "degraded"
+    return "stopped"
+
+
+async def probe_service_status(
+    settings: Settings, entry: ServiceCatalogEntry
+) -> ServiceRuntimeStatus:
+    """1 サービスの unit の状態と /health を問い合わせて稼働状態を返す。"""
+    # deployable=False は backend 内処理で動作するため、固定で in_process を返す。
+    if not entry.deployable:
+        return "in_process"
+    url = service_health_url(settings, entry)
+    if not url:
+        return "unconfigured"
+    try:
+        unit_state = await read_unit_state(settings, entry)
+    except Exception as exc:  # noqa: BLE001 - systemd を使えない環境は /health だけで判定する
+        logger.debug("systemctl show failed: service=%s error=%s", entry.service_id, exc)
+        return _from_health(await probe_health(settings, url, entry.service_id))
+    health = await probe_health(settings, url, entry.service_id)
+    if unit_state.active_state in _ACTIVE_STATES:
+        return "starting" if health == "unreachable" else _from_health(health)
+    # unit の外(手元で uv run したプロセスなど)が同じポートで応答している場合は、その状態を出す。
+    if health != "unreachable":
+        return _from_health(health)
+    if not unit_state.installed:
+        return "not_installed"
+    if unit_state.active_state == "failed":
+        return "failed"
+    return "stopped"
 
 
 async def probe_service_statuses(settings: Settings) -> dict[str, ServiceRuntimeStatus]:

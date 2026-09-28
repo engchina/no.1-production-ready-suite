@@ -1,14 +1,13 @@
+# 【段階的に廃止】開発の標準は scripts/rag-services.sh(uv の venv + systemd。#286)。サービス管理画面は
+# この compose を使わない。後続の PR で削除する。
+#
 # dev(backend をホストで uv 起動)向けの compose override。
 #
 # dev では backend はホストプロセス、各マイクロサービスはコンテナで動かす。ホストの
 # backend が各サービスの /health・/parse 等を叩けるよう、コンテナの 8000 を localhost の
 # dev_port(catalog の ServiceCatalogEntry.dev_port)へ公開する。ポートは catalog と一致させる。
 #
-# サービス管理画面(dev)は内部で次を実行する:
-#   docker compose --project-name production-ready-rag --project-directory <rag> \
-#     -f <rag>/docker-compose.yml -f <rag>/docker-compose.dev.yml up -d --no-build <service_id>
-# GPU ASR は base 側の profiles:["gpu"] を継承するため
-# --profile gpu が併用される。oci parser は profiles:["oci"]。
+# GPU ASR は base 側の profiles:["gpu"]、oci parser は profiles:["oci"]。
 # 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。
 #
 # モデルは dev では **イメージへ焼き込まず**(BAKE_MODELS=0)、parser ごとの Docker

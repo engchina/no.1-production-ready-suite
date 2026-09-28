@@ -31,6 +31,6 @@ boilerplate を除去した **クリーン Markdown** へ変換する前処理�
 # dev(ホストの uv プロセス)
 uv run --directory services/preprocess/url_to_markdown uvicorn app.main:app --port 8014
 
-# Docker(build context = リポジトリ root)
-docker compose up preprocess-url-to-markdown
+# rag-services.sh(サービスの venv を作って前面で起動)
+scripts/rag-services.sh run preprocess-url-to-markdown   # rag/ で実行(uv の venv。systemd は install)
 ```

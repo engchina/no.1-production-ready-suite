@@ -31,10 +31,10 @@ write_files:
     content: |
       ${wallet_content}
 %{ if product == "rag" ~}
-  - path: "/u01/aipoc/props/compose_services.txt"
+  - path: "/u01/aipoc/props/rag_services.txt"
     permissions: "0644"
     content: |
-      ${compose_services}
+      ${rag_services}
 %{ endif ~}
   - path: "/u01/aipoc/props/adb_name.txt"
     permissions: "0644"
@@ -111,7 +111,7 @@ write_files:
         fi
       }
 
-      # Docker を入れる前に保存する（Docker が追加する iptables の規則を永続化しないため）。
+      # アプリの配備（init_script.sh）より前に、application port を開ける規則だけを保存する。
       configure_firewall() {
         if command -v iptables >/dev/null 2>&1; then
           iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$${APPLICATION_PORT}" -j ACCEPT || true

@@ -34,14 +34,16 @@ cd frontend
 npm ci
 BACKEND_URL=http://localhost:8000 npm run dev   # http://localhost:3000（BACKEND_URL 未指定なら /api は 404）
 
-# まとめて（Docker。CPU parser サービス込み）
-docker compose up --build
-# ローカル GPU parser(ASR)も起動する場合(CUDA host)
-docker compose --profile gpu up --build
+# 前処理 / CPU parser(サービスごとの uv の venv + systemd の unit。rag/ で実行。#286)
+scripts/rag-services.sh install            # GPU parser(ASR)も使う場合は --gpu を足す
 ```
 
 CPU の parser(docling / unstructured)は **独立した FastAPI マイクロサービス**(`services/parsers/<name>`)で
 動き、backend は取込時に HTTP 委譲する。各 parser は独自依存で個別に upgrade できる。
+既定の解析エンジンは **Docling**(#286)。Docling は **PDF と画像だけ**を解析し、それ以外(テキスト・HTML・Office・メール など)は
+取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
+Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
+「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
 GPU の OCR(mineru / dots_ocr)は外部で運用する API を「検索・回答設定 › 文書解析」で指定する。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
@@ -49,22 +51,18 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 
 ### サービス管理画面(マイクロサービスの稼働可視化・起動/停止)
 
-システム設定の **サービス管理**(`/settings/services`)で、前処理 / Parser マイクロサービスの
-稼働状態(`running` / `degraded` / `stopped` / `unconfigured`)を一覧表示する。状態は各サービスの
-`GET /health` を集約した `GET /api/services` を 5 秒ごとにポーリングして表示する。
+前処理 / parser は、サービスごとの uv の venv で動くネイティブのプロセスで、systemd の unit
+(`production-ready-rag-<service>.service`、`127.0.0.1:<port>`)として動かす(#286。Docker は使わない)。
+システム設定の **サービス管理**(`/settings/services`)は、各 unit の状態(`systemctl show`)と `GET /health` から
+稼働状態(稼働中 / 縮退 / 起動中 / 起動失敗 / 停止 / 未登録 / 未設定)を 5 秒ごとに表示し、起動 / 停止 / 再起動とログ
+(`journalctl -u <unit>`)を画面から操作する。
 
-起動/停止(`docker compose up -d` / `stop`)も画面から行えるが、**安全のため既定は無効**
-(`RAG_SERVICE_CONTROL_ENABLED=false`、可視化のみ)。有効化するには:
-
-- ローカル(ホスト直起動 `scripts/start-backend.sh`): `RAG_SERVICE_CONTROL_ENABLED=true` を設定すれば
-  ホストの `docker compose` をそのまま使う(追加マウント不要)。
-- コンテナ運用: backend へ `docker.sock` と compose ファイルをマウントした上で同フラグを有効化
-  (`docker-compose.yml` の backend サービスにコメントで雛形を記載)。
-
-操作対象は `app/services/catalog.py` の allowlist に限定され、任意コマンドは実行できない。
-compose の project 名は `production-ready-rag` に固定している（`docker-compose.yml` の `name:`。#310）。
-対象の project にコンテナが無い場合、ログ・停止・再起動はエラーになる。旧 project（`no1-production-ready-rag` など）
-のコンテナが残っている環境は、[docs/deployment.md](./docs/deployment.md) の「既存環境の更新手順（#310）」で作り直す。
+- 起動 = `systemctl enable --now`、停止 = `systemctl disable --now`。利用者が最後に操作した状態が再起動・再配備後も保たれる。
+- backend は、sudoers で許可した unit の `systemctl` / `journalctl` だけを `sudo -n` で実行する。unit 名は
+  `app/services/catalog.py` の allowlist で検証し、argv は固定(任意のコマンドは実行できない)。
+- 本番は `RAG_SERVICE_CONTROL_ENABLED=true`(Terraform の stack の既定)のときだけ操作でき、開発(`RAG_ENVIRONMENT=development`)は自動で有効。
+- 開発環境の unit と sudoers は `scripts/rag-services.sh install` で登録する(systemd の無い環境は
+  `scripts/rag-services.sh run <service>` で前面に起動)。手順は [docs/deployment.md](./docs/deployment.md)。
 
 詳細は [backend/README.md](./backend/README.md) / [frontend/README.md](./frontend/README.md) を参照。
 
@@ -85,7 +83,8 @@ Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提�
 ## OCI への配備（Resource Manager）
 
 3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database 26ai は NL2SQL / Agent と共有し、
-RAG は専用の Compute 1 台で `docker-compose.yml` を動かします（CPU の parser だけを配備する）。
+RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。Docker は使わない。#286）を作ります
+（CPU の parser だけを配備する）。Docker Compose で配備した既存環境の移行は [docs/deployment.md](./docs/deployment.md) を参照してください。
 「配備する製品」で RAG を選び、入力・配備方式・instance 上の構成・制約は [terraform/README.md](../terraform/README.md) を参照してください。
 
 ## ドキュメント

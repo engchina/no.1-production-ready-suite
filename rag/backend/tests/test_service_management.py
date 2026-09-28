@@ -1,43 +1,68 @@
-"""サービス管理(カタログ / 稼働プローブ / 制御 / API)のテスト。"""
+"""サービス管理(カタログ / 稼働プローブ / systemd の制御 / API)のテスト(#286)。
+
+systemctl / journalctl / sudo は実行しない。conftest の autouse fixture が
+``app.services.control.run_command`` を「systemd を使えない」に差し替えており、
+systemd の振る舞いが要るテストは ``_FakeSystemd`` を差し込む。
+"""
 
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 from pytest import MonkeyPatch
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.main import app
+from app.services import control as service_control
 from app.services.catalog import (
+    ALLOWED_SYSTEMD_UNITS,
     SERVICE_CATALOG,
+    SYSTEMD_UNIT_PREFIX,
     ServiceCatalogEntry,
     get_catalog_entry,
+    is_allowed_systemd_unit,
     is_dev_mode,
+    resolve_service_base_url,
     service_health_url,
-    service_model_cache_volume_name,
 )
 from app.services.control import (
-    COMPOSE_PROJECT_NAME,
-    REPO_ROOT,
     ControlResult,
-    DockerComposeDriver,
     ServiceControlClient,
     ServiceControlError,
     ServiceLogsError,
     ServiceLogsResult,
-    _compose_args,
-    _compose_env,
-    _compose_logs_args,
-    _compose_ps_args,
+    SystemdDriver,
     read_service_logs,
+    render_service_runtime_env,
+    service_runtime_env,
+    write_service_runtime_env,
 )
 from app.services.status import probe_service_status, probe_service_statuses
+from app.services.systemd import (
+    JOURNAL_FETCH_LINES,
+    CommandOutput,
+    CommandUnavailableError,
+    is_permission_error,
+    is_systemd_unavailable,
+    journalctl_argv,
+    parse_journal,
+    parse_systemctl_show,
+    run_command,
+    systemctl_action_argv,
+    systemctl_show_argv,
+    validate_unit,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+RAG_ROOT = Path(__file__).resolve().parents[2]
+DOCLING_UNIT = "production-ready-rag-parser-docling.service"
 
 
 # --- カタログ ---------------------------------------------------------------
@@ -68,6 +93,8 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
         "parser-glm-ocr",
     ):
         assert get_catalog_entry(service_id) is None
+        directory = service_id.removeprefix("parser-").replace("-", "_")
+        assert not (RAG_ROOT / "services" / "parsers" / directory).exists()
 
 
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
@@ -106,44 +133,75 @@ def test_catalog_deployable_marks_future_service_stages() -> None:
 
 
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
-    """ローカルでモデル DL を行う parser だけ model_cache_path を持つ。"""
-    by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    appuser_cache = {"parser-docling", "parser-asr"}
-    for service_id in appuser_cache:
-        assert by_id[service_id].model_cache_path == "/home/appuser/.cache"
-    # それ以外(OCI proxy / pipeline / preprocess / unstructured)はモデル DL なし。
-    with_cache = {e.service_id for e in SERVICE_CATALOG if e.model_cache_path is not None}
-    assert with_cache == appuser_cache
+    """ローカルでモデル DL を行う parser だけ、実行ユーザーの ~/.cache を持つ。"""
+    with_cache = {e.service_id: e.model_cache_path for e in SERVICE_CATALOG if e.model_cache_path}
+    assert with_cache == {"parser-docling": "~/.cache", "parser-asr": "~/.cache"}
 
 
-def test_service_model_cache_volume_name_is_stable_per_service() -> None:
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    assert service_model_cache_volume_name(asr) == "parser-asr-model-cache"
-    # model_cache_path 未設定(モデル DL なし)のサービスは None。
-    chunking = get_catalog_entry("pipeline-chunking")
-    assert chunking is not None
-    assert service_model_cache_volume_name(chunking) is None
+def test_catalog_ports_are_unique_and_high() -> None:
+    """ポートは一意で、sibling app の backend port と衝突しない高番台に寄せる。"""
+    ports = [entry.port for entry in SERVICE_CATALOG]
+    assert len(ports) == len(set(ports)), "port は一意であること"
+    assert all(port >= 18000 for port in ports)
 
 
-def test_compose_env_injects_huggingface_settings() -> None:
-    settings = get_settings()
-    settings = settings.model_copy(
+def test_service_url_defaults_point_to_native_localhost_ports() -> None:
+    """URL 設定の既定値は、ネイティブ配備で listen する 127.0.0.1:<port>(#286)。
+
+    Docker Compose の service 名(http://parser-docling:8000 など)を既定にしない。
+    """
+    defaults = Settings.model_fields
+    for entry in SERVICE_CATALOG:
+        assert defaults[entry.url_field].default == f"http://127.0.0.1:{entry.port}", entry
+        assert entry.default_url == f"http://127.0.0.1:{entry.port}"
+
+
+def test_catalog_systemd_units_cover_only_deployable_services() -> None:
+    for entry in SERVICE_CATALOG:
+        if entry.deployable:
+            assert entry.systemd_unit == f"{SYSTEMD_UNIT_PREFIX}{entry.service_id}.service"
+        else:
+            assert entry.systemd_unit is None
+    assert {
+        entry.systemd_unit for entry in SERVICE_CATALOG if entry.deployable
+    } == ALLOWED_SYSTEMD_UNITS
+    assert DOCLING_UNIT in ALLOWED_SYSTEMD_UNITS
+    # backend / ingestion-worker の unit は画面から操作させない。
+    assert "production-ready-rag-backend.service" not in ALLOWED_SYSTEMD_UNITS
+    assert "production-ready-rag-ingestion-worker.service" not in ALLOWED_SYSTEMD_UNITS
+
+
+def test_get_catalog_entry_allowlist() -> None:
+    assert get_catalog_entry("parser-docling") is not None
+    assert get_catalog_entry("unknown-service") is None
+    assert get_catalog_entry("../etc/passwd") is None
+
+
+# --- サービス実行用の env ファイル ---------------------------------------------
+
+
+def test_service_runtime_env_injects_huggingface_settings() -> None:
+    settings = get_settings().model_copy(
         update={
             "huggingface_token": "hf_secret",
             "huggingface_endpoint": "https://hf-mirror.com",
         }
     )
-    env = _compose_env(settings)
-    assert "HF_DOWNLOAD_DIR" not in env
+    env = service_runtime_env(settings)
     assert env["HF_TOKEN"] == "hf_secret"
     assert env["HF_ENDPOINT"] == "https://hf-mirror.com"
-    # os.environ を継承していること(PATH などが残る)。
-    assert "PATH" in env
+    # os.environ を丸ごと渡さない(unit に余計な環境変数を持ち込まない)。
+    assert "PATH" not in env
 
 
-def test_compose_env_injects_oci_enterprise_ai_settings() -> None:
-    """OCI parser コンテナ向けに実効 OCI Enterprise AI 設定を env 注入する。"""
+def test_service_runtime_env_defaults_hf_endpoint_to_official_hub() -> None:
+    """空の HF_ENDPOINT は huggingface_hub の DL を壊すため、公式 hub を渡す。"""
+    settings = get_settings().model_copy(update={"huggingface_endpoint": ""})
+    assert service_runtime_env(settings)["HF_ENDPOINT"] == "https://huggingface.co"
+
+
+def test_service_runtime_env_injects_oci_enterprise_ai_settings() -> None:
+    """OCI parser と docling の Vision 向けに実効 OCI Enterprise AI 設定を渡す。"""
     settings = get_settings().model_copy(
         update={
             "oci_enterprise_ai_endpoint": "https://inference.example/openai/v1",
@@ -156,16 +214,19 @@ def test_compose_env_injects_oci_enterprise_ai_settings() -> None:
             "oci_enterprise_ai_vlm_input_mode": "files_api",
         }
     )
-    env = _compose_env(settings)
+    env = service_runtime_env(settings)
     assert env["PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_API_KEY"] == "sk-secret"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"] == "ocid1.generativeaiproject.oc1..x"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
+    # docling の DocRAG Vision は docrag の名前(OCI_ENTERPRISE_AI_*)で読む。
+    assert env["OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
+    assert env["OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
 
 
-def test_compose_env_oci_vlm_model_empty_when_unconfigured() -> None:
+def test_service_runtime_env_oci_vlm_model_empty_when_unconfigured() -> None:
     """Vision モデル未設定なら空文字で渡し、parser は degraded を維持する。"""
     settings = get_settings().model_copy(
         update={
@@ -174,113 +235,483 @@ def test_compose_env_oci_vlm_model_empty_when_unconfigured() -> None:
             "oci_enterprise_ai_llm_model": "",
         }
     )
-    env = _compose_env(settings)
-    assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
+    assert service_runtime_env(settings)["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
 
 
-def test_compose_passes_oci_enterprise_ai_env_to_vision_parser() -> None:
-    """compose は parser-oci-genai-vision へ ${OCI_ENTERPRISE_AI_*} を渡す。"""
-    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
-    text = compose.read_text(encoding="utf-8")
-    assert "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL: ${PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL:-}" in text
-    assert "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT: ${PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT:-}" in text
+def test_render_service_runtime_env_escapes_for_systemd() -> None:
+    """EnvironmentFile の値は二重引用符で囲み、引用符・バックスラッシュ・改行を無害化する。"""
+    text = render_service_runtime_env(
+        {"HF_TOKEN": 'a"b\\c\nINJECTED=1', "HF_ENDPOINT": "https://huggingface.co"}
+    )
+    lines = text.splitlines()
+    assert 'HF_TOKEN="a\\"b\\\\cINJECTED=1"' in lines
+    assert 'HF_ENDPOINT="https://huggingface.co"' in lines
+    # 改行で別の変数を注入できない。
+    assert not any(line.startswith("INJECTED=") for line in lines)
 
 
-def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> None:
+def test_write_service_runtime_env_is_private(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-
-    async def fake_probe(_settings: Any) -> dict[str, str]:
-        return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe)
-    data = client.get("/api/services").json()["data"]
-    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
-    assert asr["model_cache"] == {
-        "container_path": "/home/appuser/.cache",
-        "volume_name": "parser-asr-model-cache",
-        "editable": False,
-    }
-    # モデル DL なしのサービスは model_cache=None。
-    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
-    assert chunking["model_cache"] is None
+    target = tmp_path / "nested" / "service-runtime.env"
+    monkeypatch.setattr(settings, "rag_service_runtime_env_file", str(target))
+    monkeypatch.setattr(settings, "huggingface_token", "hf_secret")
+    written = write_service_runtime_env(settings)
+    assert written == target
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert 'HF_TOKEN="hf_secret"' in target.read_text(encoding="utf-8")
+    assert list(target.parent.glob(".service-runtime.env.tmp-*")) == []
 
 
-def test_list_services_hides_model_cache_mount_in_production(monkeypatch: MonkeyPatch) -> None:
+# --- systemd の argv(allowlist・固定の argv・shell なし) ----------------------
+
+
+def test_systemctl_action_argv_is_fixed_and_uses_enable_disable() -> None:
+    """起動/停止は enable --now / disable --now(最後に操作した状態を systemd に残す)。"""
+    sudo_systemctl = ["/usr/bin/sudo", "-n", "/usr/bin/systemctl"]
+    assert systemctl_action_argv("start", DOCLING_UNIT) == [
+        *sudo_systemctl,
+        "enable",
+        "--now",
+        DOCLING_UNIT,
+    ]
+    assert systemctl_action_argv("stop", DOCLING_UNIT) == [
+        *sudo_systemctl,
+        "disable",
+        "--now",
+        DOCLING_UNIT,
+    ]
+    assert systemctl_action_argv("restart", DOCLING_UNIT) == [
+        *sudo_systemctl,
+        "restart",
+        DOCLING_UNIT,
+    ]
+
+
+def test_systemctl_show_and_journalctl_argv_are_fixed() -> None:
+    # 状態の読み取りは root が要らないため sudo を使わない。
+    assert systemctl_show_argv(DOCLING_UNIT) == [
+        "/usr/bin/systemctl",
+        "show",
+        DOCLING_UNIT,
+        "--property=LoadState,ActiveState,SubState,UnitFileState",
+        "--no-pager",
+    ]
+    # sudoers と同じ argv にするため、行数は固定で取る(画面の行数は Python で切り詰める)。
+    assert journalctl_argv(DOCLING_UNIT) == [
+        "/usr/bin/sudo",
+        "-n",
+        "/usr/bin/journalctl",
+        "-u",
+        DOCLING_UNIT,
+        "-n",
+        str(JOURNAL_FETCH_LINES),
+        "--no-pager",
+        "-o",
+        "short-iso",
+    ]
+    assert JOURNAL_FETCH_LINES == 1000
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "",
+        "sshd.service",
+        "docker.service",
+        "production-ready-rag-backend.service",
+        "production-ready-rag-ingestion-worker.service",
+        # backend 内処理のステージは unit を持たない。
+        "production-ready-rag-pipeline-chunking.service",
+        "production-ready-rag-parser-docling",
+        "production-ready-rag-parser-docling.service; rm -rf /",
+        "production-ready-rag-parser-docling.service --now",
+        "production-ready-rag-parser-docling.service\n",
+        "../../etc/systemd/system/production-ready-rag-parser-docling.service",
+        "--now",
+        "*",
+        "production-ready-rag-*.service",
+    ],
+)
+def test_systemd_argv_rejects_units_outside_allowlist(unit: str) -> None:
+    assert is_allowed_systemd_unit(unit) is False
+    with pytest.raises(ValueError):
+        validate_unit(unit)
+    with pytest.raises(ValueError):
+        systemctl_action_argv("start", unit)
+    with pytest.raises(ValueError):
+        systemctl_action_argv("stop", unit)
+    with pytest.raises(ValueError):
+        systemctl_action_argv("restart", unit)
+    with pytest.raises(ValueError):
+        systemctl_show_argv(unit)
+    with pytest.raises(ValueError):
+        journalctl_argv(unit)
+
+
+def test_systemctl_action_argv_rejects_unknown_action() -> None:
+    with pytest.raises(ValueError):
+        systemctl_action_argv("mask", DOCLING_UNIT)  # type: ignore[arg-type]
+
+
+def test_run_command_uses_exec_without_shell_and_c_locale(monkeypatch: MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Process:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"LoadState=loaded\n", b""
+
+    async def fake_exec(*args: Any, **kwargs: Any) -> _Process:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    output = asyncio.run(run_command(systemctl_show_argv(DOCLING_UNIT), 5.0))
+    assert output == CommandOutput(returncode=0, stdout="LoadState=loaded", stderr="")
+    assert captured["args"] == tuple(systemctl_show_argv(DOCLING_UNIT))
+    assert "shell" not in captured["kwargs"]
+    assert captured["kwargs"]["env"]["LC_ALL"] == "C"
+    assert captured["kwargs"]["stdin"] == asyncio.subprocess.DEVNULL
+
+
+def test_run_command_missing_binary_is_unavailable(monkeypatch: MonkeyPatch) -> None:
+    async def fake_exec(*_args: Any, **_kwargs: Any) -> Any:
+        raise FileNotFoundError("/usr/bin/systemctl")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(CommandUnavailableError):
+        asyncio.run(run_command(systemctl_show_argv(DOCLING_UNIT), 5.0))
+
+
+# --- systemctl show / journalctl の出力の解釈 -----------------------------------
+
+
+def test_parse_systemctl_show_normal_and_not_found() -> None:
+    state = parse_systemctl_show(
+        "LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\n"
+    )
+    assert state.installed is True
+    assert state.enabled is True
+    assert state.active_state == "active"
+
+    missing = parse_systemctl_show(
+        "LoadState=not-found\nActiveState=inactive\nSubState=dead\nUnitFileState=\n"
+    )
+    assert missing.installed is False
+    assert missing.enabled is False
+
+    disabled = parse_systemctl_show(
+        "LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=disabled\n"
+    )
+    assert disabled.installed is True
+    assert disabled.enabled is False
+
+
+def test_parse_journal_no_entries_is_empty() -> None:
+    assert parse_journal("-- No entries --", 200) == ""
+    assert parse_journal("", 200) == ""
+
+
+def test_parse_journal_strips_meta_lines_and_keeps_tail() -> None:
+    stdout = "\n".join(
+        [
+            "-- Logs begin at Mon 2026-09-28 00:00:00 UTC, end at Mon 2026-09-28 01:00:00 UTC. --",
+            "2026-09-28T00:00:01+0000 host gunicorn[1]: line 1",
+            "-- Boot 0123456789abcdef --",
+            "2026-09-28T00:00:02+0000 host gunicorn[1]: line 2",
+            "2026-09-28T00:00:03+0000 host gunicorn[1]: line 3",
+        ]
+    )
+    assert parse_journal(stdout, 2) == (
+        "2026-09-28T00:00:02+0000 host gunicorn[1]: line 2\n"
+        "2026-09-28T00:00:03+0000 host gunicorn[1]: line 3"
+    )
+    assert "line 1" in parse_journal(stdout, 200)
+    assert "-- Boot" not in parse_journal(stdout, 200)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "sudo: a password is required",
+        "Sorry, user ragsvc is not allowed to execute '/usr/bin/systemctl enable --now x' as root",
+        "ragsvc is not in the sudoers file.  This incident will be reported.",
+        "Failed to enable unit: Access denied",
+        "Failed to start x.service: Interactive authentication required.",
+        "Hint: You are currently not seeing messages from other users and the system.",
+        "No journal files were opened due to insufficient permissions.",
+    ],
+)
+def test_permission_errors_are_detected(message: str) -> None:
+    assert is_permission_error(message) is True
+    assert is_systemd_unavailable(message) is False
+
+
+def test_systemd_unavailable_and_generic_failures_are_distinguished() -> None:
+    unavailable = (
+        "System has not been booted with systemd as init system (PID 1). Can't operate.\n"
+        "Failed to connect to bus: Host is down"
+    )
+    assert is_systemd_unavailable(unavailable) is True
+    generic = "Job for x.service failed because the control process exited with error code."
+    assert is_permission_error(generic) is False
+    assert is_systemd_unavailable(generic) is False
+
+
+# --- systemd の fake ------------------------------------------------------------
+
+
+class _FakeSystemd:
+    """``app.services.control.run_command`` の代わり。argv を記録し、unit の状態を返す。"""
+
+    def __init__(
+        self,
+        *,
+        load_state: str = "loaded",
+        active_state: str = "active",
+        unit_file_state: str = "enabled",
+        action_result: CommandOutput | None = None,
+        journal_result: CommandOutput | None = None,
+        show_error: Exception | None = None,
+    ) -> None:
+        self.load_state = load_state
+        self.active_state = active_state
+        self.unit_file_state = unit_file_state
+        self.action_result = action_result or CommandOutput(0, "", "")
+        self.journal_result = journal_result or CommandOutput(0, "-- No entries --", "")
+        self.show_error = show_error
+        self.calls: list[list[str]] = []
+
+    async def __call__(self, argv: list[str], timeout: float) -> CommandOutput:
+        self.calls.append(list(argv))
+        if argv[:2] == ["/usr/bin/systemctl", "show"]:
+            if self.show_error is not None:
+                raise self.show_error
+            return CommandOutput(
+                0,
+                f"LoadState={self.load_state}\nActiveState={self.active_state}\n"
+                f"SubState=running\nUnitFileState={self.unit_file_state}",
+                "",
+            )
+        if argv[2] == "/usr/bin/journalctl":
+            return self.journal_result
+        return self.action_result
+
+    def install(self, monkeypatch: MonkeyPatch) -> _FakeSystemd:
+        monkeypatch.setattr(service_control, "run_command", self)
+        return self
+
+
+def _docling() -> ServiceCatalogEntry:
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+    return entry
+
+
+# --- 制御(起動/停止/再起動) ------------------------------------------------------
+
+
+def test_driver_start_enables_unit_and_writes_runtime_env(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "production")
-    data = client.get("/api/services/catalog").json()["data"]
-    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
-    assert asr["model_cache"] is None
+    monkeypatch.setattr(settings, "huggingface_token", "hf_secret")
+    fake = _FakeSystemd(active_state="inactive", unit_file_state="disabled").install(monkeypatch)
+    result = asyncio.run(SystemdDriver().run(settings, _docling(), "start"))
+    assert result.ok is True
+    # unit の登録を確かめてから、enable --now で起動する(最後に操作した状態を残す)。
+    assert fake.calls == [
+        systemctl_show_argv(DOCLING_UNIT),
+        systemctl_action_argv("start", DOCLING_UNIT),
+    ]
+    env_file = Path(settings.rag_service_runtime_env_file)
+    assert 'HF_TOKEN="hf_secret"' in env_file.read_text(encoding="utf-8")
+    assert stat.S_IMODE(os.stat(env_file).st_mode) == 0o600
 
 
-def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
-    compose = Path(__file__).resolve().parents[2] / "docker-compose.dev.yml"
-    text = compose.read_text(encoding="utf-8")
-    cache_entries = [entry for entry in SERVICE_CATALOG if entry.model_cache_path]
-
-    assert len(cache_entries) == 2
-    for entry in cache_entries:
-        volume_name = service_model_cache_volume_name(entry)
-        assert volume_name is not None
-        assert f"- {volume_name}:{entry.model_cache_path}" in text
-        assert f"\n  {volume_name}:" in text
-
-    assert "HF_DOWNLOAD_DIR" not in text
-    assert "/u01/models" not in text
+def test_driver_stop_disables_unit(monkeypatch: MonkeyPatch) -> None:
+    fake = _FakeSystemd().install(monkeypatch)
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "stop"))
+    assert result.ok is True
+    assert fake.calls[-1] == [
+        "/usr/bin/sudo",
+        "-n",
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        DOCLING_UNIT,
+    ]
 
 
-def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    appuser_services = ("docling", "asr")
+def test_driver_restart_keeps_enable_state(monkeypatch: MonkeyPatch) -> None:
+    fake = _FakeSystemd().install(monkeypatch)
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "restart"))
+    assert result.ok is True
+    assert fake.calls[-1] == ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "restart", DOCLING_UNIT]
+    assert not any("enable" in call or "disable" in call for call in fake.calls)
 
-    for service in appuser_services:
-        text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
-            encoding="utf-8"
+
+def test_driver_missing_unit_is_not_executed(monkeypatch: MonkeyPatch) -> None:
+    fake = _FakeSystemd(load_state="not-found", active_state="inactive").install(monkeypatch)
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "start"))
+    assert result.ok is False
+    assert result.reason == "unit_not_found"
+    assert DOCLING_UNIT in (result.detail or "")
+    # unit が無いときは sudo systemctl を呼ばない。
+    assert fake.calls == [systemctl_show_argv(DOCLING_UNIT)]
+
+
+def test_driver_permission_denied_is_reported(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(action_result=CommandOutput(1, "", "sudo: a password is required")).install(
+        monkeypatch
+    )
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "stop"))
+    assert result.ok is False
+    assert result.reason == "permission_denied"
+    assert "sudoers" in (result.detail or "")
+
+
+def test_driver_generic_failure_points_to_journal(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(
+        action_result=CommandOutput(
+            1, "", "Job for x.service failed because the control process exited with error code."
         )
-        assert "mkdir -p /tmp/uv-cache /home/appuser/.cache" in text
-        assert "setpriv" not in text
-        user_lines = [line for line in text.splitlines() if line.startswith("USER ")]
-        assert user_lines[-1] == "USER appuser"
-
-    for service in ("marker", "unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"):
-        assert not (repo_root / "services" / "parsers" / service).exists()
-
-
-def test_compose_uses_shared_oci_config_volume() -> None:
-    """production compose は共有 oci-config volume を OCI service へ mount する。"""
-    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
-    text = compose.read_text(encoding="utf-8")
-    assert text.count("oci-config:/home/appuser/.oci") == 4
-    assert "~/.oci:/home/appuser/.oci:ro" not in text
-    assert "\n  oci-config:" in text
+    ).install(monkeypatch)
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "start"))
+    assert result.ok is False
+    assert result.reason == "failed"
+    assert result.exit_code == 1
+    assert f"journalctl -u {DOCLING_UNIT}" in (result.detail or "")
 
 
-def test_get_catalog_entry_allowlist() -> None:
-    assert get_catalog_entry("parser-docling") is not None
-    assert get_catalog_entry("unknown-service") is None
-    assert get_catalog_entry("../etc/passwd") is None
+def test_driver_without_systemd_is_unavailable() -> None:
+    # conftest の既定(systemd を使えない)。
+    result = asyncio.run(SystemdDriver().run(get_settings(), _docling(), "start"))
+    assert result.ok is False
+    assert result.reason == "unavailable"
 
 
-def test_catalog_dev_ports_avoid_app_backend_range() -> None:
-    """dev parser/preprocess ports は sibling app の backend port と衝突しない高番台に寄せる。"""
-    ports = [entry.dev_port for entry in SERVICE_CATALOG]
-    assert len(ports) == len(set(ports)), "dev_port は一意であること"
-    assert all(port >= 18000 for port in ports)
+def test_control_client_raises_on_failure(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(load_state="not-found").install(monkeypatch)
+    with pytest.raises(ServiceControlError) as exc_info:
+        asyncio.run(ServiceControlClient().control(get_settings(), _docling(), "stop"))
+    assert exc_info.value.result.reason == "unit_not_found"
 
 
-# --- 稼働プローブ -----------------------------------------------------------
+class _RecordingDriver(SystemdDriver):
+    """run() の呼び出し action を記録する driver スタブ。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def run(
+        self,
+        settings: Settings,
+        entry: ServiceCatalogEntry,
+        action: Literal["start", "stop", "restart"],
+    ) -> ControlResult:
+        self.calls.append(action)
+        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
+
+
+def test_control_client_delegates_to_driver() -> None:
+    driver = _RecordingDriver()
+    asyncio.run(ServiceControlClient(driver=driver).control(get_settings(), _docling(), "start"))
+    assert driver.calls == ["start"]
+
+
+def test_control_client_serializes_same_service() -> None:
+    """同一サービスへの並行 control はロックで直列化される。"""
+    active = 0
+    max_active = 0
+
+    class _SlowDriver(SystemdDriver):
+        async def run(
+            self,
+            settings: Settings,
+            entry: ServiceCatalogEntry,
+            action: Literal["start", "stop", "restart"],
+        ) -> ControlResult:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
+
+    c = ServiceControlClient(driver=_SlowDriver())
+    settings = get_settings()
+    entry = _docling()
+
+    async def _drive() -> None:
+        await asyncio.gather(*(c.control(settings, entry, "start") for _ in range(3)))
+
+    asyncio.run(_drive())
+    assert max_active == 1, "同一サービスの control は同時に 1 つだけ実行されること"
+
+
+# --- ログ(journalctl) ------------------------------------------------------------
+
+
+def test_read_service_logs_journal_success(monkeypatch: MonkeyPatch) -> None:
+    fake = _FakeSystemd(
+        journal_result=CommandOutput(0, "-- Logs begin at x --\nline 1\nline 2\nline 3", "")
+    ).install(monkeypatch)
+    result = asyncio.run(read_service_logs(get_settings(), _docling(), 2))
+    assert result == ServiceLogsResult(
+        service_id="parser-docling", source="journald", lines=2, content="line 2\nline 3"
+    )
+    assert fake.calls[-1] == journalctl_argv(DOCLING_UNIT)
+
+
+def test_read_service_logs_zero_lines_is_empty(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd().install(monkeypatch)
+    result = asyncio.run(read_service_logs(get_settings(), _docling(), 200))
+    assert result.content == ""
+
+
+def test_read_service_logs_missing_unit_raises(monkeypatch: MonkeyPatch) -> None:
+    """unit が無いと journalctl は exit 0 の空を返すため、先に unit を確かめて失敗にする。"""
+    fake = _FakeSystemd(load_state="not-found").install(monkeypatch)
+    with pytest.raises(ServiceLogsError) as exc_info:
+        asyncio.run(read_service_logs(get_settings(), _docling(), 200))
+    assert exc_info.value.reason == "unit_not_found"
+    assert not any(call[2:3] == ["/usr/bin/journalctl"] for call in fake.calls)
+
+
+def test_read_service_logs_permission_denied_raises(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(journal_result=CommandOutput(1, "", "sudo: a password is required")).install(
+        monkeypatch
+    )
+    with pytest.raises(ServiceLogsError) as exc_info:
+        asyncio.run(read_service_logs(get_settings(), _docling(), 200))
+    assert exc_info.value.reason == "permission_denied"
+
+
+def test_read_service_logs_permission_hint_with_exit_zero_raises(monkeypatch: MonkeyPatch) -> None:
+    """journal を読めないときの exit 0 + 案内だけの出力を、空のログとして返さない。"""
+    _FakeSystemd(
+        journal_result=CommandOutput(
+            0,
+            "-- No entries --",
+            "Hint: You are currently not seeing messages from other users and the system.",
+        )
+    ).install(monkeypatch)
+    with pytest.raises(ServiceLogsError) as exc_info:
+        asyncio.run(read_service_logs(get_settings(), _docling(), 200))
+    assert exc_info.value.reason == "permission_denied"
+
+
+# --- 稼働プローブ(systemctl show + /health) ------------------------------------
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict[str, Any], raise_error: bool = False) -> None:
+    def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
-        self._raise = raise_error
-        self.status_code = 500 if raise_error else 200
+        self.status_code = 200
 
     def raise_for_status(self) -> None:
-        if self._raise:
-            raise RuntimeError("http error")
+        return None
 
     def json(self) -> dict[str, Any]:
         return self._payload
@@ -309,569 +740,142 @@ class _FakeAsyncClient:
             raise ConnectionError("connection refused")
         return self.routes.get(base, _FakeResponse({"status": "ok"}))
 
-    async def request(self, method: str, url: str, **_kwargs: Any) -> _FakeResponse:
-        assert method == "GET"
-        return await self.get(url)
 
-
-def _patch_probe_httpx(monkeypatch: MonkeyPatch) -> None:
+@pytest.fixture
+def fake_http(monkeypatch: MonkeyPatch) -> Iterator[type[_FakeAsyncClient]]:
     import httpx
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    _FakeAsyncClient.routes = {}
+    _FakeAsyncClient.raise_on_connect = set()
+    _FakeAsyncClient.calls = []
+    yield _FakeAsyncClient
+    _FakeAsyncClient.routes = {}
+    _FakeAsyncClient.raise_on_connect = set()
+    _FakeAsyncClient.calls = []
 
 
-def test_probe_normalizes_statuses(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    _patch_probe_httpx(monkeypatch)
+def _url(service_id: str) -> str:
+    entry = get_catalog_entry(service_id)
+    assert entry is not None
+    return service_health_url(get_settings(), entry)
 
-    docling = service_health_url(settings, get_catalog_entry("parser-docling"))  # type: ignore[arg-type]
-    asr = service_health_url(settings, get_catalog_entry("parser-asr"))  # type: ignore[arg-type]
-    _FakeAsyncClient.routes = {
-        docling: _FakeResponse({"status": "ok"}),
-        asr: _FakeResponse({"status": "degraded"}),
+
+def test_probe_without_systemd_uses_health_only(fake_http: type[_FakeAsyncClient]) -> None:
+    fake_http.routes = {
+        _url("parser-docling"): _FakeResponse({"status": "ok"}),
+        _url("parser-asr"): _FakeResponse({"status": "degraded"}),
     }
-    _FakeAsyncClient.raise_on_connect = {
-        service_health_url(settings, get_catalog_entry("parser-unstructured"))  # type: ignore[arg-type]
-    }
-    try:
-        statuses = asyncio.run(probe_service_statuses(settings))
-    finally:
-        _FakeAsyncClient.routes = {}
-        _FakeAsyncClient.raise_on_connect = set()
-
+    fake_http.raise_on_connect = {_url("parser-unstructured")}
+    statuses = asyncio.run(probe_service_statuses(get_settings()))
     assert statuses["parser-docling"] == "running"
     assert statuses["parser-asr"] == "degraded"
     assert statuses["parser-unstructured"] == "stopped"
 
 
-def test_probe_stopped_service_is_not_retried(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    _patch_probe_httpx(monkeypatch)
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-    url = service_health_url(settings, entry)
-    _FakeAsyncClient.calls = []
-    _FakeAsyncClient.raise_on_connect = {url}
-    try:
-        status = asyncio.run(probe_service_status(settings, entry))
-        calls = list(_FakeAsyncClient.calls)
-    finally:
-        _FakeAsyncClient.calls = []
-        _FakeAsyncClient.raise_on_connect = set()
+@pytest.mark.parametrize(
+    ("load_state", "active_state", "reachable", "expected"),
+    [
+        ("loaded", "active", True, "running"),
+        # unit は動いているが /health にまだ届かない(モデル読込中など)。
+        ("loaded", "active", False, "starting"),
+        ("loaded", "activating", False, "starting"),
+        ("loaded", "failed", False, "failed"),
+        ("loaded", "inactive", False, "stopped"),
+        ("not-found", "inactive", False, "not_installed"),
+        # unit の外のプロセスが同じポートで応答しているときは、その状態を出す。
+        ("not-found", "inactive", True, "running"),
+    ],
+)
+def test_probe_combines_unit_state_and_health(
+    monkeypatch: MonkeyPatch,
+    fake_http: type[_FakeAsyncClient],
+    load_state: str,
+    active_state: str,
+    reachable: bool,
+    expected: str,
+) -> None:
+    _FakeSystemd(load_state=load_state, active_state=active_state).install(monkeypatch)
+    if not reachable:
+        fake_http.raise_on_connect = {_url("parser-docling")}
+    assert asyncio.run(probe_service_status(get_settings(), _docling())) == expected
 
+
+def test_probe_stopped_service_is_not_retried(fake_http: type[_FakeAsyncClient]) -> None:
+    url = _url("parser-docling")
+    fake_http.raise_on_connect = {url}
+    status = asyncio.run(probe_service_status(get_settings(), _docling()))
     assert status == "stopped"
-    assert calls == [f"{url}/health"]
+    assert fake_http.calls == [f"{url}/health"]
 
 
-def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
+def test_probe_unconfigured_when_url_blank(
+    monkeypatch: MonkeyPatch, fake_http: type[_FakeAsyncClient]
+) -> None:
     settings = get_settings()
-    # unconfigured 判定は prod(url_field を使う)経路の挙動。dev は dev_port 既定で常に解決される。
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "")
-    _patch_probe_httpx(monkeypatch)
     statuses = asyncio.run(probe_service_statuses(settings))
     assert statuses["parser-docling"] == "unconfigured"
 
 
-def test_probe_non_deployable_returns_in_process_without_http(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    _patch_probe_httpx(monkeypatch)
+def test_probe_non_deployable_returns_in_process_without_probe(
+    monkeypatch: MonkeyPatch, fake_http: type[_FakeAsyncClient]
+) -> None:
+    fake = _FakeSystemd().install(monkeypatch)
     entry = get_catalog_entry("pipeline-chunking")
     assert entry is not None and entry.deployable is False
-    _FakeAsyncClient.calls = []
-    try:
-        status = asyncio.run(probe_service_status(settings, entry))
-        calls = list(_FakeAsyncClient.calls)
-    finally:
-        _FakeAsyncClient.calls = []
-    # backend 内処理の段は /health を叩かず固定で in_process を返す。
+    status = asyncio.run(probe_service_status(get_settings(), entry))
+    # backend 内処理の段は /health も systemctl も叩かず固定で in_process を返す。
     assert status == "in_process"
-    assert calls == []
+    assert fake_http.calls == []
+    assert fake.calls == []
 
 
-# --- 制御層 -----------------------------------------------------------------
+# --- API ----------------------------------------------------------------------
 
-# compose の project 名と project directory は常に固定する(#310)。未指定だと cwd の
-# ディレクトリ名から project 名が決まり、別 project のコンテナのログが空で返る。
-_PROD_PREFIX = ["docker", "compose", "--project-name", "production-ready-rag"]
-_DEV_PREFIX = [
-    "docker",
-    "compose",
-    "--project-name",
-    "production-ready-rag",
-    "--project-directory",
-    str(REPO_ROOT),
-    "-f",
-    str(REPO_ROOT / "docker-compose.yml"),
-    "-f",
-    str(REPO_ROOT / "docker-compose.dev.yml"),
-]
 
-
-def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")  # prod: override 無し
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    args = _compose_args(settings, asr, "start")
-    assert args == [
-        *_PROD_PREFIX,
-        "--profile",
-        "gpu",
-        "up",
-        "-d",
-        "--no-build",
-        "parser-asr",
-    ]
-    # GPU は profile gate に隠れるため stop / restart でも --profile gpu を付ける。
-    assert _compose_args(settings, asr, "stop") == [
-        *_PROD_PREFIX,
-        "--profile",
-        "gpu",
-        "stop",
-        "parser-asr",
-    ]
-    assert _compose_args(settings, asr, "restart") == [
-        *_PROD_PREFIX,
-        "--profile",
-        "gpu",
-        "restart",
-        "parser-asr",
-    ]
-
-
-def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")  # prod: override 無し
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    # start は --no-build(制御リクエスト内で build しない)。
-    assert _compose_args(settings, docling, "start") == [
-        *_PROD_PREFIX,
-        "up",
-        "-d",
-        "--no-build",
-        "parser-docling",
-    ]
-    assert _compose_args(settings, docling, "stop") == [
-        *_PROD_PREFIX,
-        "stop",
-        "parser-docling",
-    ]
-
-
-def test_compose_args_build_and_remove(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    # build はイメージ生成。明示アクションで実行する。
-    assert _compose_args(settings, docling, "build") == [
-        *_PROD_PREFIX,
-        "build",
-        "parser-docling",
-    ]
-    # remove はコンテナ削除(稼働中なら停止してから force 削除)。
-    assert _compose_args(settings, docling, "remove") == [
-        *_PROD_PREFIX,
-        "rm",
-        "-f",
-        "-s",
-        "parser-docling",
-    ]
-    # 残る GPU サービスの build も profile gate を越える。
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    assert _compose_args(settings, asr, "build") == [
-        *_PROD_PREFIX,
-        "--profile",
-        "gpu",
-        "build",
-        "parser-asr",
-    ]
-
-
-def test_build_uses_longer_build_timeout(monkeypatch: MonkeyPatch) -> None:
-    """build は専用の長い timeout を、その他は通常 timeout を使う。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    monkeypatch.setattr(settings, "rag_service_control_timeout_seconds", 60.0)
-    monkeypatch.setattr(settings, "rag_service_build_timeout_seconds", 1800.0)
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-
-    async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
-        # stop の前のコンテナ確認(ps)にもコンテナ ID を返す。
-        return _FakeProcess(returncode=0, stdout=b"abc123\n")
-
-    used: list[float] = []
-    real_wait_for = asyncio.wait_for
-
-    async def spy_wait_for(awaitable: Any, timeout: float) -> Any:
-        used.append(timeout)
-        return await real_wait_for(awaitable, timeout)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(asyncio, "wait_for", spy_wait_for)
-    driver = DockerComposeDriver()
-    asyncio.run(driver.run(settings, docling, "build"))
-    asyncio.run(driver.run(settings, docling, "stop"))
-    # build はコンテナ確認なし。stop は ps(通常 timeout)→ stop(通常 timeout)。
-    assert used == [1800.0, 60.0, 60.0]
-
-
-def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    # dev は port 公開 override を重ねてホスト backend から到達可能にする。
-    assert _compose_args(settings, docling, "start") == [
-        *_DEV_PREFIX,
-        "up",
-        "-d",
-        "--no-build",
-        "parser-docling",
-    ]
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    # GPU は override に加えて --profile gpu。
-    assert _compose_args(settings, asr, "start") == [
-        *_DEV_PREFIX,
-        "--profile",
-        "gpu",
-        "up",
-        "-d",
-        "--no-build",
-        "parser-asr",
-    ]
-
-
-def test_compose_logs_args_dev_adds_tail_and_override(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    assert _compose_logs_args(settings, docling, 123) == [
-        *_DEV_PREFIX,
-        "logs",
-        "--no-color",
-        "--tail",
-        "123",
-        "parser-docling",
-    ]
-
-
-def test_compose_project_name_matches_compose_file_and_init_script() -> None:
-    """control.py の project 名は compose の name・init_script・build-services.sh と同じ。"""
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert f"\nname: {COMPOSE_PROJECT_NAME}\n" in compose
-    init_script = (REPO_ROOT / "init_script.sh").read_text(encoding="utf-8")
-    assert f'COMPOSE_PROJECT_NAME="{COMPOSE_PROJECT_NAME}"' in init_script
-    build_script = (REPO_ROOT / "scripts" / "build-services.sh").read_text(encoding="utf-8")
-    assert f'COMPOSE_PROJECT_NAME="{COMPOSE_PROJECT_NAME}"' in build_script
-    assert '--project-name "${COMPOSE_PROJECT_NAME}"' in build_script
-    assert '--project-directory "${ROOT_DIR}"' in build_script
-
-
-def test_compose_ps_args_pin_project(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    # GPU は profile gate に隠れるため ps でも --profile gpu を付ける。
-    assert _compose_ps_args(settings, asr) == [
-        *_PROD_PREFIX,
-        "--profile",
-        "gpu",
-        "ps",
-        "--all",
-        "--quiet",
-        "parser-asr",
-    ]
-
-
-def test_build_command_hint_uses_same_project(monkeypatch: MonkeyPatch) -> None:
-    from app.services.control import _build_command_hint
-
-    settings = get_settings()
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    monkeypatch.setattr(settings, "environment", "prod")
-    assert _build_command_hint(settings, docling) == (
-        "docker compose --project-name production-ready-rag build parser-docling"
-    )
-    monkeypatch.setattr(settings, "environment", "dev")
-    hint = _build_command_hint(settings, docling)
-    assert hint.startswith(
-        "docker compose --project-name production-ready-rag --project-directory "
-    )
-    assert hint.endswith("docker-compose.dev.yml build parser-docling")
-
-
-def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> None:
-    from app.services.control import _friendly_compose_error
-
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-    docling = get_catalog_entry("parser-docling")
-    assert docling is not None
-    raw = (
-        "Error response from daemon: No such image: "
-        "no1-production-ready-rag-parser-docling:dev-local"
-    )
-    friendly = _friendly_compose_error(raw, settings, docling)
-    assert "未ビルド" in friendly
-    assert "docker compose" in friendly and "build parser-docling" in friendly
-    assert "docker-compose.dev.yml" in friendly  # dev は override 付きで案内
-
-    # GPU は --profile gpu を含める。
-    asr = get_catalog_entry("parser-asr")
-    assert asr is not None
-    assert "--profile gpu" in _friendly_compose_error("no such image: x", settings, asr)
-
-    # 既知でないエラーはそのまま返す。
-    assert _friendly_compose_error("boom", settings, docling) == "boom"
-
-
-class _FakeProcess:
-    def __init__(self, returncode: int, stderr: bytes = b"", stdout: bytes = b"") -> None:
-        self.returncode = returncode
-        self._stderr = stderr
-        self._stdout = stdout
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        return self._stdout, self._stderr
-
-    def kill(self) -> None:  # pragma: no cover - timeout テストでのみ使用
-        pass
-
-    async def wait(self) -> int:  # pragma: no cover
-        return self.returncode
-
-
-def test_control_client_raises_on_nonzero_exit(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")  # docker driver 経路
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
-        return _FakeProcess(returncode=1, stderr=b"boom")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    client_obj = ServiceControlClient(docker_driver=DockerComposeDriver())
-    with pytest.raises(ServiceControlError) as exc:
-        asyncio.run(client_obj.control(settings, entry, "start"))
-    assert exc.value.result.exit_code == 1
-    assert exc.value.result.detail == "boom"
-
-
-def _install_fake_compose(
-    monkeypatch: MonkeyPatch,
-    *,
-    ps_stdout: bytes = b"abc123\n",
-    stdout: bytes = b"",
-    returncode: int = 0,
-) -> list[dict[str, Any]]:
-    """compose subprocess を差し替える。``ps`` はコンテナ ID を、それ以外は ``stdout`` を返す。"""
-    calls: list[dict[str, Any]] = []
-
-    async def fake_exec(*args: str, **kwargs: Any) -> _FakeProcess:
-        calls.append({"args": list(args), "kwargs": kwargs})
-        if "ps" in args:
-            return _FakeProcess(returncode=0, stdout=ps_stdout)
-        return _FakeProcess(returncode=returncode, stdout=stdout)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    return calls
-
-
-def _subcommands(calls: list[dict[str, Any]], service_id: str) -> list[str]:
-    """記録した argv から、service_id の直前までのサブコマンド部分(先頭語)を取り出す。"""
-    result: list[str] = []
-    for call in calls:
-        args = call["args"]
-        # サブコマンドは profile / file 指定の後ろ、先頭の非オプション語。
-        index = args.index(service_id)
-        head = [arg for arg in args[:index] if arg in {"ps", "logs", "stop", "restart", "up"}]
-        result.append(head[0] if head else "")
-    return result
-
-
-def test_control_client_success(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")  # docker driver 経路
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    calls = _install_fake_compose(monkeypatch)
-    result = asyncio.run(ServiceControlClient().control(settings, entry, "stop"))
-    assert isinstance(result, ControlResult)
-    assert result.ok is True
-    # stop の前に、project にコンテナがあるかを確かめる。
-    assert _subcommands(calls, "parser-docling") == ["ps", "stop"]
-    assert calls[0]["args"] == _compose_ps_args(settings, entry)
-
-
-@pytest.mark.parametrize("action", ["stop", "restart"])
-def test_control_fails_when_container_missing(
-    monkeypatch: MonkeyPatch, action: Literal["stop", "restart"]
-) -> None:
-    """project にコンテナが無い stop / restart は、exit 0 でも成功にしない(#310)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    calls = _install_fake_compose(monkeypatch, ps_stdout=b"")
-    with pytest.raises(ServiceControlError) as exc:
-        asyncio.run(ServiceControlClient().control(settings, entry, action))
-    assert exc.value.result.ok is False
-    assert exc.value.result.action == action
-    assert exc.value.result.detail is not None
-    assert "parser-docling のコンテナ" in exc.value.result.detail
-    assert COMPOSE_PROJECT_NAME in exc.value.result.detail
-    # 確認だけして、stop / restart 自体は実行しない。
-    assert _subcommands(calls, "parser-docling") == ["ps"]
-
-
-def test_control_start_does_not_require_existing_container(monkeypatch: MonkeyPatch) -> None:
-    """start はコンテナを作るため、事前のコンテナ確認をしない。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    calls = _install_fake_compose(monkeypatch, ps_stdout=b"")
-    result = asyncio.run(ServiceControlClient().control(settings, entry, "start"))
-    assert result.ok is True
-    assert _subcommands(calls, "parser-docling") == ["up"]
-
-
-def test_control_api_stop_missing_container_is_502(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    _install_fake_compose(monkeypatch, ps_stdout=b"")
-
-    resp = client.post("/api/services/parser-docling/stop")
-    assert resp.status_code == 502
-    assert COMPOSE_PROJECT_NAME in resp.text
-
-
-def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    calls = _install_fake_compose(monkeypatch, stdout=b"line1\nline2\n")
-    result = asyncio.run(read_service_logs(settings, entry, 50))
-
-    assert result == ServiceLogsResult(
-        service_id="parser-docling",
-        source="docker",
-        lines=50,
-        content="line1\nline2",
-    )
-    assert _subcommands(calls, "parser-docling") == ["ps", "logs"]
-    logs_call = calls[-1]
-    assert logs_call["args"] == [
-        *_PROD_PREFIX,
-        "logs",
-        "--no-color",
-        "--tail",
-        "50",
-        "parser-docling",
-    ]
-    assert logs_call["kwargs"]["cwd"] is None
-
-
-def test_read_service_logs_missing_container_raises(monkeypatch: MonkeyPatch) -> None:
-    """project にコンテナが無ければ、空のログではなくエラーにする(#310)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    calls = _install_fake_compose(monkeypatch, ps_stdout=b"", stdout=b"")
-    with pytest.raises(ServiceLogsError) as exc:
-        asyncio.run(read_service_logs(settings, entry, 50))
-    assert "parser-docling のコンテナ" in str(exc.value)
-    assert COMPOSE_PROJECT_NAME in str(exc.value)
-    assert _subcommands(calls, "parser-docling") == ["ps"]
-    # dev は固定の project 名と project directory で確かめる。
-    assert calls[0]["args"] == [*_DEV_PREFIX, "ps", "--all", "--quiet", "parser-docling"]
-    assert calls[0]["kwargs"]["cwd"] == str(REPO_ROOT)
-
-
-def test_read_service_logs_ps_failure_raises(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    async def fake_exec(*_args: str, **_kwargs: Any) -> _FakeProcess:
-        return _FakeProcess(returncode=1, stderr=b"Cannot connect to the Docker daemon")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    with pytest.raises(ServiceLogsError, match="Cannot connect to the Docker daemon"):
-        asyncio.run(read_service_logs(settings, entry, 50))
-
-
-# --- API --------------------------------------------------------------------
+async def _all_stopped(_settings: Any) -> dict[str, str]:
+    return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
 
 
 def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-
-    async def fake_probe(_settings: Any) -> dict[str, str]:
-        return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe)
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
     resp = client.get("/api/services")
     assert resp.status_code == 200
     data = resp.json()["data"]
     # prod + flag OFF は可視化のみ。
     assert data["control_enabled"] is False
     assert data["deployment_mode"] == "prod"
-    assert len(data["services"]) == len(SERVICE_CATALOG)
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
-    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
-    assert asr["execution_policy"] == "selected_adapter"
+    docling = next(s for s in data["services"] if s["service_id"] == "parser-docling")
+    assert docling["systemd_unit"] == DOCLING_UNIT
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
     assert chunking["deployable"] is False
-    retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
-    assert retrieval["execution_policy"] == "in_process_when_disabled"
-    assert retrieval["deployable"] is False
+    assert chunking["systemd_unit"] is None
 
 
-def test_control_rejects_non_deployable_stage(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")  # dev は制御自動有効
-
-    async def fail_exec(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("non-deployable stage must not invoke compose")
-
-    # 409 ガードは control 実行前。compose が呼ばれたらテスト失敗にする。
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_exec)
-    resp = client.post("/api/services/pipeline-chunking/start")
-    assert resp.status_code == 409
+def test_list_services_exposes_model_cache_path(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
+    data = client.get("/api/services").json()["data"]
+    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
+    assert asr["model_cache"] == {
+        "path": str(Path("~/.cache").expanduser()),
+        "editable": False,
+    }
+    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
+    assert chunking["model_cache"] is None
 
 
 def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-
-    async def fake_probe(_settings: Any) -> dict[str, str]:
-        return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe)
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
     data = client.get("/api/services").json()["data"]
     # dev は flag OFF でも制御を自動有効化。
     assert data["control_enabled"] is True
@@ -891,15 +895,8 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["control_enabled"] is False
-    assert data["deployment_mode"] == "prod"
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert "status" not in data["services"][0]
-    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
-    assert asr["execution_policy"] == "selected_adapter"
-    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
-    assert chunking["execution_policy"] == "in_process_when_disabled"
-    retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
-    assert retrieval["execution_policy"] == "in_process_when_disabled"
 
 
 def test_get_service_status_probes_only_target(monkeypatch: MonkeyPatch) -> None:
@@ -907,191 +904,139 @@ def test_get_service_status_probes_only_target(monkeypatch: MonkeyPatch) -> None
 
     async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
         seen.append(entry.service_id)
-        return "running"
+        return "starting"
 
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
     resp = client.get("/api/services/parser-asr/status")
     assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["service_id"] == "parser-asr"
-    assert data["status"] == "running"
+    assert resp.json()["data"]["status"] == "starting"
     assert seen == ["parser-asr"]
 
 
-def test_get_service_logs_returns_tail(monkeypatch: MonkeyPatch) -> None:
-    async def fake_logs(
-        _settings: Any, entry: ServiceCatalogEntry, lines: int
-    ) -> ServiceLogsResult:
-        return ServiceLogsResult(
-            service_id=entry.service_id,
-            source="docker",
-            lines=lines,
-            content="ready",
-        )
-
-    monkeypatch.setattr("app.api.routes.services.read_service_logs", fake_logs)
-    resp = client.get("/api/services/parser-docling/logs?lines=50")
+def test_get_service_logs_returns_journal_tail(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(journal_result=CommandOutput(0, "a\nb\nc", "")).install(monkeypatch)
+    resp = client.get("/api/services/parser-docling/logs?lines=2")
     assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data == {
+    assert resp.json()["data"] == {
         "service_id": "parser-docling",
-        "source": "docker",
-        "lines": 50,
-        "content": "ready",
+        "source": "journald",
+        "lines": 2,
+        "content": "b\nc",
     }
 
 
-def test_get_service_logs_missing_container_is_502(monkeypatch: MonkeyPatch) -> None:
-    """別 project のコンテナしか無いとき、200 の空ログではなく 502 を返す(#310)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    _install_fake_compose(monkeypatch, ps_stdout=b"", stdout=b"")
-
-    resp = client.get("/api/services/parser-docling/logs?lines=200")
-    assert resp.status_code == 502
-    assert "parser-docling のコンテナ" in resp.text
-
-
 def test_get_service_logs_zero_lines_is_200_empty(monkeypatch: MonkeyPatch) -> None:
-    """コンテナがあってログが 0 行なら、従来どおり 200 で空の本文を返す。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    _install_fake_compose(monkeypatch, ps_stdout=b"abc123\n", stdout=b"")
-
+    _FakeSystemd().install(monkeypatch)
     resp = client.get("/api/services/parser-docling/logs?lines=200")
     assert resp.status_code == 200
     assert resp.json()["data"]["content"] == ""
 
 
-def test_get_service_logs_unknown_service_is_404() -> None:
-    resp = client.get("/api/services/unknown-service/logs")
+def test_get_service_logs_missing_unit_is_404(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(load_state="not-found").install(monkeypatch)
+    resp = client.get("/api/services/parser-docling/logs?lines=200")
     assert resp.status_code == 404
+    assert DOCLING_UNIT in resp.text
+
+
+def test_get_service_logs_permission_denied_is_503(monkeypatch: MonkeyPatch) -> None:
+    _FakeSystemd(journal_result=CommandOutput(1, "", "sudo: a password is required")).install(
+        monkeypatch
+    )
+    resp = client.get("/api/services/parser-docling/logs?lines=200")
+    assert resp.status_code == 503
+    assert "sudoers" in resp.text
+
+
+def test_get_service_logs_without_systemd_is_503() -> None:
+    resp = client.get("/api/services/parser-docling/logs?lines=200")
+    assert resp.status_code == 503
+    assert "systemd" in resp.text
+
+
+def test_get_service_logs_unknown_service_is_404() -> None:
+    assert client.get("/api/services/unknown-service/logs").status_code == 404
 
 
 def test_control_rejected_when_disabled_in_prod(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-    resp = client.post("/api/services/parser-docling/start")
-    assert resp.status_code == 409
+    fake = _FakeSystemd().install(monkeypatch)
+    assert client.post("/api/services/parser-docling/start").status_code == 409
+    assert fake.calls == []
 
 
 def test_control_unknown_service_is_404(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    resp = client.post("/api/services/unknown-service/stop")
-    assert resp.status_code == 404
+    fake = _FakeSystemd().install(monkeypatch)
+    assert client.post("/api/services/unknown-service/stop").status_code == 404
+    assert client.post("/api/services/sshd/stop").status_code == 404
+    assert fake.calls == []
 
 
-def test_control_success_returns_updated_status(monkeypatch: MonkeyPatch) -> None:
+def test_control_rejects_non_deployable_stage(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")  # dev は制御自動有効
+    fake = _FakeSystemd().install(monkeypatch)
+    assert client.post("/api/services/pipeline-chunking/start").status_code == 409
+    assert fake.calls == []
+
+
+def test_docker_build_and_remove_endpoints_are_gone(monkeypatch: MonkeyPatch) -> None:
+    """Docker のイメージ build / コンテナ削除の操作は無くした(#286)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    fake = _FakeSystemd().install(monkeypatch)
+    assert client.post("/api/services/parser-docling/build").status_code in {404, 405}
+    assert client.post("/api/services/parser-docling/remove").status_code in {404, 405}
+    assert fake.calls == []
 
-    async def fake_control(
-        _self: Any,
-        _settings: Any,
-        entry: ServiceCatalogEntry,
-        action: Literal["start", "stop", "restart"],
-    ) -> ControlResult:
-        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
+
+def test_control_start_returns_updated_status(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    fake = _FakeSystemd().install(monkeypatch)
 
     async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
-        # 操作対象 1 件のみ再プローブする(route は probe_service_status を使う)。
-        return "running"
+        return "starting"
 
-    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
     resp = client.post("/api/services/parser-docling/start")
     assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["service_id"] == "parser-docling"
-    assert data["action"] == "start"
-    assert data["status"] == "running"
+    assert resp.json()["data"] == {
+        "service_id": "parser-docling",
+        "action": "start",
+        "status": "starting",
+    }
+    assert systemctl_action_argv("start", DOCLING_UNIT) in fake.calls
 
 
-def _spy_control(monkeypatch: MonkeyPatch) -> list[tuple[str, str]]:
-    """ServiceControlClient.control を記録のみのスパイへ差し替え、(service_id, action) 列を返す。"""
-    calls: list[tuple[str, str]] = []
-
-    async def fake_control(
-        _self: Any,
-        _settings: Any,
-        entry: ServiceCatalogEntry,
-        action: Literal["start", "stop", "restart"],
-    ) -> ControlResult:
-        calls.append((entry.service_id, action))
-        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-
-    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
-    return calls
-
-
-def test_control_acts_on_single_service(monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("fake_kwargs", "expected_status", "expected_text"),
+    [
+        ({"load_state": "not-found"}, 404, DOCLING_UNIT),
+        ({"action_result": CommandOutput(1, "", "sudo: a password is required")}, 503, "sudoers"),
+        ({"action_result": CommandOutput(1, "", "Job failed.")}, 502, "journalctl -u"),
+        ({"show_error": CommandUnavailableError("no systemctl")}, 503, "systemd"),
+    ],
+)
+def test_control_failures_map_to_http_status(
+    monkeypatch: MonkeyPatch,
+    fake_kwargs: dict[str, Any],
+    expected_status: int,
+    expected_text: str,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    calls = _spy_control(monkeypatch)
-
-    async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
-        return "running"
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
-    resp = client.post("/api/services/parser-asr/start")
-    assert resp.status_code == 200
-    assert calls == [("parser-asr", "start")]
-
-
-def test_control_build_and_remove_endpoints(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    calls = _spy_control(monkeypatch)
-
-    async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
-        return "stopped"
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
-    build = client.post("/api/services/parser-docling/build")
-    remove = client.post("/api/services/parser-docling/remove")
-    assert build.status_code == 200
-    assert remove.status_code == 200
-    assert build.json()["data"]["action"] == "build"
-    assert remove.json()["data"]["action"] == "remove"
-    assert calls == [("parser-docling", "build"), ("parser-docling", "remove")]
-
-
-def test_build_remove_blocked_when_control_disabled(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
-    monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-    assert client.post("/api/services/parser-docling/build").status_code == 409
-    assert client.post("/api/services/parser-docling/remove").status_code == 409
-
-
-def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-
-    async def fake_control(
-        _self: Any,
-        _settings: Any,
-        entry: ServiceCatalogEntry,
-        action: Literal["start", "stop", "restart"],
-    ) -> ControlResult:
-        raise ServiceControlError(
-            ControlResult(
-                ok=False,
-                action=action,
-                service_id=entry.service_id,
-                exit_code=1,
-                detail="compose failed",
-            )
-        )
-
-    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
+    _FakeSystemd(**fake_kwargs).install(monkeypatch)
     resp = client.post("/api/services/parser-docling/stop")
-    assert resp.status_code == 502
+    assert resp.status_code == expected_status
+    assert expected_text in resp.text
 
 
-# --- dev モード(uv プロセス driver)-----------------------------------------
+# --- URL の解決(dev の旧 docker 名の読み替え) -----------------------------------
 
 
 def test_is_dev_mode_maps_environment() -> None:
@@ -1110,21 +1055,12 @@ def test_is_dev_mode_maps_environment() -> None:
             object.__setattr__(settings, "environment", "dev")
 
 
-def test_service_health_url_dev_uses_dev_port(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(settings, "environment", "dev")
-    monkeypatch.setattr(settings, entry.url_field, "http://preprocess-csv-to-json:8000")
-    assert service_health_url(settings, entry) == f"http://127.0.0.1:{entry.dev_port}"
-
-
-def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: MonkeyPatch) -> None:
-    from app.services.catalog import resolve_service_base_url
-
+def test_resolve_service_base_url_dev_rewrites_legacy_docker_name(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
-    # docker 既定(host == compose service 名)→ dev_port へ書き換え(画面プローブと一致)。
+    # 以前の Docker Compose 時代の backend/.env に残った docker 名 → 127.0.0.1:<port>。
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
     monkeypatch.setattr(
         settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
@@ -1140,8 +1076,6 @@ def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: Monke
 
 
 def test_resolve_service_base_url_dev_respects_overrides(monkeypatch: MonkeyPatch) -> None:
-    from app.services.catalog import resolve_service_base_url
-
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     # 明示上書き(host != service 名)は尊重する。
@@ -1156,14 +1090,12 @@ def test_resolve_service_base_url_dev_respects_overrides(monkeypatch: MonkeyPatc
 
 
 def test_resolve_service_base_url_prod_uses_setting(monkeypatch: MonkeyPatch) -> None:
-    from app.services.catalog import resolve_service_base_url
-
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")
-    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000/")
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://10.0.0.5:18020/")
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
-        == "http://parser-docling:8000"
+        == "http://10.0.0.5:18020"
     )
 
 
@@ -1173,8 +1105,7 @@ def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPat
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
-    client = ParserServiceClient(settings)
-    assert client.service_url("docling") == "http://127.0.0.1:18020"
+    assert ParserServiceClient(settings).service_url("docling") == "http://127.0.0.1:18020"
 
 
 def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
@@ -1185,90 +1116,4 @@ def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch)
     monkeypatch.setattr(
         settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
     )
-    monkeypatch.setattr(
-        settings, "rag_preprocess_office_to_pdf_service_url", "http://preprocess-office-to-pdf:8000"
-    )
     assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:18012"
-    assert preprocess_service_url(settings, "office_to_pdf") == "http://127.0.0.1:18010"
-
-
-def test_service_health_url_prod_uses_url_field(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(settings, "environment", "prod")
-    monkeypatch.setattr(settings, entry.url_field, "http://preprocess-csv-to-json:8000/")
-    assert service_health_url(settings, entry) == "http://preprocess-csv-to-json:8000"
-
-
-class _RecordingDriver:
-    """run() の呼び出し action を記録する driver スタブ。"""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    async def run(
-        self, settings: Any, entry: ServiceCatalogEntry, action: Literal["start", "stop", "restart"]
-    ) -> ControlResult:
-        self.calls.append(action)
-        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-
-
-def test_control_client_selects_driver_by_mode_and_runner() -> None:
-    settings = get_settings()
-    parser = get_catalog_entry("parser-docling")
-    assert parser is not None
-
-    object.__setattr__(settings, "environment", "dev")
-    try:
-        # dev は docker compose driver(override でポート公開)
-        docker = _RecordingDriver()
-        c = ServiceControlClient(docker_driver=docker)  # type: ignore[arg-type]
-        asyncio.run(c.control(settings, parser, "start"))
-        assert docker.calls == ["start"]
-
-        # prod も docker driver
-        object.__setattr__(settings, "environment", "prod")
-        docker = _RecordingDriver()
-        c = ServiceControlClient(docker_driver=docker)  # type: ignore[arg-type]
-        asyncio.run(c.control(settings, parser, "stop"))
-        assert docker.calls == ["stop"]
-    finally:
-        object.__setattr__(settings, "environment", "dev")
-
-
-def test_control_client_serializes_same_service() -> None:
-    """同一サービスへの並行 control はロックで直列化される。"""
-    settings = get_settings()
-    object.__setattr__(settings, "environment", "prod")  # docker driver 経路
-    entry = get_catalog_entry("parser-docling")
-    assert entry is not None
-
-    active = 0
-    max_active = 0
-
-    class _SlowDriver:
-        async def run(
-            self, _s: Any, e: ServiceCatalogEntry, action: Literal["start", "stop", "restart"]
-        ) -> ControlResult:
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            await asyncio.sleep(0.02)
-            active -= 1
-            return ControlResult(ok=True, action=action, service_id=e.service_id, exit_code=0)
-
-    c = ServiceControlClient(docker_driver=_SlowDriver())  # type: ignore[arg-type]
-
-    async def _drive() -> None:
-        await asyncio.gather(
-            c.control(settings, entry, "start"),
-            c.control(settings, entry, "start"),
-            c.control(settings, entry, "start"),
-        )
-
-    try:
-        asyncio.run(_drive())
-    finally:
-        object.__setattr__(settings, "environment", "dev")
-    assert max_active == 1, "同一サービスの control は同時に 1 つだけ実行されること"

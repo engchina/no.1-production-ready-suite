@@ -26,20 +26,81 @@ npm ci
 BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /api は proxy せず 404（hermetic）
 ```
 
-Docker Compose:
+### 前処理 / parser（uv の venv + systemd。#286）
 
-```bash
-cp ../platform/.env.example ../platform/.env   # 初回だけ
-cp backend/.env.example backend/.env
-docker compose up --build
-```
+前処理と parser はサービスごとの uv の venv（`uv sync --locked --no-dev --python 3.12`）で動くネイティブのプロセスで、
+`127.0.0.1:<port>` だけで listen する。本番と同じく systemd の unit（`production-ready-rag-<service>.service`）で動かし、
+「運用設定 › サービス管理」画面から起動 / 停止する。Docker は使わない。unit の定義は本番の `init_script.sh` と共通
+（[`scripts/rag-systemd.sh`](../scripts/rag-systemd.sh)）。
 
-backend は OCI / Oracle 接続情報を前提に起動し、`/u01/data/production-ready-rag` を永続ボリュームにする。
-backend / ingestion-worker はリポジトリの `platform/` を `/u01/production-ready-platform` に書き込み可能で mount し、
-`PLATFORM_ENV_FILE=/u01/production-ready-platform/.env` で共通 `.env` を読み書きする（システム設定画面の保存先。
-`model-settings.json` も同じディレクトリ）。共通 `.env` は env_file で注入しない（環境変数が `.env` より優先され、
-画面で保存した値が反映されなくなるため）。コンテナの `appuser` が `platform/` と `platform/.env` に書き込めるようにしておく。
-OCI の parser（`--profile oci`）は `platform/.env` と `backend/.env` を env_file で受け取る。
+| サービス | ディレクトリ | port |
+|---|---|---|
+| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / url-to-markdown / image-enhance / pii-redact | `services/preprocess/<name>` | 18010〜18016 |
+| parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
+| parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
+| parser-asr（GPU。開発環境だけ） | `services/parsers/asr` | 18026 |
+| parser-oci-genai-vision / parser-oci-document-understanding | `services/parsers/oci_*` | 18027 / 18028 |
+
+backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
+`backend/.env` に以前の docker 名（`http://parser-docling:8000` など）が残っていても、development では `127.0.0.1:<port>` へ読み替える。
+
+1. OS のコマンドを入れる（Ubuntu。使うサービスの分だけでよい）。
+
+   ```bash
+   sudo apt-get install -y --no-install-recommends \
+     libreoffice-core libreoffice-writer libreoffice-impress libreoffice-calc fonts-noto-cjk \
+     poppler-utils tesseract-ocr tesseract-ocr-jpn
+   ```
+
+2. systemd が PID 1 の環境（WSL2 は `/etc/wsl.conf` の `[boot] systemd=true`）では、unit と sudoers を登録する（`rag/` で実行）。
+   venv を作り（docling のモデルと pii_redact の日本語 NER モデルも取得する）、unit を `/etc/systemd/system/` に、
+   画面から操作する unit の `systemctl` / `journalctl` だけを現在のユーザーに許可する sudoers を
+   `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する。
+
+   ```bash
+   scripts/rag-services.sh install            # 前処理 7 つと既定の CPU parser（docling）
+   scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
+   scripts/rag-services.sh install --oci      # OCI parser も足す
+   scripts/rag-services.sh install --gpu      # GPU parser（ASR。CUDA が要る）
+   scripts/rag-services.sh status             # unit の状態
+   scripts/rag-services.sh render /tmp/units  # 登録せずに unit と sudoers の中身だけ確かめる
+   scripts/rag-services.sh uninstall          # unit と sudoers を消す
+   ```
+
+   backend を `RAG_ENVIRONMENT=development`（既定）で起動すると、サービス管理画面の起動 / 停止が有効になる。
+   起動は `systemctl enable --now`、停止は `systemctl disable --now` なので、PC を再起動しても最後に操作した状態に戻る。
+   `install` を再実行しても、停止したサービスは停止のまま（コードを更新したときは起動中のものだけ再起動する）。
+
+3. systemd が無い環境では、使うサービスだけ前面で起動する（Ctrl+C で停止。サービス管理画面の起動 / 停止は使えないが、
+   状態は /health で表示される）。
+
+   ```bash
+   scripts/rag-services.sh run parser-docling
+   ```
+
+### 既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方（#286）
+
+既定の文書解析エンジン **Docling**（`parser-docling`。DocRAG のレイアウト解析）は **PDF と画像だけ**を解析する。
+
+| 形式 | 既定（Docling）のまま | 取り込み方 |
+|---|---|---|
+| PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
+| Office（`.docx` / `.pptx` / `.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
+| テキスト・Markdown・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
+| メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
+| TIFF・旧 Office（`.doc` / `.ppt` / `.xls`）・Outlook（`.msg`）・音声・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
+
+- Docling で解析できない形式は、**取込を始める前に止まる**。アップロードの結果に「このままでは取込を開始できません」と
+  理由・対処を出し、処理レシピの「処理を開始」（文書一覧の一括取込を含む）は HTTP 409 で理由・対処を返す。自動で
+  Unstructured へ振り分けない。判定は backend の `app/rag/parser_source_guard.py` の 1 か所で、ファイル準備が
+  passthrough 以外（Office→PDF など形式が変わる）のときは変換後の形式で取込時に判定する。
+- 処理レシピで Unstructured を選んだ文書は止めない。Unstructured の解析サービス（`parser-unstructured`）は**既定では配備しない**。
+  - 本番: Terraform の stack で入力 `rag_enable_parser_unstructured` を有効にして再配備し、「運用設定 › サービス管理」で起動する。
+  - 開発: `scripts/rag-services.sh install parser-unstructured`（または `--unstructured`）で登録する。
+  - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
+- 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+
+`docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は段階的に廃止する（後続の PR で削除する）。配備・画面・スクリプトは使わない。
 
 ### ローカル保存ディレクトリ(`PLATFORM_LOCAL_STORAGE_DIR`)
 
@@ -71,6 +132,92 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 コンテナ healthcheck は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
+
+#286 で、RAG の backend・ingestion-worker・前処理・parser を Docker Compose から、サービスごとの uv の venv と
+systemd の unit に移した。サービス管理画面は docker compose ではなく systemd の unit を操作する。既定の解析エンジンは Docling になった。
+
+### 何が変わるか
+
+| 項目 | 以前（Docker Compose） | #286 以降 |
+|---|---|---|
+| backend / ingestion-worker | compose の `backend` / `ingestion-worker` | `production-ready-rag-backend.service` / `production-ready-rag-ingestion-worker.service`（`rag/backend/.venv`） |
+| 前処理 / parser | compose の service（`rag-compose`） | `production-ready-rag-<service>.service`（`rag/services/*/*/.venv`、`127.0.0.1:<port>`） |
+| 実行ユーザー | コンテナの `appuser` | 専用の system user `ragsvc`（home は `/var/lib/production-ready-rag`） |
+| アップロード原本 | named volume `production-ready-rag_backend-local-storage` | `/u01/data/production-ready-rag` |
+| OCI の設定 | named volume `production-ready-rag_oci-config` | `/var/lib/production-ready-rag/.oci/config` |
+| モデル（docling など） | image に焼き込み | `ragsvc` の `~/.cache`（配備時に取得） |
+| サービス管理の操作 | `docker compose up / stop / build / rm` | `systemctl enable --now / disable --now / restart`、`journalctl -u <unit>`（sudoers で許可した unit だけ） |
+| 起動 / 停止の状態 | 再配備で compose_services.txt の service を全部起動 | 最後に操作した状態（enable / disable）を再起動・再配備でも保つ。初めての unit は起動 |
+| Terraform | `rag_compose_services` / `rag_enable_parser_docling` / `compose_services.txt` | `rag_services`（Docling は常に配備）/ `rag_services.txt` |
+| 既定の解析エンジン | Unstructured | Docling（`RAG_PARSER_ADAPTER_BACKEND=docling`） |
+
+### OCI Compute（`init_script.sh` で配備した環境）
+
+新しい stack で Compute を作り直すか、既存の Compute 上で `init_script.sh` を実行し直せば移行する。
+`init_script.sh` は次を自動で行う。
+
+1. 以前の `production-ready-rag.service`（compose）を `systemctl disable --now` で止めて消し、`rag-compose down --remove-orphans`
+   でコンテナを消す（volume と image は残す）。`/usr/local/bin/rag-compose` は `rag-compose.legacy-docker` に退避する。
+2. named volume `production-ready-rag_backend-local-storage` の中身を `/u01/data/production-ready-rag` へ、
+   `production-ready-rag_oci-config` の中身を `/var/lib/production-ready-rag/.oci` へ写す（写し先が空のときだけ。上書きしない）。
+3. `ragsvc` を作り、backend と前処理 / parser の venv・unit・sudoers を作って起動する。前処理 / parser は初めての unit なので
+   全部起動する（Docker で止めていたサービスは、移行後に画面から停止し直す。以後はその状態が保たれる）。
+
+既存の Compute 上で実行し直す場合は、cloud-init と同じく tag を固定して取得し、以前の stack が書いた入力
+（`/u01/aipoc/props/backend.env`）を新しい既定に合わせてから実行する。`init_script.sh` は以前の `compose_services.txt`
+（`backend` / `ingestion-worker` は読み飛ばす）も読むが、`parser-docling` が無い構成（以前の `rag_enable_parser_docling=false`）は
+拒否するので、そのときは `compose_services.txt` に `parser-docling` を足す。
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite
+sudo -u ubuntu git fetch --depth 1 origin <suite-v の tag> && sudo -u ubuntu git checkout -f FETCH_HEAD
+# 既定の解析エンジン（Docling）と、画面からの起動 / 停止を有効にする（stack の新しい既定と同じ）
+sudo sed -i -e 's/^RAG_PARSER_ADAPTER_BACKEND=.*/RAG_PARSER_ADAPTER_BACKEND=docling/' \
+  -e '/^RAG_PARSER_UNSTRUCTURED_ENABLED=/d' \
+  -e 's/^RAG_SERVICE_CONTROL_ENABLED=.*/RAG_SERVICE_CONTROL_ENABLED=true/' /u01/aipoc/props/backend.env
+grep -q '^RAG_PARSER_DOCLING_ENABLED=' /u01/aipoc/props/backend.env \
+  || echo 'RAG_PARSER_DOCLING_ENABLED=true' | sudo tee -a /u01/aipoc/props/backend.env
+sudo APP_ROOT=/u01/aipoc bash rag/init_script.sh      # ログは /var/log/rag-init.log
+```
+
+移行後の確認と片付け:
+
+```bash
+systemctl list-units --all 'production-ready-rag-*'
+sudo journalctl -u production-ready-rag-backend.service -n 100 --no-pager
+curl -fsS http://127.0.0.1:8000/api/health
+sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
+```
+
+- サービス管理画面で各サービスの状態（稼働中 / 起動中 / 停止 / 起動失敗 / 未登録）とログ（journalctl）が見え、起動 / 停止できる。
+- 文書をアップロードして取込が成功する（既定の解析エンジンは Docling）。
+- 問題が無ければ Docker の資源を消してよい（任意）: `docker volume ls -q | grep '^production-ready-rag_'`、
+  `docker images --format '{{.Repository}}' | grep '^production-ready-rag-'` を確認して削除し、Docker 自体が不要なら
+  `sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` で外す。
+- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`）は host のファイルなので、そのまま引き継がれる。
+
+### ローカル（Docker Compose で前処理 / parser を動かしていた環境）
+
+1. 以前のコンテナを止めて消す（port 18010〜18038 を空ける）。
+
+   ```bash
+   docker ps -aq --filter label=com.docker.compose.project=production-ready-rag | xargs -r docker rm -f
+   ```
+
+2. 「[ローカル開発 › 前処理 / parser](#前処理--parseruv-の-venv--systemd286)」の手順で unit と sudoers を登録する
+   （`scripts/rag-services.sh install`）。`scripts/build-services.sh` は削除した。
+3. `backend/.env` の `RAG_SERVICE_CONTROL_COMMAND` はもう読まない（削除してよい）。サービスの URL を docker 名で書いていても
+   development では `127.0.0.1:<port>` に読み替えるが、`backend/.env.example` と同じ `127.0.0.1:<port>` に直しておく。
+
+### 既定の解析エンジンの変更（Unstructured → Docling）
+
+- `RAG_PARSER_ADAPTER_BACKEND` と `model-settings.json` の `parser_adapters` を保存していない環境は、Docling が既定になる。
+  Unstructured を使い続ける場合は「検索・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+- Docling は PDF と画像だけを解析する。それ以外の形式は取込を始める前に止まるので、「[既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方](#既定の解析エンジンdoclingで扱える形式とそれ以外の形式の取り込み方286)」のとおり処理レシピで Unstructured（または Office→PDF）を選ぶ。
+- Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
+- 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
 ## 既存環境の更新手順（#211: 共通 .env への移行）
 
@@ -107,7 +254,8 @@ ln -s "${NEW}" "${OLD}"
    docker compose run --rm --no-deps -T --entrypoint cat backend /u01/data/production-ready-rag/.env   # key を確認して移す
    ```
 
-5. 再配備または再起動する。Compute の stack では更新した `rag/` を取得したうえで、共通 `.env` を container の
+5. 再配備または再起動する（以下は #286 より前の Docker Compose の配備の手順。#286 以降は `init_script.sh` を実行し直す）。
+   Compute の stack では更新した `rag/` を取得したうえで、共通 `.env` を container の
    `appuser` が読み書きできるようにしてから起動する（`init_script.sh` の `prepare_container_permissions` と同じ）。
 
    ```bash
@@ -139,7 +287,8 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. 更新した版で起動し、システムテーブルを初期化する（`PLATFORM_*` がなければ作り、`RAG_ROLE_*` を追加する。冪等）。
 
    ```bash
-   sudo /usr/local/bin/rag-compose run --rm --no-deps -T backend uv run --no-sync python -m app.rag.system_schema_cli initialize
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
    ```
 
    画面の「システム設定 > データベース > RAG システムテーブル」からでもよい。
@@ -168,7 +317,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 1. 保存済みの設定は読み込み時に既定へ寄せる（画面や取込は壊れない）。
    - `model-settings.json`（`parser_adapters`）や `RAG_PARSER_ADAPTER_BACKEND` に削除したエンジンが残っていれば、
-     既定の Unstructured として扱う。「検索・回答設定 › 文書解析」で保存し直すと旧値は消える。
+     既定の解析エンジン（#286 以降は Docling）として扱う。「検索・回答設定 › 文書解析」で保存し直すと旧値は消える。
    - 文書レシピ・KB 構築設定に残っていれば「global 既定の解析エンジンを継承」として扱う（分割などの他の上書きは保つ）。
      これらのエンジンで作った既存の索引はそのまま検索対象に残り、文書の取込設定には parser のずれ（再処理が必要）と表示される。
      必要な文書だけ、利用できる解析エンジンを選び直して再処理する。
@@ -191,11 +340,13 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 ## 既存環境の更新手順（#310 compose の project 名の固定と parser image の作り直し）
 
+> #286 より前の Docker Compose の環境向けの手順。#286 以降は Docker を使わない（上の #286 の手順で移行する）。
+
 #310 で次の2点を変えた。既存のローカル環境は、旧 project のコンテナを止めてから新しい名前で作り直す。
 
 - **compose の project 名を `production-ready-rag` に固定した。** `docker-compose.yml` の top-level `name:`、
-  サービス管理（`backend/app/services/control.py` が `--project-name` / `--project-directory` を付ける）、
-  `scripts/build-services.sh`、本番の `init_script.sh` の wrapper（`rag-compose`）が同じ名前を使う。
+  当時のサービス管理（`backend/app/services/control.py`）、`scripts/build-services.sh`、本番の `init_script.sh` の
+  wrapper（`rag-compose`）が同じ名前を使っていた（#286 でどれも Docker を使わなくなった）。
   以前は project 名が compose ファイルのディレクトリ名から決まり（monorepo では `rag`、archive 済みの旧 repo
   `no.1-production-ready-rag` では `no1-production-ready-rag`）、サービス管理の「ログ」は別 project の
   コンテナを探して空の結果を返していた。今は対象の project にコンテナが無ければ、ログ・停止・再起動は
@@ -227,7 +378,9 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 3. 新しい project 名で image を作り、起動する（`rag/` で実行）。起動はサービス管理画面の「起動」でもよい。
 
    ```bash
-   scripts/build-services.sh --cpu --preprocess      # image 名は production-ready-rag-<service>
+   docker compose --project-name production-ready-rag --project-directory "$PWD" \
+     -f docker-compose.yml -f docker-compose.dev.yml build \
+     parser-docling parser-unstructured preprocess-office-to-pdf preprocess-pdf-to-page-images
    docker compose --project-name production-ready-rag --project-directory "$PWD" \
      -f docker-compose.yml -f docker-compose.dev.yml \
      up -d --no-build parser-docling parser-unstructured \
@@ -270,14 +423,58 @@ sudo rag-compose up -d parser-docling parser-unstructured
 
 ## 本番構成
 
-OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台で `docker-compose.yml`
-（backend / ingestion-worker / 前処理 / CPU parser）を動かし、host の Nginx が frontend を配信する構成を作る。
+OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台に
+NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。#286）を作る。Docker は使わない。
 ADB（Oracle 26ai）と Wallet も stack が用意し（NL2SQL / Agent と共有する）、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
+
+| 構成要素 | 内容 |
+|---|---|
+| 実行ユーザー | 専用の system user `ragsvc`（home `/var/lib/production-ready-rag`）。リポジトリは `ubuntu` の所有で、`ubuntu` が git pull・uv sync・frontend の build を行う |
+| Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
+| backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
+| 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`TimeoutStopSec=90`） |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 7 つ・parser-docling と、選べば parser-unstructured・OCI parser 2 つ）。GPU の parser は配備しない |
+| frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
+| upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
+| 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |
+| サービス実行用 env | `rag/backend/service-runtime.env`（0600）。サービス管理が起動 / 再起動の前に HuggingFace 設定と実効 OCI Enterprise AI 設定を書き、前処理 / parser の unit が EnvironmentFile で読む |
+| ログ | `/var/log/rag-init.log`、`journalctl -u production-ready-rag-<service>.service` |
+
+### サービス管理画面と sudoers
+
+画面の起動 / 停止 / 再起動 / ログは、backend（`ragsvc`）が次のコマンドだけを `sudo -n` で実行する。argv は固定で、
+unit 名は backend のカタログの allowlist（前処理 / parser のうち配備したもの）で検証する（shell を通さない）。
+backend・ingestion-worker の unit と、それ以外のコマンドは許可しない。状態は `systemctl show`（root 不要）と各サービスの `/health` で判定する。
+
+```text
+# /etc/sudoers.d/production-ready-rag-services（init_script.sh が生成。visudo -cf で検査してから 0440 で置く）
+Cmnd_Alias RAG_SERVICE_CONTROL = /usr/bin/systemctl enable --now production-ready-rag-parser-docling.service, \
+    /usr/bin/systemctl disable --now production-ready-rag-parser-docling.service, \
+    /usr/bin/systemctl restart production-ready-rag-parser-docling.service, \
+    /usr/bin/journalctl -u production-ready-rag-parser-docling.service -n 1000 --no-pager -o short-iso, \
+    ...（配備した前処理 / parser の unit ごとに同じ 4 行）
+ragsvc ALL=(root) NOPASSWD: RAG_SERVICE_CONTROL
+```
+
+- 起動 = `systemctl enable --now`、停止 = `systemctl disable --now`。利用者が最後に操作した状態を systemd の enable / disable で持ち、
+  サーバーの再起動では enable の unit だけが起動する。再配備（`init_script.sh`）では、enable の unit は新しいコードで restart、
+  disable の unit は停止のまま、初めての unit は起動する。stack で外したサービスの unit は止めて消す。
+- 再起動（`systemctl restart`）は enable / disable を変えない。画面では稼働中・起動中・一部異常のサービスにだけ出す。
+- ログは `journalctl` を 1000 行固定で取り、画面が求める行数に切り詰める（sudoers と argv を一致させるため）。
+- 失敗の区別: unit が登録されていない → 404、sudoers の許可が無い・systemd が使えない → 503、`systemctl` の失敗 → 502。
+  ログが 0 行（`-- No entries --`）は 200 で空の本文。
+- 画面から起動 / 停止するには `RAG_SERVICE_CONTROL_ENABLED=true`（stack は true）。false のときは状態の表示だけ。
+
+```bash
+systemctl list-units --all 'production-ready-rag-*'
+sudo journalctl -u production-ready-rag-parser-docling.service -f
+sudo systemctl status production-ready-rag-backend.service
+```
 
 規模が大きくなった場合の推奨:
 
-- Frontend: Vite build artifact を配信する nginx container を OCI Container Instances または OKE に配置。
-- Backend: FastAPI + Uvicorn/Gunicorn container を OKE に配置。
+- Frontend: Vite build artifact を配信する nginx を OCI Container Instances または OKE に配置。
+- Backend: FastAPI + Uvicorn/Gunicorn を OKE に配置。
 - Storage: OCI Object Storage。
 - DB: Oracle 26ai。RAG チャンクは `VECTOR(1536, FLOAT32)`。
 - LLM/VLM: OCI Enterprise AI。
@@ -286,10 +483,8 @@ ADB（Oracle 26ai）と Wallet も stack が用意し（NL2SQL / Agent と共有
 - Secret: 共通 `.env`（`platform/.env`、`PLATFORM_*`）と `backend/.env`（`RAG_*`）から読み込む。
 - Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。利用者（production はログインしたユーザー、local は `X-User-ID`）と、local の `X-Tenant-ID` は raw 値を保存せず hash 化し（production は `X-Tenant-ID` を使わない。#225）、`RAG_AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
 
-backend container は production entrypoint として Gunicorn + `uvicorn.workers.UvicornWorker` を使う。worker 数と timeout は `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、listen port は `PORT` で調整する。local 開発だけ `uvicorn app.main:app --reload` を使い、本番では `/api/ready` と golden set gate で昇格判定する。
-
-frontend container は lockfile ベースの `npm ci` で build し、runtime stage では Vite の `dist/` を nginx で静的配信する。`/api/*` は `BACKEND_URL` へリバースプロキシし、SSE のため proxy buffering は無効化する。
-frontend build は外部 font service に依存せず、CSS の日本語第一 font stack で表示する。これにより CI / OKE build が Google Fonts などへの外向き通信に依存しない。
+backend は production entrypoint として Gunicorn + `uvicorn.workers.UvicornWorker` を使う（unit の ExecStart）。local 開発だけ `uvicorn app.main:app --reload` を使い、本番では `/api/ready` と golden set gate で昇格判定する。
+frontend build は外部 font service に依存せず、CSS の日本語第一 font stack で表示する。これにより CI / build が Google Fonts などへの外向き通信に依存しない。
 
 ## リリース前チェック
 
@@ -315,10 +510,10 @@ npm test
 npm run build
 ```
 
-container:
+配備スクリプト（`init_script.sh` と systemd の unit・sudoers）:
 
 ```bash
-docker compose config
+bash rag/scripts/tests/init-script-deployment.test.sh
 ```
 
 frontend の lint / dependency audit / Playwright E2E は `../nl2sql/` と同じく CI では実行しない。UI/UX を変更した PR では以下をローカルで実行し、結果を PR の `検証結果` に記載する(型検査は `npm run build` の `tsc --noEmit` が CI 上でも走る)。
@@ -429,7 +624,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `rag-file-processing-staging` の metrics は staging gate の実測値に加えて、local contract で証明済みの `parser_routing_accuracy`、`parser_warning_taxonomy_coverage`、`reading_order_consistency`、`table_structure_fidelity`、`visual_chunk_metadata_completeness` などを同じ artifact に統合する。これにより OCI / Oracle が必要な gate と local parser/chunker で十分検証できる gate を分離しつつ、promotion 判定は 1 つの metrics payload で完結する。
 - file-processing staging の通常実行 payload には `chunk_template_scorecard` も含まれる。manifest の `expected_chunk_template` と staging/golden metrics を使い、`pdf_layout` / `office_slide` / `office_sheet` / `markdown_by_heading` / `html_semantic` / `email_thread` / `table_preserve_rows` / `ocr_page` などの template 健康度を評価する。`chunk_block_integrity`、`chunk_contextual_coherence`、`chunk_size_compliance` などの core 指標が低い場合は `chunk_template_scorecard_blocked` を promotion blocker として返す。さらに template ごとの expected / measured case count、covered / missing source kinds、covered / missing scenarios を artifact に残し、ある template の未測定を別 template の良好な aggregate 指標で隠さない。
 - `RAG_INGESTION_QUEUE_STARTUP_RECOVERY_ENABLED` / `RAG_INGESTION_QUEUE_STARTUP_DRAIN_LIMIT` / `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` / `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` / `RAG_INGESTION_JOB_MAX_ATTEMPTS`: 永続化済み取込 job の起動時回復、stale RUNNING 判定、同時実行数、最大試行回数を制御する。QUEUED/RUNNING job は `/api/documents/ingestion-jobs/{job_id}/cancel` で `CANCELLED` にできる。job の状態遷移（cancel・完了・失敗）は遷移元の status を条件にした UPDATE で行い、cancel 済み job を `SUCCEEDED` / `FAILED` で上書きせず、完了済み job を `CANCELLED` で上書きしない（後者は 409）。cancel API は job の状態だけを変え、文書・レシピの status は cancel を検知した worker が戻す（レシピの job はレシピ行だけを戻し、文書の status には触れない）。取り消した job の次工程は自動投入しない。`/api/documents/ingestion-jobs/{job_id}/retry` は、レシピの job なら同じレシピの job として再投入し、他のレシピの出力は初期化しない（#305）。実行中の Enterprise AI / Oracle 呼び出しを強制中断するものではないため、外部 timeout と stale recovery も併用する。取込中に Oracle の接続が一時的に切れた場合（python-oracledb の `is_session_dead` / `isrecoverable`。`DPY-4011` など）は、`attempt_count < RAG_INGESTION_JOB_MAX_ATTEMPTS` なら文書・レシピの status を工程の前に戻して job を `QUEUED` に戻し、再実行する（使い切ったら `FAILED`）。DB の transaction も、commit の前に接続が切れた場合だけ新しい接続で 1 回やり直す。ログ（`ingestion_job_failed` / `ingestion_job_requeued_transient_db_error` / `oracle_transaction_retry` / `oracle_rollback_failed`）には `oracle_error_code` と `full_code` を出す（#341）。
-- `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一コンテナでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセス/別コンテナへ切り出す場合は `uv run --no-sync python -m app.rag.ingestion_worker` を別途起動する(docker-compose の `ingestion-worker` service)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、`replicas` を増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
+- `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一コンテナでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセスへ切り出す場合は `python -m app.rag.ingestion_worker` を別途起動する(本番は systemd の `production-ready-rag-ingestion-worker.service`)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、`replicas` を増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH`: Enterprise AI gateway の response が既知 envelope ではなく独自の深い JSON 構造に包まれる場合だけ指定する JSON Pointer。例: `/payload/results/0/generated/text`、`/payload/results/0/document`。未設定なら既知 envelope を自動判定する。
 - `WEB_CONCURRENCY`: backend container の Gunicorn worker 数。OKE / Container Instances の CPU 割当、OCI / Oracle の p95 latency、同時実行数から決める。

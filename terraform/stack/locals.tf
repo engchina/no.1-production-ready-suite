@@ -41,13 +41,13 @@ locals {
 
   # ---------------------------------------------------------------- RAG
 
-  # rag/docker-compose.yml のうち、RAG の Compute が build・起動する service。
-  # CPU の parser だけを配備する（parser-unstructured は既定の解析方式のため常に起動）。
-  # GPU の service（compose の gpu profile）はこの stack では扱わない。
-  rag_compose_services = concat(
+  # RAG の Compute に配備する前処理 / parser（サービスごとの uv の venv と systemd の unit。#286）。
+  # backend と ingestion-worker は常に配備するため、この一覧には含めない。
+  # CPU の parser だけを配備する（parser-docling は既定の解析エンジンのため常に配備する。
+  # parser-unstructured は Docling が扱えない形式を取り込む場合だけ、入力で選んで配備する）。
+  # GPU の parser（ASR）はこの stack では扱わない。
+  rag_services = concat(
     [
-      "backend",
-      "ingestion-worker",
       "preprocess-office-to-pdf",
       "preprocess-pdf-to-page-images",
       "preprocess-csv-to-json",
@@ -55,16 +55,18 @@ locals {
       "preprocess-url-to-markdown",
       "preprocess-image-enhance",
       "preprocess-pii-redact",
-      "parser-unstructured",
+      "parser-docling",
     ],
-    var.rag_enable_parser_docling ? ["parser-docling"] : [],
+    var.rag_enable_parser_unstructured ? ["parser-unstructured"] : [],
     var.rag_enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],
   )
 
-  # rag/backend/.env（RAG_*。docker compose の env_file）。
+  # rag/backend/.env（RAG_*）。backend が python-dotenv で読み、OCI parser の unit も EnvironmentFile で読む。
   # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#214）。
-  # RAG_ENVIRONMENT と service URL、PLATFORM_LOCAL_STORAGE_DIR / PLATFORM_OCI_CONFIG_FILE は
-  # docker-compose.yml の environment が正本のため、ここには書かない。
+  # RAG_ENVIRONMENT は init_script.sh が書く systemd の unit の Environment が正本、service URL と
+  # PLATFORM_LOCAL_STORAGE_DIR / PLATFORM_OCI_CONFIG_FILE は Settings の既定値（127.0.0.1:<port>・
+  # /u01/data/production-ready-rag・実行ユーザーの ~/.oci/config）を使うため、ここには書かない。
+  # サービス管理画面の起動 / 停止は、sudoers で許可した unit の systemctl だけを実行する（#286）。
   # RAG_AUDIT_CONTEXT_HASH_SALT は instance 上で生成する（state に残さない）。
   # ADB の DDL は Terraform に持たない。init_script.sh がアプリの system schema CLI で適用する。
   rag_backend_env = <<-EOT
@@ -74,9 +76,9 @@ RAG_LOG_LEVEL=INFO
 RAG_AUTH_MODE=production
 RAG_AUDIT_CONTEXT_HASH_SALT=
 
-RAG_PARSER_ADAPTER_BACKEND=unstructured
-RAG_PARSER_UNSTRUCTURED_ENABLED=true
-RAG_SERVICE_CONTROL_ENABLED=false
+RAG_PARSER_ADAPTER_BACKEND=docling
+RAG_PARSER_DOCLING_ENABLED=true
+RAG_SERVICE_CONTROL_ENABLED=true
 EOT
 
   # ---------------------------------------------------------------- NL2SQL
@@ -194,7 +196,8 @@ PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}
 EOT
 
   # 製品ごとの Compute に置く共通 .env の差分（データの置き場所と、Cookie を HTTPS 限定にするか）。
-  # RAG の保存先と model-settings.json は docker-compose.yml が正本（PLATFORM_LOCAL_STORAGE_DIR）。
+  # RAG の保存先（PLATFORM_LOCAL_STORAGE_DIR）と model-settings.json は Settings の既定値を使う
+  # （/u01/data/production-ready-rag と、platform/.env と同じ場所の model-settings.json）。
   platform_env_product = {
     rag    = <<-EOT
 
@@ -230,7 +233,7 @@ EOT
     nl2sql = local.nl2sql_backend_env
   }
 
-  # 製品ごとの差分（backend/.env、RAG の compose service）以外は全製品で同じ bootstrap を使う。
+  # 製品ごとの差分（backend/.env、RAG の前処理 / parser）以外は全製品で同じ bootstrap を使う。
   # 使わない製品の値は空文字にする（テンプレートは製品で分岐して、その製品のファイルだけを書く）。
   cloud_init_common_vars = {
     adb_name            = local.effective_adb_name
@@ -246,17 +249,17 @@ EOT
   }
   cloud_init_user_data = {
     for product in local.non_agent_products : product => base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", merge(local.cloud_init_common_vars, {
-      product          = product
-      backend_env      = base64gzip(local.backend_envs[product])
-      platform_env     = base64gzip(local.platform_envs[product])
-      compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""
+      product      = product
+      backend_env  = base64gzip(local.backend_envs[product])
+      platform_env = base64gzip(local.platform_envs[product])
+      rag_services = product == "rag" ? join(" ", local.rag_services) : ""
     })))
   }
   # Agent は RAG / NL2SQL の private IP を backend/.env に書くため、それらの Compute の後に作る（別の local）。
   agent_cloud_init_user_data = base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", merge(local.cloud_init_common_vars, {
-    product          = "agent"
-    backend_env      = base64gzip(local.agent_backend_env)
-    platform_env     = base64gzip(local.platform_envs["agent"])
-    compose_services = ""
+    product      = "agent"
+    backend_env  = base64gzip(local.agent_backend_env)
+    platform_env = base64gzip(local.platform_envs["agent"])
+    rag_services = ""
   })))
 }

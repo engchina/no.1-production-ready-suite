@@ -26,8 +26,9 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 
 ## 起動
 
-- **開発**: 触る変換のサービスだけローカル起動(各サービス README 参照)。
+- **開発**: 触る変換のサービスだけ起動する(`rag/scripts/rag-services.sh run preprocess-<name>`、または install で unit を登録)。
   in-process(passthrough / text_normalize)は何も起動不要。
-- **本番**: 各サービスを Docker イメージ化し、Docker Compose(単一ホスト)/ OKE
-  (Deployment+Service)/ OCI Container Instances へ独立デプロイ・独立スケールする。
-  build context は **リポジトリ root**(共有 package を含めるため)。
+- **本番 / 開発**: 各サービスをサービスごとの uv の venv と systemd の unit
+  (`production-ready-rag-preprocess-<name>.service`、`127.0.0.1:18010〜18016`)で動かす(#286。Docker は使わない)。
+  本番は `rag/init_script.sh`、開発は `rag/scripts/rag-services.sh install` が venv と unit を作る。
+  office_to_pdf は LibreOffice、pdf_to_page_images は CJK フォント(fonts-noto-cjk)を OS に入れる。

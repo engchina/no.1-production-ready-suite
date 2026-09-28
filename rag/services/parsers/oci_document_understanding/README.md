@@ -6,8 +6,9 @@ OCI Document Understanding を呼ぶ parser マイクロサービス(OCI クラ�
 - `POST /parse`(file + content_type)→ OCI Document Understanding の非同期 processor job
   で OCR/表抽出 → `StructuredExtraction`(ParseResponse)で返す。
 - `GET /health` は OCI 設定の充足(compartment / namespace / 入力 bucket)で ok/degraded。
-- **OCI 認証はメインプロジェクト設定を継承**: docker-compose で共通 `platform/.env`・`backend/.env` と
-  `~/.oci` マウント、`PLATFORM_OCI_CONFIG_FILE` を受け取る(個別設定なし)。`--profile oci` で opt-in。
+- **OCI 認証はメインプロジェクト設定を継承**: systemd の unit が共通 `platform/.env`・`backend/.env` を EnvironmentFile で読み、
+  OCI の設定ファイルは実行ユーザーの `~/.oci/config` を使う(#286。個別設定なし)。Terraform の stack では
+  `rag_enable_oci_cloud_parsers` で配備する。
 - 未設定/SDK 失敗/job 失敗/timeout 時は extraction=None を返し、backend 側で既存
   in-process / ローカルフローへ安全に縮退する。
 
