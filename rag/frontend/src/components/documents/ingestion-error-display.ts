@@ -20,7 +20,7 @@ const PHASE_TO_STEP: Record<IngestionJobPhase, FailedFlowStep> = {
 
 export type DocumentFailureView = {
   errored: boolean;
-  /** どの工程で失敗したか（最新 FAILED ジョブの phase 由来。不明なら null）。 */
+  /** どの工程で失敗したか（レシピの FAILED の step、無ければ最新 FAILED ジョブの phase。不明なら null）。 */
   failedStep: FailedFlowStep | null;
   /** 「原因 + 対処」を 1 本化した本文（最具体レイヤ採用。無ければ null）。 */
   primaryMessage: string | null;
@@ -35,6 +35,7 @@ export function resolveDocumentFailureView({
   documentStatus,
   latestJobStatus,
   latestJobPhase,
+  failedRecipePhase,
   latestJobErrorMessage,
   segments,
   documentErrorMessage,
@@ -42,6 +43,11 @@ export function resolveDocumentFailureView({
   documentStatus?: FileStatus | null;
   latestJobStatus?: string | null;
   latestJobPhase?: IngestionJobPhase | null;
+  /**
+   * レシピの step のうち FAILED の工程。レシピの CHUNK ジョブは索引まで行うため、ジョブの phase より
+   * 実際に失敗した工程を正確に示す。ステップ表示と同じ工程を失敗として出すため優先する（#329）。
+   */
+  failedRecipePhase?: IngestionJobPhase | null;
   latestJobErrorMessage?: string | null;
   segments: Pick<IngestionSegment, "status" | "error_message">[];
   documentErrorMessage?: string | null;
@@ -57,8 +63,11 @@ export function resolveDocumentFailureView({
     normalizeIngestionErrorMessage(latestJobErrorMessage) ??
     normalizeIngestionErrorMessage(failedSegment?.error_message) ??
     normalizeIngestionErrorMessage(documentErrorMessage);
-  const failedStep =
-    latestJobStatus === "FAILED" && latestJobPhase ? PHASE_TO_STEP[latestJobPhase] : null;
+  const failedStep = failedRecipePhase
+    ? PHASE_TO_STEP[failedRecipePhase]
+    : latestJobStatus === "FAILED" && latestJobPhase
+      ? PHASE_TO_STEP[latestJobPhase]
+      : null;
   return { errored: true, failedStep, primaryMessage };
 }
 

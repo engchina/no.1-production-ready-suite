@@ -3,6 +3,7 @@
 import { Button } from "@engchina/production-ready-ui";
 import { Check, ChevronDown, ChevronsDown, Search, X } from "lucide-react";
 import {
+  type FocusEvent,
   type KeyboardEvent,
   useCallback,
   useEffect,
@@ -25,6 +26,8 @@ interface MultiSelectComboboxStrings {
   selectedCount: (count: number) => string;
   selectAllVisible: string;
   clear: string;
+  /** 一覧の下部の「完了」。選択は選ぶたびに反映済みのため、一覧を閉じて入力欄へ戻るだけ（#316）。 */
+  done: string;
   hideEmpty?: string;
   hiddenEmptyCount?: (count: number) => string;
 }
@@ -89,6 +92,8 @@ export function MultiSelectCombobox<T>({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
+  // 閉じて入力欄へフォーカスを戻すとき、入力欄の onFocus で開き直さないための印。
+  const suppressOpenOnFocusRef = useRef(false);
 
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -193,8 +198,39 @@ export function MultiSelectCombobox<T>({
   };
 
   const openList = () => {
-    if (disabled) return;
+    if (disabled || suppressOpenOnFocusRef.current) return;
     setOpen(true);
+  };
+
+  /** 一覧を閉じ、入力欄へフォーカスを戻す（完了・Esc・開閉ボタン。#316）。 */
+  const closeAndFocusInput = () => {
+    setOpen(false);
+    suppressOpenOnFocusRef.current = true;
+    try {
+      inputRef.current?.focus();
+    } finally {
+      suppressOpenOnFocusRef.current = false;
+    }
+  };
+
+  // Esc は入力欄だけでなく、一覧の中の操作（さらに表示・完了など）にフォーカスがあるときも効かせる。
+  const onRootKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || !open) return;
+    event.preventDefault();
+    // 外側のダイアログなどまで Esc を伝えない（一覧だけを閉じる）。
+    event.stopPropagation();
+    closeAndFocusInput();
+  };
+
+  // Tab / Shift+Tab などでフォーカスが入力欄と一覧の外へ移ったら閉じる。移り先が無い
+  // （ウィンドウの切り替え・フォーカスできない所のクリック）ときは閉じない。外側のクリックは
+  // pointerdown の処理が閉じる。
+  const onRootBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (!open) return;
+    const next = event.relatedTarget;
+    if (next instanceof Node && !rootRef.current?.contains(next)) {
+      setOpen(false);
+    }
   };
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -219,12 +255,6 @@ export function MultiSelectCombobox<T>({
         if (target) toggle(getId(target));
         return;
       }
-      case "Escape":
-        if (open) {
-          event.preventDefault();
-          setOpen(false);
-        }
-        return;
       case "Backspace":
         if (filter === "" && selectedIds.length > 0) {
           onChange(selectedIds.slice(0, -1));
@@ -241,7 +271,7 @@ export function MultiSelectCombobox<T>({
       : undefined;
 
   return (
-    <div ref={rootRef} className="space-y-2">
+    <div ref={rootRef} className="space-y-2" onKeyDown={onRootKeyDown} onBlur={onRootBlur}>
       <div
         className={cn(
           "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-md border border-border/80 bg-surface px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-focus-ring focus-within:bg-surface-hover focus-within:ring-2 focus-within:ring-focus-ring",
@@ -317,8 +347,12 @@ export function MultiSelectCombobox<T>({
           onClick={(event) => {
             event.stopPropagation();
             if (disabled) return;
-            setOpen((value) => !value);
-            inputRef.current?.focus();
+            if (open) {
+              closeAndFocusInput();
+            } else {
+              setOpen(true);
+              inputRef.current?.focus();
+            }
           }}
           disabled={disabled}
           aria-label={strings.toggleListAria}
@@ -454,24 +488,39 @@ export function MultiSelectCombobox<T>({
                 ? strings.hiddenEmptyCount(hiddenEmptyCount)
                 : strings.selectedCount(selectedIds.length)}
             </span>
-            <span className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-start sm:gap-3">
-              <button
+            <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:w-auto sm:justify-start">
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <button
+                  type="button"
+                  onClick={selectAllVisible}
+                  // 検索語を変えている間は古い結果が出ているため、まとめて選ばせない。
+                  disabled={disabled || filtered.length === 0 || Boolean(remote?.searching)}
+                  className="whitespace-nowrap text-xs font-medium text-accent-fg transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                >
+                  {strings.selectAllVisible}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChange([])}
+                  disabled={disabled || selectedIds.length === 0}
+                  className="whitespace-nowrap text-xs text-fg-muted transition-colors hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {strings.clear}
+                </button>
+              </span>
+              {/* 選択は選ぶたびに反映済み。「完了」は一覧を閉じて入力欄へ戻る、目に見える閉じ方（#316）。
+                  ページの主操作と競わないよう secondary にする。 */}
+              <Button
                 type="button"
-                onClick={selectAllVisible}
-                // 検索語を変えている間は古い結果が出ているため、まとめて選ばせない。
-                disabled={disabled || filtered.length === 0 || Boolean(remote?.searching)}
-                className="text-xs font-medium text-accent-fg transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                size="sm"
+                variant="secondary"
+                icon={Check}
+                onClick={closeAndFocusInput}
+                // 狭い幅で折り返したときも右端に置く。
+                className="ml-auto"
               >
-                {strings.selectAllVisible}
-              </button>
-              <button
-                type="button"
-                onClick={() => onChange([])}
-                disabled={disabled || selectedIds.length === 0}
-                className="text-xs text-fg-muted transition-colors hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {strings.clear}
-              </button>
+                {strings.done}
+              </Button>
             </span>
           </div>
         </div>

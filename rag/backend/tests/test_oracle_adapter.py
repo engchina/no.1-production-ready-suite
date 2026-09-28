@@ -1048,6 +1048,58 @@ async def test_oracle_client_updates_ingestion_job_status() -> None:
     assert update_call.parameters["started_at"] == started_at
 
 
+async def test_oracle_client_transition_ingestion_job_uses_status_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """状態遷移は遷移元の status を WHERE に入れた 1 回の UPDATE で行う(#305)。"""
+    finished_at = datetime(2026, 1, 2, 0, 5, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[[_oracle_ingestion_job_row(status="CANCELLED")]],
+    )
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.transition_ingestion_job(
+        "job-1",
+        from_statuses=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+        to_status=IngestionJobStatus.CANCELLED,
+        error_message="利用者によりキャンセルされました。",
+        finished_at=finished_at,
+    )
+
+    assert updated is not None
+    assert updated.status == IngestionJobStatus.CANCELLED
+    update_call = pool.connection.calls[0]
+    assert "UPDATE rag_ingestion_jobs" in update_call.statement
+    assert "status IN (:from_status_0, :from_status_1)" in update_call.statement
+    assert "EXISTS (" in update_call.statement
+    assert update_call.parameters["from_status_0"] == "QUEUED"
+    assert update_call.parameters["from_status_1"] == "RUNNING"
+    assert update_call.parameters["to_status"] == "CANCELLED"
+    assert update_call.parameters["finished_at"] == finished_at
+    assert pool.connection.commits == 1
+
+
+async def test_oracle_client_transition_ingestion_job_returns_none_when_no_row_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """遷移元の status でなければ 0 行更新になり、None を返して他者の状態を上書きしない。"""
+    pool = FakeOraclePool(execute_results=[])
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 0, raising=False)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.transition_ingestion_job(
+        "job-1",
+        from_statuses=(IngestionJobStatus.RUNNING,),
+        to_status=IngestionJobStatus.SUCCEEDED,
+        finished_at=datetime(2026, 1, 2, 0, 5, tzinfo=UTC),
+    )
+
+    assert updated is None
+    assert len(pool.connection.calls) == 1
+    assert "status IN (:from_status_0)" in pool.connection.calls[0].statement
+
+
 async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     """stale RUNNING job は試行回数に応じて再キューまたは失敗へ戻す。"""
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)

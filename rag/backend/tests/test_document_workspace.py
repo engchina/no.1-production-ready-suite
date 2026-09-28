@@ -1,7 +1,9 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
 import hashlib
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import anyio
@@ -9,7 +11,7 @@ import pytest
 
 from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.main import app
 from app.schemas.document import (
     DocumentChunkView,
@@ -92,6 +94,7 @@ class FakeWorkspaceOracle:
         self.ingestion_segments: dict[str, list[IngestionSegment]] = {}
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
         self.processing_configs: dict[str, DocumentProcessingConfig] = {}
+        self.recipes: dict[str, dict[str, object]] = {}
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         for detail in self.documents.values():
@@ -473,6 +476,46 @@ class FakeWorkspaceOracle:
         )
         self.ingestion_jobs[job_id] = updated
         return updated
+
+    async def transition_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        from_statuses: Collection[IngestionJobStatus],
+        to_status: IngestionJobStatus,
+        error_message: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> IngestionJob | None:
+        # 実 Oracle の `WHERE status IN (...)` と同じく、遷移元の状態のときだけ書く。
+        job = self.ingestion_jobs.get(job_id)
+        if job is None or job.status not in from_statuses:
+            return None
+        updated = job.model_copy(
+            update={
+                "status": to_status,
+                "error_message": error_message,
+                "finished_at": finished_at,
+            }
+        )
+        self.ingestion_jobs[job_id] = updated
+        return updated
+
+    async def get_document_recipe(
+        self, document_id: str, recipe_id: str
+    ) -> dict[str, object] | None:
+        row = self.recipes.get(recipe_id)
+        if row is None or row.get("document_id") != document_id:
+            return None
+        return dict(row)
+
+    async def update_document_recipe_status(
+        self, *, recipe_id: str, status: FileStatus, **kwargs: object
+    ) -> None:
+        row = self.recipes.setdefault(recipe_id, {"recipe_id": recipe_id})
+        row["status"] = status.value
+        for key, value in kwargs.items():
+            if value is not None:
+                row[key] = value
 
     async def upsert_chunk_set(self, **kwargs: object) -> None:
         _ = kwargs
@@ -1978,7 +2021,11 @@ def test_cancel_queued_ingestion_job(
 def test_cancel_running_ingestion_job(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """実行中 job は cancellation requested として CANCELLED にできる。"""
+    """実行中 job は CANCELLED にでき、文書の status は API では戻さない(#305)。
+
+    実行中の worker がまだ処理を続けているため、文書を戻すのは cancel を検知した worker に任せる。
+    API が先に戻すと、同じ文書を再投入できてしまい、古い worker と新しい job が競合する。
+    """
     document_id = _upload(
         "cancel-running-policy.txt",
         "cancel running 本文".encode(),
@@ -2003,7 +2050,7 @@ def test_cancel_running_ingestion_job(
     cancelled = resp.json()["data"]
     assert cancelled["status"] == "CANCELLED"
     assert cancelled["error_message"] == documents_route.INGESTION_JOB_CANCELLED_MESSAGE
-    assert fake_document_dependencies.documents[document_id].status == FileStatus.UPLOADED
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.INGESTING
 
 
 def test_cancel_ingestion_job_rejects_terminal_status(
@@ -2080,63 +2127,248 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
     assert fake_document_dependencies.ingestion_jobs[queued_job.id].status == (
         IngestionJobStatus.CANCELLED
     )
+    # cancel を検知した worker が文書の status を戻す。
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.UPLOADED
 
 
-def test_recover_and_drain_ingestion_jobs_recovers_stale_running_jobs(
-    fake_document_dependencies: FakeWorkspaceOracle,
-) -> None:
-    """stale RUNNING job は再キューされ、上限到達 job は FAILED に残る。"""
-    runnable_document_id = _upload(
-        "stale-policy.txt",
-        "stale job 本文".encode(),
-        "text/plain",
-    )
-    maxed_document_id = _upload(
-        "maxed-policy.txt",
-        "maxed job 本文".encode(),
-        "text/plain",
-    )
-    old_started_at = datetime(2026, 1, 1, tzinfo=UTC)
-    stale_job = IngestionJob(
-        id="job-stale",
-        document_id=runnable_document_id,
-        status=IngestionJobStatus.RUNNING,
-        parser_profile="local_text_structure",
-        attempt_count=1,
-        max_attempts=3,
-        queued_at=old_started_at,
-        started_at=old_started_at,
-    )
-    maxed_job = IngestionJob(
-        id="job-maxed",
-        document_id=maxed_document_id,
-        status=IngestionJobStatus.RUNNING,
-        parser_profile="local_text_structure",
-        attempt_count=3,
-        max_attempts=3,
-        queued_at=old_started_at,
-        started_at=old_started_at,
-    )
-    fake_document_dependencies.ingestion_jobs[stale_job.id] = stale_job
-    fake_document_dependencies.ingestion_jobs[maxed_job.id] = maxed_job
+def _interleave_between_job_read_and_write(
+    monkeypatch: pytest.MonkeyPatch,
+    fake: FakeWorkspaceOracle,
+    job_id: str,
+    action: Callable[[], None],
+) -> dict[str, bool]:
+    """job の状態を読んでから書くまでの間に、別の処理(action)を 1 回だけ割り込ませる。
 
-    async def run_recovery() -> list[IngestionJob]:
-        return await documents_route.recover_and_drain_ingestion_jobs(
-            limit=10,
-            stale_running_seconds=1.0,
-            concurrency=2,
+    get は値を返した後に、transition は書く前に action を呼ぶ。どちらも「読んでから書くまで」の
+    間に相当する(#305 の TOCTOU)。``armed["on"]`` を True にした後の最初のアクセスで発火する。
+    """
+    armed = {"on": False}
+    original_get = fake.get_ingestion_job
+    original_transition = fake.transition_ingestion_job
+
+    def fire(target_id: str) -> None:
+        if armed["on"] and target_id == job_id:
+            armed["on"] = False
+            action()
+
+    async def get_then_interleave(target_id: str) -> IngestionJob | None:
+        current = await original_get(target_id)
+        fire(target_id)
+        return current
+
+    async def interleave_then_transition(target_id: str, **kwargs: Any) -> IngestionJob | None:
+        fire(target_id)
+        return await original_transition(target_id, **kwargs)
+
+    monkeypatch.setattr(fake, "get_ingestion_job", get_then_interleave)
+    monkeypatch.setattr(fake, "transition_ingestion_job", interleave_then_transition)
+    return armed
+
+
+def _cancel_job_in_store(fake: FakeWorkspaceOracle, job_id: str) -> None:
+    """cancel API が job を CANCELLED にした状態を直接作る。"""
+    job = fake.ingestion_jobs[job_id]
+    if job.status in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}:
+        fake.ingestion_jobs[job_id] = job.model_copy(
+            update={
+                "status": IngestionJobStatus.CANCELLED,
+                "error_message": documents_route.INGESTION_JOB_CANCELLED_MESSAGE,
+                "finished_at": datetime.now(UTC),
+            }
         )
 
-    drained = anyio.run(run_recovery)
 
-    assert [job.id for job in drained] == ["job-stale"]
-    assert fake_document_dependencies.ingestion_jobs["job-stale"].status == (
+def test_cancel_after_job_succeeded_does_not_overwrite_succeeded(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cancel API が RUNNING を読んだ直後に job が SUCCEEDED になったら、上書きせず 409 にする。"""
+    document_id = _upload("succeeded-race.txt", "競合本文".encode(), "text/plain")
+    fake_document_dependencies.documents[document_id] = fake_document_dependencies.documents[
+        document_id
+    ].model_copy(update={"status": FileStatus.INDEXED})
+    running_job = IngestionJob(
+        id="job-succeeded-race",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[running_job.id] = running_job
+
+    def worker_finishes() -> None:
+        job = fake_document_dependencies.ingestion_jobs[running_job.id]
+        fake_document_dependencies.ingestion_jobs[running_job.id] = job.model_copy(
+            update={"status": IngestionJobStatus.SUCCEEDED, "finished_at": datetime.now(UTC)}
+        )
+
+    armed = _interleave_between_job_read_and_write(
+        monkeypatch, fake_document_dependencies, running_job.id, worker_finishes
+    )
+    armed["on"] = True
+
+    resp = client.post(f"/api/documents/ingestion-jobs/{running_job.id}/cancel")
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == ["この取込ジョブはキャンセルできません。"]
+    assert fake_document_dependencies.ingestion_jobs[running_job.id].status == (
         IngestionJobStatus.SUCCEEDED
     )
-    assert fake_document_dependencies.ingestion_jobs["job-stale"].attempt_count == 2
-    assert fake_document_dependencies.ingestion_jobs["job-maxed"].status == (
-        IngestionJobStatus.FAILED
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.INDEXED
+
+
+def test_cancel_during_finish_keeps_cancelled_and_skips_auto_advance(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完了処理が RUNNING を確かめた直後に cancel されたら、SUCCEEDED で上書きせず自動進行しない。
+
+    #305 の TOCTOU(確認と書き込みの間の割り込み)を再現する。
+    """
+    monkeypatch.setattr(get_settings(), "rag_auto_chunk_after_extract_enabled", True)
+    document_id = _upload("finish-race.txt", "完了競合本文".encode(), "text/plain")
+    queued_job = IngestionJob(
+        id="job-finish-race",
+        document_id=document_id,
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
     )
+    fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
+    armed = _interleave_between_job_read_and_write(
+        monkeypatch,
+        fake_document_dependencies,
+        queued_job.id,
+        lambda: _cancel_job_in_store(fake_document_dependencies, queued_job.id),
+    )
+
+    async def ingest_to_review(
+        document_id: str,
+        *,
+        force: bool = False,
+        use_prepared_artifact: bool = False,
+        cancel_checker: object | None = None,
+    ) -> DocumentDetail:
+        _ = force, use_prepared_artifact, cancel_checker
+        detail = await fake_document_dependencies.update_document_status(
+            document_id, FileStatus.REVIEW
+        )
+        # pipeline は REVIEW まで書き終えた。この後の完了処理の途中で cancel が割り込む。
+        armed["on"] = True
+        return detail
+
+    monkeypatch.setattr(documents_route, "_ingest_existing_document", ingest_to_review)
+
+    anyio.run(documents_route._run_ingestion_job, queued_job.id)
+
+    assert fake_document_dependencies.ingestion_jobs[queued_job.id].status == (
+        IngestionJobStatus.CANCELLED
+    )
+    # 取り消した job の次工程(CHUNK)は投入しない。
+    assert [
+        job.id
+        for job in fake_document_dependencies.ingestion_jobs.values()
+        if job.phase == IngestionJobPhase.CHUNK
+    ] == []
+    # job は CANCELLED なので、文書も取り消し後の状態へ戻す(REVIEW のまま残さない)。
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.UPLOADED
+
+
+def test_cancel_recipe_job_does_not_change_document_status(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """レシピの job の cancel は、文書(全レシピの集約)の status を変えない。"""
+    document_id = _upload("recipe-cancel.txt", "レシピ本文".encode(), "text/plain")
+    fake_document_dependencies.documents[document_id] = fake_document_dependencies.documents[
+        document_id
+    ].model_copy(update={"status": FileStatus.INDEXED})
+    fake_document_dependencies.recipes["recipe-2"] = {
+        "document_id": document_id,
+        "recipe_id": "recipe-2",
+        "status": FileStatus.INGESTING.value,
+        "config_revision": 1,
+        "processing_config": {},
+    }
+    running_job = IngestionJob(
+        id="job-recipe-cancel",
+        document_id=document_id,
+        recipe_id="recipe-2",
+        recipe_revision=1,
+        status=IngestionJobStatus.RUNNING,
+        phase=IngestionJobPhase.PREPROCESS,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[running_job.id] = running_job
+
+    resp = client.post(f"/api/documents/ingestion-jobs/{running_job.id}/cancel")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "CANCELLED"
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.INDEXED
+
+
+def test_retry_recipe_job_requeues_same_recipe_without_resetting_document(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """レシピの job の再試行は同じレシピの job を投入し、文書全体(全レシピ)の出力を消さない。"""
+    document_id = _upload("recipe-retry.txt", "レシピ再試行本文".encode(), "text/plain")
+    fake_document_dependencies.documents[document_id] = fake_document_dependencies.documents[
+        document_id
+    ].model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {"raw_text": "レシピ 1 の抽出"},
+            "indexed_at": datetime.now(UTC),
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id="chunk-recipe-1",
+            chunk_index=0,
+            text="レシピ 1 の chunk",
+        )
+    ]
+    fake_document_dependencies.recipes["recipe-2"] = {
+        "document_id": document_id,
+        "recipe_id": "recipe-2",
+        "status": FileStatus.ERROR.value,
+        "config_revision": 3,
+        "processing_config": {},
+    }
+    failed_job = IngestionJob(
+        id="job-recipe-failed",
+        document_id=document_id,
+        recipe_id="recipe-2",
+        recipe_revision=2,
+        status=IngestionJobStatus.FAILED,
+        phase=IngestionJobPhase.PREPROCESS,
+        parser_profile="local_text_structure",
+        error_message="前回失敗",
+        queued_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[failed_job.id] = failed_job
+
+    resp = client.post(f"/api/documents/ingestion-jobs/{failed_job.id}/retry")
+
+    assert resp.status_code == 200
+    retry_job = resp.json()["data"]
+    assert retry_job["id"] != failed_job.id
+    assert retry_job["recipe_id"] == "recipe-2"
+    assert retry_job["recipe_revision"] == 3
+    assert retry_job["phase"] == "PREPROCESS"
+    assert retry_job["status"] == "QUEUED"
+    # 他のレシピの出力(文書の chunk / 抽出)と文書の status はそのまま。
+    detail = fake_document_dependencies.documents[document_id]
+    assert detail.status == FileStatus.INDEXED
+    assert detail.extraction == {"raw_text": "レシピ 1 の抽出"}
+    assert [chunk.chunk_id for chunk in fake_document_dependencies.chunks[document_id]] == [
+        "chunk-recipe-1"
+    ]
 
 
 def test_document_content_returns_original_bytes() -> None:

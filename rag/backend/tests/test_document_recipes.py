@@ -1,5 +1,6 @@
 """1文書1〜3レシピの境界・工程状態・検索対象契約。"""
 
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,7 @@ from app.clients.oracle import (
     oracle_ingestion_job_schema_sql,
 )
 from app.config import Settings
+from app.rag.ingestion import IngestionCancelledError
 from app.schemas.document import (
     DocumentDetail,
     DocumentPreprocessArtifact,
@@ -565,6 +567,38 @@ class _FakeRecipeJobOracle:
         self.jobs[job.id] = job
         return job
 
+    async def transition_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        from_statuses: Collection[IngestionJobStatus],
+        to_status: IngestionJobStatus,
+        error_message: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> IngestionJob | None:
+        # 実 Oracle の `WHERE status IN (...)` と同じく、遷移元の状態のときだけ書く。
+        job = self.jobs.get(job_id)
+        if job is None or job.status not in from_statuses:
+            return None
+        updated = job.model_copy(
+            update={
+                "status": to_status,
+                "error_message": error_message,
+                "finished_at": finished_at,
+            }
+        )
+        self.jobs[job_id] = updated
+        return updated
+
+    async def list_document_ingestion_jobs(
+        self, document_id: str, *, status: IngestionJobStatus | None = None
+    ) -> list[IngestionJob]:
+        return [
+            job
+            for job in self.jobs.values()
+            if job.document_id == document_id and (status is None or job.status == status)
+        ]
+
 
 class _FakeRecipeJobPipeline:
     """extraction を行わず、ingest 実行でレシピを REVIEW へ遷移させる fake pipeline。"""
@@ -678,3 +712,175 @@ async def test_recipe_extract_job_stays_in_review_when_auto_chunk_disabled(
     assert fake.recipe_status == FileStatus.REVIEW
     chunk_jobs = [job for job in fake.jobs.values() if job.phase == IngestionJobPhase.CHUNK]
     assert chunk_jobs == []
+
+
+def _cancel_recipe_job(fake: _FakeRecipeJobOracle, job_id: str) -> None:
+    job = fake.jobs[job_id]
+    fake.jobs[job_id] = job.model_copy(
+        update={
+            "status": IngestionJobStatus.CANCELLED,
+            "error_message": documents_route.INGESTION_JOB_CANCELLED_MESSAGE,
+            "finished_at": datetime.now(UTC),
+        }
+    )
+
+
+async def test_recipe_job_cancelled_during_finish_does_not_enqueue_next_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完了処理が RUNNING を読んだ直後に cancel されたら、SUCCEEDED にせず次工程も入れない。"""
+    fake = _FakeRecipeJobOracle()
+    fake.jobs["job-extract-1"] = _extract_job()
+    await ObjectStorageClient().put("prepared/policy.pdf", b"prepared pdf bytes", "application/pdf")
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _FakeRecipeJobPipeline)
+    monkeypatch.setattr(
+        documents_route,
+        "get_settings",
+        lambda: Settings(rag_auto_chunk_after_extract_enabled=True),
+    )
+    monkeypatch.setattr(documents_route, "_dispatch_ingestion_job", lambda *a, **k: None)
+    armed = {"on": False}
+    original_get = fake.get_ingestion_job
+    original_transition = fake.transition_ingestion_job
+    original_ingest = _FakeRecipeJobPipeline.ingest
+
+    def fire(job_id: str) -> None:
+        if armed["on"]:
+            armed["on"] = False
+            _cancel_recipe_job(fake, job_id)
+
+    async def get_then_cancel(job_id: str) -> IngestionJob | None:
+        current = await original_get(job_id)
+        fire(job_id)
+        return current
+
+    async def cancel_then_transition(job_id: str, **kwargs: Any) -> IngestionJob | None:
+        fire(job_id)
+        return await original_transition(job_id, **kwargs)
+
+    async def ingest_then_arm(
+        self: _FakeRecipeJobPipeline, *args: object, **kwargs: object
+    ) -> None:
+        await original_ingest(self, *args, **kwargs)
+        armed["on"] = True
+
+    monkeypatch.setattr(fake, "get_ingestion_job", get_then_cancel)
+    monkeypatch.setattr(fake, "transition_ingestion_job", cancel_then_transition)
+    monkeypatch.setattr(_FakeRecipeJobPipeline, "ingest", ingest_then_arm)
+
+    await documents_route._run_ingestion_job("job-extract-1")
+
+    assert fake.jobs["job-extract-1"].status == IngestionJobStatus.CANCELLED
+    assert [job for job in fake.jobs.values() if job.phase == IngestionJobPhase.CHUNK] == []
+    # 取り消しを検知した worker がレシピを EXTRACT の前の状態(ファイル準備済み)へ戻す。
+    assert fake.recipe_status == FileStatus.PREPROCESSED
+
+
+class _FakeRecipeIndexPipeline:
+    """INDEX 工程の fake。索引の途中で cancel が割り込んだ状態を作る。"""
+
+    cancel_during_index: dict[str, bool] = {"on": False}
+
+    def __init__(self, **_kwargs: object) -> None:
+        pass
+
+    async def index_chunked(self, *args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+        _FakeRecipeIndexPipeline.cancel_during_index["on"] = True
+
+
+async def test_recipe_materialize_checks_cancel_before_activate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """索引後に cancel されていたら、新しい chunk_set を active にしない(#305)。"""
+
+    class IndexOracle(_FakeRecipeJobOracle):
+        def __init__(self) -> None:
+            super().__init__()
+            self.activated: list[str] = []
+
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+            row = await super().get_document_recipe(document_id, recipe_id)
+            return {**row, "active_extraction_recipe_id": "extraction-1"}
+
+        async def get_latest_recipe_chunk_set(
+            self, *args: object, **kwargs: object
+        ) -> dict[str, object]:
+            _ = args, kwargs
+            return {"chunk_set_id": "chunk-set-pending"}
+
+        async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
+            _ = chunk_set_id
+            return 3
+
+        async def upsert_chunk_set(self, **kwargs: object) -> None:
+            _ = kwargs
+
+        async def mark_chunk_set_indexed(self, **kwargs: object) -> None:
+            _ = kwargs
+
+        async def activate_recipe_chunk_set(self, *, chunk_set_id: str, **kwargs: object) -> None:
+            _ = kwargs
+            self.activated.append(chunk_set_id)
+
+        async def update_document_status(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("取り消した job で文書の status を INDEXED にしない")
+
+    fake = IndexOracle()
+    _FakeRecipeIndexPipeline.cancel_during_index["on"] = False
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _FakeRecipeIndexPipeline)
+    job = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+
+    async def cancel_checker() -> bool:
+        return _FakeRecipeIndexPipeline.cancel_during_index["on"]
+
+    with pytest.raises(IngestionCancelledError):
+        await _materialize_experiment_candidate(
+            fake,  # type: ignore[arg-type]
+            job,
+            cancel_checker=cancel_checker,
+        )
+
+    assert fake.activated == []
+
+
+@pytest.mark.parametrize(
+    ("phase", "active_chunk_set_id", "expected"),
+    [
+        (IngestionJobPhase.PREPROCESS, None, FileStatus.UPLOADED),
+        (IngestionJobPhase.EXTRACT, None, FileStatus.PREPROCESSED),
+        (IngestionJobPhase.CHUNK, None, FileStatus.REVIEW),
+        (IngestionJobPhase.INDEX, None, FileStatus.CHUNKED),
+        # 旧 active の出力があれば検索対象のまま。
+        (IngestionJobPhase.CHUNK, "chunk-set-old", FileStatus.INDEXED),
+    ],
+)
+async def test_restore_recipe_status_after_cancel_returns_to_state_before_phase(
+    phase: IngestionJobPhase,
+    active_chunk_set_id: str | None,
+    expected: FileStatus,
+) -> None:
+    """取り消し後のレシピは、旧 active があれば INDEXED、無ければ工程を始める前の状態へ戻す。"""
+    recorded: dict[str, object] = {}
+
+    class RestoreOracle:
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+            return {
+                "document_id": document_id,
+                "recipe_id": recipe_id,
+                "active_chunk_set_id": active_chunk_set_id,
+            }
+
+        async def update_document_recipe_status(self, **kwargs: object) -> None:
+            recorded.update(kwargs)
+
+    job = _recipe_job(phase, IngestionJobStatus.CANCELLED)
+    await documents_route._restore_recipe_status_after_cancel(
+        RestoreOracle(), job  # type: ignore[arg-type]
+    )
+
+    assert recorded["recipe_id"] == "recipe-1"
+    assert recorded["status"] == expected
