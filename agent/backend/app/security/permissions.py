@@ -268,8 +268,11 @@ def permissions_for_roles(roles: Iterable[str]) -> set[str]:
 # ---- API の権限 manifest ----
 
 # 公開 path。`/mcp/{binding_id}` は Runtime からの呼出し境界で、Binding 固有 token で認証する
-# （Cookie・manifest の対象外）。
-PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/auth/login", "/mcp/{binding_id}"})
+# （Cookie・manifest の対象外）。`/ready/database` は画面の DB ゲートがログイン前に使う
+# （接続先・資格情報は返さない。#325）。
+PUBLIC_API_PATHS = frozenset(
+    {"/health", "/ready", "/ready/database", "/auth/login", "/mcp/{binding_id}"}
+)
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 
 

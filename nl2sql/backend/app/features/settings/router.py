@@ -53,6 +53,7 @@ from app.features.settings.system_schema import (
     system_schema_manager,
 )
 from app.features.settings.system_schema_runtime import reset_system_schema_runtime
+from app.readiness import deepsec_readiness
 from app.schemas.settings import (
     ModelSettingsTestRequest,
     SelectAiCredentialCreateRequest,
@@ -95,13 +96,6 @@ router.include_router(
 )
 
 
-def _deepsec_readiness(settings: Settings) -> str | None:
-    """DeepSec は Thin mode だけ対応する（NL2SQL 固有の readiness）。"""
-    if settings.oracle_deepsec_enabled and settings.oracle_driver_mode.strip().lower() != "thin":
-        return "invalid_configuration"
-    return None
-
-
 # データベース設定も3製品共通の実装（pr_system_settings.database。#108）。
 # 接続そのもの（Thin / DeepSec 対応の adapter）と接続 pool の後始末は NL2SQL のものを渡す。
 router.include_router(
@@ -110,7 +104,7 @@ router.include_router(
         env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
-        extra_readiness=_deepsec_readiness,
+        extra_readiness=deepsec_readiness,
         connection_failure_log_extra=lambda exc: oracle_connection_diagnostics(exc),
         connection_security_enabled=True,
         password_reveal_enabled=True,

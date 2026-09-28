@@ -9,8 +9,8 @@
 1. local（`AGENT_AUTH_MODE=local`）: 全権限のローカル利用者（`request.state.principal`）。
    router の RBAC は従来どおり `AGENT_RBAC_ENABLED` の header / JWT / 外部 policy に従う
    （ローカル利用者は router の RBAC に使わない）。
-2. production で公開 path（`/health`・`/ready`・`/auth/login`・`POST /mcp/{binding_id}`）:
-   そのまま通す。
+2. production で公開 path（`/health`・`/ready`・`/ready/database`・`/auth/login`・
+   `POST /mcp/{binding_id}`）: そのまま通す。
 3. production で session Cookie あり: 共通認証（DB ユーザー・構成管理者）でセッションを検証し、
    更新系は CSRF を照合し、manifest の権限を確認する。router は利用者から `ActorPolicy` を作る
    （header の RBAC 情報は使わない）。

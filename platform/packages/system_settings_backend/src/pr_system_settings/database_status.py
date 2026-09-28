@@ -1,0 +1,240 @@
+"""DB の状態 API（`GET /ready/database`。3製品共通。#325）。
+
+画面の DB ゲートが「設定画面以外を開く前」に参照する。常に HTTP 200 で返し、
+`status` で次の 4 つを区別する。
+
+- `ok`：設定済みで接続でき、製品の準備（システムテーブル等）もできている
+- `not_configured`：接続設定が不足している（まず設定が必要）
+- `unreachable`：設定済みだが、DB が起動していない・到達できない
+- `setup_required`：接続できるが、製品のシステムテーブルの作成・更新が必要
+
+判定の順（固定）:
+
+1. `short_circuit(settings)`：DB を使わない構成（NL2SQL の memory モード）なら、その応答を返す
+2. `database_readiness(settings, extra_readiness)`：システム設定画面と同じ判定。`ok` 以外は
+   `not_configured`（接続は試さない）
+3. `test_connection(settings)`：bounded な接続確認。失敗は `unreachable`
+4. `schema_probe(settings)`：製品の準備状態の確認。`ok` 以外はその結果を返す
+5. `ok`
+
+ログイン不要の path なので、`detail` には接続先・資格情報・Wallet の path を含めない
+（ORA / DPY / DPI のコードだけ。#320）。共有パッケージは oracledb に依存しないため、
+接続確認と準備状態の確認は製品から注入する。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
+from pr_backend_core.schemas import ApiResponse
+from pydantic import BaseModel
+
+from .database import ORACLE_ERROR_CODE_RE, ExtraReadiness, TestConnection, database_readiness
+
+logger = logging.getLogger(__name__)
+
+DatabaseAvailability = Literal["ok", "not_configured", "unreachable", "setup_required"]
+DatabaseSchemaProbeStatus = Literal["ok", "setup_required", "unreachable"]
+
+READINESS_OK = "ok"
+# schema_probe が例外を送出したときの check。
+SCHEMA_CHECK_FAILED = "schema_check_failed"
+
+
+class DatabaseStatusData(BaseModel):
+    """データベース（Oracle 26ai）の利用可否（`GET /ready/database` の応答）。"""
+
+    status: DatabaseAvailability
+    # 設定の判定（`database_readiness`）の値。製品の準備状態の確認が上書きすることがある
+    # （NL2SQL の `migration_required` 等）。
+    check: str
+    # 公開してよい補足（ORA コード等）。接続先・資格情報は含めない。
+    detail: str | None = None
+    # 接続先が変わったことを画面が知るための識別子（接続先の値の hash。生値は返さない）。
+    context_id: str = ""
+    # 製品のシステムテーブルの状態（RAG の `missing` / `partial` / `outdated` / `ready`）。
+    schema_status: str | None = None
+    # ADB のライフサイクル状態（段階 2 以降で使う予約項目。現在は返さない）。
+    adb_lifecycle_state: str | None = None
+
+
+@dataclass(frozen=True)
+class DatabaseSchemaProbeResult:
+    """製品の準備状態の確認（`schema_probe`）の結果。"""
+
+    status: DatabaseSchemaProbeStatus = "ok"
+    # 指定すると応答の `check` を上書きする（例: `migration_required`）。
+    check: str | None = None
+    detail: str | None = None
+    schema_status: str | None = None
+
+
+SchemaProbe = Callable[[Any], Awaitable[DatabaseSchemaProbeResult]]
+ShortCircuit = Callable[[Any], DatabaseStatusData | None]
+ContextFields = Callable[[Any], Sequence[object]]
+
+
+def default_context_fields(settings: Any) -> list[object]:
+    """接続先を表す設定（DSN・ユーザー・Wallet の配置先）。"""
+    return [
+        str(getattr(settings, name, "") or "")
+        for name in ("oracle_dsn", "oracle_user", "resolved_oracle_wallet_dir")
+    ]
+
+
+def database_context_id(fields: Sequence[object]) -> str:
+    """接続先の値から、生値を推測できない識別子（SHA-256）を作る。"""
+    payload = json.dumps(list(fields), ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    # 製品の OracleConnectionTimeoutError は TimeoutError 派生とは限らない（Agent）。
+    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+
+
+def safe_oracle_error_code(exc: BaseException) -> str | None:
+    """例外の文字列から、公開してよいエラーコードを 1 つ返す（ORA を優先）。"""
+    codes = [str(code).upper() for code in ORACLE_ERROR_CODE_RE.findall(str(exc))]
+    for code in codes:
+        if code.startswith("ORA-"):
+            return code
+    return codes[0] if codes else None
+
+
+def safe_connection_error_detail(exc: BaseException) -> str:
+    """接続確認の失敗を、接続先・資格情報を含まない文字列にする。"""
+    if _is_timeout(exc):
+        return "Oracle connection probe timed out."
+    code = safe_oracle_error_code(exc)
+    if code:
+        return f"Oracle connection probe failed ({code})."
+    return "Oracle connection probe failed."
+
+
+def safe_schema_error_detail(exc: BaseException) -> str:
+    """準備状態の確認の失敗を、接続先を含まない文字列にする。"""
+    code = safe_oracle_error_code(exc)
+    if code:
+        return f"システムテーブルの状態を確認できませんでした ({code})。"
+    return "システムテーブルの状態を確認できませんでした。"
+
+
+async def database_status(
+    settings: Any,
+    *,
+    test_connection: TestConnection,
+    extra_readiness: ExtraReadiness | None = None,
+    schema_probe: SchemaProbe | None = None,
+    short_circuit: ShortCircuit | None = None,
+    context_fields: ContextFields | None = None,
+    connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None = None,
+) -> DatabaseStatusData:
+    """DB の状態を判定する（判定の順はモジュールの docstring を参照）。"""
+    context_id = database_context_id((context_fields or default_context_fields)(settings))
+
+    if short_circuit is not None:
+        shortcut = short_circuit(settings)
+        if shortcut is not None:
+            if not shortcut.context_id:
+                shortcut = shortcut.model_copy(update={"context_id": context_id})
+            return shortcut
+
+    # Wallet のファイル読込と暗号化 PEM の復号確認を含むため、event loop を塞がない。
+    check = await run_in_threadpool(database_readiness, settings, extra_readiness)
+    if check != READINESS_OK:
+        # 設定が不足している：接続を試さない。
+        return DatabaseStatusData(status="not_configured", check=check, context_id=context_id)
+
+    # 接続確認の timeout は製品の test_connection が持つ（Oracle 用の timeout）。ここで
+    # 閲覧 API 用の短い timeout をかけると、起動済み ADB の初回接続を unreachable と誤判定する。
+    try:
+        await test_connection(settings)
+    except Exception as exc:  # noqa: BLE001 - DB の不通を status へ正規化する境界
+        log_extra = dict(connection_failure_log_extra(exc)) if connection_failure_log_extra else {}
+        log_extra.setdefault("exception_type", type(exc).__name__)
+        logger.warning("database_status_unreachable", extra=log_extra, exc_info=True)
+        return DatabaseStatusData(
+            status="unreachable",
+            check=check,
+            detail=safe_connection_error_detail(exc),
+            context_id=context_id,
+        )
+
+    if schema_probe is not None:
+        try:
+            probe = await schema_probe(settings)
+        except Exception as exc:  # noqa: BLE001 - 準備の案内へ正規化する境界
+            logger.warning(
+                "database_schema_status_unavailable",
+                extra={
+                    "error_code": safe_oracle_error_code(exc),
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            return DatabaseStatusData(
+                status="setup_required",
+                check=SCHEMA_CHECK_FAILED,
+                detail=safe_schema_error_detail(exc),
+                context_id=context_id,
+            )
+        return DatabaseStatusData(
+            status=probe.status,
+            check=probe.check or check,
+            detail=probe.detail,
+            context_id=context_id,
+            schema_status=probe.schema_status,
+        )
+
+    return DatabaseStatusData(status="ok", check=check, context_id=context_id)
+
+
+def build_database_status_router(
+    *,
+    get_settings: Callable[[], Any],
+    test_connection: TestConnection,
+    extra_readiness: ExtraReadiness | None = None,
+    schema_probe: SchemaProbe | None = None,
+    short_circuit: ShortCircuit | None = None,
+    context_fields: ContextFields | None = None,
+    connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None = None,
+) -> APIRouter:
+    """`GET /ready/database` の router を作る。製品側で `/api` 配下に include する。
+
+    - `test_connection(settings)`：bounded な接続確認。失敗なら例外を送出する
+      （接続 pool は製品が持つ）
+    - `extra_readiness(settings)`：製品固有の設定の判定（NL2SQL の DeepSec）。システム設定画面の
+      `build_database_router` と同じものを渡す
+    - `schema_probe(settings)`：製品の準備状態の確認
+      （RAG の system schema、NL2SQL の incremental store）
+    - `short_circuit(settings)`：DB を使わない構成なら応答を返す（NL2SQL の memory モード）
+    - `context_fields(settings)`：`context_id` の元にする接続先の値（既定は DSN・ユーザー・Wallet）
+    - `connection_failure_log_extra(exc)`：接続確認の失敗をログに出すときの追加項目
+
+    ログイン不要の path にするため、製品の公開 path の一覧に `/ready/database` を入れる。
+    """
+    router = APIRouter()
+
+    @router.get("/ready/database", response_model=ApiResponse[DatabaseStatusData])
+    async def get_database_status() -> ApiResponse[DatabaseStatusData]:
+        """DB ゲートが使う設定の判定と bounded な接続確認。常に HTTP 200。"""
+        return ApiResponse(
+            data=await database_status(
+                get_settings(),
+                test_connection=test_connection,
+                extra_readiness=extra_readiness,
+                schema_probe=schema_probe,
+                short_circuit=short_circuit,
+                context_fields=context_fields,
+                connection_failure_log_extra=connection_failure_log_extra,
+            )
+        )
+
+    return router

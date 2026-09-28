@@ -1,14 +1,9 @@
-"""API 共通 response model。"""
+"""API 共通 response model。
 
-from typing import Literal
+DB の状態（`GET /api/ready/database`）の型は 3 製品共通（`pr_system_settings.database_status`。
+#325）を re-export する。
+"""
 
-from pydantic import BaseModel
+from pr_system_settings.database_status import DatabaseStatusData
 
-
-class DatabaseStatusData(BaseModel):
-    """アプリケーション DB gate 用の可用性 status。"""
-
-    status: Literal["ok", "not_configured", "setup_required", "unreachable"]
-    check: str
-    detail: str | None = None
-    context_id: str = ""
+__all__ = ["DatabaseStatusData"]

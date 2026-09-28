@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from pathlib import Path
 
+from pr_system_settings.database import database_readiness
+
 from app.config import (
     DEFAULT_LOCAL_STORAGE_DIR,
     Settings,
@@ -15,7 +17,6 @@ READINESS_OK = "ok"
 READINESS_MISSING = "missing"
 READINESS_INVALID = "invalid"
 READINESS_MISSING_CREDENTIALS = "missing_credentials"
-READINESS_WALLET_NOT_FOUND = "wallet_not_found"
 # 既定値を /u01/data/production-ready-rag へ移す前の保存先。自動移行はせず、起動時に案内だけ出す。
 LEGACY_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
 
@@ -39,11 +40,6 @@ def readiness_checks(settings: Settings) -> dict[str, str]:
     checks.update(_upload_storage_checks(settings))
     checks.update(_production_safety_checks(settings))
     return checks
-
-
-def oracle_readiness_check(settings: Settings) -> str:
-    """Oracle 26ai 接続設定の readiness status を返す。"""
-    return _oracle_check(settings)
 
 
 def upload_storage_readiness_checks(settings: Settings) -> dict[str, str]:
@@ -150,20 +146,13 @@ def _enterprise_ai_check(settings: Settings) -> str:
 
 
 def _oracle_check(settings: Settings) -> str:
-    """Oracle 26ai の接続設定を確認する。"""
-    required_status = _required_values_check(settings.oracle_user, settings.oracle_dsn)
-    if required_status != READINESS_OK:
-        return required_status
+    """Oracle 26ai の接続設定を確認する。
 
-    if _is_present(settings.oracle_password):
-        return READINESS_OK
-
-    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
-    if not _is_present(wallet_dir):
-        return READINESS_MISSING_CREDENTIALS
-    if not Path(wallet_dir).expanduser().is_dir():
-        return READINESS_WALLET_NOT_FOUND
-    return READINESS_OK
+    システム設定画面・DB の状態 API（`/api/ready/database`）と同じ platform の判定を使う（#325）。
+    Wallet mTLS では DB パスワードがあっても、Wallet のファイル・Wallet パスワード・
+    サービス名（tnsnames.ora）がそろっていなければ ok にしない。
+    """
+    return database_readiness(settings)
 
 
 def _required_values_check(*values: str) -> str:

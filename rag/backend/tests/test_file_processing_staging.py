@@ -43,6 +43,7 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
+from tests.support import shared_thin_wallet_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -3041,6 +3042,8 @@ def _complete_oci_settings(**overrides: Any) -> Settings:
         "oracle_user": "rag_user",
         "oracle_password": "oracle-password",
         "oracle_dsn": "adb.example.com/rag",
+        # Wallet mTLS の Wallet がそろっていないと Oracle の readiness は ok にならない（#325）。
+        "oracle_wallet_dir": shared_thin_wallet_dir(),
         "object_storage_region": "ap-osaka-1",
         "object_storage_namespace": "namespace",
         "object_storage_bucket": "bucket",
