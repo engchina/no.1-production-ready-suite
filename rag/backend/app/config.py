@@ -444,7 +444,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # --- OCI Object Storage ---
     object_storage_region: str = Field(default="")
     object_storage_namespace: str = Field(default="")
-    object_storage_bucket: str = Field(default="")
+    object_storage_bucket: str = Field(default="production-ready")
     upload_storage_backend: UploadStorageBackend = Field(
         default="local",
         description=(
@@ -1758,6 +1758,21 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         if str(value).strip().casefold() == "auto":
             return "files_api"
         return value
+
+    @model_validator(mode="after")
+    def normalize_legacy_graph_enabled(self) -> Self:
+        """legacy RAG_GRAPH_ENABLED=true を起動時に RAG_GRAPH_PROFILE へ寄せる(#274)。
+
+        legacy フラグは profile off を full 相当に読み替える。フラグのまま残すと、取込の構築判定
+        (graph_adapter)は full なのに、文書の構築予定・実効設定の表示は rag_graph_profile(off)を
+        見て食い違い、文書レシピで「構築しない」を選んでも full で構築される。profile を唯一の
+        正本にするため、ここで profile へ移してフラグを下ろす。
+        """
+        if self.rag_graph_enabled:
+            if self.rag_graph_profile == "off":
+                self.rag_graph_profile = "full"
+            self.rag_graph_enabled = False
+        return self
 
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:

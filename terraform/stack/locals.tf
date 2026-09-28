@@ -185,6 +185,7 @@ PLATFORM_ORACLE_ADB_REGION=${var.region}
 
 PLATFORM_UPLOAD_STORAGE_BACKEND=local
 PLATFORM_OBJECT_STORAGE_REGION=${var.region}
+PLATFORM_OBJECT_STORAGE_BUCKET=production-ready
 
 PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}
 PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}
@@ -206,7 +207,6 @@ PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}
 PLATFORM_MODEL_SETTINGS_FILE=${local.nl2sql_data_dir_host}/model-settings.json
 PLATFORM_LOCAL_STORAGE_DIR=${local.nl2sql_data_dir_host}
 PLATFORM_OBJECT_STORAGE_NAMESPACE=
-PLATFORM_OBJECT_STORAGE_BUCKET=nl2sql-originals
 EOT
     agent  = <<-EOT
 
@@ -215,7 +215,6 @@ PLATFORM_AUTH_COOKIE_SECURE=${var.agent_app_auth_cookie_secure}
 PLATFORM_MODEL_SETTINGS_FILE=${local.agent_data_dir_host}/model-settings.json
 PLATFORM_LOCAL_STORAGE_DIR=${local.agent_data_dir_host}
 PLATFORM_OBJECT_STORAGE_NAMESPACE=
-PLATFORM_OBJECT_STORAGE_BUCKET=
 EOT
   }
 

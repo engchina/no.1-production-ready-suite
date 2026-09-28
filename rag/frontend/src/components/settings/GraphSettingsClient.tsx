@@ -31,9 +31,10 @@ export function GraphSettingsClient() {
   const [profile, setProfile] = useState<GraphProfileName | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // server 値か保存中フラグが変わったレンダーで、選択を server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
+  // server 値が変わったレンダー(初回取得・保存成功)でだけ、選択を server 値に戻す。
+  // 保存中フラグを条件に入れると、保存に失敗したときも未保存の選択が消えてしまう(#274)。
+  const serverChanged = useValuesChanged([query.data]);
+  if (serverChanged && query.data) {
     setProfile(query.data.profile);
   }
 

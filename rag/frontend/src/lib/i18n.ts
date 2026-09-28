@@ -1065,7 +1065,7 @@ export const ja = {
     "最大 N 個の sub-question に分解し RRF 融合へ注入",
   "settings.agentic.profile.multi_hop": "multi-hop",
   "settings.agentic.profile.multi_hop.description":
-    "分解 + 根拠が弱い時に top context で 1 回追加分解(上限 1 hop)",
+    "分解 + 根拠が見つからない時に、上位の検索結果を踏まえて 1 回だけ追加分解(検索の補正が動いた時は行わない)",
   "settings.agentic.profile.smart_routing": "スマートルーティング",
   "settings.agentic.profile.smart_routing.description":
     "クエリの種別を見極めて検索向けに正規化(現状は書き換え相当の LLM 計画)",
@@ -1486,6 +1486,10 @@ export const ja = {
     "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.search": "追加する文書を検索",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
+  "knowledgeBases.assignment.truncated":
+    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
@@ -1531,7 +1535,7 @@ export const ja = {
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
-    "「{fileName}」を「{name}」から外します。文書自体は削除されません。",
+    "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",
@@ -2267,6 +2271,9 @@ export const ja = {
   "search.searching": "検索中…",
   "search.cancel": "停止",
   "search.cancelled": "検索ストリームを停止しました。",
+  "search.stream.incomplete":
+    "回答の受信が途中で途切れました。通信状態を確認して、もう一度検索してください。",
+  "search.stream.failed": "検索処理中にエラーが発生しました。時間をおいて再度お試しください。",
   "search.cancelledHint": "検索は途中で停止されました。必要に応じて再検索してください。",
   "search.mode.hybrid": "ハイブリッド",
   "search.mode.vector": "ベクトル",
@@ -2372,7 +2379,8 @@ export const ja = {
   "search.history.savedAt": "保存日時: {value}",
   "search.history.deleteTitle": "保存された回答を削除しますか？",
   "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
-  "search.history.deleteError": "回答を削除できませんでした。",
+  "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
+  "search.history.deleted": "保存された回答を削除しました。",
   "settings.docragPrompts.vlm_answer.title": "DocRAG の回答生成テンプレート",
   "settings.docragPrompts.vlm_answer.description":
     "回答エンジンが DocRAG のとき、根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
@@ -2644,6 +2652,7 @@ export const ja = {
     "RAG 検索は業務ビュー単位で行います。知識ベースを束ねた業務ビューを作成すると検索できます。",
   "search.businessViewRequired.cta": "業務ビューを作成",
   "search.businessViewError": "業務ビューを読み込めませんでした。",
+  "search.businessViewLoading": "業務ビューを読み込んでいます。",
   "search.guardrail": "安全チェック警告",
   "search.meta.trace": "トレースID",
   "search.meta.elapsed": "処理時間",

@@ -45,6 +45,7 @@ import {
   type SearchMode,
 } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
@@ -182,6 +183,12 @@ export function SearchClient() {
   const [businessViewIds, setBusinessViewIds] = useWorkspaceState<string[]>("search.businessViewIds", []);
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
+  // 表示中の回答を生成したときの代表の業務ビュー（選択の先頭）。回答・引用の評価はこの業務ビューへ送る。
+  // 検索後に選択を変えても、表示中の回答の評価先は変えない。backend の business_view_applied は
+  // 複数選択で "a,b" になるため評価先には使わない（#285）。
+  const [answerBusinessViewId, setAnswerBusinessViewId] = useState<string | null>(null);
+  // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
+  const [lastSkipFaq, setLastSkipFaq] = useState(false);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -194,6 +201,8 @@ export function SearchClient() {
       ? businessViewIds.filter((id) => !businessViews.some((view) => view.id === id))
       : [];
   const staleBusinessViewKey = staleBusinessViewIds.join(",");
+  // 画面を離れたら生成中の検索を止める（backend の pipeline と LLM を無駄に動かし続けない。#285）。
+  useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     if (!staleBusinessViewKey) return;
     const stale = new Set(staleBusinessViewKey.split(","));
@@ -224,6 +233,7 @@ export function SearchClient() {
     }
     setScopeError("");
     setSubmittedQuery(trimmed);
+    setLastSkipFaq(skipFaq);
     setFaqSuggestions(null);
     setFaqAnswer(null);
     if (!skipFaq) {
@@ -249,6 +259,7 @@ export function SearchClient() {
     setCitations([]);
     setMeta(null);
     setErrorText("");
+    setAnswerBusinessViewId(businessViewIds[0] ?? null);
     setRun({
       startedAtMs,
       startedAtIso: new Date(startedAtMs).toISOString(),
@@ -375,7 +386,7 @@ export function SearchClient() {
           {businessViewsQuery.isLoading ? (
             <Card>
               <CardContent className="pt-5">
-                <LoadingState rows={4} label={t("search.businessViewRequired.title")} />
+                <LoadingState rows={4} label={t("search.businessViewLoading")} />
               </CardContent>
             </Card>
           ) : businessViewsQuery.isError ? (
@@ -429,7 +440,7 @@ export function SearchClient() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") void submit();
+                      if (isSubmitEnter(e)) void submit();
                     }}
                     placeholder={t("search.placeholder")}
                     aria-label={t("nav.search")}
@@ -668,7 +679,7 @@ export function SearchClient() {
               </CardContent>
             </Card>
           ) : phase === "error" ? (
-            <ErrorState message={errorText} onRetry={() => void submit()} />
+            <ErrorState message={errorText} onRetry={() => void submit(lastSkipFaq)} />
           ) : (
             <>
               {/* 安全チェック警告 */}
@@ -718,9 +729,7 @@ export function SearchClient() {
                   {meta && phase === "done" ? (
                     <FeedbackControls
                       traceId={meta.trace_id}
-                      businessViewId={
-                        meta.diagnostics?.business_view_applied ?? businessViewIds[0] ?? null
-                      }
+                      businessViewId={answerBusinessViewId}
                       targetType="answer"
                       sourceSurface="search"
                       contentSnapshot={feedbackSnapshot}
@@ -754,9 +763,7 @@ export function SearchClient() {
                         chunk={chunk}
                         index={i}
                         traceId={meta?.trace_id}
-                        businessViewId={
-                          meta?.diagnostics?.business_view_applied ?? businessViewIds[0] ?? null
-                        }
+                        businessViewId={answerBusinessViewId}
                         sourceSurface="search"
                         contentSnapshot={feedbackSnapshot}
                       />
