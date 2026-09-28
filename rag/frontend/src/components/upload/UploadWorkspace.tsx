@@ -13,6 +13,7 @@ import {
   FieldError,
   RequiredBadge,
   Skeleton,
+  Spinner,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import {
@@ -25,7 +26,6 @@ import {
   FileText,
   HardDrive,
   ListChecks,
-  Loader2,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -559,7 +559,7 @@ function IngestionJobBadge({ job }: { job: IngestionJob }) {
 function JobStatusIcon({ status }: { status: IngestionJob["status"] }) {
   switch (status) {
     case "RUNNING":
-      return <Loader2 size={14} aria-hidden className="animate-spin" />;
+      return <Spinner size={14} />;
     case "SUCCEEDED":
       return <CheckCircle2 size={14} aria-hidden className="" />;
     case "FAILED":

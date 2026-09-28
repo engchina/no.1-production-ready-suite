@@ -58,6 +58,9 @@ export const buttonVariants = cva(
 
 type ButtonVariantProps = VariantProps<typeof buttonVariants>;
 
+/** ボタンのアイコンとスピナーの寸法（px）。sm / md / lg で共通（README §4「Button」、--icon-md）。 */
+export const BUTTON_ICON_SIZE = 16;
+
 /**
  * variant と tone の組み合わせ。`variant="danger"`（赤塗り）に `tone="danger"`（赤文字）を重ねると
  * 赤地に赤文字になり読めないため、型で禁止する。tone="danger" は secondary / ghost（と primary の既定）に使う。
@@ -183,10 +186,18 @@ export function Button({
       onMouseDown={busy ? undefined : onMouseDown}
       onKeyDown={busy ? loadingKeyDownHandler(onKeyDown) : onKeyDown}
     >
-      {/* 先頭スロットは常に 16px。スピナーは全周トラック付き（回転してもシルエットが変わらない）。 */}
-      {loading ? <Spinner size={16} /> : Icon ? <Icon size={16} aria-hidden /> : null}
+      {/*
+        先頭スロットは sm / md / lg とも 16px（アイコンもスピナーも同じ寸法なので loading で幅が変わらない）。
+        スピナーは全周トラック付き（回転してもシルエットが変わらない）。loading 中の地と文字は disabled と同じ
+        （surface-disabled / fg-disabled。ライトで 2.82:1）なので、処理中を示すスピナーだけは fg-muted（4.39:1）にする。
+      */}
+      {loading ? (
+        <Spinner size={BUTTON_ICON_SIZE} className="text-fg-muted" />
+      ) : Icon ? (
+        <Icon size={BUTTON_ICON_SIZE} aria-hidden />
+      ) : null}
       {children}
-      {TrailingIcon && !loading ? <TrailingIcon size={16} aria-hidden /> : null}
+      {TrailingIcon && !loading ? <TrailingIcon size={BUTTON_ICON_SIZE} aria-hidden /> : null}
     </button>
   );
   return tooltipText ? (

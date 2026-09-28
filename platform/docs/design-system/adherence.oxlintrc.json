@@ -73,6 +73,10 @@
           {
             "selector": "JSXOpeningElement[name.name='input'] > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:pl|ps)-(?:7|8|9|10|11|12|\\[)/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*(?:pl|ps)-(?:7|8|9|10|11|12|\\[)/])",
             "message": "アイコン付きの入力欄（検索欄）を手書きしない（絶対配置のアイコン + input の pl-*）。TextField の leadingIcon / trailing / onClear を使う（docs/design-system/README.md §4「TextField」）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/])",
+            "message": "回転するアイコンを手書きしない（lucide の Loader2 / RefreshCw 等に animate-spin を付けない）。共有の Spinner（全周トラック・線の実寸 2px・reduced-motion 対応）を使い、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」）。"
           }
         ]
       }

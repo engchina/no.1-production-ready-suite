@@ -269,12 +269,40 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
   - Playwright の `toBeDisabled()` は `aria-disabled` も無効と判定する。jest-dom の `toBeDisabled()` と CSS の `:disabled` は判定しないので、loading の検証は `aria-disabled` / `aria-busy` で行う
 - **旧実装のバグ:** `loading` でスピナーを**追加**していたため、スピナー＋アイコン＋ラベルの三重表示で幅が跳ねていました
 - 1秒を超えて領域全体が待ちになる処理は、ボタンではなく領域側で `LoadingState`。ボタンのスピナーは「この操作が進行中」だけを表す
+- アイコンとスピナーは `sm` / `md` / `lg` とも **16px**（`BUTTON_ICON_SIZE`、`--icon-md`）。ボタンの高さで寸法を変えない（18px は §3 のアイコン寸法の 4 段に無く、`sm` の 14px は周りの 16px のアイコンとそろわない。#395）
+- `loading` 中のスピナーの色は `--color-fg-muted`。地と文字は disabled と同じ（`--color-surface-disabled` / `--color-fg-disabled`）だが、`fg-disabled` のままではライトで地に対して 2.82:1 になり、処理中を示す図形の 3:1（WCAG 1.4.11）に届かないため（`fg-muted` はライト 4.39:1 / ダーク 7.28:1。#395）
 
 **variant と tone（danger の使い方）**
 
 - 赤塗りの `variant="danger"` は **実際の破壊的な確定**（確認ダイアログの確定、確認語を入力した「危険な操作」区画の実行）にだけ使う。
 - 確定の前の起点（確認ダイアログを開くボタン）や、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は、`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。
 - `variant="danger"` と `tone="danger"` は**型で同時に指定できない**（赤地に赤文字になり読めない）。
+
+### `Spinner`（変更）— ★ 線の実寸・トラック・reduced-motion（#395）
+
+処理中を示す回転アイコンは共有の `Spinner` 1 つだけ（`Button` の `loading`、`ProcessingIndicator` / `TimedLoadingState`、製品の状態バッジ）。lucide の `Loader2` / `RefreshCw` などに `animate-spin` を付けて回さない（adherence の lint が検出する）。
+
+| 項目 | 決定 | 理由 |
+|---|---|---|
+| 形 | 全周のトラック + 270 度のアーク。外形は大きさによらず直径 20/24 | 欠けた円弧だけだとインクの重心が回転で動き、中心がずれて見える |
+| 線の太さ | **実寸 2px**（14 / 16 / 20 / 24px で viewBox 上 3.429 / 3 / 2.4 / 2）。太くした分は円の半径を内側へ寄せる | 旧実装は viewBox 24 に線幅 2 固定で、16px では 1.33px、14px では 1.17px まで細り、等倍の画面でかすれていた。GitHub Primer・Fluent 2 の 16〜28px のスピナーも 2px |
+| トラックの色 | `--color-spinner-track`: アークと同じ色（`currentColor`）をライト 30% / ダーク 35% で透かす。強制カラーモードは `GrayText` | アーク対トラックの境目 3:1 以上を保つ上限の濃さ（下の実測）。トラックを 3:1 の `--color-border-control` にすると、アーク（`--color-accent-fg`）との差がライト 1.58:1 / ダーク 2.43:1 になり、回っている部分が見分けにくくなる |
+| 回転 | `transform` の等速（linear 1s）だけ | 合成スレッドで回るので、メインスレッドが詰まっても（回答の描画・SSE の解析中）止まらない。弧長の伸縮（`stroke-dasharray`）はメインスレッドで描き直すため詰まると止まり、加減速は 1 周ごとに遅くなる区間が「止まりかけ」に見える |
+| `prefers-reduced-motion` | 回転を止め、アークの濃さだけを 1 ↔ 0.5 で 1.2 秒ずつ変える（opacity のみ。`base.css` の一括無効化より詳細度の高い規則で上書き） | 止めたままのアークは「75% の進捗の円」に見え、処理中だと分からない。位置の動きは出さず、フェードに置き換える（Apple HIG の Reduce Motion の置き換えと同じ考え方） |
+| 色 | 置かれた場所の文字色（`currentColor`）。`ProcessingIndicator` は `--color-accent-fg`、ボタンの `loading` は `--color-fg-muted` | 地に対してアーク 3:1 以上（下の実測） |
+
+**実測（コントラスト比。アーク / 地、トラック / 地、アーク / トラック）**
+
+| 置き場所 | ライト | ダーク |
+|---|---|---|
+| `ProcessingIndicator`（`surface`） | 4.92 / 1.52 / 3.24 | 7.34 / 2.03 / 3.62 |
+| `TimedLoadingState`（`surface-sunken`） | 4.63 / 1.50 / 3.09 | 8.00 / 2.02 / 3.97 |
+| 最も条件の悪い地（ライト `surface-hover`、ダーク `surface-overlay`） | 4.47 / 1.49 / 3.00 | 5.94 / 1.95 / 3.05 |
+| `Button` の `loading`（`surface-disabled`、`fg-muted`） | 4.39 / 1.45 / 3.03 | 7.28 / 2.15 / 3.39 |
+
+旧実装（トラック 25%）のトラック / 地はライト 1.39〜1.41:1、ダーク 1.59〜1.62:1。
+
+**動くスピナーは同じ処理に 1 つだけ（UX 契約 messaging §3.7）。** 起点の `Button` が `loading` を出している間、同じ処理の `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"`（ラベル・経過時間・時間がかかる案内だけ）にする。`ProcessingIndicator` がボタンの状態を自動で読み取る仕組みは持たない（同じ処理かどうかは画面にしか分からないため、呼び出し側が `activityIcon` で指定する）。
 
 ### タッチ端末の当たり判定（新設）— ★ 見た目は変えず 44px（#364）
 
@@ -630,7 +658,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**34点あります。**
+QA に事前共有してください。**36点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -669,6 +697,7 @@ QA に事前共有してください。**34点あります。**
 | 33 | **検索欄のクリアが共有のボタンになる** | `type="search"` のブラウザ既定の ×（Chromium・Safari だけ。キーボードで届かない）→ 値があるときだけ入力欄の右端に「検索語をクリア」（NL2SQL の所有者の前方一致は「入力をクリア」）の × ボタン。Tab で届き、ホバー・フォーカスで Tooltip。Escape でも消える | どのブラウザでも同じ操作で消せる。キーボード・読み上げで使える（#384） |
 | 34 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
 | 35 | **Agent の一覧が 10 件/ページになり、表の中で縦スクロールする** | Agent の 14 の表は全件をページの高さで表示（ページ送りなし）、読み込み中は 4 本の棒（`LoadingState`）、実行先・Skill を取得している間に「未設定」「Skill を取得できません」などの警告が出た。監査は「表示件数」（既定 100 件）を 1 度に表示、メモリは 20 件で打ち切り → 共有の `PagedDataTable`（表頭の固定、md 未満 5 行・md 以上 8 行の縦スクロール、直下に 10 件/ページの `Pagination`）。一覧のページは作業状態に残り、Run・承認の 5 秒ごとの再取得でも戻らない。監査は API の offset / limit で送る（「1 ページの件数」、既定 10 件。CSV は条件に合う記録を最大 1,000 件）、メモリは 100 件まで取得してページで送る。読み込み中は `TimedLoadingState` と画面の形の Skeleton、取得中は警告を出さない | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
+| 36 | **スピナーの線が太くなり、トラックが見えやすくなる。reduced-motion ではアークの濃さが変わる** | 線の実寸は 16px で 1.33px・14px で 1.17px（viewBox 24 に線幅 2 固定）、トラックは `currentColor` の 25%、reduced-motion では止まったまま（75% の進捗の円に見える）、ボタンの `loading` のスピナーは `fg-disabled`（ライトで地に 2.82:1）、RAG の状態バッジ 3 箇所は lucide の `Loader2` / `LoaderCircle` / `RefreshCw` を回していた → すべて共有 `Spinner`: 線は大きさによらず**実寸 2px**、トラックは `--color-spinner-track`（ライト 30% / ダーク 35%）、reduced-motion では回転を止めてアークの濃さを 1 ↔ 0.5 で変える、ボタンの `loading` のスピナーは `fg-muted`（4.39:1）。回転は等速のまま、ボタンのスピナーは sm / md / lg とも 16px のまま | 等倍の画面で線がかすれ、ダークでトラックが見えにくかった。アーク対トラックの境目 3:1 を保つ上限まで濃くした（§4「Spinner」、#395） |
 
 ### API の非互換
 

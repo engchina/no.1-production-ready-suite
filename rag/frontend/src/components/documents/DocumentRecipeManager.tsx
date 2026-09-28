@@ -39,6 +39,7 @@ import {
   ObjectActionBar,
   SelectField,
   Skeleton,
+  Spinner,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -496,7 +497,7 @@ function RecipeSteps({ recipe }: { recipe: DocumentRecipeView }) {
 
 function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   if (step?.status === "RUNNING") {
-    return <LoaderCircle size={14} className="animate-spin" aria-hidden />;
+    return <Spinner size={14} />;
   }
   if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
   if (step?.status === "NEEDS_REVIEW") return <Eye size={14} aria-hidden />;
@@ -509,7 +510,8 @@ function RecipeStatusBadge({ recipe }: { recipe: DocumentRecipeView }) {
   const Icon = status.icon;
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
-      <Icon size={14} className={status.spin ? "animate-spin" : undefined} aria-hidden />
+      {/* 回すアイコンは共有の Spinner（全周トラック・reduced-motion 対応。#395） */}
+      {status.spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {t(status.label)}
     </span>
   );

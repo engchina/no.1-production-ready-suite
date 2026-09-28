@@ -114,6 +114,16 @@
   /* ── フォーカス ───────────────────────────────────────────────────────
      暗い面の上では [data-surface] 側で明るいリングに差し替わります。 */
   --color-focus-ring: light-dark(var(--blue-500), var(--blue-300));
+
+  /* ── スピナーのトラック（#395）───────────────────────────────────────
+     アークと同じ色（currentColor）を透かす。置かれた面・文字色（accent-fg / fg-muted / 白）に追従する。
+     濃さは「アーク対トラックの境目が 3:1 以上」を保つ上限: ライト 30%（surface-hover 上で 3.00:1）、
+     ダーク 35%（surface-overlay 上で 3.05:1）。トラック対地はライト 1.45〜1.52:1 / ダーク 1.95〜2.15:1。
+     currentColor はこのトークンを使う要素（Spinner の circle）で解決される。 */
+  --color-spinner-track: light-dark(
+    color-mix(in srgb, currentColor 30%, transparent),
+    color-mix(in srgb, currentColor 35%, transparent)
+  );
 }
 
 /* ── 常時暗いスラブの地の色（テーマで濃さだけ変わる）

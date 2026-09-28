@@ -413,7 +413,8 @@ export function Button({
 
   // 先頭スロット: loading 中はスピナーがアイコンを置き換える（幅不変）。
   // icon が無いまま loading にするとスピナーの分だけ幅が広がる（規約違反）。
-  const leading = loading ? <Spinner size={16} /> : icon ? <Icon name={icon} size={16} /> : null;
+  // 寸法は sm / md / lg とも 16px。スピナーは fg-muted（disabled の地の上で 3:1 以上。README §4「Spinner」、#395）。
+  const leading = loading ? <Spinner size={16} className="text-fg-muted" /> : icon ? <Icon name={icon} size={16} /> : null;
 
   return (
     <button

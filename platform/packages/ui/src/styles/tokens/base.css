@@ -176,12 +176,40 @@ svg.animate-spin {
   will-change: transform;
 }
 
+/*
+ * Spinner（#395）。トラックはアークと同じ色を透かしたトークン（colors.css）。
+ * 回転は等速（linear 1s）の transform だけ: 合成スレッドで回るので、メインスレッドが詰まっても止まらない。
+ * 弧長の伸縮（stroke-dasharray）や加減速は使わない（README §4「Spinner」）。
+ */
+.pr-spinner-track {
+  stroke: var(--color-spinner-track);
+}
+
+/* 回転を止めたときのアークの濃さの変化（opacity だけ。位置は動かさない）。 */
+@keyframes pr-spinner-breathe {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /*
+   * 回転は止める（Spinner の motion-reduce:animate-none）。止めたままのアークは「75% の進捗の円」に見えるため、
+   * アークの濃さだけをゆっくり変えて処理中を伝える（Apple HIG の「視差効果を減らす」は動きをディゾルブに置き換える）。
+   * 上の一括無効化（* の 0.01ms）より詳細度を高くして上書きする。
+   */
+  svg.animate-spin .pr-spinner-arc {
+    animation: pr-spinner-breathe 1.2s ease-in-out infinite alternate !important;
   }
 
   .sidebar-reveal {
