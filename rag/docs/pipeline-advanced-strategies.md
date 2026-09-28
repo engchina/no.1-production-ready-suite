@@ -33,7 +33,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 ### 設計
 - **tree 構築(取込時 or 検索時キャッシュ)**: 既存の `DocumentElement.section_path` /
   `parent_id` 階層から、文書ごとに `section tree`(node = {title, summary, page_range,
-  child_ids})を構築。要約は OCI Enterprise AI(`hierarchical_parent_child` / RAPTOR と共用可)。
+  child_ids})を構築。要約は OCI Enterprise AI(RAPTOR と共用可)。
   Oracle 26ai に `rag_document_nav_tree`(または既存 `navigation` JSON、`app/rag/navigation.py`)を
   再利用して node を永続化。
 - **検索時 navigation**: OCI Enterprise AI に「query + 現在 node の title/summary 群」を渡し、各 node

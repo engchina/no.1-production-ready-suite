@@ -72,12 +72,11 @@ const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.
 const CHUNKING_VALUES = [
   "structure_aware",
   "recursive_character",
-  "hierarchical_parent_child",
+  "docrag_small_to_big",
   "markdown_heading",
   "page_level",
   "fixed_size",
   "fixed_delimiter",
-  "docrag_small_to_big",
 ] as const;
 const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = CHUNKING_VALUES.map(
   (value) => ({ value, label: t(`settings.chunking.strategy.${value}` as I18nKey) })
@@ -115,7 +114,6 @@ function emptyConfig(): DocumentProcessingConfig {
     chunking_strategy: null,
     chunk_size: null,
     chunk_overlap: null,
-    chunk_child_size: null,
     chunk_min_chars: null,
     chunk_context_header_enabled: null,
     graph_profile: null,

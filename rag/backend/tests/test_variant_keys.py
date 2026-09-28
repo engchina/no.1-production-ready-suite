@@ -227,3 +227,41 @@ def test_ids_carry_layer_prefixes() -> None:
     assert bundle["metadata_layer_id"].startswith("md_")
     assert bundle["graph_layer_id"].startswith("gr_")
     assert bundle["nav_layer_id"].startswith("nv_")
+
+
+def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
+    """親子階層の削除(#271)後も、既定の子サイズで作った既存 chunk_set_id は変わらない。"""
+    import hashlib
+    import json
+
+    from app.rag.variant_keys import KEY_VERSION
+
+    settings = get_settings().model_copy(update={"rag_chunking_strategy": "structure_aware"})
+    legacy_payload = {
+        "v": KEY_VERSION,
+        "er": compute_extraction_recipe_id(SRC, settings),
+        "rag_chunking_strategy": settings.rag_chunking_strategy,
+        "rag_chunk_size": settings.rag_chunk_size,
+        "rag_chunk_overlap": settings.rag_chunk_overlap,
+        "rag_chunk_child_size": 320,
+        "rag_chunk_min_chars": settings.rag_chunk_min_chars,
+        "rag_chunk_delimiter": settings.rag_chunk_delimiter,
+        "rag_chunk_context_header_enabled": settings.rag_chunk_context_header_enabled,
+    }
+    canonical = json.dumps(
+        legacy_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    legacy_id = "cs_" + hashlib.sha1(canonical.encode(), usedforsecurity=False).hexdigest()[:16]
+
+    assert compute_chunk_set_id(SRC, settings) == legacy_id
+
+
+def test_chunk_set_id_uses_docrag_params_only_for_docrag() -> None:
+    """DocRAG の 5 項目は DocRAG 親子階層のときだけ、既定から変えた値だけが ID に効く。"""
+    docrag = get_settings().model_copy(update={"rag_chunking_strategy": "docrag_small_to_big"})
+    tuned = docrag.model_copy(update={"rag_docrag_child_target_chars": 600})
+    assert compute_chunk_set_id(SRC, docrag) != compute_chunk_set_id(SRC, tuned)
+
+    structure = docrag.model_copy(update={"rag_chunking_strategy": "structure_aware"})
+    structure_tuned = structure.model_copy(update={"rag_docrag_child_target_chars": 600})
+    assert compute_chunk_set_id(SRC, structure) == compute_chunk_set_id(SRC, structure_tuned)

@@ -46,7 +46,6 @@ function config(): DocumentProcessingConfig {
     chunking_strategy: null,
     chunk_size: 800,
     chunk_overlap: null,
-    chunk_child_size: null,
     chunk_min_chars: null,
     chunk_context_header_enabled: null,
     graph_profile: null,
@@ -601,6 +600,34 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+test("分割プレビューで DocRAG 親子階層の 5 項目を指定できる", async ({ page }) => {
+  const state = await mockWorkspace(page, { documentStatus: "REVIEW" });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "Chunk" }).click();
+
+  const preview = page.getByRole("region", { name: "分割プレビュー" });
+  await preview.getByRole("combobox", { name: "分割方式" }).click();
+  await page.getByRole("option", { name: "DocRAG 親子階層" }).click();
+
+  // DocRAG は chunk サイズ等を使わず、rag_poc と同じ 5 項目だけを出す。
+  await expect(preview.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveCount(0);
+  await expect(preview.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("1000");
+  await expect(preview.getByLabel("親チャンク最大 child 数", { exact: true })).toHaveValue("12");
+  await preview.getByLabel("子チャンク目標文字数", { exact: true }).fill("600");
+  await preview.getByRole("button", { name: "プレビュー実行" }).click();
+
+  await expect(preview).toContainText("件数");
+  expect(state.previewPayload()).toMatchObject({
+    chunking_strategy: "docrag_small_to_big",
+    docrag_child_target_chars: 600,
+    docrag_table_child_target_chars: 3000,
+    docrag_parent_target_chars: 6000,
+    docrag_parent_max_pages: 3,
+    docrag_parent_max_children: 12,
+  });
+  await expectNoPageOverflow(page);
+});
 
 test("分割プレビュー失敗を画面内に表示する", async ({ page }) => {
   await mockWorkspace(page, { documentStatus: "REVIEW", previewFails: true });

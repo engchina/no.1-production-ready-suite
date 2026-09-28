@@ -170,7 +170,7 @@ test("回答スタイルの native radio は方向キーで移動できる", asy
   await expect(page.getByRole("radio", { name: /詳細・出典明示/ })).toBeChecked();
 });
 
-test("revision 競合時は再読み込みを案内する", async ({ page }) => {
+test("revision 競合時は最新の設定を読み込み直して案内する", async ({ page }) => {
   await page.route("**/api/settings/generation", async (route) => {
     if (route.request().method() === "PATCH") {
       await route.fulfill({
@@ -189,7 +189,7 @@ test("revision 競合時は再読み込みを案内する", async ({ page }) => 
   await page.getByRole("radio", { name: /詳細・出典明示/ }).check();
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText(/画面を再読み込みしてから保存/)).toBeVisible();
+  await expect(page.getByText(/最新の設定を読み込みました/)).toBeVisible();
 });
 
 test("安全チェック設定は方針を保存できる", async ({ page }) => {
@@ -275,6 +275,34 @@ test("OCI 未設定時は保存エラーと OCI 認証導線を表示する", as
   );
 });
 
+test("OCI の注意は OCI Guardrails を選んだときだけ、未設定の理由どおりに表示する", async ({
+  page,
+}) => {
+  // 保存中は oci_guardrails だが compartment が未設定(.env 直接編集などで起こる)。
+  await page.route("**/api/settings/guardrail", async (route) => {
+    await route.fulfill({
+      json: guardrailEnvelope(
+        "standard",
+        "oci_guardrails",
+        false,
+        "oci_guardrails_compartment_missing"
+      ),
+    });
+  });
+
+  await page.goto("/settings/guardrail");
+  const compartmentWarning = page.getByText("OCI Guardrails の compartment が未設定です。", {
+    exact: false,
+  });
+  await expect(compartmentWarning).toBeVisible();
+  await expect(page.getByText("OCI API キー認証を利用できません。", { exact: false })).toHaveCount(0);
+
+  // Local を選ぶ(未保存)と、OCI の注意は消える。
+  await page.getByText("Local", { exact: true }).click();
+  await expect(compartmentWarning).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
+});
+
 test("回答スタイル設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/generation", async (route) => {
@@ -349,7 +377,8 @@ function generationEnvelope(profile: string, customPromptConfigured = true) {
 function guardrailEnvelope(
   policy: string,
   backend: "local" | "oci_guardrails" = "local",
-  ociConfigured = false
+  ociConfigured = false,
+  ociWarningCode: string | null = null
 ) {
   const specs = [
     { name: "standard", grounding_min_overlap: 3, grounding_min_ratio: 0.12, audit_emphasis: false },
@@ -375,7 +404,7 @@ function guardrailEnvelope(
       })),
       backend,
       oci_configured: ociConfigured,
-      oci_warning_code: null,
+      oci_warning_code: ociWarningCode,
       config_source: "runtime",
     },
     error_messages: [],

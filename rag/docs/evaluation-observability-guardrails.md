@@ -38,11 +38,11 @@ API: `POST /api/evaluation/run`
 `cases` は 1 件以上必須です。`rerank_top_n` は `top_k` 以下である必要があります。返却指標:
 
 - `evaluated_k`: 実際に評価した最終 citation 数の上限。`min(top_k, rerank_top_n)`。
-- `precision_at_k`: 上位 `evaluated_k` 件の document-level citation のうち relevant document が占める割合。同一 document の複数 chunk は 1 件として扱う。
+- `precision_at_k`: 上位 `evaluated_k` 件の document-level citation のうち relevant document が占める割合。同一 document の複数 chunk は 1 件として扱う。隣接・同一 group の context 展開などで citation が `evaluated_k` 件より多くても、数えるのは上位 `evaluated_k` 件の document だけ(1.0 を超えない)。
 - `recall_at_k`: relevant document をどれだけ取得できたか。
 - `mrr`: 最初の relevant document が何位に出たか。
 - `answer_keyword_hit_rate`: 回答が期待キーワードを含んだ割合。
-- `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。no-results のように citation context がない case は、根拠なし生成を避ける短絡経路として pass 扱いにする。
+- `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。判定は安全チェックの方針に関係なく standard の閾値(一致数 3・一致率 0.12)で行う。no-results のように citation context がない case でも、回答が空でなければ(「見つかりませんでした」等の固定文言を含む)根拠なしとして `low_groundedness` に数える。
 - `citation_traceability_coverage`: citation が `document_id` / `chunk_id` / page range と、`element_ids`・`bbox`・`section_path` のいずれかを持つ割合。RAGFlow / Docling 的な引用追跡品質の gate に使う。
 - `bbox_citation_coverage`: citation が原本 preview へ位置決めできる `bbox` を持つ割合。画像 OCR、PDF、レイアウト文書の bbox 回帰検知に使う。
 - `preview_addressability_coverage`: chunk bbox だけでなく、StructuredExtraction の `DocumentElement` / `ExtractionTableCell` / `ExtractionAsset` bbox が page number と page size / page rotation / coordinate unit metadata で preview 座標へ解決できる割合。staging gate では chunk bbox が正常でも table cell / asset bbox が定位不能、または page rotation が非法 / bbox metadata と矛盾する場合は失敗にし、RAGFlow 的な citation-to-preview 精度を cell-level まで退化検知する。
@@ -66,7 +66,8 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 | `strict_ci` | precision 0.7 / recall 0.85 / mrr 0.75 / groundedness 0.95 / answer_keyword 0.9 / citation_traceability_coverage 0.9 |
 | `ragas_like` | faithfulness 0.8 / context_precision 0.7 / context_recall 0.8 / response_relevancy 0.7 |
 
-- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`/api/evaluation/run` `…/compare` は golden-set JSON で `suite` を指定でき、`EvaluationMetrics.evaluation_suite` に確定 suite を残す。
+- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`/api/evaluation/run` `…/compare` は golden-set JSON で `suite` を指定でき、`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定 suite を残す。
+- 評価 API は業務ビューを受け取らないため、業務ビューの「品質評価」上書きは評価の実行には反映されない(#277 で確認。扱いは未決定)。
 - 既定 `request_only` は閾値なしで現行どおり `error_count` だけで `passed` を判定する。外部評価 SaaS / LLM-as-judge の追加呼び出しは導入せず、決定論ヒューリスティック指標のみを使う。
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、citation traceability / bbox / element lineage coverage、content kind hit、section coverage、guardrail warning、diagnostics、elapsed ms、error type を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足・引用 lineage / content kind / section lineage 欠落のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
@@ -186,9 +187,10 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 現在の参照ポリシー:
 
 - 長すぎる query を拒否する。
-- system prompt や過去指示の無視を求める prompt injection を拒否する。
+- system prompt や過去指示の無視を求める prompt injection を拒否する。判定は NFKC・ゼロ幅空白やソフトハイフンなど表示されない書式文字(Unicode Cf)の除去・大小文字の正規化をした文字列で行い、`system_prompt` / `system-prompt` のような区切りの違いも同じ対象として扱う。
 - `drop/delete/update/insert` などの SQL 変更文らしさは警告し、検索のみ実行する。
-- query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。マスク後の query を embedding / retrieval に使い、raw 値を監査ログや metrics へ出さない。
+- query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。全角英数字・全角記号(`＠` `－`)・長音記号の区切り・不可視文字を挟んだ値もマスクする(その場合、マスク後の文字列は NFKC 正規化した表記になる)。マスク後の query を embedding / retrieval / 回答生成に使い(標準の回答エンジンと DocRAG の両方。DocRAG の回答記録に保存する質問もマスク後)、raw 値を監査ログや metrics へ出さない。
+- チャットの会話履歴と今回の質問は、未信頼データとしてタグで囲んで回答生成へ渡す。囲む前に `&` `<` `>` を実体参照へ置き換え、発話に閉じタグを書いて囲みの外へ指示を置けないようにする。DocRAG が履歴から書き換えた質問も、元の質問と同じ安全チェックに通し、拒否されたら書き換えを使わない。
 - citation がない場合は LLM を呼び出さず、no-results 回答に短絡する。
 - 回答に secret らしき文字列が含まれる場合は表示を止める。
 - citation がある回答でも、回答と検索根拠の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返し、監査ログにも guardrail code を残す。これは軽量なヒューリスティックであり、本番では LLM-as-judge や RAGAS 等の groundedness 評価で補強する。

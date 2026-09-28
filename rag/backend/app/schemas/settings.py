@@ -66,6 +66,21 @@ from app.config import (
     CHUNK_OVERLAP_MAX_CHARS,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
+    DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
+    DOCRAG_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_CHILD_TARGET_CHARS_MIN,
+    DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
+    DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    DOCRAG_PARENT_MAX_CHILDREN_MIN,
+    DOCRAG_PARENT_MAX_PAGES_DEFAULT,
+    DOCRAG_PARENT_MAX_PAGES_MAX,
+    DOCRAG_PARENT_MAX_PAGES_MIN,
+    DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
+    DOCRAG_PARENT_TARGET_CHARS_MAX,
+    DOCRAG_PARENT_TARGET_CHARS_MIN,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     AgenticProfile,
     ChunkingStrategy,
     EvaluationSuite,
@@ -122,7 +137,6 @@ ParserAdapterScoreStatus = Literal[
 _CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "structure_aware",
     "recursive_character",
-    "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
 }
@@ -526,7 +540,6 @@ class ChunkingStrategyStatusData(BaseModel):
     origin: str
     recommended_for: list[str] = Field(default_factory=list)
     selected: bool
-    uses_child_size: bool = False
 
 
 class ChunkingSettingsData(BaseModel):
@@ -535,10 +548,15 @@ class ChunkingSettingsData(BaseModel):
     strategy: ChunkingStrategyName
     chunk_size: int
     overlap: int
-    child_size: int
     min_chars: int
     delimiter: str
     context_header_enabled: bool
+    # DocRAG 親子階層(docrag_small_to_big)の分割パラメータ(rag_poc と同じ 5 項目)。
+    docrag_child_target_chars: int
+    docrag_table_child_target_chars: int
+    docrag_parent_target_chars: int
+    docrag_parent_max_pages: int
+    docrag_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -553,10 +571,34 @@ class ChunkingSettingsUpdate(BaseModel):
         le=CHUNK_SIZE_MAX_CHARS,
     )
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    child_size: int = Field(default=320, ge=80, le=4000)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
     context_header_enabled: bool = True
+    docrag_child_target_chars: int = Field(
+        default=DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_CHILD_TARGET_CHARS_MAX,
+    )
+    docrag_table_child_target_chars: int = Field(
+        default=DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    )
+    docrag_parent_target_chars: int = Field(
+        default=DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
+        ge=DOCRAG_PARENT_TARGET_CHARS_MIN,
+        le=DOCRAG_PARENT_TARGET_CHARS_MAX,
+    )
+    docrag_parent_max_pages: int = Field(
+        default=DOCRAG_PARENT_MAX_PAGES_DEFAULT,
+        ge=DOCRAG_PARENT_MAX_PAGES_MIN,
+        le=DOCRAG_PARENT_MAX_PAGES_MAX,
+    )
+    docrag_parent_max_children: int = Field(
+        default=DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
+        ge=DOCRAG_PARENT_MAX_CHILDREN_MIN,
+        le=DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    )
 
     @field_validator("delimiter")
     @classmethod
@@ -574,8 +616,6 @@ class ChunkingSettingsUpdate(BaseModel):
             return self
         if self.overlap >= self.chunk_size:
             raise ValueError("overlap は chunk_size より小さくしてください。")
-        if self.strategy == "hierarchical_parent_child" and self.child_size >= self.chunk_size:
-            raise ValueError("child_size は chunk_size より小さくしてください。")
         if (
             self.strategy in _CHUNKING_STRATEGIES_WITH_MIN_CHARS
             and self.min_chars >= self.chunk_size
@@ -919,6 +959,7 @@ class GuardrailSettingsData(BaseModel):
     policies: list[GuardrailPolicyStatusData] = Field(default_factory=list)
     backend: GuardrailBackendName = "local"
     oci_configured: bool = False
+    # OCI Guardrails を使う場合の readiness の問題(保存中の検査方式が local でも返す)。
     oci_warning_code: str | None = None
     config_source: Literal["runtime"]
 

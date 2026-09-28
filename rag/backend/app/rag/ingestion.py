@@ -1032,14 +1032,15 @@ class IngestionPipeline:
 
         def _run_chunking() -> list[Chunk]:
             if chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY:
-                # DocRAG の親子分割は docling レイアウトを入力にするため backend 内で行う。
-                return build_docrag_chunks(extraction, source_name=source_name)
+                # DocRAG 親子階層は docling レイアウトを入力にするため backend 内で行う。
+                return build_docrag_chunks(
+                    extraction, source_name=source_name, params=chunking_params.docrag
+                )
             request = ChunkingStageRequest(
                 extraction=extraction,
                 strategy=chunking_params.strategy,
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
-                child_size=chunking_params.child_size,
                 min_chars=chunking_params.min_chars,
                 delimiter=chunking_params.delimiter,
             )
@@ -1051,11 +1052,21 @@ class IngestionPipeline:
                 strategy=chunking_params.strategy,
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
-                child_size=chunking_params.child_size,
                 min_chars=chunking_params.min_chars,
                 delimiter=chunking_params.delimiter,
             )
 
+        docrag_attributes: dict[str, int] = (
+            {
+                "docrag_child_target_chars": chunking_params.docrag.child_target_chars,
+                "docrag_table_child_target_chars": chunking_params.docrag.table_child_target_chars,
+                "docrag_parent_target_chars": chunking_params.docrag.parent_target_chars,
+                "docrag_parent_max_pages": chunking_params.docrag.parent_max_pages,
+                "docrag_parent_max_children": chunking_params.docrag.parent_max_children,
+            }
+            if chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY
+            else {}
+        )
         chunks = await _observe_cpu_ingestion_stage(
             trace_id,
             "chunking",
@@ -1065,8 +1076,8 @@ class IngestionPipeline:
                 "chunk_strategy": chunking_params.strategy,
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
-                "chunk_child_size": chunking_params.child_size,
                 "chunk_min_chars": chunking_params.min_chars,
+                **docrag_attributes,
                 "input_chars": len(text),
                 "parser_profile": parser_profile,
                 "parser_backend": quality_report.parser_backend,
