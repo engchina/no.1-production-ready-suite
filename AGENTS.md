@@ -165,6 +165,13 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
 - 本文は日本語第一フォントスタック `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文ベース `14px`。
 
+### 読み込み中・一覧・ページング（3 製品で統一。NL2SQL が基準）
+
+- **読み込み中**: 内容（一覧・詳細・フォームの初期値など）を取得している間は、その領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を出し、領域は**内容の形をした灰色の `Skeleton` で覆う**（寸法を予約して CLS を出さない）。テキストだけの「読み込み中…」、領域を空白のままにすること、画面全体を塞ぐスピナーは使わない（UX 契約 `messaging.md` §3.6）。再読み込み（表示を更新）中は、前の内容を出したまま更新し、操作したボタンの `loading` で示す。
+- **一覧の縦スクロール**: 件数が多い一覧は `DataTable` の `stickyHeader`（表頭を固定）と `visibleRows`（**md 未満 5 行・md 以上 8 行**）を使い、それを超える行は表の中で縦スクロールにする（ページ全体を伸ばさない）。行の最小高さは 3.5rem。値は `packages/ui` の共通定数を使い、製品で数値を書かない。
+- **ページング**: 共通の `Pagination` / `usePagination`（既定 10 件/ページ）を表の直下に置き、1 ページしかないときは出さない。サーバー側のページングでも同じ部品を使う。ページ番号は作業状態として保持する（UX 契約 `workspace-state.md`）。
+- 新しい一覧・読み込み中の表示を作るときは NL2SQL の同種の画面を見本にし、Playwright で読み込み中（応答を遅らせる）・行数が多いとき（縦スクロール）・2 ページ以上（ページング）を desktop と 375px で確認する。
+
 ### lint
 
 - 遵守ルールの正本は `platform/docs/design-system/adherence.oxlintrc.json`（と JS プラグイン `design-system-plugin.mjs`）。各製品は **コピーせず相対パスで参照する**（oxlint は `extends`、ESLint は JSON を import して `no-restricted-syntax` / `no-restricted-imports` に渡す）。書き方は [platform/AGENTS.md](./platform/AGENTS.md) の「lint」を参照。
