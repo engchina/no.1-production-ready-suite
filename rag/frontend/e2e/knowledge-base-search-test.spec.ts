@@ -156,6 +156,74 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
   await expectNoPageOverflow(page);
 });
 
+// #349: 回答の引用のプレビューでも、DocRAG の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
+test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", async ({
+  page,
+}) => {
+  await mockKbPage(page, 1);
+  await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, (route) =>
+    route.fulfill({
+      json: ok({ page_count: 1, pages: [{ page_number: 1, width: 612, height: 792 }] }),
+    })
+  );
+  await page.route(/\/api\/documents\/doc-1\/preview-pages\/1(?:\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "image/svg+xml" },
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/></svg>',
+    })
+  );
+  const body = searchStreamBody("policy.pdf").replace(
+    '"metadata":{}',
+    `"metadata":${JSON.stringify({
+      page_start: 1,
+      page_width: 1224,
+      page_height: 1584,
+      bbox: "[122.4, 158.4, 1101.6, 792]",
+      bbox_unit: "absolute",
+      docrag_metadata_json: JSON.stringify({
+        layout: {
+          display_regions: [
+            {
+              page: 1,
+              boxes: [
+                { record_id: "docling-p1-1", seq_no: 1, category: "Text", bbox: [122.4, 158.4, 612, 316.8] },
+                { record_id: "docling-p1-2", seq_no: 2, category: "Text", bbox: [612, 633.6, 1101.6, 792] },
+              ],
+            },
+          ],
+        },
+      }),
+    })}`
+  );
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({ status: 200, contentType: "text/event-stream", body })
+  );
+
+  await page.goto("/knowledge-bases/kb-1");
+  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByRole("button", { name: "検索テスト" }).click();
+  await page.getByRole("button", { name: "プレビュー" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByTestId("preview-viewer")).toBeVisible();
+  const overlays = dialog.getByTestId("bbox-content-overlay");
+  await expect(overlays).toHaveCount(2);
+  await expect(dialog.getByText("p.1 の 2 か所を強調しています")).toBeVisible();
+  // 解析時のページ画像 px（1224x1584）をページに対する % に直して重ねる: 10% / 10% / 40% / 10%。
+  const surfaceBox = await dialog.getByTestId("preview-image-surface").boundingBox();
+  const overlayBox = await overlays.first().boundingBox();
+  expect((overlayBox!.x - surfaceBox!.x) / surfaceBox!.width).toBeCloseTo(0.1, 2);
+  expect((overlayBox!.y - surfaceBox!.y) / surfaceBox!.height).toBeCloseTo(0.1, 2);
+  expect(overlayBox!.width / surfaceBox!.width).toBeCloseTo(0.4, 2);
+  expect(overlayBox!.height / surfaceBox!.height).toBeCloseTo(0.1, 2);
+
+  // ドロワーは 1 画面分（上下 1rem の余白を除く）の高さ。
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox!.height).toBeCloseTo(page.viewportSize()!.height - 28, 0);
+  await expectNoPageOverflow(page);
+});
+
 test("KB 検索テストの引用が内部スクロールしてもページ末尾に空白を作らない", async ({ page }) => {
   await mockKbPage(page, 1);
   await page.route("**/api/search/stream", (route) =>

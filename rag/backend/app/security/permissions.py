@@ -276,6 +276,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/chunks"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/chunk-preview"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/content"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/preview-pages"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
     ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
@@ -301,6 +303,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_D}/reject"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----
     ("GET", "/knowledge-bases"): _KNOWLEDGE_BASE_READ,
     ("POST", "/knowledge-bases"): _any(KNOWLEDGE_BASES_MANAGE),

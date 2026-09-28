@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, FileQuestion } from "lucide-react";
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
   api,
@@ -15,16 +15,23 @@ import {
   type BboxOverlayRect,
   type BboxOverlayUnit,
   type BboxPageSize,
+  type PreviewHighlight,
   bboxPageAspectRatio,
+  buildPreviewHighlights,
   formatBboxPercent,
   normalizeBboxForPreview,
 } from "@/lib/bbox";
 import { t } from "@/lib/i18n";
+import { useDocumentPreviewPages } from "@/lib/queries";
 import { charsetFromContentType, decodeText } from "@/lib/text-decode";
 import {
   buttonVariants,
+  cn,
   Skeleton,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
+
+import { bboxOverlayStyle, PreviewViewer, type PreviewViewerPage } from "./PreviewViewer";
 
 type Kind = SourcePreviewKind;
 type DocumentContentVariant = "original" | "prepared";
@@ -61,7 +68,14 @@ export function isPreparedPdfArtifact(
     : artifact.file_name.toLowerCase().endsWith(".pdf");
 }
 
-/** 原本ファイルのプレビュー（画像 / PDF / テキスト）。 */
+/**
+ * 原本ファイルのプレビュー（画像 / PDF / テキスト）。
+ *
+ * 画像と PDF（Office は変換済み PDF）はページ画像のビューア（PreviewViewer）で表示し、回転・拡大縮小・
+ * フィット・パン・ページ送りと bbox の強調を付ける（#349）。PDF のページ画像を描けないときは、
+ * 従来どおりブラウザの PDF 表示（iframe）と位置の案内に戻す。
+ * 高さは親に合わせる（呼び出し側が 1 画面分などの高さを与える）。
+ */
 export function DocumentPreview({
   documentId,
   recipeId = null,
@@ -75,6 +89,8 @@ export function DocumentPreview({
   focusBboxMode = null,
   focusBboxUnit = null,
   focusPageSize = null,
+  highlights = null,
+  className,
 }: {
   documentId: string;
   recipeId?: string | null;
@@ -88,6 +104,9 @@ export function DocumentPreview({
   focusBboxMode?: BboxCoordinateMode | null;
   focusBboxUnit?: BboxOverlayUnit | null;
   focusPageSize?: BboxPageSize | null;
+  /** 強調する領域（DocRAG の表示領域など）。省略時は focusBbox 1 つを強調する。 */
+  highlights?: PreviewHighlight[] | null;
+  className?: string;
 }) {
   const contentUrl = (
     options: { variant?: DocumentContentVariant; disposition?: "inline" | "attachment" } = {}
@@ -104,49 +123,45 @@ export function DocumentPreview({
     disposition: "attachment",
   });
   const kind = kindOf(fileName, sourceProfile);
+  const focus = { focusBbox, focusBboxMode, focusBboxUnit, focusPage, focusPageSize };
+  const effectiveHighlights =
+    highlights ??
+    buildPreviewHighlights({ focusPage, focusBbox, focusBboxMode, focusBboxUnit, focusPageSize });
 
   if (kind === "image") {
     return (
-      <ImagePreview
-        url={url}
+      <PreviewViewer
+        key={url}
+        kind="image"
+        className={cn("h-full min-h-80", className)}
         fileName={fileName}
-        focusBbox={focusBbox}
-        focusBboxMode={focusBboxMode}
-        focusBboxUnit={focusBboxUnit}
-        focusPage={focusPage}
-        focusPageSize={focusPageSize}
+        pages={[{ pageNumber: 1, imageUrl: () => url }]}
+        focusPage={1}
+        // 画像は 1 ページとして扱う（ページ番号の無い・1 以外の値でも同じ画像に重ねる）。
+        highlights={effectiveHighlights.map((highlight) => ({ ...highlight, page: null }))}
       />
     );
   }
 
   if (kind === "pdf") {
-    const pdfUrl = pdfPreviewUrl(url, focusPage);
     return (
-      <PreviewFrame
-        focusBbox={focusBbox}
-        focusBboxMode={focusBboxMode}
-        focusBboxUnit={focusBboxUnit}
-        focusPage={focusPage}
-        focusPageSize={focusPageSize}
-      >
-        <iframe
-          src={pdfUrl}
-          title={fileName}
-          className="h-[60vh] w-full rounded-md border border-border bg-surface"
-        />
-      </PreviewFrame>
+      <PdfPagesPreview
+        key={url}
+        documentId={documentId}
+        recipeId={recipeId}
+        variant={variant}
+        fileName={fileName}
+        iframeUrl={pdfPreviewUrl(url, focusPage)}
+        highlights={effectiveHighlights}
+        className={className}
+        {...focus}
+      />
     );
   }
 
   if (kind === "text" || kind === "html" || kind === "email") {
     return (
-      <PreviewFrame
-        focusBbox={focusBbox}
-        focusBboxMode={focusBboxMode}
-        focusBboxUnit={focusBboxUnit}
-        focusPage={focusPage}
-        focusPageSize={focusPageSize}
-      >
+      <PreviewFrame className={className} {...focus}>
         <TextPreview url={url} />
       </PreviewFrame>
     );
@@ -156,24 +171,19 @@ export function DocumentPreview({
     // 原本(docx/pptx/xlsx 等)はブラウザで直接描画できないため、preprocess が生成した
     // 変換済 PDF があればそれを表示する(抽出 bbox も prepared PDF 座標系で整合)。
     if (isPreparedPdfArtifact(preparedArtifact) && variant !== "prepared") {
-      const preparedPdfUrl = pdfPreviewUrl(
-        contentUrl({ variant: "prepared" }),
-        focusPage
-      );
+      const preparedUrl = contentUrl({ variant: "prepared" });
       return (
-        <PreviewFrame
-          focusBbox={focusBbox}
-          focusBboxMode={focusBboxMode}
-          focusBboxUnit={focusBboxUnit}
-          focusPage={focusPage}
-          focusPageSize={focusPageSize}
-        >
-          <iframe
-            src={preparedPdfUrl}
-            title={fileName}
-            className="h-[60vh] w-full rounded-md border border-border bg-surface"
-          />
-        </PreviewFrame>
+        <PdfPagesPreview
+          key={preparedUrl}
+          documentId={documentId}
+          recipeId={recipeId}
+          variant="prepared"
+          fileName={fileName}
+          iframeUrl={pdfPreviewUrl(preparedUrl, focusPage)}
+          highlights={effectiveHighlights}
+          className={className}
+          {...focus}
+        />
       );
     }
     return (
@@ -196,77 +206,85 @@ export function DocumentPreview({
   );
 }
 
-function ImagePreview({
-  url,
-  fileName,
-  focusBbox,
-  focusBboxMode,
-  focusBboxUnit,
-  focusPage,
-  focusPageSize,
-}: {
-  url: string;
-  fileName: string;
+type FocusProps = {
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
   focusBboxUnit?: BboxOverlayUnit | null;
   focusPage?: number | null;
   focusPageSize?: BboxPageSize | null;
+};
+
+/** PDF をページ画像で表示する。ページ一覧を取れないとき（描けないファイル・古い backend）は iframe に戻す。 */
+function PdfPagesPreview({
+  documentId,
+  recipeId,
+  variant,
+  fileName,
+  iframeUrl,
+  highlights,
+  className,
+  ...focus
+}: FocusProps & {
+  documentId: string;
+  recipeId: string | null;
+  variant: DocumentContentVariant;
+  fileName: string;
+  iframeUrl: string;
+  highlights: PreviewHighlight[];
+  className?: string;
 }) {
-  const [naturalPageSize, setNaturalPageSize] = useState<BboxPageSize | null>(null);
-  const pageSize = focusPageSize ?? naturalPageSize;
-  return (
-      <PreviewFrame
-        focusBbox={focusBbox}
-        focusBboxMode={focusBboxMode}
-        focusBboxUnit={focusBboxUnit}
-        focusPage={focusPage}
-        focusPageSize={pageSize}
-        showContentOverlay
-        contentMaxWidth={imagePreviewMaxWidth(pageSize)}
+  const pagesQuery = useDocumentPreviewPages(documentId, { recipeId, variant });
+  const pages = useMemo<PreviewViewerPage[]>(
+    () =>
+      (pagesQuery.data?.pages ?? []).map((page) => ({
+        pageNumber: page.page_number,
+        points: { width: page.width, height: page.height },
+        imageUrl: (dpi: number) =>
+          api.documentPreviewPageImageUrl(documentId, page.page_number, {
+            recipeId,
+            variant,
+            dpi,
+          }),
+      })),
+    [documentId, pagesQuery.data?.pages, recipeId, variant]
+  );
+
+  if (pagesQuery.isPending) {
+    return (
+      <TimedLoadingState
+        label={t("preview.viewer.loading")}
+        placement="panel"
+        testId="preview-loading"
+        className={cn("h-full min-h-80 grid-rows-[auto_minmax(0,1fr)]", className)}
       >
-      <div
-        className="relative mx-auto w-full overflow-hidden rounded-md border border-border bg-surface"
-        data-testid="preview-image-surface"
-        style={{
-          aspectRatio: bboxPageAspectRatio(pageSize),
-          maxWidth: imagePreviewMaxWidth(pageSize),
-        }}
-      >
-        <img
-          src={url}
-          alt={fileName}
-          className="absolute inset-0 h-full w-full object-contain"
-          onLoad={(event) => {
-            const image = event.currentTarget;
-            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-              setNaturalPageSize({ width: image.naturalWidth, height: image.naturalHeight });
-            }
-          }}
+        <Skeleton className="h-full min-h-60 w-full" />
+      </TimedLoadingState>
+    );
+  }
+  if (pagesQuery.isError || pages.length === 0) {
+    return (
+      <PreviewFrame className={className} {...focus}>
+        <iframe
+          src={iframeUrl}
+          title={fileName}
+          className="h-full min-h-80 w-full rounded-md border border-border bg-surface"
         />
-      </div>
-    </PreviewFrame>
+      </PreviewFrame>
+    );
+  }
+  return (
+    <PreviewViewer
+      kind="pdf"
+      className={cn("h-full min-h-80", className)}
+      fileName={fileName}
+      pages={pages}
+      focusPage={focus.focusPage ?? null}
+      highlights={highlights}
+    />
   );
 }
 
-function imagePreviewMaxWidth(pageSize?: BboxPageSize | null): string {
-  const width = Number(
-    pageSize?.rotation === 90 || pageSize?.rotation === 270
-      ? pageSize?.height
-      : pageSize?.width
-  );
-  const height = Number(
-    pageSize?.rotation === 90 || pageSize?.rotation === 270
-      ? pageSize?.width
-      : pageSize?.height
-  );
-  const ratio =
-    Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
-      ? width / height
-      : 1 / 1.414;
-  return `min(100%, ${Math.max(12, ratio * 60).toFixed(3)}vh)`;
-}
-
+/** ページ画像で表示できないとき（iframe の PDF・テキスト）に、位置の案内を上に添える。 */
 function PreviewFrame({
   children,
   focusBbox,
@@ -274,29 +292,16 @@ function PreviewFrame({
   focusBboxUnit = null,
   focusPage = null,
   focusPageSize = null,
-  showContentOverlay = false,
-  contentMaxWidth,
-}: {
-  children: ReactNode;
-  focusBbox?: number[] | null;
-  focusBboxMode?: BboxCoordinateMode | null;
-  focusBboxUnit?: BboxOverlayUnit | null;
-  focusPage?: number | null;
-  focusPageSize?: BboxPageSize | null;
-  showContentOverlay?: boolean;
-  /** content overlay 表示時、relative 基準をサーフェス幅へ揃えて overlay のズレを防ぐ。 */
-  contentMaxWidth?: string;
-}) {
+  className,
+}: FocusProps & { children: ReactNode; className?: string }) {
   const overlayRect = normalizeBboxForPreview(
     focusBbox,
     focusPageSize,
     focusBboxMode,
     focusBboxUnit
   );
-  const style = overlayRect ? bboxOverlayStyle(overlayRect) : null;
-  const showPreviewOverlay = Boolean(style && !showContentOverlay);
   return (
-    <div className="space-y-2">
+    <div className={cn("flex h-full min-h-0 flex-col gap-2", className)}>
       {focusBbox && overlayRect ? (
         <BboxLocator
           overlayRect={overlayRect}
@@ -304,29 +309,14 @@ function PreviewFrame({
           focusPageSize={focusPageSize}
         />
       ) : null}
-      {showPreviewOverlay && overlayRect ? (
+      {overlayRect ? (
         <BboxPreviewOverlay
           overlayRect={overlayRect}
           focusPage={focusPage}
           focusPageSize={focusPageSize}
         />
       ) : null}
-      <div
-        className={showContentOverlay ? "relative mx-auto w-full" : "relative"}
-        style={showContentOverlay && contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
-      >
-        {children}
-        {style && showContentOverlay ? (
-          <span
-            aria-hidden
-            data-bbox-mode={overlayRect?.coordinateMode}
-            data-bbox-unit={overlayRect?.unit}
-            data-testid="bbox-content-overlay"
-            className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-subtle shadow-[0_0_0_1px_rgba(255,255,255,0.85)]"
-            style={style}
-          />
-        ) : null}
-      </div>
+      <div className="relative min-h-0 flex-1">{children}</div>
     </div>
   );
 }
@@ -406,15 +396,6 @@ function BboxLocator({
   );
 }
 
-function bboxOverlayStyle(rect: BboxOverlayRect): CSSProperties {
-  return {
-    left: `${rect.leftPercent}%`,
-    top: `${rect.topPercent}%`,
-    width: `${rect.widthPercent}%`,
-    height: `${rect.heightPercent}%`,
-  };
-}
-
 function TextPreview({ url }: { url: string }) {
   // 取得結果は URL ごとに持つ。URL が変わった直後は前の結果を使わず、読込中として扱う。
   const [result, setResult] = useState<{ url: string; text: string | null; error: boolean } | null>(
@@ -454,7 +435,7 @@ function TextPreview({ url }: { url: string }) {
   if (text === null) return <Skeleton className="h-40 w-full" />;
 
   return (
-    <pre className="max-h-[60vh] overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg">
+    <pre className="h-full max-h-full min-h-40 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg">
       {text}
     </pre>
   );

@@ -165,12 +165,20 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
   test.skip(testInfo.project.name !== "desktop", "desktop (mouse wheel) contract");
   await mockDocumentWorkspace(page, { pdfPreview: true });
 
-  await page.setViewportSize({ width: 1440, height: 900 });
+  // 内容が右ペインからあふれる高さにする（ペインは 1 画面分の高さ）。
+  await page.setViewportSize({ width: 1440, height: 640 });
   await page.goto("/documents/doc-1");
 
-  const pdfFrame = page.locator('iframe[title="policy.pdf"]');
+  // 右ペイン（タブ + 内容）は左のプレビューと同じ 1 画面分の高さにそろえる（#349）。
+  const previewPane = page.getByTestId("document-preview-pane");
+  const inspectorPane = page.getByTestId("document-inspector-pane");
+  await expect(page.locator('iframe[title="policy.pdf"]')).toBeVisible();
+  const previewPaneBox = await previewPane.boundingBox();
+  expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(previewPaneBox!.height, 0);
+  expect(previewPaneBox!.height).toBeCloseTo(640 - 28, 0);
   const textPanel = page.getByRole("tabpanel");
-  const previewHeight = await pdfFrame.evaluate((element) => element.getBoundingClientRect().height);
+  const previewHeight = await textPanel.evaluate((element) => element.clientHeight);
+  expect(previewHeight).toBeGreaterThan(400);
   const textPanelMetrics = await textPanel.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -510,6 +518,180 @@ test("画像 preview は同一 surface 上で bbox overlay を位置決めする
   expect(overlayBox).not.toBeNull();
   expect(overlayBox!.width).toBeCloseTo(surfaceBox!.width, 1);
   expect(overlayBox!.height).toBeCloseTo(surfaceBox!.height * 0.4, 1);
+  await expectNoHorizontalOverflow(page);
+});
+
+// #349: PDF はページ画像で表示し、DocRAG の表示領域（要素ごとの bbox）を強調する。強調は回転・拡大に追従する。
+async function relativeBox(child: Locator, parent: Locator) {
+  const childBox = await child.boundingBox();
+  const parentBox = await parent.boundingBox();
+  expect(childBox).not.toBeNull();
+  expect(parentBox).not.toBeNull();
+  return {
+    left: (childBox!.x - parentBox!.x) / parentBox!.width,
+    top: (childBox!.y - parentBox!.y) / parentBox!.height,
+    width: childBox!.width / parentBox!.width,
+    height: childBox!.height / parentBox!.height,
+  };
+}
+
+function expectBoxClose(
+  actual: { left: number; top: number; width: number; height: number },
+  expected: { left: number; top: number; width: number; height: number }
+) {
+  expect(actual.left).toBeCloseTo(expected.left, 2);
+  expect(actual.top).toBeCloseTo(expected.top, 2);
+  expect(actual.width).toBeCloseTo(expected.width, 2);
+  expect(actual.height).toBeCloseTo(expected.height, 2);
+}
+
+test("PDF はページ画像で表示し、DocRAG の表示領域を要素ごとに強調する", async ({ page }) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+
+  const viewer = page.getByTestId("preview-viewer");
+  await expect(viewer).toBeVisible();
+  await expect(page.locator('iframe[title="policy.pdf"]')).toHaveCount(0);
+  await expect(page.getByTestId("preview-page-status")).toHaveText("1 / 2");
+  await expect(viewer.getByRole("img", { name: "policy.pdf p.1" })).toHaveAttribute(
+    "src",
+    /\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\/1\?variant=original&dpi=\d+$/
+  );
+  const surface = page.getByTestId("preview-image-surface");
+  const overlays = page.getByTestId("bbox-content-overlay");
+  await expect(overlays).toHaveCount(2);
+  await expect(overlays.first()).toHaveAttribute("data-highlight-tone", "primary");
+  await expect(overlays.first()).toHaveAttribute("data-bbox-unit", "absolute");
+  await expect(page.getByText("p.1 の 2 か所を強調しています")).toBeVisible();
+  expectBoxClose(await relativeBox(overlays.nth(0), surface), {
+    left: 0.1,
+    top: 0.1,
+    width: 0.4,
+    height: 0.1,
+  });
+  expectBoxClose(await relativeBox(overlays.nth(1), surface), {
+    left: 0.5,
+    top: 0.5,
+    width: 0.4,
+    height: 0.1,
+  });
+
+  // 強調のある別のページ（横向き）へ移ると、そのページの寸法に合わせて重ねる。
+  await page.getByRole("button", { name: "強調のある 2 ページ目を表示" }).click();
+  await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
+  await expect(overlays).toHaveCount(1);
+  expectBoxClose(await relativeBox(overlays.first(), surface), {
+    left: 0,
+    top: 0,
+    width: 0.5,
+    height: 0.5,
+  });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("プレビューの回転・拡大の後も強調が同じ位置に重なり、キーボードでも操作できる", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  await page.getByRole("tabpanel").getByRole("button", { name: /交通費は1000円/ }).click();
+
+  const viewport = page.getByTestId("preview-viewport");
+  const frame = page.getByTestId("preview-page-frame");
+  const firstOverlay = page.getByTestId("bbox-content-overlay").first();
+  await expect(firstOverlay).toBeVisible();
+
+  // 右に 90 度回す: 回転前の (x, y, w, h) = (0.1, 0.1, 0.4, 0.1) は、外枠の中で
+  // (1 - y - h, x, h, w) = (0.8, 0.1, 0.1, 0.4) になる（画像と強調を同じ層で回すため）。
+  await page.getByRole("button", { name: "右に回転" }).click();
+  await expect(viewport).toHaveAttribute("data-rotation", "90");
+  expectBoxClose(await relativeBox(firstOverlay, frame), {
+    left: 0.8,
+    top: 0.1,
+    width: 0.1,
+    height: 0.4,
+  });
+
+  // 拡大しても、外枠に対する位置は変わらない。
+  await page.getByRole("button", { name: "拡大", exact: true }).click();
+  await page.getByRole("button", { name: "拡大", exact: true }).click();
+  await expect(page.getByTestId("preview-zoom-status")).toHaveText("150%");
+  await expect(viewport).toHaveAttribute("data-fit-mode", "zoom");
+  expectBoxClose(await relativeBox(firstOverlay, frame), {
+    left: 0.8,
+    top: 0.1,
+    width: 0.1,
+    height: 0.4,
+  });
+  // 拡大するとビューポートの中でスクロール（パン）できる。
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollWidth > element.clientWidth))
+    .toBe(true);
+
+  // キーボード: ビューポートにフォーカスして操作する。
+  await viewport.focus();
+  await page.keyboard.press("Shift+R");
+  await expect(viewport).toHaveAttribute("data-rotation", "0");
+  expectBoxClose(await relativeBox(firstOverlay, frame), {
+    left: 0.1,
+    top: 0.1,
+    width: 0.4,
+    height: 0.1,
+  });
+  await page.keyboard.press("-");
+  await expect(page.getByTestId("preview-zoom-status")).toHaveText("125%");
+  await page.keyboard.press("0");
+  await expect(viewport).toHaveAttribute("data-fit-mode", "fit-page");
+  await expect(page.getByRole("button", { name: "全体を表示" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  // 全体表示ではページ全体がビューポートに収まる。
+  const viewportBox = await viewport.boundingBox();
+  const frameBox = await frame.boundingBox();
+  expect(frameBox!.height).toBeLessThanOrEqual(viewportBox!.height);
+  expect(frameBox!.width).toBeLessThanOrEqual(viewportBox!.width);
+  await page.keyboard.press("w");
+  await expect(viewport).toHaveAttribute("data-fit-mode", "fit-width");
+  await page.keyboard.press("r");
+  await expect(viewport).toHaveAttribute("data-rotation", "90");
+  await page.keyboard.press("PageDown");
+  await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
+  // 回転はページごと。2 ページ目は回していない。
+  await expect(viewport).toHaveAttribute("data-rotation", "0");
+  await page.keyboard.press("Home");
+  await expect(page.getByTestId("preview-page-status")).toHaveText("1 / 2");
+  await expect(viewport).toHaveAttribute("data-rotation", "90");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("プレビューの領域は 1 画面分の高さで、ページは内部でスクロールする", async ({ page }) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+
+  await page.goto("/documents/doc-1");
+
+  const pane = page.getByTestId("document-preview-pane");
+  const viewport = page.getByTestId("preview-viewport");
+  await expect(viewport).toBeVisible();
+  const viewportHeight = page.viewportSize()!.height;
+  const paneBox = await pane.boundingBox();
+  // 上下 1rem（14px ルート）ずつの余白を除いた高さ。
+  expect(paneBox!.height).toBeCloseTo(viewportHeight - 28, 0);
+  const viewerBox = await page.getByTestId("preview-viewer").boundingBox();
+  expect(viewerBox!.y + viewerBox!.height).toBeLessThanOrEqual(paneBox!.y + paneBox!.height + 1);
+  // 拡大してもプレビューの高さは変わらず、ページはビューアの中でスクロールする。
+  await viewport.focus();
+  for (let index = 0; index < 5; index += 1) await page.keyboard.press("+");
+  await expect(page.getByTestId("preview-zoom-status")).toHaveText("300%");
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true);
+  expect((await pane.boundingBox())!.height).toBeCloseTo(paneBox!.height, 0);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -943,6 +1125,10 @@ async function mockDocumentWorkspace(
     chunksError?: boolean;
     imagePreview?: boolean;
     pdfPreview?: boolean;
+    /** PDF をページ画像で表示する API（preview-pages）を返す（#349）。無ければ iframe に戻る。 */
+    pdfPages?: boolean;
+    /** Chunk「交通費は1000円」に DocRAG の表示領域（要素ごとの bbox・2 ページ）を持たせる（#349）。 */
+    docragRegions?: boolean;
     segmentError?: boolean;
     segmentCount?: number;
     mineruSegment?: boolean;
@@ -1298,6 +1484,38 @@ async function mockDocumentWorkspace(
     });
     }
   );
+  if (options.pdfPages) {
+    await page.route(
+      /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/preview-pages(?:\?|$)/,
+      async (route) => {
+        await route.fulfill({
+          json: {
+            data: {
+              page_count: 2,
+              pages: [
+                { page_number: 1, width: 612, height: 792 },
+                { page_number: 2, width: 792, height: 612 },
+              ],
+            },
+            error_messages: [],
+            warning_messages: [],
+          },
+        });
+      }
+    );
+    await page.route(
+      /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/preview-pages\/\d+/,
+      async (route) => {
+        const pageNumber = Number(new URL(route.request().url()).pathname.split("/").pop());
+        const [width, height] = pageNumber === 2 ? [792, 612] : [612, 792];
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "image/svg+xml" },
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="white"/><rect x="61.2" y="79.2" width="244.8" height="79.2" fill="none" stroke="black"/><text x="24" y="40">PAGE ${pageNumber}</text></svg>`,
+        });
+      }
+    );
+  }
   await page.route(
     /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/chunks(?:\?|$)/,
     async (route) => {
@@ -1365,7 +1583,32 @@ async function mockDocumentWorkspace(
                     ...(options.chunkBboxUnit ? { bbox_unit: options.chunkBboxUnit } : {}),
                     chunk_profile: "structure_v1",
                   }
-                : { chunk_profile: "structure_v1" },
+                : options.docragRegions
+                  ? {
+                      chunk_profile: "structure_v1",
+                      page_width: 612,
+                      page_height: 792,
+                      bbox_unit: "absolute",
+                      docrag_metadata_json: JSON.stringify({
+                        schema_version: 4,
+                        layout: {
+                          display_regions: [
+                            {
+                              page: 1,
+                              boxes: [
+                                // 10% / 10% / 40% / 10%
+                                { record_id: "docling-p1-1", seq_no: 1, category: "Text", bbox: [61.2, 79.2, 306, 158.4] },
+                                // 50% / 50% / 40% / 10%
+                                { record_id: "docling-p1-2", seq_no: 2, category: "Table", bbox: [306, 396, 550.8, 475.2] },
+                              ],
+                            },
+                            // 2 ページ目は横向き（792x612 pt）。1 ページ目と同じ dpi の px 座標で、左上 1/4。
+                            { page: 2, boxes: [{ record_id: "docling-p2-1", seq_no: 1, category: "Text", bbox: [0, 0, 396, 306] }] },
+                          ],
+                        },
+                      }),
+                    }
+                  : { chunk_profile: "structure_v1" },
           },
         ],
         error_messages: [],

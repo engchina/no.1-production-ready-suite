@@ -114,6 +114,8 @@ export const queryKeys = {
   documentChunks: (id: string) => ["documents", id, "chunks"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
+  documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
+    ["documents", id, "preview-pages", recipeId ?? "", variant] as const,
   documentRecipeChunks: (id: string, recipeId: string) =>
     ["documents", id, "recipes", recipeId, "chunks"] as const,
   documentRecipeExtractionExport: (
@@ -569,6 +571,22 @@ export function useDocumentIngestionConfig(id: string | null) {
 }
 
 /** 文書の1〜3件の独立処理レシピ。 */
+/** PDF のページ画像プレビュー用のページ一覧。描けないファイル（422）は再試行せず iframe に戻す。 */
+export function useDocumentPreviewPages(
+  id: string | null,
+  options: { recipeId?: string | null; variant?: "original" | "prepared"; enabled?: boolean } = {},
+) {
+  const variant = options.variant ?? "original";
+  return useQuery({
+    queryKey: queryKeys.documentPreviewPages(id ?? "", options.recipeId ?? null, variant),
+    queryFn: () =>
+      api.getDocumentPreviewPages(id as string, { recipeId: options.recipeId, variant }),
+    enabled: id != null && (options.enabled ?? true),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useDocumentRecipes(id: string | null) {
   return useQuery({
     queryKey: queryKeys.documentRecipes(id ?? ""),

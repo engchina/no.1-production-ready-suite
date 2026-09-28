@@ -563,6 +563,25 @@ export interface BatchUploadFailedItem {
   source_profile: SourceProfile | null;
 }
 
+/** プレビューのページ画像 1 ページの表示寸法（pt。ページの /Rotate を反映した向き）。 */
+export interface DocumentPreviewPage {
+  page_number: number;
+  width: number;
+  height: number;
+}
+
+export interface DocumentPreviewPages {
+  page_count: number;
+  pages: DocumentPreviewPage[];
+}
+
+function documentPreviewPagesBase(id: string, recipeId?: string | null): string {
+  const base = `/api/documents/${encodeURIComponent(id)}`;
+  return recipeId
+    ? `${base}/recipes/${encodeURIComponent(recipeId)}/preview-pages`
+    : `${base}/preview-pages`;
+}
+
 export interface DocumentChunkView {
   document_id: string;
   chunk_id: string;
@@ -2896,6 +2915,27 @@ export const api = {
     return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
       recipeId,
     )}/content${qs ? `?${qs}` : ""}`;
+  },
+  /** PDF をページ画像で表示するためのページ一覧（bbox の強調を重ねる。#349）。 */
+  getDocumentPreviewPages: (
+    id: string,
+    options: { recipeId?: string | null; variant?: "original" | "prepared" } = {},
+  ) =>
+    request<DocumentPreviewPages>(
+      `${documentPreviewPagesBase(id, options.recipeId)}${
+        options.variant ? `?variant=${options.variant}` : ""
+      }`,
+    ),
+  documentPreviewPageImageUrl: (
+    id: string,
+    pageNumber: number,
+    options: { recipeId?: string | null; variant?: "original" | "prepared"; dpi?: number } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.dpi) search.set("dpi", String(options.dpi));
+    const qs = search.toString();
+    return `${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`;
   },
 
   // ナレッジベース

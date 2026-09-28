@@ -20,6 +20,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Path,
     Query,
     Request,
     Response,
@@ -51,7 +52,13 @@ from app.rag.docrag_chunking import (
     docrag_fallback_needed,
     mark_docrag_fallback,
 )
-from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
+from app.rag.document_crop import (
+    DocumentSourceNotFoundError,
+    crop_png,
+    load_parsed_source,
+    page_sizes,
+    render_page_png,
+)
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -101,6 +108,8 @@ from app.schemas.document import (
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
     DocumentPreprocessArtifact,
+    DocumentPreviewPage,
+    DocumentPreviewPages,
     DocumentProcessingConfig,
     DocumentRecipeCreateRequest,
     DocumentRecipeDeleteResult,
@@ -1265,6 +1274,53 @@ async def document_recipe_content(
         variant=variant,
         disposition=disposition,
         preprocess_artifact=artifact,
+    )
+
+
+async def _recipe_detail_and_artifact(
+    document_id: str, recipe_id: str
+) -> tuple[DocumentDetail, DocumentPreprocessArtifact | None]:
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if detail is None or row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    artifact = (
+        DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
+        if row.get("preprocess_artifact")
+        else None
+    )
+    return detail, artifact
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/preview-pages",
+    response_model=ApiResponse[DocumentPreviewPages],
+)
+async def document_recipe_preview_pages(
+    document_id: str,
+    recipe_id: str,
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+) -> ApiResponse[DocumentPreviewPages]:
+    """選択レシピの原本 / 処理後ファイルのページ一覧(ページ画像のプレビュー用)。"""
+    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    return await _document_preview_pages_response(
+        detail, variant=variant, preprocess_artifact=artifact
+    )
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/preview-pages/{page_number}")
+async def document_recipe_preview_page_image(
+    document_id: str,
+    recipe_id: str,
+    page_number: Annotated[int, Path(ge=1, le=10000)],
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+    dpi: Annotated[int, Query(ge=48, le=288)] = 144,
+) -> Response:
+    """選択レシピの原本 / 処理後ファイルの 1 ページを PNG で返す(bbox の強調を重ねる)。"""
+    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    return await _document_preview_page_image_response(
+        detail, page_number=page_number, variant=variant, dpi=dpi, preprocess_artifact=artifact
     )
 
 
@@ -5196,6 +5252,86 @@ async def document_content(
     )
 
 
+@router.get("/{document_id}/preview-pages", response_model=ApiResponse[DocumentPreviewPages])
+async def document_preview_pages(
+    document_id: str,
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+) -> ApiResponse[DocumentPreviewPages]:
+    """原本 / 処理後ファイルのページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
+    detail = await OracleClient().get_document(document_id)
+    if detail is None or detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return await _document_preview_pages_response(
+        detail, variant=variant, preprocess_artifact=detail.preprocess_artifact
+    )
+
+
+@router.get("/{document_id}/preview-pages/{page_number}")
+async def document_preview_page_image(
+    document_id: str,
+    page_number: Annotated[int, Path(ge=1, le=10000)],
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+    dpi: Annotated[int, Query(ge=48, le=288)] = 144,
+) -> Response:
+    """原本 / 処理後ファイルの 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
+    detail = await OracleClient().get_document(document_id)
+    if detail is None or detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return await _document_preview_page_image_response(
+        detail,
+        page_number=page_number,
+        variant=variant,
+        dpi=dpi,
+        preprocess_artifact=detail.preprocess_artifact,
+    )
+
+
+async def _document_preview_pages_response(
+    detail: DocumentDetail,
+    *,
+    variant: Literal["original", "prepared"],
+    preprocess_artifact: DocumentPreprocessArtifact | None,
+) -> ApiResponse[DocumentPreviewPages]:
+    data, _file_name, _content_type = await _load_document_content(
+        detail, variant=variant, preprocess_artifact=preprocess_artifact
+    )
+    try:
+        sizes = await asyncio.to_thread(page_sizes, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(
+        data=DocumentPreviewPages(
+            page_count=len(sizes),
+            pages=[
+                DocumentPreviewPage(page_number=index + 1, width=width, height=height)
+                for index, (width, height) in enumerate(sizes)
+            ],
+        )
+    )
+
+
+async def _document_preview_page_image_response(
+    detail: DocumentDetail,
+    *,
+    page_number: int,
+    variant: Literal["original", "prepared"],
+    dpi: int,
+    preprocess_artifact: DocumentPreprocessArtifact | None,
+) -> Response:
+    data, _file_name, _content_type = await _load_document_content(
+        detail, variant=variant, preprocess_artifact=preprocess_artifact
+    )
+    try:
+        png = await asyncio.to_thread(render_page_png, data, page_number, dpi)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.get("/{document_id}/crop")
 async def document_crop(
     document_id: str,
@@ -5241,6 +5377,31 @@ async def _document_content_response(
     disposition: Literal["inline", "attachment"],
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> Response:
+    data, file_name, content_type = await _load_document_content(
+        detail, variant=variant, preprocess_artifact=preprocess_artifact
+    )
+    media_type = _content_type_header(content_type, data)
+    headers = {
+        # 非 ASCII ファイル名は RFC 5987 でエンコードする
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
+        # MIME sniffing による取り違えを防ぐ
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=60",
+    }
+    if media_type.split(";", 1)[0].strip().lower() in SCRIPTABLE_CONTENT_TYPES:
+        # 利用者がアップロードした HTML / SVG を同じ origin で開いてもスクリプトを動かさない(#281)。
+        # 画面のプレビューは本文をテキストとして取得するので、表示には影響しない。
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(content=data, media_type=media_type, headers=headers)
+
+
+async def _load_document_content(
+    detail: DocumentDetail,
+    *,
+    variant: Literal["original", "prepared"],
+    preprocess_artifact: DocumentPreprocessArtifact | None,
+) -> tuple[bytes, str, str]:
+    """原本またはファイル準備後 artifact の (中身, ファイル名, content type) を返す。"""
     if detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     if variant == "prepared":
@@ -5267,20 +5428,7 @@ async def _document_content_response(
         raise HTTPException(status_code=404, detail=not_found_message) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bad_path_message) from exc
-
-    media_type = _content_type_header(content_type, data)
-    headers = {
-        # 非 ASCII ファイル名は RFC 5987 でエンコードする
-        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
-        # MIME sniffing による取り違えを防ぐ
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, max-age=60",
-    }
-    if media_type.split(";", 1)[0].strip().lower() in SCRIPTABLE_CONTENT_TYPES:
-        # 利用者がアップロードした HTML / SVG を同じ origin で開いてもスクリプトを動かさない(#281)。
-        # 画面のプレビューは本文をテキストとして取得するので、表示には影響しない。
-        headers["Content-Security-Policy"] = "sandbox"
-    return Response(content=data, media_type=media_type, headers=headers)
+    return data, file_name, content_type
 
 
 async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:
