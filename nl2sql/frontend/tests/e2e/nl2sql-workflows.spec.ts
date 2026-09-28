@@ -17441,8 +17441,10 @@ for (const theme of ["light", "dark"]) {
       const inMenu = isMobile && path !== "/data-management";
       await expect(header.getByRole("heading", { level: 1 })).toBeVisible();
       if (inMenu) await header.getByRole("button", { name: "その他の操作" }).click();
-      const role = inMenu ? "menuitem" : "button";
-      const refresh = header.getByRole(role, { name: "表示を更新", exact: true });
+      // 「その他の操作」メニューは body へ Portal で描くため、ヘッダーの外から探す（#363）。
+      const refresh = inMenu
+        ? page.getByRole("menu", { name: "その他の操作" }).getByRole("menuitem", { name: "表示を更新", exact: true })
+        : header.getByRole("button", { name: "表示を更新", exact: true });
       await expect(refresh).toBeEnabled();
       if (!isMobile) {
         for (const label of ["表示を更新", "DB 構造を再取得"]) {
