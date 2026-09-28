@@ -180,7 +180,7 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
 
     if [ "${SKIP_AUDIT}" != "1" ]; then
       log "backend pip-audit"
-      run_backend_tool pip-audit
+      run_backend_tool pip-audit --skip-editable
     else
       log "backend pip-audit skipped（SKIP_AUDIT=0 で実行。全件は dependency-audit-nightly.yml）"
     fi

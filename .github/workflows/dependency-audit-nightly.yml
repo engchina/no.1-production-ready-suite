@@ -51,4 +51,4 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Dependency audit
-        run: uv run pip-audit ${{ matrix.args }}
+        run: uv run pip-audit --skip-editable ${{ matrix.args }}
