@@ -1446,6 +1446,24 @@ def test_update_guardrail_settings_rejects_unready_oci_backend(
     assert settings.rag_guardrail_backend == "local"
 
 
+def test_guardrail_settings_reports_oci_readiness_even_when_local(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """保存中が local でも、OCI Guardrails を選んだときの未設定理由を返す(#277)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
+    monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
+    monkeypatch.setattr(settings, "oci_compartment_id", "")
+
+    resp = client.get("/api/settings/guardrail")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["backend"] == "local"
+    assert body["oci_configured"] is False
+    assert body["oci_warning_code"] == "oci_guardrails_compartment_missing"
+
+
 def test_update_guardrail_settings_rejects_unknown_policy() -> None:
     resp = client.patch("/api/settings/guardrail", json={"policy": "paranoid"})
     assert resp.status_code == 422

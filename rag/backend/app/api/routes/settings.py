@@ -1446,7 +1446,9 @@ def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
         ],
         backend=settings.rag_guardrail_backend,
         oci_configured=_oci_guardrails_configured(settings),
-        oci_warning_code=_oci_guardrails_warning_code(settings),
+        # 保存中の検査方式に関係なく返し、画面が「OCI Guardrails を選んだとき」の
+        # 注意を正しい理由で出せるようにする(#277)。
+        oci_warning_code=_oci_guardrails_readiness_code(settings),
         config_source="runtime",
     )
 
@@ -1467,6 +1469,11 @@ def _oci_guardrails_warning_code(settings: Settings) -> str | None:
     """oci_guardrails 選択時の静的 readiness warning code を返す。"""
     if settings.rag_guardrail_backend != "oci_guardrails":
         return None
+    return _oci_guardrails_readiness_code(settings)
+
+
+def _oci_guardrails_readiness_code(settings: Settings) -> str | None:
+    """OCI Guardrails を使う場合の静的 readiness の問題(なければ None)を返す。"""
     compartment_configured = bool(
         str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
         or str(getattr(settings, "oci_compartment_id", "") or "").strip()

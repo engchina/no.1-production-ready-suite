@@ -1360,3 +1360,85 @@ def test_run_evaluation_request_suite_beats_kb_suite(
 
     assert resp.status_code == 200
     assert resp.json()["data"]["evaluation_suite"] == "retrieval_focused"
+
+
+def test_compare_evaluation_stamps_resolved_suite_on_each_experiment(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """compare でも確定した評価スイートを各 experiment の metrics に残す(#277)。"""
+    from app.api.routes import evaluation as evaluation_route
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["thresholds"] = kwargs.get("thresholds")
+        return _minimal_eval_metrics()
+
+    class FakeOracleClient:
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            return "eval-1"
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+
+    body = {
+        "cases": _eval_run_body()["cases"],
+        "experiments": [{"id": "exp-a"}, {"id": "exp-b", "top_k": 5}],
+    }
+    resp = client.post("/api/evaluation/compare", json=body)
+
+    assert resp.status_code == 200
+    results = resp.json()["data"]["results"]
+    assert [result["metrics"]["evaluation_suite"] for result in results] == [
+        "balanced",
+        "balanced",
+    ]
+    assert captured["thresholds"].groundedness_pass_rate == 0.9
+
+
+class ExpandedContextPipeline:
+    """rerank 上位より多い document の citation を返す(隣接 context 展開の再現)。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+    ) -> SearchResponse:
+        return SearchResponse(
+            answer="A と B と C の承認条件です。",
+            citations=[
+                RetrievedChunk(
+                    document_id=document_id,
+                    chunk_id=f"{document_id}:0",
+                    text=f"{document_id} の承認条件です。",
+                    score=1.0,
+                )
+                for document_id in ("doc-a", "doc-b", "doc-c")
+            ],
+            trace_id=trace_id or "trace",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+        )
+
+
+async def test_precision_at_k_counts_only_top_evaluated_documents() -> None:
+    """citation が evaluated_k より多くても precision@k は 1.0 を超えない(#277)。"""
+    runner = EvaluationRunner(pipeline=ExpandedContextPipeline())
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-expanded",
+                query="承認条件",
+                relevant_document_ids=["doc-a", "doc-b", "doc-c"],
+            )
+        ],
+        top_k=1,
+        rerank_top_n=1,
+    )
+
+    assert metrics.evaluated_k == 1
+    assert metrics.precision_at_k == 1.0
+    assert metrics.case_results[0].precision_at_k == 1.0
+    assert metrics.case_results[0].hit_document_ids == ["doc-a", "doc-b", "doc-c"]
