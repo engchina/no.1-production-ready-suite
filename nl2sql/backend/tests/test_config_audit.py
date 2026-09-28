@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from app.config_audit import (
@@ -154,7 +155,8 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}" in backend_env
     assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in platform_env
     assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in platform_env
-    assert "platform_env        = base64gzip(local.platform_envs[product])" in locals_tf
+    # terraform fmt の桁そろえに左右されないよう、空白は問わない（#239 で書き方が変わった）。
+    assert re.search(r"platform_env\s+=\s+base64gzip\(local\.platform_envs\[product\]\)", locals_tf)
     assert '"${app_root}/props/platform.env" "${platform_repo_dir}/.env"' in init_script
     assert "instantclient" not in init_script
     assert "instantclient" not in dockerfile
