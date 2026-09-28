@@ -503,6 +503,29 @@ describe("resolveDocumentFailureView", () => {
     expect(view.primaryMessage).toBe("ファイル準備に失敗しました。再処理してください。");
   });
 
+  it("レシピの step が失敗した工程を、ジョブの phase より優先する（ステップ表示と一致させる。Issue 329）", () => {
+    // レシピの CHUNK ジョブは索引まで行う。索引で失敗したら、ジョブの phase は CHUNK でも失敗工程は索引。
+    const view = resolveDocumentFailureView({
+      documentStatus: "ERROR",
+      latestJobStatus: "FAILED",
+      latestJobPhase: "CHUNK",
+      failedRecipePhase: "INDEX",
+      latestJobErrorMessage: "取込処理に失敗しました。",
+      segments: [],
+    });
+    expect(view.failedStep).toBe("INDEXING");
+    // レシピの step に失敗が無ければ、今までどおりジョブの phase を使う。
+    expect(
+      resolveDocumentFailureView({
+        documentStatus: "ERROR",
+        latestJobStatus: "FAILED",
+        latestJobPhase: "CHUNK",
+        failedRecipePhase: null,
+        segments: [],
+      }).failedStep
+    ).toBe("CHUNKING");
+  });
+
   it("ジョブ原因が無ければ失敗セグメント→文書の順にフォールバックする", () => {
     const view = resolveDocumentFailureView({
       documentStatus: "ERROR",
