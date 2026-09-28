@@ -10,7 +10,7 @@ import {
 } from "@/lib/parser-capabilities";
 
 const CAPABILITIES: ParserBackendCapabilityData[] = [
-  { backend: "marker", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+  { backend: "dots_ocr", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
   {
     backend: "unstructured",
     modalities: ["pdf", "image", "text", "html", "email", "office"],
@@ -20,7 +20,7 @@ const CAPABILITIES: ParserBackendCapabilityData[] = [
 
 describe("formatSupportedFormats", () => {
   it("modality を日本語ラベルで「・」連結する", () => {
-    expect(formatSupportedFormats(findParserCapability(CAPABILITIES, "marker"))).toBe(
+    expect(formatSupportedFormats(findParserCapability(CAPABILITIES, "dots_ocr"))).toBe(
       "PDF・画像"
     );
   });
@@ -47,21 +47,21 @@ describe("effectiveModalityForParser", () => {
 });
 
 describe("parserSupportsDocument", () => {
-  it("marker × office は非対応", () => {
+  it("dots_ocr × office は非対応", () => {
     expect(
       parserSupportsDocument({
         capabilities: CAPABILITIES,
-        backend: "marker",
+        backend: "dots_ocr",
         modality: "office",
       })
     ).toBe(false);
   });
 
-  it("marker × office でも office_to_pdf 変換があれば対応", () => {
+  it("dots_ocr × office でも office_to_pdf 変換があれば対応", () => {
     expect(
       parserSupportsDocument({
         capabilities: CAPABILITIES,
-        backend: "marker",
+        backend: "dots_ocr",
         modality: "office",
         preprocessProfile: "office_to_pdf",
       })
@@ -77,12 +77,12 @@ describe("parserSupportsDocument", () => {
       })
     ).toBeNull();
     expect(
-      parserSupportsDocument({ capabilities: undefined, backend: "marker", modality: "pdf" })
+      parserSupportsDocument({ capabilities: undefined, backend: "dots_ocr", modality: "pdf" })
     ).toBeNull();
     expect(
       parserSupportsDocument({
         capabilities: CAPABILITIES,
-        backend: "marker",
+        backend: "dots_ocr",
         modality: "unknown",
       })
     ).toBeNull();

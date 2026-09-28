@@ -24,12 +24,13 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import (
     CHUNK_OVERLAP_MAX_CHARS,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
+    REMOVED_PARSER_ADAPTER_BACKENDS,
     ChunkingStrategy,
     DocragAnswerFlow,
     DocragQueryStrategy,
@@ -60,12 +61,9 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
     "parser_docling_vision_enabled": "rag_parser_docling_vision_enabled",
-    "parser_marker_enabled": "rag_parser_marker_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
-    "parser_unlimited_ocr_enabled": "rag_parser_unlimited_ocr_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
-    "parser_glm_ocr_enabled": "rag_parser_glm_ocr_enabled",
     "chunking_strategy": "rag_chunking_strategy",
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
@@ -105,12 +103,9 @@ _QUERY_FIELD_MAP: dict[str, str] = {
 # してしまうため、backend 選択を flag 有効化の意思表示として扱う。
 _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
-    "marker": "rag_parser_marker_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
-    "unlimited_ocr": "rag_parser_unlimited_ocr_enabled",
     "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
-    "glm_ocr": "rag_parser_glm_ocr_enabled",
 }
 
 
@@ -118,21 +113,49 @@ class KbAdapterConfigError(ValueError):
     """KB 構築設定がグローバル設定と整合しないときに送出する。"""
 
 
+# 削除した文書解析エンジン(#270)の有効化フラグ。保存済みの KB 構築設定・文書レシピ・
+# 取込ジョブの snapshot に残っていても読めるよう、検証前に取り除く。
+_REMOVED_PARSER_FLAG_FIELDS = frozenset(
+    f"parser_{backend}_enabled" for backend in REMOVED_PARSER_ADAPTER_BACKENDS
+)
+
+
 class KnowledgeBaseIngestionConfig(BaseModel):
     """取込時(Parser / Chunking)の KB 上書き。None はグローバル継承。"""
 
     model_config = ConfigDict(extra="ignore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_parser_engines(cls, data: object) -> object:
+        """削除済みエンジン(#270)の保存値を「global 既定の文書解析エンジンを継承」へ寄せる。
+
+        保存値は KB の ``retrieval_config``、文書・レシピの ``processing_config``、取込ジョブの
+        ``settings_overrides`` に JSON で残る。読み込みは全てこのモデルの検証を通るため、ここで
+        正規化すれば取込・画面の両方が壊れず、次回保存時に旧値は消える。文書レシピの
+        ``DocumentProcessingConfig`` は ``extra="forbid"`` なので、旧フラグも検証前に取り除く。
+        Oracle 上の JSON を書き換える migration は持たない(値の置換だけで済み、再保存で消えるため)。
+        """
+        if not isinstance(data, dict):
+            return data
+        cleaned = {
+            key: value for key, value in data.items() if key not in _REMOVED_PARSER_FLAG_FIELDS
+        }
+        backend = cleaned.get("parser_adapter_backend")
+        if (
+            isinstance(backend, str)
+            and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
+        ):
+            cleaned["parser_adapter_backend"] = None
+        return cleaned
+
     preprocess_profile: PreprocessProfile | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
     parser_docling_vision_enabled: bool | None = None
-    parser_marker_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None
-    parser_unlimited_ocr_enabled: bool | None = None
     parser_mineru_enabled: bool | None = None
     parser_dots_ocr_enabled: bool | None = None
-    parser_glm_ocr_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
     chunk_size: int | None = Field(
         default=None,

@@ -100,7 +100,6 @@ variableGroups:
     variables:
       - rag_app_auth_cookie_secure
       - rag_enable_parser_docling
-      - rag_enable_parser_marker
       - rag_enable_oci_cloud_parsers
       - rag_instance_display_name
       - rag_instance_flex_shape_ocpus
@@ -639,14 +638,6 @@ variables:
     description: "Build and start parser-docling. The Unstructured parser (parser-unstructured) is always started because it is the default document parser."
     default: true
 
-  rag_enable_parser_marker:
-    type: boolean
-    required: true
-    visible: deploy_rag
-    title: "Marker parser (CPU)"
-    description: "Build and start parser-marker. It needs more CPU and memory than the other CPU parsers."
-    default: false
-
   rag_enable_oci_cloud_parsers:
     type: boolean
     required: true
@@ -674,7 +665,7 @@ variables:
     required: true
     visible: deploy_rag
     title: "RAG Compute memory (GB)"
-    description: "The CPU document parsers (Docling / Marker) load ML models. 32 GB or more is recommended."
+    description: "The CPU document parser (Docling) loads ML models. 32 GB or more is recommended."
     default: 32
 
   rag_instance_boot_volume_size:

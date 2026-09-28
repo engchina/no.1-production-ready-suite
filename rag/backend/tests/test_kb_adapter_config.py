@@ -78,10 +78,8 @@ def test_external_parser_backend_enables_feature_flag() -> None:
     """外部 parser backend を選ぶと対応 feature flag が有効になる。"""
     for backend, flag_field in (
         ("unstructured", "rag_parser_unstructured_enabled"),
-        ("unlimited_ocr", "rag_parser_unlimited_ocr_enabled"),
         ("mineru", "rag_parser_mineru_enabled"),
         ("dots_ocr", "rag_parser_dots_ocr_enabled"),
-        ("glm_ocr", "rag_parser_glm_ocr_enabled"),
     ):
         # グローバル既定が無効でも backend 選択で有効化されることを確かめる。
         settings = get_settings().model_copy(update={flag_field: False})
@@ -112,7 +110,6 @@ def test_local_backend_does_not_enable_adapter_flags() -> None:
     config = _config(ingestion={"parser_adapter_backend": "local"})
     overrides = config.settings_overrides("ingestion")
     assert "rag_parser_docling_enabled" not in overrides
-    assert "rag_parser_marker_enabled" not in overrides
     assert "rag_parser_unstructured_enabled" not in overrides
 
 
@@ -154,12 +151,40 @@ def test_parse_is_tolerant_of_legacy_and_unknown_keys() -> None:
 def test_dump_parse_round_trip() -> None:
     """dump → parse で正規の KB 構築フィールドだけが保たれる。"""
     config = _config(
-        ingestion={"chunking_strategy": "page_level", "parser_adapter_backend": "marker"},
+        ingestion={"chunking_strategy": "page_level", "parser_adapter_backend": "docling"},
         query={"evaluation_suite": "strict_ci"},
     )
     restored = parse_adapter_config(dump_adapter_config(config))
     assert restored.ingestion == config.ingestion
     assert restored.query == KnowledgeBaseQueryConfig()
+
+
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: str) -> None:
+    """削除したエンジン(#270)が保存済み KB 構築設定に残っていても壊れず、global 既定を継承する。
+
+    backend の選択と旧 feature flag は捨て、他の上書き(分割など)は保つ。再保存で旧値は消える。
+    """
+    raw = {
+        "version": 2,
+        "ingestion": {
+            "parser_adapter_backend": removed,
+            f"parser_{removed}_enabled": True,
+            "chunking_strategy": "page_level",
+        },
+    }
+    config = parse_adapter_config(raw)
+
+    assert config.ingestion.parser_adapter_backend is None
+    assert config.ingestion.chunking_strategy == "page_level"
+    overrides = config.settings_overrides("ingestion")
+    assert "rag_parser_adapter_backend" not in overrides
+    assert not [key for key in overrides if removed in key]
+    settings = get_settings()
+    effective = resolve_effective_settings(settings, config, scope="ingestion")
+    assert effective.rag_parser_adapter_backend == settings.rag_parser_adapter_backend
+    dumped = dump_adapter_config(config)
+    assert removed not in str(dumped)
 
 
 def test_ingestion_scope_overlays_advanced_axes() -> None:

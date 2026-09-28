@@ -155,7 +155,7 @@ def test_parser_options_send_saved_image_retrieval_prompt() -> None:
         "vision_enabled": True,
         "image_retrieval_prompt": "独自 {{image_metadata}}",
     }
-    assert parser._parser_options("marker") == {}
+    assert parser._parser_options("unstructured") == {}
 
 
 async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

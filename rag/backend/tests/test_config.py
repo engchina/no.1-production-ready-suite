@@ -321,14 +321,10 @@ def test_external_gpu_parser_connection_defaults() -> None:
     """外部 GPU parser は未接続を既定とし、旧 service URL を読まない。"""
     settings = Settings()
 
-    assert settings.rag_parser_unlimited_ocr_api_host == ""
     assert settings.rag_parser_mineru_api_host == ""
     assert settings.rag_parser_dots_ocr_api_host == ""
-    assert settings.rag_parser_glm_ocr_api_host == ""
-    assert settings.rag_parser_unlimited_ocr_model == "/models/Unlimited-OCR"
     assert settings.rag_parser_mineru_language == "japan"
     assert settings.rag_parser_dots_ocr_model == "rednote-hilab/dots.mocr"
-    assert settings.rag_parser_glm_ocr_model == "ggml-org/GLM-OCR-GGUF:f16"
 
     assert Settings(rag_parser_mineru_language=" english ").rag_parser_mineru_language == "english"
     with pytest.raises(ValidationError):
@@ -404,24 +400,18 @@ def test_parser_adapter_default_is_unstructured(monkeypatch: pytest.MonkeyPatch)
     for key in (
         "RAG_PARSER_ADAPTER_BACKEND",
         "RAG_PARSER_DOCLING_ENABLED",
-        "RAG_PARSER_MARKER_ENABLED",
         "RAG_PARSER_UNSTRUCTURED_ENABLED",
-        "RAG_PARSER_UNLIMITED_OCR_ENABLED",
         "RAG_PARSER_MINERU_ENABLED",
         "RAG_PARSER_DOTS_OCR_ENABLED",
-        "RAG_PARSER_GLM_OCR_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.rag_parser_adapter_backend == "unstructured"
     assert settings.rag_parser_docling_enabled is False
-    assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is True
-    assert settings.rag_parser_unlimited_ocr_enabled is False
     assert settings.rag_parser_mineru_enabled is False
     assert settings.rag_parser_dots_ocr_enabled is False
-    assert settings.rag_parser_glm_ocr_enabled is False
     # auto(旧既定)は新既定 unstructured へ。local_partition は baseline 値 local へ。
     # local は正規化せず baseline 値として残す(runtime は ingestion で unstructured へマップ)。
     assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "unstructured"
@@ -436,26 +426,58 @@ def test_parser_adapter_default_is_unstructured(monkeypatch: pytest.MonkeyPatch)
         Settings(rag_parser_adapter_backend="llama_parse")
 
 
-def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> None:
-    """外部 parser はサービス化。backend は per-adapter extra のみ宣言し combined extra は持たない。
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr", " Marker "])
+def test_removed_parser_backends_fall_back_to_default(
+    monkeypatch: pytest.MonkeyPatch, removed: str
+) -> None:
+    """削除したエンジン(#270)が env に残っていても既定の Unstructured として扱う。"""
+    assert Settings(rag_parser_adapter_backend=removed).rag_parser_adapter_backend == (
+        "unstructured"
+    )
+    monkeypatch.setenv("RAG_PARSER_ADAPTER_BACKEND", removed)
+    assert Settings(_env_file=None).rag_parser_adapter_backend == "unstructured"
 
-    marker(pillow<11)と unstructured(pillow>=11.1)は共存不可のため、combined extra は
-    そもそも lock 不能。両 extra を uv conflicts に宣言し universal lock を成立させる。
-    """
+
+@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str) -> None:
+    """model-settings.json に削除したエンジン(#270)が残っていても読み込みで既定へ寄せる。"""
+    settings = Settings(_env_file=None, rag_parser_adapter_backend="docling")
+    config_module._load_parser_adapters(
+        settings,
+        {
+            "adapter_backend": removed,
+            f"{removed}_enabled": True,
+            f"{removed}_api_host": "https://removed.example.com",
+            f"{removed}_model": "removed-model",
+            "unstructured_enabled": True,
+        },
+        3,
+    )
+
+    assert settings.rag_parser_adapter_backend == "unstructured"
+    dumped = config_module._dump_parser_adapters(settings)
+    assert dumped["adapter_backend"] == "unstructured"
+    assert not [key for key in dumped if removed in key]
+
+
+def test_removed_parser_engine_settings_are_gone() -> None:
+    """削除したエンジン(#270)の Settings 項目・環境変数は持たない(旧名は読まない)。"""
+    names = settings_env_names(Settings)
+    for engine in ("marker", "unlimited_ocr", "glm_ocr"):
+        assert not [name for name in names if engine in name], engine
+
+
+def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> None:
+    """外部 parser はサービス化。backend は per-adapter extra のみ宣言する(combined extra なし)。"""
     pyproject = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
     )
     optional = pyproject["project"]["optional-dependencies"]
 
     assert optional["docling"] == ["docling==2.129.0"]
-    assert optional["marker"] == ["marker-pdf[full]==1.10.2"]
     assert optional["unstructured"] == ["unstructured[all-docs]==0.27.8"]
-    # 共存不可な combined extra は提供しない(サービス分離の理由)。
-    assert "parser-adapters" not in optional
-    # marker と unstructured は uv conflicts で排他宣言する。
-    conflicts = pyproject["tool"]["uv"]["conflicts"]
-    conflict_sets = [{entry["extra"] for entry in group} for group in conflicts]
-    assert {"marker", "unstructured"} in conflict_sets
+    # Marker は削除した(#270)。combined extra も提供しない(サービス分離の理由)。
+    assert set(optional) == {"docling", "unstructured"}
     # backend は共有 contract package を path 依存で取り込む。
     assert "rag-parser-core" in pyproject["project"]["dependencies"]
 

@@ -1064,16 +1064,16 @@ def test_document_ingestion_job_endpoint_queues_existing_document() -> None:
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
 
 
-def test_unlimited_ocr_failure_marks_job_failed_and_document_error(
+def test_external_ocr_failure_marks_job_failed_and_document_error(
     monkeypatch: pytest.MonkeyPatch,
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    message = "選択した文書解析サービス（Unlimited-OCR）の応答がタイムアウトしました。"
+    message = "選択した文書解析サービス（Dots.OCR）の応答がタイムアウトしました。"
 
-    class UnlimitedOcrFailure(RuntimeError):
+    class DotsOcrFailure(RuntimeError):
         safe_for_user = True
 
-    class FailingUnlimitedOcrPipeline(FakeWorkspaceIngestionPipeline):
+    class FailingDotsOcrPipeline(FakeWorkspaceIngestionPipeline):
         async def ingest(
             self,
             document_id: str,
@@ -1081,9 +1081,9 @@ def test_unlimited_ocr_failure_marks_job_failed_and_document_error(
             **_kwargs: object,
         ) -> DocumentDetail:
             await self._oracle.update_document_status(document_id, FileStatus.ERROR, message)
-            raise UnlimitedOcrFailure(message)
+            raise DotsOcrFailure(message)
 
-    monkeypatch.setattr(documents_route, "IngestionPipeline", FailingUnlimitedOcrPipeline)
+    monkeypatch.setattr(documents_route, "IngestionPipeline", FailingDotsOcrPipeline)
     document_id = _upload("scan.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")
     resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
     assert resp.status_code == 200

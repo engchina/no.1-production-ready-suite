@@ -99,7 +99,7 @@ def test_health_reports_degraded_when_runtime_health_fails() -> None:
         raise ConnectionError("vllm refused")
 
     app = create_parse_app(
-        backend="glm_ocr",
+        backend="mineru",
         import_name="pydantic",
         distribution_names=("pydantic",),
         runtime_health=fail_runtime,
@@ -107,7 +107,7 @@ def test_health_reports_degraded_when_runtime_health_fails() -> None:
     payload = TestClient(app).get("/health").json()
 
     assert payload["status"] == "degraded"
-    assert payload["backend"] == "glm_ocr"
+    assert payload["backend"] == "mineru"
     assert payload["package_version"] is not None
 
 
@@ -169,7 +169,7 @@ def test_parse_runs_external_adapter_in_worker(
     monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(service_module, "run_external_adapter", fake_run)
     app = create_parse_app(
-        backend="unlimited_ocr",
+        backend="dots_ocr",
         import_name="pydantic",
         distribution_names=("pydantic",),
     )
@@ -187,16 +187,16 @@ def test_parse_runs_external_adapter_in_worker(
 def test_parse_result_to_registry_result_preserves_fallback() -> None:
     response = ParseResponse(
         extraction=None,
-        parser_backend="marker",
-        parser_version="marker_adapter_v1",
+        parser_backend="docling",
+        parser_version="docling_adapter_v1",
         fallback_used=True,
-        template="marker_fallback",
-        warnings=["marker_adapter_failed"],
+        template="docling_fallback",
+        warnings=["docling_adapter_failed"],
     )
     result = response.to_result()
     assert result.extraction is None
     assert result.fallback_used is True
-    assert result.warnings == ("marker_adapter_failed",)
+    assert result.warnings == ("docling_adapter_failed",)
     # 往復で等価
     assert ParseResponse.from_result(result).model_dump() == response.model_dump()
 

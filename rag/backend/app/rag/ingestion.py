@@ -2423,12 +2423,9 @@ def _selected_parser_failure_message(
 def _parser_backend_label(backend: str) -> str:
     labels = {
         "docling": "Docling",
-        "marker": "Marker",
         "unstructured": "Unstructured",
-        "unlimited_ocr": "Unlimited-OCR",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
-        "glm_ocr": "GLM-OCR",
         "oci_genai_vision": "OCI Generative AI Vision",
         "oci_document_understanding": "OCI Document Understanding",
         "enterprise_ai_vlm": "OCI Generative AI Vision",
@@ -2518,12 +2515,9 @@ def _is_audio_source(source_profile: SourceProfile | None, content_type: str) ->
 def _is_external_adapter_backend(parser_backend: str) -> bool:
     return parser_backend in {
         "docling",
-        "marker",
         "unstructured",
-        "unlimited_ocr",
         "mineru",
         "dots_ocr",
-        "glm_ocr",
     }
 
 

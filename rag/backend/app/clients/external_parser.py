@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import re
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -22,7 +21,7 @@ from app.schemas.document import SourceProfile
 
 logger = logging.getLogger(__name__)
 
-ExternalParserBackend = Literal["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"]
+ExternalParserBackend = Literal["mineru", "dots_ocr"]
 ExternalParserProtocol = Literal["mineru_file_parse", "openai_chat_completions"]
 ExternalParserStatusValue = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
@@ -305,83 +304,6 @@ class ExternalParserClient:
             raise ValueError("dots output is empty")
         return elements, pages
 
-    def _parse_glm(
-        self,
-        source_bytes: bytes,
-        source_profile: SourceProfile | None,
-        content_type: str,
-        connection: ExternalParserConnection,
-    ) -> tuple[object, list[ExtractionPage]]:
-        rendered_pages = self._source_images(
-            source_bytes, source_profile, content_type, self._settings.rag_parser_glm_ocr_dpi
-        )
-        elements: list[dict[str, object]] = []
-        pages: list[ExtractionPage] = []
-        for page in rendered_pages:
-            pages.extend(_extraction_pages((page,)))
-            text = _strip_fences(
-                self._openai_chat(
-                    connection,
-                    [(page.png, page.mime_type)],
-                    "Text Recognition:",
-                    max_tokens=8192,
-                )
-            )
-            if any(char.isalnum() for char in text):
-                elements.append({"type": "text", "text": text, "page_number": page.number})
-        if not elements:
-            raise ValueError("glm output is empty")
-        return elements, pages
-
-    def _parse_unlimited(
-        self,
-        source_bytes: bytes,
-        source_profile: SourceProfile | None,
-        content_type: str,
-        connection: ExternalParserConnection,
-    ) -> tuple[object, list[ExtractionPage]]:
-        rendered_pages = self._source_images(
-            source_bytes,
-            source_profile,
-            content_type,
-            self._settings.rag_parser_unlimited_ocr_dpi,
-        )
-        batch_size = self._settings.rag_parser_unlimited_ocr_pdf_batch_size
-        elements: list[dict[str, object]] = []
-        pages: list[ExtractionPage] = []
-        for batch in batched(rendered_pages, batch_size):
-            pages.extend(_extraction_pages(batch))
-            prompt = "<image>document parsing." if len(batch) == 1 else "<image>Multi page parsing."
-            text = self._openai_chat(
-                connection,
-                [(page.png, page.mime_type) for page in batch],
-                prompt,
-                max_tokens=8192,
-                extra={
-                    "skip_special_tokens": False,
-                    "vllm_xargs": {
-                        "ngram_size": 35,
-                        "window_size": 128 if len(batch) == 1 else 1024,
-                    },
-                },
-            )
-            parts = _unlimited_pages(text)
-            if len(batch) > 1 and len(parts) != len(batch):
-                raise ValueError("unlimited page count mismatch")
-            if len(parts) == len(batch):
-                elements.extend(
-                    {"type": "text", "text": part, "page_number": page.number}
-                    for page, part in zip(batch, parts, strict=True)
-                    if part
-                )
-            elif parts:
-                elements.append(
-                    {"type": "text", "text": "\n\n".join(parts), "page_number": batch[0].number}
-                )
-        if not elements:
-            raise ValueError("unlimited output is empty")
-        return elements, pages
-
     def _source_images(
         self,
         source_bytes: bytes,
@@ -629,20 +551,6 @@ def _dots_elements(value: str, page_number: int) -> list[dict[str, object]]:
     return result
 
 
-_UNLIMITED_REF = re.compile(r"<\|ref\|>(.*?)<\|/ref\|>", re.S)
-_UNLIMITED_DET = re.compile(r"<\|det\|>.*?<\|/det\|>", re.S)
-
-
-def _unlimited_pages(value: str) -> list[str]:
-    cleaned = _UNLIMITED_REF.sub(lambda match: match.group(1), value or "")
-    cleaned = _UNLIMITED_DET.sub("", cleaned).replace("<｜end▁of▁sentence｜>", "").strip()
-    if not cleaned:
-        return []
-    if "<PAGE>" not in cleaned:
-        return [cleaned]
-    return [part.strip() for part in cleaned.split("<PAGE>") if part.strip()]
-
-
 _DOTS_PROMPT = (
     "Please output the layout information from the PDF image, including each layout "
     "element's bbox, its category, and the corresponding text content within the bbox.\n\n"
@@ -685,7 +593,7 @@ def _convert_external_output(
     )
 
 
-# ponytail: 4 実装に必要な差分だけを登録し、動的 plugin/DSL は持たない。
+# ponytail: 2 実装に必要な差分だけを登録し、動的 plugin/DSL は持たない。
 ENGINE_SPECS = {
     "mineru": ExternalParserEngineSpec(
         backend="mineru",
@@ -705,26 +613,6 @@ ENGINE_SPECS = {
         model_field="rag_parser_dots_ocr_model",
         api_key_field="rag_parser_dots_ocr_api_key",
         call=ExternalParserClient._parse_dots,
-        convert=_convert_external_output,
-    ),
-    "glm_ocr": ExternalParserEngineSpec(
-        backend="glm_ocr",
-        protocol="openai_chat_completions",
-        capabilities=("pdf", "image"),
-        endpoint_field="rag_parser_glm_ocr_api_host",
-        model_field="rag_parser_glm_ocr_model",
-        api_key_field="rag_parser_glm_ocr_api_key",
-        call=ExternalParserClient._parse_glm,
-        convert=_convert_external_output,
-    ),
-    "unlimited_ocr": ExternalParserEngineSpec(
-        backend="unlimited_ocr",
-        protocol="openai_chat_completions",
-        capabilities=("pdf", "image"),
-        endpoint_field="rag_parser_unlimited_ocr_api_host",
-        model_field="rag_parser_unlimited_ocr_model",
-        api_key_field="rag_parser_unlimited_ocr_api_key",
-        call=ExternalParserClient._parse_unlimited,
         convert=_convert_external_output,
     ),
 }

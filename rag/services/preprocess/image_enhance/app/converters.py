@@ -2,7 +2,7 @@
 
 スキャン画像・写真を OCR しやすい形へ補正する。グレースケール化 → ノイズ除去 →
 CLAHE コントラスト均一化 → 軽い傾き補正(deskew)を決定論で行い、PNG(可逆)で返す。
-後段の OCR parser(mineru / dots_ocr / glm_ocr / Enterprise AI VLM)の精度を前段で底上げする。
+後段の OCR parser(mineru / dots_ocr / Enterprise AI VLM)の精度を前段で底上げする。
 重い CV 依存(OpenCV)はこのサービスに隔離し、他 parser / backend に非干渉。
 
 画像でない・空・復号失敗のときは passthrough(変換せず原本を使う)へ縮退する。

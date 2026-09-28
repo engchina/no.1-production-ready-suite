@@ -38,14 +38,7 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
 )
 _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "docling": ("rag_parser_docling_enabled", "rag_parser_docling_vision_enabled"),
-    "marker": ("rag_parser_marker_enabled",),
     "unstructured": ("rag_parser_unstructured_enabled",),
-    "unlimited_ocr": (
-        "rag_parser_unlimited_ocr_enabled",
-        "rag_parser_unlimited_ocr_model",
-        "rag_parser_unlimited_ocr_dpi",
-        "rag_parser_unlimited_ocr_pdf_batch_size",
-    ),
     "mineru": (
         "rag_parser_mineru_enabled",
         "rag_parser_mineru_language",
@@ -54,11 +47,6 @@ _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
         "rag_parser_dots_ocr_enabled",
         "rag_parser_dots_ocr_model",
         "rag_parser_dots_ocr_dpi",
-    ),
-    "glm_ocr": (
-        "rag_parser_glm_ocr_enabled",
-        "rag_parser_glm_ocr_model",
-        "rag_parser_glm_ocr_dpi",
     ),
 }
 

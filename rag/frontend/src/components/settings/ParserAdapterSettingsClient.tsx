@@ -70,12 +70,9 @@ type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
   docling_enabled: boolean;
   docling_vision_enabled: boolean;
-  marker_enabled: boolean;
   unstructured_enabled: boolean;
-  unlimited_ocr_enabled: boolean;
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
-  glm_ocr_enabled: boolean;
   connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
 type ExternalParserConnectionForm = {
@@ -90,21 +87,13 @@ type ParserAdapterFlagField = Exclude<
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
-const EXTERNAL_BACKENDS: ExternalParserBackendName[] = [
-  "unlimited_ocr",
-  "mineru",
-  "dots_ocr",
-  "glm_ocr",
-];
+const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["mineru", "dots_ocr"];
 
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
-  marker: "marker_enabled",
   unstructured: "unstructured_enabled",
-  unlimited_ocr: "unlimited_ocr_enabled",
   mineru: "mineru_enabled",
   dots_ocr: "dots_ocr_enabled",
-  glm_ocr: "glm_ocr_enabled",
 };
 
 const SERVICE_BACKENDS: ParserServiceBackendName[] = [
@@ -116,7 +105,6 @@ const PARSER_BACKEND_SERVICE_IDS: Partial<
   Record<ParserAdapterBackendName | ParserServiceBackendName, string>
 > = {
   docling: "parser-docling",
-  marker: "parser-marker",
   unstructured: "parser-unstructured",
   oci_genai_vision: "parser-oci-genai-vision",
   oci_document_understanding: "parser-oci-document-understanding",
@@ -396,11 +384,10 @@ function OverviewCard({
             aria-label={t("settings.parserAdapters.backend")}
             className="space-y-2"
           >
+            {/* CPU / GPU / OCI の各グループは 2 エンジンなので、1 行 2 枚で横幅いっぱいに並べる
+                （下の外部 GPU 接続カードと同じ 2 列）。 */}
             {backendProfileGroups.map((group) => (
-              <div
-                key={group.profile}
-                className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-4"
-              >
+              <div key={group.profile} className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {group.backends.map((backend) => {
                   const selected = form.adapter_backend === backend;
                   const service = isServiceBackend(backend)
@@ -1148,20 +1135,15 @@ function RowCell({ label, children }: { label: string; children: ReactNode }) {
 
 function adapterLabel(adapter: ParserAdapterBackendName) {
   if (adapter === "docling") return "Docling";
-  if (adapter === "marker") return "Marker";
   if (adapter === "unstructured") return "Unstructured";
-  if (adapter === "unlimited_ocr") return "Unlimited-OCR";
   if (adapter === "mineru") return "MinerU";
-  if (adapter === "dots_ocr") return "Dots.OCR";
-  return "GLM-OCR";
+  return "Dots.OCR";
 }
 
 function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
-  if (backend === "unlimited_ocr") return "Unlimited-OCR";
   if (backend === "mineru") return "MinerU";
   if (backend === "dots_ocr") return "Dots.OCR";
-  if (backend === "glm_ocr") return "GLM-OCR";
   if (backend === "oci_genai_vision")
     return t("settings.parserAdapters.backend.oci_genai_vision");
   // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 表示用)。
@@ -1193,14 +1175,7 @@ function serviceIdForBackend(backend: ParserAdapterBackend): string | null {
 
 function serviceProfileForBackend(backend: ParserAdapterBackend): ServiceProfile | null {
   const normalized = normalizeBackend(backend);
-  if (
-    normalized === "unlimited_ocr" ||
-    normalized === "mineru" ||
-    normalized === "dots_ocr" ||
-    normalized === "glm_ocr"
-  ) {
-    return "gpu";
-  }
+  if (normalized === "mineru" || normalized === "dots_ocr") return "gpu";
   if (normalized === "oci_genai_vision" || normalized === "oci_document_understanding") {
     return "oci";
   }
@@ -1401,12 +1376,9 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     adapter_backend: normalizeBackend(settings.adapter_backend),
     docling_enabled: enabledByBackend.get("docling") ?? false,
     docling_vision_enabled: settings.docling_vision_enabled ?? false,
-    marker_enabled: enabledByBackend.get("marker") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
-    unlimited_ocr_enabled: enabledByBackend.get("unlimited_ocr") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
-    glm_ocr_enabled: enabledByBackend.get("glm_ocr") ?? false,
     connections: Object.fromEntries(
       EXTERNAL_BACKENDS.map((backend) => {
         const connection = (settings.connections ?? []).find(
@@ -1451,12 +1423,9 @@ function serializeForm(form: ParserAdapterForm) {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
     docling_vision_enabled: form.docling_vision_enabled,
-    marker_enabled: form.marker_enabled,
     unstructured_enabled: form.unstructured_enabled,
-    unlimited_ocr_enabled: form.unlimited_ocr_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
-    glm_ocr_enabled: form.glm_ocr_enabled,
     connections: form.connections,
   });
 }
@@ -1466,12 +1435,9 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
     docling_vision_enabled: form.docling_vision_enabled,
-    marker_enabled: form.marker_enabled,
     unstructured_enabled: form.unstructured_enabled,
-    unlimited_ocr_enabled: form.unlimited_ocr_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
-    glm_ocr_enabled: form.glm_ocr_enabled,
     connections: EXTERNAL_BACKENDS.map((backend) => {
       const connection = form.connections[backend];
       return {
@@ -1532,7 +1498,5 @@ function externalEndpointPlaceholder(backend: ExternalParserBackendName) {
 
 function defaultExternalModel(backend: ExternalParserBackendName) {
   if (backend === "dots_ocr") return "rednote-hilab/dots.mocr";
-  if (backend === "glm_ocr") return "ggml-org/GLM-OCR-GGUF:f16";
-  if (backend === "unlimited_ocr") return "/models/Unlimited-OCR";
   return "";
 }

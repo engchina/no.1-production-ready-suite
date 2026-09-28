@@ -239,14 +239,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == (
-        "docling",
-        "marker",
-        "unstructured",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    )
+    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured", "mineru")
     assert route_by_kind["pdf"]["attempted_order"] == ()
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["candidate_order"] == ("unstructured",)
@@ -341,10 +334,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     }
     assert trend_route_by_kind["pdf"]["candidate_order"] == [
         "docling",
-        "glm_ocr",
-        "marker",
         "mineru",
-        "unlimited_ocr",
         "unstructured",
     ]
     assert trend_route_by_kind["pdf"]["selected_backend"] == "local"
@@ -543,10 +533,10 @@ def test_file_processing_staging_trend_keeps_adapter_package_version_evidence() 
                 "passed": True,
                 "case_count": 2,
                 "blocking_failure_count": 0,
-                "passed_case_refs": ["case:contract-docling", "case:contract-marker"],
+                "passed_case_refs": ["case:contract-docling", "case:contract-unstructured"],
                 "backend_passed_case_refs": {
                     "docling": ["case:contract-docling"],
-                    "marker": ["case:contract-marker"],
+                    "unstructured": ["case:contract-unstructured"],
                 },
                 "blocking_failure_case_refs": [],
             },
@@ -559,10 +549,10 @@ def test_file_processing_staging_trend_keeps_adapter_package_version_evidence() 
                         "adapter_package_version": "2.103.0",
                     },
                     {
-                        "backend": "marker",
-                        "adapter_import_name": "marker",
-                        "adapter_distribution_name": "marker-pdf",
-                        "adapter_package_version": "1.10.2",
+                        "backend": "unstructured",
+                        "adapter_import_name": "unstructured",
+                        "adapter_distribution_name": "unstructured",
+                        "adapter_package_version": "0.27.8",
                     },
                 ]
             },
@@ -572,15 +562,15 @@ def test_file_processing_staging_trend_keeps_adapter_package_version_evidence() 
 
     assert trend["parser_adapter_contract"]["adapter_package_version_pairs"] == [
         "docling|docling|2.103.0",
-        "marker|marker-pdf|1.10.2",
+        "unstructured|unstructured|0.27.8",
     ]
     assert trend["parser_adapter_contract"]["passed_case_refs"] == [
         "case:contract-docling",
-        "case:contract-marker",
+        "case:contract-unstructured",
     ]
     assert trend["parser_adapter_contract"]["backend_passed_case_refs"] == {
         "docling": ["case:contract-docling"],
-        "marker": ["case:contract-marker"],
+        "unstructured": ["case:contract-unstructured"],
     }
     assert "raw_text" not in json.dumps(trend, ensure_ascii=False)
 
@@ -1481,7 +1471,6 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
             oracle_password="super-secret-password",
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -1504,14 +1493,7 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == [
-        "docling",
-        "marker",
-        "unstructured",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    ]
+    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured", "mineru"]
     assert route_by_kind["email"]["candidate_order"] == ["unstructured"]
     assert "super-secret-password" not in output_path.read_text(encoding="utf-8")
 
@@ -1565,14 +1547,13 @@ def test_report_payload_strict_contract_uses_explicit_adapter_settings(
     ) -> ParserAdapterCompatibilityMatrix:
         captured_settings["backend"] = settings.rag_parser_adapter_backend
         captured_settings["docling_enabled"] = settings.rag_parser_docling_enabled
-        captured_settings["marker_enabled"] = settings.rag_parser_marker_enabled
         captured_settings["unstructured_enabled"] = settings.rag_parser_unstructured_enabled
         captured_contract_args.update(kwargs)
         return ParserAdapterCompatibilityMatrix(
             passed=True,
             fixture_root=str(kwargs["fixture_root"]),
             source_kinds=("pdf", "html"),
-            backends=("docling", "marker", "unstructured"),
+            backends=("docling", "unstructured"),
             case_count=2,
             blocking_failure_count=0,
             cases=(
@@ -1637,7 +1618,6 @@ def test_report_payload_strict_contract_uses_explicit_adapter_settings(
         settings=Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
         parser_adapter_contract_strict=True,
@@ -1646,7 +1626,6 @@ def test_report_payload_strict_contract_uses_explicit_adapter_settings(
     assert captured_settings == {
         "backend": "docling",
         "docling_enabled": True,
-        "marker_enabled": True,
         "unstructured_enabled": True,
     }
     assert payload["parser_adapter_contract_mode"] == "strict"
@@ -1774,11 +1753,11 @@ def test_report_payload_source_routes_are_contract_aware(
         passed=True,
         fixture_root="/tmp/fixtures",
         source_kinds=("pdf", "office", "html", "email", "image"),
-        backends=("docling", "marker", "unstructured"),
+        backends=("docling", "unstructured"),
         case_count=5,
         blocking_failure_count=0,
         cases=(
-            _contract_passed_case("marker", "pdf"),
+            _contract_passed_case("docling", "pdf"),
             _contract_passed_case("docling", "office"),
             _contract_passed_case("docling", "html"),
             _contract_passed_case("unstructured", "email"),
@@ -1809,9 +1788,8 @@ def test_report_payload_source_routes_are_contract_aware(
         _promotion_ready_staging_report("contract-aware-route"),
         manifest=manifest,
         settings=Settings(
-            rag_parser_adapter_backend="marker",
+            rag_parser_adapter_backend="docling",
             rag_parser_docling_enabled=True,
-            rag_parser_marker_enabled=True,
             rag_parser_unstructured_enabled=True,
         ),
     )
@@ -1819,17 +1797,10 @@ def test_report_payload_source_routes_are_contract_aware(
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == (
-        "docling",
-        "marker",
-        "unstructured",
-        "unlimited_ocr",
-        "mineru",
-        "glm_ocr",
-    )
-    assert route_by_kind["pdf"]["selected_backend"] == "marker"
+    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured", "mineru")
+    assert route_by_kind["pdf"]["selected_backend"] == "docling"
     assert "selected_adapter_supported_for_source" in route_by_kind["pdf"]["reason_codes"]
-    assert route_by_kind["office"]["selected_backend"] == "local"
+    assert route_by_kind["office"]["selected_backend"] == "docling"
     assert route_by_kind["email"]["selected_backend"] == "local"
     assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == ["image"]
     assert (
@@ -1857,7 +1828,6 @@ def test_file_processing_staging_cli_strict_preflight_requires_selected_adapter(
         lambda: _complete_oci_settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -1924,7 +1894,7 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name in {"docling", "marker", "unstructured"},
+            import_name in {"docling", "unstructured"},
             "1.0.0",
             import_name,
         ),
@@ -1936,14 +1906,13 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
     ) -> ParserAdapterCompatibilityMatrix:
         captured_contract_args["backend"] = settings.rag_parser_adapter_backend
         captured_contract_args["docling_enabled"] = settings.rag_parser_docling_enabled
-        captured_contract_args["marker_enabled"] = settings.rag_parser_marker_enabled
         captured_contract_args["unstructured_enabled"] = settings.rag_parser_unstructured_enabled
         captured_contract_args.update(kwargs)
         return ParserAdapterCompatibilityMatrix(
             passed=True,
             fixture_root=str(kwargs["fixture_root"]),
             source_kinds=("pdf", "html"),
-            backends=("docling", "marker", "unstructured"),
+            backends=("docling", "unstructured"),
             case_count=2,
             blocking_failure_count=0,
             cases=(
@@ -1963,7 +1932,6 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
         Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
         manifest=manifest,
@@ -1985,7 +1953,6 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
     assert "manual.html" not in contract_text
     assert captured_contract_args["backend"] == "docling"
     assert captured_contract_args["docling_enabled"] is True
-    assert captured_contract_args["marker_enabled"] is True
     assert captured_contract_args["unstructured_enabled"] is True
     assert captured_contract_args["fixture_root"] == fixture_root
     assert captured_contract_args["require_backend_evidence"] is True
@@ -2007,7 +1974,7 @@ def test_preflight_payload_strict_blocks_schema_remap_failure(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name in {"docling", "marker", "unstructured"},
+            import_name in {"docling", "unstructured"},
             "1.0.0",
             import_name,
         ),
@@ -2043,7 +2010,6 @@ def test_preflight_payload_strict_blocks_schema_remap_failure(
         Settings(
             rag_parser_adapter_backend="docling",
             rag_parser_docling_enabled=True,
-            rag_parser_marker_enabled=True,
             rag_parser_unstructured_enabled=True,
         ),
         manifest={
@@ -2089,7 +2055,6 @@ def test_file_processing_staging_cli_stops_before_clients_when_preflight_fails(
         lambda: Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -2894,7 +2859,6 @@ def test_file_processing_staging_cli_fails_preflight_when_selected_adapter_flag_
         lambda: _complete_oci_settings(
             rag_parser_adapter_backend="docling",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )

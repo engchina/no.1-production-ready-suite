@@ -147,7 +147,6 @@ function emptyAdapterConfig() {
       preprocess_profile: null,
       parser_adapter_backend: null,
       parser_docling_enabled: null,
-      parser_marker_enabled: null,
       parser_unstructured_enabled: null,
       chunking_strategy: null,
       chunk_size: null,

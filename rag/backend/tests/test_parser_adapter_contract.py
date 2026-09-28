@@ -212,22 +212,18 @@ def test_compatibility_matrix_runs_installed_adapter_remap(
     assert "非機密 artifact" not in json.dumps(asdict(matrix), ensure_ascii=False)
 
 
-def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
+def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
     """GPU OCR adapter は backend in-process ではなく parser service runner で検証する。"""
     fixture_root = tmp_path / "fixtures"
     fixture_root.mkdir()
-    (fixture_root / "scan.pdf").write_bytes(b"%PDF-1.7 scanned")
+    (fixture_root / "scan.png").write_bytes(b"\x89PNG scanned")
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
-        lambda import_name, _distribution_names: (
-            import_name == "sglang",
-            "0.4.0" if import_name == "sglang" else None,
-            import_name if import_name == "sglang" else None,
-        ),
+        lambda *_args: (False, None, None),
     )
     calls: list[str] = []
 
@@ -241,9 +237,9 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
         fail_fast: bool = False,
     ) -> ParserRegistryResult:
         calls.append(backend)
-        assert source_bytes == b"%PDF-1.7 scanned"
-        assert source_profile.sanitized_file_name == "scan.pdf"
-        assert content_type == "application/pdf"
+        assert source_bytes == b"\x89PNG scanned"
+        assert source_profile.sanitized_file_name == "scan.png"
+        assert content_type == "image/png"
         assert fail_fast is False
         return ParserRegistryResult(
             extraction=StructuredExtraction(
@@ -252,14 +248,15 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
                     DocumentElement(
                         kind="text",
                         text="非機密 artifact には入れない本文",
-                        element_id="unlimited-ocr-el-1",
-                        source_parser="unlimited_ocr_adapter",
+                        element_id="dots-ocr-el-1",
+                        source_parser="dots_ocr_adapter",
                         page_number=1,
+                        bbox=[0.1, 0.1, 0.9, 0.2],
                     )
                 ],
             ),
-            parser_backend="unlimited_ocr",
-            parser_version="unlimited_ocr:test",
+            parser_backend="dots_ocr",
+            parser_version="dots_ocr:test",
             template="ocr_page",
         )
 
@@ -271,27 +268,27 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="unlimited_ocr",
-            rag_parser_unlimited_ocr_enabled=True,
-            rag_parser_unlimited_ocr_api_host="http://external-unlimited",
+            rag_parser_adapter_backend="dots_ocr",
+            rag_parser_dots_ocr_enabled=True,
+            rag_parser_dots_ocr_api_host="http://external-dots",
         ),
         fixture_root=fixture_root,
         fixture_specs=(
             ParserAdapterFixtureSpec(
-                source_kind="pdf",
-                file_name="scan.pdf",
-                content_type="application/pdf",
+                source_kind="image",
+                file_name="scan.png",
+                content_type="image/png",
             ),
         ),
-        backends=["unlimited_ocr"],
+        backends=["dots_ocr"],
     )
 
-    assert calls == ["unlimited_ocr"]
+    assert calls == ["dots_ocr"]
     assert matrix.passed is True
     assert matrix.cases[0].status == "passed"
 
 
-def test_compatibility_matrix_unlimited_ocr_unconfigured_connection_is_missing(
+def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -302,24 +299,20 @@ def test_compatibility_matrix_unlimited_ocr_unconfigured_connection_is_missing(
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
-        lambda import_name, _distribution_names: (
-            import_name == "sglang",
-            "0.4.0" if import_name == "sglang" else None,
-            import_name if import_name == "sglang" else None,
-        ),
+        lambda *_args: (False, None, None),
     )
-    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "sglang")
+    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "mineru")
     monkeypatch.setattr(
         parser_registry,
-        "_run_unlimited_ocr_sglang",
+        "_run_mineru",
         lambda _path: (_ for _ in ()).throw(AssertionError("in-process OCR must not run")),
     )
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="unlimited_ocr",
-            rag_parser_unlimited_ocr_enabled=True,
-            rag_parser_unlimited_ocr_api_host="",
+            rag_parser_adapter_backend="mineru",
+            rag_parser_mineru_enabled=True,
+            rag_parser_mineru_api_host="",
         ),
         fixture_root=fixture_root,
         fixture_specs=(
@@ -329,7 +322,7 @@ def test_compatibility_matrix_unlimited_ocr_unconfigured_connection_is_missing(
                 content_type="application/pdf",
             ),
         ),
-        backends=["unlimited_ocr"],
+        backends=["mineru"],
     )
 
     case = matrix.cases[0]
@@ -966,7 +959,6 @@ def test_parser_adapter_contract_cli_strict_blocks_missing_adapter(
         lambda: Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -1015,7 +1007,6 @@ def test_parser_adapter_contract_cli_strict_blocks_explicit_unrouted_backend(
         lambda: Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -1099,7 +1090,6 @@ def test_parser_adapter_contract_cli_strict_manifest_uses_real_fixtures(
         lambda: Settings(
             rag_parser_adapter_backend="local",
             rag_parser_docling_enabled=False,
-            rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
         ),
     )
@@ -1107,7 +1097,6 @@ def test_parser_adapter_contract_cli_strict_manifest_uses_real_fixtures(
     def fake_matrix(settings: Settings, **kwargs: object) -> ParserAdapterCompatibilityMatrix:
         captured["backend"] = settings.rag_parser_adapter_backend
         captured["docling_enabled"] = settings.rag_parser_docling_enabled
-        captured["marker_enabled"] = settings.rag_parser_marker_enabled
         captured["unstructured_enabled"] = settings.rag_parser_unstructured_enabled
         captured.update(kwargs)
         return ParserAdapterCompatibilityMatrix(
@@ -1146,7 +1135,6 @@ def test_parser_adapter_contract_cli_strict_manifest_uses_real_fixtures(
     assert exit_code == 0
     assert captured["backend"] == "docling"
     assert captured["docling_enabled"] is True
-    assert captured["marker_enabled"] is True
     assert captured["unstructured_enabled"] is True
     assert captured["fixture_root"] == fixture_root
     assert captured["require_backend_evidence"] is True

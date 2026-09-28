@@ -515,7 +515,7 @@ class DocumentExtractionExportFormat(StrEnum):
 
 
 class DocumentExtractionExport(BaseModel):
-    """Docling / Marker 風に extraction を非 embedding 形式で確認する view。"""
+    """Docling 風に extraction を非 embedding 形式で確認する view。"""
 
     document_id: str
     file_name: str

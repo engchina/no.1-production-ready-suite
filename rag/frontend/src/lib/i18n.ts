@@ -208,12 +208,9 @@ export const ja = {
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Unstructured へ正規化",
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
-  "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
-  "settings.parserAdapters.backend.unlimited_ocr.description": "外部 Unlimited-OCR API を使用",
   "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
-  "settings.parserAdapters.backend.glm_ocr.description": "外部 GLM-OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.oci_genai_vision.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
@@ -531,7 +528,7 @@ export const ja = {
   "settings.services.commands.description":
     "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
   "settings.services.commands.buildAll.label": "CPU サービスを事前ビルド(前処理 / Parser CPU / pipeline)",
-  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(例: GLM-OCR)",
+  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(ASR 音声文字起こし)",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
@@ -557,7 +554,7 @@ export const ja = {
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
   "settings.services.cpuNote":
-    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling / Marker は明示選択した場合のみ使用します。",
+    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling は明示選択した場合のみ使用します。",
   "settings.services.gpuNote": "GPU 構成(docker compose --profile gpu で opt-in)。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
@@ -626,7 +623,6 @@ export const ja = {
   "settings.services.item.preprocessImageEnhance": "画像補正",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
-  "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",

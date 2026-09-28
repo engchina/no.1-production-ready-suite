@@ -1,6 +1,6 @@
 """Optional parser adapter runtime readiness.
 
-Docling / Marker / Unstructured は任意依存として扱うため、flag と実際の
+Docling / Unstructured は任意依存として扱うため、flag と実際の
 package installation 状態を分けて非機密に表示する。
 """
 
@@ -25,18 +25,14 @@ logger = logging.getLogger(__name__)
 # adapter ごとの parser サービス URL を持つ Settings フィールド名。
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
-    "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
 }
 
 ParserAdapterName = Literal[
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
@@ -56,20 +52,10 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("docling",),
         install_package="docling==2.103.0",
     ),
-    "marker": ParserAdapterPackageSpec(
-        import_name="marker",
-        distribution_names=("marker-pdf", "marker"),
-        install_package="marker-pdf[full]==1.10.2",
-    ),
     "unstructured": ParserAdapterPackageSpec(
         import_name="unstructured",
         distribution_names=("unstructured",),
         install_package="unstructured[all-docs]==0.23.1",
-    ),
-    "unlimited_ocr": ParserAdapterPackageSpec(
-        import_name="external_api",
-        distribution_names=("openai_chat_completions",),
-        install_package="外部 Unlimited-OCR API",
     ),
     # 外部 native API の接続設定を実装証跡として扱う。
     "mineru": ParserAdapterPackageSpec(
@@ -83,31 +69,19 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("openai_chat_completions",),
         install_package="外部 Dots.OCR API",
     ),
-    # 外部 OpenAI 互換 API の接続設定を実装証跡として扱う。
-    "glm_ocr": ParserAdapterPackageSpec(
-        import_name="external_api",
-        distribution_names=("openai_chat_completions",),
-        install_package="外部 GLM-OCR API",
-    ),
 }
 ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
 )
 ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "local",
     "docling",
-    "marker",
     "unstructured",
-    "unlimited_ocr",
     "mineru",
     "dots_ocr",
-    "glm_ocr",
     # service 系 backend(OCI クラウドサービスを backend から直接呼ぶ)。package
     # readiness の対象外だが、選択値の正規化では受理する。enterprise_ai_vlm は
     # oci_genai_vision の後方互換エイリアス。
