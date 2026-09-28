@@ -197,8 +197,10 @@ for (const viewport of [
       timeout: 4_000,
     });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
-    // 検索ボタンがスピナーを出すため、進捗の表示は静的（動くスピナーは 1 つだけ）。
-    await expect(progress).toHaveAttribute("data-processing-activity-icon", "none");
+    // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは進捗の表示の 1 つだけ（#413）。
+    await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+    await expect(page.getByTestId("search-run-stop")).toHaveAccessibleName("停止");
+    await expect(page.getByTestId("search-run-stop")).not.toHaveAttribute("aria-busy", "true");
     await expect(progress).toHaveAttribute("data-processing-placement", "result");
     await page.screenshot({
       path: `test-results/answer-progress-search-${viewport.name}.png`,

@@ -664,3 +664,61 @@ test("DocRAG 回答ではチャットにも根拠パネルと会話から補っ�
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
 });
+
+test("送信と停止は同じボタンで、生成中の Enter では停止しない（#413）", async ({ page }) => {
+  await mockChat(page);
+  let calls = 0;
+  let aborted = 0;
+  page.on("requestfailed", (request) => {
+    if (request.url().includes("/messages/stream")) aborted += 1;
+  });
+  // 応答を返さず、生成中のままにする（mockChat より後に登録したものが優先される）。
+  await page.route("**/api/chat/conversations/*/messages/stream", () => {
+    calls += 1;
+    return new Promise<void>(() => undefined);
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("combobox", { name: "業務ビュー" }).click();
+  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await page.getByRole("button", { name: "新しい会話" }).click();
+
+  const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
+  const button = page.getByTestId("chat-run-stop");
+  await expect(button).toHaveAccessibleName("送信");
+  // 入力が空の間は送信できない（フォーカスは受ける）。
+  await expect(button).toHaveAttribute("aria-disabled", "true");
+
+  await composer.fill("経費の上限は？");
+  await expect(button).not.toHaveAttribute("aria-disabled", "true");
+  const idleBox = await button.boundingBox();
+  await button.click();
+  await expect(button).toHaveAccessibleName("停止");
+  await expect(button).toBeFocused();
+  const runningBox = await button.boundingBox();
+  expect(runningBox?.x).toBe(idleBox?.x);
+  expect(runningBox?.width).toBe(idleBox?.width);
+
+  // 生成中も次の質問を書ける。Enter では停止も送信もしない。
+  await composer.fill("次の質問");
+  await composer.press("Enter");
+  await page.waitForTimeout(300);
+  await expect(button).toHaveAccessibleName("停止");
+  await expect(composer).toBeFocused();
+  expect(calls).toBe(1);
+  expect(aborted).toBe(0);
+
+  // 停止で中断する。フォーカスはボタンに残る。
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await expect(button).toHaveAccessibleName("送信");
+  await expect(button).toBeFocused();
+  await expect.poll(() => aborted).toBe(1);
+
+  // 停止の後に再び送信できる（書いておいた次の質問）。
+  await expect(composer).toHaveValue("次の質問");
+  await button.click();
+  await expect.poll(() => calls).toBe(2);
+  await expect(button).toHaveAccessibleName("停止");
+  await expectNoPageOverflow(page);
+});

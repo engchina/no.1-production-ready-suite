@@ -19,13 +19,13 @@ import {
   Plus,
   RotateCcw,
   SendHorizontal,
-  Square,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import { RunStopButton } from "@/components/RunStopButton";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
@@ -615,7 +615,10 @@ export function ChatClient() {
       if (!controller.signal.aborted) {
         setErrorText(error instanceof ApiError ? error.messages.join(" / ") : t("chat.error.send"));
         // 質問を保存する前に失敗したら、入力を戻して送り直せるようにする。
-        if (!started && retryContent === undefined) setComposer(content);
+        // 生成中に書き始めた次の質問は上書きしない。
+        if (!started && retryContent === undefined) {
+          setComposer((current) => (current.trim() ? current : content));
+        }
       }
       setLiveTurn(null);
     } finally {
@@ -974,32 +977,26 @@ export function ChatClient() {
                   placeholder={
                     activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
                   }
-                  disabled={!activeId || sending}
+                  // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
+                  // 生成中に disabled にすると、Enter で送った直後にフォーカスが body へ外れる。
+                  disabled={!activeId}
                   className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border-control bg-surface-sunken p-2 text-sm text-fg disabled:opacity-60"
                 />
-                {sending ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
-                    onClick={stop}
-                    aria-label={t("chat.composer.stop")} icon={Square}>
-                    {t("chat.composer.stop")}
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
-                    onClick={() => void send()}
-                    disabled={
-                      !activeId ||
-                      composer.trim().length === 0 ||
-                      businessViewWithoutKnowledgeBases
-                    }
-                    aria-label={t("chat.composer.send")} icon={SendHorizontal}>
-                    {t("chat.composer.send")}
-                  </Button>
-                )}
+                {/* 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。 */}
+                <RunStopButton
+                  running={sending}
+                  onRun={() => void send()}
+                  onStop={stop}
+                  runLabel={t("chat.composer.send")}
+                  stopLabel={t("chat.composer.stop")}
+                  runIcon={SendHorizontal}
+                  runDisabled={
+                    !activeId || composer.trim().length === 0 || businessViewWithoutKnowledgeBases
+                  }
+                  size="md"
+                  className="w-full shrink-0 sm:w-auto"
+                  testId="chat-run-stop"
+                />
               </div>
               {errorText ? (
                 <p className="text-sm text-danger-fg" role="alert">

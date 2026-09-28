@@ -1617,7 +1617,7 @@ export const ja = {
   "knowledgeBases.searchTest.placeholder": "この知識ベースに質問してみる…",
   "knowledgeBases.searchTest.button": "検索テスト",
   "knowledgeBases.searchTest.searching": "検索中…",
-  "knowledgeBases.searchTest.cancel": "中止",
+  "knowledgeBases.searchTest.cancel": "停止",
   "knowledgeBases.searchTest.initialHint":
     "質問を入力すると、この知識ベースから上位の根拠チャンクを取得します。",
   "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",

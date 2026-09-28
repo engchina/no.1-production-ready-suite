@@ -55,6 +55,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { isOneOf, removeWorkspace, useWorkspaceState } from "@/lib/workspace-state";
+import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
@@ -427,42 +428,20 @@ export function SearchClient() {
                 }
               />
 
-              <div className="flex flex-col gap-2 sm:flex-row">
-                {/* 隣の lg の Button と同じ高さ（size="lg"）。 */}
-                <TextField
-                  id="search-query"
-                  label={t("nav.search")}
-                  labelHidden
-                  size="lg"
-                  value={query}
-                  onValueChange={setQuery}
-                  onKeyDown={(e) => {
-                    if (isSubmitEnter(e)) void submit();
-                  }}
-                  placeholder={t("search.placeholder")}
-                  leadingIcon={SearchIcon}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="button"
-                  icon={SearchIcon}
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    void submit();
-                  }}
-                  onClick={() => void submit()}
-                  loading={isStreaming}
-                  size="lg"
-                  className="sm:min-w-28"
-                >
-                  {t("search.button")}
-                </Button>
-                {isStreaming ? (
-                  <Button type="button" variant="secondary" size="lg" onClick={cancel} icon={X}>
-                    {t("search.cancel")}
-                  </Button>
-                ) : null}
-              </div>
+              {/* 質問欄の Enter で検索する（実行中の Enter は submit が無視し、停止しない）。
+                  検索のボタンはフォームの最後（詳細条件の下）に置く（#413）。 */}
+              <TextField
+                id="search-query"
+                label={t("nav.search")}
+                labelHidden
+                value={query}
+                onValueChange={setQuery}
+                onKeyDown={(e) => {
+                  if (isSubmitEnter(e)) void submit();
+                }}
+                placeholder={t("search.placeholder")}
+                leadingIcon={SearchIcon}
+              />
 
               <QuerySuggestions
                 businessViewId={businessViewIds[0] ?? null}
@@ -659,6 +638,20 @@ export function SearchClient() {
                 </fieldset>
                 ) : null}
               </div>
+
+              {/* フォームの操作行（buttons.md §3.1 / §5.2.1）。検索と停止は同じボタンで、実行中は同じ位置で「停止」になる。 */}
+              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center">
+                <RunStopButton
+                  running={isStreaming}
+                  onRun={() => void submit()}
+                  onStop={cancel}
+                  runLabel={t("search.button")}
+                  stopLabel={t("search.cancel")}
+                  runIcon={SearchIcon}
+                  className="w-full sm:w-auto sm:min-w-28"
+                  testId="search-run-stop"
+                />
+              </div>
             </CardContent>
           </Card>
 
@@ -819,14 +812,14 @@ function SearchRunPanel({
         </h3>
         <span className={runStatusClass(phase)}>{runStatusLabel(phase)}</span>
       </div>
-      {/* 今の工程と経過時間（#375）。検索ボタンが loading のスピナーを出すため、ここは静的な表示にする。 */}
+      {/* 今の工程と経過時間（#375）。検索のボタンは実行中に「停止」になりスピナーを出さないため、
+          動くスピナーはここの 1 つだけ（#413）。 */}
       <AnswerProgress
         active={phase === "streaming"}
         stages={run.stages}
         startedAtMs={run.startedAtMs}
         finishedAtMs={run.endedAtMs}
         finalLabel={runFinishedLabel(phase)}
-        activityIcon="none"
         testId="search-run-progress"
       />
       <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
