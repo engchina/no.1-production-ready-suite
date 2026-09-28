@@ -1430,6 +1430,46 @@ export type TextFieldProps = {
 
 ---
 
+## Tabs — 変更（#396）: ペインの中の見方の切り替え
+
+ページより小さい単位（ペイン・カードの中）で同じ対象の見方を切り替えるときも `Tabs` + `TabPanel` を使います。枠の中にボタンを並べたセグメントコントロールは作りません（理由は README §4「`Tabs`」）。`TabItem` に `disabledReason` を足しました。ほかの props・id・aria・キー操作は変えていません。
+
+```tsx
+<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+  <h3 className="text-sm font-semibold text-fg">{t("flow.preview")}</h3>
+  {/* 選んだ見方に効く操作（ダウンロード等）は見出しの行に置く */}
+</div>
+<Tabs
+  idPrefix="preview"                       // 同じ画面の別の Tabs と分ける
+  ariaLabel={t("flow.preview")}
+  className="mb-2 shrink-0"
+  value={variant}
+  onChange={(id) => setVariant(id === "prepared" ? "prepared" : "original")}
+  items={[
+    { id: "original", label: t("flow.preview.before") },
+    {
+      id: "prepared",
+      label: t("flow.preview.after"),
+      disabled: !hasPrepared,
+      disabledReason: hasPrepared ? undefined : t("flow.preview.preparedUnavailable"),
+    },
+  ]}
+/>
+<TabPanel id={variant} value={variant} idPrefix="preview" className="flex min-h-0 flex-1 flex-col">
+  <DocumentPreview … />
+</TabPanel>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 役割は `tablist` / `tab`（`aria-selected`）/ `tabpanel`。`radiogroup` / `aria-pressed` にしない | WAI-ARIA APG に segmented control のパターンは無い。見方の切り替えは Tabs パターン。`radiogroup` はフォームの値の選択、`aria-pressed` はオン / オフのトグルで、中身が入れ替わることを伝えない |
+| 表示中のパネルが 1 つでも `TabPanel` で包む（`id` と `value` に選択中の id を渡す） | `aria-controls` の参照先と、パネルの名前（`aria-labelledby` = 選んだタブ）を持たせる。中身の要素は同じ位置のままなので、切り替えで作り直されない |
+| `disabledReason` は無効のタブにだけ `title` として付ける | 無効のタブはフォーカスを受けず Tooltip を出せない。ホバーと読み上げ（説明）で理由を伝える。有効なタブには付けない |
+| 入れ子（右ペインのタブの中の形式のタブ）でもよい。`idPrefix` を分ける | 入れ子の tablist は、外側の tablist の外（外側の `tabpanel` の中）にあるので、矢印キーが干渉しない |
+
+- E2E: 1 画面に `tabpanel` が複数になる。`page.getByRole("tabpanel")` で引いていたテストは、ペイン（`getByTestId("document-inspector-pane")`）やパネルの名前（`{ name: "抽出エクスポート" }`）で絞る。
+- 単体テストは `packages/ui/tests/components.test.tsx`（役割・選択・無効の理由・キー操作）、実ブラウザは RAG の `e2e/document-workspace-file-processing.spec.ts`（「処理前/処理後と抽出エクスポートの形式は共有の Tabs で…」）。
+
 ## Disclosure — **新規** / DisclosureChevron — 変更（#397）
 
 開閉できる領域の標準形です。ネイティブの `<details>` / `<summary>` を包み、見出しの行全体を押せる領域にし、開閉の状態を右端（`plain` は見出しの直後）の `DisclosureChevron` で示します。**製品で `<details>` / `<summary>` を手書きしないでください**（adherence の lint が JSX の `<details>` を検出します）。見た目と振る舞いの決定は README §4「`Disclosure`」。
