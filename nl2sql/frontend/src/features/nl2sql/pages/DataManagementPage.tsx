@@ -36,7 +36,6 @@ import { formatDateTime } from "@/lib/format";
 import { randomUuid } from "@/lib/randomUuid";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import { toastError } from "@/lib/toast";
 import {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
@@ -567,7 +566,7 @@ export function DataManagementPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
       setDbProfileRefreshError(message);
-      toastError(message);
+      toast.error(message);
     }
   };
 

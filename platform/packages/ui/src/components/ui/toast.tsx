@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FocusEvent } from "react";
 import { createPortal } from "react-dom";
 
 import { cn } from "../../lib/utils";
@@ -24,6 +24,10 @@ export interface ToasterProps {
  * 通知を上に重ねても押せず、確認ダイアログのボタンを覆うだけになる。
  *
  * 閉じるボタンの aria ラベルは `dismissLabel` で注入（既定「閉じる」）。
+ *
+ * いずれかの通知にポインタが乗っている間、または通知の中にフォーカスがある間は、すべての通知の自動消滅を止め、
+ * 離れたら残り時間から再開する（WCAG 2.2.1 の考え方。読んでいる途中・操作しようとしている途中で消さない）。
+ * 通知ごとではなく全体を止めるのは、下の通知が消えて読んでいる通知の位置がずれないようにするため。
  */
 export function Toaster({
   dismissLabel = "閉じる",
@@ -31,7 +35,20 @@ export function Toaster({
   placement = "bottom-right",
 }: ToasterProps = {}) {
   const toasts = useToastStore((state) => state.toasts);
+  const pause = useToastStore((state) => state.pause);
+  const resume = useToastStore((state) => state.resume);
   const [mounted, setMounted] = useState(false);
+  // ホバー・フォーカス中の通知（`hover:<id>` / `focus:<id>`）。1 つでもあれば止める。
+  const engaged = useRef(new Set<string>());
+  const setEngaged = useCallback(
+    (key: string, active: boolean) => {
+      if (active) engaged.current.add(key);
+      else engaged.current.delete(key);
+      if (engaged.current.size > 0) pause();
+      else resume();
+    },
+    [pause, resume]
+  );
 
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
@@ -51,20 +68,49 @@ export function Toaster({
       }}
     >
       {toasts.map((item) => (
-        <ToastCard key={item.id} item={item} dismissLabel={dismissLabel} />
+        <ToastCard key={item.id} item={item} dismissLabel={dismissLabel} onEngage={setEngaged} />
       ))}
     </div>,
     document.body
   );
 }
 
-function ToastCard({ item, dismissLabel }: { item: ToastItem; dismissLabel: string }) {
+function ToastCard({
+  item,
+  dismissLabel,
+  onEngage,
+}: {
+  item: ToastItem;
+  dismissLabel: string;
+  onEngage: (key: string, active: boolean) => void;
+}) {
   const dismiss = useToastStore((state) => state.dismiss);
   const Icon = toneIcon[item.tone];
+  const hoverKey = `hover:${item.id}`;
+  const focusKey = `focus:${item.id}`;
+
+  // ホバー・フォーカス中に閉じられた（DOM から外れた）通知は、leave / blur が届かないため、外れたときに解除する。
+  useEffect(
+    () => () => {
+      onEngage(hoverKey, false);
+      onEngage(focusKey, false);
+    },
+    [onEngage, hoverKey, focusKey]
+  );
+
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    // 通知の中でフォーカスが移るだけなら止めたままにする。
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    onEngage(focusKey, false);
+  };
 
   return (
     <div
       role={toneRole(item.tone)}
+      onPointerEnter={() => onEngage(hoverKey, true)}
+      onPointerLeave={() => onEngage(hoverKey, false)}
+      onFocus={() => onEngage(focusKey, true)}
+      onBlur={handleBlur}
       className="animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface-raised px-3.5 py-3 shadow-[var(--shadow-toast)]"
     >
       <Icon size={16} className={cn("mt-0.5 shrink-0", toneText[item.tone])} aria-hidden />

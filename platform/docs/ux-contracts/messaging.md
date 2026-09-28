@@ -98,6 +98,7 @@
 - **配置**：画面の右下に積む。共有 UI の `<Toaster/>` を使い、重なり順は共有トークン `--z-toast`（暗幕とモーダルの下）に従う（§6）。通知が確認ボタンを覆ってはならない。`<Toaster/>` の `placement` は既定 `bottom-right`、`bottom-left` は明示した製品だけが使う。
 - **a11y**：コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない（`toast-accessibility`）。`danger` は `role="alert"`。
 - **自動で消える時間**：success / info / warning は既定 4 秒（`toast-dismiss`：3–5s）。`danger` は既定 `duration: 0`（利用者が閉じるまで残す）とし、閉じる × ボタンを必ず出す。
+- **一時停止**：通知にポインタが乗っている間と、通知の中にフォーカスがある間は、すべての通知の自動消滅を止め、離れたら残り時間から再開する（WCAG 2.2.1 の考え方。読んでいる途中・押そうとしている途中で消さない）。`action` 付きの通知は自動では消えない。これらは共有 UI の `<Toaster/>` と `toast` が持ち、製品で時間を補わない。
 - **アニメーション**：enter 200ms ease-out / exit 130ms ease-in（`exit-faster-than-enter`）。`prefers-reduced-motion` で無効にする。
 - **Undo**：削除・一括操作の成功 Toast には、できれば「元に戻す」action を付ける（`undo-support`）。
 - **終了通知**：バックグラウンド処理の終了は、終端への遷移を観測したときだけ 1 回出す。初回取得・再読込・同じ状態の再取得では出し直さない。
@@ -107,7 +108,7 @@
 toast.success(message, opts?)
 toast.info(message, opts?)
 toast.warning(message, opts?)
-toastError(message, opts?)      // = danger。固定面がない場合だけ。既定で自動では消えない
+toast.error(message, opts?)     // = danger。固定面がない場合だけ。既定で自動では消えない
 // opts: { description?: string; action?: { label; onClick }; duration?: number }
 ```
 

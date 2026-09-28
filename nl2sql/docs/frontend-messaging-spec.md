@@ -8,7 +8,7 @@
 ## 3.1 Toast（NL2SQL 固有）
 
 - **合成データ生成の終了通知**: 終端遷移を観測したときだけ、終了状態と対象表名を共通 Toast に表示する。結果画面へ遷移する action は付けず、4 秒で自動消去し、閉じるボタンも利用できる。ページ上部に終了履歴の Banner を表示せず、初回取得・再読込・同一状態の再取得では通知を再送しない。履歴と詳細はデータ管理画面で確認する。
-- `danger` の Toast は `src/lib/toast.ts` の `toastError()` を通す。`<Toaster/>` は `src/main.tsx` で一度だけ描画する。
+- `danger` の Toast は共有 UI の `toast.error()` をそのまま使う（既定で利用者が閉じるまで残る。自動消滅の時間を上書きしない）。以前の `src/lib/toast.ts` の `toastError()` は、共有 UI の既定が UX 契約に合ったため削除した（#351）。`<Toaster/>` は `src/main.tsx` で一度だけ描画する。
 
 ## 3.3 FormStatus（NL2SQL 固有）
 
@@ -33,8 +33,7 @@
 
 ```
 src/components/ui/feedback-tone.ts   FeedbackTone(4 トーン)+ アイコン/色/role マップ
-src/lib/toast.ts                     toastError() 等のアプリ側ラッパ(ストアは共有パッケージ)
-@engchina/production-ready-ui        <Toaster/> / <ConfirmProvider> / useConfirm() / <SelectField/>
+@engchina/production-ready-ui        <Toaster/> / toast / <ConfirmProvider> / useConfirm() / <SelectField/>
 src/components/ui/banner.tsx         <Banner severity title? action? onDismiss? />
 src/components/ui/field-error.tsx    <FieldError id message />
 src/components/ui/form-status.tsx    <FormStatus tone message />

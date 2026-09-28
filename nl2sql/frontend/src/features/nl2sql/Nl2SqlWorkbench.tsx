@@ -43,7 +43,6 @@ import {
 import { ApiError, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import { formatDateTime } from "@/lib/format";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
@@ -879,7 +878,7 @@ function ExecutableNl2SqlWorkbench() {
         })
       );
     } catch (err) {
-      toastError(err instanceof Error ? err.message : t("nl2sql.recommend.autoDetectFailed"));
+      toast.error(err instanceof Error ? err.message : t("nl2sql.recommend.autoDetectFailed"));
     } finally {
       setDetecting(false);
     }
@@ -895,7 +894,7 @@ function ExecutableNl2SqlWorkbench() {
       });
       if (!result.executed) {
         const message = sampleDataMutationFailureMessage(result);
-        toastError(message);
+        toast.error(message);
         setPageError({ source: "sample-import", message });
         return;
       }
@@ -905,7 +904,7 @@ function ExecutableNl2SqlWorkbench() {
       clearTrackedJob();
       await loadCatalog();
     } catch (err) {
-      toastError(err instanceof Error ? err.message : t("nl2sql.sample.importFailed"));
+      toast.error(err instanceof Error ? err.message : t("nl2sql.sample.importFailed"));
     } finally {
       setImportingSample(false);
     }

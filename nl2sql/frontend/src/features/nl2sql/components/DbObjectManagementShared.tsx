@@ -44,7 +44,6 @@ import { IdentifierText } from "@/components/IdentifierText";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { toastError } from "@/lib/toast";
 import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -1207,7 +1206,7 @@ export function DbObjectDetailPanel({
       await copyTextToClipboard(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
-      toastError(t("common.action.copyFailed"));
+      toast.error(t("common.action.copyFailed"));
     }
   };
   const detailTabs = [
@@ -1350,7 +1349,7 @@ export function DbObjectDetailPanel({
                   downloadText(`${detailQualifiedName.toLowerCase().replace(".", "_")}_ddl.sql`, detail.ddl);
                   toast.success(t("common.action.downloaded"));
                 } catch {
-                  toastError(t("common.action.downloadFailed"));
+                  toast.error(t("common.action.downloadFailed"));
                 }
               }} icon={Download}>
               <span>{t("dbAdmin.detail.download")}</span>

@@ -64,10 +64,10 @@ test("credential-missing Profile sync uses one fixed error surface and recovery 
   assert.match(profileProgressSource, /profiles\.oracle\.sync\.openDatabaseSettings/u);
   assert.doesNotMatch(
     profilePageSource,
-    /job\.status === "failed"[\s\S]{0,160}toastError\(t\("profiles\.oracle\.sync\.failed"\)\)/u,
+    /job\.status === "failed"[\s\S]{0,160}toast\.error\(t\("profiles\.oracle\.sync\.failed"\)\)/u,
   );
   assert.doesNotMatch(
     profilePageSource,
-    /toastError\(t\("profiles\.oracle\.sync\.savedButFailed"\)\)/u,
+    /toast\.error\(t\("profiles\.oracle\.sync\.savedButFailed"\)\)/u,
   );
 });

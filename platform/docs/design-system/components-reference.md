@@ -876,6 +876,51 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 
 ---
 
+## Toaster / toast / Banner — 変更（#351）
+
+一時通知（`<Toaster/>` + `toast`）の表示時間と一時停止、Banner の閉じるボタンを UX 契約 messaging §3.1 にそろえました。製品で表示時間を補ったり、`toast.error` のラッパーを作ったりしないでください。
+
+| 決めたこと | 理由 |
+|---|---|
+| 既定の表示時間は success / info / warning が 4 秒、danger（`toast.error`）が 0（利用者が閉じるまで残す）。`duration` を渡せば上書きできる | messaging §3.1。エラーは次の行動を決めるまで読めるようにする（以前は danger 8 秒・warning 6 秒で消えていた） |
+| `action` 付きの通知は自動では消えない（従来どおり） | 「元に戻す」を押す前に消さない |
+| いずれかの通知にポインタが乗っている間、または通知の中にフォーカスがある間は、**すべての**通知の自動消滅を止め、離れたら残り時間から再開する | 読んでいる・押そうとしている途中で消さない（WCAG 2.2.1 の考え方、Radix / Sonner の通例）。通知ごとに止めると、下の通知が消えて読んでいる通知の位置がずれる |
+| 残り時間は store（`useToastStore`）が持つ。`pause()` / `resume()` と `paused` を公開する | 表示の部品を作り直しても残り時間が失われない。単体テストでタイマーを検証できる |
+| ホバー・フォーカス中の通知が閉じられて DOM から外れたときは、その通知の一時停止を解除する | 外れた要素からは `pointerleave` / `blur` が届かず、止まったままになるのを防ぐ |
+| Banner の閉じる × は Toast と同じ共有 `Button`（`ghost`・`iconOnly`・`touchTarget`・`X` 16px）。色はトーンの文字色（`text-current`）、ホバーは `fg` の薄い重ね | 手書きのボタンをやめ、フォーカスリング・当たり判定（44px）・強制カラーの輪郭を共有部品にそろえる |
+
+```tsx
+// 製品のアプリの最上位で一度だけ
+<Toaster dismissLabel={t("common.close")} regionLabel={t("common.notifications")} />
+
+toast.success(t("profiles.message.saved"));                       // 4 秒
+toast.error(error instanceof ApiError ? error.message : t("…"));  // 閉じるまで残る
+toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: undo } }); // 自動では消えない
+```
+
+### toast の API
+
+```ts
+export interface ToastOptions {
+  description?: string;
+  action?: { label: string; onClick: () => void };
+  /** 自動消滅までの ms。0 で自動消滅しない。未指定はトーンの既定（danger は 0、他は 4000）。 */
+  duration?: number;
+}
+
+export declare const toast: {
+  success(message: string, options?: ToastOptions): string;
+  info(message: string, options?: ToastOptions): string;
+  warning(message: string, options?: ToastOptions): string;
+  error(message: string, options?: ToastOptions): string; // danger
+  dismiss(id: string): void;
+};
+
+// useToastStore.getState(): { toasts, paused, push, dismiss, clear, pause, resume }
+```
+
+---
+
 ## BlockedPageNotice — **新規**（#325）
 
 ページ全体が使えない（ブロック状態）ときに、業務画面の代わりに主領域の中央へ出す案内カードです。RAG と NL2SQL の DB ゲートが別々に手書きしていた見た目を `packages/ui` にまとめました（3製品の DB ゲートは `@engchina/production-ready-system-settings` の `DatabaseGate` がこれを使います）。製品で全画面の案内カードを再実装しないでください。
