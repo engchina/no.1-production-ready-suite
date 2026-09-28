@@ -1,7 +1,7 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 
 /**
- * md 未満（767px 以下）のナビのドロワー（#367。案 A・決定待ち）。
+ * md 未満（767px 以下）のナビのドロワー（#367。案 A に決定）。
  * AppShell がドロワーを持ち、Sidebar / SidebarAccountFooter は context で「ドロワーの中にいるか」を知る。
  * 製品のナビの設定（nav config）とサイドバーの折りたたみ状態（ui-store）は変えない。
  */

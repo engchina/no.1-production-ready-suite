@@ -824,7 +824,7 @@ export function AppShell({ sidebar, children, style }) {
 }
 ```
 
-### md 未満のナビのドロワー（#367。案 A、決定待ち）
+### md 未満のナビのドロワー（#367。案 A に決定）
 
 上の参照実装は md 以上の形です。`packages/ui` の `AppShell` は、md 未満（`NAV_DRAWER_QUERY` = `(max-width: 767px)`）で次の形に切り替えます。製品のコードは変えません（`sidebar` スロットの `Sidebar` をそのまま渡す）。
 
