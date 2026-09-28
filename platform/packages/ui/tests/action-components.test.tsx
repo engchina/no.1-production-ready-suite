@@ -141,6 +141,24 @@ describe("FormActionBar", () => {
     expect(without).not.toContain('aria-haspopup="menu"');
   });
 
+  it("直置きのボタンは既定で type=button、type を渡すと submit にでき、loading でもラベルを変えない", () => {
+    const html = renderToStaticMarkup(
+      <FormActionBar
+        ariaLabel="操作"
+        primaryActions={[{ id: "save", label: "保存", type: "submit", loading: true, ariaLabel: "DB 設定: 保存" }]}
+        secondaryActions={[{ id: "test", label: "接続テスト", onClick: noop }]}
+      />
+    );
+    const [save, test] = html.match(/<button\b[^>]*>/g) ?? [];
+    expect(save).toContain('type="submit"');
+    expect(save).toContain('aria-busy="true"');
+    expect(save).toContain('aria-label="DB 設定: 保存"');
+    expect(test).toContain('type="button"');
+    expect(test).toContain('data-form-action-id="test"');
+    expect(html).toContain("<span>保存</span>");
+    expect(html).not.toContain("保存中");
+  });
+
   it("entityActionToFormAction は一覧・詳細の EntityAction をそのまま移す", () => {
     const action = entityActionToFormAction({
       id: "archive",

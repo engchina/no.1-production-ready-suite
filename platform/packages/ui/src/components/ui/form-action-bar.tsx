@@ -35,6 +35,12 @@ export interface FormActionDescriptor {
   disabled?: boolean;
   ariaLabel?: string;
   testId?: string;
+  /**
+   * 直置きのボタンの type（既定 "button"）。`<form>` の中で保存を "submit" にすると、
+   * 入力欄での Enter による送信（暗黙の送信）と `onSubmit` の検証をそのまま使える。
+   * `href` を持つ操作と「その他の操作」メニューの項目では使わない。
+   */
+  type?: "button" | "submit";
 }
 
 export interface FormActionBarProps {
@@ -111,7 +117,7 @@ function VisibleAction({
 
   return (
     <Button
-      type="button"
+      type={action.type ?? "button"}
       variant={variant}
       size="lg"
       className={className}

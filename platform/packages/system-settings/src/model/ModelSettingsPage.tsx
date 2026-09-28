@@ -7,9 +7,11 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
+  FormActionBar,
   FormStatus,
   PageBody,
   RequiredBadge,
+  SecretField,
   Skeleton,
   Switch,
   TextField,
@@ -21,8 +23,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Cpu,
   Database,
-  Eye,
-  EyeOff,
   ListChecks,
   Plus,
   Save,
@@ -466,32 +466,23 @@ export function ModelSettingsPage({
                   id="enterprise-api-key"
                   label={t("settings.model.enterprise.apiKey")}
                   value={draft.enterprise_ai.api_key}
+                  onValueChange={(value) => updateEnterprise("api_key", value)}
                   visible={apiKeyVisible}
-                  disabled={draft.enterprise_ai.clear_api_key}
+                  onVisibleChange={setApiKeyVisible}
                   hasSavedSecret={draft.enterprise_ai.has_api_key}
+                  savedLabel={t("settings.model.enterprise.apiKeySaved")}
+                  notSetLabel={t("settings.model.enterprise.apiKeyNotSet")}
+                  showLabel={t("settings.model.enterprise.apiKeyShow")}
+                  hideLabel={t("settings.model.enterprise.apiKeyHide")}
                   placeholder={t("settings.model.placeholder.apiKey")}
                   helper={t("settings.model.enterprise.apiKeyHelp")}
-                  onToggleVisible={() =>
-                    setApiKeyVisible((current) => !current)
-                  }
-                  onChange={(value) => updateEnterprise("api_key", value)}
+                  clearOption={{
+                    label: t("settings.model.enterprise.clearApiKey"),
+                    checked: draft.enterprise_ai.clear_api_key,
+                    onCheckedChange: updateApiKeyClear,
+                  }}
                   className="md:col-span-2 2xl:col-span-1"
                 />
-                {draft.enterprise_ai.has_api_key ? (
-                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle md:col-span-2">
-                    <input
-                      type="checkbox"
-                      checked={draft.enterprise_ai.clear_api_key}
-                      onChange={(event) =>
-                        updateApiKeyClear(event.target.checked)
-                      }
-                      className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
-                    />
-                    <span className="text-fg">
-                      {t("settings.model.enterprise.clearApiKey")}
-                    </span>
-                  </label>
-                ) : null}
               </div>
               <ModelFormActions
                 sectionLabel={t("settings.model.enterprise.title")}
@@ -620,6 +611,7 @@ export function ModelSettingsPage({
   );
 }
 
+/** 節ごとの保存の操作行（UX 契約 buttons §5.2.1 の FormActionBar。保存は form の submit）。 */
 function ModelFormActions({
   sectionLabel,
   canSubmit,
@@ -636,26 +628,23 @@ function ModelFormActions({
   const saveLabel = t("settings.model.save");
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-      <Button
-        type="submit"
-        size="lg"
-        className="whitespace-nowrap"
-        aria-label={`${sectionLabel}: ${saveLabel}`}
-        disabled={!canSubmit || disabled}
-        loading={saving}
-        icon={Save}
-      >
-        {saveLabel}
-      </Button>
-      {errorText ? (
-        <FormStatus
-          tone="danger"
-          message={errorText}
-          className="min-w-0 flex-1"
-        />
-      ) : null}
-    </div>
+    <FormActionBar
+      ariaLabel={t("settings.model.actions.label", { section: sectionLabel })}
+      primaryActions={[
+        {
+          id: "save",
+          type: "submit",
+          label: saveLabel,
+          ariaLabel: `${sectionLabel}: ${saveLabel}`,
+          icon: Save,
+          loading: saving,
+          disabled: !canSubmit || disabled,
+        },
+      ]}
+      status={
+        errorText ? <FormStatus tone="danger" message={errorText} /> : null
+      }
+    />
   );
 }
 
@@ -950,91 +939,6 @@ function ModelTestResultPanel({
       rawError={result.raw_error}
       className={className}
     />
-  );
-}
-
-function SecretField({
-  id,
-  label,
-  value,
-  visible,
-  disabled,
-  hasSavedSecret,
-  placeholder,
-  helper,
-  className,
-  onChange,
-  onToggleVisible,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  visible: boolean;
-  disabled: boolean;
-  hasSavedSecret: boolean;
-  placeholder?: string;
-  helper?: string;
-  className?: string;
-  onChange: (value: string) => void;
-  onToggleVisible: () => void;
-}) {
-  const hintId = helper ? `${id}-hint` : undefined;
-
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
-        <label htmlFor={id} className="text-sm font-medium text-fg">
-          {label}
-        </label>
-        {hasSavedSecret ? (
-          <span className="inline-flex items-center justify-center whitespace-nowrap rounded-full border border-success-border bg-success-subtle px-2 py-0.5 text-xs font-medium text-success-fg">
-            {t("settings.model.enterprise.apiKeySaved")}
-          </span>
-        ) : (
-          <span className="rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
-            {t("settings.model.enterprise.apiKeyNotSet")}
-          </span>
-        )}
-      </div>
-      <div className="relative">
-        <input
-          id={id}
-          type={visible ? "text" : "password"}
-          value={value}
-          disabled={disabled}
-          placeholder={placeholder}
-          aria-describedby={hintId}
-          onChange={(event) => onChange(event.target.value)}
-          className="h-[44px] w-full rounded-md border border-border-control bg-surface px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-focus-ring"
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          iconOnly
-          touchTarget
-          type="button"
-          onClick={onToggleVisible}
-          disabled={disabled}
-          aria-label={
-            visible
-              ? t("settings.model.enterprise.apiKeyHide")
-              : t("settings.model.enterprise.apiKeyShow")
-          }
-          className="absolute right-0 top-0 rounded-l-none"
-        >
-          {visible ? (
-            <EyeOff size={16} aria-hidden />
-          ) : (
-            <Eye size={16} aria-hidden />
-          )}
-        </Button>
-      </div>
-      {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-          {helper}
-        </p>
-      ) : null}
-    </div>
   );
 }
 
