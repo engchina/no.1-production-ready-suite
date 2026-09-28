@@ -2031,6 +2031,7 @@ export const ja = {
   "flow.chunks.title": "Chunk / Citation",
   "flow.chunks.loading": "Chunk を読み込んでいます",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
+  "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.docragFallbackTitle": "構造認識で分割しました",
   "flow.chunks.docragFallback":
     "DocRAG 親子階層を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
@@ -2375,6 +2376,7 @@ export const ja = {
   "chat.sessions.renameEmpty": "会話名を入力してください。",
   "chat.sessions.renameError": "会話名を変更できませんでした。入力内容を確認して再試行してください。",
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
+  "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "最初のメッセージを送信して会話を始めましょう。",
   "chat.messages.error": "会話を読み込めませんでした。",
   "chat.message.you": "あなた",

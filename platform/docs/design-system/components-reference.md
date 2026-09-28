@@ -1262,7 +1262,10 @@ export interface PaginationLabels {
 - `stickyHeader`・`visibleRows`（`INFORMATION_TABLE_VISIBLE_ROWS`）・行の最小高さ（`INFORMATION_TABLE_ROW_CLASS`。`rowProps` の className と合わせる）はこの部品が付けます。
 - `resetKey` を省くと、再取得で行が変わってもページを戻しません（Agent の Run・承認の 5 秒ごとの再取得など）。行が減って範囲外になったら表示だけ末尾のページに寄せます。
 - 製品は文言だけを渡す薄いラッパーを持ちます（RAG の `components/PagedDataTable.tsx`、Agent の `components/ListViews.tsx`。Agent はページ番号を `sessionStorage` の作業状態に残す `pageKey` を足している）。
-- サーバー側のページング（offset / limit / total）は `DataTable` + `Pagination` に `offsetPagination` の結果を渡します（Agent の監査、RAG の文書一覧）。
+- サーバー側のページング（offset / limit / total）は `DataTable` + `Pagination` に `offsetPagination` の結果を渡します（Agent の監査、RAG の文書一覧・チャットの会話一覧）。
+- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、前へ戻るカーソルを画面が積み、`page`（積んだ数 + 1）・`totalPages`・`range` を `Pagination` に渡します（NL2SQL の SQL生成評価の `cursorPagination`、#403）。
+- 表ではない行リスト（カードの行・選択と連動する一覧）は `INFORMATION_LIST_SCROLL_CLASS` で 5 / 8 行の高さにし、中をスクロールします。行が表より高くても手書きの `max-h-[…]` にしません（NL2SQL の実行履歴、RAG の chunk・抽出セグメント、#403）。
+- 基準から外す一覧（選択と連動する一覧・カーソル型の「さらに読み込む」・分析の一覧の件数の切り替え）と理由は、UX 契約 `page-archetypes.md` の「一覧の型と、基準から外す例外」にあります。
 
 ---
 

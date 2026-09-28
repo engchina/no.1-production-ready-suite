@@ -30,6 +30,7 @@ import {
   ProcessingIndicator,
   Skeleton,
   TimedLoadingState,
+  INFORMATION_LIST_SCROLL_CLASS,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
 
@@ -323,7 +324,11 @@ function HistoryGrid({
                 onToggle={onSortChange}
               />
             </div>
-            <div className="max-h-[42rem] overflow-x-hidden overflow-y-auto" data-testid="history-list">
+            {/* md 未満 5 行・md 以上 8 行の高さで中を縦スクロールにする（#403。以前は手書きの 42rem）。 */}
+            <div
+              className={`overflow-x-hidden ${INFORMATION_LIST_SCROLL_CLASS}`}
+              data-testid="history-list"
+            >
               <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
                 {items.map((item) => {
                   const selected = item.id === selectedId;

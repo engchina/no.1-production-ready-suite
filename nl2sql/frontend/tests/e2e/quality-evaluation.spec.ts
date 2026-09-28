@@ -637,6 +637,82 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   );
 });
 
+test("結果明細と最近の job は、カーソル型の API を共通の Pagination で送り、読み込み中は経過時間と Skeleton を出す", async ({
+  page,
+}) => {
+  await mockQualityApi(page, { fixedStatus: "completed_with_errors", recentJobs: repeatedJobs(3) });
+  // カーソル型の API（next_cursor と total）を 10 件ずつ返す（#403）。後から登録した route が優先される。
+  const allResults = repeatedResults(23);
+  const allJobs = repeatedJobs(12);
+  const resultGate = createRequestGate();
+  const jobGate = createRequestGate();
+  const requestedResultLimits: string[] = [];
+  const cursorPage = <T,>(items: T[], url: URL) => {
+    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const offset = Number(url.searchParams.get("cursor") ?? 0);
+    const next = offset + limit;
+    return { items: items.slice(offset, next), next_cursor: next < items.length ? String(next) : null, total: items.length };
+  };
+  await page.route(`**${basePath}/job-001/results**`, async (route) => {
+    const url = new URL(route.request().url());
+    requestedResultLimits.push(url.searchParams.get("limit") ?? "");
+    await resultGate.promise;
+    return envelope(route, cursorPage(allResults, url));
+  });
+  await page.route(`**${basePath}?**`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await jobGate.promise;
+    return envelope(route, cursorPage(allJobs, new URL(route.request().url())));
+  });
+
+  await page.goto("/evaluation?job=job-001");
+
+  const recentLoading = page.getByTestId("quality-evaluation-recent-jobs-loading");
+  await expect(recentLoading).toContainText("最近の SQL生成評価 job を読み込んでいます");
+  await expect(recentLoading.getByRole("timer")).toBeVisible();
+  await expect(recentLoading.locator('[data-skeleton="list"]')).toBeVisible();
+  const resultsLoading = page.getByTestId("quality-evaluation-results-loading");
+  await expect(resultsLoading).toContainText("結果明細を読み込んでいます");
+  await expect(resultsLoading.getByRole("timer")).toBeVisible();
+  resultGate.release();
+  jobGate.release();
+  await expect(recentLoading).toHaveCount(0);
+  await expect(resultsLoading).toHaveCount(0);
+  expect(requestedResultLimits[0]).toBe("10");
+
+  const results = page.getByTestId("quality-evaluation-results-pagination");
+  await expect(results).toHaveAttribute("aria-label", "結果明細のページ切替");
+  await expect(results).toContainText("1-10 / 23 件");
+  await expect(results).toContainText("1 / 3 ページ");
+  await expect(results.getByRole("button", { name: "前へ" })).toBeDisabled();
+  await results.getByRole("button", { name: "次へ" }).click();
+  await expect(results).toContainText("11-20 / 23 件");
+  await results.getByRole("button", { name: "次へ" }).click();
+  await expect(results).toContainText("21-23 / 23 件");
+  await expect(results).toContainText("3 / 3 ページ");
+  await expect(results.getByRole("button", { name: "次へ" })).toBeDisabled();
+  await results.getByRole("button", { name: "前へ" }).click();
+  await expect(results).toContainText("11-20 / 23 件");
+  // 結果表（min-w 74rem）があっても、ページ送りはセクションの枠の中に収まる（横に押し出さない）。
+  const contained = await results.evaluate((nav) => {
+    const section = nav.closest("section")!;
+    const sectionBox = section.getBoundingClientRect();
+    const navBox = nav.getBoundingClientRect();
+    return navBox.left >= sectionBox.left - 1 && navBox.right <= sectionBox.right + 1 && section.scrollWidth <= section.clientWidth + 1;
+  });
+  expect(contained).toBe(true);
+
+  const jobs = page.getByTestId("quality-evaluation-recent-jobs-pagination");
+  await expect(jobs).toContainText("1-10 / 12 件");
+  await jobs.getByRole("button", { name: "次へ" }).click();
+  await expect(jobs).toContainText("11-12 / 12 件");
+  await expect(page.getByTestId("quality-evaluation-recent-jobs-scroll-region").locator("article")).toHaveCount(2);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+  );
+  expect(overflow).toBe(false);
+});
+
 test("desktop constrains result details and recent jobs to internal scroll regions", async ({
   page,
 }, testInfo) => {

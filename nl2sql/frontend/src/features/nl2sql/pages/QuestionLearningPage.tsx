@@ -1016,11 +1016,12 @@ function TrainingDataTable({
         ]}
         rows={visibleExamples}
         getRowKey={(example) => example.id}
-        rowProps={() => ({ className: "hover:bg-surface-hover" })}
+        rowProps={() => ({ className: `${INFORMATION_TABLE_ROW_CLASS} hover:bg-surface-hover` })}
         testId="qcm-training-data-table"
         tableClassName="w-full min-w-[62rem] table-fixed"
-        className="max-h-[42rem]"
+        // 高さは md 未満 5 行・md 以上 8 行の実測（#403。以前は手書きの 42rem）。
         stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       />
       <Pagination
         page={currentPage}

@@ -475,6 +475,29 @@ async function mockProfileApi(
   );
 }
 
+/**
+ * 一覧の高さは手書きの rem ではなく、DataTable の visibleRows（md 未満 5 行・md 以上 8 行）の実測で決まる（#403）。
+ * 行が表示行数より少なければ、その行数ぶんの高さになる。
+ */
+async function expectVisibleRowsMaxHeight(region: Locator, rows: number) {
+  await expect
+    .poll(() =>
+      region.evaluate((node, limit) => {
+        const scroller = node as HTMLElement;
+        const table = scroller.querySelector("table");
+        const dataRows = Array.from(table?.tBodies[0]?.rows ?? []).filter(
+          (row) => row.dataset.rowKind === "data"
+        );
+        const last = dataRows.slice(0, limit).at(-1);
+        if (!table || !last) return Number.NaN;
+        const chrome = scroller.offsetHeight - scroller.clientHeight;
+        const expected = Math.ceil(last.getBoundingClientRect().bottom - table.getBoundingClientRect().top + chrome);
+        return Math.abs(Number.parseFloat(getComputedStyle(scroller).maxHeight) - expected);
+      }, rows)
+    )
+    .toBeLessThanOrEqual(1);
+}
+
 async function expectNoDocumentHorizontalOverflow(page: Page) {
   const width = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -563,7 +586,6 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
 
   const listPanel = page.locator("#profile-management-panel-list");
   const profileList = page.getByTestId("profile-management-list");
-  const expectedListMaxHeight = (page.viewportSize()?.width ?? 0) >= 768 ? "427px" : "280px";
   await expect(listPanel.getByText("128 件", { exact: true })).toBeVisible();
   await expect(profileList).toHaveAttribute("role", "region");
   await expect(profileList).toHaveAttribute(
@@ -571,7 +593,7 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
     "プロファイル一覧。必要に応じて縦方向にスクロールできます。"
   );
   await expect(profileList).toHaveAttribute("tabindex", "0");
-  await expect(profileList).toHaveCSS("max-height", expectedListMaxHeight);
+  await expectVisibleRowsMaxHeight(profileList, (page.viewportSize()?.width ?? 0) >= 768 ? 8 : 5);
   await expect(page.getByText("2 / 128 件を表示")).toHaveCount(0);
   await expect(
     page.getByTestId("profile-management-load-more").getByRole("button", { name: "さらに読み込む" })
@@ -598,7 +620,7 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
   await search.fill("PROFILE_EMP");
   await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toBeVisible();
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toHaveCount(0);
-  await expect(profileList).toHaveCSS("max-height", "280px");
+  await expectVisibleRowsMaxHeight(profileList, 5);
   await expectNoDocumentHorizontalOverflow(page);
   // 区切りのない名前でも名前セルの内容が許可表の列へはみ出さない（#535）。
   const nameCellOverflow = await page.getByTestId("profile-management-grid").locator("tbody td:first-child").evaluateAll((cells) =>

@@ -1395,6 +1395,12 @@ export function useConversations(params: {
     queryFn: () => api.listConversations(params),
     enabled: params.business_view_id != null,
     retry: false,
+    // ページを送る間は前のページを出したままにする（同じ業務ビューの間だけ。#403）。
+    placeholderData: (previous, previousQuery) =>
+      (previousQuery?.queryKey[1] as { business_view_id?: string } | undefined)?.business_view_id ===
+      params.business_view_id
+        ? previous
+        : undefined,
   });
 }
 

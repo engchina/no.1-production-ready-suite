@@ -30,6 +30,7 @@ export type WorkspaceField =
   | "chat.businessViewId"
   | "chat.conversationId"
   | "chat.composer"
+  | "chat.conversationsPage"
   | "fileList.view"
   | "knowledgeBases.view"
   | "knowledgeBases.documentsPage"

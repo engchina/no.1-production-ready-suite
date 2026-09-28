@@ -14,6 +14,11 @@ import {
   BulkSelectionActions,
   ProcessingIndicator,
   RowActionMenu,
+  DEFAULT_PAGE_SIZE,
+  ListSkeleton,
+  Pagination,
+  TableSkeleton,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -43,6 +48,7 @@ import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
 import { QuestionText } from "../components/QuestionText";
 import {
+  cursorPagination,
   qualityEvaluationAttemptTimedOut,
   qualityEvaluationLastHeartbeatMs,
   qualityEvaluationLeaseExpired,
@@ -126,7 +132,7 @@ export function EvaluationPage() {
     queryKey: ["quality-evaluations", "jobs", jobCursor],
     queryFn: () =>
       apiGet<QualityEvaluationJobPage>(
-        `/api/nl2sql/quality-evaluations?limit=10${
+        `/api/nl2sql/quality-evaluations?limit=${DEFAULT_PAGE_SIZE}${
           jobCursor ? `&cursor=${encodeURIComponent(jobCursor)}` : ""
         }`
       ),
@@ -160,7 +166,7 @@ export function EvaluationPage() {
       apiGet<QualityEvaluationResultPage>(
         `/api/nl2sql/quality-evaluations/${encodeURIComponent(
           currentJobId
-        )}/results?limit=25${
+        )}/results?limit=${DEFAULT_PAGE_SIZE}${
           resultCursor ? `&cursor=${encodeURIComponent(resultCursor)}` : ""
         }`
       ),
@@ -781,14 +787,24 @@ export function EvaluationPage() {
             title={t("qualityEvaluation.details.title")}
             description={t("qualityEvaluation.details.description")}
           />
-          <div>
+          {/* グリッドの子の最小幅を 0 にし、結果表（min-w 74rem）が枠と Pagination を横へ押し出さないようにする。 */}
+          <div className="min-w-0">
             {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
               <EmptyState
                 title={t("qualityEvaluation.details.emptyTitle")}
                 hint={t("qualityEvaluation.details.emptyHint")}
               />
             ) : resultsQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} placement="result" />
+              <TimedLoadingState
+                label={t("qualityEvaluation.details.loading")}
+                operationKey={`quality-evaluation-results-${currentJobId}`}
+                placement="result"
+                framed={false}
+                testId="quality-evaluation-results-loading"
+              >
+                <TableSkeleton columns={6} className="hidden md:block" />
+                <ListSkeleton rowClassName="h-[7rem]" className="md:hidden" />
+              </TimedLoadingState>
             ) : resultsQuery.isError ? (
               <ErrorState
                 message={t("qualityEvaluation.error.load")}
@@ -802,17 +818,21 @@ export function EvaluationPage() {
             ) : (
               <>
                 <ResultTable results={resultsQuery.data.items} />
-                <Pagination
-                  canGoPrevious={resultCursorHistory.length > 0}
-                  canGoNext={Boolean(resultsQuery.data.next_cursor)}
+                <CursorPagination
+                  depth={resultCursorHistory.length}
+                  total={resultsQuery.data.total}
+                  count={resultsQuery.data.items.length}
+                  nextCursor={resultsQuery.data.next_cursor ?? null}
+                  ariaLabel={t("qualityEvaluation.pagination.resultsLabel")}
+                  testId="quality-evaluation-results-pagination"
                   onPrevious={() => {
                     const history = [...resultCursorHistory];
                     setResultCursor(history.pop() ?? null);
                     setResultCursorHistory(history);
                   }}
-                  onNext={() => {
+                  onNext={(nextCursor) => {
                     setResultCursorHistory((history) => [...history, resultCursor]);
-                    setResultCursor(resultsQuery.data?.next_cursor ?? null);
+                    setResultCursor(nextCursor);
                   }}
                 />
               </>
@@ -829,7 +849,15 @@ export function EvaluationPage() {
           />
           <div>
             {recentJobsQuery.isLoading ? (
-              <LoadingState label={t("common.loading")} placement="panel" />
+              <TimedLoadingState
+                label={t("qualityEvaluation.recent.loading")}
+                operationKey="quality-evaluation-recent-jobs"
+                placement="panel"
+                framed={false}
+                testId="quality-evaluation-recent-jobs-loading"
+              >
+                <ListSkeleton rows={5} rowClassName="h-[5.5rem]" className="max-h-[17.5rem] overflow-hidden" />
+              </TimedLoadingState>
             ) : recentJobsQuery.isError ? (
               <ErrorState
                 message={t("qualityEvaluation.error.load")}
@@ -923,18 +951,22 @@ export function EvaluationPage() {
                     ))}
                   </div>
                 )}
-                {showRecentJobsPagination ? (
-                  <Pagination
-                    canGoPrevious={jobCursorHistory.length > 0}
-                    canGoNext={Boolean(recentJobsQuery.data?.next_cursor)}
+                {showRecentJobsPagination && recentJobsQuery.data ? (
+                  <CursorPagination
+                    depth={jobCursorHistory.length}
+                    total={recentJobsQuery.data.total}
+                    count={recentJobs.length}
+                    nextCursor={recentJobsQuery.data.next_cursor ?? null}
+                    ariaLabel={t("qualityEvaluation.pagination.jobsLabel")}
+                    testId="quality-evaluation-recent-jobs-pagination"
                     onPrevious={() => {
                       const history = [...jobCursorHistory];
                       setJobCursor(history.pop() ?? null);
                       setJobCursorHistory(history);
                     }}
-                    onNext={() => {
+                    onNext={(nextCursor) => {
                       setJobCursorHistory((history) => [...history, jobCursor]);
-                      setJobCursor(recentJobsQuery.data?.next_cursor ?? null);
+                      setJobCursor(nextCursor);
                     }}
                   />
                 ) : null}
@@ -1418,42 +1450,56 @@ function VerdictBadge({
   );
 }
 
-function Pagination({
-  canGoPrevious,
-  canGoNext,
+/**
+ * カーソル型の API（next_cursor と total）のページ送りを、共通の Pagination で出す（#403）。
+ * 前へ戻るカーソルは呼び出し側が積んで持つので、移動は隣のページだけ（前へ / 次へ）。
+ */
+function CursorPagination({
+  depth,
+  total,
+  count,
+  nextCursor,
+  ariaLabel,
+  testId,
   onPrevious,
   onNext,
 }: {
-  canGoPrevious: boolean;
-  canGoNext: boolean;
+  depth: number;
+  total: number;
+  count: number;
+  nextCursor: string | null;
+  ariaLabel: string;
+  testId: string;
   onPrevious: () => void;
-  onNext: () => void;
+  onNext: (nextCursor: string) => void;
 }) {
-  if (!canGoPrevious && !canGoNext) return null;
+  const { page, totalPages, range } = cursorPagination({
+    depth,
+    limit: DEFAULT_PAGE_SIZE,
+    total,
+    count,
+    hasNext: Boolean(nextCursor),
+  });
   return (
-    <nav
-      className="mt-4 flex justify-end gap-2"
-      aria-label={t("qualityEvaluation.pagination.label")}
-    >
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={!canGoPrevious}
-        onClick={onPrevious}
-      >
-        {t("qualityEvaluation.action.previous")}
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={!canGoNext}
-        onClick={onNext}
-      >
-        {t("qualityEvaluation.action.next")}
-      </Button>
-    </nav>
+    <Pagination
+      className="mt-3"
+      page={page}
+      totalPages={totalPages}
+      onPageChange={(next) => {
+        if (next < page) onPrevious();
+        else if (next > page && nextCursor) onNext(nextCursor);
+      }}
+      summary={t("qualityEvaluation.pagination.range", {
+        start: range.start,
+        end: range.end,
+        total: range.total,
+      })}
+      pageIndicator={t("qualityEvaluation.pagination.page", { page, total: totalPages })}
+      prevLabel={t("qualityEvaluation.action.previous")}
+      nextLabel={t("qualityEvaluation.action.next")}
+      ariaLabel={ariaLabel}
+      testId={testId}
+    />
   );
 }
 

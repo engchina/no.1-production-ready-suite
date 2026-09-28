@@ -12,6 +12,11 @@ import {
   TimedLoadingState,
   Skeleton,
   ListSkeleton,
+  DEFAULT_PAGE_SIZE,
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  offsetForPage,
+  offsetPagination,
 } from "@engchina/production-ready-ui";
 import {
   Check,
@@ -25,6 +30,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import { ListPagination } from "@/components/ListPagination";
 import { RunStopButton } from "@/components/RunStopButton";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
@@ -55,6 +61,23 @@ import { cn } from "@/lib/utils";
 
 const COMPARE_MAX = 3;
 const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
+
+/** 会話一覧のページ（業務ビューごと。#403）。別の業務ビューに移ったら 1 ページ目から。 */
+interface ConversationsPage {
+  businessViewId: string | null;
+  offset: number;
+}
+
+function isConversationsPage(value: unknown): value is ConversationsPage {
+  const page = value as ConversationsPage;
+  return (
+    typeof page === "object" &&
+    page !== null &&
+    isNullableString(page.businessViewId) &&
+    Number.isInteger(page.offset) &&
+    page.offset >= 0
+  );
+}
 
 interface LiveColumn {
   model_id: string;
@@ -351,12 +374,38 @@ export function ChatClient() {
   const canOpenBusinessViews = useAuth().hasPermission(MENU_PERMISSIONS.businessViews);
   const selectedBusinessView = businessViews.find((view) => view.id === businessViewId);
   const businessViewWithoutKnowledgeBases = selectedBusinessView?.knowledge_base_count === 0;
+  // 会話一覧はサーバー側でページングする（50 件で打ち切らない。#403）。
+  // ページは作業状態として残す（workspace-state.md）。別の業務ビューに移ったら 1 ページ目から。
+  const [conversationsPage, setConversationsPage] = useWorkspaceState<ConversationsPage>(
+    "chat.conversationsPage",
+    { businessViewId, offset: 0 },
+    isConversationsPage
+  );
+  const conversationOffset =
+    conversationsPage.businessViewId === businessViewId ? conversationsPage.offset : 0;
+  const setConversationOffset = (offset: number) =>
+    setConversationsPage({ businessViewId, offset });
   const conversationsQuery = useConversations({
     business_view_id: businessViewId ?? undefined,
-    limit: 50,
-    offset: 0,
+    limit: DEFAULT_PAGE_SIZE,
+    offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
+  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。
+  const conversationsData = conversationsQuery.data;
+  const conversationsOutOfRange = Boolean(
+    conversationsData &&
+      conversationsData.offset === conversationOffset &&
+      conversationsData.items.length === 0 &&
+      conversationOffset > 0
+  );
+  const lastConversationsOffset =
+    conversationsData && conversationsData.total > 0
+      ? offsetForPage(Math.ceil(conversationsData.total / DEFAULT_PAGE_SIZE), DEFAULT_PAGE_SIZE)
+      : 0;
+  if (conversationsOutOfRange && lastConversationsOffset !== conversationOffset) {
+    setConversationOffset(lastConversationsOffset);
+  }
 
   const [activeId, setActiveId] = useWorkspaceState<string | null>(
     "chat.conversationId",
@@ -470,6 +519,8 @@ export function ChatClient() {
     }
     try {
       const created = await createConversation.mutateAsync({ business_view_id: businessViewId });
+      // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
+      setConversationOffset(0);
       setActiveId(created.id);
       setLiveTurn(null);
       focusComposer();
@@ -548,6 +599,8 @@ export function ChatClient() {
         {
           onStart: ({ user_message, columns }) => {
             started = true;
+            // 送った会話は一覧の先頭へ移るので、1 ページ目に戻して選択中の行を見せる（#403）。
+            setConversationOffset(0);
             void queryClient.invalidateQueries({ queryKey: ["conversations"] });
             const startedAtMs = Date.now();
             setLiveTurn({
@@ -761,9 +814,16 @@ export function ChatClient() {
               ) : conversations.length === 0 ? (
                 <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
               ) : (
+                <>
                 <ul
-                  className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto lg:max-h-none"
+                  // lg 未満は 5 / 8 行の高さで中をスクロールし、lg 以上は会話エリアの高さまで伸ばす（#403）。
+                  className={cn(
+                    "min-h-0 flex-1 space-y-1",
+                    INFORMATION_LIST_SCROLL_CLASS,
+                    "lg:max-h-none"
+                  )}
                   aria-label={t("chat.sessions.title")}
+                  data-testid="chat-conversation-list"
                 >
                   {conversations.map((conversation) => {
                     const title = conversation.title ?? t("chat.sessions.untitled");
@@ -828,6 +888,7 @@ export function ChatClient() {
                           <div
                             className={cn(
                               "grid grid-cols-[minmax(0,1fr)_auto] rounded-md transition-colors",
+                              INFORMATION_LIST_ROW_CLASS,
                               conversation.id === activeId
                                 ? "bg-accent-subtle text-fg"
                                 : "text-fg-muted hover:bg-surface-hover hover:text-fg"
@@ -866,6 +927,21 @@ export function ChatClient() {
                     );
                   })}
                 </ul>
+                {conversationsData ? (
+                  <ListPagination
+                    {...offsetPagination({
+                      // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
+                      offset: conversationsData.offset,
+                      limit: DEFAULT_PAGE_SIZE,
+                      total: conversationsData.total,
+                      count: conversations.length,
+                    })}
+                    onPageChange={(next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
+                    ariaLabel={t("chat.sessions.pagination")}
+                    testId="chat-conversations-pagination"
+                  />
+                ) : null}
+                </>
               )}
             </aside>
 

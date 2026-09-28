@@ -66,6 +66,8 @@ import {
   CardTitle,
   Disclosure,
   FormStatus,
+  INFORMATION_LIST_SCROLL_CLASS,
+  ListSkeleton,
   ProcessingIndicator,
   SelectField,
   type SelectFieldOption,
@@ -136,7 +138,11 @@ import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
-import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
+import {
+  nearestVerticalScrollContainer,
+  revealWithinScrollContainer,
+  scrollFocusedControlIntoView,
+} from "@/lib/focus-scroll";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useNowMs } from "@/lib/use-now-ms";
 import {
@@ -2126,7 +2132,11 @@ function IngestionSegmentsPanel({
       ) : (
       <ol
         aria-label={t("flow.segments.title")}
-        className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-surface p-2 lg:grid-cols-2"
+        data-testid="document-segment-list"
+        className={cn(
+          "mt-3 grid grid-cols-1 content-start gap-2 rounded-md border border-border bg-surface p-2 [scrollbar-gutter:stable] lg:grid-cols-2",
+          INFORMATION_LIST_SCROLL_CLASS
+        )}
       >
         {segments.map((segment) => {
           const segmentErrorMessage = visibleErrorSegmentIds.has(segment.segment_id)
@@ -2657,11 +2667,22 @@ function DocumentChunksPanel({
   onSelect: (chunk: DocumentChunkView) => void;
 }) {
   const selectedChunkRef = useRef<HTMLButtonElement | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
 
   useEffect(() => {
     if (!focusRequestKey || !selectedChunkId || !selectedChunkRef.current) return;
     scrollFocusedControlIntoView(selectedChunkRef.current, { focus: true });
   }, [focusRequestKey, selectedChunkId]);
+
+  // 一覧は 5 / 8 行の高さで中をスクロールする（xl 以上はプレビューと同じ高さのパネルがスクロールする。#403）。
+  // 要素・表セルの選択やタブの切り替えで、選ばれた chunk が見える範囲の外にあれば、
+  // そのスクロール領域の中だけを動かして見せる（ページは動かさない）。
+  // URL の指定（focusRequestKey）は上の effect がフォーカスごと動かす。再取得では動かさない。
+  useEffect(() => {
+    if (focusRequestKey || loading || !selectedChunkRef.current) return;
+    const container = nearestVerticalScrollContainer(listRef.current);
+    if (container) revealWithinScrollContainer(container, selectedChunkRef.current);
+  }, [focusRequestKey, loading, selectedChunkId]);
 
   if (loading) {
     return (
@@ -2671,7 +2692,10 @@ function DocumentChunksPanel({
         framed={false}
         testId="document-chunks-loading"
       >
-        <Skeleton className="h-80 w-full rounded-md" />
+        <ListSkeleton
+          rowClassName="h-[7rem]"
+          className={cn("overflow-hidden", INFORMATION_LIST_SCROLL_CLASS, "xl:max-h-none")}
+        />
       </TimedLoadingState>
     );
   }
@@ -2692,7 +2716,18 @@ function DocumentChunksPanel({
 
   const docragFellBack = docragChunkingFellBack(chunks);
   const list = (
-    <ol className="space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
+    <ol
+      ref={listRef}
+      aria-label={t("flow.chunks.listLabel", { count: chunks.length })}
+      data-testid="document-chunk-list"
+      className={cn(
+        "space-y-3 rounded-lg border border-border bg-surface-sunken p-3 [scrollbar-gutter:stable]",
+        INFORMATION_LIST_SCROLL_CLASS,
+        // xl 以上はプレビューの横に並び、タブのパネル（プレビューと同じ高さ）がスクロールする。
+        // 一覧にも高さを付けると、スクロールが二重になりパネルの下が空く。
+        "xl:max-h-none xl:overflow-visible"
+      )}
+    >
       {chunks.map((chunk) => {
         const selected = chunk.chunk_id === selectedChunkId;
         return (
