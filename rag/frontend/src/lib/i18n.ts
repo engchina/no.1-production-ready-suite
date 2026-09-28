@@ -59,15 +59,8 @@ export const ja = {
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
-  "settings.preview.env.title": ".env プレビュー",
-  "settings.preview.json.title": "JSON プレビュー",
-  "settings.preview.env.copy": ".env をコピー",
-  "settings.preview.json.copy": "JSON をコピー",
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
-  "settings.preview.ops.title": "運用メモ",
-  "settings.preview.secret.saved": "<保存済み secret>",
-  "settings.preview.secret.entered": "<入力済み secret>",
 
   // ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品（AUTH_MESSAGES）が持つ（#214）。
 
@@ -1099,10 +1092,14 @@ export const ja = {
 
   "settings.huggingface.subtitle":
     "parser のモデルダウンロード認証 token・ミラー endpoint を設定します。",
-  "settings.huggingface.loadError": "HuggingFace 設定の取得に失敗しました。",
+  "settings.huggingface.loading": "HuggingFace 設定を読み込んでいます",
+  "settings.huggingface.loadError":
+    "HuggingFace 設定を取得できませんでした。backend の状態を確認して再試行してください。",
   "settings.huggingface.saveError":
     "HuggingFace 設定の保存に失敗しました。入力値とサーバー側 .env の書き込み権限を確認してください。",
   "settings.huggingface.cardTitle": "HuggingFace モデルダウンロード",
+  "settings.huggingface.cardDescription":
+    "どちらも任意です。空欄なら公式 hub から token なし（匿名）でダウンロードします。",
   "settings.huggingface.field.endpoint": "ミラー endpoint(任意)",
   "settings.huggingface.placeholder.endpoint": "https://hf-mirror.com",
   "settings.huggingface.helper.endpoint":
@@ -1114,28 +1111,17 @@ export const ja = {
     "gated モデルや rate limit 緩和のための HuggingFace アクセス token。各 parser コンテナへ env で渡します。",
   "settings.huggingface.helper.tokenSaved": "token は保存済みです。変更する場合だけ入力してください。",
   "settings.huggingface.secrets.saved": "保存済み",
+  "settings.huggingface.secrets.notSet": "未設定",
   "settings.huggingface.secrets.clearToken": "保存済み token を削除する",
   "settings.huggingface.secrets.show": "token を表示",
   "settings.huggingface.secrets.hide": "token を隠す",
-  "settings.huggingface.actions.save": "保存する",
-  "settings.huggingface.actions.saving": "保存中…",
-  "settings.huggingface.actions.saved": "保存しました",
+  "settings.huggingface.actions.label": "HuggingFace 設定の操作",
+  "settings.huggingface.actions.save": "保存",
+  "settings.huggingface.actions.saved": "HuggingFace 設定を保存しました",
   "settings.huggingface.hint":
-    "保存した値は backend/.env に書き込まれ、サービス起動時に各 parser へ供給されます。既存コンテナは再作成で反映されます。",
-  "settings.huggingface.env.description": "保存される backend/.env のプレビュー(token はマスク)。",
-  "settings.huggingface.ops.description": "保存後の挙動。",
-  "settings.huggingface.ops.persist":
-    "値は backend の .env に保存します(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)。",
-  "settings.huggingface.ops.mount":
-    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。",
-  "settings.huggingface.ops.bake": "prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時 DL/認証にのみ使います。",
-  "settings.huggingface.status.title": "ダウンロード設定の状態",
-  "settings.huggingface.status.description": "現在の token / ミラーの設定状況。",
-  "settings.huggingface.status.token": "認証 token",
-  "settings.huggingface.status.tokenConfigured": "設定済み",
-  "settings.huggingface.status.tokenNotConfigured": "未設定(匿名 DL)",
-  "settings.huggingface.status.endpoint": "ミラー endpoint",
-  "settings.huggingface.status.endpointDefault": "公式 hub",
+    "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。既存のコンテナは再作成で反映されます。",
+  "settings.huggingface.hintCache":
+    "dev のモデルキャッシュは parser ごとの Docker named volume へ自動保存します。prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.database.readiness.ok": "OK",
   "settings.database.readiness.missing": "未設定",
