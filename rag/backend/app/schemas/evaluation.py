@@ -157,6 +157,9 @@ class EvaluationCaseResult(BaseModel):
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
     elapsed_ms: float
     error_type: str | None = None
+    # 時間切れになった工程（進捗の stage と同じ名前。例: agentic_planning）。
+    # 時間切れ以外は None（#383）。
+    error_stage: str | None = None
     error_message: str | None = None
 
 

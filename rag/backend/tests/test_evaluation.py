@@ -7,13 +7,19 @@ from typing import Any, cast
 import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from app.config import Settings, get_settings
+from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.main import app
 from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
 from app.rag.evaluation_adapter import resolve_evaluation_suite
-from app.rag.pipeline import NO_RESULTS_ANSWER, NO_RESULTS_WARNING
+from app.rag.pipeline import (
+    NO_RESULTS_ANSWER,
+    NO_RESULTS_WARNING,
+    SearchStageProgress,
+    SearchStageProgressCallback,
+)
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationCompareResponse,
     EvaluationExperiment,
     EvaluationMetrics,
     EvaluationRagOverrides,
@@ -42,6 +48,7 @@ class StubPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         assert trace_id
         self.requests.append(request)
@@ -348,6 +355,7 @@ class DuplicateChunkPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         return SearchResponse(
             answer="A 文書の承認条件が関連します。",
@@ -497,6 +505,7 @@ class MissPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         return SearchResponse(
             answer="関連しない回答です。",
@@ -583,6 +592,7 @@ class NoResultsPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         return SearchResponse(
             answer=NO_RESULTS_ANSWER,
@@ -759,7 +769,7 @@ async def test_evaluation_runner_records_timeout_audit(
 ) -> None:
     """評価 case timeout は error result と脱敏済み RAG 監査ログに残す。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_search_timeout_seconds", 0.001)
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 0.001)
     runner = EvaluationRunner(pipeline=SlowPipeline(), settings=settings)
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
@@ -781,7 +791,9 @@ async def test_evaluation_runner_records_timeout_audit(
     result = metrics.case_results[0]
     assert result.status == "error"
     assert result.error_type == "TimeoutError"
-    assert result.error_message == EVALUATION_CASE_ERROR_MESSAGE
+    assert result.error_message is not None
+    assert "時間切れになった工程: 検索の準備" in result.error_message
+    assert "INV-SECRET" not in result.error_message
     assert result.trace_id
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
@@ -791,6 +803,128 @@ async def test_evaluation_runner_records_timeout_audit(
     assert audit_event["error_stage"] == "timeout"
     assert audit_event["error_type"] == "TimeoutError"
     assert "INV-SECRET" not in str(audit_event)
+
+
+def _timeout_cases() -> list[EvaluationCase]:
+    return [
+        EvaluationCase(
+            id="case-slow",
+            query="遅い: 承認条件は？",
+            relevant_document_ids=["doc-1"],
+            expected_answer_keywords=["120000"],
+        ),
+        EvaluationCase(
+            id="case-fast",
+            query="承認条件は？",
+            relevant_document_ids=["doc-1"],
+            expected_answer_keywords=["120000"],
+        ),
+    ]
+
+
+async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
+    """評価の 1 ケースは、回答生成の上限（rag_answer_timeout_seconds）で打ち切る（#383）。
+
+    検索だけの上限（旧 rag_search_timeout_seconds、30 秒）では、agentic の業務ビューで LLM を
+    何度も呼ぶケースが打ち切られるため、チャット・検索の回答と同じ上限にそろえる。
+    """
+    settings = Settings(rag_answer_timeout_seconds=0.05)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(
+        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
+    )
+
+    metrics = await runner.run(cases=_timeout_cases(), top_k=5, rerank_top_n=3)
+
+    slow, fast = metrics.case_results
+    assert slow.status == "error"
+    assert slow.error_type == "TimeoutError"
+    assert slow.failure_reasons == ["case_error"]
+    # 時間切れになった工程を、工程の名前（SSE の stage と同じ）と文言の両方で残す。
+    assert slow.error_stage == "agentic_planning"
+    assert slow.error_message is not None
+    assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
+    assert "時間切れになった工程: 検索の計画" in slow.error_message
+    assert "遅い" not in slow.error_message
+    # 時間切れのケースがあっても、評価は次のケースへ進む。
+    assert fast.status == "success"
+    assert fast.error_stage is None
+    assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]
+    assert metrics.case_count == 2
+    assert metrics.error_count == 1
+    assert metrics.passed is False
+
+
+async def test_evaluation_case_within_answer_timeout_succeeds() -> None:
+    """回答生成の上限内に終わるケースは、検索だけの上限（30 秒）の長さに関係なく成功する。"""
+    settings = Settings(rag_answer_timeout_seconds=5.0)
+    pipeline = StagedSlowPipeline(sleep_seconds=0.05)
+    runner = EvaluationRunner(
+        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
+    )
+
+    metrics = await runner.run(cases=_timeout_cases(), top_k=5, rerank_top_n=3)
+
+    assert [result.status for result in metrics.case_results] == ["success", "success"]
+    assert metrics.error_count == 0
+
+
+async def test_evaluation_time_budget_stops_remaining_cases() -> None:
+    """評価全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに記録する。"""
+    settings = Settings(rag_answer_timeout_seconds=5.0)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(
+        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
+    )
+
+    metrics = await runner.run(
+        cases=_timeout_cases(), top_k=5, rerank_top_n=3, time_budget_seconds=0.05
+    )
+
+    slow, skipped = metrics.case_results
+    assert slow.status == "error"
+    assert slow.error_type == "TimeoutError"
+    assert slow.error_stage == "agentic_planning"
+    assert slow.error_message is not None
+    assert "評価全体の時間の上限に達したため" in slow.error_message
+    assert "時間切れになった工程: 検索の計画" in slow.error_message
+    assert skipped.status == "error"
+    assert skipped.error_type == "EvaluationTimeBudgetExceeded"
+    assert skipped.error_stage is None
+    assert skipped.failure_reasons == ["case_error"]
+    assert skipped.error_message is not None
+    assert "実行していません" in skipped.error_message
+    # 残りのケースは pipeline を呼ばない。
+    assert pipeline.queries == ["遅い: 承認条件は？"]
+    assert metrics.case_count == 2
+    assert metrics.error_count == 2
+    assert metrics.passed is False
+
+
+async def test_evaluation_compare_shares_time_budget_across_experiments() -> None:
+    """比較は、評価全体の上限を experiment の間で共有する（HTTP の待ちを超えない）。"""
+    settings = Settings(rag_answer_timeout_seconds=5.0)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(
+        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
+    )
+
+    comparison = await runner.compare(
+        cases=_timeout_cases(),
+        experiments=[
+            EvaluationExperiment(id="first", top_k=5, rerank_top_n=3),
+            EvaluationExperiment(id="second", top_k=5, rerank_top_n=3),
+        ],
+        time_budget_seconds=0.05,
+    )
+
+    by_id = {result.experiment.id: result for result in comparison.results}
+    assert by_id["first"].metrics.error_count == 2
+    assert [result.error_type for result in by_id["second"].metrics.case_results] == [
+        "EvaluationTimeBudgetExceeded",
+        "EvaluationTimeBudgetExceeded",
+    ]
+    assert pipeline.queries == ["遅い: 承認条件は？"]
 
 
 async def test_evaluation_runner_compares_experiments_and_ranks_best() -> None:
@@ -851,6 +985,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
             self,
             request: SearchRequest,
             trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
         ) -> SearchResponse:
             return SearchResponse(
                 answer="承認条件は 120000 円です。",
@@ -891,7 +1026,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
     runner = EvaluationRunner(
         quality_source=EmptyQualitySource(),
         settings=Settings.model_construct(
-            rag_search_timeout_seconds=30.0,
+            rag_answer_timeout_seconds=30.0,
             rag_rrf_k=60,
             rag_context_window_chars=12000,
             rag_context_neighbor_window=0,
@@ -978,6 +1113,7 @@ class PartiallyFailingPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         if "失敗" in request.query:
             raise RuntimeError("raw secret detail: INV-SECRET")
@@ -1004,10 +1140,53 @@ class SlowPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         assert trace_id
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
+
+
+class StagedSlowPipeline:
+    """「遅い」を含む質問だけ、検索の計画（agentic_planning）の工程で止まる pipeline。"""
+
+    def __init__(self, *, sleep_seconds: float) -> None:
+        self._sleep_seconds = sleep_seconds
+        self.queries: list[str] = []
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
+    ) -> SearchResponse:
+        self.queries.append(request.query)
+        if "遅い" in request.query:
+            if progress_callback is not None:
+                await progress_callback(
+                    SearchStageProgress(
+                        trace_id=trace_id or "trace",
+                        stage="agentic_planning",
+                        outcome="started",
+                        elapsed_ms=0.0,
+                        attributes={},
+                    )
+                )
+            await asyncio.sleep(self._sleep_seconds)
+        return SearchResponse(
+            answer="承認条件は 120000 円です。",
+            citations=[
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:0",
+                    text="承認条件: 120000",
+                    score=1.0,
+                )
+            ],
+            trace_id=trace_id or "trace-ok",
+            guardrail_warnings=[],
+            elapsed_ms=2.0,
+        )
 
 
 class ComparePipeline:
@@ -1017,6 +1196,7 @@ class ComparePipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         if request.mode == SearchMode.HYBRID:
             return SearchResponse(
@@ -1246,6 +1426,56 @@ def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> 
     assert "ABC-123" not in artifact_text
     assert artifacts[0]["request_summary"]["cases"][0]["query_hash"]
     assert artifacts[0]["knowledge_base_ids"] == ["kb-1"]
+
+
+def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch) -> None:
+    """評価 API は、評価全体を画面・Nginx の待ちより短い上限（600 秒）で打ち切らせる（#383）。"""
+    from app.api.routes import evaluation as evaluation_route
+
+    observed: dict[str, object] = {}
+
+    class CapturingEvaluationRunner:
+        async def run(self, **kwargs: object) -> EvaluationMetrics:
+            observed["run"] = kwargs.get("time_budget_seconds")
+            return EvaluationMetrics(
+                case_count=0,
+                evaluated_k=0,
+                precision_at_k=0.0,
+                recall_at_k=0.0,
+                mrr=0.0,
+                answer_keyword_hit_rate=0.0,
+                groundedness_pass_rate=0.0,
+                passed=True,
+            )
+
+        async def compare(self, **kwargs: object) -> EvaluationCompareResponse:
+            observed["compare"] = kwargs.get("time_budget_seconds")
+            return EvaluationCompareResponse(
+                ranking_metric="mrr", best_experiment_id=None, results=[]
+            )
+
+    class NoopOracleClient:
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            del artifact
+            return "eval-1"
+
+    monkeypatch.setattr("app.api.routes.evaluation.EvaluationRunner", CapturingEvaluationRunner)
+    monkeypatch.setattr("app.api.routes.evaluation.OracleClient", NoopOracleClient)
+    case = {"id": "case-1", "query": "承認条件は？", "relevant_document_ids": ["doc-1"]}
+
+    run_response = client.post("/api/evaluation/run", json={"cases": [case]})
+    compare_response = client.post(
+        "/api/evaluation/compare",
+        json={"cases": [case], "experiments": [{"id": "hybrid"}]},
+    )
+
+    assert run_response.status_code == 200
+    assert compare_response.status_code == 200
+    assert evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    assert observed == {
+        "run": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS,
+        "compare": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS,
+    }
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -1485,6 +1715,7 @@ class ExpandedContextPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
         return SearchResponse(
             answer="A と B と C の承認条件です。",

@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.clients.oracle import OracleClient
-from app.config import get_settings
+from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, get_settings
 from app.rag.evaluation import EvaluationRunner
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
 from app.rag.rate_limit import enforce_rate_limit
@@ -25,6 +25,14 @@ from app.schemas.search import parse_search_id_filter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+# 品質評価（golden set。`/run`・`/compare`）の全体の時間の上限（秒。#383）。評価は同期の HTTP で、
+# 1 ケースごとに回答生成（`rag_answer_timeout_seconds`）を行うため、ケース数 × 上限では画面や
+# Nginx の待ちを超える。保存済みの回答の評価（#304）と同じく、LLM 1 回の timeout の設定の上限
+# （`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）で打ち切り、上限に達した後のケースは実行せずに
+# 失敗として返す。画面の timeout（frontend の `EVALUATION_RUN_TIMEOUT_MS` = 630 秒）と Nginx の
+# 待ち時間（660 秒。`init_script.sh` が生成する設定）はこれより長くし、打ち切った結果を画面に届ける
+# （上限の後の取込品質の集計と artifact の保存は、画面との差の 30 秒に収める）。
+EVALUATION_RUN_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
 
 
 async def _resolve_evaluation_suite_name(
@@ -64,6 +72,7 @@ async def run_evaluation(
         knowledge_base_ids=request.knowledge_base_ids,
         thresholds=effective_thresholds,
         rag_overrides=request.rag_overrides,
+        time_budget_seconds=EVALUATION_RUN_TIMEOUT_SECONDS,
     )
     metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
     await _save_evaluation_artifact(
@@ -96,6 +105,7 @@ async def compare_evaluation(
         experiments=request.experiments,
         ranking_metric=request.ranking_metric,
         thresholds=effective_thresholds,
+        time_budget_seconds=EVALUATION_RUN_TIMEOUT_SECONDS,
     )
     # /run と同じく、確定した評価スイートを各 experiment の metrics に残す。
     comparison = comparison.model_copy(

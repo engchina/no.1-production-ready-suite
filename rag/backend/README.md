@@ -215,7 +215,7 @@ retrieval / rerank 後に citation が 0 件の場合は LLM を呼び出さず�
 
 検索レスポンスの `diagnostics` は、`top_k`、`rerank_top_n`、query variant 件数、retrieval/rerank/去重/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression 節約文字数、context 文字数、RRF 定数、Oracle vector target accuracy、filter key、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、no-results や評価回帰の原因調査に使います。
 
-`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒、上限 600 秒）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search` / `rag_chat_send_message`）の pipeline 実行時間を制限します（#375）。agentic の計画・multi_hop の再分解・回答の生成で LLM を複数回呼ぶため、検索だけの上限（`RAG_SEARCH_TIMEOUT_SECONDS`、既定 30 秒。品質評価の 1 ケースに使う）とは分けています。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 「追加の検索の計画」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
+`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒、上限 600 秒）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search` / `rag_chat_send_message`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。agentic の計画・multi_hop の再分解・回答の生成で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を 600 秒で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 「追加の検索の計画」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 
 回答生成後は secret leakage をブロックし、citation context との token / n-gram 重なりが少ない場合は `low_groundedness` warning を返します。warning はレスポンスと `rag_search_audit.guardrail_codes` の両方に残るため、UI と運用監視で引用確認を促せます。
 
