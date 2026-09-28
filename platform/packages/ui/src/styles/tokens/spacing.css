@@ -29,6 +29,7 @@
   --nav-item-height: 2.75rem;        /* h-11 */
   --command-button-height: 2.25rem;
   --tab-height: 2.75rem;             /* ページタブ。ナビ行と同じ高さに揃える */  /* h-9 */
+  --tab-fade-width: 2rem;            /* タブが横にスクロールするときの端のフェードの幅（#364） */
 
   /* PROPOSED — root-independent control heights (NL2SQL button spec) */
   --button-height-sm: 32px;
@@ -54,7 +55,9 @@
 
 /* タッチ端末（coarse pointer）ではボタン高さを 44px にする（WCAG 2.2 SC 2.5.5 / Apple HIG 44pt）。
    画面幅ではなく入力方式で判定する（マウスで狭いウィンドウを使う場合は密度を保つ）。
-   変数で切り替えるため、呼び出し側の h-* / min-h-* 上書きはそのまま効く。 */
+   変数で切り替えるため、呼び出し側の h-* / min-h-* 上書きはそのまま効く。
+   ToggleChip / Switch は見た目の大きさを変えず、同じ --control-height-touch で当たり判定だけを広げる
+   （structure/touch-target.css、#364）。 */
 @media (pointer: coarse) {
   :root {
     --button-height-sm: var(--control-height-touch);

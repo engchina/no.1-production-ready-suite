@@ -1,7 +1,8 @@
 import type { LucideIcon } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { nearestScrollTop } from "./select-field";
 
 export interface TabItem {
   id: string;
@@ -50,30 +51,127 @@ export function nextTabId(items: TabItem[], value: string, key: string): string 
   }
 }
 
+/** スクロールの位置の丸めの誤差（小数の px）で端のフェードがちらつかないようにする余裕。 */
+const SCROLL_EDGE_EPSILON = 1;
+
+/**
+ * 横にスクロールするタブの列で、どちらの方向に続きがあるか（その側の端をフェードする）。
+ * 入りきるときはどちらも false（フェードを出さない）。
+ */
+export function tabsScrollEdges({
+  scrollLeft,
+  clientWidth,
+  scrollWidth,
+}: {
+  scrollLeft: number;
+  clientWidth: number;
+  scrollWidth: number;
+}): { start: boolean; end: boolean } {
+  if (scrollWidth - clientWidth <= SCROLL_EDGE_EPSILON) return { start: false, end: false };
+  return {
+    start: scrollLeft > SCROLL_EDGE_EPSILON,
+    end: scrollLeft + clientWidth < scrollWidth - SCROLL_EDGE_EPSILON,
+  };
+}
+
+/**
+ * タブを見せるための scrollLeft。すでにフェードの外で見えていれば動かさない。
+ * padding はフェードの幅（scroll-padding-inline）。端のタブは 0 / 末尾まで寄せる（ブラウザが範囲に丸める）。
+ */
+export function revealTabScrollLeft({
+  scrollLeft,
+  clientWidth,
+  tabLeft,
+  tabWidth,
+  padding = 0,
+}: {
+  scrollLeft: number;
+  clientWidth: number;
+  tabLeft: number;
+  tabWidth: number;
+  padding?: number;
+}) {
+  // SelectField の一覧の縦のスクロール（nearestScrollTop）と同じ計算を横に使う。
+  return nearestScrollTop({ scrollTop: scrollLeft, viewportHeight: clientWidth, itemTop: tabLeft, itemHeight: tabWidth, padding });
+}
+
 /**
  * ビュー切替。**同じ対象の別の見方**に切り替えるときだけ使う。
  * データを絞り込むだけなら ToggleChip、別の画面に移るなら Sidebar。
  * 下線スタイル固定。PageHeader の `tabs` に渡すとヘッダー下端に吸い付く。
+ *
+ * 入りきらないときは横にスクロールし、スクロールできる方向の端だけをフェードする（`data-scroll-start` /
+ * `data-scroll-end` と structure/tabs.css、#364）。選択中のタブ（キーボード・クリック・呼び出し側の変更）は、
+ * フェードに隠れない位置までタブの列の中だけでスクロールして見せる（ページ全体はスクロールしない）。
  */
 export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", className }: TabsProps) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  const updateEdges = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const next = tabsScrollEdges(list);
+    setEdges((current) => (current.start === next.start && current.end === next.end ? current : next));
+  }, []);
+
+  const reveal = useCallback((id: string) => {
+    const list = listRef.current;
+    const tab = refs.current[id];
+    if (!list || !tab) return;
+    const scrollLeft = revealTabScrollLeft({
+      scrollLeft: list.scrollLeft,
+      clientWidth: list.clientWidth,
+      // タブの列は relative なので offsetLeft はスクロールの内容の左端からの距離になる。
+      tabLeft: tab.offsetLeft,
+      tabWidth: tab.offsetWidth,
+      padding: Number.parseFloat(window.getComputedStyle(list).scrollPaddingInlineStart) || 0,
+    });
+    if (scrollLeft !== list.scrollLeft) list.scrollLeft = scrollLeft;
+  }, []);
+
+  // 選択中のタブを見せる（初回の表示と、value が変わったとき）。scroll イベントでフェードも更新される。
+  useLayoutEffect(() => {
+    reveal(value);
+    updateEdges();
+  }, [value, reveal, updateEdges]);
+
+  // タブの列の幅（画面の resize・サイドバーの開閉）と、タブの中身（件数・ラベル）が変わったときにフェードを出し分ける。
+  useEffect(() => {
+    updateEdges();
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(list);
+    for (const tab of Array.from(list.children)) observer.observe(tab);
+    return () => observer.disconnect();
+  }, [items, updateEdges]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const next = nextTabId(items, value, event.key);
     if (next === null) return;
     event.preventDefault();
     onChange?.(next);
-    refs.current[next]?.focus();
+    // ブラウザの既定のスクロール（タブがフェードの下に残ることがある・ページまで動く）ではなく、
+    // タブの列の中だけでフェードの外まで見せる。
+    refs.current[next]?.focus({ preventScroll: true });
+    reveal(next);
   }
 
   return (
     <div
+      ref={listRef}
       role="tablist"
       aria-label={ariaLabel}
       onKeyDown={handleKeyDown}
+      onScroll={updateEdges}
+      data-scroll-start={edges.start || undefined}
+      data-scroll-end={edges.end || undefined}
       className={cn(
-        // PageHeader 内ではヘッダーの full-bleed な罫線が境界になるため自前の線を出さない
-        "flex items-stretch gap-5 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none] [header_&]:shadow-none [&::-webkit-scrollbar]:hidden",
+        // PageHeader 内ではヘッダーの full-bleed な罫線が境界になるため自前の線を出さない。
+        // スクロールバーを隠す指定・フェード・scroll-padding は pr-tabs-scroll（structure/tabs.css）が持つ。
+        "pr-tabs-scroll relative flex items-stretch gap-5 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [header_&]:shadow-none",
         className
       )}
     >
