@@ -29,6 +29,10 @@ import {
   ClearActionButton,
   ProcessingIndicator,
   ObjectActionBar,
+  TimedLoadingState,
+  TableSkeleton,
+  ListSkeleton,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -337,6 +341,7 @@ function ProfileList({
   totalCount,
   selectedProfileId,
   loading,
+  loadingIndicator = true,
   search,
   sort,
   onSearchChange,
@@ -352,6 +357,8 @@ function ProfileList({
   totalCount: number;
   selectedProfileId: string;
   loading: boolean;
+  /** 読み込み中の文言と経過時間を一覧の位置に出すか。作業領域の先頭に同じ処理の表示があるときは false。 */
+  loadingIndicator?: boolean;
   search: string;
   sort: ProfileListSortState;
   onSearchChange: (value: string) => void;
@@ -384,11 +391,19 @@ function ProfileList({
         </div>
       </div>
       {loading ? (
-        <div className="grid gap-2" data-testid="profile-list-skeleton">
-          {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="h-12 animate-pulse rounded-md bg-surface-hover" />
-          ))}
-        </div>
+        loadingIndicator ? (
+          <TimedLoadingState
+            label={t("profiles.summary.loading")}
+            operationKey="profile-list-load"
+            framed={false}
+            testId="profile-list-loading"
+          >
+            <TableSkeleton columns={3} testId="profile-list-skeleton" />
+          </TimedLoadingState>
+        ) : (
+          // 同じ読み込みの経過時間は作業領域の先頭に出ているため、ここでは形だけを出す（messaging.md §3.7）。
+          <TableSkeleton columns={3} testId="profile-list-skeleton" />
+        )
       ) : profiles.length === 0 ? (
         <EmptyState
           title={search.trim() ? t("profiles.list.noResultsTitle") : t("profiles.empty.title")}
@@ -794,11 +809,15 @@ function SchemaGroupedSelectionPanel({
         </span>
       </div>
       {loading ? (
-        <div className="grid gap-2" aria-label={t("profiles.objects.loading")}>
-          {Array.from({ length: 5 }, (_, index) => (
-            <div key={index} className="h-11 animate-pulse rounded-md bg-surface-hover" />
-          ))}
-        </div>
+        <TimedLoadingState
+          label={t("profiles.objects.loading")}
+          operationKey={`${dataTestId}-load`}
+          framed={false}
+          className="content-start"
+          testId={`${dataTestId}-loading`}
+        >
+          <ListSkeleton rows={5} rowClassName="h-11" />
+        </TimedLoadingState>
       ) : groups.length === 0 ? (
         <EmptyState title={emptyTitle} hint={emptyHint} />
       ) : (
@@ -2163,6 +2182,7 @@ export function ProfileManagementPage() {
                 totalCount={profileTotal}
                 selectedProfileId={selectedProfileId}
                 loading={!profilesLoaded || (loading === "load" && profiles.length === 0)}
+                loadingIndicator={!showProfileWorkspaceProcessing}
                 search={profileSearch}
                 sort={profileSort}
                 onSearchChange={setProfileSearch}
@@ -2197,15 +2217,14 @@ export function ProfileManagementPage() {
                   onRetry={() => void profileDetailQuery.refetch()}
                 />
               ) : (
-                <div
-                  className="grid gap-2"
-                  data-testid="profile-editor-skeleton"
-                  aria-label={t("profiles.detail.loading")}
+                <TimedLoadingState
+                  label={t("profiles.detail.loading")}
+                  operationKey="profile-detail-load"
+                  framed={false}
+                  testId="profile-editor-loading"
                 >
-                  {Array.from({ length: 6 }, (_, index) => (
-                    <div key={index} className="h-12 animate-pulse rounded-md bg-surface-hover" />
-                  ))}
-                </div>
+                  <FormSkeleton fields={5} testId="profile-editor-skeleton" />
+                </TimedLoadingState>
               )}
             </DbObjectManagementPanelShell>
           </>

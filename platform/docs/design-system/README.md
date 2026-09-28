@@ -376,6 +376,13 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 見出しセルは折り返さない。並べ替えボタンの高さは `--button-height-sm`（タッチ端末 44px）
 - 一覧用の optional props（platform #56）: `stickyHeader`、`visibleRows`（表頭 + 先頭 N 行の実測高さで内部スクロール）、`scrollAriaLabel`（キーボードでスクロールできる region）、`selectedRowKey` / `isRowSelected`、`rowProps`、`renderRowDetail`、列の `rowHeader`。詳細は `components-reference.md`。**アプリで `<table>` を手書きしない**（例外は、元の文書の表を再現して編集する見出しなしのグリッドだけ。#129）
 
+### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
+
+- 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
+- `Skeleton` の見た目は 1 つ（`SKELETON_CLASS`: `--color-surface-hover` の地、`prefers-reduced-motion` で点滅しない）。形のある `TableSkeleton` / `ListSkeleton` / `FormSkeleton` を `TimedLoadingState` の子に置き、読み込み後の寸法を予約する
+- ページングは共通の `Pagination` / `usePagination`（10 件）。サーバー側は `offsetPagination` / `offsetForPage`、ページ番号の保持は `usePagination` の `page` / `onPageChange` / `resetKey`
+- API と標準の組み合わせは `components-reference.md`「読み込み中と一覧の表示密度」
+
 ### `AppShell`（変更）
 
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
@@ -558,7 +565,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**25点あります。**
+QA に事前共有してください。**28点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -587,6 +594,9 @@ QA に事前共有してください。**25点あります。**
 | 23 | **タッチ端末でチップとスイッチの当たり判定が広がる** | `ToggleChip`（約 26px）・`Switch`（24px）の当たり判定 = 見た目 → タッチ端末（`pointer: coarse`）でだけ 44px 以上。見た目の大きさとマウス環境は変わらない | Apple HIG 44pt / WCAG 2.5.5。Button と同じ `--control-height-touch`。見た目の外側を押しても切り替わる（§4「タッチ端末の当たり判定」、#364） |
 | 24 | **入りきらないタブの端がフェードする** | 横にスクロールしても手がかりなし → スクロールできる方向の端だけを透かす（2rem）。キーボードで選んだタブはフェードの外までスクロール | 375px などで続きのタブがあることを見せる。強制カラーモードではフェードの代わりに細いスクロールバー（§4「Tabs」、#364） |
 | 25 | **アイコンだけのボタンに説明の吹き出しが出る** | `iconOnly` の名前は `aria-label`（読み上げだけ）か HTML の `title`（マウスで長く止めたときだけ）→ ホバー（400ms）とキーボードのフォーカスで、`aria-label` と同じ文言の暗い吹き出しをボタンの上（入らなければ下）に出す。Escape で閉じる。タッチ端末では出さない。RAG のプレビューのツールバー・NL2SQL のグラフ操作などの `title` は `tooltip` に置き換えた | アイコンだけのボタンの名前を、キーボード・マウスのどちらでも目で確かめられるようにする（§4「`Tooltip`」、#372） |
+| 26 | **読み込み中の Skeleton の見た目が 1 つになり、経過時間が付く** | 共有 `Skeleton` は `bg-border/60`、DataTable の読込行と NL2SQL の画面は `bg-surface-hover` と混在し、`prefers-reduced-motion` で点滅が止まらない部品があった。RAG の設定・一覧・文書詳細は塊やテキストだけ → すべて `--color-surface-hover` の地で reduced-motion では点滅しない。読み込み中は `TimedLoadingState`（「〜を読み込んでいます」と経過時間）+ 形のある `TableSkeleton` / `ListSkeleton` / `FormSkeleton`。`DataTable` の `loading` は `visibleRows` の行数で高さを予約 | UX 契約 messaging §3.6 / §3.7 を 3 製品でそろえる（#265。#338 から移した形のある Skeleton） |
+| 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・業務ビューは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。承認済み FAQ・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
+| 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
 
 ### API の非互換
 

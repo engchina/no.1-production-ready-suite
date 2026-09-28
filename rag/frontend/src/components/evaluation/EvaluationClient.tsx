@@ -9,6 +9,8 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   SelectField,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -26,6 +28,7 @@ import {
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { PagedDataTable } from "@/components/PagedDataTable";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
@@ -675,7 +678,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
       <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-fg">
         {t("evaluation.cases")}
       </h3>
-      <DataTable<EvaluationCaseResult>
+      <PagedDataTable<EvaluationCaseResult>
         columns={[
           {
             key: "case_id",
@@ -729,8 +732,10 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         ]}
         rows={metrics.case_results}
         getRowKey={(result) => result.case_id}
-        stickyHeader
-        className="max-h-[34rem] overflow-auto [scrollbar-gutter:stable]"
+        resetKey={metrics}
+        scrollAriaLabel={t("evaluation.case.scrollLabel")}
+        scrollTestId="evaluation-case-scroll-region"
+        paginationTestId="evaluation-case-pagination"
         tableClassName="w-full min-w-[680px] text-sm"
       />
     </section>
@@ -803,6 +808,10 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
         ]}
         rows={comparison.results}
         getRowKey={(result) => result.experiment.id}
+        rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        scrollAriaLabel={t("evaluation.compare.scrollLabel")}
         className="[contain:paint]"
         tableClassName="w-full min-w-[640px] text-sm"
       />

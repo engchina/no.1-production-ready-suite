@@ -12,6 +12,8 @@ import {
   FormStatus,
   Skeleton,
   Switch,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useMemo, useState, type ReactNode } from "react";
 import {
@@ -145,8 +147,15 @@ export function ParserAdapterSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-40 w-full rounded-lg" />
-        <Skeleton className="h-72 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-parser-adapters-load"
+          placement="page"
+          testId="settings-parser-adapters-loading"
+        >
+          <FormSkeleton fields={2} />
+          <FormSkeleton fields={5} />
+        </TimedLoadingState>
       </PageBody>
     );
   }

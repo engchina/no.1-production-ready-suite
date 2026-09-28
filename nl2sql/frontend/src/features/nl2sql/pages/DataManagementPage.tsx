@@ -22,6 +22,8 @@ import {
   ProcessingIndicator,
   ObjectActionBar,
   type EntityAction,
+  INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
+  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -36,10 +38,6 @@ import { formatDateTime } from "@/lib/format";
 import { randomUuid } from "@/lib/randomUuid";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import {
-  INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
-  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
-} from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";

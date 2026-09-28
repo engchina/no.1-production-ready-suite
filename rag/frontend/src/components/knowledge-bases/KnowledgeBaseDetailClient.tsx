@@ -4,6 +4,7 @@ import { FilePlus2, Files, Save, Unlink } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
+import { ListPagination } from "@/components/ListPagination";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
@@ -14,12 +15,16 @@ import {
   CardTitle,
   DEFAULT_PAGE_SIZE,
   FormStatus,
+  ListSkeleton,
   ObjectActionBar,
-  Pagination,
+  offsetForPage,
+  offsetPagination,
   RowActionMenu,
   SelectField,
   type SelectFieldOption,
+  Skeleton,
   TextField,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -41,6 +46,7 @@ import {
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
@@ -66,7 +72,15 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 
   if (detail.isPending) {
     return (
-      <Card className="h-64 animate-pulse" role="status" aria-label={t("knowledgeBases.detail.loading")} />
+      <TimedLoadingState
+        label={t("knowledgeBases.detail.loading")}
+        operationKey={`knowledge-base-detail-${knowledgeBaseId}`}
+        placement="page"
+        testId="knowledge-base-detail-loading"
+      >
+        <Skeleton className="h-32" />
+        <ListSkeleton rows={3} rowClassName="h-11" />
+      </TimedLoadingState>
     );
   }
   if (detail.isError || !detail.data) {
@@ -390,7 +404,14 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
 function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDetail }) {
   const confirm = useConfirm();
   // 所属文書はサーバー側でページングする（件数の上限で打ち切らない）。
-  const [offset, setOffset] = useState(0);
+  // ページは作業状態として残す（workspace-state.md）。別のナレッジベースに移ったら 1 ページ目から。
+  const [documentsPage, setDocumentsPage] = useWorkspaceState(
+    "knowledgeBases.documentsPage",
+    { knowledgeBaseId: knowledgeBase.id, offset: 0 },
+    isKnowledgeBaseDocumentsPage
+  );
+  const offset = documentsPage.knowledgeBaseId === knowledgeBase.id ? documentsPage.offset : 0;
+  const setOffset = (next: number) => setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: next });
   const documents = useDocuments({
     knowledge_base_id: knowledgeBase.id,
     limit: DEFAULT_PAGE_SIZE,
@@ -405,7 +426,6 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
   const movingToLastPage = outOfRange && lastPageOffset !== offset;
   if (movingToLastPage) setOffset(lastPageOffset);
   const total = page?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE));
 
   const handleRemove = async (document: DocumentSummary) => {
     const ok = await confirm({
@@ -453,17 +473,14 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
               />
             ))}
           </ul>
-          <Pagination
-            page={Math.floor(offset / DEFAULT_PAGE_SIZE) + 1}
-            totalPages={totalPages}
-            onPageChange={(next) => setOffset((next - 1) * DEFAULT_PAGE_SIZE)}
-            summary={t("pager.range", {
-              start: formatNumber(offset + 1),
-              end: formatNumber(offset + documents.data.items.length),
-              total: formatNumber(total),
+          <ListPagination
+            {...offsetPagination({
+              offset,
+              limit: DEFAULT_PAGE_SIZE,
+              total,
+              count: documents.data.items.length,
             })}
-            prevLabel={t("pager.prev")}
-            nextLabel={t("pager.next")}
+            onPageChange={(next) => setOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
             testId="knowledge-base-documents-pagination"
           />
         </>
@@ -529,10 +546,28 @@ function documentHasKnowledgeBase(document: DocumentSummary, knowledgeBaseId: st
 
 function KnowledgeBaseDocumentsSkeleton() {
   return (
-    <div className="space-y-2" role="status" aria-label={t("knowledgeBases.documents.loading")}>
-      <div className="h-9 rounded-md bg-surface-sunken" />
-      <div className="h-9 rounded-md bg-surface-sunken" />
-      <div className="h-9 rounded-md bg-surface-sunken" />
-    </div>
+    <TimedLoadingState
+      label={t("knowledgeBases.documents.loading")}
+      operationKey="knowledge-base-documents-load"
+      testId="knowledge-base-documents-loading"
+    >
+      <ListSkeleton rowClassName="h-11" />
+    </TimedLoadingState>
+  );
+}
+
+interface KnowledgeBaseDocumentsPage {
+  knowledgeBaseId: string;
+  offset: number;
+}
+
+function isKnowledgeBaseDocumentsPage(value: unknown): value is KnowledgeBaseDocumentsPage {
+  const page = value as KnowledgeBaseDocumentsPage;
+  return (
+    typeof page === "object" &&
+    page !== null &&
+    typeof page.knowledgeBaseId === "string" &&
+    Number.isInteger(page.offset) &&
+    page.offset >= 0
   );
 }

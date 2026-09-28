@@ -9,8 +9,9 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
   Switch,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
@@ -93,7 +94,14 @@ export function GroundingSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-grounding-load"
+          placement="page"
+          testId="settings-grounding-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

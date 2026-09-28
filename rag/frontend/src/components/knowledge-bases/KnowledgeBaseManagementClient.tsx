@@ -13,14 +13,22 @@ import {
   type EntityAction,
   FormStatus,
   RowActionMenu,
+  TableSkeleton,
   TextField,
+  TimedLoadingState,
   ToggleChip,
+  DEFAULT_PAGE_SIZE,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  offsetForPage,
+  offsetPagination,
 } from "@engchina/production-ready-ui";
 import { Database, Search } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
+import { ListPagination } from "@/components/ListPagination";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -47,7 +55,7 @@ import {
   validateKnowledgeBaseName,
 } from "./knowledge-base-actions";
 
-const LIMIT = 20;
+const LIMIT = DEFAULT_PAGE_SIZE;
 
 interface KnowledgeBaseListView {
   filter: KnowledgeBaseStatus | "ALL";
@@ -169,46 +177,32 @@ export function KnowledgeBaseManagementClient() {
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending || movingToLastPage ? (
-          <KnowledgeBaseListSkeleton />
+          <TimedLoadingState
+            label={t("knowledgeBases.loading")}
+            operationKey="knowledge-bases-load"
+            testId="knowledge-bases-loading"
+          >
+            <TableSkeleton columns={6} />
+          </TimedLoadingState>
         ) : items.length > 0 ? (
-          <>
+          <div className="grid gap-2">
             <DataTable<KnowledgeBaseSummary>
               columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
               rows={items}
               getRowKey={(knowledgeBase) => knowledgeBase.id}
+              rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
               stickyHeader
-              className="bounded-scroll-area-lg"
+              visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              scrollAriaLabel={t("knowledgeBases.scrollLabel")}
+              scrollTestId="knowledge-bases-scroll-region"
               tableClassName="w-full min-w-[760px] text-sm"
             />
-
-            <div className="flex items-center justify-between">
-              <span className="tnum text-xs text-fg-muted">
-                {t("pager.range", {
-                  start: page && page.total === 0 ? 0 : offset + 1,
-                  end: offset + items.length,
-                  total: formatNumber(page?.total ?? 0),
-                })}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - LIMIT))}
-                >
-                  {t("pager.prev")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!page?.has_next}
-                  onClick={() => setOffset(offset + LIMIT)}
-                >
-                  {t("pager.next")}
-                </Button>
-              </div>
-            </div>
-          </>
+            <ListPagination
+              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
+              onPageChange={(next) => setOffset(offsetForPage(next, LIMIT))}
+              testId="knowledge-bases-pagination"
+            />
+          </div>
         ) : (
           <Card>
             <EmptyState
@@ -371,12 +365,4 @@ function knowledgeBaseColumns({
       ),
     },
   ];
-}
-
-function KnowledgeBaseListSkeleton() {
-  return (
-    <Card className="h-80 animate-pulse">
-      <div className="h-full bg-surface-sunken" />
-    </Card>
-  );
 }

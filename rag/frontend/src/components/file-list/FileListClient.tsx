@@ -13,7 +13,13 @@ import {
   SelectField,
   type SelectFieldOption,
   ToggleChip,
-  Skeleton,
+  TableSkeleton,
+  TimedLoadingState,
+  DEFAULT_PAGE_SIZE,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  offsetForPage,
+  offsetPagination,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 import { RotateCcw, Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
@@ -23,6 +29,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { ListPagination } from "@/components/ListPagination";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,
@@ -42,7 +49,7 @@ import {
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
-import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
@@ -59,7 +66,7 @@ import {
 } from "./FileListClient.logic";
 import { deleteConfirmDescription } from "./document-delete-impact";
 
-const LIMIT = 20;
+const LIMIT = DEFAULT_PAGE_SIZE;
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
@@ -435,9 +442,15 @@ export function FileListClient() {
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending ? (
-          <Skeleton className="h-64 w-full rounded-lg" />
+          <TimedLoadingState
+            label={t("fileList.loading")}
+            operationKey="file-list-load"
+            testId="file-list-loading"
+          >
+            <TableSkeleton columns={8} />
+          </TimedLoadingState>
         ) : items.length > 0 ? (
-          <>
+          <div className="grid gap-2">
             <DataTable<DocumentSummary>
               columns={documentColumns({
                 allSelected,
@@ -457,46 +470,22 @@ export function FileListClient() {
               rows={items}
               getRowKey={(doc) => doc.id}
               isRowSelected={(doc) => selection.isSelected(doc.id)}
+              rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
               stickyHeader
-              className="bounded-scroll-area-lg"
+              visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              scrollAriaLabel={t("fileList.scrollLabel")}
+              scrollTestId="file-list-scroll-region"
               tableClassName="w-full min-w-[980px] text-sm"
             />
-
-            {/* ページネーション */}
-            <div className="flex items-center justify-between">
-              <span className="tnum text-xs text-fg-muted">
-                {t("pager.range", {
-                  start: page && page.total === 0 ? 0 : offset + 1,
-                  end: offset + items.length,
-                  total: formatNumber(page?.total ?? 0),
-                })}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={offset === 0}
-                  onClick={() => {
-                    setOffset(Math.max(0, offset - LIMIT));
-                    selection.clear();
-                  }}
-                >
-                  {t("pager.prev")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!page?.has_next}
-                  onClick={() => {
-                    setOffset(offset + LIMIT);
-                    selection.clear();
-                  }}
-                >
-                  {t("pager.next")}
-                </Button>
-              </div>
-            </div>
-          </>
+            <ListPagination
+              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
+              onPageChange={(next) => {
+                setOffset(offsetForPage(next, LIMIT));
+                selection.clear();
+              }}
+              testId="file-list-pagination"
+            />
+          </div>
         ) : (
           <Card>
             <div className="p-5">

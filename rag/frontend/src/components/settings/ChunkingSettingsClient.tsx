@@ -9,9 +9,10 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
   Switch,
   TextField,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import {
@@ -102,8 +103,15 @@ export function ChunkingSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-48 w-full rounded-lg" />
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-chunking-load"
+          placement="page"
+          testId="settings-chunking-loading"
+        >
+          <FormSkeleton fields={2} />
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

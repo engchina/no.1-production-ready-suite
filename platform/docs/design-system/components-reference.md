@@ -578,6 +578,14 @@ export function Pagination({ page = 1, totalPages = 1, onPageChange, summary, pa
 
 ---
 
+> **packages/ui の追加（#265）。** 上の参照実装の props はそのまま。`usePagination(items, pageSize?, options?)` の `options` に
+> `page` / `onPageChange`（制御式。ページ番号を作業状態に保持する。再取得で items が変わってもページを戻さない）と
+> `resetKey`（この値が変わったときだけ 1 ページ目へ戻す）を足した。省略時は従来どおり items が変わると 1 ページ目へ戻る。
+> サーバー側のページング（offset / limit / total）は `offsetPagination({ offset, limit, total, count })` で
+> `page` / `totalPages` / `range` に直し、ページの移動は `offsetForPage(page, limit)` で offset に戻す。既定は `DEFAULT_PAGE_SIZE`（10）。
+
+---
+
 ## DataTable.jsx — 変更
 
 ```jsx
@@ -1131,3 +1139,60 @@ export interface TooltipProps {
 
 - E2E で吹き出しを引くときは、`page.locator('[role="tooltip"]:not([hidden])')` で引きます（説明用の吹き出しは閉じている間も `hidden` で body にあり、名前と同じ文言の吹き出しは `aria-hidden` なので `getByRole("tooltip")` では引けません）。説明は `toHaveAccessibleDescription` で確かめます。
 - 単体テストは `packages/ui/tests/tooltip.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/tooltip.spec.ts`（desktop のホバー・キーボード・Escape・反転、mobile-375 のタッチ端末）。
+
+## 読み込み中と一覧の表示密度 — **新規**（#265）
+
+3 製品の一覧・読み込み中の表示を NL2SQL の基準にそろえるための定数と形のある Skeleton です。値は製品で書かず、ここから import します。
+
+```ts
+// packages/ui/src/lib/list-density.ts（NL2SQL の src/lib/list-density.ts から移した。値は同じ）
+INFORMATION_TABLE_VISIBLE_ROWS       // { base: 5, md: 8 } — DataTable の visibleRows
+INFORMATION_TABLE_FIXED_VISIBLE_ROWS // 5 — 幅によらず 5 行の一覧
+INFORMATION_TABLE_ROW_CLASS          // "h-[3.5rem]" — DataTable の rowProps の className（行の最小高さ）
+INFORMATION_LIST_ROW_CLASS           // "min-h-[3.5rem]" — 表ではない行リストの行
+INFORMATION_LIST_SCROLL_CLASS        // "max-h-[17.5rem] overflow-auto md:max-h-[28rem]" — 表ではない行リストの 5 / 8 行
+INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS // "h-56 max-h-56 overflow-auto"
+INFORMATION_TABLE_FOCUS_CLASS        // Tab で到達できるスクロール領域のフォーカスの表示（outline）
+```
+
+```tsx
+/** 見た目は 1 つ: 地は --color-surface-hover、prefers-reduced-motion では点滅しない。 */
+export const SKELETON_CLASS = "animate-pulse rounded-md bg-surface-hover motion-reduce:animate-none";
+export function Skeleton({ className, testId }: { className?: string; testId?: string });
+
+/** 表の形。DataTable と同じ枠・表頭（surface-sunken、2.5rem）・行（3.5rem）に列ごとの棒。
+ *  rows の既定は { base: 5, md: 8 }。md 以上だけの行は CSS（hidden md:flex）で出し分け、最初の描画で高さが決まる。 */
+export function TableSkeleton({ rows, columns = 4, className, testId }: TableSkeletonProps);
+
+/** 表ではない行リスト（カードの行・履歴）の形。角丸の塊を gap-2 で並べる。 */
+export function ListSkeleton({ rows, rowClassName = "h-[3.5rem]", className, testId }: ListSkeletonProps);
+
+/** 設定カード・エディタの形。見出し → ラベル + 入力欄（--button-height-md）× fields → 右寄せの操作行。 */
+export function FormSkeleton({ fields = 4, title = true, actions = true, className, testId }: FormSkeletonProps);
+```
+
+- 形のある Skeleton は `aria-hidden` です。**読み込み中の文言と経過時間は `TimedLoadingState` が出す**ので、必ずその子に置きます（UX 契約 messaging.md §3.6 / §3.7）。
+- `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
+- 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
+
+標準の組み合わせ:
+
+```tsx
+{query.isPending ? (
+  <TimedLoadingState label={t("xxx.loading")} operationKey="xxx-load" testId="xxx-loading">
+    <TableSkeleton columns={5} />
+  </TimedLoadingState>
+) : (
+  <div className="grid gap-2">
+    <DataTable
+      rows={pageItems}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      scrollAriaLabel={t("xxx.scrollLabel")}
+      …
+    />
+    <Pagination page={page} totalPages={totalPages} onPageChange={setPage} summary={…} prevLabel={…} nextLabel={…} />
+  </div>
+)}
+```

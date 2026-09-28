@@ -20,6 +20,7 @@ import {
   BulkSelectionActions,
   ContentActionBar,
   ProcessingIndicator,
+  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 
@@ -31,7 +32,6 @@ import { formatDateTime } from "@/lib/format";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DB_OBJECT_GRID_ROW_CLASS,

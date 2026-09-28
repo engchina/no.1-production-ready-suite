@@ -20,18 +20,16 @@ import {
   StatusBadge,
   ClearActionButton,
   DisclosureChevron,
-} from "@engchina/production-ready-ui";
-import { ErrorState } from "@/components/StateViews";
-
-
-import { t } from "@/lib/i18n";
-import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-} from "@/lib/list-density";
+} from "@engchina/production-ready-ui";
+import { ErrorState } from "@/components/StateViews";
+
+
+import { t } from "@/lib/i18n";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   deriveOntologyErDetails,

@@ -19,13 +19,22 @@ import {
   SelectField,
   type SelectFieldOption,
   StatusBadge,
+  TableSkeleton,
+  FormSkeleton,
+  TimedLoadingState,
   ToggleChip,
+  DEFAULT_PAGE_SIZE,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  offsetForPage,
+  offsetPagination,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
-import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
+import { ListPagination } from "@/components/ListPagination";
+import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
   useKnowledgeBaseSelectionHealth,
@@ -76,7 +85,7 @@ import { cn } from "@/lib/utils";
 import { readWorkspace, removeWorkspace, useWorkspaceState, writeWorkspace } from "@/lib/workspace-state";
 import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
 
-const LIMIT = 20;
+const LIMIT = DEFAULT_PAGE_SIZE;
 
 /**
  * 一覧の絞り込み・検索・ページ。編集対象は URL の `?id=` が唯一の情報源なので、ここには持たない（#147）。
@@ -471,6 +480,14 @@ function BusinessViewList({
             }
             onRetry={() => void query.refetch()}
           />
+        ) : query.isPending ? (
+          <TimedLoadingState
+            label={t("businessViews.loading")}
+            operationKey="business-views-load"
+            testId="business-views-loading"
+          >
+            <TableSkeleton columns={5} />
+          </TimedLoadingState>
         ) : items.length === 0 && !query.isFetching ? (
           <Card>
             <EmptyState
@@ -483,54 +500,37 @@ function BusinessViewList({
             />
           </Card>
         ) : (
-          <>
+          <div className="grid gap-2">
             <DataTable<BusinessViewSummary>
               columns={businessViewColumns({ onOpen, actionsFor })}
               rows={items}
               getRowKey={(item) => item.id}
-              loading={query.isPending}
               // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。
               // アーカイブ済みは編集できないため開かない。
               onRowClick={(item) => {
                 if (item.status !== "ARCHIVED") onOpen(item.id);
               }}
               rowProps={(item) => ({
-                className: cn("align-top", item.status === "ARCHIVED" && "cursor-default"),
+                className: cn(
+                  INFORMATION_TABLE_ROW_CLASS,
+                  "align-top",
+                  item.status === "ARCHIVED" && "cursor-default"
+                ),
                 "data-testid": `business-view-row-${item.id}`,
               })}
               stickyHeader
-              className="bounded-scroll-area-lg"
+              visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              scrollAriaLabel={t("businessViews.list.scrollLabel")}
+              scrollTestId="business-views-scroll-region"
               tableClassName="w-full min-w-[720px] text-sm"
               ariaLabel={t("businessViews.list.aria")}
             />
-            <div className="flex items-center justify-between">
-              <span className="tnum text-xs text-fg-muted">
-                {t("pager.range", {
-                  start: page && page.total === 0 ? 0 : offset + 1,
-                  end: offset + items.length,
-                  total: formatNumber(page?.total ?? 0),
-                })}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - LIMIT))}
-                >
-                  {t("pager.prev")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!page?.has_next}
-                  onClick={() => setOffset(offset + LIMIT)}
-                >
-                  {t("pager.next")}
-                </Button>
-              </div>
-            </div>
-          </>
+            <ListPagination
+              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
+              onPageChange={(next) => setOffset(offsetForPage(next, LIMIT))}
+              testId="business-views-pagination"
+            />
+          </div>
         )}
       </PageBody>
     </div>
@@ -682,7 +682,14 @@ function BusinessViewEditRoute({
       />
       <PageBody wide>
         {detail.isPending ? (
-          <LoadingState rows={6} label={t("nav.businessViews")} />
+          <TimedLoadingState
+            label={t("businessViews.detail.loading")}
+            operationKey={`business-view-detail-${id}`}
+            placement="page"
+            testId="business-view-detail-loading"
+          >
+            <FormSkeleton fields={6} />
+          </TimedLoadingState>
         ) : notFound ? (
           <Card>
             <MissingEditorTarget id={id} onBack={onBack} />

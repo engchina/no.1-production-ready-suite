@@ -9,7 +9,8 @@ import {
   CardTitle,
   Button,
   FormStatus,
-  Skeleton,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, ClipboardCheck, RotateCcw, Save } from "lucide-react";
@@ -57,7 +58,14 @@ export function EvaluationSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-evaluation-load"
+          placement="page"
+          testId="settings-evaluation-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

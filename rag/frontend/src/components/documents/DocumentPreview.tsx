@@ -432,7 +432,18 @@ function TextPreview({ url }: { url: string }) {
       </div>
     );
   }
-  if (text === null) return <Skeleton className="h-40 w-full" />;
+  if (text === null) {
+    return (
+      <TimedLoadingState
+        label={t("preview.text.loading")}
+        operationKey="preview-text-load"
+        framed={false}
+        testId="preview-text-loading"
+      >
+        <Skeleton className="h-40 w-full" />
+      </TimedLoadingState>
+    );
+  }
 
   return (
     <pre className="h-full max-h-full min-h-40 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg">

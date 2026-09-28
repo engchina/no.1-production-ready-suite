@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -16,20 +16,59 @@ export interface PaginationRange {
   total: number;
 }
 
+export interface UsePaginationOptions {
+  /**
+   * 制御式の現在ページ（1-based）。ページ番号を作業状態（sessionStorage・URL 等）に保持するときに渡す
+   * （UX 契約 workspace-state.md）。渡すと、再取得で items が変わってもページを戻さない（範囲外は表示だけ末尾に寄せる）。
+   */
+  page?: number;
+  /** 制御式のときのページ変更。`setPage` と Pagination の操作から呼ばれる。 */
+  onPageChange?: (page: number) => void;
+  /**
+   * 1 ページ目へ戻す契機（検索語・絞り込み・並べ替え等）。この値が変わったときだけ 1 ページ目へ戻す。
+   * 省略時: 非制御なら items が変わるたびに戻す（従来どおり）、制御式なら戻さない。
+   */
+  resetKey?: unknown;
+}
+
 /**
  * 一覧のページング状態（slice・totalPages・clamp）を 1 箇所に集約するフック。
  * 各ページで重複していた「PAGE_SIZE / setPage / slice / clamp」を置き換える。
- * items が変わったら 1 ページ目へ戻す。
+ * 既定では items が変わったら 1 ページ目へ戻す。ページを保持する一覧は `options.page` / `onPageChange` /
+ * `resetKey` を渡す。
  */
-export function usePagination<T>(items: readonly T[], pageSize: number = DEFAULT_PAGE_SIZE) {
-  const [page, setPage] = useState(1);
+export function usePagination<T>(
+  items: readonly T[],
+  pageSize: number = DEFAULT_PAGE_SIZE,
+  options: UsePaginationOptions = {}
+) {
+  const controlled = options.page !== undefined;
+  const [innerPage, setInnerPage] = useState(1);
+  const requestedPage = controlled ? Math.max(1, Math.floor(options.page ?? 1)) : innerPage;
   const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const currentPage = Math.min(page, totalPages);
+  const currentPage = Math.min(requestedPage, totalPages);
 
+  const onPageChangeRef = useRef(options.onPageChange);
+  useLayoutEffect(() => {
+    onPageChangeRef.current = options.onPageChange;
+  });
+  const setPage = useCallback(
+    (next: number) => {
+      if (controlled) onPageChangeRef.current?.(next);
+      else setInnerPage(next);
+    },
+    [controlled]
+  );
+
+  // 前回の契機と比べて変わったときだけ戻す（StrictMode の effect の再実行や復元直後の初回で戻さない）。
+  const resetTrigger = "resetKey" in options ? options.resetKey : controlled ? CONTROLLED_WITHOUT_RESET : items;
+  const previousResetTrigger = useRef(resetTrigger);
   useEffect(() => {
+    if (Object.is(previousResetTrigger.current, resetTrigger)) return;
+    previousResetTrigger.current = resetTrigger;
     setPage(1);
-  }, [items]);
+  }, [resetTrigger, setPage]);
 
   const start = total === 0 ? 0 : (currentPage - 1) * pageSize;
   const pageItems = useMemo(
@@ -44,6 +83,40 @@ export function usePagination<T>(items: readonly T[], pageSize: number = DEFAULT
   };
 
   return { page: currentPage, setPage, totalPages, pageItems, range };
+}
+
+/** 制御式で resetKey が無いときの、変わらない契機。 */
+const CONTROLLED_WITHOUT_RESET = Symbol("controlled-without-reset");
+
+/**
+ * サーバー側のページング（offset / limit / total）を Pagination の page / totalPages / range に直す。
+ * `count` は今のページで返った件数。ページの移動は `offsetForPage(page, limit)` で offset に戻す。
+ */
+export function offsetPagination({
+  offset,
+  limit,
+  total,
+  count,
+}: {
+  offset: number;
+  limit: number;
+  total: number;
+  count: number;
+}) {
+  const size = Math.max(1, limit);
+  const page = Math.floor(Math.max(0, offset) / size) + 1;
+  const totalPages = Math.max(1, Math.ceil(Math.max(0, total) / size));
+  const range: PaginationRange = {
+    start: total === 0 || count === 0 ? 0 : offset + 1,
+    end: count === 0 ? 0 : offset + count,
+    total,
+  };
+  return { page, totalPages, range };
+}
+
+/** 1-based のページ番号を offset に直す。 */
+export function offsetForPage(page: number, limit: number) {
+  return (Math.max(1, Math.floor(page)) - 1) * Math.max(1, limit);
 }
 
 export interface PaginationProps {

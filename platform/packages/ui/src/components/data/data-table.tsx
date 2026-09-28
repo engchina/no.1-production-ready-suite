@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Fragment, useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
+import { SKELETON_CLASS } from "../ui/skeleton";
 
 export type SortDirection = "asc" | "desc";
 
@@ -58,7 +59,7 @@ export interface DataTableProps<T> {
   renderRowDetail?: (row: T, index: number) => ReactNode;
   /** 読込中は行の代わりにスケルトンを描画。 */
   loading?: boolean;
-  /** 読込中のスケルトン行数（既定 3）。 */
+  /** 読込中のスケルトン行数（既定は visibleRows の行数、無ければ 3）。 */
   loadingRows?: number;
   /** 行が空かつ非読込のとき表示（EmptyState 等）。 */
   empty?: ReactNode;
@@ -191,7 +192,7 @@ export function DataTable<T>({
   rowProps,
   renderRowDetail,
   loading,
-  loadingRows = 3,
+  loadingRows,
   empty,
   dense,
   stickyHeader,
@@ -209,6 +210,7 @@ export function DataTable<T>({
   const tableRef = useRef<HTMLTableElement>(null);
   const isMd = useMediaQuery(MD_QUERY);
   const rowLimit = resolveVisibleRows(visibleRows, isMd);
+  const skeletonRows = loadingRows ?? rowLimit ?? 3;
   const [measuredHeight, setMeasuredHeight] = useState<number>();
   const selectable = selectedRowKey !== undefined || Boolean(isRowSelected);
 
@@ -342,11 +344,11 @@ export function DataTable<T>({
         </thead>
         <tbody className="divide-y divide-border/70 text-fg">
           {loading
-            ? Array.from({ length: loadingRows }).map((_, rowIndex) => (
+            ? Array.from({ length: skeletonRows }).map((_, rowIndex) => (
                 <tr key={`skeleton-${rowIndex}`} aria-hidden="true" data-row-kind="skeleton">
                   {columns.map((column) => (
                     <td key={column.key} className={cellPad}>
-                      <span className="block h-4 w-full animate-pulse rounded bg-surface-hover motion-reduce:animate-none" />
+                      <span className={cn(SKELETON_CLASS, "block h-4 w-full rounded")} />
                     </td>
                   ))}
                 </tr>

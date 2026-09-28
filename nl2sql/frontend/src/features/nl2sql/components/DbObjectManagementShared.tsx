@@ -22,6 +22,7 @@ import {
   Tabs,
   ContentActionBar,
   TimedLoadingState,
+  Skeleton,
   type ProcessingActivityIcon,
   type ProcessingPlacement,
   ObjectActionBar,
@@ -29,6 +30,8 @@ import {
   type EntityAction,
   type EntityActionTone,
   FixedSplitPane,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -44,10 +47,6 @@ import { IdentifierText } from "@/components/IdentifierText";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import {
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
-} from "@/lib/list-density";
 import { cn } from "@/lib/utils";
 import type { FixedSplitWidePane } from "@engchina/production-ready-ui";
 import {
@@ -185,13 +184,7 @@ export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
 export const DB_OBJECT_GRID_ROW_CLASS = INFORMATION_TABLE_ROW_CLASS;
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
-  return (
-    <div
-      className={`animate-pulse rounded-md bg-surface-hover motion-reduce:animate-none ${className}`}
-      aria-hidden="true"
-      data-testid="db-management-skeleton-block"
-    />
-  );
+  return <Skeleton className={className} testId="db-management-skeleton-block" />;
 }
 
 /**

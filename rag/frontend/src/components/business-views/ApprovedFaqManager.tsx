@@ -3,12 +3,13 @@ import { useState } from "react";
 
 import {
   Button,
-  DataTable,
   EmptyState,
   FormStatus,
   RowActionMenu,
   SelectField,
+  TableSkeleton,
   TextField,
+  TimedLoadingState,
   toast,
   useConfirm,
   type SelectFieldOption,
@@ -21,6 +22,7 @@ import {
   type ApprovedFaqImportPreviewData,
   type ApprovedFaqRecordData,
 } from "@/lib/api";
+import { PagedDataTable } from "@/components/PagedDataTable";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
@@ -103,7 +105,16 @@ export function ApprovedFaqManager({
 
   return (
     <div className="space-y-5">
-      <DataTable<ApprovedFaqRecordData>
+      {query.isPending ? (
+        <TimedLoadingState
+          label={t("businessViews.faq.loading")}
+          operationKey={`approved-faq-${businessViewId}`}
+          testId="approved-faq-loading"
+        >
+          <TableSkeleton columns={3} />
+        </TimedLoadingState>
+      ) : (
+      <PagedDataTable<ApprovedFaqRecordData>
         columns={[
           {
             key: "question",
@@ -147,7 +158,7 @@ export function ApprovedFaqManager({
         ]}
         rows={records}
         getRowKey={(row) => row.id}
-        loading={query.isPending}
+        resetKey={businessViewId}
         dense
         empty={
           <EmptyState
@@ -155,7 +166,12 @@ export function ApprovedFaqManager({
             hint={t("businessViews.faq.emptyHint")}
           />
         }
+        ariaLabel={t("businessViews.faq.listAria")}
+        scrollAriaLabel={t("businessViews.faq.scrollLabel")}
+        scrollTestId="approved-faq-scroll-region"
+        paginationTestId="approved-faq-pagination"
       />
+      )}
 
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">

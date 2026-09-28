@@ -12,6 +12,7 @@ import {
   Skeleton,
   Tabs,
   toast,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 
 import { ApiError } from "@/lib/api";
@@ -111,7 +112,17 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
     (candidate) => !current.includes(candidate.keyword),
   );
 
-  if (query.isPending) return <Skeleton className="h-40 w-full" />;
+  if (query.isPending) {
+    return (
+      <TimedLoadingState
+        label={t("businessViews.knowledge.loading")}
+        operationKey="business-view-knowledge-load"
+        testId="business-view-knowledge-loading"
+      >
+        <Skeleton className="h-40 w-full" />
+      </TimedLoadingState>
+    );
+  }
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">

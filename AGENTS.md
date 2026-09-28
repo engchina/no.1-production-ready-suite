@@ -189,9 +189,9 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### 読み込み中・一覧・ページング（3 製品で統一。NL2SQL が基準）
 
-- **読み込み中**: 内容（一覧・詳細・フォームの初期値など）を取得している間は、その領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を出し、領域は**内容の形をした灰色の `Skeleton` で覆う**（寸法を予約して CLS を出さない）。テキストだけの「読み込み中…」、領域を空白のままにすること、画面全体を塞ぐスピナーは使わない（UX 契約 `messaging.md` §3.6）。再読み込み（表示を更新）中は、前の内容を出したまま更新し、操作したボタンの `loading` で示す。
-- **一覧の縦スクロール**: 件数が多い一覧は `DataTable` の `stickyHeader`（表頭を固定）と `visibleRows`（**md 未満 5 行・md 以上 8 行**）を使い、それを超える行は表の中で縦スクロールにする（ページ全体を伸ばさない）。行の最小高さは 3.5rem。値は `packages/ui` の共通定数を使い、製品で数値を書かない。
-- **ページング**: 共通の `Pagination` / `usePagination`（既定 10 件/ページ）を表の直下に置き、1 ページしかないときは出さない。サーバー側のページングでも同じ部品を使う。ページ番号は作業状態として保持する（UX 契約 `workspace-state.md`）。
+- **読み込み中**: 内容（一覧・詳細・フォームの初期値など）を取得している間は、その領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を出し、領域は**内容の形をした灰色の `Skeleton` で覆う**（寸法を予約して CLS を出さない）。形は `packages/ui` の `TableSkeleton`（表）・`ListSkeleton`（行リスト）・`FormSkeleton`（設定カード・エディタ）か `Skeleton` の組み合わせで作り、`TimedLoadingState` の子に置く。同じ取得の経過時間は 1 か所だけに出す。テキストだけの「読み込み中…」、領域を空白のままにすること、画面全体を塞ぐスピナーは使わない（UX 契約 `messaging.md` §3.6）。再読み込み（表示を更新）中は、前の内容を出したまま更新し、操作したボタンの `loading` で示す。
+- **一覧の縦スクロール**: 件数が多い一覧は `DataTable` の `stickyHeader`（表頭を固定）と `visibleRows`（**md 未満 5 行・md 以上 8 行**）を使い、それを超える行は表の中で縦スクロールにする（ページ全体を伸ばさない）。行の最小高さは 3.5rem。値は `packages/ui` の共通定数（`INFORMATION_TABLE_VISIBLE_ROWS`・`INFORMATION_TABLE_ROW_CLASS`・表ではない行リストは `INFORMATION_LIST_SCROLL_CLASS` など）を使い、製品で数値を書かない。
+- **ページング**: 共通の `Pagination` / `usePagination`（既定 10 件/ページ）を表の直下に置き、1 ページしかないときは出さない。サーバー側のページングでも同じ部品を使う（offset / limit / total は `offsetPagination` / `offsetForPage` で変換する）。ページ番号は作業状態として保持する（UX 契約 `workspace-state.md`。`usePagination` は `page` / `onPageChange` で制御でき、`resetKey` が変わったときだけ 1 ページ目へ戻す）。
 - 新しい一覧・読み込み中の表示を作るときは NL2SQL の同種の画面を見本にし、Playwright で読み込み中（応答を遅らせる）・行数が多いとき（縦スクロール）・2 ページ以上（ページング）を desktop と 375px で確認する。
 
 ### lint

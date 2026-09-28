@@ -325,7 +325,11 @@ test("業務ビューの読み込み中は読み込み中の状態として読�
   });
 
   await page.goto("/search");
-  await expect(page.getByRole("status", { name: "業務ビューを読み込んでいます。" })).toBeVisible();
+  // 読み込み中は文言と経過時間（TimedLoadingState）を出し、状態として読み上げる（#265）。
+  const loading = page.getByTestId("search-business-views-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading.getByRole("timer")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "業務ビューを読み込んでいます。" })).toHaveCount(1);
   await expect(page.getByText("業務ビューを作成してください")).toHaveCount(0);
   release();
   await expect(page.getByRole("combobox", { name: /対象の業務ビュー/ })).toBeVisible();

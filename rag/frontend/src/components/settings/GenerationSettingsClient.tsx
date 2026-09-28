@@ -13,6 +13,8 @@ import {
   SelectField,
   Skeleton,
   type SelectFieldOption,
+  TimedLoadingState,
+  FormSkeleton,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -70,7 +72,14 @@ export function GenerationSettingsClient() {
   if (query.isPending) {
     return (
       <PageBody wide>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <TimedLoadingState
+          label={t("settings.loading")}
+          operationKey="settings-generation-load"
+          placement="page"
+          testId="settings-generation-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
       </PageBody>
     );
   }

@@ -39,6 +39,7 @@ import {
   ObjectActionBar,
   SelectField,
   Skeleton,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -181,11 +182,18 @@ export function DocumentRecipeManager({
   if (loading) {
     return (
       <section aria-label={t("documents.recipes.title")} className="space-y-3">
-        <Skeleton className="h-9 w-48" />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <Skeleton className="h-28" />
-          <Skeleton className="hidden h-28 sm:block" />
-        </div>
+        <TimedLoadingState
+          label={t("documents.recipes.loading")}
+          operationKey="document-recipes-load"
+          framed={false}
+          testId="document-recipes-loading"
+        >
+          <Skeleton className="h-9 w-48" />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Skeleton className="h-28" />
+            <Skeleton className="hidden h-28 sm:block" />
+          </div>
+        </TimedLoadingState>
       </section>
     );
   }
