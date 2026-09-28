@@ -99,7 +99,7 @@ variableGroups:
     visible: deploy_rag
     variables:
       - rag_app_auth_cookie_secure
-      - rag_enable_parser_docling
+      - rag_enable_parser_unstructured
       - rag_enable_oci_cloud_parsers
       - rag_instance_display_name
       - rag_instance_flex_shape_ocpus
@@ -630,20 +630,20 @@ variables:
     description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the RAG Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
     default: false
 
-  rag_enable_parser_docling:
+  rag_enable_parser_unstructured:
     type: boolean
     required: true
     visible: deploy_rag
-    title: "Docling parser (CPU)"
-    description: "Build and start parser-docling. The Unstructured parser (parser-unstructured) is always started because it is the default document parser."
-    default: true
+    title: "Unstructured parser (CPU)"
+    description: "Install and start parser-unstructured as a systemd service. The default Docling parser handles PDF and images only; enable this to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files, and select Unstructured in the document's processing recipe."
+    default: false
 
   rag_enable_oci_cloud_parsers:
     type: boolean
     required: true
     visible: deploy_rag
     title: "OCI cloud parsers"
-    description: "Build and start parser-oci-genai-vision and parser-oci-document-understanding. They call OCI services and need no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
+    description: "Install and start parser-oci-genai-vision and parser-oci-document-understanding as systemd services. The Docling parser (the default document parser) is always installed. They call OCI services and need no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
     default: false
 
   rag_instance_display_name:
@@ -857,9 +857,9 @@ outputs:
     type: copyableString
     visible: deploy_rag
 
-  rag_compose_services:
-    title: "RAG Docker Compose services"
-    displayText: "RAG Docker Compose services"
+  rag_services:
+    title: "RAG preprocessing and parser services"
+    displayText: "RAG preprocessing and parser services"
     type: copyableString
     visible: deploy_rag
 

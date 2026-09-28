@@ -252,7 +252,7 @@ def test_legacy_experiment_job_with_removed_engine_uses_default_engine(removed: 
         {"rag_parser_adapter_backend": removed, "rag_preprocess_profile": "passthrough"},
     )
 
-    assert candidate.rag_parser_adapter_backend == "unstructured"
+    assert candidate.rag_parser_adapter_backend == "docling"
 
 
 @pytest.mark.parametrize("profile", ["marker_adapter", "unlimited_ocr_adapter", "glm_ocr_adapter"])

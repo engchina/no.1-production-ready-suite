@@ -189,9 +189,9 @@ export const ja = {
     "文書解析に使うエンジンを選び、現在の可用性だけを確認します。",
   "settings.parserAdapters.backend": "使用エンジン",
   "settings.parserAdapters.backend.local": "Local(廃止)",
-  "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Unstructured へ正規化",
-  "settings.parserAdapters.backend.docling.description": "Docling を優先",
-  "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
+  "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
+  "settings.parserAdapters.backend.docling.description": "既定の解析エンジン。PDF と画像を解析",
+  "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
   "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
@@ -209,7 +209,7 @@ export const ja = {
   "settings.parserAdapters.doclingVision.hint":
     "図や画像を含む表を Vision モデルで説明し、検索できる本文にします。画像 1 枚ごとに LLM の呼び出しと解析時間がかかります。",
   "settings.parserAdapters.legacyBackendNotice":
-    "旧『local』設定です。未選択時は既定の Unstructured で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
+    "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から Docker イメージの構築や起動は行いません。",
@@ -507,23 +507,31 @@ export const ja = {
     "前処理 / Parser / pipeline マイクロサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
   "settings.services.overview.description":
-    "各サービスの /health を確認して稼働状態を表示します。起動/停止は docker compose で行います。",
+    "各サービスの systemd の unit と /health を確認して稼働状態を表示します。起動/停止は systemd の unit を操作します。",
   "settings.services.controlEnabled": "起動/停止",
   "settings.services.controlEnabled.on": "有効",
   "settings.services.controlEnabled.off": "無効(可視化のみ)",
   "settings.services.controlDisabled.hint":
-    "起動/停止は無効です。有効化するには rag_service_control_enabled=true を設定してください。",
-  "settings.services.mode.dev": "開発 (docker)",
-  "settings.services.mode.prod": "本番 (docker)",
+    "起動/停止は無効です。有効化するには RAG_SERVICE_CONTROL_ENABLED=true を設定してください。",
+  "settings.services.mode.dev":
+    "開発 (systemd)",
+  "settings.services.mode.prod":
+    "本番 (systemd)",
   "settings.services.mode.dev.hint":
-    "開発モード(RAG_ENVIRONMENT=dev)。Parser は初回起動時にイメージ build が走るため、事前ビルドを推奨します。",
+    "開発モード(RAG_ENVIRONMENT=development)です。unit と sudoers は rag/scripts/rag-services.sh install で登録します。起動/停止した状態は、PC の再起動後も保たれます。",
   "settings.services.mode.prod.hint":
-    "本番モード(RAG_ENVIRONMENT=prod)です。起動/停止は docker compose を呼びます。",
+    "本番モードです。起動は systemctl enable --now、停止は systemctl disable --now で行い、最後に操作した状態をサーバーの再起動・再配備後も保ちます。",
   "settings.services.commands.title": "実行コマンド",
   "settings.services.commands.description":
-    "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
-  "settings.services.commands.buildAll.label": "CPU サービスを事前ビルド(前処理 / Parser CPU / pipeline)",
-  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(ASR 音声文字起こし)",
+    "サーバー上で状態やログを確かめるコマンドです。rag/ ディレクトリで実行します。",
+  "settings.services.commands.status.label":
+    "すべてのサービスの状態を確認",
+  "settings.services.commands.logs.label":
+    "Docling のログを追いかける",
+  "settings.services.commands.install.label":
+    "開発環境で unit と sudoers を登録(CPU サービス)",
+  "settings.services.commands.installGpu.label":
+    "開発環境で GPU parser(ASR 音声文字起こし)を登録",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
@@ -549,13 +557,20 @@ export const ja = {
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
   "settings.services.cpuNote":
-    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling は明示選択した場合のみ使用します。",
-  "settings.services.gpuNote": "GPU 構成(docker compose --profile gpu で opt-in)。",
+    "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を処理レシピで選んだ場合だけ使用します。",
+  "settings.services.gpuNote":
+    "GPU 構成(本番の配備には含めません。開発環境で rag/scripts/rag-services.sh install --gpu で登録します)。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
+  "settings.services.status.starting":
+    "起動中",
+  "settings.services.status.failed":
+    "起動失敗",
   "settings.services.status.stopped": "停止",
+  "settings.services.status.not_installed":
+    "未登録",
   "settings.services.status.unconfigured": "未設定",
   "settings.services.status.in_process": "backend 内処理",
   "settings.services.status.loading": "確認中",
@@ -565,9 +580,13 @@ export const ja = {
   "settings.services.modelCache.label": "モデルキャッシュ",
   "settings.services.modelCache.readonly": "変更不可",
   "settings.services.modelCache.hint":
-    "dev では Docker named volume として自動作成され、host の絶対パスや UID に依存しません。",
+    "サービスの実行ユーザーのキャッシュです。モデルは初回の配備・起動時に取得し、再起動しても保持されます。",
   "settings.services.statusLoadingHint": "状態確認中です。",
   "settings.services.statusLoadErrorHint": "状態を取得できませんでした。更新してください。",
+  "settings.services.notInstalledHint":
+    "systemd の unit が登録されていません。本番は Terraform の stack で配備を選び、開発は rag/scripts/rag-services.sh install で登録します。",
+  "settings.services.failedHint":
+    "起動に失敗しました。ログで原因を確認してから起動し直してください。",
   "settings.services.requiredService": "必須サービス",
   "settings.services.executionPolicy.requiredNoFallback": "必須 / fallbackなし",
   "settings.services.executionPolicy.inProcessWhenDisabled": "既定は backend 内処理",
@@ -581,14 +600,13 @@ export const ja = {
   "settings.services.action.stop": "停止",
   "settings.services.action.starting": "起動中",
   "settings.services.action.stopping": "停止中",
-  "settings.services.action.build": "ビルド",
-  "settings.services.action.building": "ビルド中",
-  "settings.services.action.remove": "削除",
-  "settings.services.action.removing": "削除中",
+  "settings.services.action.restart":
+    "再起動",
   "settings.services.action.logs": "ログ",
   "settings.services.action.hideLogs": "ログを閉じる",
   "settings.services.logs.title": "{service} のログ",
-  "settings.services.logs.source.docker": "docker compose logs / 最新 {lines} 行",
+  "settings.services.logs.source.journald":
+    "journalctl -u {unit} / 最新 {lines} 行",
   "settings.services.logs.loading": "ログを取得中です。",
   "settings.services.logs.refresh": "再取得",
   "settings.services.logs.copy": "コピー",
@@ -598,17 +616,13 @@ export const ja = {
   "settings.services.logs.loadError": "ログを取得できませんでした。",
   "settings.services.confirm.stop.title": "サービスを停止しますか?",
   "settings.services.confirm.stop.description":
-    "{service} を停止します。このサービスを必須とする処理段階は利用できなくなります。",
+    "{service} を停止します。サーバーを再起動・再配備しても停止したままになります。このサービスを必須とする処理段階は利用できなくなります。",
   "settings.services.confirm.stop.confirm": "停止する",
-  "settings.services.confirm.remove.title": "コンテナを削除しますか?",
-  "settings.services.confirm.remove.description":
-    "{service} のコンテナを削除します(稼働中なら停止してから削除)。イメージは残るため、再起動で再生成できます。",
-  "settings.services.confirm.remove.confirm": "削除する",
   "settings.services.confirm.cancel": "キャンセル",
   "settings.services.toast.started": "{service} を起動しました。",
   "settings.services.toast.stopped": "{service} を停止しました。",
-  "settings.services.toast.built": "{service} のイメージをビルドしました。",
-  "settings.services.toast.removed": "{service} のコンテナを削除しました。",
+  "settings.services.toast.restarted":
+    "{service} を再起動しました。",
   "settings.services.toast.failed": "{service} の操作に失敗しました。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF→画像PDF",
@@ -1740,6 +1754,8 @@ export const ja = {
   "upload.batch.openShort": "表示",
   "upload.batch.current": "表示中",
   "upload.jobs.title": "文書処理状況",
+  "upload.parserNotice.title": "このままでは取込を開始できません",
+  "upload.parserNotice.short": "既定の Docling では解析できない形式です（処理レシピで Unstructured を選択）",
   "upload.jobs.documentId": "文書 ID: {id}",
   "upload.jobs.loading": "文書処理状況を読み込んでいます",
   "upload.jobs.loadError":

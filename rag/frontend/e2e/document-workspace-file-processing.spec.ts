@@ -838,6 +838,31 @@ test("バックグラウンド失敗後は開始 message を消し、失敗原�
   await expectNoPageOverflow(page);
 });
 
+// 既定の文書解析エンジン（Docling）で扱えない形式は、backend が取込を始める前に 409 で止める（#286）。
+// 処理レシピの失敗表示に、理由と対処（処理レシピで Unstructured を選ぶ・サービスを起動する）を出す。
+test("Docling で解析できない形式は、取込を始めずに理由と対処を表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, { documentStatus: "UPLOADED" });
+  const detail =
+    "文書解析エンジン Docling（既定の解析エンジン）はこのファイル形式（.eml）を解析できないため、取込を開始しませんでした。" +
+    "この文書の「処理レシピ」で「文書解析」を Unstructured に変えてから「処理を開始」してください。" +
+    "Unstructured の解析サービス（parser-unstructured）は停止しています。「運用設定 › サービス管理」で Unstructured を起動してください。";
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", (route) =>
+    route.fulfill({
+      status: 409,
+      json: { data: null, error_messages: [detail], warning_messages: [] },
+    })
+  );
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("button", { name: "ファイル準備を実行" }).click();
+
+  await expect(page.getByText(detail, { exact: false }).first()).toBeVisible();
+  await expect(
+    page.getByText("ファイル準備を開始しました。完了まで状態を更新します。")
+  ).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("ERROR は失敗 phase と前段の再処理ボタンを表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "ERROR",

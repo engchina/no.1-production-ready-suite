@@ -160,7 +160,7 @@ def _adapter_status(
         version = connection.model
         distribution_name = connection.protocol
     elif settings.rag_parser_readiness_probe_enabled:
-        # 本番/compose: parser サービスの /health で導入状況・version を解決する。
+        # 本番: parser サービスの /health で導入状況・version を解決する。
         installed, version, distribution_name = _probe_service_health(settings, backend)
     else:
         # 開発/テスト: backend プロセス内の import 検出にフォールバックする。

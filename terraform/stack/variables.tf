@@ -488,16 +488,17 @@ variable "rag_app_auth_cookie_secure" {
   default     = false
 }
 
-# 文書解析（parser）は CPU のマイクロサービスだけを配備する。parser-unstructured は既定の解析方式
-# （RAG_PARSER_ADAPTER_BACKEND=unstructured）のため常に起動し、ここでは任意の parser だけを選ぶ。
-variable "rag_enable_parser_docling" {
-  description = "Build and start the Docling parser microservice (CPU, parser-docling)."
+# 文書解析（parser）は CPU のマイクロサービスだけを配備する。parser-docling（既定の解析エンジン。
+# RAG_PARSER_ADAPTER_BACKEND=docling。PDF と画像）は常に配備し、ここでは任意の parser だけを選ぶ。
+# 以前の Docling を配備するかを選ぶ入力は廃止した（Docling は常に配備する。#286）。
+variable "rag_enable_parser_unstructured" {
+  description = "Install the Unstructured parser (parser-unstructured) as a systemd service. Use it to ingest formats that the default Docling parser (PDF and images only) cannot parse, such as text, HTML, Office, and e-mail; select Unstructured in the document's processing recipe."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "rag_enable_oci_cloud_parsers" {
-  description = "Build and start the OCI cloud parser proxies (parser-oci-genai-vision / parser-oci-document-understanding). They call OCI services and need no GPU."
+  description = "Install and start the OCI cloud parser proxies (parser-oci-genai-vision / parser-oci-document-understanding) as systemd services. They call OCI services and need no GPU."
   type        = bool
   default     = false
 }

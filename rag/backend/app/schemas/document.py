@@ -199,6 +199,18 @@ class DocumentDetail(DocumentSummary):
     classification: DocumentClassification | None = None
 
 
+class ParserSourceNotice(BaseModel):
+    """選んだ文書解析エンジン(既定は Docling)で扱えない形式の案内(取込を始める前に止める。#286)。"""
+
+    code: str = Field(description="parser_source_unsupported")
+    backend: str = Field(description="取込で使う文書解析エンジン(既定レシピ)。")
+    file_format: str = Field(description="原本の拡張子(無ければ content type)。")
+    suggested_backend: str | None = Field(
+        default=None, description="この形式を扱える文書解析エンジン(例: unstructured)。"
+    )
+    message: str = Field(description="利用者向けの理由と対処。")
+
+
 class UploadResult(BaseModel):
     """アップロード結果。"""
 
@@ -211,6 +223,10 @@ class UploadResult(BaseModel):
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     source_profile: SourceProfile
     ingestion_started: bool = False
+    parser_notice: ParserSourceNotice | None = Field(
+        default=None,
+        description="既定の文書解析エンジンで扱えない形式のとき、取込を始める前の案内(#286)。",
+    )
 
 
 class BatchUploadResult(BaseModel):

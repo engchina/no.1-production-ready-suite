@@ -1109,7 +1109,10 @@ def test_parser_registry_records_safe_fallback_for_corrupted_office() -> None:
 def test_parser_registry_records_external_adapter_unavailable_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Docling/Unstructured flags は未導入環境でも安全に local fallback する。"""
+    """Docling/Unstructured flags は未導入環境でも安全に local fallback する。
+
+    Docling は PDF と画像だけを受けるため(#286)、Markdown は Unstructured で確かめる。
+    """
 
     def unavailable(name: str) -> bool:
         return False
@@ -1129,14 +1132,14 @@ def test_parser_registry_records_external_adapter_unavailable_warning(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="docling",
-        docling_enabled=True,
+        adapter_backend="unstructured",
+        unstructured_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.extraction is not None
     assert result.fallback_used is True
-    assert "docling_adapter_package_missing" in result.warnings
+    assert "unstructured_adapter_package_missing" in result.warnings
 
 
 def test_parser_registry_requires_adapter_feature_flag(
@@ -1197,8 +1200,8 @@ def test_parser_registry_adapter_fallback_warning_affects_quality_report(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="docling",
-        docling_enabled=True,
+        adapter_backend="unstructured",
+        unstructured_enabled=True,
     )
 
     assert result.extraction is not None
@@ -1215,7 +1218,7 @@ def test_parser_registry_adapter_fallback_warning_affects_quality_report(
     assert quality.fallback_used is True
     assert quality.risk_level == "medium"
     assert "parser_fallback_used" in quality.quality_warnings
-    assert "docling_adapter_package_missing" in quality.quality_warnings
+    assert "unstructured_adapter_package_missing" in quality.quality_warnings
 
 
 def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
@@ -1313,10 +1316,13 @@ def test_parser_registry_explicit_unstructured_routes_email(
     assert result.extraction.parser_artifacts["email_lineage_normalized"] is True
 
 
-def test_parser_registry_explicit_docling_routes_office(
+def test_parser_registry_explicit_docling_does_not_take_office(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Office は明示選択された Docling adapter で解析する。"""
+    """Docling は PDF と画像だけを受ける(#286)。Office は Docling へ渡さない。
+
+    Office は ファイル準備の office_to_pdf で PDF にするか、Unstructured を選ぶ。
+    """
     docling_module = ModuleType("docling")
     docling_module.__dict__["__version__"] = "3.0.0"
     converter_module = ModuleType("docling.document_converter")
@@ -1327,8 +1333,7 @@ def test_parser_registry_explicit_docling_routes_office(
 
     class FakeDocumentConverter:
         def convert(self, path: str) -> object:
-            assert path.endswith(".docx")
-            return SimpleNamespace(document=FakeDocument())
+            raise AssertionError(f"Docling に Office を渡した: {path}")
 
     converter_module.__dict__["DocumentConverter"] = FakeDocumentConverter
     monkeypatch.setitem(sys.modules, "docling", docling_module)
@@ -1355,10 +1360,8 @@ def test_parser_registry_explicit_docling_routes_office(
         unstructured_enabled=False,
     )
 
-    assert result.parser_backend == "docling"
-    assert result.template == "office_document"
-    assert result.extraction is not None
-    assert "Office Docling" in result.extraction.raw_text
+    assert result.parser_backend != "docling"
+    assert "docling_adapter_source_unsupported" in result.warnings
 
 
 def test_image_adapter_without_bbox_gets_full_frame_source_asset(
@@ -3242,11 +3245,17 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 @pytest.mark.parametrize(
     ("backend", "file_name", "content_type", "expected"),
     [
-        # docling: PDF・画像・テキスト・HTML・Office
+        # docling: PDF・画像だけ(parser サービスは DocRAG のレイアウト解析。#286)
         ("docling", "doc.pdf", "application/pdf", True),
-        ("docling", "memo.md", "text/markdown", True),
-        ("docling", "page.html", "text/html", True),
-        ("docling", "sheet.xlsx", _XLSX_MIME, True),
+        ("docling", "scan.png", "image/png", True),
+        ("docling", "photo.jpg", "image/jpeg", True),
+        ("docling", "memo.md", "text/markdown", False),
+        ("docling", "memo.txt", "text/plain", False),
+        ("docling", "data.json", "application/json", False),
+        ("docling", "data.xml", "application/xml", False),
+        ("docling", "page.html", "text/html", False),
+        ("docling", "sheet.xlsx", _XLSX_MIME, False),
+        ("docling", "mail.eml", "message/rfc822", False),
         # unstructured: 汎用(メール含む)
         ("unstructured", "mail.eml", "message/rfc822", True),
         ("unstructured", "doc.pdf", "application/pdf", True),

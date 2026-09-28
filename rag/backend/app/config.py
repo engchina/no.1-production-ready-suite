@@ -44,8 +44,8 @@ AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
     # 廃止済みの in-process baseline。validator は local を正規化せず保持する(advanced
     # diagnostics の scorecard/staging golden gate が「常時利用可能な baseline」概念として
-    # 参照するため)。runtime では ingestion._partition_source が local を既定 unstructured
-    # サービスへマップし、in-process 解析は実行しない。
+    # 参照するため)。runtime では ingestion._partition_source が local を既定エンジン
+    # (DEFAULT_PARSER_ADAPTER_BACKEND = docling)のサービスへマップし、in-process 解析は実行しない。
     "local",
     "docling",
     "unstructured",
@@ -65,13 +65,14 @@ ParserAdapterBackend = Literal[
 # 取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
 # 旧値は再保存時に消えるため、既存データを書き換える migration は持たない。
 REMOVED_PARSER_ADAPTER_BACKENDS = frozenset({"marker", "unlimited_ocr", "glm_ocr"})
-DEFAULT_PARSER_ADAPTER_BACKEND: Literal["unstructured"] = "unstructured"
+# 既定の文書解析エンジン(#286: Unstructured から Docling へ変更)。Unstructured は明示選択で使える。
+DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 
 
 def normalize_parser_adapter_backend_value(value: object) -> object:
     """旧値・削除済みエンジンを既定エンジンへ正規化する(未知値はそのまま検証へ回す)。
 
-    - ``auto``(旧既定)と削除済みエンジン → 既定 ``unstructured``。
+    - ``auto``(旧既定)と削除済みエンジン → 既定 ``docling``(DEFAULT_PARSER_ADAPTER_BACKEND)。
     - ``local_partition``(結果タグ別名)→ baseline 値 ``local``。
     - ``local`` は正規化しない(advanced diagnostics が常時利用可能な baseline として扱う)。
     """
@@ -255,10 +256,11 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 class _PersistedParserAdapterSettings(BaseModel):
     """UI から保存された文書解析 backend と外部接続設定。"""
 
-    adapter_backend: ParserAdapterBackend = "unstructured"
-    docling_enabled: bool = False
+    # 既定エンジンは Docling(#286)。選択中の engine の flag だけを既定で有効にする。
+    adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
+    docling_enabled: bool = True
     docling_vision_enabled: bool = False
-    unstructured_enabled: bool = True
+    unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
@@ -321,7 +323,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
     # --- HuggingFace モデルダウンロード ---
     # RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT。huggingface_hub が読む HF_TOKEN /
-    # HF_ENDPOINT は、サービス管理が compose の parser コンテナへ環境変数として渡す。
+    # HF_ENDPOINT は、サービス管理が起動/再起動の前にサービス実行用の env ファイルへ書き、
+    # parser の systemd の unit が EnvironmentFile で読む(#286)。
     huggingface_token: str = Field(default="")
     huggingface_endpoint: str = Field(default="")
 
@@ -1165,31 +1168,31 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_preprocess_office_to_pdf_service_url: str = Field(
-        default="http://preprocess-office-to-pdf:8000",
+        default="http://127.0.0.1:18010",
         description="Office→PDF 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_pdf_to_page_images_service_url: str = Field(
-        default="http://preprocess-pdf-to-page-images:8000",
+        default="http://127.0.0.1:18011",
         description="PDF→ページ画像PDF 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_csv_to_json_service_url: str = Field(
-        default="http://preprocess-csv-to-json:8000",
+        default="http://127.0.0.1:18012",
         description="CSV→構造化 JSON 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_excel_to_json_service_url: str = Field(
-        default="http://preprocess-excel-to-json:8000",
+        default="http://127.0.0.1:18013",
         description="Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_url_to_markdown_service_url: str = Field(
-        default="http://preprocess-url-to-markdown:8000",
+        default="http://127.0.0.1:18014",
         description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_image_enhance_service_url: str = Field(
-        default="http://preprocess-image-enhance:8000",
+        default="http://127.0.0.1:18015",
         description="画像補正(OCR 前処理)マイクロサービスの base URL。",
     )
     rag_preprocess_pii_redact_service_url: str = Field(
-        default="http://preprocess-pii-redact:8000",
+        default="http://127.0.0.1:18016",
         description="PII マスク(取込時)前処理マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
@@ -1206,17 +1209,19 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="前処理で生成した正規化原本(canonical source)の Object Storage key prefix。",
     )
     rag_parser_adapter_backend: ParserAdapterBackend = Field(
-        default="unstructured",
+        default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
-            "文書解析 backend の明示選択。既定は Unstructured(simple 形式の catch-all)。"
-            "Docling/各 OCR/OCI Vision/Document Understanding は対応 parser "
-            "マイクロサービスへ HTTP 委譲する。in-process 解析・local fallback は持たない。"
+            "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
+            "Docling/Unstructured/各 OCR/OCI Vision/Document Understanding は対応 parser "
+            "マイクロサービスまたは API へ HTTP 委譲する。"
+            "in-process 解析・local fallback は持たない。"
         ),
     )
     rag_parser_docling_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Docling adapter を feature flag で有効化する。未導入時は安全に fallback する。"
+            "Docling adapter を有効化する。既定 backend のため既定で True。"
+            "取込時は parser-docling マイクロサービスの常時起動が前提。"
         ),
     )
     rag_parser_docling_vision_enabled: bool = Field(
@@ -1227,10 +1232,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_parser_unstructured_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Unstructured adapter を有効化する。既定 backend(simple 形式の catch-all)のため "
-            "既定で True。取込時は parser-unstructured マイクロサービスの常時起動が前提。"
+            "Unstructured adapter を有効化する。既定 backend ではないため既定で False"
+            "(画面で Unstructured を選ぶと有効になる)。選択時は parser-unstructured の起動が前提。"
         ),
     )
     rag_parser_mineru_enabled: bool = Field(
@@ -1242,11 +1247,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
     rag_parser_docling_service_url: str = Field(
-        default="http://parser-docling:8000",
+        default="http://127.0.0.1:18020",
         description="Docling parser マイクロサービスの base URL。",
     )
     rag_parser_unstructured_service_url: str = Field(
-        default="http://parser-unstructured:8000",
+        default="http://127.0.0.1:18022",
         description="Unstructured parser マイクロサービスの base URL。",
     )
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
@@ -1278,18 +1283,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_parser_asr_service_url: str = Field(
-        default="http://parser-asr:8000",
+        default="http://127.0.0.1:18026",
         description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
     )
     rag_parser_oci_genai_vision_service_url: str = Field(
-        default="http://parser-oci-genai-vision:8000",
+        default="http://127.0.0.1:18027",
         description=(
             "OCI Generative AI(Vision)parser マイクロサービスの base URL。"
             "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
         ),
     )
     rag_parser_oci_document_understanding_service_url: str = Field(
-        default="http://parser-oci-document-understanding:8000",
+        default="http://127.0.0.1:18028",
         description=(
             "OCI Document Understanding parser マイクロサービスの base URL。"
             "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
@@ -1342,7 +1347,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_chunking_service_url: str = Field(
-        default="http://pipeline-chunking:8000",
+        default="http://127.0.0.1:18030",
         description="chunking ステージマイクロサービスの base URL。",
     )
     rag_vector_index_service_enabled: bool = Field(
@@ -1353,7 +1358,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_vector_index_service_url: str = Field(
-        default="http://pipeline-vector-index:8000",
+        default="http://127.0.0.1:18031",
         description="vector_index ステージマイクロサービスの base URL。",
     )
     rag_graph_service_enabled: bool = Field(
@@ -1364,7 +1369,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_graph_service_url: str = Field(
-        default="http://pipeline-graphrag:8000",
+        default="http://127.0.0.1:18032",
         description="graphrag ステージマイクロサービスの base URL。",
     )
     rag_generation_service_enabled: bool = Field(
@@ -1376,7 +1381,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_generation_service_url: str = Field(
-        default="http://pipeline-generation:8000",
+        default="http://127.0.0.1:18033",
         description="generation ステージマイクロサービスの base URL。",
     )
     rag_guardrail_service_enabled: bool = Field(
@@ -1389,7 +1394,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_guardrail_service_url: str = Field(
-        default="http://pipeline-guardrail:8000",
+        default="http://127.0.0.1:18034",
         description="guardrail ステージマイクロサービスの base URL。",
     )
     rag_agentic_service_enabled: bool = Field(
@@ -1402,7 +1407,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_agentic_service_url: str = Field(
-        default="http://pipeline-agentic:8000",
+        default="http://127.0.0.1:18035",
         description="agentic ステージマイクロサービスの base URL。",
     )
     rag_grounding_service_enabled: bool = Field(
@@ -1414,7 +1419,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_grounding_service_url: str = Field(
-        default="http://pipeline-grounding:8000",
+        default="http://127.0.0.1:18036",
         description="grounding ステージマイクロサービスの base URL。",
     )
     rag_evaluation_service_enabled: bool = Field(
@@ -1425,7 +1430,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_evaluation_service_url: str = Field(
-        default="http://pipeline-evaluation:8000",
+        default="http://127.0.0.1:18037",
         description="evaluation ステージマイクロサービスの base URL。",
     )
     rag_retrieval_service_enabled: bool = Field(
@@ -1438,7 +1443,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_retrieval_service_url: str = Field(
-        default="http://pipeline-retrieval:8000",
+        default="http://127.0.0.1:18038",
         description="retrieval ステージマイクロサービスの base URL。",
     )
     rag_raptor_enabled: bool = Field(
@@ -1466,7 +1471,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "readiness 画面の adapter version/可用性を parser サービスの /health 問い合わせで "
             "解決する。OFF(既定)は backend プロセス内の import 検出にフォールバック(開発/テスト "
-            "用)。compose / 本番では true にしてサービスの導入状況を表示する。"
+            "用)。本番(systemd の unit)では true にしてサービスの導入状況を表示する。"
         ),
     )
     rag_parser_readiness_probe_timeout_seconds: float = Field(
@@ -1474,32 +1479,31 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         gt=0,
         description="readiness の /health 問い合わせ timeout(秒)。",
     )
-    # --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+    # --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止。#286）---
     rag_service_control_enabled: bool = Field(
         default=False,
         description=(
-            "サービス管理画面からの起動/停止(docker compose 制御)を有効化する。"
+            "サービス管理画面からの起動/停止(systemd の unit の操作)を有効化する。"
             "OFF(既定)は稼働状態の可視化のみで、制御 API は 409(control_disabled)で拒否する。"
-            "ON にする場合は backend が docker CLI を実行できる必要がある(ホスト直起動、または "
-            "docker.sock + docker CLI のマウント)。"
-        ),
-    )
-    rag_service_control_command: str = Field(
-        default="docker compose",
-        description=(
-            "サービス起動/停止に使う compose コマンドのベース(空白区切り)。"
-            "service 名はカタログの allowlist 経由でのみ付与し、任意コマンドは受け付けない。"
+            "dev(RAG_ENVIRONMENT が prod 以外)は自動で有効。操作は sudoers で許可した "
+            "allowlist の unit の `systemctl enable --now / disable --now / restart` と "
+            "`journalctl -u <unit>` だけを `sudo -n` で実行する(rag/docs/deployment.md)。"
         ),
     )
     rag_service_control_timeout_seconds: float = Field(
         default=60.0,
         gt=0,
-        description="サービス起動/停止 subprocess の timeout(秒)。超過は失敗として構造化返却する。",
+        description=(
+            "systemctl / journalctl の subprocess の timeout(秒)。超過は失敗として構造化返却する。"
+        ),
     )
-    rag_service_build_timeout_seconds: float = Field(
-        default=1800.0,
-        gt=0,
-        description="サービス build subprocess の timeout(秒)。build は長いため別枠で長めに取る。",
+    rag_service_runtime_env_file: str = Field(
+        default=str(BACKEND_ROOT / "service-runtime.env"),
+        description=(
+            "マイクロサービスの unit が EnvironmentFile で読む実行用の env ファイル。"
+            "backend が起動/再起動の前に HuggingFace 設定と実効 OCI Enterprise AI 設定"
+            "(model-settings.json 由来を含む)を書く(0600)。unit 側の path と一致させる。"
+        ),
     )
     rag_service_status_probe_timeout_seconds: float = Field(
         default=5.0,
@@ -1728,7 +1732,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
         ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
         「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
-        ``local`` を既定 ``unstructured`` サービスへマップし、in-process 解析は実行しない。
+        ``local`` を既定エンジン(``docling``)のサービスへマップし、in-process 解析は実行しない。
         """
         return normalize_parser_adapter_backend_value(value)
 

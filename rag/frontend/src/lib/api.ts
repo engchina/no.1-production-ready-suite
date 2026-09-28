@@ -531,6 +531,18 @@ export interface DocumentDeleteImpact {
   knowledge_bases: KnowledgeBaseRef[];
 }
 
+/**
+ * 選んだ文書解析エンジン（既定は Docling。PDF と画像だけ）で扱えない形式の案内（#286）。
+ * 取込は始めず、処理レシピで Unstructured を選ぶよう案内する。
+ */
+export interface ParserSourceNotice {
+  code: string;
+  backend: string;
+  file_format: string;
+  suggested_backend: string | null;
+  message: string;
+}
+
 export interface UploadResult {
   id: string;
   file_name: string;
@@ -541,6 +553,7 @@ export interface UploadResult {
   knowledge_bases: KnowledgeBaseRef[];
   source_profile: SourceProfile;
   ingestion_started: boolean;
+  parser_notice?: ParserSourceNotice | null;
 }
 
 export interface BatchUploadFailedItem {
@@ -1819,15 +1832,25 @@ export type ServiceCategory =
   | "graphrag"
   | "agentic";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
+// systemd の unit の状態 + /health（#286）。starting は unit が動いているが /health にまだ届かない、
+// failed は unit が失敗して止まった、not_installed は unit が登録されていない。
 export type ServiceRuntimeStatus =
-  "running" | "degraded" | "stopped" | "unconfigured" | "in_process";
+  | "running"
+  | "degraded"
+  | "starting"
+  | "failed"
+  | "stopped"
+  | "not_installed"
+  | "unconfigured"
+  | "in_process";
 export type ServiceExecutionPolicy =
   "required_no_fallback" | "in_process_when_disabled" | "selected_adapter";
-export type ServiceAction = "start" | "stop" | "restart" | "build" | "remove";
+// 起動 = systemctl enable --now、停止 = systemctl disable --now、再起動 = systemctl restart。
+export type ServiceAction = "start" | "stop" | "restart";
 
 export interface ServiceModelCacheData {
-  container_path: string;
-  volume_name: string;
+  /** サービスの実行ユーザーのキャッシュ親ディレクトリ（~/.cache）。 */
+  path: string;
   editable: false;
 }
 
@@ -1839,6 +1862,8 @@ export interface ServiceCatalogItemData {
   execution_policy: ServiceExecutionPolicy;
   deployable: boolean;
   configured: boolean;
+  /** 起動/停止・ログに使う systemd の unit 名。backend 内処理のステージは null。 */
+  systemd_unit: string | null;
   model_cache: ServiceModelCacheData | null;
 }
 
@@ -1866,7 +1891,7 @@ export interface ServiceControlResultData {
   status: ServiceRuntimeStatus;
 }
 
-export type ServiceLogsSource = "docker";
+export type ServiceLogsSource = "journald";
 
 export interface ServiceLogsData {
   service_id: string;

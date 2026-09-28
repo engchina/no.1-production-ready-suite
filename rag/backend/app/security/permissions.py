@@ -405,8 +405,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/services/{service_id}/start"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/stop"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/restart"): _any(MENU_SETTINGS_SERVICES),
-    ("POST", "/services/{service_id}/build"): _any(MENU_SETTINGS_SERVICES),
-    ("POST", "/services/{service_id}/remove"): _any(MENU_SETTINGS_SERVICES),
     # ---- 検索・回答設定 ----
     # 文書ワークスペースの処理設定パネルも文書解析の設定を読む。
     ("GET", "/settings/parser-adapters"): _any(

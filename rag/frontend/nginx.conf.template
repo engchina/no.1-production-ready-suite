@@ -6,7 +6,8 @@ server {
   index index.html;
 
   # アップロードの上限。nginx の既定（1m）のままだと 1 MB を超える文書を送れない（#280）。
-  # backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）より少し大きくする（init_script.sh と同じ値）。
+  # backend の RAG_MAX_UPLOAD_BYTES の既定（200 MiB）+ multipart の余白 10 MiB（init_script.sh の
+  # nginx_client_max_body_size と同じ計算。値は init-script-deployment.test.sh が照合する。Refs #306）。
   client_max_body_size 210M;
   proxy_connect_timeout 60s;
   proxy_send_timeout 600s;

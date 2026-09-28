@@ -123,8 +123,8 @@ class ParserServiceClient:
         field = _SERVICE_URL_FIELDS.get(backend)
         if field is None:
             return None
-        # dev では catalog の dev_port から 127.0.0.1:<port> に解決する(docker 名は
-        # ホストから引けないため)。prod は設定値そのまま。
+        # 既定は 127.0.0.1:<port>(ネイティブ配備)。dev では以前の docker 名の設定も
+        # catalog の port へ読み替える。prod は設定値そのまま。
         from app.services.catalog import resolve_service_base_url
 
         url = resolve_service_base_url(self._settings, field)
@@ -518,11 +518,17 @@ def _service_unavailable_message(
         formats = supported_formats_label(backend)
         formats_suffix = f"（対応形式: {formats}）" if formats else ""
         noun = "文書解析エンジン" if external else "文書解析サービス"
+        # 既定の Docling は PDF と画像だけを解析する(#286)。取込前の判定(parser_source_guard)と
+        # 同じ対処を案内する(ファイル準備で形式を変えた場合などは、ここで止まる)。
+        remedy = (
+            "それ以外の形式は、この文書の「処理レシピ」で「文書解析」を Unstructured に変えて"
+            "（「運用設定 › サービス管理」で Unstructured を起動して）から再実行してください。"
+            if backend == "docling"
+            else "別の解析エンジンを選ぶか、対応形式に変換してから再実行してください。"
+        )
         return (
             f"選択した{noun}（{label}）はこのファイル形式を処理できません"
-            f"{formats_suffix}。"
-            "別の解析エンジンを選ぶか、対応形式に変換してから再実行してください。"
-            f"{warning_suffix}"
+            f"{formats_suffix}。{remedy}{warning_suffix}"
         )
     if external:
         suffix = f" 接続先: {service_url}" if service_url else ""

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { t } from "@/lib/i18n";
 
 import {
+  serviceCanRestart,
   serviceExecutionPolicyLabelKey,
   servicePrimaryAction,
   serviceStoppedHintKey,
@@ -47,5 +48,43 @@ describe("ServicesManagementClient service policy helpers", () => {
     expect(servicePrimaryAction("unconfigured")).toBe("start");
     expect(servicePrimaryAction("loading")).toBe("start");
     expect(servicePrimaryAction("error")).toBe("start");
+  });
+
+  // systemd の unit の状態（#286）。起動中は unit が動いているので「停止」、失敗・未登録は「起動」。
+  it("maps systemd unit states to the primary action and restart availability", () => {
+    expect(servicePrimaryAction("starting")).toBe("stop");
+    expect(servicePrimaryAction("failed")).toBe("start");
+    expect(servicePrimaryAction("not_installed")).toBe("start");
+    expect(serviceCanRestart("running")).toBe(true);
+    expect(serviceCanRestart("degraded")).toBe(true);
+    expect(serviceCanRestart("starting")).toBe(true);
+    expect(serviceCanRestart("stopped")).toBe(false);
+    expect(serviceCanRestart("failed")).toBe(false);
+    expect(serviceCanRestart("not_installed")).toBe(false);
+  });
+
+  it("labels systemd states and journald logs without docker wording", () => {
+    expect(t("settings.services.status.starting")).toBe("起動中");
+    expect(t("settings.services.status.failed")).toBe("起動失敗");
+    expect(t("settings.services.status.not_installed")).toBe("未登録");
+    expect(
+      t("settings.services.logs.source.journald", {
+        unit: "production-ready-rag-parser-docling.service",
+        lines: "200",
+      })
+    ).toBe("journalctl -u production-ready-rag-parser-docling.service / 最新 200 行");
+    for (const key of [
+      "settings.services.overview.description",
+      "settings.services.mode.dev",
+      "settings.services.mode.prod",
+      "settings.services.mode.dev.hint",
+      "settings.services.mode.prod.hint",
+      "settings.services.gpuNote",
+      "settings.services.modelCache.hint",
+    ] as const) {
+      expect(t(key)).not.toMatch(/docker|compose|コンテナ/i);
+    }
+    // 既定の解析エンジンは Docling（#286）。
+    expect(t("settings.services.cpuNote")).toContain("Docling は既定の解析エンジン");
   });
 });

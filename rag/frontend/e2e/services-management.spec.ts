@@ -1,7 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockLocalAuth } from "./_helpers";
 
-type ServiceStatus = "running" | "degraded" | "stopped" | "unconfigured";
+type ServiceStatus =
+  | "running"
+  | "degraded"
+  | "starting"
+  | "failed"
+  | "stopped"
+  | "not_installed"
+  | "unconfigured";
 
 interface ServiceRow {
   service_id: string;
@@ -119,6 +126,14 @@ async function mockServices(
       // deployable=false の段は in_process 固定表示(操作ボタン非表示)。純 CPU の
       // pipeline 段(in_process_when_disabled)は demote 済み、それ以外は deployable。
       deployable: service.execution_policy !== "in_process_when_disabled",
+      systemd_unit:
+        service.execution_policy !== "in_process_when_disabled"
+          ? `production-ready-rag-${service.service_id}.service`
+          : null,
+      model_cache:
+        service.service_id === "parser-docling"
+          ? { path: "/var/lib/production-ready-rag/.cache", editable: false }
+          : null,
     }));
     await route.fulfill({
       json: {
@@ -147,7 +162,7 @@ async function mockServices(
       json: {
         data: {
           service_id: serviceId,
-          source: serviceId.startsWith("preprocess-") ? "uv" : "docker",
+          source: "journald",
           lines: 200,
           content: `${serviceId} boot complete\nGET /health 200 OK`,
         },
@@ -185,21 +200,18 @@ async function mockServices(
       },
     });
   });
-  for (const action of ["build", "remove"] as const) {
-    await page.route(`**/api/services/*/${action}`, async (route) => {
-      const id =
-        route.request().url().match(new RegExp(`services/([^/]+)/${action}`))?.[1] ?? "";
-      const target = state.services.find((s) => s.service_id === decodeURIComponent(id));
-      if (action === "remove" && target) target.status = "stopped";
-      await route.fulfill({
-        json: {
-          data: { service_id: id, action, status: target?.status ?? "stopped" },
-          error_messages: [],
-          warning_messages: [],
-        },
-      });
+  await page.route("**/api/services/*/restart", async (route) => {
+    const id = route.request().url().match(/services\/([^/]+)\/restart/)?.[1] ?? "";
+    const target = state.services.find((s) => s.service_id === decodeURIComponent(id));
+    if (target) target.status = "running";
+    await route.fulfill({
+      json: {
+        data: { service_id: id, action: "restart", status: "running" },
+        error_messages: [],
+        warning_messages: [],
+      },
     });
-  }
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -277,7 +289,9 @@ for (const viewport of [
     await page.getByRole("button", { name: "Docling の操作" }).click();
     await page.getByRole("menuitem", { name: "ログ" }).click();
     await expect(page.getByText("Docling のログ")).toBeVisible();
-    await expect(page.getByText("docker compose logs / 最新 200 行")).toBeVisible();
+    await expect(
+      page.getByText("journalctl -u production-ready-rag-parser-docling.service / 最新 200 行")
+    ).toBeVisible();
     await expect(page.getByText("parser-docling boot complete")).toBeVisible();
     await expect(page.getByRole("button", { name: "再取得" })).toBeVisible();
     await expect(page.getByRole("button", { name: "コピー" })).toBeVisible();
@@ -291,7 +305,7 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
 
   await page.goto("/settings/services");
 
-  await expect(page.getByText("本番 (docker)")).toBeVisible();
+  await expect(page.getByText("本番 (systemd)")).toBeVisible();
   await expect(page.getByText("無効(可視化のみ)")).toBeVisible();
   await expect(
     page.getByText("起動/停止は無効です。", { exact: false })
@@ -302,19 +316,18 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
   await expect(
     page.getByRole("button", { name: "Office→PDF 停止" })
   ).toBeDisabled();
-  // メニュー内のビルド / 削除も無効。
-  await page.getByRole("button", { name: "Docling の操作" }).click();
-  await expect(page.getByRole("menuitem", { name: "ビルド" })).toBeDisabled();
-  await expect(page.getByRole("menuitem", { name: "削除" })).toBeDisabled();
+  // メニュー内の再起動も無効。
+  await page.getByRole("button", { name: "Office→PDF の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "再起動" })).toBeDisabled();
 });
 
-test("dev モードは docker バッジと有効化された制御を表示する", async ({ page }) => {
+test("dev モードは systemd バッジと有効化された制御を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
 
   await page.goto("/settings/services");
 
-  await expect(page.getByText("開発 (docker)")).toBeVisible();
+  await expect(page.getByText("開発 (systemd)")).toBeVisible();
   await expect(
     page.getByText("開発モード", { exact: false })
   ).toBeVisible();
@@ -327,26 +340,47 @@ test("dev モードは docker バッジと有効化された制御を表示す�
   ).toBeEnabled();
 });
 
-test("各サービスの操作メニューからビルドとコンテナ削除を実行できる", async ({ page }) => {
+test("稼働中のサービスは操作メニューから確認なしで再起動できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
 
   await page.goto("/settings/services");
 
-  // ビルドは確認なしで実行 → トースト。
-  await page.getByRole("button", { name: "Docling の操作" }).click();
-  await page.getByRole("menuitem", { name: "ビルド" }).click();
-  await expect(page.getByText("Docling のイメージをビルドしました。")).toBeVisible();
-
-  // 削除は破壊的なので確認ダイアログを経て実行 → トースト。
-  await page.getByRole("button", { name: "Docling の操作" }).click();
-  await page.getByRole("menuitem", { name: "削除" }).click();
-  await expect(page.getByRole("heading", { name: "コンテナを削除しますか?" })).toBeVisible();
-  await page.getByRole("button", { name: "削除する" }).click();
-  await expect(page.getByText("Docling のコンテナを削除しました。")).toBeVisible();
+  await page.getByRole("button", { name: "Office→PDF の操作" }).click();
+  await page.getByRole("menuitem", { name: "再起動" }).click();
+  await expect(page.getByText("Office→PDF を再起動しました。")).toBeVisible();
+  // Docker のイメージ build / コンテナ削除の操作は出さない（#286）。
+  await page.getByRole("button", { name: "Office→PDF の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "ビルド" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
 });
 
-test("実行コマンドは既定で折りたたまれ、展開すると dev のビルドコマンドを表示する", async ({
+test("unit が未登録・起動失敗のサービスは状態と案内を出す", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  const services = defaultServices().map((service) =>
+    service.service_id === "parser-asr"
+      ? { ...service, status: "not_installed" as const }
+      : service.service_id === "parser-docling"
+        ? { ...service, status: "failed" as const }
+        : service
+  );
+  await mockServices(page, { controlEnabled: true, deploymentMode: "prod", services });
+
+  await page.goto("/settings/services");
+
+  const asr = page.getByTestId("service-row-parser-asr");
+  await expect(asr.getByText("未登録")).toBeVisible();
+  await expect(asr.getByText("systemd の unit が登録されていません", { exact: false })).toBeVisible();
+  // unit が無いので起動できない。
+  await expect(page.getByRole("button", { name: /ASR\(音声文字起こし\) 起動/ })).toBeDisabled();
+  const docling = page.getByTestId("service-row-parser-docling");
+  await expect(docling.getByText("起動失敗")).toBeVisible();
+  await expect(docling.getByText("ログで原因を確認", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toBeEnabled();
+  await expect(docling.getByText("/var/lib/production-ready-rag/.cache")).toBeVisible();
+});
+
+test("実行コマンドは既定で折りたたまれ、展開すると systemd のコマンドを表示する", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -354,17 +388,22 @@ test("実行コマンドは既定で折りたたまれ、展開すると dev の
 
   await page.goto("/settings/services");
 
-  const devBuild = "docker compose -f docker-compose.yml -f docker-compose.dev.yml build";
+  const status = "systemctl list-units --all 'production-ready-rag-*'";
   // 既定では閉じている(コマンドは描画されない)。
-  await expect(page.getByText(devBuild, { exact: false })).toHaveCount(0);
+  await expect(page.getByText(status, { exact: false })).toHaveCount(0);
 
   await page.getByRole("button", { name: "実行コマンド" }).click();
 
-  // 展開すると dev の override 付きビルドコマンドが見える。
-  await expect(page.getByText(devBuild, { exact: false }).first()).toBeVisible();
+  await expect(page.getByText(status, { exact: false }).first()).toBeVisible();
   await expect(
-    page.getByText("--profile gpu build parser-asr", { exact: false }).first()
+    page.getByText("sudo journalctl -u production-ready-rag-parser-docling.service -f").first()
   ).toBeVisible();
+  // dev は unit と sudoers を登録するコマンドも出す。
+  await expect(page.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("scripts/rag-services.sh install --gpu", { exact: true })
+  ).toBeVisible();
+  await expect(page.getByText("docker", { exact: false })).toHaveCount(0);
 });
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
@@ -431,24 +470,23 @@ for (const viewport of [
       await expect(buttons).toHaveCount(2);
       await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(1);
       await expect(row.getByTestId(`service-primary-action-${serviceId}`)).toHaveText(primary);
-      for (const moved of ["ログ", "ビルド", "削除"]) {
+      for (const moved of ["ログ", "再起動"]) {
         await expect(row.getByRole("button", { name: moved, exact: true })).toHaveCount(0);
       }
     }
     await expectNoHorizontalOverflow(page);
 
-    // メニューには ログ / ビルド / 削除（danger）が入る。
-    await page.getByRole("button", { name: "Docling の操作" }).click();
+    // 稼働中の行のメニューには ログ / 再起動 が入る（停止中はログだけ）。
+    await page.getByRole("button", { name: "Office→PDF の操作" }).click();
     const menu = page.getByRole("menu");
-    await expect(menu.getByRole("menuitem")).toHaveText(["ログ", "ビルド", "削除"]);
-    await expect(menu.getByRole("menuitem", { name: "削除" })).toHaveAttribute(
-      "data-entity-action-tone",
-      "danger"
-    );
+    await expect(menu.getByRole("menuitem")).toHaveText(["ログ", "再起動"]);
     await expectNoHorizontalOverflow(page);
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Docling の操作" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Office→PDF の操作" })).toBeFocused();
+    await page.getByRole("button", { name: "Docling の操作" }).click();
+    await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["ログ"]);
+    await page.keyboard.press("Escape");
   });
 }
 

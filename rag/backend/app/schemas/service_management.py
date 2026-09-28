@@ -1,4 +1,4 @@
-"""サービス管理(前処理 / Parser マイクロサービスの稼働可視化・起動/停止)スキーマ。"""
+"""サービス管理(前処理 / Parser マイクロサービスの稼働可視化・起動/停止。systemd。#286)スキーマ。"""
 
 from __future__ import annotations
 
@@ -10,19 +10,18 @@ from app.services.catalog import ServiceCategory, ServiceExecutionPolicy, Servic
 from app.services.status import ServiceRuntimeStatus
 
 DeploymentMode = Literal["dev", "prod"]
-ServiceLogsSource = Literal["docker"]
+ServiceLogsSource = Literal["journald"]
 
 
 class ServiceModelCacheData(BaseModel):
-    """モデル DL を行うサービスのキャッシュマウント情報(dev・読み取り専用表示)。"""
+    """モデル DL を行うサービスのキャッシュの場所(読み取り専用表示)。"""
 
-    container_path: str = Field(description="コンテナ内 HF キャッシュ実体パス。")
-    volume_name: str = Field(
-        description="dev で mount する Docker Compose named volume の論理名。",
+    path: str = Field(
+        description="サービスの実行ユーザーのキャッシュ親ディレクトリ(HF・docling などのモデル)。",
     )
     editable: Literal[False] = Field(
         default=False,
-        description="volume 名と mount 先は固定。UI からは編集不可。",
+        description="キャッシュの場所は固定。UI からは編集不可。",
     )
 
 
@@ -46,6 +45,10 @@ class ServiceCatalogItemData(BaseModel):
     configured: bool = Field(
         description="base URL が設定済みか(未設定なら status=unconfigured)。",
     )
+    systemd_unit: str | None = Field(
+        default=None,
+        description="起動/停止・ログに使う systemd の unit 名。backend 内処理のステージは None。",
+    )
     model_cache: ServiceModelCacheData | None = Field(
         default=None,
         description="モデル DL を行うサービスのキャッシュマウント情報。なければ None。",
@@ -65,7 +68,10 @@ class ServiceCatalogData(BaseModel):
         description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
     )
     deployment_mode: DeploymentMode = Field(
-        description="dev は uv プロセス起動、prod は docker compose 制御。RAG_ENVIRONMENT 由来。",
+        description=(
+            "RAG_ENVIRONMENT 由来。dev/prod とも systemd の unit を操作する。"
+            "dev は起動/停止を自動で有効にする。"
+        ),
     )
     services: list[ServiceCatalogItemData] = Field(default_factory=list)
 
@@ -77,7 +83,10 @@ class ServiceListData(BaseModel):
         description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
     )
     deployment_mode: DeploymentMode = Field(
-        description="dev は uv プロセス起動、prod は docker compose 制御。RAG_ENVIRONMENT 由来。",
+        description=(
+            "RAG_ENVIRONMENT 由来。dev/prod とも systemd の unit を操作する。"
+            "dev は起動/停止を自動で有効にする。"
+        ),
     )
     services: list[ServiceStatusData] = Field(default_factory=list)
 

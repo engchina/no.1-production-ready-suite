@@ -82,10 +82,9 @@ REMOVED_AGENT_BASIC_AUTH = (
     "htpasswd",
 )
 
-# RAG の Compute が常に build・起動する compose の service（CPU だけ）と、任意で足せる service。
-RAG_BASE_COMPOSE_SERVICES = [
-    "backend",
-    "ingestion-worker",
+# RAG の Compute が常に配備する前処理 / parser（CPU だけ）と、任意で足せる parser（#286）。
+# backend と ingestion-worker は常に配備するため、この一覧には含めない。
+RAG_BASE_SERVICES = [
     "preprocess-office-to-pdf",
     "preprocess-pdf-to-page-images",
     "preprocess-csv-to-json",
@@ -93,29 +92,35 @@ RAG_BASE_COMPOSE_SERVICES = [
     "preprocess-url-to-markdown",
     "preprocess-image-enhance",
     "preprocess-pii-redact",
-    "parser-unstructured",
-]
-RAG_OPTIONAL_COMPOSE_SERVICES = [
     "parser-docling",
+]
+# parser-unstructured は Docling が扱えない形式(テキスト・Office・メール など)を取り込むときだけ選ぶ(#286)。
+RAG_OPTIONAL_SERVICES = [
+    "parser-unstructured",
     "parser-oci-genai-vision",
     "parser-oci-document-understanding",
 ]
-# docker-compose.yml の environment が正本の key。RAG の .env に書くと compose の値に隠れて誤解を招く。
-RAG_COMPOSE_OWNED_ENV_KEYS = {
+# systemd の unit の Environment（init_script.sh）と Settings の既定値が正本の key。RAG の .env に書くと、
+# unit の値に隠れる（RAG_ENVIRONMENT）か、配備が前提にする場所とずれる。
+RAG_UNIT_OWNED_ENV_KEYS = {
     "RAG_ENVIRONMENT",
     "PLATFORM_LOCAL_STORAGE_DIR",
     "PLATFORM_MODEL_SETTINGS_FILE",
     "PLATFORM_OCI_CONFIG_FILE",
 }
+# 以前の入力（Docling は既定の解析エンジンのため常に配備する。#286）。stack に残さない。
+REMOVED_RAG_INPUTS = ("rag_enable_parser_docling", "rag_compose_services", "compose_services")
 
 # 製品ごとの backend/.env（製品接頭辞。#211）に必ず書く値。
 REQUIRED_BACKEND_ENV_LINES = {
-    # RAG の env_file は compose が `$` を展開するため、入力由来の値を single quote で囲む。
+    # RAG の backend/.env は OCI parser の unit も EnvironmentFile で読む。入力由来の値は single quote で囲む。
+    # 既定の解析エンジンは Docling。サービス管理画面は sudoers で許可した unit の systemctl だけを実行する（#286）。
     "rag": [
         "RAG_AUTH_MODE=production\n",
         "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
-        "RAG_PARSER_ADAPTER_BACKEND=unstructured\n",
-        "RAG_SERVICE_CONTROL_ENABLED=false\n",
+        "RAG_PARSER_ADAPTER_BACKEND=docling\n",
+        "RAG_PARSER_DOCLING_ENABLED=true\n",
+        "RAG_SERVICE_CONTROL_ENABLED=true\n",
     ],
     "nl2sql": [
         "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}\n",
@@ -183,20 +188,24 @@ BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins
 INIT_SCRIPT_CONTRACTS = {
     "rag": [
         'WALLET_DIR="${APP_ROOT}/wallet"',
-        'COMPOSE_PROJECT_NAME="production-ready-rag"',
         'BACKEND_HOST="127.0.0.1"',
         'BACKEND_PORT="8000"',
-        "REQUIRED_COMPOSE_SERVICES=(backend ingestion-worker parser-unstructured)",
-        "docker-compose-plugin",
-        "ports: !override",
-        '- "${BACKEND_HOST}:${BACKEND_PORT}:8000"',
-        "- ${WALLET_DIR}:${WALLET_DIR}",
+        "REQUIRED_RAG_SERVICES=(parser-docling)",
+        'source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "python -m app.rag.system_schema_cli initialize",
         "openssl rand -hex 32",
-        "ExecStart=${COMPOSE_WRAPPER} up -d --no-build ${COMPOSE_SERVICES[*]}",
+        'uv sync --locked --no-dev --python ${RAG_PYTHON_VERSION}',
+        "--bind ${BACKEND_HOST}:${BACKEND_PORT}",
+        "python -m app.rag.ingestion_worker",
+        "Environment=RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false",
+        "KillMode=mixed",
+        'systemctl enable --now "${unit}"',
+        'elif systemctl is-enabled --quiet "${unit}"; then',
+        'visudo -cf "${tmp}"',
         "proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
         "proxy_buffering off;",
+        "client_max_body_size ${client_max_body_size};",
         "/api/health",
         '"${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"',
     ],
@@ -231,14 +240,16 @@ INIT_SCRIPT_CONTRACTS = {
 }
 INIT_SCRIPT_ORDER = {
     "rag": [
+        "  load_rag_services\n",
         "  install_system_packages\n",
-        "  install_docker\n",
-        "  load_compose_services\n",
+        "  install_nodejs\n",
+        "  install_uv\n",
+        "  prepare_service_user\n",
         "  prepare_filesystem\n",
+        "  migrate_from_docker_compose\n",
         "  install_runtime_env\n",
-        "  write_compose_override\n",
-        "  build_images\n",
-        "  prepare_container_permissions\n",
+        "  install_wallet\n",
+        "  install_service_venvs\n",
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
@@ -657,7 +668,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "backend_env = base64gzip(local.agent_backend_env)",
             'platform_env = base64gzip(local.platform_envs["agent"])',
             'for product, extra in local.platform_env_product : product => "${local.platform_env}${extra}"',
-            'compose_services = product == "rag" ? join(" ", local.rag_compose_services) : ""',
+            'rag_services = product == "rag" ? join(" ", local.rag_services) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
             # MCP の URL は同じ subnet の private IP の Nginx（/api/ を backend へ proxy）。
@@ -714,52 +725,62 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
 
     rag_env = _heredoc(locals_source, "rag_backend_env")
     rag_keys = _env_keys(rag_env) + _env_keys(platform_common) + _env_keys(_platform_env_product(locals_source, "rag"))
-    compose_owned = sorted(set(rag_keys) & RAG_COMPOSE_OWNED_ENV_KEYS)
-    if compose_owned:
-        raise AssertionError(f"RAG .env must not set keys owned by docker-compose.yml: {compose_owned}")
-    # RAG の backend/.env は compose の env_file で、compose が `$` を展開する。入力値を書くなら single quote で囲む。
+    unit_owned = sorted(set(rag_keys) & RAG_UNIT_OWNED_ENV_KEYS)
+    if unit_owned:
+        raise AssertionError(f"RAG .env must not set keys owned by the systemd units / Settings defaults: {unit_owned}")
+    # RAG の backend/.env は python-dotenv と systemd の EnvironmentFile が読む。入力値を書くなら single quote で囲む。
     for line in rag_env.splitlines():
         key, _, value = line.partition("=")
         if re.search(r"\$\{var\.", value) and not (value.startswith("'") and value.endswith("'")):
             raise AssertionError(f"RAG backend/.env value must be single-quoted: {key}")
 
-    _verify_rag_compose_services(locals_source)
+    _verify_rag_services(locals_source)
 
 
-def _verify_rag_compose_services(locals_source: str) -> None:
-    match = re.search(r"(?ms)^  rag_compose_services = concat\(\n(.*?)^  \)$", locals_source)
+def _rag_systemd_services() -> dict[str, str]:
+    """rag/scripts/rag-systemd.sh の RAG_MICROSERVICES（id|dir|port|timeout）の id → dir。"""
+    source = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", source)
+    if block is None:
+        raise AssertionError("rag/scripts/rag-systemd.sh RAG_MICROSERVICES not found")
+    services: dict[str, str] = {}
+    for line in block.group(1).splitlines():
+        service_id, directory, _port, _timeout = line.strip().strip('"').split("|")
+        services[service_id] = directory
+    return services
+
+
+def _verify_rag_services(locals_source: str) -> None:
+    match = re.search(r"(?ms)^  rag_services = concat\(\n(.*?)^  \)$", locals_source)
     if match is None:
-        raise AssertionError("locals.tf rag_compose_services concat() not found")
+        raise AssertionError("locals.tf rag_services concat() not found")
     services_local = match.group(1)
     listed = re.findall(r'"([a-z0-9-]+)"', services_local)
     base = re.findall(r'"([a-z0-9-]+)"', services_local.split("],", 1)[0])
-    if base != RAG_BASE_COMPOSE_SERVICES:
-        raise AssertionError(f"RAG base compose services changed: {base}")
+    if base != RAG_BASE_SERVICES:
+        raise AssertionError(f"RAG base services changed: {base}")
     optional = [name for name in listed if name not in base]
-    if sorted(optional) != sorted(RAG_OPTIONAL_COMPOSE_SERVICES):
-        raise AssertionError(f"RAG optional compose services changed: {optional}")
+    if sorted(optional) != sorted(RAG_OPTIONAL_SERVICES):
+        raise AssertionError(f"RAG optional services changed: {optional}")
     _require_all(
         services_local,
         [
-            'var.rag_enable_parser_docling ? ["parser-docling"] : []',
+            'var.rag_enable_parser_unstructured ? ["parser-unstructured"] : []',
             "var.rag_enable_oci_cloud_parsers ? [",
         ],
-        context="RAG optional compose services",
+        context="RAG optional services",
     )
-    compose_source = (REPO_ROOT / "rag" / "docker-compose.yml").read_text(encoding="utf-8")
-    services = compose_source.split("\nservices:\n", 1)[1].split("\nvolumes:\n", 1)[0]
-    blocks = re.split(r"(?m)^  ([a-z0-9-]+):\n", services)
-    compose = {blocks[index]: blocks[index + 1] for index in range(1, len(blocks) - 1, 2)}
-    missing = sorted(name for name in listed if name not in compose)
+    # 各サービスは rag/scripts/rag-systemd.sh に unit の定義（venv のディレクトリ・port）がある。
+    defined = _rag_systemd_services()
+    missing = sorted(name for name in listed if name not in defined)
     if missing:
-        raise AssertionError(f"compose services not defined in rag/docker-compose.yml: {missing}")
-    gpu = sorted(
-        name
-        for name in listed
-        if re.search(r'profiles: \[[^\]]*"gpu"', compose[name]) or "nvidia" in compose[name]
-    )
-    if gpu:
-        raise AssertionError(f"the stack must not start GPU services: {gpu}")
+        raise AssertionError(f"RAG services not defined in rag/scripts/rag-systemd.sh: {missing}")
+    for name in listed:
+        directory = REPO_ROOT / "rag" / defined[name]
+        if not (directory / "uv.lock").is_file():
+            raise AssertionError(f"RAG service {name} has no uv.lock for `uv sync --locked`: {directory}")
+    if "parser-asr" in listed:
+        raise AssertionError("the stack must not deploy GPU services: parser-asr")
 
 
 def _verify_bootstrap(bootstrap: str) -> None:
@@ -789,14 +810,14 @@ def _verify_bootstrap(bootstrap: str) -> None:
             raise AssertionError(f"{secret_path} must be written root-only (0600)")
     # 製品固有のファイルは、その製品の Compute にだけ書く。
     rag_block = re.search(r'(?ms)^%\{ if product == "rag" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
-    if rag_block is None or 'path: "/u01/aipoc/props/compose_services.txt"' not in rag_block.group(1):
-        raise AssertionError("compose_services.txt must be written only on the RAG Compute")
+    if rag_block is None or 'path: "/u01/aipoc/props/rag_services.txt"' not in rag_block.group(1):
+        raise AssertionError("rag_services.txt must be written only on the RAG Compute")
     if "basic_auth" in bootstrap:
         raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
     _require_in_order(
         bootstrap,
         ["configure_firewall\n", "clone_or_update_repo ", "run_application_init\n"],
-        context="bootstrap order (firewall rules are saved before Docker is installed)",
+        context="bootstrap order (firewall rules are saved before the application is deployed)",
     )
 
 
@@ -805,15 +826,18 @@ def _verify_init_scripts(init_sources: dict[str, str]) -> None:
         _require_all(source, INIT_SCRIPT_CONTRACTS[product], context=f"{product}/init_script.sh")
         _require_in_order(source, INIT_SCRIPT_ORDER[product], context=f"{product}/init_script.sh main order")
     rag = init_sources["rag"]
-    allowed_block = re.search(r"(?ms)^ALLOWED_COMPOSE_SERVICES=\(\n(.*?)^\)$", rag)
+    allowed_block = re.search(r"(?ms)^ALLOWED_RAG_SERVICES=\(\n(.*?)^\)$", rag)
     if allowed_block is None:
-        raise AssertionError("rag/init_script.sh ALLOWED_COMPOSE_SERVICES not found")
-    if sorted(allowed_block.group(1).split()) != sorted(RAG_BASE_COMPOSE_SERVICES + RAG_OPTIONAL_COMPOSE_SERVICES):
-        raise AssertionError("rag/init_script.sh allowed compose services differ from the stack")
+        raise AssertionError("rag/init_script.sh ALLOWED_RAG_SERVICES not found")
+    if sorted(allowed_block.group(1).split()) != sorted(RAG_BASE_SERVICES + RAG_OPTIONAL_SERVICES):
+        raise AssertionError("rag/init_script.sh allowed services differ from the stack")
     for product in ("rag", "agent"):
         if "auth_basic" in init_sources[product]:
             raise AssertionError(f"{product} uses the backend login; Nginx must not add Basic authentication")
-    for product in ("nl2sql", "agent"):
+    # 3 製品とも Docker を入れず、systemd で直接動かす（RAG は #286。以前の compose の配備を止める処理だけ残す）。
+    if re.search(r"docker-ce|docker-compose-plugin|download\.docker\.com|docker (?:run|compose)\b", rag):
+        raise AssertionError("rag is deployed natively with systemd and must not install or run Docker")
+    for product in PRODUCTS:
         if re.search(r"(?im)^\s*(?:docker|docker-compose)\b", init_sources[product]):
             raise AssertionError(f"{product} is deployed directly with systemd and must not require Docker")
 
@@ -862,6 +886,10 @@ def verify(package_path: Path) -> None:
         sources["output.tf"],
     )
     _verify_bootstrap(bootstrap)
+    stack_sources = "\n".join([*sources.values(), bootstrap])
+    for removed in REMOVED_RAG_INPUTS:
+        if removed in stack_sources:
+            raise AssertionError(f"removed RAG stack input / output remains: {removed}")
     _verify_init_scripts(init_sources)
     _verify_boundaries({**sources, "bootstrap": bootstrap, **{f"{p}/init_script.sh": s for p, s in init_sources.items()}})
 

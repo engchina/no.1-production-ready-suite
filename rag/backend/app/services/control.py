@@ -1,13 +1,14 @@
-"""サービス起動/停止の制御層。
+"""サービス起動/停止・ログの制御層(systemd。#286)。
 
-driver 抽象で実環境を切り替えられるようにしつつ、今回は ``DockerComposeDriver``
-(dev/prod とも docker compose)のみ実装する。将来 OKE/Container Instances 用 driver を足せる。
+各マイクロサービスは systemd の unit(``production-ready-rag-<service_id>.service``)として動く。
+画面の起動/停止は unit を ``enable --now`` / ``disable --now`` し、利用者が最後に操作した状態を
+systemd の enable / disable として残す(再起動・再配備でもその状態に戻る)。
 
 セキュリティ要件:
 - ``rag_service_control_enabled`` が False の間は呼び出し側が 409 で拒否する(本層は実行しない)。
-- service 名は **カタログの allowlist** に限定し、任意コマンド・任意引数は受けない。
-- compose のベースコマンドのみ設定で差し替え可能(``rag_service_control_command``)。
-- subprocess は timeout 付きで実行し、失敗は exit code/stderr 付きで構造化返却する。
+- 対象は **カタログの allowlist の unit** に限定し、任意のコマンド・引数は受けない
+  (argv は ``app.services.systemd`` が固定で組み立てる)。
+- subprocess は timeout 付きで実行し、失敗は理由(unit が無い / 権限が無い / 失敗)付きで返す。
 """
 
 from __future__ import annotations
@@ -15,36 +16,65 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from app.config import (
     Settings,
     enterprise_ai_default_model_id,
     enterprise_ai_vision_model_id,
 )
-from app.services.catalog import (
-    ServiceCatalogEntry,
-    is_dev_mode,
+from app.services.catalog import ServiceCatalogEntry
+from app.services.systemd import (
+    CommandUnavailableError,
+    SystemdAction,
+    UnitState,
+    is_permission_error,
+    is_systemd_unavailable,
+    journalctl_argv,
+    parse_journal,
+    parse_systemctl_show,
+    run_command,
+    systemctl_action_argv,
+    systemctl_show_argv,
 )
 
 logger = logging.getLogger(__name__)
 
-ServiceAction = Literal["start", "stop", "restart", "build", "remove"]
-ServiceLogsSource = Literal["docker"]
+ServiceAction = SystemdAction
+ServiceLogsSource = Literal["journald"]
+# 失敗の理由。API は unit_not_found → 404、permission_denied / unavailable → 503、
+# failed → 502 にする。
+ServiceFailureReason = Literal["unit_not_found", "permission_denied", "unavailable", "failed"]
 
-# backend/app/services/control.py → parents[3] = リポジトリ root(services/<…> を解決する基点)。
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
-# compose の project 名。docker-compose.yml の top-level ``name:``・本番の init_script.sh の
-# wrapper(``--project-name``)・scripts/build-services.sh と同じ値にする(#310)。
-# 未指定だと compose ファイルのディレクトリ名から決まり、画面から操作・ログ取得する project と
-# 実際にコンテナが動いている project がずれる(ずれると logs は exit 0 で空を返す)。
-COMPOSE_PROJECT_NAME = "production-ready-rag"
-# 対象のコンテナが無いと成功扱いにならない操作(ログ取得は read_service_logs で別に確かめる)。
-_ACTIONS_REQUIRING_CONTAINER: frozenset[ServiceAction] = frozenset({"stop", "restart"})
+# サービス実行用の env ファイルに書く key(値は backend の実効設定)。
+# HF_TOKEN / HF_ENDPOINT は huggingface_hub が読む標準名。OCI_ENTERPRISE_AI_* は docling の
+# DocRAG Vision 図説明が読む名前、PLATFORM_OCI_ENTERPRISE_AI_* は OCI parser が読む名前。
+SERVICE_RUNTIME_ENV_KEYS = (
+    "HF_TOKEN",
+    "HF_ENDPOINT",
+    "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
+    "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
+    "PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID",
+    "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL",
+    "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL",
+    "PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH",
+    "PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH",
+    "PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE",
+    "OCI_ENTERPRISE_AI_ENDPOINT",
+    "OCI_ENTERPRISE_AI_API_KEY",
+    "OCI_ENTERPRISE_AI_PROJECT_OCID",
+    "OCI_ENTERPRISE_AI_VLM_MODEL",
+    "OCI_ENTERPRISE_AI_DEFAULT_MODEL",
+)
+_RUNTIME_ENV_FILE_MODE = 0o600
+_ACTION_LABELS: dict[ServiceAction, str] = {
+    "start": "起動",
+    "stop": "停止",
+    "restart": "再起動",
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +86,7 @@ class ControlResult:
     service_id: str
     exit_code: int | None = None
     detail: str | None = None
+    reason: ServiceFailureReason | None = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +100,7 @@ class ServiceLogsResult:
 
 
 class ServiceControlError(Exception):
-    """制御コマンドの実行に失敗したことを表す(API は 502 へ正規化)。"""
+    """制御コマンドの実行に失敗したことを表す(API は ``result.reason`` で status を決める)。"""
 
     def __init__(self, result: ControlResult) -> None:
         super().__init__(result.detail or f"{result.action} failed: {result.service_id}")
@@ -77,233 +108,155 @@ class ServiceControlError(Exception):
 
 
 class ServiceLogsError(Exception):
-    """サービスログ取得に失敗したことを表す(API は 502 へ正規化)。"""
+    """サービスログ取得に失敗したことを表す(API は ``reason`` で status を決める)。"""
+
+    def __init__(self, message: str, reason: ServiceFailureReason = "failed") -> None:
+        super().__init__(message)
+        self.reason: ServiceFailureReason = reason
 
 
-def _compose_project_directory(settings: Settings) -> Path | None:
-    """compose の project directory(build context・相対 volume の基点)。
+class _UnitError(Exception):
+    """unit の状態確認・操作の失敗(理由と利用者向けメッセージ)。"""
 
-    dev はホストのリポジトリ root(``rag/``)。prod(backend もコンテナ)はマウントした compose
-    ファイルの場所が既定の project directory になるため指定しない(None)。
-    """
-    return REPO_ROOT if is_dev_mode(settings) else None
-
-
-def _compose_command(settings: Settings) -> list[str]:
-    """compose のベースコマンド(設定で差し替え可能。空なら ``docker compose``)。"""
-    return shlex.split(settings.rag_service_control_command) or ["docker", "compose"]
+    def __init__(self, message: str, reason: ServiceFailureReason) -> None:
+        super().__init__(message)
+        self.reason: ServiceFailureReason = reason
 
 
-def _compose_target_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
-    """ベースコマンドとサブコマンドの間に置く引数(project 名・directory・ファイル・profile)。
-
-    project 名は常に固定し(``COMPOSE_PROJECT_NAME``)、どの cwd から実行しても同じ project の
-    コンテナを操作する。dev は ``docker-compose.dev.yml`` を重ね、コンテナの 8000 を localhost の
-    dev_port へ公開してホスト backend が /health・/parse を叩けるようにする(ファイルは
-    project directory からの絶対パスで渡す)。prod(backend もコンテナ)は base compose のみ。
-    GPU サービスは compose の profile gate を越えるため ``--profile gpu`` を付ける。
-    """
-    project_args = ["--project-name", COMPOSE_PROJECT_NAME]
-    project_directory = _compose_project_directory(settings)
-    file_args: list[str] = []
-    if project_directory is not None:
-        project_args += ["--project-directory", str(project_directory)]
-        file_args = [
-            "-f",
-            str(project_directory / "docker-compose.yml"),
-            "-f",
-            str(project_directory / "docker-compose.dev.yml"),
-        ]
-    return [*project_args, *file_args, *_compose_profile_args(entry)]
-
-
-def _compose_base_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
-    """compose のサブコマンド前までの引数配列(ベースコマンド + 対象の指定)。"""
-    return [*_compose_command(settings), *_compose_target_args(settings, entry)]
-
-
-def _compose_args(
-    settings: Settings,
-    entry: ServiceCatalogEntry,
-    action: ServiceAction,
-) -> list[str]:
-    """compose コマンドの引数配列を組み立てる(shell 補間なし)。
-
-    service 名は allowlist 済みエントリからのみ採る。
-    """
-    prefix = _compose_base_args(settings, entry)
-    if action == "start":
-        # --no-build: 数 GB の build を start では走らせない(明示の build アクションで行う)。
-        # 未ビルドなら compose が即エラーを返し、ユーザに事前 build を促す(timeout 回避)。
-        return [*prefix, "up", "-d", "--no-build", entry.service_id]
-    if action == "stop":
-        # GPU サービスは profile gate に隠れるため stop でも --profile gpu を付ける
-        # (付けても既存コンテナを止めるだけで無害)。
-        return [*prefix, "stop", entry.service_id]
-    if action == "build":
-        # 明示的なイメージ build。長時間になるため呼び出し側は build 用 timeout を使う。
-        return [*prefix, "build", entry.service_id]
-    if action == "remove":
-        # コンテナ削除。-s で稼働中なら停止してから、-f で確認なしに削除する。
-        return [*prefix, "rm", "-f", "-s", entry.service_id]
-    # restart も build しない(既存イメージを使う)。
-    return [*prefix, "restart", entry.service_id]
-
-
-def _compose_logs_args(
-    settings: Settings,
-    entry: ServiceCatalogEntry,
-    lines: int,
-) -> list[str]:
-    """docker compose logs の引数配列を組み立てる(shell 補間なし)。"""
-    return [
-        *_compose_base_args(settings, entry),
-        "logs",
-        "--no-color",
-        "--tail",
-        str(lines),
-        entry.service_id,
-    ]
-
-
-def _compose_ps_args(settings: Settings, entry: ServiceCatalogEntry) -> list[str]:
-    """対象サービスのコンテナ ID(停止中を含む)を列挙する引数配列。"""
-    return [*_compose_base_args(settings, entry), "ps", "--all", "--quiet", entry.service_id]
-
-
-def _missing_container_message(entry: ServiceCatalogEntry) -> str:
-    """compose project に対象のコンテナが無いときの案内(操作・ログ共通)。"""
+def unit_not_found_message(entry: ServiceCatalogEntry) -> str:
+    """unit が登録されていないときの案内(操作・ログ共通)。"""
     return (
-        f"{entry.service_id} のコンテナが compose project「{COMPOSE_PROJECT_NAME}」に"
-        "見つかりません。サービスを起動してから再実行してください。"
-        f"別の project 名で起動したコンテナは、停止してから「{COMPOSE_PROJECT_NAME}」で"
-        "作り直してください(rag/docs/deployment.md の既存環境の更新手順(#310))。"
+        f"{entry.service_id} の systemd の unit「{entry.systemd_unit}」が登録されていません。"
+        "本番は rag/init_script.sh(Terraform の stack で選んだサービスだけを登録します)、"
+        "開発は rag/scripts/rag-services.sh install で登録してください(rag/docs/deployment.md)。"
     )
 
 
-def _compose_env(settings: Settings) -> dict[str, str]:
-    """compose subprocess へ渡す環境変数。
-
-    HuggingFace 設定(``RAG_HUGGINGFACE_*``)を docker-compose の ``${HF_TOKEN}`` /
-    ``${HF_ENDPOINT}`` substitution へ供給する(DL 認証/ミラー)。parser コンテナ内の
-    huggingface_hub が読む標準名のため、compose 側の名前は変えない。
-
-    OCI parser マイクロサービス(parser-oci-genai-vision 等)はモデル設定 JSON を読まず env
-    からのみ OCI 設定を読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を
-    ``${PLATFORM_OCI_ENTERPRISE_AI_*}`` substitution へ供給する。これで「モデル画面で設定 →
-    parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を読むため再起動が必要)。
-    ``os.environ`` を継承しつつ上書きする。
-    """
-    env = dict(os.environ)
-    env["HF_TOKEN"] = settings.huggingface_token
-    env["HF_ENDPOINT"] = settings.huggingface_endpoint
-    # OCI parser コンテナの env へ橋渡しする実効 OCI Enterprise AI 設定。未設定は空文字のまま渡し、
-    # parser 側は引き続き degraded(=正しい挙動)になる。api_key は env で渡り argv には乗らない。
-    env["PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"] = settings.oci_enterprise_ai_endpoint
-    env["PLATFORM_OCI_ENTERPRISE_AI_API_KEY"] = settings.oci_enterprise_ai_api_key
-    env["PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"] = settings.oci_enterprise_ai_project_ocid
-    env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] = enterprise_ai_vision_model_id(settings)
-    env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"] = enterprise_ai_default_model_id(settings)
-    env["PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH"] = settings.oci_enterprise_ai_vlm_path
-    env["PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH"] = settings.oci_enterprise_ai_llm_path
-    env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] = str(
-        settings.oci_enterprise_ai_vlm_input_mode
+def permission_denied_message(entry: ServiceCatalogEntry, command: str) -> str:
+    """sudoers の許可が無いときの案内。"""
+    return (
+        f"{entry.service_id} の {command} を実行する権限がありません。"
+        "backend の実行ユーザーに、この unit の systemctl / journalctl だけを許可する sudoers "
+        "(/etc/sudoers.d/production-ready-rag-services)を登録してください(rag/docs/deployment.md)。"
     )
-    return env
 
 
-def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
-    """compose profile 引数を service catalog から組み立てる。"""
-    profiles: list[str] = []
-    if entry.profile == "gpu":
-        profiles.append("gpu")
-    return [arg for profile in profiles for arg in ("--profile", profile)]
+def systemd_unavailable_message(detail: str) -> str:
+    return (
+        "systemd を使えないため、サービスを操作できません"
+        f"(systemd が PID 1 の環境で実行してください)。詳細: {detail}"
+    )
 
 
-def _build_command_hint(settings: Settings, entry: ServiceCatalogEntry) -> str:
-    """未ビルド時にユーザへ案内する build コマンド(実行する compose と同じ project・ファイル)。
+def service_runtime_env(settings: Settings) -> dict[str, str]:
+    """マイクロサービスの unit に渡す実行用の環境変数(backend の実効設定)。
 
-    案内は常に ``docker compose`` で示す(設定のベースコマンドは内部実装の差し替え用)。
+    HuggingFace 設定(``RAG_HUGGINGFACE_*``)を ``HF_TOKEN`` / ``HF_ENDPOINT`` として渡す。
+    OCI parser(parser-oci-genai-vision 等)と docling の Vision 図説明はモデル設定 JSON を読まず
+    env からのみ OCI 設定を読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を
+    渡す。これで「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回
+    だけ env を読むため再起動が必要)。
     """
-    target = _compose_target_args(settings, entry)
-    return shlex.join(["docker", "compose", *target, "build", entry.service_id])
+    endpoint = settings.oci_enterprise_ai_endpoint
+    api_key = settings.oci_enterprise_ai_api_key
+    project = settings.oci_enterprise_ai_project_ocid
+    vlm_model = enterprise_ai_vision_model_id(settings)
+    default_model = enterprise_ai_default_model_id(settings)
+    return {
+        "HF_TOKEN": settings.huggingface_token,
+        # 空の HF_ENDPOINT は huggingface_hub が scheme 無しの endpoint として扱い DL が
+        # 失敗するため、未設定のときは公式 hub を渡す。
+        "HF_ENDPOINT": settings.huggingface_endpoint or "https://huggingface.co",
+        "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT": endpoint,
+        "PLATFORM_OCI_ENTERPRISE_AI_API_KEY": api_key,
+        "PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID": project,
+        "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL": vlm_model,
+        "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL": default_model,
+        "PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH": settings.oci_enterprise_ai_vlm_path,
+        "PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH": settings.oci_enterprise_ai_llm_path,
+        "PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE": str(settings.oci_enterprise_ai_vlm_input_mode),
+        "OCI_ENTERPRISE_AI_ENDPOINT": endpoint,
+        "OCI_ENTERPRISE_AI_API_KEY": api_key,
+        "OCI_ENTERPRISE_AI_PROJECT_OCID": project,
+        "OCI_ENTERPRISE_AI_VLM_MODEL": vlm_model,
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": default_model,
+    }
 
 
-def _friendly_compose_error(detail: str, settings: Settings, entry: ServiceCatalogEntry) -> str:
-    """compose の生エラーを、実行可能な案内付きの分かりやすい文言へ正規化する。"""
-    low = detail.lower()
-    if "no such image" in low or "image not found" in low:
-        # --no-build のため未ビルドのイメージで up すると発生する。事前 build を促す。
-        return (
-            f"{entry.service_id} のイメージが未ビルドです。先にビルドしてください: "
-            f"{_build_command_hint(settings, entry)}"
-        )
-    return detail
+def _systemd_env_value(value: str) -> str:
+    """systemd の EnvironmentFile の値として安全に書く(改行を除き、二重引用符でエスケープ)。"""
+    single_line = value.replace("\r", "").replace("\n", "")
+    escaped = single_line.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
-@dataclass(frozen=True)
-class _ComposeOutput:
-    """compose subprocess の終了コードと出力(decode 済み)。"""
+def render_service_runtime_env(values: dict[str, str]) -> str:
+    """サービス実行用の env ファイルの本文(systemd の EnvironmentFile 形式)。"""
+    lines = [
+        "# backend がサービスの起動/再起動の前に書く(手で編集しない)。#286",
+        "# マイクロサービスの systemd の unit が EnvironmentFile で読む。",
+    ]
+    lines += [
+        f"{key}={_systemd_env_value(values.get(key, ''))}" for key in SERVICE_RUNTIME_ENV_KEYS
+    ]
+    return "\n".join(lines) + "\n"
 
-    returncode: int
-    stdout: str
-    stderr: str
 
-
-class _ComposeExecError(Exception):
-    """compose を実行できなかった(コマンド無し / timeout)。メッセージは利用者向け。"""
-
-
-async def _exec_compose(settings: Settings, args: list[str], timeout: float) -> _ComposeOutput:
-    """compose を shell なし・timeout 付きで実行する(操作・ログ・コンテナ確認で共通)。"""
-    # dev はホストのリポジトリ root から compose ファイル群を解決する。
-    # prod(コンテナ)は cwd を変えず、マウント済み compose を既定の cwd から解決する。
-    cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
+def write_service_runtime_env(settings: Settings) -> Path:
+    """サービス実行用の env ファイルを 0600 で atomic に書く(secret を含むため)。"""
+    path = Path(settings.rag_service_runtime_env_file).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+    content = render_service_runtime_env(service_runtime_env(settings))
     try:
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            env=_compose_env(settings),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _RUNTIME_ENV_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        tmp_path.replace(path)
+        path.chmod(_RUNTIME_ENV_FILE_MODE)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return path
+
+
+def _unit_of(entry: ServiceCatalogEntry) -> str:
+    unit = entry.systemd_unit
+    if unit is None:
+        raise _UnitError(
+            f"{entry.service_id} は backend 内処理で動作します(systemd の unit はありません)。",
+            "failed",
         )
-    except FileNotFoundError as exc:
-        raise _ComposeExecError(f"compose コマンドが見つかりません: {exc}") from exc
+    return unit
+
+
+async def read_unit_state(settings: Settings, entry: ServiceCatalogEntry) -> UnitState:
+    """``systemctl show`` で unit の状態を読む(失敗は ``_UnitError``)。"""
+    timeout = float(settings.rag_service_control_timeout_seconds)
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError as exc:
-        process.kill()
-        with _suppress_process_cleanup():
-            await process.wait()
-        raise _ComposeExecError(f"timeout({timeout}s)で打ち切りました。") from exc
-    return _ComposeOutput(
-        returncode=process.returncode if process.returncode is not None else -1,
-        stdout=(stdout or b"").decode("utf-8", "replace").strip(),
-        stderr=(stderr or b"").decode("utf-8", "replace").strip(),
-    )
-
-
-async def _service_container_exists(settings: Settings, entry: ServiceCatalogEntry) -> bool:
-    """compose project に対象サービスのコンテナ(停止中を含む)があるかを返す。
-
-    ``compose logs`` / ``stop`` / ``restart`` は、project にコンテナが無くても exit 0 で何もせず
-    終わるため、空のログや成功として返さないよう事前に確かめる(#310)。
-    確認そのものに失敗したら ``_ComposeExecError`` を送出する。
-    """
-    output = await _exec_compose(
-        settings,
-        _compose_ps_args(settings, entry),
-        float(settings.rag_service_control_timeout_seconds),
-    )
+        output = await run_command(systemctl_show_argv(_unit_of(entry)), timeout)
+    except CommandUnavailableError as exc:
+        raise _UnitError(systemd_unavailable_message(str(exc)), "unavailable") from exc
     if output.returncode != 0:
-        raise _ComposeExecError(
-            output.stderr or output.stdout or "コンテナの状態を確認できませんでした。"
-        )
-    return bool(output.stdout)
+        if is_systemd_unavailable(output.message):
+            raise _UnitError(systemd_unavailable_message(output.message), "unavailable")
+        if is_permission_error(output.message):
+            raise _UnitError(
+                permission_denied_message(entry, "systemctl show"), "permission_denied"
+            )
+        raise _UnitError(output.message or "unit の状態を確認できませんでした。", "failed")
+    return parse_systemctl_show(output.stdout)
 
 
-class DockerComposeDriver:
-    """``docker compose`` CLI を subprocess で叩く driver(dev/prod とも)。"""
+async def _require_installed_unit(settings: Settings, entry: ServiceCatalogEntry) -> str:
+    unit = _unit_of(entry)
+    state = await read_unit_state(settings, entry)
+    if not state.installed:
+        raise _UnitError(unit_not_found_message(entry), "unit_not_found")
+    return unit
+
+
+class SystemdDriver:
+    """allowlist の unit を ``sudo -n systemctl`` で操作する driver。"""
 
     async def run(
         self,
@@ -311,67 +264,65 @@ class DockerComposeDriver:
         entry: ServiceCatalogEntry,
         action: ServiceAction,
     ) -> ControlResult:
-        args = _compose_args(settings, entry, action)
-        # build はイメージ生成で長時間になるため別枠の長い timeout を使う。
-        timeout = float(
-            settings.rag_service_build_timeout_seconds
-            if action == "build"
-            else settings.rag_service_control_timeout_seconds
-        )
-        logger.info(
-            "service_control_exec",
-            extra={"service_id": entry.service_id, "action": action, "argv": args},
-        )
+        timeout = float(settings.rag_service_control_timeout_seconds)
         try:
-            if action in _ACTIONS_REQUIRING_CONTAINER and not await _service_container_exists(
-                settings, entry
-            ):
-                return ControlResult(
-                    ok=False,
-                    action=action,
-                    service_id=entry.service_id,
-                    detail=_missing_container_message(entry),
-                )
-            output = await _exec_compose(settings, args, timeout)
-        except _ComposeExecError as exc:
+            unit = await _require_installed_unit(settings, entry)
+            if action in {"start", "restart"}:
+                # unit は起動時に 1 回だけ env を読むため、起動/再起動の前に最新の設定を書く。
+                try:
+                    write_service_runtime_env(settings)
+                except OSError as exc:
+                    raise _UnitError(
+                        f"サービス実行用の env ファイルを書けませんでした: {exc}", "failed"
+                    ) from exc
+            argv = systemctl_action_argv(action, unit)
+            logger.info(
+                "service_control_exec",
+                extra={"service_id": entry.service_id, "action": action, "argv": argv},
+            )
+            try:
+                output = await run_command(argv, timeout)
+            except CommandUnavailableError as exc:
+                raise _UnitError(str(exc), "unavailable") from exc
+        except _UnitError as exc:
             return ControlResult(
                 ok=False,
                 action=action,
                 service_id=entry.service_id,
                 detail=str(exc),
+                reason=exc.reason,
             )
         if output.returncode == 0:
             return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-        raw = output.stderr or output.stdout
-        detail = _friendly_compose_error(raw, settings, entry)
+        reason: ServiceFailureReason
+        if is_permission_error(output.message):
+            detail = permission_denied_message(entry, f"systemctl({_ACTION_LABELS[action]})")
+            reason = "permission_denied"
+        elif is_systemd_unavailable(output.message):
+            detail = systemd_unavailable_message(output.message)
+            reason = "unavailable"
+        else:
+            detail = (
+                f"{entry.service_id} の{_ACTION_LABELS[action]}に失敗しました: "
+                f"{output.message or f'exit {output.returncode}'}"
+                f"(ログは journalctl -u {unit} で確認できます)"
+            )
+            reason = "failed"
         return ControlResult(
             ok=False,
             action=action,
             service_id=entry.service_id,
             exit_code=output.returncode,
-            detail=detail or None,
+            detail=detail,
+            reason=reason,
         )
 
 
-class _suppress_process_cleanup:
-    """kill 後の wait() で出る例外を握り潰す軽量コンテキストマネージャ。"""
-
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *_exc: object) -> bool:
-        return True
-
-
 class ServiceControlClient:
-    """カタログ allowlist と feature flag を front に、``DockerComposeDriver`` へ委譲する。
+    """カタログ allowlist と feature flag を front に、``SystemdDriver`` へ委譲する。"""
 
-    dev は ``docker-compose.dev.yml`` を重ねてポートを localhost へ公開し、prod は base
-    compose のみ。いずれも docker compose で起動/停止する。
-    """
-
-    def __init__(self, docker_driver: DockerComposeDriver | None = None) -> None:
-        self._docker_driver = docker_driver or DockerComposeDriver()
+    def __init__(self, driver: SystemdDriver | None = None) -> None:
+        self._driver = driver or SystemdDriver()
         # サービス単位の直列化ロック(同一サービスへの同時 start で二重操作を防ぐ)。
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -391,7 +342,7 @@ class ServiceControlClient:
         """allowlist 済みエントリに対し action を実行する。失敗は例外で送出する。"""
         # 同一サービスへの操作は直列化する(並行 start の race を回避)。
         async with self._lock_for(entry.service_id):
-            result = await self._docker_driver.run(settings, entry, action)
+            result = await self._driver.run(settings, entry, action)
         if not result.ok:
             raise ServiceControlError(result)
         return result
@@ -402,23 +353,33 @@ async def read_service_logs(
     entry: ServiceCatalogEntry,
     lines: int,
 ) -> ServiceLogsResult:
-    """allowlist 済みサービスのログ末尾を ``docker compose logs`` から返す。
+    """allowlist 済みサービスのログ末尾を ``journalctl -u <unit>`` から返す。
 
-    compose project に対象のコンテナが無いときは ``ServiceLogsError`` にする(空のログとして
-    返さない)。コンテナがあってログが 0 行なら、空の本文をそのまま返す。
+    unit が登録されていない・権限が無いときは ``ServiceLogsError``(理由付き)にする。
+    unit があってログが 0 行(``-- No entries --``)なら、空の本文をそのまま返す。
     """
     timeout = float(settings.rag_service_control_timeout_seconds)
     try:
-        if not await _service_container_exists(settings, entry):
-            raise ServiceLogsError(_missing_container_message(entry))
-        output = await _exec_compose(settings, _compose_logs_args(settings, entry, lines), timeout)
-    except _ComposeExecError as exc:
-        raise ServiceLogsError(str(exc)) from exc
+        unit = await _require_installed_unit(settings, entry)
+        try:
+            output = await run_command(journalctl_argv(unit), timeout)
+        except CommandUnavailableError as exc:
+            raise _UnitError(str(exc), "unavailable") from exc
+    except _UnitError as exc:
+        raise ServiceLogsError(str(exc), exc.reason) from exc
     if output.returncode != 0:
-        raise ServiceLogsError(output.stderr or output.stdout or "ログ取得に失敗しました。")
+        if is_permission_error(output.message):
+            raise ServiceLogsError(
+                permission_denied_message(entry, "journalctl"), "permission_denied"
+            )
+        raise ServiceLogsError(output.message or "ログ取得に失敗しました。")
+    # journal を読めないとき journalctl は exit 0 で本文なし・権限の案内だけを出すことがある。
+    # 空のログとして返さず、権限不足として扱う。
+    if not parse_journal(output.stdout, lines) and is_permission_error(output.stderr):
+        raise ServiceLogsError(permission_denied_message(entry, "journalctl"), "permission_denied")
     return ServiceLogsResult(
         service_id=entry.service_id,
-        source="docker",
+        source="journald",
         lines=lines,
-        content=output.stdout,
+        content=parse_journal(output.stdout, lines),
     )

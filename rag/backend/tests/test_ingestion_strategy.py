@@ -1361,6 +1361,33 @@ def test_partition_source_preflight_passes_converted_pdf(
     assert result.extraction is not None
 
 
+@pytest.mark.parametrize("configured", ["local", "local_partition", ""])
+def test_partition_source_maps_legacy_or_empty_backend_to_default_docling(
+    configured: str,
+) -> None:
+    """廃止済み local・空の backend は既定エンジン Docling(#286)のサービスへ委譲する。"""
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, FakeOracle()),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        # validator を通さず旧値・空値を直接入れる(保存済み snapshot 相当)。
+        settings=Settings().model_copy(update={"rag_parser_adapter_backend": configured}),
+    )
+
+    result = pipeline._partition_source(
+        parse_bytes=b"%PDF",
+        source_profile=_pdf_source_profile(file_size_bytes=4),
+        content_type="application/pdf",
+    )
+
+    # autouse の _stub_parser_service は受け取った backend をそのまま parser_backend に返す。
+    assert result.parser_backend == "docling"
+    assert result.extraction is not None
+
+
 def test_embedding_input_with_context_header_prepends_title_and_section() -> None:
     """Contextual chunk header は「文書名 > section_path」を embedding 入力へ前置する。"""
     chunk = Chunk(

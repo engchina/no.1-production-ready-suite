@@ -63,6 +63,7 @@ from app.rag.kb_adapter_config import (
     resolve_effective_settings,
 )
 from app.rag.navigation import build_navigation_tree
+from app.rag.parser_source_guard import check_parser_source
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
@@ -112,6 +113,7 @@ from app.schemas.document import (
     IngestionJobStatus,
     IngestionSegment,
     ParserExtractionExperimentRequest,
+    ParserSourceNotice,
     SourceProfile,
     UploadResult,
 )
@@ -416,7 +418,49 @@ async def _store_uploaded_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
+        parser_notice=await _parser_notice(settings, source_profile),
     )
+
+
+async def _parser_notice(
+    settings: Settings, source_profile: SourceProfile
+) -> ParserSourceNotice | None:
+    """既定の文書解析エンジンで扱えない形式なら、取込を始める前の案内を返す(#286)。"""
+    block = await check_parser_source(settings, source_profile)
+    if block is None:
+        return None
+    return ParserSourceNotice(
+        code=block.code,
+        backend=block.backend,
+        file_format=block.file_format,
+        suggested_backend=block.suggested_backend,
+        message=block.message,
+    )
+
+
+async def _raise_if_parser_source_blocked(
+    settings: Settings, source_profile: SourceProfile, phase: IngestionJobPhase
+) -> None:
+    """解析を含む工程(準備・抽出)を、選んだ解析エンジンで扱えない形式なら始めずに 409 にする。"""
+    if phase not in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}:
+        return
+    block = await check_parser_source(settings, source_profile)
+    if block is not None:
+        raise HTTPException(status_code=409, detail=block.message)
+
+
+async def _default_recipe_settings(oracle: OracleClient, document_id: str) -> Settings:
+    """文書単位の取込(既定レシピ)で使う実効設定。レシピを読めなければ global 既定。"""
+    config = DocumentProcessingConfig()
+    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+    get_recipe = getattr(oracle, "get_document_recipe", None)
+    if callable(ensure_recipe) and callable(get_recipe):
+        recipe = await ensure_recipe(document_id)
+        row = await get_recipe(document_id, str(recipe["recipe_id"]))
+        if row is not None:
+            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    settings, _ = _merge_document_processing_config(config)
+    return settings
 
 
 async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path: str) -> None:
@@ -985,6 +1029,8 @@ async def _enqueue_ingestion_job_for_recipe(
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective_settings, _ = _merge_document_processing_config(config)
     source_profile = _source_profile_for_detail(detail)
+    # レシピの解析エンジン(既定は Docling)で扱えない形式は、job を作る前に止める(#286)。
+    await _raise_if_parser_source_blocked(effective_settings, source_profile, phase)
     job = await _create_ingestion_job_record(
         oracle=oracle,
         document_id=document_id,
@@ -3821,6 +3867,10 @@ async def _enqueue_ingestion_job_for_document(
         return await _enqueue_chunk_phase_job_for_document(document_id, force=force)
     if phase == IngestionJobPhase.INDEX:
         return await _enqueue_index_phase_job_for_document(document_id, force=force)
+    # 既定レシピの解析エンジン(既定は Docling)で扱えない形式は、出力を初期化する前に止める(#286)。
+    await _raise_if_parser_source_blocked(
+        await _default_recipe_settings(oracle, document_id), source_profile, phase
+    )
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(
             oracle=oracle,

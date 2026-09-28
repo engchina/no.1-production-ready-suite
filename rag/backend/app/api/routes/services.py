@@ -1,10 +1,11 @@
 """サービス管理エンドポイント。
 
-前処理 / Parser マイクロサービスの稼働状態の可視化(GET)と、ローカル開発(Docker Compose)
-での起動/停止(POST)を提供する。制御はカタログ allowlist + feature flag で二重に保護する。
+前処理 / Parser マイクロサービスの稼働状態の可視化(GET)と、systemd の unit の起動/停止(POST)
+を提供する(#286)。制御はカタログ allowlist + feature flag + sudoers で三重に保護する。
 """
 
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -27,12 +28,12 @@ from app.services.catalog import (
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
-    service_model_cache_volume_name,
 )
 from app.services.control import (
     ServiceAction,
     ServiceControlClient,
     ServiceControlError,
+    ServiceFailureReason,
     ServiceLogsError,
     read_service_logs,
 )
@@ -49,15 +50,23 @@ def _control_enabled(settings: Settings) -> bool:
     return is_dev_mode(settings) or bool(settings.rag_service_control_enabled)
 
 
-def _model_cache(settings: Settings, entry: ServiceCatalogEntry) -> ServiceModelCacheData | None:
-    """dev のモデルキャッシュ named volume 情報(読み取り専用)を作る。"""
-    volume_name = service_model_cache_volume_name(entry)
-    if not is_dev_mode(settings) or entry.model_cache_path is None or volume_name is None:
+def _model_cache(entry: ServiceCatalogEntry) -> ServiceModelCacheData | None:
+    """モデル DL を行うサービスのキャッシュの場所(読み取り専用)を作る。
+
+    サービスは backend と同じ実行ユーザーで動くため、backend から見た ``~/.cache`` を示す。
+    """
+    if entry.model_cache_path is None:
         return None
-    return ServiceModelCacheData(
-        container_path=entry.model_cache_path,
-        volume_name=volume_name,
-    )
+    return ServiceModelCacheData(path=str(Path(entry.model_cache_path).expanduser()))
+
+
+# 失敗の理由 → HTTP status。unit が無いは 404、sudoers / systemd が使えないは 503、それ以外は 502。
+_FAILURE_STATUS: dict[ServiceFailureReason, int] = {
+    "unit_not_found": status.HTTP_404_NOT_FOUND,
+    "permission_denied": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "failed": status.HTTP_502_BAD_GATEWAY,
+}
 
 
 def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCatalogItemData:
@@ -70,7 +79,8 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         execution_policy=entry.execution_policy,
         deployable=entry.deployable,
         configured=bool(service_health_url(settings, entry)),
-        model_cache=_model_cache(settings, entry),
+        systemd_unit=entry.systemd_unit,
+        model_cache=_model_cache(entry),
     )
 
 
@@ -136,7 +146,7 @@ async def get_service_logs(
     service_id: str,
     lines: Annotated[int, Query(ge=1, le=1000)] = 200,
 ) -> ApiResponse[ServiceLogsData]:
-    """1 サービスのログ末尾を返す(docker compose logs / dev uv log)。"""
+    """1 サービスのログ末尾を返す(journalctl -u <unit>)。"""
     settings = get_settings()
     entry = get_catalog_entry(service_id)
     if entry is None:
@@ -149,10 +159,10 @@ async def get_service_logs(
     except ServiceLogsError as exc:
         logger.warning(
             "service_logs_failed",
-            extra={"service_id": service_id, "lines": lines},
+            extra={"service_id": service_id, "lines": lines, "reason": exc.reason},
         )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=_FAILURE_STATUS[exc.reason],
             detail=str(exc) or "ログを取得できませんでした。",
         ) from exc
     return ApiResponse(
@@ -194,10 +204,11 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
                 "service_id": entry.service_id,
                 "action": action,
                 "exit_code": exc.result.exit_code,
+                "reason": exc.result.reason,
             },
         )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=_FAILURE_STATUS[exc.result.reason or "failed"],
             detail=exc.result.detail or "サービスの操作に失敗しました。",
         ) from exc
     new_status = await probe_service_status(settings, entry)
@@ -212,29 +223,17 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
 
 @router.post("/{service_id}/start", response_model=ApiResponse[ServiceControlResultData])
 async def start_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
-    """サービスを起動する(docker compose up -d)。"""
+    """サービスを起動し、起動時にも起動するようにする(systemctl enable --now)。"""
     return await _control(service_id, "start")
 
 
 @router.post("/{service_id}/stop", response_model=ApiResponse[ServiceControlResultData])
 async def stop_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
-    """サービスを停止する(docker compose stop)。"""
+    """サービスを停止し、起動時にも起動しないようにする(systemctl disable --now)。"""
     return await _control(service_id, "stop")
 
 
 @router.post("/{service_id}/restart", response_model=ApiResponse[ServiceControlResultData])
 async def restart_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
-    """サービスを再起動する(docker compose restart)。"""
+    """サービスを再起動する(systemctl restart。起動時の自動起動の設定は変えない)。"""
     return await _control(service_id, "restart")
-
-
-@router.post("/{service_id}/build", response_model=ApiResponse[ServiceControlResultData])
-async def build_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
-    """サービスのイメージをビルドする(docker compose build)。長時間になりうる。"""
-    return await _control(service_id, "build")
-
-
-@router.post("/{service_id}/remove", response_model=ApiResponse[ServiceControlResultData])
-async def remove_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
-    """サービスのコンテナを削除する(docker compose rm -f -s)。"""
-    return await _control(service_id, "remove")

@@ -398,10 +398,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      # docker compose で生成した override も検証する（ubuntu-latest には docker compose がある）。
+      # ネイティブ配備（uv の venv + systemd + Nginx。#286）。systemctl 等は fake で、生成した sudoers は visudo で検査する。
       - name: Test Compute init script
         run: |
-          bash -n init_script.sh scripts/tests/init-script-deployment.test.sh
+          bash -n init_script.sh scripts/rag-systemd.sh scripts/rag-services.sh scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/init-script-deployment.test.sh
 
   # ---------------------------------------------------------------- nl2sql

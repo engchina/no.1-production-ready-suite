@@ -33,6 +33,6 @@
 # dev(ホストの uv プロセス。事前に `python -m spacy download ja_core_news_lg` が必要)
 uv run --directory services/preprocess/pii_redact uvicorn app.main:app --port 8016
 
-# Docker(build context = リポジトリ root。モデルは build 時に取得)
-docker compose up preprocess-pii-redact
+# rag-services.sh(サービスの venv を作り、日本語 NER モデルも入れてから 127.0.0.1:18016 で起動)
+scripts/rag-services.sh run preprocess-pii-redact   # rag/ で実行(uv の venv。systemd は install)
 ```

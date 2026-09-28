@@ -8,7 +8,7 @@ audio/video を **ローカル faster-whisper(GPU)** で転写し、共有 contr
 | 項目 | 値 |
 |---|---|
 | backend 名 | `asr` |
-| 実行 | **GPU**(CUDA、`docker compose --profile gpu`) |
+| 実行 | **GPU**(CUDA。開発環境で `rag/scripts/rag-services.sh install --gpu`。本番の stack には含めない) |
 | 主依存 | faster-whisper(CTranslate2)+ ffmpeg |
 | 既定 URL | `http://parser-asr:8000` |
 | dev port | 18026 |
@@ -28,7 +28,7 @@ audio/video を **ローカル faster-whisper(GPU)** で転写し、共有 contr
 
 ```bash
 # GPU(CUDA host)
-docker compose --profile gpu up parser-asr
+scripts/rag-services.sh install --gpu   # rag/ で実行(systemd の unit)
 ```
 
 ## 取込時の経路(backend)

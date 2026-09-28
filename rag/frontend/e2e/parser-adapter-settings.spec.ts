@@ -30,6 +30,12 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
+    // 既定の解析エンジンは Docling(#286)。Unstructured は明示選択したときだけ使う。
+    await expect(page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /既定の解析エンジン/ })).toHaveCount(1);
+    await expect(
+      page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
+    ).toBeVisible();
     await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
     // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
@@ -319,8 +325,9 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await page.goto("/settings/parser-adapters");
 
-  // local は廃止。microservice エンジン(MinerU)を選択する。
+  // local は廃止。既定の Docling で解析する旨を出し、microservice エンジン(MinerU)を選択する。
   await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
+  await expect(page.getByText(/未選択時は既定の Docling で解析します/)).toBeVisible();
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
   await mineruBackend.focus();
   await expect(mineruBackend).toBeFocused();

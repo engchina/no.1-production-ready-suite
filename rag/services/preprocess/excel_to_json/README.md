@@ -27,10 +27,13 @@ uv run --directory services/preprocess/excel_to_json \
   uvicorn app.main:app --host 0.0.0.0 --port 8013
 ```
 
-## Docker
+## 起動(uv の venv + systemd。#286)
 
-build context は **リポジトリ root**(compose が設定済み):
+サービスごとの uv の venv(`uv sync --locked --no-dev --python 3.12`)で動き、本番・開発とも systemd の unit
+(`production-ready-rag-preprocess-excel-to-json.service`)で起動 / 停止する。Docker は使わない(`Dockerfile` は後続の PR で削除する)。
 
 ```bash
-docker build -f services/preprocess/excel_to_json/Dockerfile -t preprocess-excel-to-json .
+# rag/ で実行する
+scripts/rag-services.sh install preprocess-excel-to-json   # venv を作り unit と sudoers を登録して起動
+scripts/rag-services.sh run preprocess-excel-to-json       # systemd の無い環境で前面に起動
 ```

@@ -8,8 +8,9 @@ OCI Generative AI (Vision) を呼ぶ parser マイクロサービス(OCI クラ�
   3 つの `vlm_input_mode` auto/files_api/inline_image)を Vision モデルで呼び、
   `StructuredExtraction`(ParseResponse)で返す。
 - `GET /health` は OCI 設定の充足(endpoint / api_key / vision model)で ok/degraded。
-- **OCI 認証はメインプロジェクト設定を継承**: docker-compose で共通 `platform/.env`・`backend/.env` と `~/.oci`
-  マウント、`PLATFORM_OCI_CONFIG_FILE` を受け取る(個別設定なし)。`--profile oci` で opt-in。
+- **OCI 認証はメインプロジェクト設定を継承**: systemd の unit が共通 `platform/.env`・`backend/.env` と、サービス管理が
+  起動 / 再起動の前に書く実効 OCI Enterprise AI 設定(`backend/service-runtime.env`)を EnvironmentFile で読む(#286。個別設定なし)。
+  OCI の設定ファイルは実行ユーザーの `~/.oci/config`。Terraform の stack では `rag_enable_oci_cloud_parsers` で配備する。
 - OCI Generative AI は **OpenAI 互換の API キー認証(httpx)** のため oci 署名 SDK は不要。
 - 未設定/失敗時は extraction=None を返し、backend 側で既存 in-process VLM(PDF 分割込み)/
   ローカルフローへ安全に縮退する。PDF 分割・checkpoint は backend(DB 結合)側に残る。
