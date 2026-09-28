@@ -192,7 +192,7 @@
 
 ## 9. アクセシビリティ チェックリスト（必須）
 
-- [ ] Icon-only に `aria-label`。
+- [ ] Icon-only に `aria-label`。見える名前は共通 `Button` の Tooltip（`iconOnly` の既定で `aria-label` と同じ文言）が出す。HTML の `title` 属性で説明しない（キーボード・タッチで出ない）。文言を変えるときは `tooltip`（[デザインシステム README §4「`Tooltip`」](../design-system/README.md)）。
 - [ ] 操作領域：desktop 32/36/40px、icon-only 36px、mobile / coarse pointer は 44px。
 - [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。フォーカスの表示は outline 1 つ。`focus:ring-*` / `focus-visible:ring-*` を足したり、`focus(-visible):outline-none` で消したりしない（[デザインシステム README §4「フォーカスの表示」](../design-system/README.md)、adherence の lint が検出する）。
 - [ ] disabled は `disabled` 属性 + disabled の意味の色（共通 `Button` 済み）。見た目だけの無効化をしない。

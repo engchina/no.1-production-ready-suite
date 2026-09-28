@@ -149,8 +149,8 @@ export function FeedbackControls({
               current?.rating === "helpful" && "text-success-fg"
             )}
             aria-label={helpfulLabel}
+            tooltip={helpfulLabel}
             aria-pressed={current?.rating === "helpful"}
-            title={helpfulLabel}
             disabled={disabled}
             loading={mutation.isPending && retryPayload?.rating === "helpful"}
             onClick={() => void submit("helpful", null, null)} icon={ThumbsUp}>
@@ -165,9 +165,9 @@ export function FeedbackControls({
               current?.rating === "not_helpful" && "text-danger-fg"
             )}
             aria-label={notHelpfulLabel}
+            tooltip={notHelpfulLabel}
             aria-pressed={current?.rating === "not_helpful"}
             aria-expanded={showReasons}
-            title={notHelpfulLabel}
             disabled={disabled}
             onClick={handleOpenReasons} icon={ThumbsDown}>
             </Button>
