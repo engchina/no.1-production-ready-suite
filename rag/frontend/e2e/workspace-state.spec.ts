@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
@@ -31,9 +31,9 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-/** サイドナビの項目を開く（375px では icon-only のレールでも名前で辿れる）。 */
+/** サイドナビの項目を開く（375px ではナビがドロワーのため、先に「メニュー」で開く。#367）。 */
 async function openFromSidebar(page: Page, name: string) {
-  await page.getByRole("navigation").getByRole("link", { name, exact: true }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name, exact: true }).click();
 }
 
 /** beforeunload を合成して、離脱を妨げるか（preventDefault されたか）を返す。 */

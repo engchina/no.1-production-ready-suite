@@ -1,6 +1,7 @@
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
@@ -2918,10 +2919,12 @@ async function dragSplitDivider(page: Page, divider: Locator, deltaX: number) {
 
 /** 初期折りたたみのサイドナビセクションを必要に応じて展開してからリンクを開く。 */
 async function openSidebarLink(page: Page, name: string | RegExp) {
-  const link = page.getByRole("link", { name }).first();
+  // 375px ではナビがドロワー（#367）。開いてからサイドナビの中で探す。
+  const sidebar = await openSidebarNav(page);
+  const link = sidebar.getByRole("link", { name }).first();
   if (!(await link.isVisible())) {
     // クリックすると「を展開」→「を折りたたむ」に変わるため、残数が 0 になるまで先頭を開く。
-    const expandButtons = page.getByRole("button", { name: /を展開/ });
+    const expandButtons = sidebar.getByRole("button", { name: /を展開/ });
     while ((await expandButtons.count()) > 0) {
       await expandButtons.first().click();
     }
@@ -4279,10 +4282,12 @@ test("query workbench generates SQL through the job flow and shows results", asy
 
   // 「違う」= negative。利用者コメント未入力なら送信をブロックする。
   await page.getByLabel("利用者コメント（feedback_content）").fill("");
+  await dismissToasts(page);
   await page.getByRole("button", { name: "違う", exact: true }).click();
   await expect(page.getByText("「違う」の場合は利用者コメントの入力が必須です。")).toBeVisible();
 
   await page.getByLabel("利用者コメント（feedback_content）").fill("列を請求金額だけに修正");
+  await dismissToasts(page);
   await page.getByRole("button", { name: "違う", exact: true }).click();
   expect(api.feedbackPayload).toEqual({
     history_id: "hist-001",
@@ -7317,7 +7322,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   });
 
   await page.goto("/query");
-  await page.getByRole("link", { name: "SELECT SQL を実行" }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
   await expect(page.getByRole("heading", { level: 1, name: "SELECT SQL を実行" })).toBeVisible();
 
@@ -7842,7 +7847,7 @@ test("管理 SQL のコミット後はデータ管理のオブジェクト一覧
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
   await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "データの管理" }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "データの管理" }).click();
   await expect(page).toHaveURL(/\/data-management$/);
   await expect.poll(() => objectRequestCount).toBeGreaterThan(initialObjectRequestCount);
 });
@@ -8236,18 +8241,18 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await question.fill("保持テスト: 未入金の請求金額を確認したい");
 
   // SPA ナビで SELECT SQL 実行へ移動し、そちらにも入力する。
-  await page.getByRole("link", { name: "SELECT SQL を実行" }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
   const directSql = directSqlInput(page);
   await directSql.fill("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // SQL 生成へ戻ると入力が残っている(unmount で破棄されない = keep-alive)。
-  await page.getByRole("link", { name: /SQL 生成/ }).first().click();
+  await (await openSidebarNav(page)).getByRole("link", { name: /SQL 生成/ }).first().click();
   await expect(page).toHaveURL(/\/query$/);
   await expect(nl2sqlQuestionInput(page)).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
 
   // SELECT SQL 実行へ再び移動しても入力が残っている。
-  await page.getByRole("link", { name: "SELECT SQL を実行" }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
   await expect(directSqlInput(page)).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
 
@@ -8255,7 +8260,7 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "SQL 入力・結果をリセット" }).click();
   await expect(directSqlInput(page)).toHaveValue("");
 
-  await page.getByRole("link", { name: /SQL 生成/ }).first().click();
+  await (await openSidebarNav(page)).getByRole("link", { name: /SQL 生成/ }).first().click();
   const newQueryButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
   await expectLargeActionButton(newQueryButton);
   await newQueryButton.focus();
@@ -8301,7 +8306,7 @@ test("history rerun deep-links back to query with question, engine, and profile"
   await expect(page.getByRole("button", { name: /Enterprise AI Direct/ })).toHaveAttribute("aria-pressed", "true");
   expect(api.jobPayload).toBeNull();
   expect(api.executePayload).toBeNull();
-  await page.getByRole("link", { name: "実行履歴", exact: true }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "実行履歴", exact: true }).click();
   await page.getByRole("button", { name: "この質問で再実行" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
   expect(api.jobPayload).toBeNull();
@@ -8314,11 +8319,13 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
 
   await expect(page).toHaveURL(/\/query$/);
   await expect(page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" })).toBeVisible();
+  // 375px ではナビがドロワー（#367）。開いてから読む（背面は inert のため、以降のリンクはサイドナビのもの）。
+  await openSidebarNav(page);
   await expect(page.getByText("データ準備", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("AI 活用", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("改善・運用", { exact: true }).first()).toBeVisible();
   // データ準備 / 改善・運用 は初期折りたたみ(initiallyCollapsed)のため、リンク断言前に展開する。
-  // mobile 幅ではサイドバーが icon-only(セクション開閉なし・全リンク表示)になるため、展開ボタンがある時だけ押す。
+  // ドロワーの中も展開した幅で描くため、mobile 幅でも展開ボタンを押す（展開ボタンがある時だけ押す）。
   const prepareExpand = page.getByRole("button", { name: "データ準備 を展開" });
   if (await prepareExpand.isVisible()) {
     await prepareExpand.click();
@@ -8383,8 +8390,11 @@ test("dark theme keeps the SQL workbench text, controls and active states legibl
   await expect(selectedEngine).toHaveAttribute("aria-pressed", "true");
   await expect(selectedEngine).toHaveCSS("border-color", "rgb(105, 173, 255)");
   await expect(selectedEngine).toHaveCSS("color", "rgb(242, 244, 247)");
+  // 375px ではナビがドロワー（#367）。開いて現在地の色を確かめ、閉じてから本文を操作する。
+  await openSidebarNav(page);
   await expect(activeQueryLink).toHaveCSS("background-color", "rgb(40, 106, 189)");
   await expect(activeQueryLink).toHaveCSS("color", "rgb(255, 255, 255)");
+  await closeSidebarNav(page);
   await expect(executeButton).toBeDisabled();
   await expect(executeButton).toHaveCSS("background-color", "rgb(37, 43, 52)");
   await expect(executeButton).toHaveCSS("color", "rgb(116, 127, 142)");
@@ -15188,10 +15198,10 @@ test("workspace: 管理 SQL の草稿を往復と再読込で復元し確認と�
   await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
   await expect.poll(() => executions).toBe(1);
   await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("実行日時:");
-  await page.locator('a[href="/table-management"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
   // data router の遷移は非同期。離れたことを確かめてから戻る（確認語の解除はページを離れたときに起きる）。
   await expect(page).toHaveURL(/\/table-management$/);
-  await page.locator('a[href="/admin-sql"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/admin-sql"]').first().click();
   await expect(input).toHaveValue(sql + ";");
   await expect(confirmation).toHaveValue("");
   await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("前回の実行結果");
@@ -15223,9 +15233,9 @@ test("workspace: コメントの手編集を保持して対象の失効を再検
   await expect(sql).toHaveValue(/COMMENT ON/);
   await sql.fill("COMMENT ON TABLE APP.INVOICES IS '作業中の説明';");
   await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await page.locator('a[href="/table-management"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
   await page.route("**/api/nl2sql/db-admin/tables/INVOICES**", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "対象が見つかりません。最新の対象を確認してください。" }) }));
-  await page.locator('a[href="/comment-management"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/comment-management"]').first().click();
   await expect(sql).toHaveValue("COMMENT ON TABLE APP.INVOICES IS '作業中の説明';");
   await expect(page.getByText(/対象が見つかりません。最新の対象を確認してください。/).first()).toBeVisible();
   await expect(panel.getByLabel("実行確認語")).toHaveValue("");
@@ -15245,12 +15255,12 @@ test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持
   const search = page.getByRole("searchbox", { name: "検索", exact: true });
   await search.fill("INVOICES");
   await page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true }).fill("APP");
-  await page.locator('a[href="/view-management"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/view-management"]').first().click();
   await page.goBack();
   await expect(search).toHaveValue("INVOICES");
   await expect(page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true })).toHaveValue("APP");
   await page.goForward();
-  await page.locator('a[href="/table-management"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
   await expect(search).toHaveValue("INVOICES");
   await page.reload();
   await expect(search).toHaveValue("INVOICES");
@@ -16036,6 +16046,7 @@ for (const mode of ["comment", "annotation"] as const) {
       page.on("request", (request) => { if (request.url().endsWith(generationPath)) calls += 1; });
       await page.route(`**${delayedPath}`, async (route) => { await gate.promise; await route.fallback(); });
       const request = page.waitForRequest(`**${delayedPath}`);
+      await dismissToasts(page);
       await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
       await request;
       if (phase === "samples") {
@@ -16661,7 +16672,7 @@ test("sql to question retains candidates through navigation, reload and failed r
   const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
   const draft = "SELECT: 請求金額\nFROM: INVOICES\nWHERE: 請求金額 >= 100";
   await editor.fill(draft);
-  await page.locator('a[href="/direct-sql"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/direct-sql"]').first().click();
   await expect(directSqlInput(page)).toBeVisible();
   await page.goBack();
   await expect(candidates).toContainText(question);
@@ -16669,7 +16680,7 @@ test("sql to question retains candidates through navigation, reload and failed r
   const timestamp = await candidates.getByText(/実行日時:/).innerText();
   await page.goForward();
   await expect(directSqlInput(page)).toBeVisible();
-  await page.locator('a[href="/sql-to-question"]').first().click();
+  await (await openSidebarNav(page)).locator('a[href="/sql-to-question"]').first().click();
   await expect(editor).toHaveValue(draft);
   await expect(candidates).toContainText(timestamp);
   await page.reload();
@@ -17204,7 +17215,7 @@ test.describe("query snapshot ownership", () => {
       expect((await readSnapshot(tab)).jobId).toBe(`job-tab-${index}`);
       await tab.reload();
       await expect(tab.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
-      await tab.locator('a[href="/history"]').first().click();
+      await (await openSidebarNav(tab)).locator('a[href="/history"]').first().click();
       await tab.goBack();
       await expect(tab.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
       await tab.goForward();

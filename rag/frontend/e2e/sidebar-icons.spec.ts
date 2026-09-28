@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LOCAL_AUTH_ME } from "./_helpers";
+import { LOCAL_AUTH_ME, openSidebarNav } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
@@ -24,7 +24,7 @@ for (const viewport of [
     await mockApi(page);
     await page.goto("/settings/oci");
 
-    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    const sidebar = await openSidebarNav(page);
     const ociSettings = sidebar.getByRole("link", { name: "OCI 認証設定" });
     const modelSettings = sidebar.getByRole("link", { name: "モデル設定" });
 
@@ -44,11 +44,16 @@ for (const viewport of [
     const brand = sidebar.locator('[title="Production Ready RAG"]').first();
     const uploadLink = sidebar.getByRole("link", { name: "文書アップロード" });
 
-    if (viewport.width <= 640) {
-      await expect(brand).toHaveAttribute("aria-hidden", "true");
-      await expect(brand.getByText("Production Ready", { exact: true })).toBeHidden();
-      await expect(page.getByRole("button", { name: "サイドバーを展開" })).toBeVisible();
-      await expect(uploadLink).toBeVisible();
+    if (viewport.width < 768) {
+      // md 未満はドロワー（#367）。上端のバーに製品名を出し、開いたドロワーは展開して描く（折りたたみボタンは無い）。
+      const banner = page.getByTestId("nav-drawer-bar").locator('[title="Production Ready RAG"]');
+      await expect(banner.getByText("Production Ready", { exact: true })).toBeVisible();
+      await expect(banner.getByText("RAG", { exact: true })).toBeVisible();
+      await openSidebarNav(page);
+      await expect(brand.getByText("Production Ready", { exact: true })).toBeVisible();
+      await expect(uploadLink.getByText("アップロード", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "サイドバーを展開" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "サイドバーを折りたたむ" })).toHaveCount(0);
       return;
     }
 

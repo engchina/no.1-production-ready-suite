@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -88,7 +88,8 @@ for (const viewport of [
     await expect(page.getByText("要素 1 / ページ 1 / 表 0 / セル 0 / アセット 0 / BBox 1")).toBeVisible();
     await expect(page.getByText("schema remap 成功", { exact: true })).toBeVisible();
 
-    const navLink = page.getByRole("link", { name: "文書解析" });
+    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
+    const navLink = (await openSidebarNav(page)).getByRole("link", { name: "文書解析" });
     await expect(navLink).toHaveAttribute("aria-current", "page");
     await navLink.focus();
     await expect(navLink).toBeFocused();

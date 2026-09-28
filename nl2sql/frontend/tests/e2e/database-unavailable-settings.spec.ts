@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 
 import { systemAdminMe } from "./_helpers/database-gate";
 
@@ -66,7 +67,9 @@ async function expectFullPageGate(page: Page) {
   await expect(page.getByText(NOTICE_HINT, { exact: true })).toBeVisible();
   await expect(page.getByText(/ORA-12514/)).toHaveCount(0);
   await expect(page.getByText(RAW_DATABASE_ERROR, { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toBeVisible();
+  // サイドナビは残る（375px ではドロワー。開けることを確かめて閉じる。#367）。
+  await openSidebarNav(page);
+  await closeSidebarNav(page);
 
   const settingsLink = page.getByRole("link", { name: "データベース設定を開く" });
   const retry = page.getByRole("button", { name: "再試行" });

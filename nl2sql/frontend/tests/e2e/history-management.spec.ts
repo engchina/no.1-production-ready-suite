@@ -1,5 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -745,7 +746,7 @@ test("履歴の選択とSQLタブを往復・再読込で復元し失効時は�
   await page.getByRole("button", { name: "請求金額を確認 の履歴を表示", exact: true }).click();
   const sqlTab = page.getByRole("tab", { name: "SQL", exact: true });
   await sqlTab.click();
-  await page.getByRole("link", { name: "SELECT SQL を実行", exact: true }).click();
+  await (await openSidebarNav(page)).getByRole("link", { name: "SELECT SQL を実行", exact: true }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
   await page.goBack();
   await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");

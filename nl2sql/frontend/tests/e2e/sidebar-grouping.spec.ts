@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 import type { CurrentUser } from "../../src/features/security/types";
 
 const SYSTEM_ADMIN_USER: CurrentUser = {
@@ -236,7 +237,8 @@ test("管理 SQL 画面からサイドバーを操作しても表示が空白に
   await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
   await page.locator("#admin-sql-input").fill("SELECT 1 FROM DUAL");
 
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 375px ではナビがドロワー（#367）。リンクを押すと閉じるため、押す前に毎回開く。
+  const sidebar = await openSidebarNav(page);
   const collapseDataPrep = sidebar.getByRole("button", { name: "データ準備 を折りたたむ" });
   if (await collapseDataPrep.isVisible()) {
     await collapseDataPrep.click();
@@ -247,11 +249,13 @@ test("管理 SQL 画面からサイドバーを操作しても表示が空白に
   await sidebar.getByRole("link", { name: "SELECT SQL を実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
   await expect(page.getByRole("heading", { level: 1, name: "SELECT SQL を実行" })).toBeVisible();
+  await openSidebarNav(page);
   await sidebar.getByRole("link", { name: "管理 SQL を実行" }).click();
   await expect(page).toHaveURL(/\/admin-sql$/);
   await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
   await expect(page.locator("#admin-sql-input")).toHaveValue("SELECT 1 FROM DUAL");
 
+  await openSidebarNav(page);
   await sidebar.getByRole("link", { name: "SQL 生成" }).click();
 
   await expect(page).toHaveURL(/\/query$/);
@@ -276,7 +280,7 @@ test("管理 SQL 権限だけの既定入口は管理 SQL 画面へ振り分け�
 
   await expect(page).toHaveURL(/\/admin-sql$/);
   await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "管理 SQL を実行" })).toHaveAttribute(
     "aria-current",
     "page"
@@ -417,7 +421,7 @@ test("SQL 生成権限がない既定入口は root から最初の許可画面�
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/settings\/appearance$/);
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "外観" })).toHaveAttribute(
     "aria-current",
     "page"
@@ -443,7 +447,7 @@ test("settings_upload_storage 権限だけの既定入口は保存先設定へ�
 
   await expect(page).toHaveURL(/\/settings\/upload-storage$/);
   await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   await expect(sidebar.getByRole("link", { name: "アップロード保存先" })).toHaveAttribute(
     "aria-current",
     "page"
@@ -473,13 +477,21 @@ test("メニュー権限がない root は無権限画面へ移動し、再転�
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 });
 
-test("375px 幅では icon-only ナビとして開閉ボタンなしで主要リンクへ到達できる", async ({ page }) => {
+test("375px 幅ではナビがドロワーになり、開くと主要リンクへ到達できる（#367）", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
 
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // 閉じている間はサイドナビを出さず、上端のバーの「メニュー」から開く。
+  await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toHaveCount(0);
+  const sidebar = await openSidebarNav(page);
 
-  await expect(sidebar.getByRole("button", { name: "AI 活用 を折りたたむ" })).toHaveCount(0);
+  // ドロワーの中は展開した幅で描くため、desktop と同じくセクションの開閉ボタンがある。
+  await expect(sidebar.getByRole("button", { name: "AI 活用 を折りたたむ" })).toBeVisible();
+  // 既定で畳むセクション（nav-config の initiallyCollapsed）を開く。
+  for (const section of ["データ準備", "改善・運用", "NL2SQL セキュリティ", "運用設定", "ユーザーとロール", "システム設定"]) {
+    await sidebar.getByRole("button", { name: `${section} を展開`, exact: true }).click();
+    await expect(sidebar.getByRole("button", { name: `${section} を折りたたむ`, exact: true })).toBeVisible();
+  }
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "SQL から質問を生成" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "サンプルデータ管理" })).toBeVisible();

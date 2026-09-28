@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { closeSidebarNav, openSidebarNav } from "./fixtures/nav";
 
 // 未保存変更の離脱ガードと、一覧の作業状態の保持（platform UX 契約 workspace-state.md。#87）。
 
@@ -9,8 +10,9 @@ const VIEWPORTS = [
   { name: "mobile-375", width: 375, height: 812 },
 ];
 
-function sidebarLink(page: Page, href: string): Locator {
-  return page.getByRole("complementary", { name: "サイドナビゲーション" }).locator(`a[href="${href}"]`);
+/** サイドナビのリンク。375px ではナビがドロワー（#367）のため、先に「メニュー」で開く。 */
+async function sidebarLink(page: Page, href: string): Promise<Locator> {
+  return (await openSidebarNav(page)).locator(`a[href="${href}"]`);
 }
 
 /** beforeunload の handler が登録されていれば、cancelable な event が preventDefault される。 */
@@ -66,7 +68,7 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#new-agent-name").fill("下書きの Agent");
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
 
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
       await expectNoHorizontalOverflow(page);
@@ -75,6 +77,8 @@ for (const viewport of VIEWPORTS) {
       await dialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(page).toHaveURL(/\/agents\?id=new$/);
       await expect(page.locator("#new-agent-name")).toHaveValue("下書きの Agent");
+      // 375px ではサイドナビのドロワーが開いたまま（確認をキャンセルしたため）。閉じてから本文を操作する。
+      await closeSidebarNav(page);
 
       // パンくずの一覧リンクも同じ離脱ガードで止まる。
       await page.getByRole("navigation", { name: "パンくず" }).getByRole("link", { name: "業務 Agent" }).click();
@@ -82,7 +86,7 @@ for (const viewport of VIEWPORTS) {
       await dialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(page).toHaveURL(/\/agents\?id=new$/);
 
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       await dialog.getByRole("button", { name: "破棄して移動" }).click();
       await expect(page).toHaveURL(/\/runs$/);
       await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
@@ -104,7 +108,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/agents$/);
       await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
 
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       await expect(page).toHaveURL(/\/runs$/);
     });
 
@@ -118,7 +122,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("設定を保存しました")).toBeVisible();
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(false);
 
-      await sidebarLink(page, "/settings/external-nl2sql").click();
+      await (await sidebarLink(page, "/settings/external-nl2sql")).click();
       await expect(page).toHaveURL(/\/settings\/external-nl2sql$/);
       await expect(page.getByText("変更を破棄しますか")).toHaveCount(0);
     });
@@ -128,7 +132,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "外部 MCP", level: 1 })).toBeVisible();
       expect(await beforeUnloadBlocks(page)).toBe(false);
 
-      await sidebarLink(page, "/agents").click();
+      await (await sidebarLink(page, "/agents")).click();
       await expect(page).toHaveURL(/\/agents$/);
       await expect(page.getByText("変更を破棄しますか")).toHaveCount(0);
     });
@@ -169,9 +173,9 @@ for (const viewport of VIEWPORTS) {
       // 適用していない入力も下書きとして残す。
       await page.locator("#audit-error-code").fill("E_DRAFT");
 
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       await expect(page).toHaveURL(/\/runs$/);
-      await sidebarLink(page, "/audit").click();
+      await (await sidebarLink(page, "/audit")).click();
       await expect(page.locator("#audit-run-id")).toHaveValue("run-e2e-1");
       await expect(page.locator("#audit-tool-name")).toHaveValue("echo");
       await expect(page.locator("#audit-warning-filter")).toHaveValue("true");
@@ -221,7 +225,7 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#run-goal").fill("下書きの目標");
       await page.goto("/memory");
       await page.locator("#memory-search").fill("学習メモ");
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
       await page.reload();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
@@ -231,13 +235,13 @@ for (const viewport of VIEWPORTS) {
       // 置換の確認語は保存も復元もしない。
       await page.goto("/settings/runtime-snapshot");
       await page.locator("#runtime-snapshot-confirm").fill("REPLACE");
-      await sidebarLink(page, "/runs").click();
+      await (await sidebarLink(page, "/runs")).click();
       await expect(page).toHaveURL(/\/runs$/);
       // URL が変わっても、遅い環境では Run の画面が出るまで前の画面が残る。画面が切り替わって
       // スナップショット画面が unmount されたことを確かめてから戻る（#254）。
       await expect(page.locator("#run-goal")).toBeVisible();
       await expect(page.locator("#runtime-snapshot-confirm")).toHaveCount(0);
-      await sidebarLink(page, "/settings/runtime-snapshot").click();
+      await (await sidebarLink(page, "/settings/runtime-snapshot")).click();
       await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);
       await expect(page.locator("#runtime-snapshot-confirm")).toHaveValue("");
 

@@ -1,4 +1,6 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
+import { dismissToasts } from "./_helpers/toast";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -1520,6 +1522,7 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   );
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
 
+  await dismissToasts(page);
   await status.getByRole("button", { name: "Oracle 反映を再試行" }).click();
 
   await expect(status).toHaveAttribute("data-job-status", "succeeded");
@@ -2913,7 +2916,8 @@ test("未保存のままサイドナビで離脱しようとすると確認を�
 
   await page.getByLabel("カテゴリ").fill("finance");
 
-  const otherPageLink = page.getByRole("link", { name: "オントロジー構築" }).first();
+  // 375px ではナビがドロワー（#367）。開いてからサイドナビのリンクを押す。
+  const otherPageLink = (await openSidebarNav(page)).getByRole("link", { name: "オントロジー構築" }).first();
   await otherPageLink.click();
 
   // 確認ダイアログを挟み、キャンセルすれば編集画面に留まる。
@@ -2923,7 +2927,8 @@ test("未保存のままサイドナビで離脱しようとすると確認を�
   await expect(page).toHaveURL(/\/profiles\?profile=default/);
   await expect(page.getByLabel("カテゴリ")).toHaveValue("finance");
 
-  // 承認したときだけ遷移する。
+  // 承認したときだけ遷移する（確認をキャンセルしたのでドロワーは開いたまま）。
+  await openSidebarNav(page);
   await otherPageLink.click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "破棄して戻る" }).click();

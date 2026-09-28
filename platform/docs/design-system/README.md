@@ -386,6 +386,17 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 ### `AppShell`（変更）
 
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
+- **md 未満（767px 以下）はナビをドロワーにする（#367。案 A、決定待ち — §11）。** 3 製品の nav config と `Sidebar` の props は変えず、`AppShell` がモードを切り替えます
+  - サイドバーを隠し、画面の上端に反転面（サイドバーと同じ `data-surface="inverted"`）のバーを置く。左端に「メニュー」ボタン（lucide `Menu`、`aria-expanded` / `aria-controls`、44px）、その右に製品名（`Sidebar` の `title`）。バーは本文のスクロールの外にあり、どこまでスクロールしてもメニューに届く
+  - 開くと左からドロワー（`role="dialog"` + `aria-modal`、幅 `--sidebar-width`、画面幅 − 3.5rem まで）と scrim（`--scrim`）。ドロワーの中の `Sidebar` は折りたたみの選好（`collapsed`）に関係なく展開して描き、折りたたみボタンの代わりに「メニューを閉じる」（`X`）を出す
+  - 閉じ方は「閉じるボタン・Escape・scrim のタップ・ナビの選択（今のページのリンクを含む）・画面の移動」。閉じたら「メニュー」ボタンへフォーカスを戻す。画面を移ったときは、製品の画面遷移のフォーカス（本文 `#pr-main` へ移す）がそのあとに働く
+  - 未保存の変更の離脱の確認（`useUnsavedChangesGuard` はリンクの click を capture で止める）でキャンセルしたときは、ドロワーを開いたままにする（別の項目を選び直せる。確認ダイアログはドロワーの上に出る）
+  - 開いたら閉じるボタンへフォーカスし、Tab / Shift+Tab をドロワーの中で回す。背面（本文へスキップ・上端のバー・`<main>`）は `inert` にし、`<main>` のスクロールを止める
+  - 上端のバーは `<header>` にしない（md 以上に無い banner の landmark を増やさず、`PageHeader` の `<header>` と取り違えない）。Playwright では `data-testid="nav-drawer-bar"`
+  - 開閉は transform（200ms、ease-out）。`prefers-reduced-motion` では動かさない（`motion-reduce:transition-none` と §4 の一括無効化）
+  - z-index は scrim が `--z-scrim`、ドロワーが `--z-dialog`。確認ダイアログ（ログアウトの前の確認など）はドロワーの上に出る
+  - md 以上は従来どおり（サイドバーを本文の左に置き、折りたたみの状態を ui-store に保持する）。md 未満でドロワーを開閉しても ui-store の `sidebarCollapsed` は変えない
+  - 文言は `navDrawerLabels`（既定 `{ menu: "メニュー", close: "メニューを閉じる" }`）で上書きできる。サイドバーの `footer` に置く部品は、`collapsed` を `useSidebarCollapsed(collapsed)` に通して使う（ドロワーの中で `false` になる。共通の `SidebarAccountFooter` / `SidebarAccountSection` は対応済み）
 
 ### 削除
 
@@ -565,7 +576,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**28点あります。**
+QA に事前共有してください。**29点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -597,6 +608,7 @@ QA に事前共有してください。**28点あります。**
 | 26 | **読み込み中の Skeleton の見た目が 1 つになり、経過時間が付く** | 共有 `Skeleton` は `bg-border/60`、DataTable の読込行と NL2SQL の画面は `bg-surface-hover` と混在し、`prefers-reduced-motion` で点滅が止まらない部品があった。RAG の設定・一覧・文書詳細は塊やテキストだけ → すべて `--color-surface-hover` の地で reduced-motion では点滅しない。読み込み中は `TimedLoadingState`（「〜を読み込んでいます」と経過時間）+ 形のある `TableSkeleton` / `ListSkeleton` / `FormSkeleton`。`DataTable` の `loading` は `visibleRows` の行数で高さを予約 | UX 契約 messaging §3.6 / §3.7 を 3 製品でそろえる（#265。#338 から移した形のある Skeleton） |
 | 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・業務ビューは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。承認済み FAQ・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
 | 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
+| 29 | **md 未満のナビがドロワーになる**（#367。案 A、決定待ち） | 375px などで 56px のアイコン列（展開すると本文を押し出す）→ **上端のバーの「メニュー」ボタンで開くドロワー**（scrim・フォーカスの閉じ込め・Escape / scrim / ナビの選択で閉じる）。本文は画面の全幅（375 − 56 = 319px → 375px）。md 以上は変わらない | 狭い画面で本文の幅を削らない。Material の modal navigation drawer と同じ型（§4 `AppShell`、§11） |
 
 ### API の非互換
 
@@ -611,6 +623,7 @@ QA に事前共有してください。**28点あります。**
 | `AppShell` | スキップリンクと `<main id="pr-main">` を出力 |
 | `Button`（#372） | `tooltip`（`string \| false`）/ `tooltipPlacement` プロップ新設。`iconOnly` は既定で `aria-label` と同じ文言の Tooltip を出す。Tooltip を出すときは `title` を無視する |
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
+| `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
 
 ---
@@ -741,6 +754,10 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - ~~**`Tooltip`** — `iconOnly` ボタンが増えたので必須~~ → 実装済み（#372、§4「`Tooltip`」）。`iconOnly` の `Button` は既定で出す
 - **`Checkbox`** — 不在のため `DataTable` の一括選択が組めない
 - **`CommandPalette`** — 3 製品とも持たないと決めた（#308）。サイドバーの起動ボタンも削除した。`--shadow-palette` / `--z-palette` は未使用のトークンとして残っている
-- **モバイル対応の方針決定** — `.pr-button` に `@media (max-width: 639px)` の 44px 強制があるが、`AppShell` は `height: 100vh` + 固定 15rem サイドバーで 639px では成立しない。**到達しない死にコード**。desktop-only と明記して coarse-pointer ルールを削除するか、レスポンシブシェルを作るか、どちらかに倒すべき
+- **モバイル対応の方針決定（決定待ち。#367 / #338 PR I）** — md 未満のナビの型を 1 つに決める。3 製品で同じ `AppShell` / `Sidebar` を使うため platform で 1 つにする
+  - **案 A（推奨・draft PR で実装済み）: md 未満はドロワー。** 内容は §4 `AppShell`・§7 #29。本文は画面の全幅を使える。業界で一般的な型（Material の modal navigation drawer、GitHub・Vercel など）
+  - 案 B: 現状のアイコン列（56px）を維持し、展開したときだけオーバーレイにする。本文は 319px のまま
+  - 案 C: 下部のタブバー。主要な 4〜5 項目だけを出す。3 製品とも項目数が多いため不向き
+  - 決まったら、この項目を §4 の決定に移し、draft PR を ready にする。タッチ端末のボタンの 44px は `(pointer: coarse)` のルール（`spacing.css`）で、幅には依存しない
 - **`html { font-size: 14px }` の撤去** — ルート上書きは利用者のブラウザ設定を無視します。撤去すると Tailwind の rem ユーティリティ経由で全余白が 14.3% 増えるため、単独のタスクとして計画が必要
 - **空状態 / ローディングの使い分け規定** — `DataTable` の `emptyText`（表内1行）と `StateViews` の `EmptyState`（カードごと置換）の2系統、ローディングは4系統あり、どちらを使うかの規定が無い。推奨: 「行が0件 → 表内テキスト」「取得前・権限なし・前提未達 → StateViews」「200ms 未満は何も出さない / 200ms–1s は Skeleton / 1s 超は LoadingState」

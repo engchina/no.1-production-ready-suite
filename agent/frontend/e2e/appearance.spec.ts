@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { openSidebarNav } from "./fixtures/nav";
 
 // 外観（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
 
@@ -59,7 +60,8 @@ for (const viewport of [
   test(`サイドナビは Agent セキュリティ → 運用設定 → ユーザーとロール → システム設定の順に並べる (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/appearance");
-    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    // 375px ではナビがドロワー（#367）。開いてから並びを読む。
+    const sidebar = await openSidebarNav(page);
     // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
     await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
 

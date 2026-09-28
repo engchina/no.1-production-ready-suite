@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -39,7 +39,7 @@ test("検索・回答設定の概要ハブが工程をフェーズ別カード�
 
 test("サイドバーの設定の概要リンクからハブへ到達できる", async ({ page }) => {
   await page.goto("/settings/pipeline");
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const sidebar = await openSidebarNav(page);
   // 現在地がハブなので「検索・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
   await expect(sidebar.getByRole("link", { name: "設定の概要" })).toBeVisible();
   await expectNoPageOverflow(page);
@@ -53,11 +53,11 @@ test("サイドバーの検索・回答設定の名前と順番は設定の概�
     .getByRole("link", { name: / の設定を開く$/ })
     .evaluateAll((links) => links.map((link) => (link.getAttribute("aria-label") ?? "").replace(/ の設定を開く$/, "")));
   expect(cardNames.length).toBeGreaterThan(0);
-  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const pipelineHrefs = await page
     .getByRole("link", { name: / の設定を開く$/ })
     .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
   // サイドバーの同じ工程のリンクを、サイドバー上の並び順で読む（先頭の「設定の概要」は除く）。
+  const sidebar = await openSidebarNav(page);
   const sidebarNames = await sidebar.locator("a").evaluateAll(
     (links, hrefs) =>
       links

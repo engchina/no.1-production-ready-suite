@@ -164,6 +164,12 @@ export {
 
 // --- app shell / layout ---
 export { AppShell } from "./components/app-shell/AppShell";
+export {
+  useSidebarCollapsed,
+  DEFAULT_NAV_DRAWER_LABELS,
+  NAV_DRAWER_QUERY,
+  type NavDrawerLabels,
+} from "./components/app-shell/nav-drawer";
 export { Sidebar, SidebarAccountFooter, type SidebarFooterAction, type SidebarProps } from "./components/app-shell/Sidebar";
 export { PageHeader, type PageHeaderAction } from "./components/app-shell/PageHeader";
 export { PageBody, Section } from "./components/app-shell/PageBody";
