@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from app.schemas.search import (
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
 STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
 
@@ -412,6 +414,12 @@ async def _stream_search_events_with_timeout(
                 )
             )
         except Exception as exc:
+            # stream は応答を始めた後なので共通の例外ハンドラーを通らない。原因を追えるよう
+            # traceback をここで記録する（利用者へは秘匿した定型文だけを返す）。
+            logger.exception(
+                "rag_search_stream_failed",
+                extra={"trace_id": trace_id, "exception_type": type(exc).__name__},
+            )
             await queue.put(
                 (
                     "error",
