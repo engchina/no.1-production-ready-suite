@@ -342,6 +342,13 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 一致しない語を入力したとき（`aria-invalid="true"`）だけ、説明文と状態バッジを danger 色にする。
 - 確認語欄であることは、見出し・状態バッジ（未入力 / 不一致 / 確認済み）・入力欄のフォーカス色で示す。
 
+### `ExecutionConfirmationField`（新規）— ★ 確認語欄は 1 つの実装（#379）
+
+破壊的な操作の実行確認語（type-to-confirm）の入力欄を `packages/ui` に置きました。NL2SQL の製品のコードと system-settings のコピーの 2 つに分かれていた実装を一本化し、Agent のスナップショットの置換の確認語も置き換えました。見た目と振る舞いは NL2SQL の実装が基準です（上の「確認語欄（実行確認語）の色」）。
+
+- 一致の判定（`confirmed`）・確認語（`expectedLabel`）・説明（`helper`）・操作（`actions`）は製品が渡す。文言は `labels` で差し替え、未指定は既定（実行確認語 / 必須 / 入力条件: {phrase} / 未入力 / 不一致 / 確認済み）
+- 製品で確認語の入力欄を手書きしない。props と実装の参照は `components-reference.md`「ExecutionConfirmationField」
+
 ### `StatusBadge`（変更）
 
 - **アイコンを必須化**（`icon` 既定 `true`）。success / danger の輝度がほぼ同じで色覚型によって見分けられないため、**形で冗長に符号化**します。強制カラーモードでも意味が残ります
@@ -623,7 +630,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**33点あります。**
+QA に事前共有してください。**34点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -656,10 +663,11 @@ QA に事前共有してください。**33点あります。**
 | 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・業務ビューは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。承認済み FAQ・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの AGENTS.md「読み込み中・一覧・ページング」、#265） |
 | 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
 | 29 | **md 未満のナビがドロワーになる**（#367。案 A に決定） | 375px などで 56px のアイコン列（展開すると本文を押し出す）→ **上端のバーの「メニュー」ボタンで開くドロワー**（scrim・フォーカスの閉じ込め・Escape / scrim / ナビの選択で閉じる）。本文は画面の全幅（375 − 56 = 319px → 375px）。md 以上は変わらない | 狭い画面で本文の幅を削らない。Material の modal navigation drawer と同じ型（§4 `AppShell`。2026-09-28 に案 A に決定） |
-| 30 | 入力欄・SelectField の角丸が Button と同じになる | `rounded-md`（0.375rem = 5.25px）→ **6px**（`--radius-control`）。Button・`Pagination` の「N / M ページ」も同じトークン（値は 6px のまま） | 隣に並べた操作部品の角の形をそろえる（§4「操作部品の角丸」、#384） |
-| 31 | **検索欄の高さ・アイコンの位置・地がそろう** | 手書きの 9 箇所: RAG のフィードバック 31.5px・ファイル一覧 35px・ナレッジベース 31.5px・検索と検索テスト 38.5px（地は `surface-sunken`）、NL2SQL のスキーマ参照 31.5px・DB 管理 38.5px、ユーザー・ロール管理と Deep Data Security 38.5px → 共有 `TextField`: **36px**（`--field-height`）。隣に lg の Button がある検索・検索テストは **40px**（`--button-height-lg`）、NL2SQL の DB オブジェクトの検索・所有者は **44px**（`touchTarget`、以前と同じ）。アイコンは左 0.75rem、文字は 34.5px から。地は `surface`。NL2SQL の DB オブジェクトの種類の select は枠線を `border-border` → `border-border-control`、角丸を `--radius-control` にし、検索・所有者とそろえた。RAG のナレッジベース詳細の「追加する文書を検索」（既に `TextField`）は先頭アイコンとクリアを足し、同じ行の SelectField・Button の `h-9`（31.5px）を外して 36px にそろえた | 並ぶ SelectField・Button と上端・下端がそろう。入力できるものの輪郭は 3:1（§4「`TextField` の先頭アイコン・後置スロット」、#384） |
-| 32 | **検索欄のクリアが共有のボタンになる** | `type="search"` のブラウザ既定の ×（Chromium・Safari だけ。キーボードで届かない）→ 値があるときだけ入力欄の右端に「検索語をクリア」（NL2SQL の所有者の前方一致は「入力をクリア」）の × ボタン。Tab で届き、ホバー・フォーカスで Tooltip。Escape でも消える | どのブラウザでも同じ操作で消せる。キーボード・読み上げで使える（#384） |
-| 33 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
+| 30 | **確認語欄が 1 つの実装になる** | Agent の実行時スナップショットの置換の確認語は `danger` の枠線の区画に素の入力欄（`h-10`・`bg-surface-sunken`）と説明だけ、置換ボタンは区画の下（`md`）→ 共有の `ExecutionConfirmationField`（中立の面・「入力条件: REPLACE」と状態のバッジ・44px の入力欄・区切り線の下に `lg` の置換ボタン、375px では全幅）。見出しの「確認入力」と説明の文言は変えない。system-settings のシステムテーブルの確認語欄は、確認語が `_` の直後で折り返すようになる（旧: 任意の位置）。NL2SQL は変わらない | 製品のコードと system-settings のコピーを `packages/ui` に一本化し、3 製品の確認語欄を同じ見た目・振る舞いにする。破壊的な操作の確認面を中立にする（UX 契約 buttons.md / messaging §3.5、§4「`ExecutionConfirmationField`」、#379） |
+| 31 | 入力欄・SelectField の角丸が Button と同じになる | `rounded-md`（0.375rem = 5.25px）→ **6px**（`--radius-control`）。Button・`Pagination` の「N / M ページ」も同じトークン（値は 6px のまま） | 隣に並べた操作部品の角の形をそろえる（§4「操作部品の角丸」、#384） |
+| 32 | **検索欄の高さ・アイコンの位置・地がそろう** | 手書きの 9 箇所: RAG のフィードバック 31.5px・ファイル一覧 35px・ナレッジベース 31.5px・検索と検索テスト 38.5px（地は `surface-sunken`）、NL2SQL のスキーマ参照 31.5px・DB 管理 38.5px、ユーザー・ロール管理と Deep Data Security 38.5px → 共有 `TextField`: **36px**（`--field-height`）。隣に lg の Button がある検索・検索テストは **40px**（`--button-height-lg`）、NL2SQL の DB オブジェクトの検索・所有者は **44px**（`touchTarget`、以前と同じ）。アイコンは左 0.75rem、文字は 34.5px から。地は `surface`。NL2SQL の DB オブジェクトの種類の select は枠線を `border-border` → `border-border-control`、角丸を `--radius-control` にし、検索・所有者とそろえた。RAG のナレッジベース詳細の「追加する文書を検索」（既に `TextField`）は先頭アイコンとクリアを足し、同じ行の SelectField・Button の `h-9`（31.5px）を外して 36px にそろえた | 並ぶ SelectField・Button と上端・下端がそろう。入力できるものの輪郭は 3:1（§4「`TextField` の先頭アイコン・後置スロット」、#384） |
+| 33 | **検索欄のクリアが共有のボタンになる** | `type="search"` のブラウザ既定の ×（Chromium・Safari だけ。キーボードで届かない）→ 値があるときだけ入力欄の右端に「検索語をクリア」（NL2SQL の所有者の前方一致は「入力をクリア」）の × ボタン。Tab で届き、ホバー・フォーカスで Tooltip。Escape でも消える | どのブラウザでも同じ操作で消せる。キーボード・読み上げで使える（#384） |
+| 34 | **強制カラーモードで、選ばれていないタブの下線が消える** | すべてのタブに `CanvasText` の下線（選んだタブと区別できない）→ 選んだタブだけ `Highlight` の下線 | 透明の枠線は強制カラーモードで system color に塗られるため、背景と同じ `Canvas` にする（§4「Tabs」、#374） |
 
 ### API の非互換
 
@@ -676,6 +684,7 @@ QA に事前共有してください。**33点あります。**
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
+| `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
 

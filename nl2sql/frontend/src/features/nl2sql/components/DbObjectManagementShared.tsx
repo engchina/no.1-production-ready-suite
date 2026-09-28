@@ -33,6 +33,7 @@ import {
   FixedSplitPane,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  ExecutionConfirmationField,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -56,7 +57,7 @@ import {
   type DbAdminObjectTarget,
 } from "../dbObjectIdentity";
 import type { DbAdminExecuteData, DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
-import { DbObjectColumnsTable, ExecutionConfirmationField, downloadText } from "./DbAdminShared";
+import { DbObjectColumnsTable, downloadText } from "./DbAdminShared";
 import { DbObjectName } from "./DbObjectName";
 
 export {

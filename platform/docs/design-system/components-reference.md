@@ -1237,6 +1237,79 @@ export function FormSkeleton({ fields = 4, title = true, actions = true, classNa
 
 ---
 
+## ExecutionConfirmationField — **新規**（#379）
+
+破壊的な操作の **実行確認語（type-to-confirm）** の入力欄です。NL2SQL の `ExecutionConfirmationField`（製品のコード、14 か所で使用）と、system-settings のシステムテーブルの確認語欄（#325 で作ったコピー）を `packages/ui` に一本化しました。Agent の実行時スナップショットの置換の確認語もこれに置き換えました。**製品で確認語の入力欄を再実装しないでください。**
+
+| 決めたこと | 理由 |
+|---|---|
+| 面は中立（`--color-surface-sunken` + `--color-border`）。入力前は danger 色を使わない | 操作前から赤いと、エラーが起きているように見える（README §4「確認語欄（実行確認語）の色」、UX 契約 messaging §3.5） |
+| 見出しの行に「入力条件: `{phrase}`」と状態のバッジ（未入力 / 不一致 / 確認済み）。バッジは `aria-live="polite"` | 状態を色だけで示さない。入力の結果を読み上げで知らせる |
+| 確認語は等幅・太字で、`.` / `_` / `$` / `#` の直後で折り返す（`<wbr>`） | 識別子（`ADMIN_EXECUTE`・`OWNER.OBJECT`）を読み違えない。375px でも横にはみ出さない |
+| 一致しない語を入れたときだけ `aria-invalid="true"`、説明文とバッジを danger 色にする | 空白だけの入力は未入力として扱う |
+| 入力欄は 44px、`required` / `aria-required`、説明を `aria-describedby`。自動補完・自動修正・スペルチェックをしない。フォーカス中は枠線を `--color-danger-fg` にする（ring は重ねない） | タッチ端末で押しやすい高さ。確認語は手で入力させる |
+| 実行 / キャンセル等の操作は `actions` で渡し、区切り線（`border-t`）の下に置く。640px 未満は縦に並べる | 確認語と実行を 1 つの区画にまとめる（README §4「カード内の操作行」） |
+| **一致の判定は呼び出し側**（`confirmed`）。前後の空白を許すかどうか・確認語の値は製品が決める | backend の確認と同じ規則で判定するため。`packages/ui` は業務の語を知らない |
+| 文言は `labels` で差し替える。未指定の項目は既定（`DEFAULT_EXECUTION_CONFIRMATION_LABELS`：実行確認語 / 必須 / 入力条件: {phrase} / 未入力 / 不一致 / 確認済み） | 3 製品で同じ語をそろえる。製品固有の見出し（Agent の「確認入力」）や system-settings の上書き可能な文言は `labels` で渡す |
+
+```tsx
+<ExecutionConfirmationField
+  value={confirmation}
+  onChange={setConfirmation}
+  confirmed={confirmation.trim() === "ADMIN_EXECUTE"}
+  expectedLabel="ADMIN_EXECUTE"
+  helper="ADMIN_EXECUTE を入力すると実行できます。"
+  disabled={running}
+  actions={
+    <>
+      <Button variant="danger" size="lg" className="w-full sm:w-auto" icon={Play} loading={running} disabled={!confirmed}>
+        実行
+      </Button>
+      <ClearActionButton label="入力をリセット" matchButtonHeight size="lg" className="w-full sm:w-auto" onClick={clear} />
+    </>
+  }
+/>
+```
+
+### ExecutionConfirmationField の props
+
+```ts
+export interface ExecutionConfirmationLabels {
+  label: string;     // 見出し。既定「実行確認語」
+  required: string;  // 必須のタグ。既定「必須」
+  expected: string;  // `{phrase}` の位置に確認語を差し込む。既定「入力条件: {phrase}」
+  pending: string;   // 既定「未入力」
+  mismatch: string;  // 既定「不一致」
+  confirmed: string; // 既定「確認済み」
+}
+
+export interface ExecutionConfirmationFieldProps {
+  value: string;
+  onChange: (value: string) => void;
+  /** 一致の判定は呼び出し側。 */
+  confirmed: boolean;
+  expectedLabel: string;
+  /** 既定は expectedLabel。 */
+  placeholder?: string;
+  helper: ReactNode;
+  disabled?: boolean;
+  /** 既定は useId。E2E やページ内リンクで引くときだけ渡す。説明の id は `${id}-helper`。 */
+  id?: string;
+  labels?: Partial<ExecutionConfirmationLabels>;
+  actions?: ReactNode;
+  className?: string;
+}
+
+/** 表示の区分（空白だけは pending）。 */
+export declare function executionConfirmationStatus(value: string, confirmed: boolean): "pending" | "mismatch" | "confirmed";
+
+/** @dsComponent */
+export declare function ExecutionConfirmationField(props: ExecutionConfirmationFieldProps): JSX.Element;
+```
+
+- ルート要素は `data-testid="execution-confirmation-field"` と `data-confirmation-status`（`pending` / `mismatch` / `confirmed`）を持ちます。3 製品の E2E はこの testid で確認語欄を引きます。
+- 確認語はページを離れる・戻るとき、対象や入力が変わったときに呼び出し側で空に戻します（UX 契約 workspace-state.md）。
+
 ## TextField — 変更（#384）
 
 先頭アイコン（`leadingIcon`）・後置スロット（`trailing`）・クリア（`onClear`）を足しました。検索欄は製品で手書きせず、これで作ります（決めたことの表は README §4「`TextField` の先頭アイコン・後置スロット」）。既存の props・id・aria は変えていません。
@@ -1314,7 +1387,7 @@ export type TextFieldProps = {
 | 後置スロットは枠線の内側（`inset-y-px right-px`）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない |
 | クリアボタンは `aria-controls` で入力欄を指し、`mousedown` を止める。押したら `onClear()` の後に入力欄へ `focus()` | ボタンが消えてもフォーカスが body に落ちない。blur で確定する検索欄が消す前の値を確定しない |
 | 強制カラーモードでは、クリアボタンの輪郭のうち上・右・下を `Canvas` にし、左の区切りだけ残す | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
-| `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #32） |
+| `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #33） |
 
 - 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。
 - 検索欄の E2E は `getByRole("searchbox" | "textbox", { name })` で引きます。先頭アイコンは入力欄の親（`xpath=..`）の `[data-text-field-slot="leading"]`、後置は `[data-text-field-slot="trailing"]` です。

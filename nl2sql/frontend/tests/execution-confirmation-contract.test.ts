@@ -6,47 +6,36 @@ function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
 
-function sliceBetween(text: string, startMarker: string, endMarker: string): string {
-  const start = text.indexOf(startMarker);
-  assert.notEqual(start, -1);
-  const end = text.indexOf(endMarker, start + startMarker.length);
-  assert.notEqual(end, -1);
-  return text.slice(start, end);
-}
-
 function sliceFrom(text: string, startMarker: string): string {
   const start = text.indexOf(startMarker);
   assert.notEqual(start, -1);
   return text.slice(start);
 }
 
-test("ExecutionConfirmationField uses a stable neutral surface without a left danger accent", () => {
-  const component = sliceBetween(
-    source("../src/features/nl2sql/components/DbAdminShared.tsx"),
-    "export function ExecutionConfirmationField",
-    "export function QueryResultsTable",
-  );
+// 確認語欄の見た目（中立の面・状態の色・フォーカス）は packages/ui の単体テスト
+// （platform/packages/ui/tests/execution-confirmation-field.test.tsx）が守る（#379）。
+test("ExecutionConfirmationField is the shared packages/ui component, not a product copy", () => {
+  const dbAdminShared = source("../src/features/nl2sql/components/DbAdminShared.tsx");
+  assert.doesNotMatch(dbAdminShared, /function ExecutionConfirmationField/u);
 
-  assert.match(component, /border border-border bg-surface-sunken p-3/u);
-  assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
-  assert.doesNotMatch(component, /bg-danger-subtle\/70/u);
-  assert.match(component, /border border-border-control bg-surface/u);
-  assert.match(component, /focus:border-danger-fg/u);
-  // フォーカスの表示は入力欄の共通規則（枠線 + 内側の影）に任せ、ring を重ねない（#355）
-  assert.doesNotMatch(component, /focus:ring-/u);
-  assert.doesNotMatch(component, /tone\??:|isDanger/u);
-});
-
-test("ExecutionConfirmationField keeps empty, mismatch, and confirmed status tones distinct", () => {
-  const component = sliceBetween(
-    source("../src/features/nl2sql/components/DbAdminShared.tsx"),
-    "export function ExecutionConfirmationField",
-    "export function QueryResultsTable",
-  );
-
-  assert.match(component, /border-success-border bg-success-subtle text-success-fg/u);
-  assert.match(component, /border-danger-border bg-danger-subtle text-danger-fg/u);
-  assert.match(component, /border-border bg-surface text-fg-muted/u);
+  const usages = [
+    "../src/features/nl2sql/components/DbAdminShared.tsx",
+    "../src/features/nl2sql/components/DbObjectManagementShared.tsx",
+    "../src/features/nl2sql/pages/AdminSqlPage.tsx",
+    "../src/features/nl2sql/pages/DataManagementPage.tsx",
+    "../src/features/nl2sql/pages/ProfileManagementPage.tsx",
+    "../src/features/nl2sql/pages/SampleDataPage.tsx",
+    "../src/features/nl2sql/pages/TableManagementPage.tsx",
+    "../src/features/nl2sql/SyntheticReview.tsx",
+    "../src/features/security/SecurityDeepSecPage.tsx",
+    "../src/components/settings/SelectAiCredentialCard.tsx",
+  ];
+  for (const path of usages) {
+    const text = source(path);
+    const uiImport = text.match(/import \{[^}]*\} from "@engchina\/production-ready-ui";/u)?.[0] ?? "";
+    assert.match(uiImport, /\bExecutionConfirmationField\b/u, path);
+    assert.match(text, /<ExecutionConfirmationField\b/u, path);
+  }
 });
 
 test("Drop object dialog does not wrap the confirmation field in a second danger surface", () => {
