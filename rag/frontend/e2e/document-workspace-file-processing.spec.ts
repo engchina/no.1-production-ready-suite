@@ -271,6 +271,58 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   ).toHaveCount(0);
 });
 
+test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true });
+
+  await page.goto("/documents/doc-1");
+
+  const diagnostics = page.getByTestId("document-diagnostics");
+  const summary = diagnostics.locator("summary");
+  const chevron = summary.locator("svg[data-state]");
+  const sourceHeading = diagnostics.getByRole("heading", { name: "原本情報" });
+  const rotate = () => chevron.evaluate((icon) => getComputedStyle(icon).rotate);
+
+  // 折りたたみ: Chevron は右向き（-90deg）。ブラウザ標準の三角は出さない。
+  await expect(summary).toContainText("処理の詳細(診断)");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+  await expect.poll(rotate).toBe("-90deg");
+  await expect(sourceHeading).toBeHidden();
+  expect(await summary.evaluate((node) => getComputedStyle(node).listStyleType)).toBe("none");
+  // 見出しの行全体が押せる（高さはトークン。タッチ端末では 44px）。
+  const box = await summary.boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
+  expect(box?.width ?? 0).toBeGreaterThan(((await diagnostics.boundingBox())?.width ?? 0) - 4);
+
+  // クリックで開く: 下向き（0deg）、内容が見える。
+  await summary.click({ position: { x: (box?.width ?? 200) - 12, y: (box?.height ?? 40) / 2 } });
+  await expect(diagnostics).toHaveAttribute("open", "");
+  await expect(chevron).toHaveAttribute("data-state", "expanded");
+  await expect.poll(rotate).toBe("0deg");
+  await expect(sourceHeading).toBeVisible();
+  await summary.click();
+  await expect(diagnostics).not.toHaveAttribute("open", "");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+
+  // キーボード: Enter で開き、Space で閉じる。フォーカスの表示は outline。
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(chevron).toHaveAttribute("data-state", "expanded");
+  await expect(sourceHeading).toBeVisible();
+  await page.keyboard.press("Space");
+  await expect(chevron).toHaveAttribute("data-state", "collapsed");
+  await expect(sourceHeading).toBeHidden();
+  expect(await summary.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+  expect(await summary.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe("none");
+
+  // reduced-motion では回転のアニメーションを止める（向きは変わる。base.css は 0.01ms に縮める）。
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const duration = await chevron.evaluate((icon) => parseFloat(getComputedStyle(icon).transitionDuration));
+  expect(duration).toBeLessThan(0.001);
+  await expectNoPageOverflow(page);
+});
+
 test("Chunk 作成と Embedding/索引の工程行に chunk 数・ベクトル数・embedding モデルを表示する", async ({
   page,
 }) => {

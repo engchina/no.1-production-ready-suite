@@ -9,6 +9,7 @@ import adherence from "../../../platform/docs/design-system/adherence.oxlintrc.j
 const LOADING_ICON = "loading を渡す Button には icon を渡す";
 const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
+const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -91,5 +92,18 @@ const c = <div className="pl-9">入れ子の行</div>;
 const d = <textarea className="pl-3" />;
 `);
     expect(linesWith(messages, HANDWRITTEN_SEARCH)).toEqual([]);
+  });
+});
+
+describe("adherence: 手書きの開閉（#397）", () => {
+  it("<details> を検出し、Disclosure・DisclosureChevron・details 以外は許す", async () => {
+    const messages = await lint(`
+const a = <details><summary>詳細</summary>本文</details>;
+const b = <details open={open} className="group/disclosure"><summary className="flex">詳細</summary></details>;
+const c = <Disclosure summary="詳細">本文</Disclosure>;
+const d = <button aria-expanded={open}>詳細<DisclosureChevron expanded={open} /></button>;
+const e = <div data-details="x">詳細</div>;
+`);
+    expect(linesWith(messages, HANDWRITTEN_DISCLOSURE)).toEqual([2, 3]);
   });
 });

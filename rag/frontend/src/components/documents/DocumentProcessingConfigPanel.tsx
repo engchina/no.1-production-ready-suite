@@ -1,11 +1,12 @@
 "use client";
 
-import { ChevronDown, RotateCcw, Save, SlidersHorizontal } from "lucide-react";
+import { RotateCcw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Banner,
   Button,
+  DisclosureChevron,
   FormStatus,
   SelectField,
   type SelectFieldOption,
@@ -315,10 +316,13 @@ export function DocumentProcessingConfigPanel({
           variant="secondary"
           size="sm"
           aria-expanded={expanded}
+          aria-controls="document-processing-config-editor"
           onClick={() => setExpanded((value) => !value)}
           disabled={loading || Boolean(error) || !data}
-          className="min-h-9 shrink-0" icon={ChevronDown}>
+          className="min-h-9 shrink-0">
           {t(expanded ? "documents.processingConfig.actions.close" : "documents.processingConfig.actions.edit")}
+          {/* 開閉の状態は向きの変わる Chevron で示す（静的な icon={ChevronDown} は閉じる操作でも下向きのままだった。#397）。 */}
+          <DisclosureChevron expanded={expanded} size={16} />
         </Button>
       </div>
 
@@ -368,7 +372,7 @@ export function DocumentProcessingConfigPanel({
           </div>
 
           {expanded ? (
-            <div className="mt-4 space-y-4 border-t border-border pt-4">
+            <div id="document-processing-config-editor" className="mt-4 space-y-4 border-t border-border pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-fg-muted">{t("documents.processingConfig.editHint")}</p>
                 <span className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg-muted">

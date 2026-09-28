@@ -5,6 +5,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Disclosure,
   FormStatus,
   Skeleton,
   StatusBadge,
@@ -177,11 +178,12 @@ function ReadonlyStages({ stages }: { stages: { id: string; prompts: { id: strin
       <h3 className="text-sm font-semibold text-fg">{t("settings.docragPrompts.stages.title")}</h3>
       <p className="text-xs leading-relaxed text-fg-muted">{t("settings.docragPrompts.stages.description")}</p>
       {stages.map((stage) => (
-        <details key={stage.id} className="rounded-md border border-border bg-surface-sunken p-3">
-          <summary className="cursor-pointer text-sm font-medium text-fg">
-            {t(`settings.docragPrompts.stage.${stage.id}` as I18nKey)}
-          </summary>
-          <div className="mt-2 space-y-3">
+        <Disclosure
+          key={stage.id}
+          summary={t(`settings.docragPrompts.stage.${stage.id}` as I18nKey)}
+          surface="sunken"
+          contentClassName="space-y-3"
+        >
             {stage.prompts.map((part) => (
               <div key={part.id}>
                 <p className="text-xs font-medium text-fg-muted">
@@ -192,8 +194,7 @@ function ReadonlyStages({ stages }: { stages: { id: string; prompts: { id: strin
                 </pre>
               </div>
             ))}
-          </div>
-        </details>
+        </Disclosure>
       ))}
     </section>
   );

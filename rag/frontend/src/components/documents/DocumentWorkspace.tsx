@@ -3,7 +3,6 @@
 import {
   Braces,
   Check,
-  ChevronDown,
   Clock3,
   Download,
   FileSearch,
@@ -65,6 +64,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Disclosure,
   FormStatus,
   ProcessingIndicator,
   SelectField,
@@ -1487,16 +1487,15 @@ export function DocumentWorkspace({
           </section>
         </div>
 
-        <details
-          className="rounded-md border border-border bg-surface px-4 py-1"
+        <Disclosure
+          summary={t("flow.inspector.details")}
+          icon={Wrench}
           open={diagnosticsOpen}
-          onToggle={(event) => setDiagnosticsOpen((event.target as HTMLDetailsElement).open)}
+          onOpenChange={setDiagnosticsOpen}
+          data-testid="document-diagnostics"
+          contentClassName="space-y-5 px-4 py-3"
+          summaryClassName="px-4"
         >
-          <summary className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-fg">
-            <Wrench size={16} className="text-accent-fg" aria-hidden />
-            {t("flow.inspector.details")}
-          </summary>
-          <div className="space-y-5 pb-3 pt-3">
             {sourceProfile ? <SourceProfilePanel profile={sourceProfile} /> : null}
             {/* 派生系譜は変換あり時のみ。変換なしは工程行の「変換なし」チップに集約する。 */}
             {parsedExtraction.sourceDerivation?.converted ? (
@@ -1570,8 +1569,7 @@ export function DocumentWorkspace({
                 })
               }
             />
-          </div>
-        </details>
+        </Disclosure>
 
         {approveDocument.isError ? (
           <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
@@ -2529,18 +2527,12 @@ function ChunkPreviewControls({
         ) : (
           <>
             {semanticBoundary ? (
-              <details
+              <Disclosure
                 key={form.chunking_strategy}
-                className="group rounded-md border border-border bg-surface-sunken p-3 sm:col-span-2"
+                summary={t("settings.chunking.params.semanticDetails")}
+                surface="sunken"
+                className="sm:col-span-2"
               >
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-                  <span>{t("settings.chunking.params.semanticDetails")}</span>
-                  <ChevronDown
-                    size={16}
-                    className="shrink-0 text-fg-muted transition-transform group-open:rotate-180"
-                    aria-hidden
-                  />
-                </summary>
                 <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                   {t(
                     form.chunking_strategy === "markdown_heading"
@@ -2553,7 +2545,7 @@ function ChunkPreviewControls({
                   {overlapField}
                   {minCharsField}
                 </div>
-              </details>
+              </Disclosure>
             ) : (
               <>
                 {chunkSizeField}

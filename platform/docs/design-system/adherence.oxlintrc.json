@@ -77,6 +77,10 @@
           {
             "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/])",
             "message": "回転するアイコンを手書きしない（lucide の Loader2 / RefreshCw 等に animate-spin を付けない）。共有の Spinner（全周トラック・線の実寸 2px・reduced-motion 対応）を使い、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='details']",
+            "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           }
         ]
       }

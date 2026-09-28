@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Disclosure,
   PageBody,
   Card,
   CardContent,
@@ -268,20 +269,21 @@ export function ParserAdapterSettingsClient() {
       {settings.adapter_backend === "docling" && settings.docling_vision_enabled ? (
         <DocragPromptCard promptKey="image_retrieval" />
       ) : null}
-      <details className="border-t border-border pt-4">
-        <summary className="cursor-pointer text-sm font-semibold text-fg">
-          {t("settings.parserAdapters.diagnostics.title")}
-        </summary>
-        <div className="mt-4 space-y-5">
-          <ParserAdapterContractCard
-            data={contractQuery.data}
-            checking={contractQuery.isFetching}
-            errorMessage={contractQuery.isError ? contractError : null}
-            hasFetched={contractQuery.isFetched}
-            onRun={() => void contractQuery.refetch()}
-          />
-        </div>
-      </details>
+      <Disclosure
+        variant="plain"
+        summary={t("settings.parserAdapters.diagnostics.title")}
+        className="border-t border-border pt-4"
+        summaryClassName="font-semibold"
+        contentClassName="pt-4"
+      >
+        <ParserAdapterContractCard
+          data={contractQuery.data}
+          checking={contractQuery.isFetching}
+          errorMessage={contractQuery.isError ? contractError : null}
+          hasFetched={contractQuery.isFetched}
+          onRun={() => void contractQuery.refetch()}
+        />
+      </Disclosure>
     </PageBody>
   );
 }

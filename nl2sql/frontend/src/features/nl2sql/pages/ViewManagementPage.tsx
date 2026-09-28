@@ -5,6 +5,7 @@ import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import {
   Button,
+  Disclosure,
   EmptyState,
   toast,
   StatusBadge,
@@ -12,7 +13,6 @@ import {
   PageBody,
   ContentActionBar,
   ProcessingIndicator,
-  DisclosureChevron,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -253,15 +253,11 @@ function ViewJoinWherePanel({
             </label>
           </div>
           {result.structure_markdown ? (
-            <details className="group/disclosure rounded-md border border-border bg-surface p-3">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-                <span>{t("viewMgmt.joinWhere.structureResult")}</span>
-                <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-              </summary>
-              <pre data-surface="code" className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">
+            <Disclosure summary={t("viewMgmt.joinWhere.structureResult")}>
+              <pre data-surface="code" className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">
                 {result.structure_markdown}
               </pre>
-            </details>
+            </Disclosure>
           ) : null}
         </section>
       ) : null}

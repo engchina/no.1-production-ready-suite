@@ -8,6 +8,7 @@ import {
   CardTitle,
   DEFAULT_PAGE_SIZE,
   DataTable,
+  Disclosure,
   EmptyState,
   toast,
   type DataTableColumn,
@@ -18,7 +19,6 @@ import {
   ClearActionButton,
   ActionResultRegion,
   ContentActionBar,
-  DisclosureChevron,
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
@@ -126,34 +126,19 @@ export function WorkSection({
   onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
-  const toneClass =
-    tone === "danger"
-      ? "border-danger-border bg-danger-subtle text-danger-fg marker:text-danger-fg"
-      : "border-border bg-surface text-fg marker:text-fg-muted";
-  const summaryIconClass = tone === "danger" ? "text-danger-fg" : "text-fg-muted";
-
   return (
-    <details
-      className={`group/disclosure rounded-md border ${toneClass}`}
-      data-testid={dataTestId}
+    <Disclosure
+      tone={tone}
+      summary={title}
+      description={description}
       open={open}
-      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+      onOpenChange={onOpenChange}
+      data-testid={dataTestId}
+      summaryClassName="px-4 py-3"
+      contentClassName="rounded-b-md bg-surface"
     >
-      <summary
-        className={`flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden`}
-      >
-        <span className="min-w-0">
-          <span className="block font-semibold">{title}</span>
-          <span className="mt-1 block text-sm font-normal text-fg-muted">{description}</span>
-        </span>
-        <DisclosureChevron
-          expanded="group"
-          size={16}
-          className={summaryIconClass}
-        />
-      </summary>
-      <div className="border-t border-current/10 bg-surface p-3">{children}</div>
-    </details>
+      {children}
+    </Disclosure>
   );
 }
 
@@ -558,12 +543,7 @@ export function DbAdminErrorNotice({
         </div>
         {error.examples.length > 0 ? <SqlRecoveryExamples examples={error.examples} /> : null}
         {hasDetail ? (
-          <details className="group/disclosure rounded-md border border-border bg-surface">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-              <span>{t("dbAdmin.result.error.detail")}</span>
-              <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-            </summary>
-            <div className="grid gap-2 border-t border-border p-3">
+          <Disclosure summary={t("dbAdmin.result.error.detail")} contentClassName="grid gap-2">
               {error.code ? <StatusBadge variant="danger" label={error.code} /> : null}
               {requestId ? (
                 <p className="break-all text-xs text-fg-muted">
@@ -575,8 +555,7 @@ export function DbAdminErrorNotice({
                   {t("dbAdmin.result.error.help")}
                 </a>
               ) : null}
-            </div>
-          </details>
+            </Disclosure>
         ) : null}
       </div>
     </Banner>
@@ -1229,15 +1208,16 @@ export function ObjectDetailPanel({
           sampleOf={(column) => sampleByColumn.get(column.column_name.toUpperCase()) ?? ""}
         />
       </div>
-      <details className="group/disclosure rounded-md border border-border bg-surface-sunken">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-          <span className="min-w-0">
+      <Disclosure
+        surface="sunken"
+        summary={
+          <>
             {t("dbAdmin.detail.ddl")}
             <span className="ml-2 text-xs font-normal text-fg-muted">{t("dbAdmin.detail.ddlHint")}</span>
-          </span>
-          <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
-        </summary>
-        <div className="grid gap-2 border-t border-border bg-surface p-3">
+          </>
+        }
+        contentClassName="grid gap-2 rounded-b-md bg-surface"
+      >
           <ContentActionBar ariaLabel={t("dbAdmin.detail.ddl")}>
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
               {t("dbAdmin.detail.copy")}
@@ -1261,8 +1241,7 @@ export function ObjectDetailPanel({
           <pre data-surface="code" className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-sm leading-6 text-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
-        </div>
-      </details>
+        </Disclosure>
     </section>
   );
 }

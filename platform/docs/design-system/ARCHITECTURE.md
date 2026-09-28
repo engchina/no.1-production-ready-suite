@@ -189,6 +189,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - `@engchina/production-ready-ui/dist/**` など内部パスへの直 import → パッケージのルートから import する
 - `loading` 中に `Button` のラベルを差し替える → ラベルは固定する
 - アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-*` を持つ `<input>`）→ `TextField` の `leadingIcon` / `trailing` / `onClear`
+- 開閉できる領域の手書き（JSX の `<details>`）→ `Disclosure`（開閉の状態は `DisclosureChevron`。#397）
 
 prop の妥当性（`Button` に存在しない prop を渡す等）は lint ではなく TypeScript の型チェックで検出します。
 

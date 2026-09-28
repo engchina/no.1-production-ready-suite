@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
   Button,
+  Disclosure,
   FormStatus,
   Switch,
   TextField,
@@ -17,7 +18,6 @@ import {
 import { useState } from "react";
 import {
   CheckCircle2,
-  ChevronDown,
   RotateCcw,
   Save,
   Scissors,
@@ -440,18 +440,12 @@ function ParamsCard({
             />
           ) : null}
           {semanticBoundary ? (
-            <details
+            <Disclosure
               key={form.strategy}
-              className="group rounded-md border border-border bg-surface-sunken p-3 md:col-span-2"
+              summary={t("settings.chunking.params.semanticDetails")}
+              surface="sunken"
+              className="md:col-span-2"
             >
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
-                <span>{t("settings.chunking.params.semanticDetails")}</span>
-                <ChevronDown
-                  size={16}
-                  className="shrink-0 text-fg-muted transition-transform group-open:rotate-180"
-                  aria-hidden
-                />
-              </summary>
               <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                 {paramsDescription(form.strategy)}
               </p>
@@ -460,7 +454,7 @@ function ParamsCard({
                 {overlapField}
                 {minCharsField}
               </div>
-            </details>
+            </Disclosure>
           ) : (
             <>
               {chunkSizeField}

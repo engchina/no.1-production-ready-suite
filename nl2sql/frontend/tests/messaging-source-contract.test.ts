@@ -34,7 +34,7 @@ test("handwritten danger surfaces stay limited to structured state and field con
     ["src/components/ExecutionActivityPanel.tsx", 1],
     ["src/components/ui/file-dropzone.tsx", 1],
     // 確認語欄の不一致バッジは packages/ui の ExecutionConfirmationField に移した（#379）。
-    ["src/features/nl2sql/components/DbAdminShared.tsx", 1],
+    // 危険な操作の区画（WorkSection の tone="danger"）は packages/ui の Disclosure の tone に移した（#397）。
     ["src/features/nl2sql/components/WorkflowProgressStrip.tsx", 1],
     ["src/features/nl2sql/pages/DataManagementPage.tsx", 1],
     ["src/components/StateViews.tsx", 1],

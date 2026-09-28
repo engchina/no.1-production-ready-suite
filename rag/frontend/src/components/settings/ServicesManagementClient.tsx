@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  DisclosureChevron,
   PageBody,
   Button,
   Card,
@@ -418,6 +419,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
       >
         <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
         {t("settings.services.commands.title")}
+        <DisclosureChevron expanded={open} size={14} className="ml-auto text-fg-muted" />
       </button>
       {open ? (
         <div id="service-commands" className="space-y-2 border-t border-border p-3">

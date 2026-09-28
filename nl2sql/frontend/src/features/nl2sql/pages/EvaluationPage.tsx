@@ -2,6 +2,7 @@ import {
   Button,
   Banner,
   DataTable,
+  Disclosure,
   EmptyState,
   toast,
   StatusBadge,
@@ -12,7 +13,6 @@ import {
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
-  DisclosureChevron,
   RowActionMenu,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
@@ -1322,16 +1322,15 @@ function ResultJudgementSummary({ result }: { result: QualityEvaluationResult })
 function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) {
   const errors = [result.generation_error, result.judge_error].filter(Boolean);
   return (
-    <details className="group/disclosure min-w-0 text-xs">
-      <summary
-        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-accent-fg [&::-webkit-details-marker]:hidden"
-        data-testid="quality-evaluation-analysis-toggle"
-      >
-        <span>{t("qualityEvaluation.details.analysis")}</span>
-        <DisclosureChevron expanded="group" size={14} />
-      </summary>
+    <Disclosure
+      variant="plain"
+      size="sm"
+      summary={t("qualityEvaluation.details.analysis")}
+      summaryClassName="text-accent-fg"
+      summaryProps={{ "data-testid": "quality-evaluation-analysis-toggle" }}
+    >
       <div
-        className="mt-2 grid min-w-0 gap-2 rounded-md bg-surface-hover p-3 text-fg-muted"
+        className="grid min-w-0 gap-2 rounded-md bg-surface-hover p-3 text-fg-muted"
         data-testid="quality-evaluation-analysis-detail"
       >
         <AnalysisList
@@ -1352,7 +1351,7 @@ function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) 
         ) : null}
         <AnalysisList label={t("qualityEvaluation.details.error")} items={errors} danger />
       </div>
-    </details>
+    </Disclosure>
   );
 }
 
