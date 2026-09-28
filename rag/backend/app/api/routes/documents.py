@@ -131,6 +131,15 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+UPLOAD_STORAGE_FAILED_MESSAGE = (
+    "原本を保存先に保存できませんでした。システム設定 > アップロード保存先 の設定を確認してから、"
+    "もう一度アップロードしてください。"
+)
+# rag_documents.file_name は VARCHAR2(512)（BYTE 長）。日本語の長いファイル名が DB の INSERT で
+# 失敗しないよう、表示・保存用のファイル名は文字数と UTF-8 のバイト数の両方で切り詰める（#280）。
+MAX_UPLOAD_FILE_NAME_CHARS = 255
+MAX_UPLOAD_FILE_NAME_BYTES = 512
+_MAX_PRESERVED_SUFFIX_CHARS = 16
 CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
@@ -366,11 +375,19 @@ async def _store_uploaded_document(
         data=data,
     )
     key = f"uploaded/{uuid4().hex}/{file_name}"
-    object_path = await storage.put(
-        key=key,
-        data=data,
-        content_type=content_type,
-    )
+    try:
+        object_path = await storage.put(
+            key=key,
+            data=data,
+            content_type=content_type,
+        )
+    except Exception as exc:
+        # 保存先の未設定・認証切れ・容量不足などは、原因の分かる 503 にする（#280）。
+        logger.exception(
+            "upload_storage_put_failed",
+            extra={"file_name": file_name, "exception_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail=UPLOAD_STORAGE_FAILED_MESSAGE) from exc
     try:
         detail = await oracle.create_document(
             file_name=file_name,
@@ -381,10 +398,15 @@ async def _store_uploaded_document(
             duplicate_of_document_id=duplicate.id if duplicate is not None else None,
             knowledge_base_ids=selected_knowledge_base_ids or None,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        # 文書行を作れなかった原本は、どの文書からも参照されず保存先に残り続ける。
+        # 範囲外・アーカイブ済みの KB や DB の失敗でも、保存した原本を消してから返す（#280）。
+        await _delete_orphan_upload_object(storage, object_path)
+        if isinstance(exc, KeyError):
+            raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
     return UploadResult(
         id=detail.id,
         file_name=detail.file_name,
@@ -395,6 +417,19 @@ async def _store_uploaded_document(
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
     )
+
+
+async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path: str) -> None:
+    """文書行を作れなかったアップロードの原本を best-effort で削除する。"""
+    try:
+        await storage.delete(object_path)
+    except Exception:
+        # 後始末の失敗で元のエラーを隠さない。残った原本はログから追えるようにする。
+        logger.warning(
+            "upload_orphan_object_cleanup_failed",
+            extra={"object_storage_path": object_path},
+            exc_info=True,
+        )
 
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
@@ -4960,12 +4995,36 @@ async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:
 
 
 def _safe_display_filename(file_name: str | None) -> str:
-    """表示・保存用のファイル名を安全な basename にする。"""
+    """表示・保存用のファイル名を安全な basename にする。
+
+    長すぎる名前は拡張子を残したまま、文字数（255）と UTF-8 のバイト数（512。
+    `rag_documents.file_name` の列長）の両方に収まるよう末尾側を切り詰める。
+    """
     name = PurePath((file_name or "document.bin").replace("\\", "/")).name.strip()
     name = re.sub(r"[\x00-\x1f\x7f]+", "_", name).strip(" .")
     if not name:
         return "document.bin"
-    return name[:255]
+    return _truncate_file_name(name)
+
+
+def _truncate_file_name(name: str) -> str:
+    """拡張子を残して、ファイル名を文字数とバイト数の上限に収める。"""
+    if (
+        len(name) <= MAX_UPLOAD_FILE_NAME_CHARS
+        and len(name.encode("utf-8")) <= MAX_UPLOAD_FILE_NAME_BYTES
+    ):
+        return name
+    suffix = PurePath(name).suffix
+    if not suffix or len(suffix) > _MAX_PRESERVED_SUFFIX_CHARS:
+        suffix = ""
+    stem = name[: len(name) - len(suffix)] if suffix else name
+    max_stem_chars = MAX_UPLOAD_FILE_NAME_CHARS - len(suffix)
+    max_stem_bytes = MAX_UPLOAD_FILE_NAME_BYTES - len(suffix.encode("utf-8"))
+    stem = stem[:max_stem_chars]
+    while stem and len(stem.encode("utf-8")) > max_stem_bytes:
+        stem = stem[:-1]
+    stem = stem.rstrip(" .")
+    return f"{stem}{suffix}" if stem else f"document{suffix}"
 
 
 def _normalized_content_type(content_type: str | None) -> str:
