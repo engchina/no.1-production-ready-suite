@@ -5,6 +5,8 @@ import {
   CardTitle,
   DataTable,
   DEFAULT_PAGE_SIZE,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   usePagination,
   Pagination,
 } from "@engchina/production-ready-ui";
@@ -59,7 +61,12 @@ export function Nl2SqlResultTable({
               }))}
               rows={pageItems}
               getRowKey={(_, index) => (range.start === 0 ? 0 : range.start - 1) + index}
+              rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
               ariaLabel={t("nl2sql.results.title", { count: results.total })}
+              // 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにする（#265）。
+              stickyHeader
+              visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              scrollAriaLabel={t("nl2sql.results.scrollLabel")}
             />
             <Pagination
               page={page}

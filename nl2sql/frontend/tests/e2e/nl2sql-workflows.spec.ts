@@ -5221,6 +5221,12 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await expect(page.getByRole("cell", { name: "顧客10" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
 
+  // 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにする（#265）。
+  const resultRegion = page.getByRole("region", { name: "検索結果。スクロールできます。" });
+  await expect(resultRegion).toBeVisible();
+  await expect(resultRegion.locator("thead")).toHaveCSS("position", "sticky");
+  expect(await resultRegion.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+
   const pagination = page.getByTestId("nl2sql-result-pagination");
   await expect(pagination).toContainText("1-10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
@@ -8829,6 +8835,57 @@ test("feedback management refresh replaces the active workspace with the shared 
   await expect(skeleton).toHaveCount(0);
   await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
+});
+
+test("feedback management profile switch shows the entries skeleton instead of the previous profile entries (#265)", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  const SECOND_PROFILE = "NL2SQL_SECOND_PROFILE";
+  // 2 つ目の profile を足して、切り替えられるようにする。
+  const profile = (name: string) => ({
+    name,
+    status: "ready",
+    owner: "APP",
+    created_at: "2026-06-21T10:00:00.000Z",
+    object_list: [],
+    attributes: { profile_attributes: { object_list: [{ owner: "APP", name: "INVOICES" }] } },
+  });
+  await page.route("**/api/nl2sql/select-ai/db-profiles?*business_profiles_only=true*", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      profiles: [profile("NL2SQL_DEFAULT_PROFILE"), profile(SECOND_PROFILE)],
+      warnings: [],
+    })
+  );
+  const gate = createRequestGate();
+  await page.route(/\/api\/nl2sql\/select-ai\/feedback\?/, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("profile_name") === SECOND_PROFILE) await gate.promise;
+    await route.fallback();
+  });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/feedback-management?tab=entries");
+  const profileSelect = page.getByLabel("DBMS_CLOUD_AI profile");
+  await expect(profileSelect).toHaveValue("NL2SQL_DEFAULT_PROFILE");
+  const entriesScrollRegion = page.getByTestId("feedback-management-entries-scroll-region");
+  await expect(entriesScrollRegion.locator("tbody tr").first()).toBeVisible();
+
+  await profileSelect.selectOption(SECOND_PROFILE);
+  // 前の profile のエントリを出したままにせず、一覧と詳細を Skeleton にして経過時間を 1 か所だけ出す。
+  await expect(page.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
+  await expect(page.getByTestId("feedback-management-entry-detail-skeleton")).toBeVisible();
+  await expect(page.getByTestId("feedback-management-entries-processing")).toContainText(
+    "Select AI feedback を読み込んでいます"
+  );
+  await expect(entriesScrollRegion).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  gate.release();
+  await expect(page.getByTestId("feedback-management-entries-list-skeleton")).toHaveCount(0);
+  await expect(entriesScrollRegion.locator("tbody tr").first()).toBeVisible();
+  await expect(page.getByTestId("feedback-management-entries-processing")).toHaveCount(0);
 });
 
 test("admin good feedback is available as similar history without manual index rebuild", async ({ page }) => {

@@ -19,6 +19,8 @@ import {
   ProcessingIndicator,
   DisclosureChevron,
   ExecutionConfirmationField,
+  ListSkeleton,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -540,9 +542,17 @@ function DeepSecTargetObjectPicker({
           data-testid={`security-deepsec-object-picker-list-${index}`}
         >
           {loading && objects.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-fg-muted" role="status">
-              {t("security.deepsec.entitlements.objectsLoading")}
-            </p>
+            // 文字だけにせず、経過時間と候補の行の形の Skeleton を出す（#265）。
+            <div className="grid gap-2 px-2 py-2">
+              <ProcessingIndicator
+                active
+                label={t("security.deepsec.entitlements.objectsLoading")}
+                placement="panel"
+                activityIcon="spinner"
+                testId={`security-deepsec-object-picker-loading-${index}`}
+              />
+              <ListSkeleton rows={3} rowClassName="h-8" />
+            </div>
           ) : null}
           {!loading && objects.length === 0 ? (
             <div className="grid gap-1 px-2 py-3 text-sm text-fg-muted">
@@ -629,12 +639,11 @@ function DeepSecPlanSteps({
   }
 
   if (loading && !plan) {
+    // 文字だけにせず、経過時間と手順の形の Skeleton を出す（#265）。
     return (
-      <Card>
-        <CardContent>
-          <p className="text-sm text-fg-muted" role="status">{t("security.deepsec.planLoading")}</p>
-        </CardContent>
-      </Card>
+      <TimedLoadingState label={t("security.deepsec.planLoading")} testId="security-deepsec-plan-loading">
+        <ListSkeleton rows={Math.max(1, stepNumbers.length)} rowClassName="h-24" />
+      </TimedLoadingState>
     );
   }
 
@@ -2412,9 +2421,13 @@ export function SecurityDeepSecPage() {
                                           />
                                         </div>
                                         {loadingDetail ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
-                                            {t("security.deepsec.entitlements.columnsLoading")}
-                                          </p>
+                                          // 文字だけにせず、経過時間と列の候補の形の Skeleton を出す（#265）。
+                                          <TimedLoadingState
+                                            label={t("security.deepsec.entitlements.columnsLoading")}
+                                            testId={`security-deepsec-columns-loading-${index}`}
+                                          >
+                                            <ListSkeleton rows={3} rowClassName="h-8" />
+                                          </TimedLoadingState>
                                         ) : detailError ? (
                                           <p className="rounded-md border border-danger-border bg-danger-subtle p-3 text-sm text-danger-fg">
                                             {detailError}

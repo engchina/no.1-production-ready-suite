@@ -29,6 +29,10 @@ import {
   type DataTableSort,
   type EntityAction,
   FormActionBar,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 
 import { formatMessage } from "../auth/messages";
@@ -36,10 +40,6 @@ import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import {
-  SECURITY_LIST_FOCUS_CLASS,
-  SECURITY_LIST_SCROLL_CLASS,
-  SECURITY_TABLE_ROW_CLASS,
-  SECURITY_TABLE_VISIBLE_ROWS,
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityIdentityLines,
@@ -681,7 +681,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 }}
                 getRowKey={(role) => role.role_id}
                 rowProps={(role) => ({
-                  className: SECURITY_TABLE_ROW_CLASS,
+                  className: INFORMATION_TABLE_ROW_CLASS,
                   "aria-label": formatMessage(m.showRole, { name: role.role_code }),
                 })}
                 ariaLabel={m.listTitle}
@@ -689,7 +689,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 scrollAriaLabel={formatMessage(m.listScrollLabel, { list: m.listTitle })}
                 scrollTestId="security-permissions-scroll-region"
                 stickyHeader
-                visibleRows={SECURITY_TABLE_VISIBLE_ROWS}
+                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                 empty={
                   <EmptyState
                     title={search ? m.noResultsTitle : m.empty}
@@ -1011,7 +1011,7 @@ function TargetFieldset<R extends PermissionRole>({
               aria-labelledby={`${idPrefix}-label`}
               tabIndex={0}
               data-testid={`${idPrefix}-list`}
-              className={`grid min-w-0 gap-2 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-3 pr-4 lg:grid-cols-2 ${SECURITY_LIST_SCROLL_CLASS} ${SECURITY_LIST_FOCUS_CLASS}`}
+              className={`grid min-w-0 gap-2 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-3 pr-4 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
             >
               {filteredItems.map((item) => (
                 <label

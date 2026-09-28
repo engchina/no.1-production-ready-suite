@@ -19,6 +19,8 @@ import {
   type EntityAction,
   FormActionBar,
   entityActionToFormAction,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -49,8 +51,6 @@ import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
 import {
-  SECURITY_TABLE_ROW_CLASS,
-  SECURITY_TABLE_VISIBLE_ROWS,
   SecurityDetailField,
   SecurityEmptySelection,
   SecurityIdentityLines,
@@ -840,7 +840,7 @@ export function UserManagementPage({
                     selectUser(user.user_uuid);
                   }}
                   getRowKey={(user) => user.user_uuid}
-                  rowProps={(user) => ({ className: SECURITY_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.login_user_id }) })}
+                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.login_user_id }) })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
@@ -848,7 +848,7 @@ export function UserManagementPage({
                   })}
                   scrollTestId="security-users-scroll-region"
                   stickyHeader
-                  visibleRows={SECURITY_TABLE_VISIBLE_ROWS}
+                  visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                   empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} />}
                   columns={userColumns}
                 />
