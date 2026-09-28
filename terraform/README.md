@@ -8,6 +8,8 @@
 - Oracle Autonomous AI Database 26ai を **1つ**（新規作成、または既存 ADB の選択）と、その Wallet。選んだ製品すべてで共有する
 - 選んだ製品ごとに OCI Compute を **1台ずつ**（Ubuntu。shape / image / subnet / SSH 鍵は共通、OCPU / メモリ / boot volume は製品ごと）
 - 各 Compute の cloud-init。suite monorepo を1回 clone し、その製品の `init_script.sh`（[`rag/`](../rag/init_script.sh) / [`nl2sql/`](../nl2sql/init_script.sh) / [`agent/`](../agent/init_script.sh)）で配備する
+- 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
+- Agent と RAG / NL2SQL を一緒に配備する場合、Agent から RAG / NL2SQL の MCP へ通す NSG（同じ subnet から `application_port` の TCP だけ。RAG / NL2SQL の VNIC に付ける）
 
 ```text
                  ┌──────────────────────────────┐
@@ -55,7 +57,7 @@ stack は secret を cloud-init に埋め込んで `backend/.env` と共通 `pla
 
 | ファイル | 内容 | 接頭辞 |
 |---|---|---|
-| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・モデル設定の場所・構成管理者 `PLATFORM_ADMIN_*`・製品ごとの `PLATFORM_AUTH_COOKIE_SECURE`）。システム設定画面の保存先でもあるため、既にあれば上書きしない | `PLATFORM_` |
+| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・モデル設定の場所・構成管理者 `PLATFORM_ADMIN_*`・サービス間 token の署名鍵 `PLATFORM_SERVICE_TOKEN_SECRET`・製品ごとの `PLATFORM_AUTH_COOKIE_SECURE`）。システム設定画面の保存先でもあるため、既にあれば上書きしない | `PLATFORM_` |
 | `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
 
 変数名の規則と既存環境の移行は [AGENTS.md](../AGENTS.md) の「設定（`.env`）とデータベース object の命名」と各製品の配備ドキュメントを参照してください。
@@ -113,6 +115,13 @@ sudo systemctl restart production-ready-rag
   （[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
 - Runtime 連携（任意）: `agent_control_plane_public_base_url`（空なら `http://<Compute の private IP>[:port]/api`）、
   `agent_control_plane_mcp_token_secret`（32 文字以上。空なら Binding MCP は fail closed）。
+- RAG / NL2SQL との連携（#233）: 同じ stack で RAG / NL2SQL も配備すると、Agent の `backend/.env` に
+  `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<その製品の Compute の private IP>[:port]/api/mcp`）を書きます。
+  配備しなかった製品の URL は空で、後から画面の「外部 RAG」「外部 NL2SQL」で設定できます。Agent は Run を作った利用者として
+  呼び、認証は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（stack が生成して全 Compute に同じ値を配る）で署名した短命の token です。
+  Binding 経由の MCP など Run の利用者がいない呼び出しを使う場合は、ユーザー管理で専用のユーザーを作り、Agent の `backend/.env` に
+  `AGENT_MCP_SERVICE_USER_LOGIN_ID` を設定します（[agent/docs/agent-control-plane-design.md §4.1](../agent/docs/agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
+  Agent の Compute は RAG / NL2SQL の Compute の後に作ります（Terraform の resource は `oci_core_instance.agent`）。
 - Agent Runtime（OpenClaw / Hermes / DeerFlow）はこの stack では配備しません。起動後に Runtime 画面から登録します。
 - Runtime 状態は Oracle に保存します（`oracle_checkpoint`、table は backend が起動時に作成）。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
 - Compute の既定は 2 OCPU / 16 GB / 100 GB。
@@ -139,7 +148,20 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 - 公開 port は `application_port`（既定 `80`）。製品ごとに別の Compute なので port は衝突しません。
 - Wallet は `/u01/aipoc/wallet`、cloud-init のログは `/var/log/cloud-init-custom.log`。
 - apply 後の output に、製品ごとの URL（`rag_application_url` など）と SSH command が出ます。配備しなかった製品の output は表示されません。
-- 製品間の HTTP 連携（Agent から RAG / NL2SQL を呼ぶなど）は、別 Compute の private IP を指定します。必要な port を VCN のセキュリティ・ルールで開けてください。
+- 製品間の HTTP 連携（Agent から RAG / NL2SQL の MCP を呼ぶ）は、別 Compute の private IP の `application_port` を使います。
+  stack は Agent と RAG / NL2SQL を一緒に配備するとき、同じ subnet の CIDR からその port だけを許可する NSG
+  （`production-ready-suite-product-mcp`）を作って RAG / NL2SQL の VNIC に付けます。stack を実行するユーザーには NSG の作成と
+  VNIC への関連付けの権限（`manage network-security-groups` と VCN の `use`）が必要です。
+- 既存の stack を更新するとき（#233）: 共通 `.env` に `PLATFORM_SERVICE_TOKEN_SECRET` が加わり、Agent の `backend/.env` に MCP の URL が
+  加わるため、全製品の Compute の `user_data`（cloud-init）が変わります。OCI provider は `user_data` の変更で Compute を
+  **置き換え（replace）** ます（`oci_core_instance` の CustomizeDiff。Agent の resource の移動は `moved` で扱うが、置き換え自体は避けられない）。
+  - 作り直してよい環境: そのまま apply します（データの正本は ADB。Compute 上のローカル保存のファイルは失われます）。
+  - 作り直したくない環境: stack を apply せず、各 Compute で手動で追記します。各 Compute の `platform/.env` に同じ
+    `PLATFORM_SERVICE_TOKEN_SECRET`（`openssl rand -base64 48` などで作った1つの値）を、Agent の `backend/.env` に
+    `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<private IP>[:port]/api/mcp`）を追記し、backend を再起動します。
+    Agent から RAG / NL2SQL の `application_port` へ通信できない場合は、subnet の security list か NSG で同じ subnet からの TCP を許可します。
+  - どちらの場合も、apply 前に Resource Manager の plan で置き換えになる resource を確認してください。
+  旧名の `AGENT_EXTERNAL_RAG_BASE_URL` / `AGENT_EXTERNAL_RAG_API_KEY`（NL2SQL も同じ）は読まれないので削除してください。
 
 ## パッケージと検証
 
