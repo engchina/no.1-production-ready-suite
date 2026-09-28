@@ -9,7 +9,6 @@ const agentJa = {
   "nav.sidebar.aria": "サイドナビゲーション",
   "nav.sidebar.expand": "サイドバーを展開",
   "nav.sidebar.collapse": "サイドバーを折りたたむ",
-  "nav.command.open": "コマンドパレットを開く",
   "nav.section.containsActive": "現在地を含む",
 
   "nav.section.runtime": "実行",

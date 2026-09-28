@@ -261,7 +261,7 @@ export const NAV_ITEMS: readonly NavItem[] = NAV_SECTIONS.flatMap((section) => s
 
 /**
  * 利用者に権限のある項目だけを残したナビ構成。項目が 0 件になったセクションは除く
- * （サイドナビ・コマンドパレット・検索・回答設定の概要が同じ判定を使う。#214）。
+ * （サイドナビ・検索・回答設定の概要が同じ判定を使う。#214）。
  */
 export function visibleNavSections(
   hasPermission: HasPermission,
