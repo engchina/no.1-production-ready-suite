@@ -49,18 +49,13 @@ on:
         required: false
         default: true
         type: boolean
-      install_parser_adapters:
-        description: "Docling / Unstructured optional dependencies を同期します。"
-        required: false
-        default: false
-        type: boolean
       run_parser_adapter_contract:
         description: "parser adapter schema remap contract artifact を出力します。"
         required: false
         default: true
         type: boolean
       parser_adapter_contract_strict:
-        description: "外部 adapter feature flags を有効化し、contract failure を gate 失敗にします。real-world staging では自動有効化されます。"
+        description: "外部 adapter feature flags を有効化し、parser サービス未達と contract failure を gate 失敗にします。real-world staging では自動有効化されます。"
         required: false
         default: false
         type: boolean
@@ -99,27 +94,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        env:
-          INPUT_INSTALL_PARSER_ADAPTERS: ${{ github.event.inputs.install_parser_adapters }}
-          INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
-          INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
-          INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST: ${{ github.event.inputs.require_real_world_file_processing_manifest }}
-        run: |
-          set -euo pipefail
-          strict_adapter_contract_required=false
-          if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ] && \
-             [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
-            strict_adapter_contract_required=true
-          fi
-          if [ "${INPUT_INSTALL_PARSER_ADAPTERS:-false}" = "true" ] || \
-             [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ] || \
-             [ "$strict_adapter_contract_required" = "true" ]; then
-            # 外部 parser は services/parsers/<name> の独立サービスへ切り出した。in-process smoke
-            # では docling + unstructured を導入する。
-            uv sync --locked --dev --extra docling --extra unstructured
-          else
-            uv sync --locked --dev
-          fi
+        # 外部 parser(Docling / Unstructured)は services/parsers/<name> の独立サービスで動き、
+        # backend は HTTP で委譲する(#286)。backend の venv に parser の extra を入れても
+        # contract / staging の判定は変わらないため入れない(#343)。
+        run: uv sync --locked --dev
 
       - name: Run evaluation and search load gates
         env:
@@ -136,6 +114,10 @@ jobs:
           INPUT_RUN_PARSER_ADAPTER_CONTRACT: ${{ github.event.inputs.run_parser_adapter_contract }}
           INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
           INPUT_PARSER_ADAPTER_CONTRACT_SOURCE_KINDS: ${{ github.event.inputs.parser_adapter_contract_source_kinds }}
+          # adapter の可用性は parser サービスの /health で判定する(本番の systemd の unit と同じ。#343)。
+          # 通常実行は parser サービスを起動しないため、選択済み adapter の missing は記録だけになり、
+          # strict(real-world staging を含む)では到達できる parser サービスが必要になる。
+          RAG_PARSER_READINESS_PROBE_ENABLED: "true"
           RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
           RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
           RAG_SEARCH_LOAD_TENANT_ID: ${{ vars.RAG_SEARCH_LOAD_TENANT_ID }}

@@ -135,11 +135,12 @@ def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
         encoding="utf-8"
     )
 
-    assert "install_parser_adapters:" in workflow
-    # 外部 parser はサービス化したため combined extra は廃止。in-process smoke は共存可能な
-    # docling + unstructured のみ導入する。
-    assert "uv sync --locked --dev --extra docling --extra unstructured" in workflow
-    assert "strict_adapter_contract_required=false" in workflow
+    # 外部 parser はサービスで動くため、backend の venv に parser の extra を入れない(#343)。
+    # adapter の可用性は parser サービスの /health で判定する。
+    assert "install_parser_adapters" not in workflow
+    assert "--extra" not in workflow
+    assert "run: uv sync --locked --dev\n" in workflow
+    assert 'RAG_PARSER_READINESS_PROBE_ENABLED: "true"' in workflow
     assert "adapter_contract_strict_enabled=false" in workflow
     assert "adapter_contract_strict_enabled=true" in workflow
     assert "run_parser_adapter_contract:" in workflow
