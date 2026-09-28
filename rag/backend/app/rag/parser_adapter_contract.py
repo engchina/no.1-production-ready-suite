@@ -158,8 +158,16 @@ def run_parser_adapter_compatibility_matrix(
     backends: Sequence[object] | None = None,
     require_routed: bool = False,
     require_backend_evidence: bool = False,
+    require_selected_adapter_runtime: bool = True,
 ) -> ParserAdapterCompatibilityMatrix:
-    """runtime 設定で adapter/source compatibility smoke を実行する。"""
+    """runtime 設定で adapter/source compatibility smoke を実行する。
+
+    ``require_selected_adapter_runtime=False`` のときは、選択済み adapter の実行環境
+    (parser サービスまたは外部 API)が見つからない ``missing`` を記録だけにして
+    blocking にしない。parser サービスを起動しない CI の通常実行(#343)用で、
+    昇格判定(strict / staging)は既定の True のまま fail-closed にする。実行環境が
+    見つかった adapter の schema remap 失敗・fallback は従来どおり blocking にする。
+    """
     resolved_fixture_root = fixture_root or _default_fixture_root()
     resolved_fixture_specs = _resolved_fixture_specs(fixture_specs, source_kinds)
     resolved_source_kinds = _resolved_matrix_source_kinds(
@@ -177,6 +185,7 @@ def run_parser_adapter_compatibility_matrix(
             adapter=adapter_by_backend[backend],
             fixture=fixture,
             require_routed=require_routed,
+            require_selected_adapter_runtime=require_selected_adapter_runtime,
             external_adapter_runner=external_adapter_runner,
         )
         for backend in resolved_backends
@@ -200,6 +209,16 @@ def run_parser_adapter_compatibility_matrix(
         blocking_failure_count=blocking_failure_count,
         cases=cases,
     )
+
+
+def parser_service_probe_settings(settings: Settings) -> Settings:
+    """adapter の可用性を parser サービスの /health で判定する設定にする(#343)。
+
+    contract の parse は `ParserServiceClient` で parser サービス(または外部 API)へ
+    HTTP 委譲するため、可用性も同じサービスで判定する。backend の venv に Docling /
+    Unstructured の package があるかどうかは、今の構成(#286)では可用性と関係しない。
+    """
+    return settings.model_copy(update={"rag_parser_readiness_probe_enabled": True})
 
 
 def strict_parser_adapter_settings(settings: Settings) -> Settings:
@@ -520,6 +539,7 @@ def _compatibility_case(
     adapter: ParserAdapterRuntimeStatus,
     fixture: ParserAdapterFixtureSpec,
     require_routed: bool,
+    require_selected_adapter_runtime: bool,
     external_adapter_runner: ExternalAdapterRunner,
 ) -> ParserAdapterCompatibilityCase:
     source_kind = fixture.source_kind
@@ -529,7 +549,7 @@ def _compatibility_case(
             adapter=adapter,
             fixture=fixture,
             status=_inactive_adapter_status(adapter),
-            blocking=blocking,
+            blocking=blocking and (require_selected_adapter_runtime or adapter.status != "missing"),
             warning_codes=(adapter.warning_code,) if adapter.warning_code else (),
             reason_codes=(f"adapter_{adapter.status}",),
         )

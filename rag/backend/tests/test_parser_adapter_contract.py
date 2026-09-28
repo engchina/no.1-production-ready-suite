@@ -878,6 +878,7 @@ def test_parser_adapter_contract_cli_writes_non_sensitive_artifact(
             rag_parser_docling_enabled=False,
         ),
     )
+    _patch_service_health(monkeypatch, healthy=set())
 
     exit_code = parser_adapter_contract_cli.main(
         ["--backend", "docling", "--source-kind", "pdf", "--output", str(output_path)]
@@ -899,6 +900,194 @@ def test_parser_adapter_contract_cli_writes_non_sensitive_artifact(
     assert "raw_text" not in output_path.read_text(encoding="utf-8")
     assert "policy-ja.pdf" not in output_path.read_text(encoding="utf-8")
     assert "file-processing-fixtures" not in output_path.read_text(encoding="utf-8")
+
+
+def _patch_service_health(monkeypatch: MonkeyPatch, *, healthy: set[str]) -> None:
+    """parser サービスの /health を差し替える(healthy にない backend は未達)。
+
+    in-process の package は常に無い状態にし、可用性がサービスだけで決まることを確かめる。
+    """
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_probe_service_health",
+        lambda _settings, backend: (
+            (True, "2.129.0", backend) if backend in healthy else (False, None, None)
+        ),
+    )
+
+
+def test_compatibility_matrix_records_missing_runtime_when_not_required(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """実行環境を必須にしない通常実行では、選択済み adapter の missing を記録だけにする。"""
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+
+    matrix = run_parser_adapter_compatibility_matrix(
+        Settings(
+            rag_parser_adapter_backend="docling",
+            rag_parser_docling_enabled=True,
+        ),
+        source_kinds=["pdf"],
+        backends=["docling"],
+        require_selected_adapter_runtime=False,
+    )
+
+    assert matrix.passed is True
+    assert matrix.blocking_failure_count == 0
+    case = matrix.cases[0]
+    assert case.status == "missing"
+    assert case.blocking is False
+    assert case.reason_codes == ("adapter_missing",)
+
+
+def test_compatibility_matrix_still_blocks_selected_disabled_adapter_when_not_required() -> None:
+    """選択した adapter の feature flag が OFF の設定矛盾は、通常実行でも blocking にする。"""
+    matrix = run_parser_adapter_compatibility_matrix(
+        Settings(
+            rag_parser_adapter_backend="unstructured",
+            rag_parser_unstructured_enabled=False,
+        ),
+        source_kinds=["pdf"],
+        backends=["unstructured"],
+        require_selected_adapter_runtime=False,
+    )
+
+    assert matrix.passed is False
+    case = matrix.cases[0]
+    assert case.status == "disabled"
+    assert case.blocking is True
+
+
+def test_compatibility_matrix_still_blocks_reachable_adapter_fallback_when_not_required(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """実行環境が見つかった adapter の fallback は、通常実行でも blocking にする。"""
+    _patch_service_health(monkeypatch, healthy={"docling"})
+
+    def unreachable_runner(
+        _self: object,
+        backend: str,
+        _source_bytes: bytes,
+        _source_profile: object,
+        _content_type: str,
+        *,
+        fail_fast: bool = False,
+    ) -> ParserRegistryResult:
+        return ParserRegistryResult(
+            extraction=None,
+            parser_backend=backend,
+            fallback_used=True,
+            warnings=(f"{backend}_adapter_service_unreachable",),
+        )
+
+    monkeypatch.setattr(
+        parser_adapter_contract_module.ParserServiceClient,
+        "runner",
+        unreachable_runner,
+    )
+
+    matrix = run_parser_adapter_compatibility_matrix(
+        Settings(
+            rag_parser_adapter_backend="docling",
+            rag_parser_docling_enabled=True,
+            rag_parser_readiness_probe_enabled=True,
+        ),
+        source_kinds=["pdf"],
+        backends=["docling"],
+        require_selected_adapter_runtime=False,
+    )
+
+    assert matrix.passed is False
+    case = matrix.cases[0]
+    assert case.status == "fallback"
+    assert case.blocking is True
+
+
+def test_parser_adapter_contract_cli_default_records_unreachable_parser_service(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """既定設定(Docling 選択)で parser サービスが無い通常実行は、記録だけで exit 0 にする。"""
+    output_path = tmp_path / "adapter-contract-default.json"
+    monkeypatch.setattr(parser_adapter_contract_cli, "get_settings", lambda: Settings())
+    _patch_service_health(monkeypatch, healthy=set())
+
+    exit_code = parser_adapter_contract_cli.main(
+        ["--source-kind", "pdf", "--output", str(output_path)]
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["passed"] is True
+    docling = [case for case in payload["cases"] if case["backend"] == "docling"]
+    assert docling[0]["status"] == "missing"
+    assert docling[0]["blocking"] is False
+    unstructured = [case for case in payload["cases"] if case["backend"] == "unstructured"]
+    assert unstructured[0]["status"] == "disabled"
+    assert unstructured[0]["blocking"] is False
+
+
+def test_parser_adapter_contract_cli_judges_adapter_by_parser_service(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """backend の venv に package が無くても、parser サービスが健全なら remap を検証する。"""
+    output_path = tmp_path / "adapter-contract-service.json"
+    monkeypatch.setattr(parser_adapter_contract_cli, "get_settings", lambda: Settings())
+    _patch_service_health(monkeypatch, healthy={"docling"})
+
+    def parser_service_runner(
+        _self: object,
+        backend: str,
+        _source_bytes: bytes,
+        _source_profile: object,
+        _content_type: str,
+        *,
+        fail_fast: bool = False,
+    ) -> ParserRegistryResult:
+        return ParserRegistryResult(
+            extraction=StructuredExtraction(
+                raw_text="本文",
+                pages=[ExtractionPage(page_number=1, element_ids=["element-1"])],
+                elements=[
+                    DocumentElement(
+                        kind="text",
+                        text="本文",
+                        element_id="element-1",
+                        source_parser="docling_adapter",
+                        page_number=1,
+                    )
+                ],
+            ),
+            parser_backend=backend,
+            parser_version="2.129.0",
+            template="pdf_layout",
+        )
+
+    monkeypatch.setattr(
+        parser_adapter_contract_module.ParserServiceClient,
+        "runner",
+        parser_service_runner,
+    )
+
+    exit_code = parser_adapter_contract_cli.main(
+        ["--strict", "--backend", "docling", "--source-kind", "pdf", "--output", str(output_path)]
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["passed"] is True
+    assert payload["cases"][0]["status"] == "passed"
+    assert payload["cases"][0]["adapter_package_version"] == "2.129.0"
 
 
 def test_parser_adapter_contract_artifact_redacts_fixture_identifiers() -> None:
@@ -962,11 +1151,7 @@ def test_parser_adapter_contract_cli_strict_blocks_missing_adapter(
             rag_parser_unstructured_enabled=False,
         ),
     )
-    monkeypatch.setattr(
-        parser_adapter_readiness,
-        "_package_info",
-        lambda *_args: (False, None, None),
-    )
+    _patch_service_health(monkeypatch, healthy=set())
 
     exit_code = parser_adapter_contract_cli.main(
         [
@@ -1010,15 +1195,7 @@ def test_parser_adapter_contract_cli_strict_blocks_explicit_unrouted_backend(
             rag_parser_unstructured_enabled=False,
         ),
     )
-    monkeypatch.setattr(
-        parser_adapter_readiness,
-        "_package_info",
-        lambda import_name, _distribution_names: (
-            import_name == "docling",
-            "2.103.0" if import_name == "docling" else None,
-            import_name if import_name == "docling" else None,
-        ),
-    )
+    _patch_service_health(monkeypatch, healthy={"docling"})
 
     exit_code = parser_adapter_contract_cli.main(
         [
@@ -1138,6 +1315,7 @@ def test_parser_adapter_contract_cli_strict_manifest_uses_real_fixtures(
     assert captured["unstructured_enabled"] is True
     assert captured["fixture_root"] == fixture_root
     assert captured["require_backend_evidence"] is True
+    assert captured["require_selected_adapter_runtime"] is True
     assert [spec.file_name for spec in fixture_specs] == [
         "scanned-contract-ja.pdf",
         "manual.html",

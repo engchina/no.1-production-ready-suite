@@ -13,6 +13,7 @@ from app.rag.parser_adapter_contract import (
     parser_adapter_contract_artifact_payload,
     parser_adapter_fixture_root_from_manifest,
     parser_adapter_fixture_specs_from_manifest,
+    parser_service_probe_settings,
     run_parser_adapter_compatibility_matrix,
     strict_parser_adapter_settings,
 )
@@ -54,13 +55,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--strict",
         action="store_true",
         help=(
-            "代表外部 adapter を明示選択し、package / schema remap "
+            "代表外部 adapter を明示選択し、parser サービス未達 / schema remap "
             "failure を gate 失敗にします。staging 昇格 smoke 用。"
+            "未指定時は、選択済み adapter の parser サービスが見つからなくても記録だけにします。"
         ),
     )
     args = parser.parse_args(argv)
     try:
-        settings = get_settings()
+        # parse は parser サービスへ HTTP 委譲するため、可用性も同じサービスの /health で
+        # 判定する(backend の venv の package では判定しない。#343)。
+        settings = parser_service_probe_settings(get_settings())
         if args.strict:
             settings = strict_parser_adapter_settings(settings)
         manifest = _load_manifest(args.manifest) if args.manifest is not None else None
@@ -86,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             backends=args.backend,
             require_routed=bool(args.strict and args.backend),
             require_backend_evidence=bool(args.strict),
+            require_selected_adapter_runtime=bool(args.strict),
         )
         payload = parser_adapter_contract_artifact_payload(matrix)
     except Exception as exc:

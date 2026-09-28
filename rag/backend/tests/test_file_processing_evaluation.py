@@ -2263,10 +2263,8 @@ def test_nightly_workflow_runs_file_processing_gate_before_api_skip() -> None:
     assert "file_processing_staging_trend_baseline_path" in workflow
     assert "run_file_processing_staging" in workflow
     assert "require_real_world_file_processing_manifest" in workflow
-    assert "install_parser_adapters" in workflow
     assert "run_parser_adapter_contract" in workflow
     assert "parser_adapter_contract_strict" in workflow
-    assert "strict_adapter_contract_required=false" in workflow
     assert "adapter_contract_strict_enabled=false" in workflow
     assert "adapter_contract_strict_enabled=true" in workflow
     assert "parser_adapter_contract_source_kinds" in workflow
