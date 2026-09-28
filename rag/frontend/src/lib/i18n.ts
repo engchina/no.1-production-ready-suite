@@ -1379,6 +1379,23 @@ export const ja = {
   "businessViews.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
   "businessViews.draftPending": "作成中の業務ビューに保存していない下書きがあります。",
   "businessViews.archivedReadonly": "アーカイブ済みの業務ビューは編集・保存できません。",
+  "businessViews.knowledgeBaseIssues.title": "参照する知識ベースの一部が検索対象になっていません",
+  "businessViews.knowledgeBaseIssues.archived":
+    "アーカイブ済み（{count} 件）: {names}",
+  "businessViews.knowledgeBaseIssues.missing":
+    "見つからない（{count} 件。削除済みか、参照できない知識ベース）: {names}",
+  "businessViews.knowledgeBaseIssues.hint":
+    "これらの知識ベースは検索されません。選択から外して保存するか、別の知識ベースを選んでください。",
+  "businessViews.knowledgeBaseIssues.allUnavailable":
+    "参照するすべての知識ベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。",
+  "businessViews.knowledgeBaseIssues.listTitle":
+    "参照する知識ベースにアーカイブ済み・見つからないものがある業務ビューがあります",
+  "businessViews.knowledgeBaseIssues.listHint":
+    "「参照 KB」列に「要確認」が付いた業務ビューを開き、参照する知識ベースを見直してください。",
+  "businessViews.knowledgeBaseIssues.badge": "要確認",
+  "businessViews.knowledgeBaseIssues.more": " ほか {count} 件",
+  "businessViews.knowledgeBaseIssues.badgeAria":
+    "参照 KB {total} 件のうち、アーカイブ済み {archived} 件・見つからない {missing} 件",
   "businessViews.form.title": "基本情報と検索・回答設定",
   "businessViews.subtitle":
     "複数の知識ベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
@@ -1478,6 +1495,9 @@ export const ja = {
   "knowledgeBases.field.description": "説明",
   "knowledgeBases.actions.create": "作成",
   "knowledgeBases.actions.archive": "アーカイブ",
+  "knowledgeBases.actions.edit": "編集",
+  "knowledgeBases.actions.save": "保存",
+  "knowledgeBases.actions.cancel": "キャンセル",
   "knowledgeBases.actions.assign": "追加",
   "knowledgeBases.actions.remove": "外す",
   "knowledgeBases.filter.aria": "知識ベース状態フィルター",
@@ -1547,12 +1567,13 @@ export const ja = {
   "knowledgeBases.default.archiveDisabled": "DEFAULT はアーカイブできません",
   "knowledgeBases.confirm.archive.title": "知識ベースをアーカイブしますか？",
   "knowledgeBases.confirm.archive.description":
-    "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
+    "「{name}」は検索対象の選択肢から外れ、参照している業務ビューでも検索されなくなります（業務ビューの画面に警告が出ます）。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
     "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
   "knowledgeBases.toast.created": "知識ベースを作成しました。",
   "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
+  "knowledgeBases.toast.updated": "知識ベースを更新しました。",
   "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",
   "knowledgeBases.toast.removed": "文書を知識ベースから外しました。",
   "knowledgeBases.error.load":
@@ -1561,6 +1582,10 @@ export const ja = {
     "知識ベースの作成に失敗しました。名前を確認して再試行してください。",
   "knowledgeBases.error.archive":
     "知識ベースのアーカイブに失敗しました。状態を確認して再試行してください。",
+  "knowledgeBases.error.update":
+    "知識ベースの更新に失敗しました。名前を確認して再試行してください。",
+  "knowledgeBases.edit.title": "名前と説明を編集",
+  "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書と知識ベースの状態を確認してください。",
   "knowledgeBases.error.remove":
@@ -1676,6 +1701,11 @@ export const ja = {
   "knowledgeBasePicker.mostDocs": "最多",
   "knowledgeBasePicker.selectedCount": "{count} 件選択中",
   "knowledgeBasePicker.emptyList": "知識ベースがありません。",
+  "knowledgeBasePicker.loadMore": "さらに表示",
+  "knowledgeBasePicker.searching": "知識ベースを検索しています…",
+  "knowledgeBasePicker.archivedBadge": "アーカイブ済み",
+  "knowledgeBasePicker.missingBadge": "見つかりません",
+  "knowledgeBasePicker.missingName": "不明な知識ベース（{id}）",
 
   "upload.subtitle": "検索対象にするドキュメントをアップロードします。",
   "upload.dropzone":

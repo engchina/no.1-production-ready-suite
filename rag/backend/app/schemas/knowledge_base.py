@@ -76,9 +76,13 @@ class KnowledgeBaseCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     default_search_mode: SearchMode = SearchMode.HYBRID
     retrieval_config: dict[str, object] = Field(default_factory=dict)
-    adapter_config: KnowledgeBaseAdapterConfig | None = Field(
+    adapter_config: object | None = Field(
         default=None,
-        description="KB 単位の構築設定。未指定ならグローバル設定を全継承する。",
+        description=(
+            "廃止(#302)。指定すると 422。KB は所属だけを持ち、構築設定は文書レシピ、"
+            "検索・回答設定は業務ビューで指定する。"
+        ),
+        json_schema_extra={"deprecated": True},
     )
 
     @field_validator("name")
@@ -101,9 +105,13 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     default_search_mode: SearchMode | None = None
     retrieval_config: dict[str, object] | None = None
-    adapter_config: KnowledgeBaseAdapterConfig | None = Field(
+    adapter_config: object | None = Field(
         default=None,
-        description="KB 単位の構築設定。指定時は既存設定を置換する。",
+        description=(
+            "廃止(#302)。指定すると 422。KB は所属だけを持ち、構築設定は文書レシピ、"
+            "検索・回答設定は業務ビューで指定する。"
+        ),
+        json_schema_extra={"deprecated": True},
     )
 
     @field_validator("name")

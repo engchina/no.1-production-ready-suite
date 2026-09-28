@@ -26,7 +26,10 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
-import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
+import {
+  KnowledgeBaseScopePicker,
+  useKnowledgeBaseSelectionHealth,
+} from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   EditorBreadcrumbs,
   MissingEditorTarget,
@@ -55,6 +58,7 @@ import {
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { docragUnusedNoteKey } from "@/lib/docrag-unused";
+import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useCustomLeaveGuard } from "@/lib/leave-guard";
@@ -370,6 +374,10 @@ function BusinessViewList({
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
   const actionsFor = useBusinessViewActions();
+  // 参照 KB がアーカイブ・削除されて検索対象から外れている業務ビュー（#302）。
+  const hasKnowledgeBaseIssues = items.some(
+    (item) => item.status !== "ARCHIVED" && knowledgeBaseIssueCount(item) > 0
+  );
   // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
   const [newDraft] = useState(() => readDraft("new"));
 
@@ -399,6 +407,15 @@ function BusinessViewList({
           onRetry={() => void query.refetch()}
           isRetrying={query.isFetching}
         />
+
+        {hasKnowledgeBaseIssues ? (
+          <Banner
+            severity="warning"
+            title={t("businessViews.knowledgeBaseIssues.listTitle")}
+          >
+            <p>{t("businessViews.knowledgeBaseIssues.listHint")}</p>
+          </Banner>
+        ) : null}
 
         {newDraft && onCreate ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-sunken p-3">
@@ -566,7 +583,30 @@ function businessViewColumns({
       header: t("businessViews.col.knowledgeBases"),
       align: "right",
       className: "tnum text-fg-muted",
-      render: (view) => formatNumber(view.knowledge_base_count),
+      render: (view) => {
+        const archived = view.archived_knowledge_base_count ?? 0;
+        const missing = view.missing_knowledge_base_count ?? 0;
+        // アーカイブ済みの業務ビューは検索に使われないため、参照 KB の警告は出さない。
+        if (view.status === "ARCHIVED" || archived + missing === 0) {
+          return formatNumber(view.knowledge_base_count);
+        }
+        return (
+          <span
+            className="inline-flex items-center justify-end gap-2"
+            data-testid={`business-view-kb-issues-${view.id}`}
+          >
+            <StatusBadge variant="warning" label={t("businessViews.knowledgeBaseIssues.badge")} />
+            <span aria-hidden>{formatNumber(view.knowledge_base_count)}</span>
+            <span className="sr-only">
+              {t("businessViews.knowledgeBaseIssues.badgeAria", {
+                total: view.knowledge_base_count,
+                archived,
+                missing,
+              })}
+            </span>
+          </span>
+        );
+      },
     },
     {
       key: "updated",
@@ -723,6 +763,12 @@ function BusinessViewEditor({
 
   const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
   const isArchived = initial?.status === "ARCHIVED";
+  // 選択中（下書きを含む）の参照 KB のうち、アーカイブ済み・見つからないもの（#302）。
+  // 範囲外の KB も名前で出せるよう、詳細が返す tenant 内の参照を併せて使う。
+  const knowledgeBaseHealth = useKnowledgeBaseSelectionHealth(config.knowledge_base_ids, {
+    known: initial?.knowledge_bases,
+    knownMissingIds: initial?.missing_knowledge_base_ids,
+  });
 
   const pending = create.isPending || update.isPending;
   const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
@@ -823,7 +869,12 @@ function BusinessViewEditor({
       <PageBody wide className="grid grid-cols-1 gap-5">
         {isArchived ? (
           <Banner severity="warning">{t("businessViews.archivedReadonly")}</Banner>
-        ) : null}
+        ) : (
+          <KnowledgeBaseIssuesBanner
+            health={knowledgeBaseHealth}
+            selectedCount={config.knowledge_base_ids.length}
+          />
+        )}
         <Card>
           <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
@@ -894,6 +945,8 @@ function BusinessViewEditor({
 
               <div>
                 <KnowledgeBaseScopePicker
+                  knownKnowledgeBases={initial?.knowledge_bases}
+                  knownMissingIds={initial?.missing_knowledge_base_ids}
                   selectedIds={config.knowledge_base_ids}
                   onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
                   disabled={pending || isDefault}
@@ -1170,6 +1223,64 @@ function BusinessViewEditor({
   );
 }
 
+/** 参照 KB のうち検索対象にならない件数（一覧の要約）。 */
+function knowledgeBaseIssueCount(view: BusinessViewSummary): number {
+  return (view.archived_knowledge_base_count ?? 0) + (view.missing_knowledge_base_count ?? 0);
+}
+
+// 警告に名前を並べる上限。超えた分は件数だけにする。
+const ISSUE_NAMES_LIMIT = 5;
+
+function issueNames(names: string[]): string {
+  const shown = names.slice(0, ISSUE_NAMES_LIMIT).join("、");
+  const rest = names.length - ISSUE_NAMES_LIMIT;
+  return rest > 0 ? `${shown}${t("businessViews.knowledgeBaseIssues.more", { count: rest })}` : shown;
+}
+
+/**
+ * 参照 KB にアーカイブ済み・見つからないものがあるときの警告（#302）。これらは検索されず、
+ * すべてが該当すると検索・回答は 0 件になる。
+ */
+function KnowledgeBaseIssuesBanner({
+  health,
+  selectedCount,
+}: {
+  health: KnowledgeBaseSelectionHealth;
+  selectedCount: number;
+}) {
+  const { archived, missing } = health;
+  if (archived.length + missing.length === 0) return null;
+  const allUnavailable = selectedCount > 0 && archived.length + missing.length >= selectedCount;
+  return (
+    <Banner
+      severity="warning"
+      title={t("businessViews.knowledgeBaseIssues.title")}
+    >
+      <div className="space-y-1" data-testid="business-view-kb-issues">
+        {archived.length > 0 ? (
+          <p className="break-words">
+            {t("businessViews.knowledgeBaseIssues.archived", {
+              count: archived.length,
+              names: issueNames(archived.map((item) => item.name)),
+            })}
+          </p>
+        ) : null}
+        {missing.length > 0 ? (
+          <p className="break-words">
+            {t("businessViews.knowledgeBaseIssues.missing", {
+              count: missing.length,
+              names: issueNames(missing.map((item) => item.id)),
+            })}
+          </p>
+        ) : null}
+        {allUnavailable ? (
+          <p className="font-medium">{t("businessViews.knowledgeBaseIssues.allUnavailable")}</p>
+        ) : null}
+        <p>{t("businessViews.knowledgeBaseIssues.hint")}</p>
+      </div>
+    </Banner>
+  );
+}
 
 function validateBusinessViewName(name: string, allowDefault = false) {
   const cleaned = name.trim();
