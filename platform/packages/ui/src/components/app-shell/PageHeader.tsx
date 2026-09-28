@@ -13,6 +13,7 @@ import {
 
 import { cn } from "../../lib/utils";
 import { Button, type ButtonVariantToneProps } from "../ui/button";
+import { FloatingActionMenu } from "../ui/floating-menu";
 import { measureClass } from "./PageBody";
 
 export interface PageHeaderAction {
@@ -130,7 +131,10 @@ function ActionButton({ action, menuItem = false, onInvoked }: { action: PageHea
 
 /**
  * 「その他の操作」メニュー（WAI-ARIA Menu Button）。開くと先頭の項目へフォーカスし、
- * ↓ ↑ Home End で移動、Escape で閉じてトリガーへ戻る。外側のクリック・Tab でも閉じる。
+ * ↓ ↑ Home End で移動、Escape で閉じてトリガーへ戻る。外側のクリック・Tab でも閉じる
+ * （Tab はトリガーの次へ、Shift+Tab はトリガーへ）。
+ * メニューは FloatingActionMenu（body へ Portal・fixed）で画面内に置く。トリガーが左寄り（375px で操作が
+ * 折り返したとき）なら左端、右寄りなら右端にそろえ、どちらも入らなければ画面の内側にずらす（#363）。
  */
 function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: string }) {
   const [open, setOpen] = useState(false);
@@ -144,7 +148,9 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
     if (!open) return;
     items()[0]?.focus({ preventScroll: true });
     const closeOnOutside = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      // メニューは body へ Portal で描くため、トリガー側（rootRef）とメニューの両方を内側として扱う。
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutside);
     return () => document.removeEventListener("mousedown", closeOnOutside);
@@ -158,6 +164,10 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
       return;
     }
     if (event.key === "Tab") {
+      // メニューは body の末尾にあるため、そのままでは Tab が文書の末尾へ抜ける。
+      // トリガーへフォーカスを移してから既定の Tab を進め、トリガーの次の要素へ移す。Shift+Tab はトリガーで止める。
+      if (event.shiftKey) event.preventDefault();
+      triggerRef.current?.focus({ preventScroll: true });
       setOpen(false);
       return;
     }
@@ -168,9 +178,8 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
     list[next]?.focus({ preventScroll: true });
   };
 
-  // ponytail: ヘッダー直下・右端揃えで開くため viewport 反転は持たない。ヘッダー以外で使うなら DropdownMenu として切り出す。
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef}>
       <Button
         ref={triggerRef}
         type="button"
@@ -185,13 +194,15 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
         <span>{label}</span>
       </Button>
       {open ? (
-        <div
-          ref={menuRef}
+        <FloatingActionMenu
           id={menuId}
-          role="menu"
-          aria-label={label}
+          open={open}
+          align="end"
+          ariaLabel={label}
+          triggerRef={triggerRef}
+          menuRef={menuRef}
           onKeyDown={onKeyDown}
-          className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1 grid min-w-56 gap-0.5 rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]"
+          className="min-w-56 gap-0.5"
         >
           {actions.map((action, index) => (
             <Fragment key={action.id}>
@@ -202,7 +213,7 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
               <ActionButton action={action} menuItem onInvoked={() => setOpen(false)} />
             </Fragment>
           ))}
-        </div>
+        </FloatingActionMenu>
       ) : null}
     </div>
   );

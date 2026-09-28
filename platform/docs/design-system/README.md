@@ -486,7 +486,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 --z-palette: 1200    コマンドパレット
 ```
 
-**SelectField の一覧と操作メニュー（`FloatingActionMenu`）は body へ Portal で描きます（#352。SelectField はモーダルの中ならそのモーダルの中）。** z-index を持つ層（モーダル・固定ヘッダー）の中で開いたときは、その層より 1 段上に出します（`--z-dialog` の中なら 1001）。層の外では `--z-dropdown` のままです。
+**SelectField の一覧と操作メニュー（`FloatingActionMenu`。PageHeader の「その他の操作」も含む、#363）は body へ Portal で描きます（#352。SelectField はモーダルの中ならそのモーダルの中）。** z-index を持つ層（モーダル・固定ヘッダー）の中で開いたときは、その層より 1 段上に出します（`--z-dialog` の中なら 1001）。層の外では `--z-dropdown` のままです。
 
 **通知（Toast）はモーダルの下に置きます。** モーダル（`aria-modal`）が開いている間はモーダルの外を操作できないため、
 通知を上に重ねても閉じるボタンや action は押せず、狭い画面では確認ダイアログのボタンを覆うだけになります
@@ -519,7 +519,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**21点あります。**
+QA に事前共有してください。**22点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -544,6 +544,7 @@ QA に事前共有してください。**21点あります。**
 | 19 | **フォーカスの表示が outline 1 つになる** | Switch・折りたたみの見出し・一覧の行ボタン・コードブロック等で outline と ring（box-shadow）が二重 → **outline 1 つ**（2px、offset 2px）。タブ・表の並べ替え列頭は部品の指定どおり内側の outline。`loading` 中のボタンはフォーカスが外れず、リングが残る | グローバルの `:focus-visible` を `@layer base` へ移し、部品の outline の調整が効くようにした。ring はフォーカスに使わない（§4「フォーカスの表示」、#355） |
 | 20 | **ページヘッダーの操作のグループに区切り線** | 区切りなし → 危険操作 / ページツール / 作業開始の境界に縦の区切り線。「その他の操作」メニューでは危険操作の前に区切り線 | buttons.md §5。README #16 で utility に枠線を付けた代わりに、グループの違いを区切りで示す（#355） |
 | 21 | **破壊的でない操作が赤塗りでなくなる** | RAG のジョブのキャンセル・一括削除の起点・業務ビューの削除の起点、Agent の承認の拒否・Run のキャンセルが `danger`（赤塗り）→ `secondary` / `ghost` + `tone="danger"`（赤文字）。Agent のストリーム方式の切り替えは手書きのセグメント → `ToggleChip` | 赤塗りは破壊的な確定だけに使う（§4 Button「variant と tone」、buttons.md §3）。確定は確認ダイアログの danger ボタンで行う（#355） |
+| 22 | **操作メニューが画面の左右の外に切れない** | PageHeader の「その他の操作」メニューが常にボタンの右端揃え（`absolute right-0`。375px で操作が折り返すと左外に切れる）→ body へ Portal で描く `FloatingActionMenu` にし、ボタンが左寄りなら**左端揃え**、右寄りなら右端揃え、どちらも入らなければ画面の内側（左右 8px）にずらす。下に入らなければ上に反転。行の操作メニュー・ObjectActionBar・FormActionBar も同じ規則で左右を反転する | 狭い画面でもすべての項目が見えて押せる（buttons.md §5.1「メニューの表示方向」、#363） |
 
 ### API の非互換
 

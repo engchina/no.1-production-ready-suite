@@ -83,7 +83,7 @@
 - `primary` はページ全体で最大 1 件。`primary/secondary` は作業開始のグループ、`utility` はページツールのグループ、`danger` は危険操作のグループとし、グループの境界に軽い区切りと余白を置く（`PageHeader` が縦の区切り線を描く。「その他の操作」メニューでは危険操作の前に区切り線。#355）。
 - 共通文言は `common.action.refresh`＝`表示を更新` を使う（今の表示の GET に限る）。外部データや構造の同期を始める操作は、製品ごとに別の文言にする。
 - 非同期操作は `loading` を渡し、処理中の再送信を防ぐ。成功の Toast と回復可能なエラーの表示は [messaging.md](./messaging.md) に従い handler 側で行う。
-- `lg` 未満で操作が 2 件以上なら、最も優先度の高い操作だけを表示し、残りを `その他の操作` メニューへ入れる。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印 / Home / End、フォーカスの復帰を満たす。
+- `lg` 未満で操作が 2 件以上なら、最も優先度の高い操作だけを表示し、残りを `その他の操作` メニューへ入れる。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印 / Home / End、フォーカスの復帰を満たす。メニューは §5.1 の「メニューの表示方向」に従い viewport 内に表示する（操作が折り返して「その他の操作」が左端に来ても左外に切れない。#363）。
 - ヘッダーには今の判断を変える状態・リスク・バックグラウンドの進捗だけを置く。件数は一覧 / タブ / 操作パネルへ、同期の最終時刻は同期操作の近くへ置く。
 
 ---
@@ -101,7 +101,7 @@
 - **一括操作**：複数選択を入れる場合は一括操作のバーを使い、一括モードの間は行内の `RowActionMenu` を disabled または非表示にする。
 - **アクセシビリティ**：メニューの trigger は `aria-haspopup="menu"` / `aria-expanded` / `aria-controls`、メニューは `role="menu"`、項目は `role="menuitem"`。Esc で閉じ、ArrowUp/Down/Home/End で移動し、Esc の後は trigger にフォーカスを戻す。
 - **配置**：行内の trigger は右寄せの icon-only ghost、詳細の操作バーはヘッダーの右側で `secondary` + overflow。danger の項目はメニュー内で区切り線を置く。メニューの面は scroll container の中に absolute で置かず、viewport 基準の fixed / portal で表示する。
-- **メニューの表示方向**：方向は trigger に最も近い実スクロール祖先を優先して判定し、なければ viewport を使う。下の空きが足りなければ上へ反転する。上下どちらも足りなければ、空きが大きい側を選び `max-height` + 内部スクロールにする。件数が少なく container が実際にはスクロールしていない場合は、メニューを container に閉じ込めず viewport 内に表示する。
+- **メニューの表示方向**：方向は trigger に最も近い実スクロール祖先を優先して判定し、なければ viewport を使う。下の空きが足りなければ上へ反転する。上下どちらも足りなければ、空きが大きい側を選び `max-height` + 内部スクロールにする。件数が少なく container が実際にはスクロールしていない場合は、メニューを container に閉じ込めず viewport 内に表示する。左右は trigger の端にそろえる（既定は右端）。そろえた端で viewport（左右 8px の余白の内側）に入らず、反対の端なら入るときは反対の端にそろえる（375px で左端に来た trigger は左端揃え）。どちらの端でも入らなければ viewport の内側にずらす（#363）。
 
 ---
 

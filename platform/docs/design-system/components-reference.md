@@ -1013,6 +1013,22 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 
 - E2E で一覧を引くときは、フィールドを囲む要素ではなく `page.getByRole("listbox", { name: "<ラベル>" })` で引きます（一覧は body の直下、モーダルの中ならモーダルの直下にあります）。
 - 一覧は `position: fixed` です。`transform` / `filter` / `contain` を持つ要素（固定の containing block）をモーダルの外枠にすると位置がずれるため、モーダルの中央寄せは flex で行います（`ConfirmDialog` と同じ）。
-- 純粋関数 `computeFloatingMenuLayout`（位置と反転）・`floatingLayerZIndex`（重なり順）・`selectPortalContainer`（描く先）・`findTypeaheadIndex` / `typeaheadStartIndex`（typeahead）・`nearestScrollTop`（強調中の選択肢のスクロール）・`isInsideAny`（外側クリック）は `packages/ui/tests/select-field.test.tsx` が確かめます。パッケージのルートからは export しません。
+- 純粋関数 `computeFloatingMenuLayout`（位置と反転）・`floatingLayerZIndex`（重なり順）・`selectPortalContainer`（描く先）・`findTypeaheadIndex` / `typeaheadStartIndex`（typeahead）・`nearestScrollTop`（強調中の選択肢のスクロール）・`isInsideAny`（外側クリック）は `packages/ui/tests/select-field.test.tsx` が確かめます（操作メニューの左右の反転は `packages/ui/tests/floating-menu.test.ts`）。パッケージのルートからは export しません。
+
+---
+
+## PageHeader の「その他の操作」メニュー — 変更（#363）
+
+`lg` 未満で主操作以外をまとめる「その他の操作」メニューを、ヘッダーの中の `absolute right-0` から **`FloatingActionMenu`（body へ Portal・`position: fixed`）** に変えました。375px では操作がタイトルの下に折り返して「その他の操作」が左端に来るため、右端揃えのままだとメニューが画面の左外に切れていました。props・`data-testid="page-actions-more"`・aria（`aria-haspopup` / `aria-expanded` / `aria-controls` / `role="menu"` / `aria-label`）は変えていません。
+
+| 決めたこと | 理由 |
+|---|---|
+| 左右はボタンの右端にそろえる（従来の位置）。右端揃えで画面（左右 8px の余白の内側）に入らず、左端揃えなら入るときは左端にそろえる。どちらも入らなければ画面の内側にずらす。そろえた端は `data-floating-menu-align`（`start` / `end`） | ボタンがどこにあっても全項目が見えて押せる。E2E が向きを確かめられる |
+| 上下は `SelectField` と同じ（下に入らなければ上に反転、どちらも入らなければ広い側で内部スクロール） | 位置の計算は `computeFloatingMenuLayout` 1 か所にまとめる |
+| 左右の反転は `FloatingActionMenu` を使うすべてのメニュー（`RowActionMenu`・`ObjectActionBar`・`FormActionBar`）に効く。`SelectField`（`stretch`）は反転しない | 同じ問題を同じ仕組みで直す。一覧はトリガーと同じ幅なので反転の必要がない |
+| 外側クリックの判定は、ボタン側とメニューの両方を内側とみなす | メニューは DOM 上ヘッダーの外にある |
+| Tab はメニューを閉じてボタンの次の要素へ、Shift+Tab はボタンへ戻す。開く・矢印 / Home / End・Escape（ボタンへ戻る）は従来どおり | メニューは body の末尾にあるため、既定の Tab では文書の末尾へ抜けてしまう |
+
+- E2E でメニューを引くときは、ヘッダーの中ではなく `page.getByRole("menu", { name: "その他の操作" })` で引きます（メニューは body の直下にあります）。
 
 ---
