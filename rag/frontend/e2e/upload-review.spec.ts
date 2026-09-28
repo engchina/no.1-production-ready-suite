@@ -64,7 +64,6 @@ function uploadResult(fileName: string, duplicateOf: string | null = null) {
     knowledge_bases: [],
     source_profile: sourceProfile(fileName),
     ingestion_started: false,
-    ingestion_job: null,
   };
 }
 
@@ -74,10 +73,12 @@ async function mockUploadPage(
     maxUploadBytes = 200 * 1024 * 1024,
     knowledgeBaseCount = 1,
     knowledgeBases,
+    ingestionJobs,
   }: {
     maxUploadBytes?: number;
     knowledgeBaseCount?: number;
     knowledgeBases?: (route: Route) => Promise<void>;
+    ingestionJobs?: (route: Route) => Promise<void>;
   } = {}
 ) {
   await mockDatabaseReady(page);
@@ -114,9 +115,33 @@ async function mockUploadPage(
         });
       })
   );
-  await page.route("**/api/documents/ingestion-jobs**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }) })
+  await page.route(
+    "**/api/documents/ingestion-jobs**",
+    ingestionJobs ??
+      ((route) =>
+        route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }) }))
   );
+}
+
+function ingestionJob(id: string, documentFileName: string | null, status = "QUEUED") {
+  return {
+    id,
+    document_id: `doc-${id}`,
+    document_file_name: documentFileName,
+    recipe_id: null,
+    recipe_revision: null,
+    status,
+    phase: "PREPROCESS",
+    parser_profile: "local_text_structure",
+    quality_warnings: [],
+    skip_reason: null,
+    error_message: null,
+    attempt_count: 0,
+    max_attempts: 3,
+    queued_at: "2026-06-16T00:00:00Z",
+    started_at: null,
+    finished_at: null,
+  };
 }
 
 function textFile(name: string, size: number) {
@@ -138,8 +163,6 @@ test("一括アップロードは上限以内に分けて送り、上限を超�
         total_count: names.length,
         uploaded_count: names.length,
         failed_count: 0,
-        queued_count: 0,
-        skipped_count: 0,
       }),
     });
   });
@@ -190,8 +213,6 @@ test("途中のまとまりが失敗しても、保存できたファイルの�
         total_count: 1,
         uploaded_count: 1,
         failed_count: 0,
-        queued_count: 0,
-        skipped_count: 0,
       }),
     });
   });
@@ -314,4 +335,158 @@ test("先頭ページ（50 件）を超える知識ベースも選べる", async
   await expect(
     page.getByRole("listbox", { name: "アップロード先の知識ベース" }).getByRole("option", { name: /知識ベース 230/ })
   ).toBeVisible();
+});
+
+// 文書アップロードの改善（#306）。
+// - 取込ジョブの一覧は文書 ID ではなくファイル名を出す
+// - 取込ジョブのパネルの読み込み中は TimedLoadingState + Skeleton、空・取得失敗も同じ枠の中で示す
+// - 送信中は件数と経過時間に加えて、送信済み / 合計のバイト数と割合を示す
+
+test("取込ジョブの一覧は、読み込み中は Skeleton で領域を確保し、ファイル名を出す", async ({ page }) => {
+  await mockLocalAuth(page);
+  let releaseJobs: () => void = () => undefined;
+  const jobsReleased = new Promise<void>((resolve) => {
+    releaseJobs = resolve;
+  });
+  await mockUploadPage(page, {
+    ingestionJobs: async (route) => {
+      await jobsReleased;
+      await route.fulfill({
+        json: apiEnvelope({
+          items: [
+            ingestionJob("job-1", "経費精算規程_2026年度版.pdf", "RUNNING"),
+            // ファイル名を返さない応答（旧 backend）では文書 ID に戻す。
+            ingestionJob("job-2", null, "FAILED"),
+          ],
+          total: 2,
+          limit: 5,
+          offset: 0,
+          has_next: false,
+        }),
+      });
+    },
+  });
+
+  await page.goto("/upload");
+  const loading = page.getByTestId("upload-jobs-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading.getByText("文書処理状況を読み込んでいます").first()).toBeVisible();
+  await expect(loading.getByRole("timer")).toBeVisible();
+  await expectNoPageOverflow(page);
+  releaseJobs();
+  await expect(loading).toHaveCount(0);
+
+  const names = page.getByTestId("upload-job-file-name");
+  await expect(names).toHaveText(["経費精算規程_2026年度版.pdf", "文書 ID: doc-job-2"]);
+  await expect(names.first()).toHaveAttribute("title", "経費精算規程_2026年度版.pdf");
+  // ファイル名がある行は文書 ID を出さない。
+  await expect(page.getByText(/doc-job-1/)).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("取込ジョブがないときは空の案内を出し、取得に失敗したときは再試行できる", async ({ page }) => {
+  await mockLocalAuth(page);
+  let failing = true;
+  await mockUploadPage(page, {
+    ingestionJobs: async (route) => {
+      if (failing) {
+        await route.fulfill({
+          status: 500,
+          json: { data: null, error_messages: ["一時的なエラー"], warning_messages: [] },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }),
+      });
+    },
+  });
+
+  await page.goto("/upload");
+  // TanStack Query の既定の再試行（3 回）を終えてから失敗を表示する。
+  await expect(page.getByText("文書処理状況を取得できませんでした。", { exact: false })).toBeVisible({
+    timeout: 15_000,
+  });
+  failing = false;
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByTestId("upload-jobs-empty")).toHaveText(
+    "まだ文書処理はありません。文書を開いて取込を始めると、ここに直近の状況が表示されます。"
+  );
+  await expectNoPageOverflow(page);
+});
+
+/**
+ * page.route で応答を差し替えると Chromium は送信の progress event を出さないため、送った XHR を捕まえ、
+ * テストから送信済みのバイト数（`xhr.upload` の progress event）を出せるようにする。
+ */
+async function captureUploadXhr(page: Page) {
+  await page.addInitScript(() => {
+    const send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (body) {
+      (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr = this;
+      return send.call(this, body);
+    };
+  });
+}
+
+async function emitUploadProgress(page: Page, loaded: number, total: number) {
+  await page.evaluate(
+    ([sent, all]) => {
+      const xhr = (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr;
+      xhr?.upload.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: sent, total: all })
+      );
+    },
+    [loaded, total]
+  );
+}
+
+test("送信中は送信済み / 合計のバイト数と割合を示し、送り終えたら保存を待っていることを示す", async ({ page }) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  await captureUploadXhr(page);
+  let releaseUpload: () => void = () => undefined;
+  const uploadReleased = new Promise<void>((resolve) => {
+    releaseUpload = resolve;
+  });
+  let uploadRequests = 0;
+  await page.route("**/api/documents/upload", async (route) => {
+    uploadRequests += 1;
+    await uploadReleased;
+    await route.fulfill({
+      status: 503,
+      json: { data: null, error_messages: ["保存先に保存できませんでした。"], warning_messages: [] },
+    });
+  });
+
+  await page.goto("/upload");
+  const fileBytes = 20 * 1024 * 1024;
+  await page.locator('input[type="file"]').setInputFiles(textFile("large.txt", fileBytes));
+
+  const sending = page.getByTestId("upload-sending");
+  await expect(sending.getByText("1 件のファイルをアップロードしています").first()).toBeVisible();
+  await expect(page.getByTestId("upload-processing-timer")).toBeVisible();
+  const bar = sending.getByRole("progressbar", { name: "送信の進み具合" });
+  const bytes = page.getByTestId("upload-progress-bytes");
+  await expect(bytes).toHaveText("送信済み 0 B / 20 MB（0%）");
+  await expect(bar).toHaveAttribute("aria-valuenow", "0");
+  await expect.poll(() => uploadRequests).toBe(1);
+
+  // multipart の本文（境界などを含む）の割合を、ファイルのバイト数へ換算して示す。
+  const bodyBytes = fileBytes + 400;
+  await emitUploadProgress(page, Math.round(bodyBytes * 0.425), bodyBytes);
+  await expect(bytes).toHaveText("送信済み 8.5 MB / 20 MB（42%）");
+  await expect(bar).toHaveAttribute("aria-valuenow", "42");
+  await expect(bar).toHaveAttribute("aria-valuetext", "送信済み 8.5 MB / 20 MB（42%）");
+  await expect(page.getByTestId("upload-progress-saving")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // 本文を送り終えると 100%。応答（保存・登録）を待つ間はその旨を示す。
+  await emitUploadProgress(page, bodyBytes, bodyBytes);
+  await expect(bytes).toHaveText("送信済み 20 MB / 20 MB（100%）");
+  await expect(page.getByTestId("upload-progress-saving")).toBeVisible();
+
+  releaseUpload();
+  await expect(sending).toHaveCount(0);
+  await expect(page.getByText("保存先に保存できませんでした。")).toBeVisible();
 });

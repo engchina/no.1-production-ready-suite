@@ -11,7 +11,6 @@ import {
   CardHeader,
   CardTitle,
   FieldError,
-  ProcessingIndicator,
   RequiredBadge,
   Skeleton,
   TimedLoadingState,
@@ -37,6 +36,7 @@ import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Dropzone } from "./Dropzone";
+import { UploadSendingState } from "./UploadProgress";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -61,7 +61,11 @@ import {
 } from "@/lib/queries";
 import { t, type I18nKey } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
-import { DEFAULT_MAX_UPLOAD_BYTES } from "@/lib/upload-requests";
+import {
+  DEFAULT_MAX_UPLOAD_BYTES,
+  totalUploadBytes,
+  type UploadProgress,
+} from "@/lib/upload-requests";
 import { canSubmitUpload, uploadKnowledgeBaseRequired } from "@/lib/upload-scope";
 import { APP_ROUTES } from "@/lib/routes";
 import {
@@ -69,7 +73,6 @@ import {
   sourceModalityKey,
   sourcePreviewKey,
   sourceWarningKey,
-  unsupportedReasonLabel,
 } from "@/lib/source-profile-labels";
 import { cn } from "@/lib/utils";
 
@@ -84,6 +87,8 @@ export function UploadWorkspace() {
   const knowledgeBaseRequired = uploadKnowledgeBaseRequired(user);
   const [knowledgeBaseMissing, setKnowledgeBaseMissing] = useState(false);
   const [sendingCount, setSendingCount] = useState(0);
+  // 送信済み / 合計のバイト数（#306）。送信を始めるたびに 0 から数え直す。
+  const [sendProgress, setSendProgress] = useState<UploadProgress | null>(null);
   const upload = useUploadDocument();
   const batchUpload = useBatchUploadDocuments();
   // 1 ファイルの上限。送信前の確認と、一括アップロードを分けて送る基準に使う（#280）。
@@ -119,10 +124,15 @@ export function UploadWorkspace() {
     upload.reset();
     batchUpload.reset();
     setSendingCount(files.length);
+    setSendProgress({
+      sentBytes: 0,
+      // 上限を超えて送らないファイルは数えない（hook の最初の通知と同じ合計）。
+      totalBytes: totalUploadBytes(files.filter((file) => file.size <= maxUploadBytes)),
+    });
     // 上限を超える 1 ファイルは、一括アップロードの経路で送らずに失敗として示す。
     if (files.length === 1 && files[0].size <= maxUploadBytes) {
       upload.mutate(
-        { file: files[0], knowledgeBaseIds },
+        { file: files[0], knowledgeBaseIds, onProgress: setSendProgress },
         {
           onSuccess: (result) => {
             setBatchItems([result]);
@@ -134,7 +144,7 @@ export function UploadWorkspace() {
       return;
     }
     batchUpload.mutate(
-      { files, knowledgeBaseIds, maxUploadBytes },
+      { files, knowledgeBaseIds, maxUploadBytes, onProgress: setSendProgress },
       {
         onSuccess: (result) => {
           setBatchItems(result.items);
@@ -164,12 +174,7 @@ export function UploadWorkspace() {
             />
             <Dropzone onFiles={handleFiles} disabled={isBusy} maxUploadBytes={maxUploadBytes} />
             {isBusy ? (
-              <ProcessingIndicator
-                active
-                placement="action"
-                label={t("upload.uploading", { count: sendingCount })}
-                testId="upload-processing"
-              />
+              <UploadSendingState fileCount={sendingCount} progress={sendProgress} />
             ) : null}
             {mutationError ? <ErrorState message={uploadErrorMessage(mutationError)} /> : null}
             {batchFailedItems.length > 0 ? (
@@ -188,12 +193,9 @@ export function UploadWorkspace() {
                 onSelect={setUploaded}
               />
             ) : null}
-            {batchItems.length <= 1 ? (
-              <UploadIngestionJobNotice job={uploaded.ingestion_job} />
-            ) : null}
             <DocumentWorkspace
               documentId={uploaded.id}
-              watchProcessing={shouldWatchProcessing(uploaded)}
+              watchProcessing={uploaded.ingestion_started}
               initialSourceProfile={uploaded.source_profile}
             />
             <Button variant="ghost" onClick={reset}>
@@ -203,45 +205,6 @@ export function UploadWorkspace() {
         )}
       </PageBody>
     </div>
-  );
-}
-
-function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefined }) {
-  // 実行中/完了は直下の DocumentWorkspace の状態表示と重複するため出さない(messaging-spec §9 P1)。
-  // skip_reason 等ここにしか出ない情報を持つ SKIPPED / FAILED のみ提示する。
-  if (!job || (job.status !== "SKIPPED" && job.status !== "FAILED")) return null;
-  return (
-    <Banner
-      severity={job.status === "FAILED" ? "danger" : "warning"}
-      title={t("upload.jobs.title")}
-    >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <IngestionJobBadge job={job} />
-        {job.skip_reason ? (
-          <span className="text-fg-muted">{uploadSkipReasonLabel(job.skip_reason)}</span>
-        ) : null}
-      </div>
-    </Banner>
-  );
-}
-
-function uploadSkipReasonLabel(reason: string): string {
-  switch (reason) {
-    case "duplicate_content":
-      return t("sourceProfile.warning.duplicate");
-    default:
-      return (
-        unsupportedReasonLabel(reason) ||
-        t("flow.phase.skipped", { phase: t("flow.jobs.phase.preprocess") })
-      );
-  }
-}
-
-function shouldWatchProcessing(uploaded: UploadResult): boolean {
-  return (
-    uploaded.ingestion_started ||
-    uploaded.ingestion_job?.status === "QUEUED" ||
-    uploaded.ingestion_job?.status === "RUNNING"
   );
 }
 
@@ -297,7 +260,6 @@ function BatchUploadSummary({
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <IngestionJobBadge job={item.ingestion_job} />
                   <Button
                     type="button"
                     variant={selected ? "secondary" : "ghost"}
@@ -380,7 +342,9 @@ function RecentIngestionJobsPanel() {
   const cancel = useCancelIngestionJob();
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const jobs = query.data?.items ?? [];
-  if (query.isPending || query.isError || jobs.length === 0) return null;
+  const warnings = query.data?.warning_messages ?? [];
+  // 定期更新（3 秒ごと）の失敗では、取得済みの一覧を残す（静かな polling でエラーを出さない）。
+  const loadFailed = query.isError && !query.data;
 
   const refreshJobs = async () => {
     setManualRefreshing(true);
@@ -405,6 +369,7 @@ function RecentIngestionJobsPanel() {
               variant="secondary"
               size="sm"
               onClick={() => void refreshJobs()}
+              disabled={query.isPending}
               loading={manualRefreshing} icon={RefreshCw}>
               {t("upload.jobs.refresh")}
             </Button>
@@ -413,6 +378,7 @@ function RecentIngestionJobsPanel() {
               variant="secondary"
               size="sm"
               onClick={() => drain.mutate({ limit: 50 })}
+              disabled={query.isPending}
               loading={drain.isPending} icon={PlayCircle}>
               {t("upload.jobs.drain")}
             </Button>
@@ -441,60 +407,108 @@ function RecentIngestionJobsPanel() {
               : t("upload.jobs.cancelFailed")}
           </Banner>
         ) : null}
-        <div className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
-          {jobs.map((job) => (
-            <div
-              key={job.id}
-              className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-fg">
-                  {t("upload.jobs.documentId", { id: job.document_id })}
-                </p>
-                <p className="mt-1 text-xs text-fg-muted">
-                  {t("sourceProfile.parser")}: {t(parserProfileKey(job.parser_profile))}
-                </p>
-                {job.error_message ? (
-                  <p className="mt-1 text-xs text-danger-fg">{job.error_message}</p>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <IngestionJobBadge job={job} />
-                {job.status === "QUEUED" || job.status === "RUNNING" ? (
-                  <Button
-                    type="button"
-                    variant="danger"
-                    size="sm"
-                    onClick={() => cancel.mutate({ id: job.id })}
-                    loading={cancel.isPending && cancel.variables?.id === job.id}
-                    icon={Ban}
+        {query.isPending ? (
+          <TimedLoadingState
+            label={t("upload.jobs.loading")}
+            placement="panel"
+            testId="upload-jobs-loading"
+          >
+            <UploadJobsSkeleton />
+          </TimedLoadingState>
+        ) : loadFailed ? (
+          <ErrorState
+            message={t("upload.jobs.loadError")}
+            onRetry={() => void query.refetch()}
+          />
+        ) : warnings.length > 0 && jobs.length === 0 ? (
+          <Banner severity="warning">{warnings[0]}</Banner>
+        ) : jobs.length === 0 ? (
+          <p
+            className="rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted"
+            data-testid="upload-jobs-empty"
+          >
+            {t("upload.jobs.empty")}
+          </p>
+        ) : (
+          <div className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
+            {jobs.map((job) => (
+              <div
+                key={job.id}
+                className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  {/* 文書 ID ではなくファイル名を出す。名前がない応答（旧 backend）では ID に戻す（#306）。 */}
+                  <p
+                    className="truncate text-sm font-medium text-fg"
+                    title={job.document_file_name || job.document_id}
+                    data-testid="upload-job-file-name"
                   >
-                    {t("upload.jobs.cancel")}
-                  </Button>
-                ) : null}
-                {job.status === "FAILED" ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => retry.mutate({ id: job.id })}
-                    loading={retry.isPending && retry.variables?.id === job.id}
-                    icon={RotateCcw}
-                  >
-                    {t("upload.jobs.retry")}
-                  </Button>
-                ) : null}
+                    {job.document_file_name || t("upload.jobs.documentId", { id: job.document_id })}
+                  </p>
+                  <p className="mt-1 text-xs text-fg-muted">
+                    {t("sourceProfile.parser")}: {t(parserProfileKey(job.parser_profile))}
+                  </p>
+                  {job.error_message ? (
+                    <p className="mt-1 text-xs text-danger-fg">{job.error_message}</p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <IngestionJobBadge job={job} />
+                  {job.status === "QUEUED" || job.status === "RUNNING" ? (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      onClick={() => cancel.mutate({ id: job.id })}
+                      loading={cancel.isPending && cancel.variables?.id === job.id}
+                      icon={Ban}
+                    >
+                      {t("upload.jobs.cancel")}
+                    </Button>
+                  ) : null}
+                  {job.status === "FAILED" ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => retry.mutate({ id: job.id })}
+                      loading={retry.isPending && retry.variables?.id === job.id}
+                      icon={RotateCcw}
+                    >
+                      {t("upload.jobs.retry")}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function IngestionJobBadge({ job }: { job: IngestionJob | null | undefined }) {
-  if (!job) return null;
+/** 取込ジョブの一覧の形をした読み込み中の表示（行の寸法を予約する）。 */
+function UploadJobsSkeleton() {
+  return (
+    <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-surface-sunken">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div
+          key={index}
+          className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="grid min-w-0 flex-1 gap-1.5">
+            <Skeleton className="h-5 w-64 max-w-full" />
+            <Skeleton className="h-4 w-40 max-w-full" />
+          </div>
+          <Skeleton className="h-7 w-20 rounded-full" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function IngestionJobBadge({ job }: { job: IngestionJob }) {
   const status = job.status;
   return (
     <span

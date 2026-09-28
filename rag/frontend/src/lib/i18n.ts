@@ -1716,6 +1716,9 @@ export const ja = {
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。音声は保存のみで取込はスキップされます。",
   "upload.selectFile": "ファイルを選択",
   "upload.uploading": "{count} 件のファイルをアップロードしています",
+  "upload.progress.aria": "送信の進み具合",
+  "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
+  "upload.progress.saving": "送信が完了しました。保存先への保存と文書の登録を待っています。",
   "upload.error.failed": "アップロードに失敗しました。時間をおいて、もう一度お試しください。",
   "upload.error.fileTooLarge":
     "ファイルサイズが上限（{size} / ファイル）を超えるため、送信しませんでした。",
@@ -1737,7 +1740,12 @@ export const ja = {
   "upload.batch.openShort": "表示",
   "upload.batch.current": "表示中",
   "upload.jobs.title": "文書処理状況",
-  "upload.jobs.documentId": "Document: {id}",
+  "upload.jobs.documentId": "文書 ID: {id}",
+  "upload.jobs.loading": "文書処理状況を読み込んでいます",
+  "upload.jobs.loadError":
+    "文書処理状況を取得できませんでした。時間をおいて、もう一度読み込んでください。",
+  "upload.jobs.empty":
+    "まだ文書処理はありません。文書を開いて取込を始めると、ここに直近の状況が表示されます。",
   "upload.jobs.refresh": "更新",
   "upload.jobs.drain": "待機ジョブを再開",
   "upload.jobs.cancel": "キャンセル",

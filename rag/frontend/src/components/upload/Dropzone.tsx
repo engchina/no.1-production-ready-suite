@@ -5,7 +5,7 @@ import { useRef, useState, type DragEvent } from "react";
 
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
-import { DEFAULT_MAX_UPLOAD_BYTES, formatUploadLimit } from "@/lib/upload-requests";
+import { DEFAULT_MAX_UPLOAD_BYTES, formatByteSize } from "@/lib/upload-requests";
 
 export const ACCEPTED_UPLOAD_TYPES = [
   ".pdf",
@@ -135,7 +135,7 @@ export function Dropzone({
     >
       <UploadCloud size={28} className="text-accent-fg" aria-hidden />
       <p className="text-sm font-medium text-fg">{t("upload.dropzone")}</p>
-      <p className="text-xs text-fg-muted">{t("upload.dropzoneHint", { size: formatUploadLimit(maxUploadBytes) })}</p>
+      <p className="text-xs text-fg-muted">{t("upload.dropzoneHint", { size: formatByteSize(maxUploadBytes) })}</p>
       <input
         ref={inputRef}
         type="file"

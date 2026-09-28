@@ -14,7 +14,8 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
    - upload レスポンスには `source_profile` を含める。`source_profile` は原本ファイル名、正規化後ファイル名、拡張子、保存 MIME type、拡張子から推定した MIME type、サイズ、SHA-256、重複元、原本 modality、推奨 parser profile、テキスト charset、品質警告を返す。
    - Dify Knowledge Pipeline / RAGFlow / R2R の「取込前にデータソース品質・処理方針・重複を明示する」ベストプラクティスは、外部 parser や別 storage を追加せず、この `source_profile` と既存の Oracle document metadata に再マップする。
-   - `ingestion_mode=manual` を multipart form で受け付ける。アップロードは原本保存と KB 所属確定だけを行い、後続処理は永続取込 job として明示投入する。
+   - アップロードは原本保存と KB 所属確定だけを行い、取込 job は作らない。後続処理は文書ごとに永続取込 job として明示投入する（取込開始方針の `ingestion_mode` は #306 で廃止。送っても無視する）。
+   - 取込 job の一覧・取得（`GET /api/documents/ingestion-jobs` ほか）は、文書のファイル名を `document_file_name` として返す（#306）。
 
 2. OCR・本文抽出と索引
    - API: `POST /api/documents/{document_id}/ingest`

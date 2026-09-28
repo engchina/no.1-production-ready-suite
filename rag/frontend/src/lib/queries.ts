@@ -84,7 +84,6 @@ import {
   type GraphSettingsUpdate,
   type AgenticSettingsData,
   type AgenticSettingsUpdate,
-  type UploadIngestionMode,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
 } from "./api";
@@ -92,9 +91,12 @@ import { t } from "./i18n";
 import {
   DEFAULT_MAX_UPLOAD_BYTES,
   failedUploadItem,
-  formatUploadLimit,
+  formatByteSize,
   mergeBatchUploadResults,
   planUploadRequests,
+  totalUploadBytes,
+  uploadProgressOf,
+  type UploadProgress,
 } from "./upload-requests";
 
 export const queryKeys = {
@@ -830,12 +832,16 @@ export function useUploadDocument() {
     mutationFn: ({
       file,
       knowledgeBaseIds = [],
-      ingestionMode = "manual",
+      onProgress,
     }: {
       file: File;
       knowledgeBaseIds?: string[];
-      ingestionMode?: UploadIngestionMode;
-    }) => api.uploadDocument(file, knowledgeBaseIds, ingestionMode),
+      /** 送信の進み具合（送信済み / 合計のバイト数。#306）。 */
+      onProgress?: (progress: UploadProgress) => void;
+    }) =>
+      api.uploadDocument(file, knowledgeBaseIds, (transfer) =>
+        onProgress?.(uploadProgressOf(0, file.size, transfer, file.size)),
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
@@ -849,6 +855,7 @@ export function useUploadDocument() {
  * 1 リクエストの合計が 1 ファイルの上限以内になるよう分けて送り（前段 nginx の body 上限で一括全体が
  * 413 にならないように）、上限を超えるファイルは送らずに失敗として返す（#280）。途中のまとまりが
  * 失敗しても、それまでに保存できたファイルの結果は残す。認証切れ・権限なしは中断して投げ直す。
+ * 送信の進み具合は、送るファイル全体のバイト数に対する送信済みのバイト数で通知する（#306）。
  */
 export function useBatchUploadDocuments() {
   const qc = useQueryClient();
@@ -856,14 +863,15 @@ export function useBatchUploadDocuments() {
     mutationFn: async ({
       files,
       knowledgeBaseIds = [],
-      ingestionMode = "manual",
       maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+      onProgress,
     }: {
       files: File[];
       knowledgeBaseIds?: string[];
-      ingestionMode?: UploadIngestionMode;
       /** 1 ファイルの上限（upload-storage 設定の `max_upload_bytes`）。 */
       maxUploadBytes?: number;
+      /** 送信の進み具合（送信済み / 合計のバイト数。#306）。 */
+      onProgress?: (progress: UploadProgress) => void;
     }): Promise<BatchUploadResult> => {
       const { groups, oversized } = planUploadRequests(files, maxUploadBytes);
       const results: BatchUploadResult[] = [];
@@ -871,12 +879,19 @@ export function useBatchUploadDocuments() {
         failedUploadItem(
           file,
           413,
-          t("upload.error.fileTooLarge", { size: formatUploadLimit(maxUploadBytes) }),
+          t("upload.error.fileTooLarge", { size: formatByteSize(maxUploadBytes) }),
         ),
       );
+      const totalBytes = totalUploadBytes(groups.flat());
+      let doneBytes = 0;
       for (const group of groups) {
+        const groupBytes = totalUploadBytes(group);
         try {
-          results.push(await api.batchUploadDocuments(group, knowledgeBaseIds, ingestionMode));
+          results.push(
+            await api.batchUploadDocuments(group, knowledgeBaseIds, (transfer) =>
+              onProgress?.(uploadProgressOf(doneBytes, groupBytes, transfer, totalBytes)),
+            ),
+          );
         } catch (error) {
           if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             throw error;
@@ -884,6 +899,10 @@ export function useBatchUploadDocuments() {
           const status = error instanceof ApiError ? error.status : 0;
           const message = uploadErrorMessage(error);
           failed.push(...group.map((file) => failedUploadItem(file, status, message)));
+        } finally {
+          // 失敗したまとまりも「送信を終えた」量として数え、進み具合を後戻りさせない。
+          doneBytes += groupBytes;
+          onProgress?.({ sentBytes: doneBytes, totalBytes });
         }
       }
       return mergeBatchUploadResults(results, failed);
@@ -891,12 +910,10 @@ export function useBatchUploadDocuments() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     },
   });
 }
 
-/** アップロード / 一括アップロードの失敗を、利用者に示す文言にする（#280）。 */
 export function uploadErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     // 前段の proxy が返す 413 は ApiResponse の本文を持たないため、既定の「APIエラー (413)」を言い換える。

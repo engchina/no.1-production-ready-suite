@@ -1,4 +1,4 @@
-import type { BatchUploadFailedItem, BatchUploadResult } from "./api";
+import type { BatchUploadFailedItem, BatchUploadResult, UploadTransferProgress } from "./api";
 
 /**
  * 文書アップロードの送信計画（#280）。
@@ -18,8 +18,8 @@ export const MAX_FILES_PER_UPLOAD_REQUEST = 50;
 
 type SizedFile = Pick<File, "size">;
 
-/** 上限の表示（200 MiB → "200 MB"。整数にならないときだけ小数 1 桁）。 */
-export function formatUploadLimit(bytes: number): string {
+/** バイト数の表示（上限・送信済みの量。200 MiB → "200 MB"。整数にならないときだけ小数 1 桁）。 */
+export function formatByteSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
   let value = bytes;
   let unit = 0;
@@ -87,7 +87,41 @@ export function mergeBatchUploadResults(
     total_count: items.length + failedItems.length,
     uploaded_count: items.length,
     failed_count: failedItems.length,
-    queued_count: results.reduce((sum, result) => sum + result.queued_count, 0),
-    skipped_count: results.reduce((sum, result) => sum + result.skipped_count, 0),
   };
+}
+
+/**
+ * 送信の進み具合（#306）。選択したファイルのバイト数で数える（multipart の境界などの付加分は含めない）。
+ * 上限を超えて送らないファイルは含めない。
+ */
+export interface UploadProgress {
+  sentBytes: number;
+  totalBytes: number;
+}
+
+/** 送信するファイルの合計バイト数。 */
+export function totalUploadBytes(files: readonly SizedFile[]): number {
+  return files.reduce((sum, file) => sum + file.size, 0);
+}
+
+/**
+ * 1 リクエストの送信済みの割合（XHR の `loaded / total`。本文全体に対する値）を、ファイルのバイト数へ
+ * 換算して全体の進み具合にする。`doneBytes` はそれまでに送り終えたまとまりのバイト数。
+ */
+export function uploadProgressOf(
+  doneBytes: number,
+  requestBytes: number,
+  transfer: UploadTransferProgress,
+  totalBytes: number,
+): UploadProgress {
+  const ratio = transfer.total > 0 ? Math.min(1, Math.max(0, transfer.loaded / transfer.total)) : 0;
+  const sentBytes = Math.min(totalBytes, doneBytes + Math.round(requestBytes * ratio));
+  return { sentBytes, totalBytes };
+}
+
+/** 送信済みの割合（0〜100 の整数。合計が 0 のときは 0）。100 は全体を送り終えたときだけ。 */
+export function uploadProgressPercent(progress: UploadProgress): number {
+  if (progress.totalBytes <= 0) return 0;
+  if (progress.sentBytes >= progress.totalBytes) return 100;
+  return Math.min(99, Math.floor((progress.sentBytes / progress.totalBytes) * 100));
 }

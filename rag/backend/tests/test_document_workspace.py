@@ -771,7 +771,6 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     """upload 後は保存だけ行い、明示操作で取込 job をキュー投入する。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "manual"},
         files={
             "file": (
                 "policy.txt",
@@ -784,7 +783,7 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert resp.status_code == 200
     body = resp.json()["data"]
     assert body["ingestion_started"] is False
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
@@ -831,16 +830,20 @@ def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
     assert settings.rag_chunking_strategy == "page_level"
 
 
-def test_document_upload_rejects_deprecated_immediate_ingestion_mode() -> None:
-    """廃止済みの upload 即時取込指定は受け付けない。"""
+def test_document_upload_has_no_ingestion_mode_and_never_enqueues() -> None:
+    """upload は取込開始方針を受け取らない。旧 ``ingestion_mode`` を送っても job は作らない。"""
     resp = client.post(
         "/api/documents/upload",
         data={"ingestion_mode": "auto"},
         files={"file": ("policy.txt", b"body", "text/plain")},
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["error_messages"] == ["body.ingestion_mode: Input should be 'manual'"]
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert "ingestion_job" not in body
+    jobs = client.get("/api/documents/ingestion-jobs")
+    assert jobs.json()["data"]["items"] == []
 
 
 def test_document_upload_audio_profile_is_reported_without_enqueue() -> None:
@@ -857,7 +860,7 @@ def test_document_upload_audio_profile_is_reported_without_enqueue() -> None:
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
     assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
     assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
     enqueue = client.post(f"/api/documents/{body['id']}/ingestion-jobs")
     assert enqueue.status_code == 200
@@ -884,7 +887,7 @@ def test_document_upload_reports_common_audio_mime_variant_without_enqueue() -> 
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
     assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
     assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
 
 def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
@@ -909,7 +912,7 @@ def test_document_upload_accepts_recognized_octet_stream_for_explicit_skip() -> 
     body = resp.json()["data"]
     assert body["source_profile"]["modality"] == "audio"
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
 
 def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> None:
@@ -934,7 +937,7 @@ def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> No
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "outlook_msg_not_supported"
     assert "unsupported_outlook_msg" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
@@ -957,7 +960,7 @@ def test_document_upload_reports_unsupported_tiff_image_without_enqueue() -> Non
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "tiff_image_not_supported"
     assert "unsupported_tiff_image" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
@@ -980,7 +983,7 @@ def test_document_upload_reports_unsupported_legacy_office_without_enqueue() -> 
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "legacy_office_binary_not_supported"
     assert "unsupported_legacy_office_binary" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"] is None
+    assert "ingestion_job" not in body
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
@@ -1004,7 +1007,7 @@ def test_document_upload_duplicate_source_does_not_enqueue() -> None:
     assert duplicate.status_code == 200
     payload = duplicate.json()["data"]
     assert payload["ingestion_started"] is False
-    assert payload["ingestion_job"] is None
+    assert "ingestion_job" not in payload
     assert payload["duplicate_of_document_id"] == original.json()["data"]["id"]
     assert "duplicate_content" in payload["source_profile"]["quality_warnings"]
 
@@ -1026,7 +1029,7 @@ def test_batch_upload_saves_documents_without_ingestion_jobs() -> None:
     """batch-upload は複数ファイルを保存し、取込 job は明示操作まで作らない。"""
     resp = client.post(
         "/api/documents/batch-upload",
-        data={"ingestion_mode": "manual", "knowledge_base_ids": "kb-1"},
+        data={"knowledge_base_ids": "kb-1"},
         files=[
             ("files", ("policy-a.txt", "A 規程".encode(), "text/plain")),
             ("files", ("policy-b.txt", "B 規程".encode(), "text/plain")),
@@ -1037,11 +1040,12 @@ def test_batch_upload_saves_documents_without_ingestion_jobs() -> None:
     data = resp.json()["data"]
     assert data["total_count"] == 2
     assert data["uploaded_count"] == 2
-    assert data["queued_count"] == 0
-    assert data["skipped_count"] == 0
+    # 取込 job を作らないため、job の状態を数える指標は返さない（#306）。
+    assert "queued_count" not in data
+    assert "skipped_count" not in data
     assert [item["file_name"] for item in data["items"]] == ["policy-a.txt", "policy-b.txt"]
     assert all(item["ingestion_started"] is False for item in data["items"])
-    assert all(item["ingestion_job"] is None for item in data["items"])
+    assert all("ingestion_job" not in item for item in data["items"])
 
     jobs = client.get("/api/documents/ingestion-jobs")
     assert jobs.status_code == 200
