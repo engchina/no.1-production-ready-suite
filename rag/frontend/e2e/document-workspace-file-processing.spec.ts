@@ -475,7 +475,8 @@ test("chunk 取得失敗時は workspace 内にエラー状態を表示する", 
   await page.goto("/documents/doc-1");
 
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  await expect(page.getByText("chunk を取得できません")).toBeVisible();
+  // 404 以外の失敗は 3 回まで再試行してからエラーにする（#311。約 7 秒）。
+  await expect(page.getByText("chunk を取得できません")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("索引状態を確認して再読み込みしてください。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });

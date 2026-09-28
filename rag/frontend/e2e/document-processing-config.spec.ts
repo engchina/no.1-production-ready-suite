@@ -95,6 +95,8 @@ async function mockWorkspace(
     putFails?: boolean;
     previewFails?: boolean;
     recipeCount?: number;
+    /** プレビュー結果の chunk に足す metadata(例: DocRAG から構造認識への縮退の印)。 */
+    previewChunkMetadata?: Record<string, string>;
   } = {}
 ) {
   const status = options.documentStatus ?? "INDEXED";
@@ -211,7 +213,10 @@ async function mockWorkspace(
             chunk_group_id: null,
             source_parser: "docling",
             element_ids: ["e0"],
-            metadata: { context_header: "policy.pdf > 第1章 > 経費申請" },
+            metadata: {
+              context_header: "policy.pdf > 第1章 > 経費申請",
+              ...options.previewChunkMetadata,
+            },
           },
         ],
         stats: {
@@ -627,6 +632,50 @@ test("分割プレビューで DocRAG 親子階層の 5 項目を指定できる
     docrag_parent_max_children: 12,
   });
   await expectNoPageOverflow(page);
+});
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`Docling 以外の解析結果で DocRAG 親子階層を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockWorkspace(page, {
+      documentStatus: "REVIEW",
+      previewChunkMetadata: {
+        chunk_strategy: "structure_aware",
+        chunk_strategy_requested: "docrag_small_to_big",
+        chunk_strategy_fallback_reason: "docrag_layout_missing",
+      },
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab", { name: "Chunk" }).click();
+
+    const preview = page.getByRole("region", { name: "分割プレビュー" });
+    await preview.getByRole("combobox", { name: "分割方式" }).click();
+    await page.getByRole("option", { name: "DocRAG 親子階層" }).click();
+    await preview.getByRole("button", { name: "プレビュー実行" }).click();
+
+    // 失敗させず構造認識で分割し、その事実と親子で分割する方法を Chunk 一覧の上に出す(#300)。
+    const notice = page.getByRole("status").filter({ hasText: "構造認識で分割しました" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("文書解析を Docling にして再解析");
+    await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("DocRAG 親子階層で分割した chunk には縮退の表示を出さない", async ({ page }) => {
+  await mockWorkspace(page, { documentStatus: "REVIEW" });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "Chunk" }).click();
+  const preview = page.getByRole("region", { name: "分割プレビュー" });
+  await preview.getByRole("button", { name: "プレビュー実行" }).click();
+
+  await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
+  await expect(page.getByText("構造認識で分割しました")).toHaveCount(0);
 });
 
 test("分割プレビュー失敗を画面内に表示する", async ({ page }) => {
