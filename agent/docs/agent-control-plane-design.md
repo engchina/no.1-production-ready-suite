@@ -106,7 +106,7 @@ Runtime が対応しない操作はローカル成功に置き換えず、
 ## 4. Binding MCP
 
 `/api/mcp/{binding_id}` は MCP initialize / tools/list / tools/call の最小 surface を提供する。
-公開 tool は Agent の選択 Skill が要求する `server_id=control-plane` の閉包だけ。tool 実行は既存の
+公開 tool は Agent の選択 Skill が要求する `server_id=control-plane` の閉包だけ。そのうち ToolPolicy で承認なしに実行できる（`allow`）tool だけを公開する。Binding MCP の呼び出しは Run と結びつかず承認の記録を作れないため、承認が必要（`ask`）・拒否（`deny`）の tool（例: 既定 policy の `external_nl2sql_query`・`external_rag_chat`）は `tools/list` に出さず、呼ぶと `-32601` で拒否する（#244）。tool 実行は既存の
 Pydantic input schema、ToolPolicy、PII/secret masking、audit metadata を再利用する。
 
 認証 token は次の順で解決する。
