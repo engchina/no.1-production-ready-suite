@@ -2083,6 +2083,11 @@ export function ProfileManagementPage() {
   const showProfileWorkspaceProcessing =
     Boolean(profileWorkspaceProcessing) &&
     (profiles.length > 0 || loading === "load" || schemaRefreshing || dbProfileRefreshing);
+  const profileListLoading = !profilesLoaded || (loading === "load" && profiles.length === 0);
+  // 初回の読込は一覧の読込表示がスピナーを出す。ヘッダーの「表示を更新」は回さない（狭い画面では「その他の操作」の
+  // 中で見えない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const profileListShowsSpinner = profileListLoading && !showProfileWorkspaceProcessing;
+  const dbProfileRefreshNoticeShown = Boolean(dbProfileRefreshError && dbProfileRefreshNeedsFull);
   const headerDbProfileRefreshStatus =
     dbProfileRefreshing || dbProfileRefreshStatus === "error" ? dbProfileRefreshStatus : "";
   const headerRefreshStatus = headerDbProfileRefreshStatus;
@@ -2142,7 +2147,8 @@ export function ProfileManagementPage() {
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
                   onClick: () => load(true),
-                  loading: loading === "load" || profileListRefreshing,
+                  loading: (loading === "load" || profileListRefreshing) && !profileListShowsSpinner,
+                  disabled: profileListShowsSpinner,
                 },
                 {
                   id: "schema-refresh",
@@ -2159,7 +2165,9 @@ export function ProfileManagementPage() {
                   label: t("profiles.action.dbProfileRefresh"),
                   icon: RefreshCw,
                   onClick: runDbProfileRefresh,
-                  loading: dbProfileRefreshing || startDbProfileRefresh.isPending,
+                  // 失敗の案内に同じ操作のボタンが出ているときは、そちらだけを回す（#416）。
+                  loading:
+                    (dbProfileRefreshing || startDbProfileRefresh.isPending) && !dbProfileRefreshNoticeShown,
                   disabled: dbProfileRefreshing || startDbProfileRefresh.isPending,
                 },
               ]
@@ -2186,7 +2194,7 @@ export function ProfileManagementPage() {
                 profiles={profiles}
                 totalCount={profileTotal}
                 selectedProfileId={selectedProfileId}
-                loading={!profilesLoaded || (loading === "load" && profiles.length === 0)}
+                loading={profileListLoading}
                 loadingIndicator={!showProfileWorkspaceProcessing}
                 search={profileSearch}
                 sort={profileSort}

@@ -560,6 +560,11 @@ export interface OntologyBuildSectionProps {
   markdownRefreshVersion?: number;
   onRefreshSchema?: () => void | Promise<void>;
   refreshingSchema?: boolean;
+  /**
+   * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得で
+   * 読み直す Markdown の読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+   */
+  workspaceFetching?: boolean;
 }
 
 export function OntologyBuildSection({
@@ -571,6 +576,7 @@ export function OntologyBuildSection({
   markdownRefreshVersion = 0,
   onRefreshSchema,
   refreshingSchema = false,
+  workspaceFetching = false,
 }: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useWorkspaceState(`markdown:${profileId}:business-text`, "");
   const [retainedDraft, setRetainedDraft] = useWorkspaceState(`markdown:${profileId}:draft`, {text:"",baseline:"",revisionId:"",etag:""});
@@ -1613,7 +1619,9 @@ export function OntologyBuildSection({
             variant="primary"
             size="lg"
             className="w-full sm:w-auto"
-            loading={busy === "start" || jobRunning}
+            // 送信中だけ loading にする。job の間は disabled にし、スピナーは構築の進行状況
+            // （WorkflowProgressStrip）が 1 つ出す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+            loading={busy === "start"}
             disabled={busy !== "" || jobRunning || publishRunning}
             onClick={() => void startBuild()} icon={UploadCloud}>
             <span>
@@ -1658,6 +1666,8 @@ export function OntologyBuildSection({
           stepsAriaLabel={t("profiles.ontologyBuild.progress.stepsLabel")}
           testId="ontology-build-steps"
           dataJobStatus={job.status}
+          // 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。
+          activityIcon={busy === "cancel" ? "none" : "spinner"}
           role={jobRunning ? "status" : undefined}
           collapsible={{
             collapsed: progressCollapsed,
@@ -1888,6 +1898,7 @@ export function OntologyBuildSection({
             operationKey={`ontology-markdown-load:${profileId ?? ""}`}
             placement="panel"
             testId="ontology-markdown-loading"
+            activityIcon={workspaceFetching ? "none" : "spinner"}
           />
         ) : activeMarkdownTab === "draft" ? (
           <div

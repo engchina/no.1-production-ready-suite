@@ -17,6 +17,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
+import { activitySpinnerTarget } from "./workflowProgressSpinner";
 
 type StatusBadgeVariant = "neutral" | "info" | "success" | "warning" | "danger";
 
@@ -66,6 +67,11 @@ export interface WorkflowProgressStripProps {
   headerExtra?: ReactNode;
   footer?: ReactNode;
   collapsible?: WorkflowProgressCollapsible;
+  /**
+   * 帯の中のスピナー。帯の中のボタン（「中止」など）が loading を出している間は "none" にする
+   * （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+   */
+  activityIcon?: "spinner" | "none";
 }
 
 function toneBorderClass(tone: WorkflowProgressTone) {
@@ -109,11 +115,14 @@ function stepCircleClass(status: WorkflowProgressStepStatus) {
 function StepIcon({
   status,
   index,
+  spinning,
 }: {
   status: WorkflowProgressStepStatus;
   index: number;
+  /** この工程でスピナーを回すか（帯全体で 1 つ。`activitySpinnerTarget`）。 */
+  spinning: boolean;
 }) {
-  if (status === "running") {
+  if (spinning) {
     return <Spinner size={14} />;
   }
   if (status === "done") return <Check size={14} aria-hidden="true" />;
@@ -144,6 +153,7 @@ export function WorkflowProgressStrip({
   headerExtra,
   footer,
   collapsible,
+  activityIcon = "spinner",
 }: WorkflowProgressStripProps) {
   const timing = useOperationTiming({
     active,
@@ -155,6 +165,11 @@ export function WorkflowProgressStrip({
   const timerKind = active ? t("common.processing.elapsed") : t("common.processing.duration");
   const collapsed = collapsible?.collapsed ?? false;
   const bodyId = `${titleId}-body`;
+  const spinnerTarget = activitySpinnerTarget({
+    active: active && activityIcon === "spinner",
+    collapsed,
+    steps,
+  });
   const toggleLabel = collapsed ? collapsible?.expandLabel : collapsible?.collapseLabel;
 
   return (
@@ -175,7 +190,7 @@ export function WorkflowProgressStrip({
             className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${toneIconClass(tone)}`}
             aria-hidden="true"
           >
-            {toneIcon(tone)}
+            {spinnerTarget === "header" ? <Spinner size={20} /> : toneIcon(tone)}
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -250,7 +265,7 @@ export function WorkflowProgressStrip({
                 <span
                   className={`relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${stepCircleClass(step.status)}`}
                 >
-                  <StepIcon status={step.status} index={index} />
+                  <StepIcon status={step.status} index={index} spinning={spinnerTarget === index} />
                 </span>
                 {/*
                   工程の見出し（名前 + Chevron）と状態（右端、375px では次の行）を 1 行に並べる工程表の行。

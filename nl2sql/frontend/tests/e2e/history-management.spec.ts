@@ -2,6 +2,7 @@ import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { expectSingleSpinner } from "./_helpers/single-spinner";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -633,6 +634,8 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   await expect(page.getByTestId("history-detail-skeleton")).toContainText(
     "履歴詳細を読み込んでいます",
   );
+  // 初回の読込のスピナーは「表示を更新」の 1 つだけ（一覧と詳細の Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
   historyGate.release();
   await expect(page.getByText("履歴はまだありません")).toBeVisible();
   await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();

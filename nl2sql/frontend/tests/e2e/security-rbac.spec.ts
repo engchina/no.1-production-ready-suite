@@ -10,6 +10,7 @@ import {
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
+import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -4122,6 +4123,46 @@ test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試
   await expect(errorState).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
   expect(planRequests).toBe(planRequestsBeforeRetry + 1);
+});
+
+test("DeepSec の読込中のスピナーは「表示を更新」の 1 つだけにする（#416）", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: false,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: {},
+      message: "未適用です。",
+    })
+  );
+  let releasePlan = () => {};
+  const planGate = new Promise<void>((resolve) => {
+    releasePlan = resolve;
+  });
+  await page.route("**/api/security/deepsec/plan", async (route) => {
+    await planGate;
+    await fulfill(route, deepSecPlan());
+  });
+  await mockDeepSecDataEntitlements(page);
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "基盤構成" }).click();
+  const planLoading = page.getByTestId("security-deepsec-plan-loading");
+  try {
+    await expect(planLoading).toBeVisible();
+    await expect(planLoading.getByRole("timer")).toBeVisible();
+    // 計画の読込は経過時間と Skeleton だけ。スピナーはヘッダーの「表示を更新」の 1 つ。
+    await expect(visibleSpinners(planLoading)).toHaveCount(0);
+    await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
+  } finally {
+    releasePlan();
+  }
+  await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
+  await expect(visibleSpinners(page)).toHaveCount(0);
 });
 
 test("DeepSec は Thick mode でも SQL step をキーボード操作できる", async ({ page }) => {

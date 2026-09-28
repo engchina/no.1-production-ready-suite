@@ -1005,6 +1005,12 @@ export function DataManagementPage() {
     (baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
     (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
     (csvTablesQuery.isFetching && !csvTablesQuery.isFetchingNextPage);
+  // ヘッダーの「表示を更新」は、一覧を残したままの再読込だけ回す。初回の読込（一覧がまだ無い）は一覧の Skeleton が
+  // スピナーを出す（このボタンは狭い画面では「その他の操作」の中で見えない。同じ処理のスピナーは 1 つ。
+  // messaging §3.7、#416）。
+  const objectReloadingWithContent = [baseObjectsQuery, previewObjectsQuery, csvTablesQuery].some(
+    (query) => Boolean(query.data) && query.isFetching && !query.isFetchingNextPage
+  );
 
   const syntheticProgress = (
     <>
@@ -1056,7 +1062,8 @@ export function DataManagementPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: objectRefreshingFromHeader,
+            loading: objectReloadingWithContent,
+            disabled: objectRefreshingFromHeader && !objectReloadingWithContent,
             onClick: () => void refreshObjects(true),
           },
           {
@@ -1755,6 +1762,8 @@ function PreviewResultsPanel({
           idPrefix="data-preview-results"
           ariaLabel={t("dataMgmt.preview.loading")}
           variant="detail"
+          // 直上の「表示」ボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+          activityIcon="none"
         />
       ) : previewError ? (
         <ErrorState message={previewError} onRetry={onRetryPreview} />

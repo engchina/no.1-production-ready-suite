@@ -306,7 +306,9 @@ export function OntologyBuildPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    loading={profilesQuery.isFetchingNextPage}
+                    // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。#416）。
+                    loading={profilesQuery.isFetchingNextPage && !profileLoadMoreError}
+                    disabled={profilesQuery.isFetchingNextPage && Boolean(profileLoadMoreError)}
                     onClick={() => void profilesQuery.fetchNextPage()}
                   >
                     {t("profiles.action.loadMore")}
@@ -372,6 +374,9 @@ export function OntologyBuildPage() {
             variant="detail"
             operationKey={selectedProfileId}
             testId="ontology-workspace-loading"
+            // 直上の「オントロジーを取得」ボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+            // messaging §3.7、#416）。
+            activityIcon={workspaceButtonLoading ? "none" : "spinner"}
           />
         ) : workspaceFailure ? (
           <ErrorState
@@ -390,6 +395,7 @@ export function OntologyBuildPage() {
                 (selectedProfile?.allowed_views?.length ?? 0) > 0
               }
               markdownRefreshVersion={markdownRefreshVersion}
+              workspaceFetching={workspaceButtonLoading}
               onPublished={handleOntologyPublished}
               onMarkdownStateChange={handleMarkdownStateChange}
               onRefreshSchema={refreshSchema}
@@ -401,6 +407,7 @@ export function OntologyBuildPage() {
               profileId={selectedProfileId}
               warningsJa={visibleOntologyWarnings}
               loadState={ontologyLoadState}
+              workspaceFetching={workspaceButtonLoading}
               loadErrorMessage={ontologyErrorMessage}
               onRetryLoad={handleLoadOntologyView}
               onRefreshSchema={refreshSchema}

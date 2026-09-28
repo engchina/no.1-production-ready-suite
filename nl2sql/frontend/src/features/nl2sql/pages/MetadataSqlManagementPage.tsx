@@ -623,7 +623,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               label: t("common.action.refresh"),
               icon: RefreshCw,
               onClick: () => void refreshObjects(true),
-              loading: objectsQuery.isFetching && !objectsQuery.isFetchingNextPage,
+              // 初回の読込は対象の一覧の Skeleton がスピナーを出す（このボタンは狭い画面では「その他の操作」の中で
+              // 見えない）。ボタンは再読込（一覧があるとき）だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+              loading: Boolean(objectsQuery.data) && objectsQuery.isFetching && !objectsQuery.isFetchingNextPage,
+              disabled: !objectsQuery.data && objectsQuery.isFetching,
             },
           {
             id: "schema-refresh",

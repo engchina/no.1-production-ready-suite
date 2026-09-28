@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { dismissToasts } from "./_helpers/toast";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { expectSingleSpinner } from "./_helpers/single-spinner";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -2710,6 +2711,8 @@ test("業務プロファイル一覧の初回ロード中は空状態ではな�
 
   await expect(page.getByTestId("profile-list-skeleton")).toBeVisible();
   await expect(page.getByText("プロファイルがありません")).toHaveCount(0);
+  // 初回の読込のスピナーは一覧の読込表示の 1 つだけ（ヘッダーの「表示を更新」は回さない。#416）。
+  await expectSingleSpinner(page, page.getByTestId("profile-list-loading"));
 
   releaseSearch();
 

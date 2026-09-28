@@ -718,7 +718,10 @@ export function ViewManagementPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  loading: viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage,
+                  // 初回の読込は一覧の Skeleton がスピナーを出す（このボタンは狭い画面では「その他の操作」の中で
+                  // 見えない）。ボタンは再読込（一覧があるとき）だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+                  loading: Boolean(viewObjectsQuery.data) && viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage,
+                  disabled: !viewObjectsQuery.data && viewObjectsQuery.isFetching,
                   onClick: () => void refreshObjects(true),
                 },
                 {
@@ -839,6 +842,8 @@ export function ViewManagementPage() {
               headingId="view-detail-heading"
               detail={detail}
               loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
+              // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
+              loadingActivityIcon={viewObjectsQuery.isPending && !viewObjectsQuery.data ? "none" : undefined}
               ddlLoading={detailRequest.ddlLoading}
               error={detailRequest.error}
               ddlError={detailRequest.ddlError}

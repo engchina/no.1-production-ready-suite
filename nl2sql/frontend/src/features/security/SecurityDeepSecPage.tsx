@@ -548,7 +548,9 @@ function DeepSecTargetObjectPicker({
                 active
                 label={t("security.deepsec.entitlements.objectsLoading")}
                 placement="panel"
-                activityIcon="spinner"
+                // 対象の候補の読込は PageHeader の「再読み込み」の loading がスピナーを出す。対象の行ごとに
+                // 同じ読込を出すので、ここでは回さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+                activityIcon="none"
                 testId={`security-deepsec-object-picker-loading-${index}`}
               />
               <ListSkeleton rows={3} rowClassName="h-8" />
@@ -641,7 +643,13 @@ function DeepSecPlanSteps({
   if (loading && !plan) {
     // 文字だけにせず、経過時間と手順の形の Skeleton を出す（#265）。
     return (
-      <TimedLoadingState label={t("security.deepsec.planLoading")} testId="security-deepsec-plan-loading">
+      // 計画の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+      // messaging §3.7、#416）。
+      <TimedLoadingState
+        label={t("security.deepsec.planLoading")}
+        testId="security-deepsec-plan-loading"
+        activityIcon="none"
+      >
         <ListSkeleton rows={Math.max(1, stepNumbers.length)} rowClassName="h-24" />
       </TimedLoadingState>
     );
@@ -803,12 +811,14 @@ export function SecurityDeepSecPage() {
   const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
   const { abortAll: abortEntitlementRequests, run: runEntitlementRequest } = useRequestScope();
   const { abortAll: abortTargetObjectRequests, run: runTargetObjectRequest } = useRequestScope();
+  // 候補の続きの読込（「さらに読み込む」）は、そのボタンの loading がスピナーを出す。ヘッダーでは回さない
+  // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const refreshing =
     statusLoading ||
     planLoading ||
     entitlementLoading ||
     targetObjectsLoading ||
-    targetObjectsLoadingMore || relatedMetadataRefreshing;
+    relatedMetadataRefreshing;
 
   const operationBusy = foundationApplying || resetting || verifying || entitlementPreviewing ||
     entitlementApplying || configSaving || configSyncing;
@@ -1723,8 +1733,8 @@ export function SecurityDeepSecPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            disabled: actionBlocked,
-            onClick: () => { if (!actionBlocked) return load(true); },
+            disabled: actionBlocked || targetObjectsLoadingMore,
+            onClick: () => { if (!actionBlocked && !targetObjectsLoadingMore) return load(true); },
             loading: refreshing,
           },
         ]}

@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
+import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1792,7 +1793,9 @@ test("Profile の一覧読込と情報取得後の workspace/Markdown 読込で�
   await expect(workspaceSkeleton).toBeVisible();
   await expect(workspaceSkeleton).toHaveAttribute("data-processing-placement", "panel");
   await expect(workspaceSkeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
-  await expect(workspaceSkeleton.locator("svg.animate-spin")).toBeVisible();
+  // スピナーは押した「オントロジーを取得」ボタンの 1 つだけ。読込の表示は経過時間と Skeleton（#416）。
+  await expect(visibleSpinners(workspaceSkeleton)).toHaveCount(0);
+  await expectSingleSpinner(page, page.getByTestId("ontology-view-fetch"));
   await expect(workspaceSkeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   ontologyViewGate.release();
@@ -1801,7 +1804,8 @@ test("Profile の一覧読込と情報取得後の workspace/Markdown 読込で�
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
-  await expect(skeleton.locator("svg.animate-spin")).toBeVisible();
+  // 取得が終わった後の Markdown の読込は、読込の表示がスピナーを 1 つ出す（#416）。
+  await expectSingleSpinner(page, skeleton);
   await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveCount(0);
   await expect(page.getByTestId("ontology-publish-actions")).toHaveCount(0);
@@ -2190,8 +2194,10 @@ test("job 取得が連続失敗しても長時間猶予内は監視を継続す�
   await expect.poll(() => polls, { timeout: 12000 }).toBeGreaterThanOrEqual(8);
   const building = section.getByRole("button", { name: "AI 構築を実行" });
   await expect(building).toBeDisabled();
-  await expect(building).toHaveAttribute("aria-busy", "true");
+  // job の間は、開始のボタンは loading にしない。スピナーは進行状況の帯の 1 つだけ（#416）。
+  await expect(building).not.toHaveAttribute("aria-busy", "true");
   await expect(page.getByTestId("ontology-build-steps")).toBeVisible();
+  await expectSingleSpinner(page, page.getByTestId("ontology-build-steps"));
   const before = polls;
   await page.waitForTimeout(2500);
   expect(polls).toBeGreaterThan(before);
@@ -2320,6 +2326,7 @@ test("リロード後も実行中の構築ジョブを復元して進捗を追�
   await expect(runningStep).toHaveAttribute("data-step-status", "running");
   await expect(runningStep).toHaveAttribute("aria-current", "step");
   await expect(runningStep.locator("svg.animate-spin").first()).toBeVisible();
+  await expectSingleSpinner(page, runningStep);
   await expect(steps.getByRole("timer")).toHaveAttribute("aria-live", "off");
   await expect(page.getByTestId("ontology-build-step-progress")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });

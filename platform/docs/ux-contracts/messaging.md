@@ -198,7 +198,13 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 - 領域内の順序は **固定の見出し / 検索 / タブ → 処理中の表示 → Skeleton または保持中の内容**。処理と関係のないタイトル・フィルター・タブは隠さず、利用者が現在地を見失わないようにする。
 - `PageHeader` はボタンのスピナーだけを担い、経過時間などの詳細表示を自動で作らない。詳細表示をヘッダーの直下に置くのは `placement="page"` の処理だけ。
 - 初回の取得は `TimedLoadingState` + Skeleton で寸法を予約する。明示的な再取得は今の内容を残し、対象領域の先頭に compact な `ProcessingIndicator` を置く。
-- 同じ処理の詳細表示は 1 つだけ。**動くスピナーは同じ処理に 1 つだけ**にし、起点のボタンが `loading` を出している場合、詳細表示は `activityIcon="none"` で静的なラベル・経過時間・slow hint だけにする。同じ timer を複数のパネルに重ねない。
+- 同じ処理の詳細表示は 1 つだけ。**動くスピナーは同じ処理に 1 つだけ**にし、起点のボタンが `loading` を出している場合、詳細表示は `activityIcon="none"` で静的なラベル・経過時間・slow hint だけにする。同じ timer を複数のパネルに重ねない。どちらに残すかは次で決める（#416）。
+  - **起点のボタンに残す**: ボタンの操作の結果を、その近くの領域が待つとき（直下のプレビュー、同じカードの一覧、`PageHeader` の「表示を更新」で読み直す各領域）。領域側（`ProcessingIndicator` / `TimedLoadingState` / Skeleton の読込表示）は `activityIcon="none"`。同じ読込を行ごと・パネルごとに出す場合も、どれも回さない。
+  - **`PageHeader` の操作が 2 つ以上ある画面の初回の読込は、領域に残す**: 狭い画面（lg 未満）では primary 以外が「その他の操作」に入り、「表示を更新」のスピナーが見えなくなる。初回の読込（内容が無く Skeleton を出す間）は領域の読込表示がスピナーを出し、「表示を更新」は `disabled` にする。内容を残した再読込だけ「表示を更新」を `loading` にし、領域の `ProcessingIndicator` は `activityIcon="none"`。操作が 1 つだけのヘッダーは狭い画面でも見えるので、上の「起点のボタンに残す」に従う。
+  - **中止の要求中は、中止のボタンに残す**: job の進行表示（`ProcessingIndicator placement="job"` / `WorkflowProgressStrip`）は、その間 `activityIcon="none"`。
+  - **進捗の表示に残す**: durable job（NL2SQL の SQL 生成・実行、オントロジーの構築など）。開始のボタンは送信の間だけ `loading` にし、job の間は `disabled` にする。スピナーは job の進行表示（NL2SQL の `WorkflowProgressStrip`）が帯全体で 1 つ出す（実行中の先頭の工程、無ければ見出しのアイコン）。job は画面の移動・再読み込みの後も続き、進行表示がその正本で、中止もそこに置くため（[buttons.md §3.1](./buttons.md)）。
+  - 1 つの状態を複数のボタンで共有しない（例: 取込と書き出しで同じ `busy` を使うと、両方が回る）。操作ごとに状態を分け、押した側だけを `loading` にし、他は `disabled` にする。
+  - lint では検出できないため、Playwright で処理中の画面の `svg.animate-spin:visible` を数える（NL2SQL は `tests/e2e/_helpers/single-spinner.ts` の `expectSingleSpinner`）。
 - 実行中は `経過時間 00:00`、durable job や結果カードの完了後は `処理時間 00:00`。1 時間未満は `mm:ss`、1 時間以上は `h:mm:ss`。数字は `tabular-nums` で幅を固定する。
 - 10 秒を超えたら控えめな slow hint を足す。取り消せる処理は同じ領域に取消の action を置く。ただし、その場で結果を待つ操作（検索・チャットの送信など）は起点のボタンが同じ位置で「停止」になるため、領域に別の停止を置かない（[buttons.md §3.1](./buttons.md)）。進捗が不明なら progress bar を出さず、総量が分かる場合だけ進捗率を並べる。
 - timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとに読み上げない。アニメーションは `prefers-reduced-motion` に従う（スピナーは回転を止め、アークの濃さだけを変える。デザインシステム README §4「Spinner」）。

@@ -68,6 +68,11 @@ export interface OntologyQueryPlaygroundProps {
   onRetryLoad?: () => void;
   onRefreshSchema?: () => void | Promise<void>;
   refreshingSchema?: boolean;
+  /**
+   * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得の
+   * 読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+   */
+  workspaceFetching?: boolean;
 }
 
 const STAGE_LABEL_KEYS = {
@@ -710,6 +715,7 @@ export function OntologyQueryPlayground({
   onRetryLoad,
   onRefreshSchema,
   refreshingSchema = false,
+  workspaceFetching = false,
 }: OntologyQueryPlaygroundProps) {
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<PlaygroundResult | null>(null);
@@ -908,6 +914,7 @@ export function OntologyQueryPlayground({
           ariaLabel={t("ontologyBuild.workspace.ontologyLoading")}
           variant="detail"
           testId="ontology-view-loading"
+          activityIcon={workspaceFetching ? "none" : "spinner"}
         />
       ) : loadState === "error" ? (
         <ErrorState

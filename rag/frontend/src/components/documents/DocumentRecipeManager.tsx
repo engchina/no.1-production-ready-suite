@@ -301,7 +301,8 @@ export function DocumentRecipeManager({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-semibold text-fg">{recipeName(selected)}</h3>
-              <RecipeStatusBadge recipe={selected} />
+              {/* 実行中の工程のスピナーは下の工程の丸が出す（同じ処理のスピナーは 1 つ。#416）。 */}
+              <RecipeStatusBadge recipe={selected} spin={false} />
               {selected.needs_reprocessing ? (
                 <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
                   {t("documents.recipes.reprocess")}
@@ -438,7 +439,8 @@ function RecipeCard({
         <span className="tnum text-xs font-medium text-fg-muted">{completed}/4</span>
       </div>
       <div className="mt-2 flex items-center gap-2">
-        <RecipeStatusBadge recipe={recipe} />
+        {/* 選んでいるレシピは、下の詳細の工程の丸がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。 */}
+        <RecipeStatusBadge recipe={recipe} spin={!selected} />
       </div>
       <div className="mt-3 grid grid-cols-4 gap-1" aria-label={`${completed}/4`}>
         {PHASES.map(({ phase }) => {
@@ -505,13 +507,14 @@ function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   return <Circle size={10} aria-hidden />;
 }
 
-function RecipeStatusBadge({ recipe }: { recipe: DocumentRecipeView }) {
+function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView; spin?: boolean }) {
   const status = recipeStatus(recipe);
-  const Icon = status.icon;
+  // 回さないときは、止まった円弧（進捗の円に見える）ではなく実行中を示す静止アイコンにする。
+  const Icon = status.spin && !spin ? Play : status.icon;
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
       {/* 回すアイコンは共有の Spinner（全周トラック・reduced-motion 対応。#395） */}
-      {status.spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
+      {status.spin && spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {t(status.label)}
     </span>
   );

@@ -10,6 +10,7 @@ import {
 } from "./_helpers/fixed-split-pane";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
+import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -3144,6 +3145,8 @@ test("スキーマ参照の読込状態は利用者向けの日本語ラベル�
   await expect(loading).toHaveAccessibleName("スキーマ情報を読み込んでいます");
   await expect(loading).toContainText("スキーマ情報を読み込んでいます");
   await expect(page.getByText("nl2sql.schema.loading", { exact: true })).toHaveCount(0);
+  // 初回の読込のスピナーはスキーマ参照の読込表示の 1 つだけ（ヘッダーの「表示を更新」は無効にするだけ。#416）。
+  await expectSingleSpinner(page, loading);
 
   schemaGate.release();
   await expect(loading).toBeHidden();
@@ -5386,6 +5389,9 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     await expect(progress.getByRole("timer")).toHaveAttribute("aria-live", "off");
     const runningIcon = generate.locator("svg.animate-spin");
     await expect(runningIcon).toBeVisible();
+    // job の間のスピナーは実行中の工程の 1 つだけ。「SQL を生成して実行」は無効にするだけで回さない（#416）。
+    await expectSingleSpinner(page, generate);
+    await expect(page.getByRole("button", { name: "SQL を生成して実行" })).not.toHaveAttribute("aria-busy", "true");
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
     await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
     expect(jobPayload).toMatchObject({
@@ -8577,6 +8583,8 @@ test("sql to question page shows a reserved loading state and retries reference-
   await page.goto("/sql-to-question");
   await expect(page.getByTestId("sql-to-question-schema-skeleton")).toBeVisible();
   await expect(page.getByRole("button", { name: "SQL 分析・質問生成" })).toBeDisabled();
+  // 参照データの読込のスピナーは「表示を更新」の 1 つだけ（スキーマの Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
   releaseFirstObjectRequest?.();
 
   const errorBanner = page.getByRole("alert");
@@ -10124,6 +10132,8 @@ test("learning candidates use the shared responsive list, filters, paging, and r
 
   const navigation = page.goto("/question-classifier-models?tab=candidates");
   await expect(page.getByTestId("qcm-candidates-list-skeleton")).toBeVisible();
+  // 初回の読込のスピナーは PageHeader の「表示を更新」の 1 つだけ（候補の Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
   holdInitialRequests = false;
   initialGate.release();
   await navigation;
@@ -10589,6 +10599,8 @@ test("data preparation read results use the shared detail skeleton without stale
   const dataSkeleton = page.getByTestId("data-preview-results-detail-skeleton");
   await expect(dataSkeleton).toBeVisible();
   await expect(showPreviewButton).toBeDisabled();
+  // プレビューのスピナーは押した「データを表示」の 1 つだけ（直下の Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, showPreviewButton);
   await expect(invoicesSelectButton).toBeEnabled();
   await expect(viewSelectButton).toBeEnabled();
   await expect(resultsActions.getByRole("button", { name: "XLSX ダウンロード" })).toBeDisabled();
@@ -16171,6 +16183,8 @@ for (const material of [
     try {
       await expect(file).toBeDisabled();
       await expect(download).toBeDisabled();
+      // 初回の読込のスピナーは「表示を更新」の 1 つだけ（一覧の Skeleton は経過時間だけ。#416）。
+      await expectSingleSpinner(page, refresh);
     } finally { readGate.release(); }
     await expect(file).toBeEnabled();
     const importGate = createRequestGate();
@@ -16190,6 +16204,9 @@ for (const material of [
       await expect(refresh).toBeDisabled();
       await expect(file).toBeDisabled();
       await expect(download).toBeDisabled();
+      // 取込のスピナーはファイル選択の 1 つだけ。出力のボタンは無効にするだけで回さない（#416）。
+      await expectSingleSpinner(page, page.getByTestId(material.fileId.replace(/-input$/u, "-dropzone")));
+      await expect(download).not.toHaveAttribute("aria-busy", "true");
     } finally { importGate.release(); }
     await expect(file).toBeEnabled();
     await expect(page.getByText("取込を再試行してください", { exact: true })).toBeVisible();

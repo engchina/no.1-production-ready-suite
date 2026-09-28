@@ -559,6 +559,9 @@ export function DocumentWorkspace({
     : "";
   const approveNeedsReingest =
     approveErrorText.includes("再取込") || approveErrorText.includes("再取り込み");
+  // 承認の失敗の案内に「再取込」が出ている間は、再取込のスピナーを案内のボタンの 1 つだけにする
+  // （下の操作行の同じ投入のボタンは回さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const bannerReingestShown = approveDocument.isError && approveNeedsReingest && Boolean(selectedRecipeId);
   const parsedExtraction = useMemo(
     () =>
       parseStructuredExtraction(
@@ -1451,6 +1454,9 @@ export function DocumentWorkspace({
                     // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
                     // 実際に取得している間（isLoading）だけ読込中にする（#281）。
                     loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isLoading)}
+                    // 分割のやり直し中は、スピナーを「分割をやり直す」ボタンの loading と経過時間を上の
+                    // ProcessingIndicator が出す。ここは同じ処理なので Skeleton だけにする（messaging §3.7、#416）。
+                    rerunPending={chunkPreview.isPending}
                     error={!chunkPreview.data && chunksQuery.isError}
                     selectedChunkId={selectedChunkId}
                     focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
@@ -1659,7 +1665,7 @@ export function DocumentWorkspace({
                       }
                     )
                   }
-                  loading={enqueueIngestion.isPending} icon={Send}>
+                  loading={enqueueIngestion.isPending && !bannerReingestShown} icon={Send}>
                   {doc.duplicate_of_document_id ? t("action.enqueueDuplicateIngestion") : t("action.enqueueIngestion")}
                 </Button>
               ) : null}
@@ -1668,7 +1674,8 @@ export function DocumentWorkspace({
                   onClick={() => void handlePhaseRestart(retryPhase, "retry")}
                   loading={
                     enqueueIngestion.isPending &&
-                    enqueueIngestion.variables?.phase === retryPhase
+                    enqueueIngestion.variables?.phase === retryPhase &&
+                    !bannerReingestShown
                   } icon={RotateCcw}>
                   {t(phaseRetryLabelKey(retryPhase))}
                 </Button>
@@ -1680,7 +1687,9 @@ export function DocumentWorkspace({
                   icon={RotateCcw}
                   onClick={() => void handlePhaseRestart(phase, "reprocess")}
                   loading={
-                    enqueueIngestion.isPending && enqueueIngestion.variables?.phase === phase
+                    enqueueIngestion.isPending &&
+                    enqueueIngestion.variables?.phase === phase &&
+                    !bannerReingestShown
                   }
                   disabled={
                     approveDocument.isPending ||
@@ -2654,6 +2663,7 @@ function PreviewStat({
 function DocumentChunksPanel({
   chunks,
   loading,
+  rerunPending = false,
   error,
   selectedChunkId,
   focusRequestKey,
@@ -2661,6 +2671,8 @@ function DocumentChunksPanel({
 }: {
   chunks: DocumentChunkView[];
   loading: boolean;
+  /** 分割のやり直し（ボタンの loading と ProcessingIndicator が状態を出す）による読込か。 */
+  rerunPending?: boolean;
   error: boolean;
   selectedChunkId: string | null;
   focusRequestKey?: string | null;
@@ -2684,6 +2696,17 @@ function DocumentChunksPanel({
     if (container) revealWithinScrollContainer(container, selectedChunkRef.current);
   }, [focusRequestKey, loading, selectedChunkId]);
 
+  if (loading && rerunPending) {
+    // 同じ処理のスピナーと経過時間は、ボタンと上の ProcessingIndicator の 1 つずつにする（messaging §3.7、#416）。
+    return (
+      <div aria-busy="true" data-testid="document-chunks-loading">
+        <ListSkeleton
+          rowClassName="h-[7rem]"
+          className={cn("overflow-hidden", INFORMATION_LIST_SCROLL_CLASS, "xl:max-h-none")}
+        />
+      </div>
+    );
+  }
   if (loading) {
     return (
       <TimedLoadingState

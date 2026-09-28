@@ -29,13 +29,17 @@ const GLOBAL_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const GLOBAL_PREVIEW_TEXT_CLASS =
   "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 
+type LegacyBusyAction = "import" | "export" | null;
+
 export function GlossaryRulesPage() {
   const [legacyMaterial, setLegacyMaterial] = useState<LegacyLearningMaterialData>({
     glossary: {},
     rules: [],
   });
   const [loading, setLoading] = useState(false);
-  const [legacyBusy, setLegacyBusy] = useState(false);
+  // 取込と書き出しで、スピナーを出すのは操作した側だけにする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const [legacyBusyAction, setLegacyBusyAction] = useState<LegacyBusyAction>(null);
+  const legacyBusy = legacyBusyAction !== null;
   // danger（原因+対処）のみ Banner で常設表示。成功の「瞬間」は toast で 1 回通知する（messaging-spec §9 P1）。
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState("");
@@ -113,7 +117,7 @@ export function GlossaryRulesPage() {
     loadSequence.current += 1;
     loadControllerRef.current?.abort();
     setLegacyTermsFilename(file.name);
-    setLegacyBusy(true);
+    setLegacyBusyAction("import");
     setErrorText(null);
     try {
       const data = await uploadLegacyLearningMaterialFile(file);
@@ -123,13 +127,13 @@ export function GlossaryRulesPage() {
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("glossary.error.importMaterial"));
     } finally {
-      setLegacyBusy(false);
+      setLegacyBusyAction(null);
     }
   };
 
   const exportLegacyTerms = async () => {
     if (loading || legacyBusy) return;
-    setLegacyBusy(true);
+    setLegacyBusyAction("export");
     setErrorText(null);
     try {
       const filename = "terms.xlsx";
@@ -142,7 +146,7 @@ export function GlossaryRulesPage() {
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("glossary.error.exportMaterial"));
     } finally {
-      setLegacyBusy(false);
+      setLegacyBusyAction(null);
     }
   };
 
@@ -193,7 +197,7 @@ export function GlossaryRulesPage() {
             importLabel={t("glossary.globalTerms.import")}
             exportLabel={t("glossary.globalTerms.export")}
             filename={legacyTermsFilename}
-            busy={legacyBusy}
+            busyAction={legacyBusyAction}
             disabled={loading || legacyBusy}
             loading={loading && !lastLoadedAt}
             rows={legacyTerms}
@@ -247,7 +251,7 @@ function GlobalMaterialPanel({
   importLabel,
   exportLabel,
   filename,
-  busy,
+  busyAction,
   disabled,
   loading,
   rows,
@@ -261,7 +265,7 @@ function GlobalMaterialPanel({
   importLabel: string;
   exportLabel: string;
   filename: string;
-  busy: boolean;
+  busyAction: LegacyBusyAction;
   disabled: boolean;
   loading: boolean;
   rows: Array<{ term: string; definition: string }>;
@@ -288,7 +292,7 @@ function GlobalMaterialPanel({
           icon="spreadsheet"
           required
           disabled={disabled}
-          loading={busy}
+          loading={busyAction === "import"}
           dataTestId={`${headingId}-file`}
           onFiles={([file]) => onImport(file)}
         />
@@ -297,7 +301,7 @@ function GlobalMaterialPanel({
           variant="secondary"
           size="sm"
           touchTarget className="md:self-end"
-          loading={busy}
+          loading={busyAction === "export"}
           disabled={disabled}
           onClick={onExport} icon={Download}>
           <span>{exportLabel}</span>
@@ -309,6 +313,9 @@ function GlobalMaterialPanel({
           ariaLabel={t("glossary.globalTerms.loading")}
           variant="list"
           rows={6}
+          // 初回の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+          // messaging §3.7、#416）。
+          activityIcon="none"
         />
       ) : (
         <GlobalPreviewTable rows={rows} />
