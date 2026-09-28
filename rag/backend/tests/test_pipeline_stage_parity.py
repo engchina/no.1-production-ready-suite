@@ -116,7 +116,6 @@ def test_graph_service_matches_local_core() -> None:
         build_relationships=local_resolved.build_relationships,
         build_claims=local_resolved.build_claims,
         build_community_summary=local_resolved.build_community_summary,
-        temporal=local_resolved.temporal,
     )
     assert remote == local
 

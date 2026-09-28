@@ -180,6 +180,8 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
                 "query": {
                     "generation_profile": "detailed_cited",
                     "vector_index_profile": "accurate",
+                    # 業務ビューは品質評価を上書きしない。送られても保存しない(#301)。
+                    "evaluation_suite": "strict_ci",
                 },
                 "system_prompt": "あなたは経理規程アシスタントです。",
                 "default_language": "日本語",
@@ -193,6 +195,7 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
     assert data["knowledge_base_count"] == 2
     assert data["config"]["query"]["generation_profile"] == "detailed_cited"
     assert "vector_index_profile" not in data["config"]["query"]
+    assert "evaluation_suite" not in data["config"]["query"]
     assert [ref["name"] for ref in data["knowledge_bases"]] == ["社内規程", "製品 FAQ"]
 
     get_resp = client.get(f"/api/business-views/{data['id']}")

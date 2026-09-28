@@ -35,7 +35,6 @@ const adapterConfig = {
     post_retrieval_pipeline: null,
     generation_profile: null,
     guardrail_policy: null,
-    evaluation_suite: null,
   },
 };
 

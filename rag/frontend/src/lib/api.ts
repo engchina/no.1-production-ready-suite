@@ -753,7 +753,6 @@ export interface KnowledgeBaseQueryConfig {
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
-  evaluation_suite: EvaluationSuiteName | null;
   /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
   answer_engine?: AnswerEngineName | null;
   /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
