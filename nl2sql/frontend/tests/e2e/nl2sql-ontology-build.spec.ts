@@ -22,6 +22,25 @@ function createRequestGate() {
   return { promise, release };
 }
 
+type ScrollSettleElement = HTMLElement & { scrollSettled?: Promise<void> };
+
+/**
+ * スクロール領域でキー（Home / End）を押し、そのキーのスクロールが終わる（scrollend）まで待つ。
+ * Chromium のキーボードのスクロールは滑らかなスクロール（アニメーション）で、scrollTop が端に届いても
+ * scrollend の前に次のキーを押すと、そのキーのスクロールが失われることがある（375px で約 1 割。#342 / #391）。
+ */
+async function pressScrollKey(region: Locator, key: "Home" | "End") {
+  await region.evaluate((element: ScrollSettleElement) => {
+    element.scrollSettled = new Promise<void>((resolve) => {
+      element.addEventListener("scrollend", () => resolve(), { once: true });
+      // すでに端にあって動かないときは scrollend が来ないため、上限で打ち切る（位置は呼び出し側の poll が判定する）。
+      setTimeout(resolve, 2_000);
+    });
+  });
+  await region.press(key);
+  await region.evaluate((element: ScrollSettleElement) => element.scrollSettled);
+}
+
 async function expectButtonLabelFits(button: Locator) {
   const spans = button.locator("span");
   const label = await spans.count() ? spans.last() : button;
@@ -3315,10 +3334,10 @@ for (const status of ["failed", "ready"] as const) {
         expect(metrics.scroll).toBeGreaterThan(metrics.client);
         await region.focus();
         await expect(region).toBeFocused();
-        await region.press("End");
+        await pressScrollKey(region, "End");
         await expect.poll(() => region.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
         await expect.poll(() => region.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
-        await region.press("Home");
+        await pressScrollKey(region, "Home");
         await expect.poll(() => region.evaluate(element => element.scrollTop)).toBe(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`diagnostics-${status}-${width}-${theme}.png`) });
