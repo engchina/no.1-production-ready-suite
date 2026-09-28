@@ -495,7 +495,9 @@ export function DbObjectSelectorFooter({
             variant="secondary"
             size="sm"
             className="w-full sm:w-auto"
-            loading={loadingNextPage}
+            // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+            loading={loadingNextPage && !(loadMoreError && onRetryLoadMore)}
+            disabled={loadingNextPage && Boolean(loadMoreError && onRetryLoadMore)}
             onClick={onLoadMore}
           >
             {loadMoreLabel}
@@ -980,6 +982,7 @@ export function DbObjectGrid({
   loadingNextPage = false,
   loadMoreError = "",
   error = "",
+  loadingActivityIcon,
   onSearchChange,
   onOwnerPrefixChange,
   onSortChange,
@@ -1004,6 +1007,11 @@ export function DbObjectGrid({
   loadingNextPage?: boolean;
   loadMoreError?: string;
   error?: string;
+  /**
+   * 読込中の表示のスピナー。起点のボタン（PageHeader の「表示を更新」など）が loading を出している間は
+   * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+   */
+  loadingActivityIcon?: ProcessingActivityIcon;
   onSearchChange: (value: string) => void;
   onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
@@ -1041,6 +1049,7 @@ export function DbObjectGrid({
           idPrefix={idPrefix}
           ariaLabel={labels.loading}
           variant="list"
+          activityIcon={loadingActivityIcon}
         />
       ) : error ? (
         <ErrorState message={error} onRetry={onRetry} />
@@ -1137,6 +1146,7 @@ export function DbObjectDetailPanel({
   countingRows = false,
   tab,
   labels,
+  loadingActivityIcon,
   onTabChange,
   onRetry,
   onRetryDdl,
@@ -1157,6 +1167,11 @@ export function DbObjectDetailPanel({
   countingRows?: boolean;
   tab: DbObjectDetailTab;
   labels: DbObjectDetailLabels;
+  /**
+   * 読込中の表示のスピナー。起点のボタン（PageHeader の「表示を更新」など）が loading を出している間は
+   * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+   */
+  loadingActivityIcon?: ProcessingActivityIcon;
   onTabChange: (tab: DbObjectDetailTab) => void;
   onRetry: () => void;
   onRetryDdl?: () => void;
@@ -1173,6 +1188,7 @@ export function DbObjectDetailPanel({
         variant="detail"
         operationKey={operationKey ?? idPrefix}
         onCancel={onCancel}
+        activityIcon={loadingActivityIcon}
       />
     );
   }

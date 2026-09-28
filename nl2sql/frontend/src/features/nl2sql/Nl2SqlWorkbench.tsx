@@ -322,6 +322,8 @@ function ExecutableNl2SqlWorkbench() {
     };
   }, [schemaDetails, schemaHeadQuery.data, schemaObjects]);
   const loadingCatalog = schemaObjectsQuery.isPending && !schemaObjectsQuery.data;
+  // SchemaReferencePanel が空のスキーマの「スキーマを更新」ボタンを出す条件（同じ条件で出す）。
+  const schemaPanelRefreshShown = !loadingCatalog && catalog.tables.length === 0 && canRefreshSchema;
   const schemaCatalogHasObjects =
     catalog.tables.length > 0 || (schemaHeadQuery.data?.object_count ?? 0) > 0;
   const currentScopedSchemaEmpty =
@@ -997,8 +999,9 @@ function ExecutableNl2SqlWorkbench() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             onClick: () => loadCatalog(false, true),
-            loading: loadingCatalog,
-            disabled: active,
+            // 参照スキーマの初回の読込は、スキーマ参照の読込表示がスピナーを出す（このボタンは狭い画面では
+            // 「その他の操作」の中で見えない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+            disabled: active || loadingCatalog,
           },
           ...(canRefreshSchema
             ? [
@@ -1008,7 +1011,8 @@ function ExecutableNl2SqlWorkbench() {
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
                   onClick: () => loadCatalog(true),
-                  loading: schemaRefresh.isRefreshing,
+                  // スキーマが空で、スキーマ参照に同じ操作のボタンが出ているときは、そちらだけを回す（#416）。
+                  loading: schemaRefresh.isRefreshing && !schemaPanelRefreshShown,
                   disabled: active || schemaRefresh.isRefreshing,
                 },
               ]
@@ -1124,8 +1128,9 @@ function ExecutableNl2SqlWorkbench() {
                         type="button"
                         variant="secondary"
                         size="sm"
-                        loading={profilesQuery.isFetchingNextPage}
-                        disabled={active}
+                        // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。#416）。
+                        loading={profilesQuery.isFetchingNextPage && !profileLoadMoreError}
+                        disabled={active || (profilesQuery.isFetchingNextPage && Boolean(profileLoadMoreError))}
                         onClick={() => void profilesQuery.fetchNextPage()}
                       >
                         {t("profiles.action.loadMore")}
@@ -1575,7 +1580,9 @@ function ExecutableNl2SqlWorkbench() {
                       type="button"
                       variant="primary"
                       size="lg"
-                      loading={jobActive}
+                      // 送信中だけ loading にする。job の間は disabled にし、スピナーは下の進行状況
+                      // （OperationStatusStrip）が 1 つ出す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+                      loading={submitting}
                       disabled={!question.trim() || active || !profileSelectionReady}
                       onClick={() => void submit()} icon={Play}>
                       <span>{t("nl2sql.action.run")}</span>

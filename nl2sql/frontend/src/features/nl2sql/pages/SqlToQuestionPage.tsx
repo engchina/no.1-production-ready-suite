@@ -601,6 +601,9 @@ function SchemaPreview({
         placement="panel"
         className="min-h-56 content-start"
         testId="sql-to-question-schema-skeleton"
+        // 参照データの読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+        // messaging §3.7、#416）。
+        activityIcon="none"
       >
         <Skeleton className="h-5 w-40" aria-hidden="true" />
         <Skeleton className="h-16 w-full" aria-hidden="true" />

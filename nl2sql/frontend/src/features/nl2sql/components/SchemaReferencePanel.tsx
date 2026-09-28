@@ -255,8 +255,9 @@ export function SchemaReferencePanel({
             type="button"
             variant="secondary"
             size="sm"
-            loading={loadingMore}
-            disabled={disabled}
+            // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+            loading={loadingMore && !(loadMoreError && onRetryLoadMore)}
+            disabled={disabled || (loadingMore && Boolean(loadMoreError && onRetryLoadMore))}
             onClick={onLoadMore}
           >
             {t("profiles.action.loadMore")}

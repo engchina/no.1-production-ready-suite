@@ -75,7 +75,11 @@ test("業務プロファイルの schema / DB Profile refresh ボタンは loadi
   assert.match(profileManagementPage, /loading: schemaRefreshing/u);
   assert.match(profileManagementPage, /disabled: schemaRefreshing/u);
   assert.match(profileManagementPage, /id: "db-profile-refresh"/u);
-  assert.match(profileManagementPage, /loading: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);
+  // 失敗の案内に同じ操作のボタンが出ている間は、そちらだけを回す（同じ処理のスピナーは 1 つ。#416）。
+  assert.match(
+    profileManagementPage,
+    /loading:\s*\(dbProfileRefreshing \|\| startDbProfileRefresh\.isPending\) && !dbProfileRefreshNoticeShown/u
+  );
   assert.match(profileManagementPage, /disabled: dbProfileRefreshing \|\| startDbProfileRefresh\.isPending/u);
 });
 

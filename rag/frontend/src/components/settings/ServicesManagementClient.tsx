@@ -139,6 +139,9 @@ export function ServicesManagementClient() {
   // クリックした行・操作だけにスピナーを出すための識別子(`${serviceId}:${action}`)。
   const [pending, setPending] = useState<string | null>(null);
   const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
+  // 「更新」を押した再取得の間だけボタンを回す。5 秒ごとの状態の polling では回さない（静かな polling は
+  // 処理中を出さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const logsQuery = useServiceLogs(logsServiceId);
 
   if (query.isPending) {
@@ -270,13 +273,12 @@ export function ServicesManagementClient() {
   const lastUpdatedText = lastUpdated
     ? new Date(lastUpdated).toLocaleTimeString("ja-JP")
     : null;
-  const statusFetching = statusQueries.some((statusQuery) => statusQuery.isFetching);
-
   function refreshServices() {
-    void query.refetch();
-    for (const statusQuery of statusQueries) {
-      void statusQuery.refetch();
-    }
+    setManualRefreshing(true);
+    void Promise.allSettled([
+      query.refetch(),
+      ...statusQueries.map((statusQuery) => statusQuery.refetch()),
+    ]).finally(() => setManualRefreshing(false));
   }
 
   function toggleLogs(service: DisplayServiceData) {
@@ -306,7 +308,7 @@ export function ServicesManagementClient() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                loading={query.isFetching || statusFetching}
+                loading={manualRefreshing}
                 onClick={refreshServices}
                 aria-label={t("settings.services.refresh")} icon={RefreshCw}>
                 {t("settings.services.refresh")}
@@ -735,7 +737,10 @@ function ServiceLogPanel({
             type="button"
             variant="secondary"
             size="sm"
-            loading={logsQuery.isFetching}
+            // 初回の取得は下の読込表示がスピナーを出す。ボタンは内容を残した再取得だけ回す
+            // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+            loading={logsQuery.isFetching && !logsQuery.isPending}
+            disabled={logsQuery.isPending}
             onClick={() => void logsQuery.refetch()}
             aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
             {t("settings.services.logs.refresh")}

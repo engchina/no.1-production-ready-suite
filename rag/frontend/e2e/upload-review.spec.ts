@@ -537,6 +537,9 @@ test("複数のファイルを送るときは、ファイルごとの送信済�
   await expect(items.nth(1)).toContainText("送信中 · 1 MB / 2 MB");
   await expect(items.nth(2)).toHaveAttribute("data-state", "waiting");
   await expect(items.nth(2)).toContainText("待機中 · 0 B / 4 MB");
+  // 回るスピナーは送信全体の表示の 1 つだけ。送信中のファイルは静止したアイコンと文言で示す（#416）。
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expect(page.getByTestId("upload-processing").locator("svg.animate-spin")).toHaveCount(1);
   await expectNoPageOverflow(page);
 
   releaseUpload();

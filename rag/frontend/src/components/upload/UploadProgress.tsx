@@ -1,5 +1,5 @@
-import { ProcessingIndicator, Spinner } from "@engchina/production-ready-ui";
-import { CheckCircle2, Clock3 } from "lucide-react";
+import { ProcessingIndicator } from "@engchina/production-ready-ui";
+import { ArrowUpCircle, CheckCircle2, Clock3 } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import {
@@ -130,7 +130,9 @@ function UploadFileProgressList({ items }: { items: UploadFileProgress[] }) {
 function FileSendStateIcon({ state }: { state: UploadFileSendState }) {
   switch (state) {
     case "sending":
-      return <Spinner size={16} className="text-accent-fg" />;
+      // 回るスピナーは上の送信全体の表示の 1 つだけにする。送信中のファイルは静止したアイコンと文言で示す
+      // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+      return <ArrowUpCircle size={16} className="text-accent-fg" aria-hidden />;
     case "sent":
       return <CheckCircle2 size={16} className="text-success-fg" aria-hidden />;
     default:

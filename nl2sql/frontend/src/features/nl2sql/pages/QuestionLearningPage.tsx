@@ -1382,6 +1382,9 @@ function TrainingCandidatesPanel({
           variant="list"
           rows={3}
           placement={loading === "candidates-load" ? "result" : "panel"}
+          // 読込は「絞り込みを適用」か PageHeader の「表示を更新」の loading がスピナーを出す（同じ処理のスピナーは
+          // 1 つ。messaging §3.7、#416）。
+          activityIcon="none"
         />
       ) : error ? (
         <ErrorState

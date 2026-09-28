@@ -32,7 +32,9 @@ const RULE_PREVIEW_TEXT_CLASS =
 export function GlobalRulesPage() {
   const [rules, setRules] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // 取込と書き出しで、スピナーを出すのは操作した側だけにする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const [busyAction, setBusyAction] = useState<"import" | "export" | null>(null);
+  const busy = busyAction !== null;
   // danger（原因+対処）のみ Banner で常設表示。成功の「瞬間」は toast で 1 回通知する（messaging-spec §9 P1）。
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState("");
@@ -101,7 +103,7 @@ export function GlobalRulesPage() {
     loadSequence.current += 1;
     loadControllerRef.current?.abort();
     setFilename(file.name);
-    setBusy(true);
+    setBusyAction("import");
     setErrorText(null);
     try {
       const data = await uploadRulesFile(file);
@@ -111,13 +113,13 @@ export function GlobalRulesPage() {
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.import"));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const exportRules = async () => {
     if (loading || busy) return;
-    setBusy(true);
+    setBusyAction("export");
     setErrorText(null);
     try {
       const response = await apiFetch("/api/nl2sql/legacy-learning-material/rules/export.xlsx", {
@@ -129,7 +131,7 @@ export function GlobalRulesPage() {
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.export"));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -197,7 +199,7 @@ export function GlobalRulesPage() {
                 icon="spreadsheet"
                 required
                 disabled={busy || loading}
-                loading={busy}
+                loading={busyAction === "import"}
                 dataTestId="global-rules-file"
                 onFiles={([file]) => void importRules(file)}
               />
@@ -206,8 +208,8 @@ export function GlobalRulesPage() {
                 variant="secondary"
                 size="sm"
                 touchTarget className="md:self-end"
-                loading={busy}
-                disabled={loading}
+                loading={busyAction === "export"}
+                disabled={loading || busyAction === "import"}
                 onClick={() => void exportRules()} icon={Download}>
                 <span>{t("globalRules.export")}</span>
               </Button>
@@ -218,6 +220,9 @@ export function GlobalRulesPage() {
                 ariaLabel={t("globalRules.loading")}
                 variant="list"
                 rows={6}
+                // 初回の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+                // messaging §3.7、#416）。
+                activityIcon="none"
               />
             ) : (
               <RulesPreviewTable rules={rules} />

@@ -482,7 +482,11 @@ function RecentIngestionJobsPanel() {
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <IngestionJobBadge job={job} />
+                  {/* 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。 */}
+                  <IngestionJobBadge
+                    job={job}
+                    spin={!(cancel.isPending && cancel.variables?.id === job.id)}
+                  />
                   {job.status === "QUEUED" || job.status === "RUNNING" ? (
                     // 処理中のジョブを止める操作。データを消す確定ではないため赤塗り（danger）にせず、
                     // secondary + tone="danger" で控えめに示す（buttons.md §3、README §4 カード内の操作行）。
@@ -540,7 +544,7 @@ function UploadJobsSkeleton() {
   );
 }
 
-function IngestionJobBadge({ job }: { job: IngestionJob }) {
+function IngestionJobBadge({ job, spin = true }: { job: IngestionJob; spin?: boolean }) {
   const status = job.status;
   return (
     <span
@@ -549,17 +553,18 @@ function IngestionJobBadge({ job }: { job: IngestionJob }) {
         jobBadgeClass(status)
       )}
     >
-      <JobStatusIcon status={status} />
+      <JobStatusIcon status={status} spin={spin} />
       {t(jobStatusKey(status))}
     </span>
   );
 }
 
 /** ジョブ状態のアイコン（実行中だけ回す）。アイコンの選択を render 中のコンポーネント生成にしない。 */
-function JobStatusIcon({ status }: { status: IngestionJob["status"] }) {
+function JobStatusIcon({ status, spin }: { status: IngestionJob["status"]; spin: boolean }) {
   switch (status) {
     case "RUNNING":
-      return <Spinner size={14} />;
+      // 回さないときは、止まった円弧（進捗の円に見える）ではなく実行中を示す静止アイコンにする。
+      return spin ? <Spinner size={14} /> : <PlayCircle size={14} aria-hidden />;
     case "SUCCEEDED":
       return <CheckCircle2 size={14} aria-hidden className="" />;
     case "FAILED":

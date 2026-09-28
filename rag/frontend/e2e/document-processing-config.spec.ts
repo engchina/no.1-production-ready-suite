@@ -557,6 +557,51 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
+  test(`分割プレビューの実行中はスピナーをボタンの 1 つだけにする (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapseSidebar) {
+      await page.addInitScript(() => {
+        window.localStorage.setItem(
+          "production-ready-rag.ui",
+          JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
+        );
+      });
+    }
+    await mockWorkspace(page, { documentStatus: "REVIEW" });
+    let releasePreview = () => {};
+    const previewGate = new Promise<void>((resolve) => {
+      releasePreview = resolve;
+    });
+    await page.route("**/api/documents/doc-1/recipes/recipe-1/chunk-preview", async (route) => {
+      await previewGate;
+      await route.fallback();
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab", { name: "Chunk" }).click();
+
+    const preview = page.getByRole("region", { name: "分割プレビュー" });
+    const run = preview.getByRole("button", { name: "プレビュー実行" });
+    await run.click();
+    const processing = page.getByTestId("chunk-preview-processing");
+    const chunksLoading = page.getByTestId("document-chunks-loading");
+    try {
+      await expect(run).toHaveAttribute("aria-busy", "true");
+      await expect(processing.getByRole("timer")).toBeVisible();
+      await expect(chunksLoading).toBeVisible();
+      // 同じ処理のスピナーと経過時間は 1 つずつ（messaging §3.7、#416）。chunk 一覧は Skeleton だけ。
+      await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+      await expect(run.locator("svg.animate-spin")).toHaveCount(1);
+      await expect(page.getByRole("timer")).toHaveCount(1);
+      await expectNoPageOverflow(page);
+    } finally {
+      releasePreview();
+    }
+    await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
+  });
+
   test(`分割プレビューの意味境界方式は推奨値を適用する (${viewport.name})`, async ({
     page,
   }) => {

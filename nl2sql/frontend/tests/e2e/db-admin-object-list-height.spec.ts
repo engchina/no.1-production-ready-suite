@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
@@ -960,6 +961,9 @@ test("コメント付きテーブル一覧でも読込・取得エラー・再�
   });
   await page.goto("/table-management");
   await expect(page.getByTestId("table-management-list-skeleton")).toBeVisible();
+  // 初回の読込のスピナーは一覧の読込表示の 1 つだけ（詳細の Skeleton は経過時間だけ、ヘッダーの
+  // 「表示を更新」は狭い画面では「その他の操作」の中なので回さない。#416）。
+  await expectSingleSpinner(page, page.getByTestId("table-management-list-skeleton"));
   gate.release();
   await expect(page.getByText("一覧の取得に失敗しました。", { exact: true })).toBeVisible();
   fail = false;

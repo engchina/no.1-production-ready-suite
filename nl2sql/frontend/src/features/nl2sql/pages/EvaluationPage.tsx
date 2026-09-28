@@ -1066,6 +1066,8 @@ function JobProgress({
         showSlowMessage={active}
         placement="job"
         testId="quality-evaluation-timing"
+        // 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。
+        activityIcon={cancelling ? "none" : "spinner"}
       />
       <div
         className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted"

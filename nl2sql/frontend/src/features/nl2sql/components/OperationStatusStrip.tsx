@@ -114,6 +114,8 @@ export function OperationStatusStrip({
       stepsAriaLabel={t("nl2sql.progress.stepsLabel")}
       testId="nl2sql-job-progress"
       dataJobStatus={job.status}
+      // 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。
+      activityIcon={cancelRequesting ? "none" : "spinner"}
       role={active ? "status" : undefined}
       meta={
         <span className="font-mono">

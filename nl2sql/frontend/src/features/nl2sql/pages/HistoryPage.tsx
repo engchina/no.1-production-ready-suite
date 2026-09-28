@@ -142,6 +142,9 @@ function HistoryListSkeleton() {
       className="content-start"
       testId="history-list-loading"
       framed={false}
+      // 初回の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+      // messaging §3.7、#416）。
+      activityIcon="none"
     >
       <h2 id="history-grid-heading" className="sr-only">{t("history.list.title")}</h2>
       <HistorySkeletonBlock className="h-14" />
@@ -164,6 +167,7 @@ function HistoryDetailSkeleton() {
       className="content-start"
       testId="history-detail-skeleton"
       framed={false}
+      activityIcon="none"
     >
       <HistorySkeletonBlock className="h-20" />
       <HistorySkeletonBlock className="h-11" />

@@ -375,9 +375,9 @@ export function SampleDataPage() {
   const actionDescription = isDeleteAction
     ? t("dataTools.sample.deleteHint", { name: datasetLabel })
     : t("dataTools.sample.importHint", { name: datasetLabel });
-  const pageNoticeActionLoading = schemaRefreshNeedsFull
-    ? schemaRefreshing
-    : loading === "load";
+  // 読込（load）のスピナーは PageHeader の「表示を更新」（すぐ上にあり、狭い画面でも見える）の 1 つだけにする。
+  // 案内の「再読み込み」は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  const pageNoticeActionLoading = schemaRefreshNeedsFull ? schemaRefreshing : false;
   const pageNoticeActionDisabled = schemaRefreshNeedsFull
     ? schemaRefreshing
     : loading === "load" || schemaRefreshing;
