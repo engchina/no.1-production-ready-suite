@@ -132,6 +132,9 @@ def test_read_workbook_sheet_loads_only_requested_openxml_rows(
         ("IMPORT.CSV", b"ID,NAME\n1,Aoyama\n", ""),
         ("IMPORT.XLSX", _xlsx_fixture(), "ImportData"),
     ],
+    # 生成した xlsx の bytes は作成時刻を含む。xdist の worker ごとにテスト ID が
+    # 変わらないよう ID を固定する（#344）。
+    ids=["IMPORT.CSV", "IMPORT.XLSX"],
 )
 def test_core_csv_and_xlsx_formats_are_case_insensitive(
     filename: str, content: bytes, sheet_name: str
@@ -224,6 +227,9 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
         ("missing-sheet.xlsx", _xlsx_fixture()),
         ("missing-sheet.xls", _xls_fixture()),
     ],
+    # 生成した xlsx の bytes は作成時刻を含む。xdist の worker ごとにテスト ID が
+    # 変わらないよう ID を固定する（#344）。
+    ids=["missing-sheet.xlsx", "missing-sheet.xls"],
 )
 def test_db_admin_tabular_import_requires_existing_workbook_sheet(
     filename: str, content: bytes

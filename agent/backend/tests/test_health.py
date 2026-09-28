@@ -5031,11 +5031,14 @@ def test_release_bundle_rejects_runner_readiness_not_ready(tmp_path: Path) -> No
     assert "runner_readiness.has_violations" in data["violations"]
 
 
-def test_validation_preflight_reports_missing_and_configured_env() -> None:
+def test_validation_preflight_reports_missing_and_configured_env(tmp_path: Path) -> None:
     script = (
         Path(__file__).resolve().parents[1] / "scripts" / "agent_runtime_validation_preflight.py"
     )
-    summary_path = Path(__file__).resolve().parents[1] / "validation-preflight.pytest.md"
+    # backend 直下の validation-preflight.pytest.md は
+    # test_validation_wrapper_live_stops_after_failed_runner_readiness も使うため、
+    # xdist で同時に動いても互いに消さないよう tmp_path に書く（#344）。
+    summary_path = tmp_path / "validation-preflight.pytest.md"
     required_env = [
         "AGENT_RUNTIME_ORACLE_DSN",
         "AGENT_RUNTIME_ORACLE_USER",
@@ -5132,7 +5135,6 @@ def test_validation_preflight_reports_missing_and_configured_env() -> None:
     assert "validation-review.ci.json" in summary
     assert '"secret"' not in configured.stdout
     assert "password" not in summary
-    summary_path.unlink(missing_ok=True)
 
 
 def test_runner_readiness_reports_release_runner_requirements(tmp_path: Path) -> None:
