@@ -3,7 +3,7 @@ name = "production-ready-backend-core"
 version = "0.1.0"
 description = "Shared FastAPI infrastructure (app factory, settings base, JSON logging, health/ready, metrics, request-context, error envelope, pagination, CORS) for the No.1 Production Ready product family (RAG / NL2SQL / Agent)."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }
 dependencies = [
   "fastapi>=0.121,<1.0",

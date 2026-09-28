@@ -2,7 +2,7 @@
 name = "production-ready-agent-backend"
 version = "0.1.0"
 description = "FastAPI backend service built on production-ready-backend-core."
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.121,<1.0",
   "starlette>=1.0.1,<2.0",

@@ -2,7 +2,7 @@
 name = "preprocess-pii-redact-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: PII マスク(Presidio + 日本語 NER、外部 SaaS 非使用)"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
     "presidio-analyzer>=2.2,<3.0",
