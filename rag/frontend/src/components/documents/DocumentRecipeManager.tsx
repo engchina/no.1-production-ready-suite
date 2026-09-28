@@ -209,6 +209,8 @@ export function DocumentRecipeManager({
 
   const processPending = enqueue.isPending || approve.isPending;
   const processError = enqueue.error ?? approve.error;
+  // 削除の失敗（処理中・最少 1 件など）も操作の近くに出す。以前は確認ダイアログを閉じた後に何も出なかった（#281）。
+  const deleteError = deleteRecipe.error;
   // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、
   // 削除は danger として「その他の操作」に入れ、確認ダイアログ（handleDelete）を通す。
   const recipeActions: EntityAction[] = [
@@ -323,6 +325,16 @@ export function DocumentRecipeManager({
           <FormStatus
             tone="danger"
             message={processError instanceof ApiError ? processError.message : t("flow.ingestFailed")}
+          />
+        ) : null}
+        {deleteError ? (
+          <FormStatus
+            tone="danger"
+            message={
+              deleteError instanceof ApiError
+                ? deleteError.message
+                : t("documents.recipes.deleteFailed")
+            }
           />
         ) : null}
 

@@ -128,6 +128,15 @@ export function unsupportedReasonLabel(reason: string | null | undefined): strin
   return key ? t(key) : reason;
 }
 
+/** 取込 job の skip_reason（重複・未対応形式など）を利用者向けの文に直す。 */
+export function ingestionSkipReasonLabel(reason: string | null | undefined): string {
+  if (reason === "duplicate_content") return t("sourceProfile.warning.duplicate");
+  return (
+    unsupportedReasonLabel(reason) ||
+    t("flow.phase.skipped", { phase: t("flow.jobs.phase.preprocess") })
+  );
+}
+
 export function qualityCodeLabel(value: string): string {
   const warningKey = EVALUATION_WARNING_KEYS[value] ?? SOURCE_WARNING_KEYS[value];
   if (warningKey) return t(warningKey);

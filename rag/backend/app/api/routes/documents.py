@@ -142,6 +142,16 @@ MAX_UPLOAD_FILE_NAME_BYTES = 512
 _MAX_PRESERVED_SUFFIX_CHARS = 16
 CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
+# ブラウザが開くとスクリプトを実行しうる形式。原本配信では CSP sandbox を付ける。
+SCRIPTABLE_CONTENT_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/xml",
+        "application/xml",
+    }
+)
 DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
     {FileStatus.UPLOADED, FileStatus.INDEXED, FileStatus.ERROR}
 )
@@ -3676,6 +3686,10 @@ async def _enqueue_ingestion_job_for_document(
         FileStatus.INDEXING,
     ):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
+    # 投入直後の job は worker が拾うまで QUEUED のまま文書は UPLOADED 等に見えるため、
+    # 状態だけでは二重投入を止められない。出力の初期化より前に、同じ(既定)レシピの
+    # 待機中・実行中 job を確かめる(#281)。
+    await _raise_if_default_recipe_job_active(oracle, document_id)
 
     source_profile = _source_profile_for_detail(detail)
     # 重複スキップは初回取込(PREPROCESS)の入口だけに適用する。PREPROCESSED 以降の段階進行
@@ -3744,6 +3758,29 @@ async def _enqueue_ingestion_job_for_document(
     )
     _dispatch_ingestion_job(job.id, force=force)
     return job
+
+
+async def _raise_if_default_recipe_job_active(oracle: OracleClient, document_id: str) -> None:
+    """文書単位の投入先(既定レシピ)に待機中・実行中の job があれば 409 にする。
+
+    Oracle の job 作成も同じレシピの QUEUED / RUNNING を拒否するが、それより前に行う出力の初期化
+    (`_reset_document_outputs_for_extract`)で待機中 job の前提を壊さないよう、ここで先に止める。
+    """
+    default_recipe_id: str | None = None
+    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+    if callable(ensure_recipe):
+        recipe = await ensure_recipe(document_id)
+        default_recipe_id = str(recipe["recipe_id"])
+    jobs = await oracle.list_document_ingestion_jobs(document_id)
+    if any(
+        job.status in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}
+        and job.recipe_id in {None, default_recipe_id}
+        for job in jobs
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="このドキュメントは取込待ちまたは取込中です。完了してから再実行してください。",
+        )
 
 
 async def _enqueue_index_phase_job_for_document(
@@ -3940,7 +3977,12 @@ async def _create_ingestion_job_record(
         queued_at=queued_at,
         finished_at=queued_at if status == IngestionJobStatus.SKIPPED else None,
     )
-    return await oracle.create_ingestion_job(job)
+    try:
+        return await oracle.create_ingestion_job(job)
+    except ValueError as exc:
+        # 同じレシピの待機中・実行中 job がある / レシピ設定が更新された、は競合(409)として返す。
+        # 以前は文書単位の投入経路で 500 になっていた(#281)。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 async def _reset_document_outputs_for_extract(
@@ -4966,17 +5008,19 @@ async def _document_content_response(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bad_path_message) from exc
 
-    return Response(
-        content=data,
-        media_type=_content_type_header(content_type, data),
-        headers={
-            # 非 ASCII ファイル名は RFC 5987 でエンコードする
-            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
-            # MIME sniffing による取り違えを防ぐ
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=60",
-        },
-    )
+    media_type = _content_type_header(content_type, data)
+    headers = {
+        # 非 ASCII ファイル名は RFC 5987 でエンコードする
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
+        # MIME sniffing による取り違えを防ぐ
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=60",
+    }
+    if media_type.split(";", 1)[0].strip().lower() in SCRIPTABLE_CONTENT_TYPES:
+        # 利用者がアップロードした HTML / SVG を同じ origin で開いてもスクリプトを動かさない(#281)。
+        # 画面のプレビューは本文をテキストとして取得するので、表示には影響しない。
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:

@@ -7111,7 +7111,7 @@ class OracleClient:
                 indexed_at
             FROM rag_documents
             WHERE {where_sql}
-            ORDER BY uploaded_at DESC
+            ORDER BY uploaded_at DESC, document_id DESC
             {limit_clause}
             """,
                 where_sql=where_sql,

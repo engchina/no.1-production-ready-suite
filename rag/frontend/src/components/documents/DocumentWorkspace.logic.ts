@@ -406,16 +406,54 @@ function segmentSpan(
 /**
  * 「このドキュメントは現在取込中です。」(409 競合)は取込が進行中の間だけ意味を持つ。
  * 取込完了後も react-query の mutation エラーが残り banner が消えないため、
- * 進行中ジョブが無くなったら stale とみなして消す。
+ * 409 の後に進行中ジョブを一度観測し、それが無くなったら stale とみなして消す。
+ *
+ * 進行中ジョブをまだ観測していない 409（別タブで投入した job がまだ一覧に無い、
+ * 「レシピ設定が更新されました」など）は、表示した瞬間に消さない（#281）。
  */
 export function ingestConflictBannerIsStale({
   errorStatus,
   hasActiveJob,
+  observedActiveJob,
 }: {
   errorStatus: number | null | undefined;
   hasActiveJob: boolean;
+  observedActiveJob: boolean;
 }): boolean {
-  return errorStatus === 409 && !hasActiveJob;
+  return errorStatus === 409 && observedActiveJob && !hasActiveJob;
+}
+
+/**
+ * 投入直後の監視（localWatchProcessing）をやめるか。
+ *
+ * 状態が確認待ち・完了・失敗になったときに加え、投入した job がキャンセル・スキップで終わり
+ * 文書が UPLOADED のまま残ったときもやめる。以前はこの場合に監視が残り、
+ * 画面を開いている間ずっとポーリングが続いた（#281）。
+ */
+export function shouldStopLocalProcessingWatch({
+  activeSubmittedJob,
+  documentStatus,
+  submittedJobStatus,
+}: {
+  activeSubmittedJob: boolean;
+  documentStatus: FileStatus;
+  submittedJobStatus: IngestionJobStatus | null | undefined;
+}): boolean {
+  if (activeSubmittedJob) return false;
+  if (
+    documentStatus === "INDEXED" ||
+    documentStatus === "ERROR" ||
+    documentStatus === "PREPROCESSED" ||
+    documentStatus === "REVIEW"
+  ) {
+    return true;
+  }
+  // SUCCEEDED / FAILED のときは文書の状態が次の取得で進む（REVIEW・ERROR など）ので、ここでは
+  // やめない（やめると失敗の表示を取り逃す）。状態が UPLOADED のまま残るのはキャンセル・スキップだけ。
+  return (
+    documentStatus === "UPLOADED" &&
+    (submittedJobStatus === "CANCELLED" || submittedJobStatus === "SKIPPED")
+  );
 }
 
 /** 状態メッセージ単一スロット(messaging-spec §9)の表示内容。優先順: 失敗原因 > 実行中 > 承認待ちゲート案内。 */

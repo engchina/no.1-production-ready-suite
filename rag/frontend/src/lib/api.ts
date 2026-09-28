@@ -2578,10 +2578,12 @@ export const api = {
     request<IngestionSegment[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-segments`,
     ),
+  // 削除は成功しても原本・artifact の後始末の失敗を warning_messages で返すため、併せて返す（#281）。
   deleteDocument: (id: string) =>
-    request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    }),
+    requestDegradable<DocumentDeleteResult>(
+      `/api/documents/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
   getDocumentStats: () =>
     requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>

@@ -2917,3 +2917,106 @@ def test_fields_edit_endpoint_is_not_available() -> None:
     )
 
     assert resp.status_code == 404
+
+
+def test_document_ingestion_job_endpoint_rejects_second_enqueue_while_queued(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#281: 待機中の job がある文書へ再投入しても、出力を初期化せず 409 を返す。
+
+    投入直後は worker が拾うまで文書は UPLOADED のままなので、一覧の「ファイル準備を実行」や
+    一括投入から二重に押せる。以前は Oracle のレシピ単位の拒否(ValueError)が 500 になり、
+    しかもその前に出力の初期化が走っていた。
+    """
+    document_id = _upload("queued-twice.txt", b"queued twice", "text/plain")
+    first = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+    assert first.status_code == 200
+    assert first.json()["data"]["status"] == "QUEUED"
+    reset_calls: list[str] = []
+    original_reset = fake_document_dependencies.reset_document_ingestion_outputs
+
+    async def tracking_reset(document_id: str, **kwargs: object) -> DocumentDetail:
+        reset_calls.append(document_id)
+        return await original_reset(document_id, **kwargs)  # type: ignore[arg-type]
+
+    fake_document_dependencies.reset_document_ingestion_outputs = tracking_reset  # type: ignore[method-assign]
+
+    second = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert second.status_code == 409
+    assert second.json()["error_messages"] == [
+        "このドキュメントは取込待ちまたは取込中です。完了してから再実行してください。"
+    ]
+    assert reset_calls == []
+    jobs = [
+        job
+        for job in fake_document_dependencies.ingestion_jobs.values()
+        if job.document_id == document_id
+    ]
+    assert len(jobs) == 1
+
+
+def test_document_ingestion_job_endpoint_allows_enqueue_while_other_recipe_job_queued(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """別レシピ(2・3 件目)の待機中 job は、文書単位(既定レシピ)の投入を妨げない。"""
+    document_id = _upload("other-recipe.txt", b"other recipe", "text/plain")
+    fake_document_dependencies.ingestion_jobs["job-other-recipe"] = IngestionJob(
+        id="job-other-recipe",
+        document_id=document_id,
+        recipe_id="recipe-2",
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "QUEUED"
+
+
+def test_document_ingestion_job_endpoint_maps_recipe_conflict_to_409(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """Oracle の job 作成が同じレシピの競合(ValueError)を返したら 500 ではなく 409 にする。"""
+    document_id = _upload("race.txt", b"race", "text/plain")
+
+    async def conflicting_create(job: IngestionJob) -> IngestionJob:
+        raise ValueError("このレシピは処理中または待機中です。")
+
+    fake_document_dependencies.create_ingestion_job = conflicting_create  # type: ignore[method-assign]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == ["このレシピは処理中または待機中です。"]
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("page.html", "text/html"),
+        ("page.htm", "text/html"),
+    ],
+)
+def test_document_content_sandboxes_scriptable_types(file_name: str, content_type: str) -> None:
+    """#281: アップロードした HTML を原本配信で開いてもスクリプトを動かさない。"""
+    body = b"<html><body><script>alert(1)</script></body></html>"
+    document_id = _upload(file_name, body, content_type)
+
+    resp = client.get(f"/api/documents/{document_id}/content")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-security-policy"] == "sandbox"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+def test_document_content_does_not_sandbox_plain_text() -> None:
+    """テキスト・PDF などは従来どおり(CSP sandbox は PDF viewer を妨げるため付けない)。"""
+    document_id = _upload("plain.txt", b"plain", "text/plain")
+
+    resp = client.get(f"/api/documents/{document_id}/content")
+
+    assert resp.status_code == 200
+    assert "content-security-policy" not in resp.headers

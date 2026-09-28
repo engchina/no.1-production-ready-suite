@@ -395,6 +395,12 @@ export function useDocuments(
   });
 }
 
+/** 404 以外の失敗だけを最大 3 回まで再試行する(TanStack Query の既定の回数に合わせる)。 */
+export function retryUnlessNotFound(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status === 404) return false;
+  return failureCount < 3;
+}
+
 /** ドキュメント詳細。 */
 export function useDocument(
   id: string | null,
@@ -404,6 +410,9 @@ export function useDocument(
     queryKey: queryKeys.document(id ?? ""),
     queryFn: () => api.getDocument(id as string),
     enabled: id != null,
+    // 削除済み・存在しない文書(404)は再試行しても変わらない。既定の 3 回の再試行で
+    // 数秒 Skeleton のままにせず、すぐに見つからない旨を出す(#281)。
+    retry: retryUnlessNotFound,
     refetchInterval: options.refetchInterval,
   });
 }
