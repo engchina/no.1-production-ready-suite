@@ -26,6 +26,8 @@ export type FloatingMenuAlign = "start" | "end" | "stretch";
 export type FloatingMenuBoundary = "scroll-ancestor" | "viewport";
 
 type FloatingMenuPosition = {
+  /** 実際にそろえた端（start / end は画面に入らなければ反対側へ反転する）。 */
+  align: FloatingMenuAlign;
   constrained: boolean;
   placement: FloatingMenuPlacement;
   style: CSSProperties;
@@ -66,6 +68,8 @@ function getScrollableAncestor(element: HTMLElement) {
 
 /**
  * 下に収まらず上のほうが広ければ上に反転し、どちらにも収まらなければ広い側で内部スクロールにする。
+ * 左右は指定の端（start = 左端、end = 右端）にそろえ、画面に入らず反対の端なら入るときは反対の端にそろえる。
+ * どちらの端でも入らなければ、画面の内側（左右 8px）にずらす。
  * DOM を読まない純粋関数（テストで反転の境界を確かめる）。
  */
 export function computeFloatingMenuLayout({
@@ -109,15 +113,23 @@ export function computeFloatingMenuLayout({
     Math.max(MENU_VIEWPORT_PADDING, unclampedTop),
     Math.max(MENU_VIEWPORT_PADDING, viewportHeight - MENU_VIEWPORT_PADDING - renderedHeight)
   );
-  const unclampedLeft =
-    align === "end" ? triggerRect.right - menuWidth : triggerRect.left;
-  const left = Math.min(
-    Math.max(MENU_VIEWPORT_PADDING, unclampedLeft),
-    Math.max(MENU_VIEWPORT_PADDING, viewportWidth - MENU_VIEWPORT_PADDING - menuWidth)
-  );
-  const horizontalOrigin = align === "end" ? "right" : "left";
+  const minLeft = MENU_VIEWPORT_PADDING;
+  const maxLeft = Math.max(MENU_VIEWPORT_PADDING, viewportWidth - MENU_VIEWPORT_PADDING - menuWidth);
+  const leftFor = (edge: FloatingMenuAlign) =>
+    edge === "end" ? triggerRect.right - menuWidth : triggerRect.left;
+  const fitsHorizontally = (value: number) => value >= minLeft && value <= maxLeft;
+  const opposite: FloatingMenuAlign | null =
+    align === "end" ? "start" : align === "start" ? "end" : null;
+  // 例: 375px で操作が折り返し、左端に来たトリガーの end 揃えは左外に切れる → start 揃えにする（#363）。
+  const resolvedAlign =
+    opposite && !fitsHorizontally(leftFor(align)) && fitsHorizontally(leftFor(opposite))
+      ? opposite
+      : align;
+  const left = Math.min(Math.max(minLeft, leftFor(resolvedAlign)), maxLeft);
+  const horizontalOrigin = resolvedAlign === "end" ? "right" : "left";
 
   return {
+    align: resolvedAlign,
     constrained,
     placement,
     style: {
@@ -161,7 +173,7 @@ function resolveFloatingLayerZIndex(trigger: HTMLElement) {
 
 /**
  * トリガーの位置に合わせて fixed のメニューを置く。開いている間はスクロール（祖先のどれでも）とリサイズに追従する。
- * FloatingActionMenu と SelectField が共有する。
+ * FloatingActionMenu（PageHeader・ObjectActionBar・RowActionMenu・FormActionBar の操作メニュー）と SelectField が共有する。
  */
 export function useFloatingMenuPosition({
   align = "end",
@@ -236,6 +248,7 @@ export function useFloatingMenuPosition({
 
 export function FloatingActionMenu({
   align,
+  ariaLabel,
   children,
   className,
   id,
@@ -245,6 +258,8 @@ export function FloatingActionMenu({
   triggerRef,
 }: {
   align?: "start" | "end";
+  /** メニューの読み上げ名（翻訳済み）。 */
+  ariaLabel?: string;
   children: ReactNode;
   className?: string;
   id: string;
@@ -262,6 +277,8 @@ export function FloatingActionMenu({
       ref={menuRef}
       id={id}
       role="menu"
+      aria-label={ariaLabel}
+      data-floating-menu-align={position?.align}
       data-floating-menu-constrained={position?.constrained ? "true" : undefined}
       data-floating-menu-placement={position?.placement}
       className={cn(
