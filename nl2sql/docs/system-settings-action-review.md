@@ -78,6 +78,8 @@
 |すべて再作成|一致する確認語を必須とし、開始・再取得・失敗で確認を解除する。backend の確認語・lease/lock・version 管理も回帰確認。|
 |通知を閉じる|操作結果通知の閉じるボタン、折返し、キーボード・focus 表示。|
 
+画面（`SystemTablesCard`）と backend の schema manager の骨格（lease・台帳・状態の分類・確認語の検証）は 3 製品共通になった（#325。画面は `@engchina/production-ready-system-settings`、backend は `pr_system_settings.system_schema`）。NL2SQL が持つのは migration ファイル・manifest・外部キーの検証・実行中の job の確認と、確認語 `RECREATE_NL2SQL_SYSTEM_TABLES`・製品固有の文言・所有者付きの object 名の表示だけ。
+
 ## 外観
 
 |操作|確認した挙動|

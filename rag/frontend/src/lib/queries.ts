@@ -2,7 +2,10 @@
  * TanStack Query フック。query key を一元管理する。
  */
 
-import { DATABASE_STATUS_QUERY_KEY } from "@engchina/production-ready-system-settings";
+import {
+  DATABASE_STATUS_QUERY_KEY,
+  SYSTEM_TABLES_QUERY_KEY,
+} from "@engchina/production-ready-system-settings";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -65,7 +68,6 @@ import {
   type ServiceListData,
   type ServiceLogsData,
   type ServiceStatusData,
-  type SystemTablesInitializeRequest,
   type RetrievalSettingsData,
   type RetrievalSettingsUpdate,
   type GroundingSettingsData,
@@ -180,7 +182,7 @@ export const queryKeys = {
   compareModels: ["chat", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
-  systemTables: ["settings", "database", "system-tables"] as const,
+  systemTables: SYSTEM_TABLES_QUERY_KEY,
   adbInfo: ["settings", "database", "adb"] as const,
   huggingfaceSettings: ["settings", "huggingface"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
@@ -1724,28 +1726,6 @@ export function useModelSettings() {
   return useQuery({
     queryKey: queryKeys.modelSettings,
     queryFn: api.getModelSettings,
-  });
-}
-
-/** RAG system table の read-only status。 */
-export function useSystemTablesStatus() {
-  return useQuery({
-    queryKey: queryKeys.systemTables,
-    queryFn: api.getSystemTablesStatus,
-    retry: false,
-  });
-}
-
-/** RAG system table の明示的な作成・更新 / 全再作成。 */
-export function useInitializeSystemTables() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: SystemTablesInitializeRequest) =>
-      api.initializeSystemTables(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.systemTables, data);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-    },
   });
 }
 
