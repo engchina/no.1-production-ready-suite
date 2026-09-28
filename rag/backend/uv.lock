@@ -870,6 +870,9 @@ requires-dist = [
 ]
 provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
 
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
 [[package]]
 name = "emoji"
 version = "2.15.0"

@@ -16,6 +16,10 @@ japanese = ["PyStemmer==3.1.0", "sudachidict_full==20260723", "sudachipy==0.6.11
 oracle = ["oci>=2.185.0", "oracledb>=2.5.0"]
 excel = ["openpyxl>=3.1", "xlrd>=2.0", "pandas>=2.0"]
 
+[dependency-groups]
+# CI（`RAG / DocRAG core`）は `uv sync --locked` で入れる。lock から取るので PyPI の索引に頼らない（#387）。
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
