@@ -4,7 +4,8 @@
 - 権限の既定拒否（manifest 未登録・権限なし 403）と manifest の完全性
 - production で Cookie がないリクエスト（AGENT_RBAC_ENABLED の有無、`POST /mcp/{binding_id}`）
 - `/security/*`（権限カタログ・対象の一覧・ロールの権限と対象範囲の保存と昇格防止）
-- `agent_security_migrate` の DDL（fake connection）
+- `agent_security_migrate` の DDL と廃止した権限コードの削除（fake connection）
+- 廃止した権限コード（`menu.dashboard`。#262）が DB に残っていても壊れないこと
 """
 
 from __future__ import annotations
@@ -39,8 +40,10 @@ from app.security.permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
     CAPABILITY_ROLES,
+    EXTERNAL_ROLE_READ_MENUS,
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
+    RETIRED_PERMISSION_CODES,
     ROUTE_PERMISSIONS,
     UNCLASSIFIED_PERMISSION,
     WEBSOCKET_PERMISSIONS,
@@ -154,7 +157,10 @@ def test_manifest_key_assignments() -> None:
         "agent.approvals.decide",
         "agent.admin",
     }
-    assert _perm("GET", "/runs") == {"menu.dashboard", "menu.runs", "menu.approvals"}
+    assert _perm("GET", "/runs") == {"menu.runs", "menu.approvals"}
+    assert _perm("GET", "/tools") == {"menu.audit", "agent.admin"}
+    assert _perm("GET", "/observability/status") == {"menu.audit"}
+    assert _perm("GET", "/settings/external-rag") == {"menu.settings_external_rag"}
     assert _perm("GET", "/audit/tool-calls") == {"menu.audit"}
     assert _perm("GET", "/settings/oci") == {"menu.settings_oci"}
     assert _perm("GET", "/security/roles/{role_id}") == {
@@ -168,6 +174,20 @@ def test_manifest_key_assignments() -> None:
     assert permission_for_route("POST", "/mcp/{binding_id}") is None
 
 
+def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
+    """廃止した `menu.dashboard`（#262）はカタログ・implies・manifest・外部ロールに現れない。"""
+    assert RETIRED_PERMISSION_CODES == ("menu.dashboard",)
+    retired = set(RETIRED_PERMISSION_CODES)
+    assert not retired & ALL_PERMISSION_CODES
+    assert all(not retired & set(item.implies) for item in PERMISSION_CATALOG)
+    for permissions in [*ROUTE_PERMISSIONS.values(), *WEBSOCKET_PERMISSIONS.values()]:
+        assert not retired & permissions
+    assert not retired & EXTERNAL_ROLE_READ_MENUS
+    # 外部連携のロールも廃止コードを受け取らない。
+    assert not retired & permissions_for_roles({"admin", "viewer"})
+    assert expand_permissions({"menu.dashboard"}) == set()
+
+
 def test_capabilities_map_to_legacy_roles_and_imply_menus() -> None:
     assert CAPABILITY_ROLES == {
         "agent.runs.view": "viewer",
@@ -176,7 +196,7 @@ def test_capabilities_map_to_legacy_roles_and_imply_menus() -> None:
         "agent.audit.view": "auditor",
         "agent.admin": "admin",
     }
-    assert {"menu.runs", "menu.dashboard"} <= expand_permissions({"agent.runs.view"})
+    assert expand_permissions({"agent.runs.view"}) == {"agent.runs.view", "menu.runs"}
     assert "menu.approvals" in expand_permissions({"agent.approvals.decide"})
     assert "menu.audit" in expand_permissions({"agent.audit.view"})
     admin = expand_permissions({"agent.admin"})
@@ -257,7 +277,6 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
         "agent.runs.operate",
         "menu.agents",
         "menu.runs",
-        "menu.dashboard",
     }
     assert data["allowed_agent_ids"] == ["default"]
     assert data["allowed_business_view_ids"] == ["bv-1"]
@@ -687,6 +706,58 @@ def test_update_role_access_prevents_privilege_escalation(auth: ProductionAuth) 
         assert allowed.status_code == 200, allowed.text
 
 
+def test_retired_permission_code_left_in_db_is_ignored(auth: ProductionAuth) -> None:
+    """migration 前の DB に `menu.dashboard`（#262）が残っていても、ログイン・権限管理の表示と保存・
+    ロールの割り当てが壊れない（未知のコードは実効権限・表示から除き、保存で消える）。"""
+    with _agent("agent-retired-a"):
+        stale = auth.create_role(
+            ["menu.dashboard", "agent.runs.view"], agent_ids=["agent-retired-a"]
+        )
+        auth.create_user("stale-user", [stale])
+        stale_headers = login("stale-user")
+        me = client.get("/api/auth/me", headers=stale_headers)
+        assert me.status_code == 200
+        assert set(me.json()["data"]["permissions"]) == {"agent.runs.view", "menu.runs"}
+        assert client.get("/api/runs", headers=stale_headers).status_code == 200
+
+        # 権限管理の画面は廃止コードを表示せず、表示どおりに保存すれば DB からも消える。
+        headers = login_configured_admin()
+        listed = client.get("/api/security/roles", headers=headers).json()["data"]
+        shown = next(item for item in listed if item["role_id"] == stale.role_id)
+        assert shown["permissions"] == ["agent.runs.view"]
+        saved = _put_access(
+            headers,
+            stale.role_id,
+            version=shown["version"],
+            permissions=shown["permissions"],
+            agent_ids=shown["agent_ids"],
+            business_view_ids=shown["business_view_ids"],
+        )
+        assert saved.status_code == 200, saved.text
+        stored = auth.store.get_role(stale.role_id)
+        assert stored is not None
+        assert stored.permissions == {"agent.runs.view"}
+
+        # 廃止コードが残るロールも、同じ権限・範囲の操作者なら割り当てられる。
+        leftover = auth.create_role(
+            ["menu.dashboard", "agent.runs.view"], agent_ids=["agent-retired-a"]
+        )
+        manager = auth.create_role(
+            ["menu.security_users", "agent.runs.view"], agent_ids=["agent-retired-a"]
+        )
+        auth.create_user("retired-manager", [manager])
+        created = client.post(
+            "/api/security/users",
+            json={
+                "login_user_id": "retired-member",
+                "display_name": "メンバー",
+                "role_ids": [leftover.role_id],
+            },
+            headers=login("retired-manager"),
+        )
+        assert created.status_code == 200, created.text
+
+
 def test_role_assignment_respects_agent_scope(auth: ProductionAuth) -> None:
     """ユーザーへのロール割り当ても、操作者の権限・範囲に収まるロールだけ（共通の昇格防止）。"""
     with _agent("agent-assign-a"), _agent("agent-assign-b"):
@@ -723,9 +794,17 @@ class _FakeCursor:
     def __exit__(self, *args: object) -> None:
         return None
 
+    rowcount = 0
+
     def execute(self, statement: str, params: dict[str, Any] | None = None) -> None:
         normalized = " ".join(statement.split())
         self._connection.statements.append(normalized)
+        if normalized.startswith("DELETE FROM AGENT_ROLE_PERMISSIONS WHERE PERMISSION_CODE"):
+            code = (params or {})["code"]
+            matched = {row for row in self._connection.role_permissions if row[1] == code}
+            self._connection.role_permissions -= matched
+            self.rowcount = len(matched)
+            return
         if normalized.startswith("CREATE"):
             name = normalized.split()[2] if normalized.split()[1] == "TABLE" else normalized
             if name in self._connection.objects:
@@ -738,6 +817,8 @@ class _FakeConnection:
         self.statements: list[str] = []
         self.objects: set[str] = set()
         self.commits = 0
+        # AGENT_ROLE_PERMISSIONS の行（ROLE_ID, PERMISSION_CODE）。
+        self.role_permissions: set[tuple[str, str]] = set()
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
@@ -781,11 +862,47 @@ def test_agent_security_migrate_creates_tables_idempotently() -> None:
     assert "agent(applied=0 skipped=3)" in second
 
 
+def test_agent_security_migrate_removes_retired_permission_codes_idempotently() -> None:
+    """既存ロールに残る `menu.dashboard`（#262）を削除し、他のコードは残す（冪等）。"""
+    connection = _FakeConnection()
+    connection.role_permissions = {
+        ("role-a", "menu.dashboard"),
+        ("role-a", "menu.runs"),
+        ("role-b", "menu.dashboard"),
+        ("role-b", "agent.runs.view"),
+    }
+
+    @contextmanager
+    def factory() -> Iterator[_FakeConnection]:
+        yield connection
+
+    first = agent_security_migrate.run(factory)
+    assert "retired_permission_rows=2" in first
+    assert connection.role_permissions == {("role-a", "menu.runs"), ("role-b", "agent.runs.view")}
+    deletes = [item for item in connection.statements if item.startswith("DELETE")]
+    assert deletes == [
+        "DELETE FROM AGENT_ROLE_PERMISSIONS WHERE PERMISSION_CODE = :code",
+    ]
+    # SYSTEM_ADMIN ロールの確認は削除の後。
+    merge_index = next(
+        index
+        for index, item in enumerate(connection.statements)
+        if item.startswith("MERGE INTO PLATFORM_ROLES")
+    )
+    assert connection.statements.index(deletes[0]) < merge_index
+
+    second = agent_security_migrate.run(factory)
+    assert "retired_permission_rows=0" in second
+    assert connection.role_permissions == {("role-a", "menu.runs"), ("role-b", "agent.runs.view")}
+
+
 def test_agent_security_migrate_dry_run_and_failure(
     monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert agent_security_migrate.main(["--dry-run"]) == 0
-    assert "mode=preview" in capsys.readouterr().out
+    preview = capsys.readouterr().out
+    assert "mode=preview" in preview
+    assert "retired_permission_codes=1" in preview
 
     @contextmanager
     def broken() -> Iterator[Any]:

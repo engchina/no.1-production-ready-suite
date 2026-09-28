@@ -10,7 +10,6 @@
 type Json = Record<string, unknown>;
 
 export const MENU_PERMISSION_CODES = [
-  "menu.dashboard",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -44,7 +43,6 @@ export const CAPABILITY_PERMISSION_CODES = [
 export const ALL_PERMISSION_CODES: string[] = [...MENU_PERMISSION_CODES, ...CAPABILITY_PERMISSION_CODES];
 
 const ADMIN_MENUS = [
-  "menu.dashboard",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -65,7 +63,6 @@ const ADMIN_MENUS = [
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
-  "menu.dashboard": ["概要", "ダッシュボード"],
   "menu.agents": ["Control Plane", "業務 Agent"],
   "menu.skills": ["Control Plane", "スキル"],
   "menu.runtimes": ["Control Plane", "Runtime"],
@@ -101,28 +98,28 @@ export const PERMISSION_CATALOG: Json[] = [
     group: CAPABILITY_GROUP,
     label: "Run の閲覧（viewer）",
     description: "利用できるエージェント・業務ビューの Run・イベント・成果物を表示できます。",
-    implies: ["menu.dashboard", "menu.runs"],
+    implies: ["menu.runs"],
   },
   {
     code: "agent.runs.operate",
     group: CAPABILITY_GROUP,
     label: "Run の実行・操作（operator）",
     description: "利用できるエージェント・業務ビューで Run の作成・取消・再開・再実行ができます。",
-    implies: ["menu.dashboard", "menu.runs"],
+    implies: ["menu.runs"],
   },
   {
     code: "agent.approvals.decide",
     group: CAPABILITY_GROUP,
     label: "承認の判断（approver）",
     description: "利用できるエージェント・業務ビューの Run の承認・却下ができます。",
-    implies: ["menu.dashboard", "menu.approvals"],
+    implies: ["menu.approvals"],
   },
   {
     code: "agent.audit.view",
     group: CAPABILITY_GROUP,
     label: "監査の閲覧（auditor）",
     description: "利用できるエージェント・業務ビューの Run の監査記録を表示できます。",
-    implies: ["menu.dashboard", "menu.audit"],
+    implies: ["menu.audit"],
   },
   {
     code: "agent.admin",

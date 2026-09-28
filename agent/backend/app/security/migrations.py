@@ -4,7 +4,8 @@
 
 1. 3 製品共通の `PLATFORM_*`（platform の `apply_platform_auth_schema`）
 2. Agent のロールのデータ（`AGENT_ROLE_*`。このモジュール）
-3. 組み込み SYSTEM_ADMIN ロールの確認（ユーザーは作らない。最初は構成管理者 `system_admin`）
+3. 廃止した権限コードの削除（`AGENT_ROLE_PERMISSIONS` から `RETIRED_PERMISSION_CODES` の行を消す）
+4. 組み込み SYSTEM_ADMIN ロールの確認（ユーザーは作らない。最初は構成管理者 `system_admin`）
 
 エージェントと業務ビューは Oracle のテーブルを持たない（エージェントは Runtime repository の状態、
 業務ビューは Run の metadata の文字列）ため、`AGENT_ROLE_AGENTS` / `AGENT_ROLE_BUSINESS_VIEWS` は
@@ -21,6 +22,8 @@ from pr_system_settings.auth.migrations import (
     oracle_error_code,
 )
 from pr_system_settings.auth.store import OracleAuthStore
+
+from .permissions import RETIRED_PERMISSION_CODES
 
 AGENT_SECURITY_DDL: tuple[str, ...] = (
     """
@@ -71,6 +74,25 @@ def apply_agent_security_schema(connection: Any) -> list[dict[str, str]]:
     return results
 
 
+def remove_retired_permission_codes(connection: Any) -> list[dict[str, str]]:
+    """既存ロールに残る廃止済みの権限コード（例: `menu.dashboard`。#262）を削除する。
+
+    何度実行してもよい（残っていなければ 0 行の DELETE）。コードごとに削除した行数を返す。
+    ロールの version は変えない（権限管理の画面は廃止済みのコードを表示・保存しないため）。
+    """
+    results: list[dict[str, str]] = []
+    with connection.cursor() as cursor:
+        for code in RETIRED_PERMISSION_CODES:
+            cursor.execute(
+                "DELETE FROM AGENT_ROLE_PERMISSIONS WHERE PERMISSION_CODE = :code",
+                {"code": code},
+            )
+            deleted = getattr(cursor, "rowcount", 0) or 0
+            results.append({"code": code, "deleted": str(max(int(deleted), 0))})
+    connection.commit()
+    return results
+
+
 def ensure_system_admin_role(connection: Any) -> None:
     """組み込み SYSTEM_ADMIN ロールを冪等に用意する（ユーザーは作らない）。"""
     with connection.cursor() as cursor:
@@ -79,8 +101,12 @@ def ensure_system_admin_role(connection: Any) -> None:
 
 
 def apply_security_schema(connection: Any) -> dict[str, list[dict[str, str]]]:
-    """PLATFORM_* → AGENT_ROLE_* → SYSTEM_ADMIN ロールの順に適用する。"""
+    """PLATFORM_* → AGENT_ROLE_* → 廃止済みの権限コードの削除 → SYSTEM_ADMIN ロールの順に適用する。
+
+    戻り値は `platform` / `agent`（DDL の結果）と `retired`（コードごとの削除行数）。
+    """
     platform_results = apply_platform_auth_schema(connection)
     agent_results = apply_agent_security_schema(connection)
+    retired_results = remove_retired_permission_codes(connection)
     ensure_system_admin_role(connection)
-    return {"platform": platform_results, "agent": agent_results}
+    return {"platform": platform_results, "agent": agent_results, "retired": retired_results}
