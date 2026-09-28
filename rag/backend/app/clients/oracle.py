@@ -12,7 +12,7 @@ import logging
 import math
 import re
 from array import array
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
@@ -3534,6 +3534,29 @@ class OracleClient:
             attempt_count=attempt_count,
             max_attempts=max_attempts,
             started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    async def transition_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        from_statuses: Collection[IngestionJobStatus],
+        to_status: IngestionJobStatus,
+        error_message: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> IngestionJob | None:
+        """job が ``from_statuses`` のときだけ ``to_status`` へ遷移する(compare-and-set)。
+
+        状態の確認と書き込みを 1 回の条件付き UPDATE で行い、cancel と完了・失敗の
+        書き込みが互いの最終状態を上書きしないようにする(#305)。遷移元の状態でなければ
+        0 行更新になり ``None`` を返す。``error_message`` / ``finished_at`` は None でも書く。
+        """
+        return await self._transition_ingestion_job_with_oracle(
+            job_id,
+            from_statuses=from_statuses,
+            to_status=to_status,
+            error_message=error_message,
             finished_at=finished_at,
         )
 
@@ -7158,6 +7181,92 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _transition_ingestion_job_with_oracle(
+        self,
+        job_id: str,
+        *,
+        from_statuses: Collection[IngestionJobStatus],
+        to_status: IngestionJobStatus,
+        error_message: str | None,
+        finished_at: datetime | None,
+    ) -> IngestionJob | None:
+        """遷移元の status を WHERE に入れた UPDATE で job の状態を遷移する。"""
+        statuses = list(dict.fromkeys(from_statuses))
+        if not statuses:
+            raise ValueError("遷移元の status を 1 つ以上指定してください。")
+        status_binds = {
+            f"from_status_{index}": status.value for index, status in enumerate(statuses)
+        }
+        status_placeholders = ", ".join(f":{name}" for name in status_binds)
+        binds: dict[str, object] = {
+            "job_id": job_id,
+            "to_status": to_status.value,
+            "error_message": error_message,
+            "finished_at": finished_at,
+            **status_binds,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
+            updated_count = _execute_count(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_ingestion_jobs
+                SET status = :to_status,
+                    error_message = :error_message,
+                    finished_at = :finished_at
+                WHERE job_id = :job_id
+                  AND status IN ({status_placeholders})
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_jobs.document_id
+                        AND {document_access_sql}
+                  )
+                """,
+                    status_placeholders=status_placeholders,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind(binds),
+            )
+            if updated_count == 0:
+                return None
+            rows = _fetch_ingestion_job_rows(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    j.job_id,
+                    j.document_id,
+                    j.recipe_id,
+                    j.recipe_revision,
+                    j.status,
+                    j.phase,
+                    j.parser_profile,
+                    j.quality_warnings,
+                    j.settings_overrides,
+                    j.skip_reason,
+                    j.error_message,
+                    j.attempt_count,
+                    j.max_attempts,
+                    j.queued_at,
+                    j.started_at,
+                    j.finished_at
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.job_id = :job_id
+                  AND {document_access_sql}
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"job_id": job_id}),
+                default_max_attempts=self._settings.ingestion_job_max_attempts,
+            )
+            return None if not rows else _ingestion_job_from_row(rows[0])
+
+        return await self._run_transaction(operation)
+
     async def _find_document_by_content_hash_with_oracle(
         self, content_sha256: str
     ) -> DocumentSummary | None:
@@ -8776,7 +8885,9 @@ def _execute_count(
     """DML を実行して影響行数を返す。"""
     cursor = connection.cursor()
     try:
-        cursor.execute(_normalize_sql(statement), binds)
+        normalized = _normalize_sql(statement)
+        # `_with_tenant_bind` の予防的な bind を含めて渡せるよう、SQL に現れる名前へ絞る。
+        cursor.execute(normalized, _binds_for_sql(normalized, binds))
         return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
         cursor.close()

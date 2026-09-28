@@ -2,7 +2,7 @@
 
 import asyncio
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from datetime import UTC, datetime
 
 import pytest
@@ -10,7 +10,12 @@ import pytest
 from app.config import get_settings
 from app.rag import ingestion_worker
 from app.rag.ingestion_worker import IngestionJobSubprocessError, IngestionQueueWorker
-from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
+from app.schemas.document import (
+    FileStatus,
+    IngestionJob,
+    IngestionJobPhase,
+    IngestionJobStatus,
+)
 
 
 def _job(job_id: str) -> IngestionJob:
@@ -354,11 +359,14 @@ async def test_worker_marks_running_job_failed_when_runner_crashes(
             assert job_id == "crash"
             return running
 
-        async def update_ingestion_job(self, job_id: str, **kwargs: object) -> IngestionJob:
+        async def transition_ingestion_job(self, job_id: str, **kwargs: object) -> IngestionJob:
             assert job_id == "crash"
+            # 完了・失敗の書き込みは RUNNING のときだけに限る(#305)。
+            assert kwargs.pop("from_statuses") == (IngestionJobStatus.RUNNING,)
+            updates["status"] = kwargs.pop("to_status")
             updates.update(kwargs)
             stop.set()
-            return running.model_copy(update=kwargs)
+            return running.model_copy(update={"status": updates["status"], **kwargs})
 
         async def update_document_status(
             self,
@@ -398,6 +406,112 @@ async def test_worker_marks_running_job_failed_when_runner_crashes(
     assert updates["status"] is IngestionJobStatus.FAILED
     assert updates["error_message"] == "child died"
     assert updates["document_status"] is FileStatus.ERROR
+
+
+class _CrashedJobOracle:
+    """子プロセスの異常終了後の後始末(_mark_running_job_failed)用の fake。"""
+
+    def __init__(self, job: IngestionJob) -> None:
+        self.job = job
+        self.document_updates: list[tuple[str, FileStatus]] = []
+        self.recipe_updates: list[dict[str, object]] = []
+        self.recipe_status = FileStatus.INGESTING
+
+    async def get_ingestion_job(self, job_id: str) -> IngestionJob | None:
+        return self.job if job_id == self.job.id else None
+
+    async def transition_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        from_statuses: Collection[IngestionJobStatus],
+        to_status: IngestionJobStatus,
+        error_message: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> IngestionJob | None:
+        if job_id != self.job.id or self.job.status not in from_statuses:
+            return None
+        self.job = self.job.model_copy(
+            update={
+                "status": to_status,
+                "error_message": error_message,
+                "finished_at": finished_at,
+            }
+        )
+        return self.job
+
+    async def list_document_ingestion_jobs(
+        self, document_id: str, *, status: IngestionJobStatus | None = None
+    ) -> list[IngestionJob]:
+        jobs = [self.job] if self.job.document_id == document_id else []
+        return [job for job in jobs if status is None or job.status == status]
+
+    async def update_document_status(
+        self, document_id: str, status: FileStatus, error_message: str | None = None
+    ) -> None:
+        _ = error_message
+        self.document_updates.append((document_id, status))
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+        return {
+            "document_id": document_id,
+            "recipe_id": recipe_id,
+            "status": self.recipe_status.value,
+        }
+
+    async def update_document_recipe_status(self, **kwargs: object) -> None:
+        self.recipe_updates.append(kwargs)
+        status = kwargs["status"]
+        assert isinstance(status, FileStatus)
+        self.recipe_status = status
+
+
+def _recipe_job(status: IngestionJobStatus) -> IngestionJob:
+    return IngestionJob(
+        id="job-recipe",
+        document_id="doc-recipe",
+        recipe_id="recipe-2",
+        recipe_revision=1,
+        status=status,
+        phase=IngestionJobPhase.PREPROCESS,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+    )
+
+
+async def test_mark_running_recipe_job_failed_changes_only_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レシピの job が異常終了したら、レシピ行だけ ERROR にし文書の status は変えない(#305)。"""
+    fake = _CrashedJobOracle(_recipe_job(IngestionJobStatus.RUNNING))
+    monkeypatch.setattr(ingestion_worker, "OracleClient", lambda: fake)
+
+    await ingestion_worker._mark_running_job_failed(
+        "job-recipe", error=IngestionJobSubprocessError("child died")
+    )
+
+    assert fake.job.status == IngestionJobStatus.FAILED
+    assert fake.document_updates == []
+    assert fake.recipe_updates[-1]["recipe_id"] == "recipe-2"
+    assert fake.recipe_updates[-1]["status"] == FileStatus.ERROR
+    # 失敗した工程はレシピ行の現在 status(INGESTING = 解析)から決める。
+    assert fake.recipe_updates[-1]["failed_phase"] == IngestionJobPhase.EXTRACT
+
+
+async def test_mark_running_job_failed_restores_cancelled_recipe_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取り消し済みの job の子が異常終了したら、FAILED にせず取り消し後の状態へ戻す(#305)。"""
+    fake = _CrashedJobOracle(_recipe_job(IngestionJobStatus.CANCELLED))
+    monkeypatch.setattr(ingestion_worker, "OracleClient", lambda: fake)
+
+    await ingestion_worker._mark_running_job_failed(
+        "job-recipe", error=IngestionJobSubprocessError("child died")
+    )
+
+    assert fake.job.status == IngestionJobStatus.CANCELLED
+    assert fake.document_updates == []
+    assert fake.recipe_status == FileStatus.UPLOADED
 
 
 async def test_default_fetch_uses_fifo_order(monkeypatch: pytest.MonkeyPatch) -> None:
