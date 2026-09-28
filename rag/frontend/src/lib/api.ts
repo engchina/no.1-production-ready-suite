@@ -101,7 +101,7 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
  * 保存済みの回答の評価（標準回答による評価）の timeout（#304）。評価は LLM を複数回呼ぶため、
  * 通常の API の 30 秒では足りない。backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で
  * 打ち切って 504 と理由を返すので、画面はそれより 30 秒長く待ち、backend の理由を表示する。
- * nginx（`nginx.conf.template`・`init_script.sh`）はさらに長い 660 秒にしている。
+ * Nginx（`init_script.sh` が生成する設定）はさらに長い 660 秒にしている。
  */
 export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
 
