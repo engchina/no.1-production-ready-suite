@@ -55,6 +55,7 @@ export function BusinessViewPickerGrid({
         selectedCount: (count) => t("businessViewPicker.selectedCount", { count }),
         selectAllVisible: t("businessViewPicker.selectAllVisible"),
         clear: t("businessViewPicker.clear"),
+        done: t("businessViewPicker.done"),
         hideEmpty: t("businessViewPicker.hideEmpty"),
         hiddenEmptyCount: (count) => t("businessViewPicker.hiddenEmptyCount", { count }),
       }}
