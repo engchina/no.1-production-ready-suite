@@ -4,6 +4,7 @@
  */
 export const MODEL_MESSAGES = {
   "common.delete": "削除",
+  "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",
   "settings.model.enterprise.apiKeyHelp":

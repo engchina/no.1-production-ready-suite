@@ -24,6 +24,7 @@ export const UPLOAD_STORAGE_MESSAGES = {
   regionPlaceholder: "選択してください",
   required: "必須",
   save: "保存",
+  actionsLabel: "アップロード保存先の操作",
   saved: "保存しました",
   openOciSettings: "OCI 認証設定を開く",
   ociSettingsIncomplete: "OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。",

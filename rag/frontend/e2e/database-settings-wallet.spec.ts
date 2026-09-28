@@ -88,7 +88,9 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(page.getByLabel("データベースパスワード")).toBeVisible();
   // 共有画面（NL2SQL と同じ。#108）は右側の構成状態・.env プレビュー・運用メモを持たない。
   await expect(main.getByText("Wallet状態:")).toBeVisible();
-  await expect(main.getByText("未設定", { exact: true })).toBeVisible();
+  // 「未設定」は secret の入力欄のバッジ（SecretField。#296）にも出るので、Wallet 状態の行に絞る。
+  const walletStatus = main.locator("p").filter({ hasText: "Wallet状態:" });
+  await expect(walletStatus).toContainText("未設定");
   await expect(main.getByText("/u01/aipoc/instantclient_23_26/network/admin")).toBeVisible();
   await expect(page.getByRole("heading", { name: ".env プレビュー" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
