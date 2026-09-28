@@ -188,61 +188,6 @@ describe("api.request envelope", () => {
     expect(page.warning_messages).toEqual([]);
   });
 
-  it.each([
-    ["uploadDocument", () => api.uploadDocument(new File(["test"], "policy.txt"))],
-    ["batchUploadDocuments", () => api.batchUploadDocuments([new File(["test"], "policy.txt")])],
-  ])("%s は既定の API タイムアウトで送信を打ち切らない", async (_name, send) => {
-    vi.useFakeTimers();
-    let aborted = false;
-    let resolveFetch: (response: Response) => void = () => undefined;
-    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
-      const signal = init?.signal as AbortSignal | undefined;
-      signal?.addEventListener("abort", () => {
-        aborted = true;
-      });
-      return new Promise<Response>((resolve) => {
-        resolveFetch = resolve;
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const pending = send();
-    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS * 4);
-    expect(aborted).toBe(false);
-
-    resolveFetch(jsonResponse({ data: { items: [] }, error_messages: [], warning_messages: [] }));
-    await expect(pending).resolves.toBeTruthy();
-  });
-
-  it("uploadDocument は knowledge_base_ids と ingestion_mode を multipart に含める", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: {
-          id: "doc-1",
-          file_name: "policy.txt",
-          status: "UPLOADED",
-          file_size_bytes: 4,
-          content_sha256: "a".repeat(64),
-          duplicate_of_document_id: null,
-          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
-        },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await api.uploadDocument(new File(["test"], "policy.txt"), ["kb-1", "kb-2"], "manual");
-
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/upload");
-    expect(init.method).toBe("POST");
-    expect(init.body).toBeInstanceOf(FormData);
-    const form = init.body as FormData;
-    expect(form.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
-    expect(form.get("ingestion_mode")).toBe("manual");
-  });
-
   it("knowledge base API は CRUD endpoint を呼び分ける", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -1469,5 +1414,223 @@ describe("api.services", () => {
       "/api/services/parser-docling/logs?lines=200",
       expect.anything()
     );
+  });
+});
+
+/**
+ * アップロードは送信の進み具合を取るため XHR で送る（#306）。node の test 環境には XHR がないため、
+ * 送信・応答を手で進められる最小の fake に差し替える。
+ */
+class FakeXhr {
+  static instances: FakeXhr[] = [];
+  method = "";
+  url = "";
+  body: unknown = null;
+  status = 0;
+  responseText = "";
+  readonly requestHeaders: Record<string, string> = {};
+  private readonly responseHeaders: Record<string, string> = {};
+  private readonly listeners: Record<string, Array<(event: unknown) => void>> = {};
+  private readonly uploadListeners: Record<string, Array<(event: unknown) => void>> = {};
+  readonly upload = {
+    addEventListener: (type: string, listener: (event: unknown) => void) => {
+      (this.uploadListeners[type] ??= []).push(listener);
+    },
+  };
+
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+
+  setRequestHeader(name: string, value: string) {
+    this.requestHeaders[name.toLowerCase()] = value;
+  }
+
+  addEventListener(type: string, listener: (event: unknown) => void) {
+    (this.listeners[type] ??= []).push(listener);
+  }
+
+  getResponseHeader(name: string): string | null {
+    return this.responseHeaders[name.toLowerCase()] ?? null;
+  }
+
+  send(body: unknown) {
+    this.body = body;
+    FakeXhr.instances.push(this);
+  }
+
+  emitUploadProgress(loaded: number, total: number, lengthComputable = true) {
+    for (const listener of this.uploadListeners.progress ?? []) {
+      listener({ loaded, total, lengthComputable });
+    }
+  }
+
+  respond(status: number, body: unknown, headers: Record<string, string> = {}) {
+    this.status = status;
+    this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+    for (const [name, value] of Object.entries(headers)) {
+      this.responseHeaders[name.toLowerCase()] = value;
+    }
+    for (const listener of this.listeners.load ?? []) listener({});
+  }
+
+  failNetwork() {
+    for (const listener of this.listeners.error ?? []) listener({});
+  }
+}
+
+function lastXhr(): FakeXhr {
+  const xhr = FakeXhr.instances.at(-1);
+  if (!xhr) throw new Error("XHR が送られていません");
+  return xhr;
+}
+
+describe("文書アップロードの送信（XHR）", () => {
+  const uploadResult = {
+    id: "doc-1",
+    file_name: "policy.txt",
+    status: "UPLOADED",
+    file_size_bytes: 4,
+    content_sha256: "a".repeat(64),
+    duplicate_of_document_id: null,
+    knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+  };
+
+  function stubXhr() {
+    FakeXhr.instances = [];
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    // fetch では送信の進み具合を取れない。アップロードで fetch を使ったら失敗させる。
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("fetch は使わない")));
+  }
+
+  it("uploadDocument は knowledge_base_ids を multipart に含め、ingestion_mode は送らない", async () => {
+    stubXhr();
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"), ["kb-1", "kb-2"]);
+    const xhr = lastXhr();
+    xhr.respond(200, { data: uploadResult, error_messages: [], warning_messages: [] });
+
+    await expect(pending).resolves.toMatchObject({ id: "doc-1" });
+    expect(xhr.method).toBe("POST");
+    expect(xhr.url).toBe("/api/documents/upload");
+    expect(xhr.requestHeaders.accept).toBe("application/json");
+    expect(xhr.body).toBeInstanceOf(FormData);
+    const form = xhr.body as FormData;
+    expect(form.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+    expect(form.has("ingestion_mode")).toBe(false);
+  });
+
+  it("送信の進み具合（送信済み / 合計のバイト数）を通知する", async () => {
+    stubXhr();
+    const progress = vi.fn();
+
+    const pending = api.batchUploadDocuments(
+      [new File(["a"], "a.txt"), new File(["b"], "b.txt")],
+      [],
+      progress,
+    );
+    const xhr = lastXhr();
+    xhr.emitUploadProgress(0, 0, false);
+    xhr.emitUploadProgress(512, 2048);
+    xhr.emitUploadProgress(2048, 2048);
+    xhr.respond(200, {
+      data: { items: [], failed_items: [], total_count: 2, uploaded_count: 0, failed_count: 0 },
+      error_messages: [],
+      warning_messages: [],
+    });
+
+    await pending;
+    expect(xhr.url).toBe("/api/documents/batch-upload");
+    expect((xhr.body as FormData).getAll("files")).toHaveLength(2);
+    // 合計が分からない通知は捨てる。
+    expect(progress.mock.calls).toEqual([
+      [{ loaded: 512, total: 2048 }],
+      [{ loaded: 2048, total: 2048 }],
+    ]);
+  });
+
+  it("Cookie の CSRF token を X-CSRF-Token として付ける", async () => {
+    stubXhr();
+    vi.stubGlobal("document", { cookie: "other=1; rag_csrf=token-123" });
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    const xhr = lastXhr();
+    xhr.respond(200, { data: uploadResult, error_messages: [], warning_messages: [] });
+    await pending;
+
+    expect(xhr.requestHeaders["x-csrf-token"]).toBe("token-123");
+    // FormData の boundary はブラウザが付けるため Content-Type は指定しない。
+    expect(xhr.requestHeaders).not.toHaveProperty("content-type");
+  });
+
+  it("既定の API タイムアウトを過ぎても送信を打ち切らない", async () => {
+    vi.useFakeTimers();
+    stubXhr();
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS * 4);
+    lastXhr().respond(200, { data: uploadResult, error_messages: [], warning_messages: [] });
+
+    await expect(pending).resolves.toMatchObject({ id: "doc-1" });
+  });
+
+  it("エラー応答は error_messages と request ID を持つ ApiError にする", async () => {
+    stubXhr();
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    lastXhr().respond(
+      415,
+      { data: null, error_messages: ["対応していないファイル形式です。"], warning_messages: [] },
+      { "X-Request-ID": "req-1" },
+    );
+
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 415,
+      message: "対応していないファイル形式です。",
+      requestId: "req-1",
+    });
+  });
+
+  it("ApiResponse でない応答（proxy の 413 の HTML）は status だけの ApiError にする", async () => {
+    stubXhr();
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    lastXhr().respond(413, "<html>413 Request Entity Too Large</html>");
+
+    await expect(pending).rejects.toMatchObject({ status: 413, message: "APIエラー (413)" });
+  });
+
+  it("401 は共通の認証イベントを通知する", async () => {
+    stubXhr();
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "CustomEvent",
+      class {
+        constructor(readonly type: string) {}
+      },
+    );
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    lastXhr().respond(401, { data: null, error_messages: ["ログインしてください。"] });
+
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "app-auth-unauthorized" }),
+    );
+  });
+
+  it("接続の失敗は ApiError ではない例外にする", async () => {
+    stubXhr();
+
+    const pending = api.uploadDocument(new File(["test"], "policy.txt"));
+    lastXhr().failNetwork();
+
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ApiError);
   });
 });

@@ -6254,7 +6254,8 @@ class OracleClient:
                 j.max_attempts,
                 j.queued_at,
                 j.started_at,
-                j.finished_at
+                j.finished_at,
+                d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
               ON d.document_id = j.document_id
@@ -6309,7 +6310,8 @@ class OracleClient:
                 j.max_attempts,
                 j.queued_at,
                 j.started_at,
-                j.finished_at
+                j.finished_at,
+                d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
               ON d.document_id = j.document_id
@@ -6358,7 +6360,8 @@ class OracleClient:
                 j.max_attempts,
                 j.queued_at,
                 j.started_at,
-                j.finished_at
+                j.finished_at,
+                d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
               ON d.document_id = j.document_id
@@ -11281,6 +11284,7 @@ def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
     return IngestionJob(
         id=str(row["job_id"]),
         document_id=str(row["document_id"]),
+        document_file_name=_optional_str(row.get("document_file_name")),
         recipe_id=_optional_str(row.get("recipe_id")),
         recipe_revision=_optional_int(row.get("recipe_revision")),
         status=_ingestion_job_status(row.get("status")),

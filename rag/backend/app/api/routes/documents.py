@@ -8,7 +8,6 @@ import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from html import escape
 from pathlib import PurePath
 from typing import Annotated, Literal
@@ -197,23 +196,18 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 
-class UploadIngestionMode(StrEnum):
-    """アップロード後の取込開始方針。"""
-
-    MANUAL = "manual"
-
-
 @router.post("/upload", response_model=ApiResponse[UploadResult])
 async def upload_document(
     http_request: Request,
     file: Annotated[UploadFile, File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
-    ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
 ) -> ApiResponse[UploadResult]:
-    """ドキュメントファイルをアップロードし、Object Storage へ保管する。"""
+    """ドキュメントファイルをアップロードし、Object Storage へ保管する。
+
+    原本の保存と文書行の登録までを行い、取込 job は作らない（取込は文書ごとに明示して始める）。
+    """
     enforce_rate_limit("upload", http_request)
     result = await _store_uploaded_document(file, knowledge_base_ids)
-    _ = ingestion_mode
     return ApiResponse(data=result)
 
 
@@ -222,7 +216,6 @@ async def batch_upload_documents(
     http_request: Request,
     files: Annotated[list[UploadFile], File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
-    ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
 ) -> ApiResponse[BatchUploadResult]:
     """複数ドキュメントをまとめてアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
@@ -233,7 +226,6 @@ async def batch_upload_documents(
     for file in files:
         try:
             result = await _store_uploaded_document(file, knowledge_base_ids)
-            _ = ingestion_mode
             items.append(result)
         except HTTPException as exc:
             source_profile = await _failed_upload_source_profile(file)
@@ -266,18 +258,6 @@ async def batch_upload_documents(
             total_count=len(files),
             uploaded_count=len(items),
             failed_count=len(failed_items),
-            queued_count=sum(
-                1
-                for item in items
-                if item.ingestion_job is not None
-                and item.ingestion_job.status == IngestionJobStatus.QUEUED
-            ),
-            skipped_count=sum(
-                1
-                for item in items
-                if item.ingestion_job is not None
-                and item.ingestion_job.status == IngestionJobStatus.SKIPPED
-            ),
         )
     )
 
@@ -3998,21 +3978,6 @@ async def _list_delete_blocking_ingestion_jobs(
     for status in DELETE_BLOCKING_INGESTION_STATUSES:
         jobs.extend(await oracle.list_document_ingestion_jobs(document_id, status=status))
     return jobs
-
-
-async def _create_ingestion_job(result: UploadResult) -> IngestionJob:
-    """upload 結果から取込 job を作る。重複・未対応は SKIPPED として記録する。"""
-    is_duplicate = result.duplicate_of_document_id is not None
-    unsupported_reason = result.source_profile.unsupported_reason
-    skip_reason = "duplicate_content" if is_duplicate else unsupported_reason
-    return await _create_ingestion_job_record(
-        oracle=OracleClient(),
-        document_id=result.id,
-        parser_profile=result.source_profile.parser_profile,
-        quality_warnings=result.source_profile.quality_warnings,
-        status=IngestionJobStatus.SKIPPED if skip_reason else IngestionJobStatus.QUEUED,
-        skip_reason=skip_reason,
-    )
 
 
 async def _create_ingestion_job_record(

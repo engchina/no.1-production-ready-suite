@@ -992,6 +992,34 @@ async def test_oracle_client_lists_document_ingestion_jobs() -> None:
     assert call.parameters["ingestion_job_status"] == "RUNNING"
 
 
+async def test_oracle_client_ingestion_jobs_carry_document_file_name() -> None:
+    """取込 job の一覧・取得は文書のファイル名を返す（一覧で文書 ID ではなく名前を出す。#306）。"""
+    row = {**_oracle_ingestion_job_row(), "document_file_name": "経費規程.pdf"}
+    pool = FakeOraclePool(execute_results=[[row], [row], [row]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    listed = await client.list_ingestion_jobs(limit=5, offset=0)
+    fetched = await client.get_ingestion_job("job-1")
+    by_document = await client.list_document_ingestion_jobs("doc-1")
+
+    assert listed[0].document_file_name == "経費規程.pdf"
+    assert fetched is not None
+    assert fetched.document_file_name == "経費規程.pdf"
+    assert by_document[0].document_file_name == "経費規程.pdf"
+    for call in pool.connection.calls:
+        assert "d.file_name AS document_file_name" in call.statement
+
+
+async def test_oracle_client_ingestion_job_without_document_file_name_is_none() -> None:
+    """ファイル名の列がない行（作成直後の job 等）は None のまま扱う。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    jobs = await client.list_ingestion_jobs(limit=5, offset=0)
+
+    assert jobs[0].document_file_name is None
+
+
 async def test_oracle_client_updates_ingestion_job_status() -> None:
     """取込 job 状態更新後に最新行を返す。"""
     started_at = datetime(2026, 1, 2, 0, 1, tzinfo=UTC)
