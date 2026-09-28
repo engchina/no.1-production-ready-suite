@@ -5,8 +5,11 @@ import { cn } from "../../lib/utils";
 import { FieldError } from "./field-error";
 import { RequiredBadge } from "./required-badge";
 
-/** 入力欄の見た目（枠線は secondary ボタンと同じ --color-border-control）。 */
-const fieldControlClass = cn(
+/**
+ * 入力欄の見た目（枠線は secondary ボタンと同じ --color-border-control）。
+ * SecretField も同じ見た目にするため、パッケージ内でだけ共有する（index.ts からは export しない）。
+ */
+export const fieldControlClass = cn(
   "w-full min-h-[var(--field-height)] rounded-md border bg-surface px-3 text-sm text-fg outline-none transition-colors",
   // プレースホルダも「文字」。透過で薄めると 3:1 を割るので fg-muted のまま使う
   "placeholder:text-fg-muted placeholder:opacity-100",

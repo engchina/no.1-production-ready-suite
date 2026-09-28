@@ -2,15 +2,16 @@ import {
   Button,
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
   ErrorState,
-  FieldError,
+  FormActionBar,
   FormStatus,
   PageBody,
+  SecretField,
   SelectField,
   Skeleton,
-  Spinner,
   TextField,
   cn,
   toast,
@@ -21,8 +22,6 @@ import {
   CheckCircle2,
   CloudDownload,
   Database,
-  Eye,
-  EyeOff,
   PlugZap,
   Power,
   PowerOff,
@@ -45,7 +44,6 @@ import {
   type DraftGuardMessages,
 } from "../guards/useSettingsDraftGuard";
 import { FileDropzone } from "../oci/FileDropzone";
-import { FieldLabel } from "../oci/required-field";
 import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
@@ -463,19 +461,20 @@ export function DatabaseSettingsPage({
             submit(settings);
           }}
         >
-          <Card className="rounded-md">
-            <CardHeader className="p-6 pb-0">
-              <div className="flex items-center gap-2 border-b border-border pb-5">
-                <Database size={20} aria-hidden />
-                <CardTitle className="text-base">
-                  {t("settings.database.cardTitle")}
-                </CardTitle>
-              </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database size={16} className="text-accent-fg" aria-hidden />
+                {t("settings.database.cardTitle")}
+              </CardTitle>
+              <CardDescription>
+                {t("settings.database.cardDescription")}
+              </CardDescription>
             </CardHeader>
 
-            <CardContent className="space-y-5 p-6">
+            <CardContent className="space-y-5">
               {/* 接続情報は 2 列の grid。意味のペア（ユーザー / パスワード、接続方式 / Wallet ZIP、Wallet パスワード / サービス）を
-                  入力順のまま同じ行に置き、チェックボックスと案内は全幅にする。 */}
+                  入力順のまま同じ行に置き、案内は全幅にする。保存済みの値の削除は SecretField が入力欄の直下に出す。 */}
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
                 <TextField
                   id="oracle-user"
@@ -488,33 +487,45 @@ export function DatabaseSettingsPage({
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
                 />
-                <PasswordField
+                <SecretField
                   id="oracle-password"
+                  ref={passwordRef}
                   label={t("settings.database.field.dbPassword")}
                   required={!settings.has_password}
+                  requiredLabel={t("common.required")}
                   value={form.password}
+                  onValueChange={(value) => updateForm({ password: value })}
                   visible={passwordVisible}
-                  disabled={form.clearPassword}
-                  inputRef={passwordRef}
-                  hasSavedSecret={settings.has_password}
-                  error={errors.password}
+                  onVisibleChange={() => void togglePasswordVisible(settings)}
+                  revealPending={passwordReveal.isPending}
+                  revealPendingLabel={t(
+                    "settings.database.secrets.revealingPassword",
+                  )}
                   revealError={
                     passwordReveal.isError ? passwordRevealError : null
                   }
-                  revealPending={passwordReveal.isPending}
-                  onToggleVisible={() => void togglePasswordVisible(settings)}
-                  onChange={(value) => updateForm({ password: value })}
+                  hasSavedSecret={settings.has_password}
+                  savedLabel={t("settings.database.secrets.saved")}
+                  notSetLabel={t("settings.database.secrets.notSet")}
+                  showLabel={t("settings.database.secrets.show")}
+                  hideLabel={t("settings.database.secrets.hide")}
+                  placeholder={
+                    settings.has_password
+                      ? t("settings.database.placeholder.passwordSaved")
+                      : t("settings.database.placeholder.password")
+                  }
+                  helper={
+                    settings.has_password
+                      ? t("settings.database.helper.passwordSavedCompact")
+                      : t("settings.database.helper.passwordRequired")
+                  }
+                  error={errors.password}
+                  clearOption={{
+                    label: t("settings.database.secrets.clearPassword"),
+                    checked: form.clearPassword,
+                    onCheckedChange: updatePasswordClear,
+                  }}
                 />
-
-                {settings.has_password ? (
-                  <div className="lg:col-span-full">
-                    <SecretClearCheckbox
-                      checked={form.clearPassword}
-                      onChange={updatePasswordClear}
-                      label={t("settings.database.secrets.clearPassword")}
-                    />
-                  </div>
-                ) : null}
 
                 {connectionSecurityEnabled ? (
                   <SelectField<DatabaseConnectionSecurity>
@@ -536,7 +547,6 @@ export function DatabaseSettingsPage({
                     helper={t(
                       `settings.database.connectionSecurity.${form.connectionSecurity}.helper`,
                     )}
-                    buttonClassName="h-11"
                   />
                 ) : null}
 
@@ -569,37 +579,39 @@ export function DatabaseSettingsPage({
                       />
                     </div>
 
-                    <PasswordField
+                    <SecretField
                       id="oracle-wallet-password"
+                      ref={walletPasswordRef}
                       label={t("settings.database.field.walletPassword")}
-                      required={false}
                       value={form.walletPassword}
+                      onValueChange={(value) =>
+                        updateForm({ walletPassword: value })
+                      }
                       visible={walletPasswordVisible}
-                      disabled={form.clearWalletPassword}
-                      inputRef={walletPasswordRef}
+                      onVisibleChange={setWalletPasswordVisible}
                       hasSavedSecret={settings.has_wallet_password}
-                      error={errors.walletPassword}
+                      savedLabel={t("settings.database.secrets.saved")}
+                      notSetLabel={t("settings.database.secrets.notSet")}
+                      showLabel={t("settings.database.secrets.showWalletPassword")}
+                      hideLabel={t("settings.database.secrets.hideWalletPassword")}
+                      placeholder={
+                        settings.has_wallet_password
+                          ? t("settings.database.placeholder.passwordSaved")
+                          : t("settings.database.placeholder.secret")
+                      }
                       helper={
                         settings.has_wallet_password
                           ? t("settings.database.helper.walletPasswordSaved")
                           : t("settings.database.helper.walletPasswordEmpty")
                       }
-                      placeholder={t("settings.database.placeholder.secret")}
-                      revealError={null}
-                      revealPending={false}
-                      revealButtonLabels={{
-                        show: t("settings.database.secrets.showWalletPassword"),
-                        hide: t("settings.database.secrets.hideWalletPassword"),
-                        revealing: t(
-                          "settings.database.secrets.revealingWalletPassword",
+                      error={errors.walletPassword}
+                      clearOption={{
+                        label: t(
+                          "settings.database.secrets.clearWalletPassword",
                         ),
+                        checked: form.clearWalletPassword,
+                        onCheckedChange: updateWalletPasswordClear,
                       }}
-                      onToggleVisible={() =>
-                        setWalletPasswordVisible((current) => !current)
-                      }
-                      onChange={(value) =>
-                        updateForm({ walletPassword: value })
-                      }
                     />
 
                     <WalletServiceField
@@ -610,17 +622,6 @@ export function DatabaseSettingsPage({
                       error={errors.dsn}
                     />
 
-                    {settings.has_wallet_password ? (
-                      <div className="lg:col-span-full">
-                        <SecretClearCheckbox
-                          checked={form.clearWalletPassword}
-                          onChange={updateWalletPasswordClear}
-                          label={t(
-                            "settings.database.secrets.clearWalletPassword",
-                          )}
-                        />
-                      </div>
-                    ) : null}
                   </>
                 ) : (
                   <>
@@ -642,29 +643,32 @@ export function DatabaseSettingsPage({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button
-                  type="submit"
-                  size="lg"
-                  loading={save.isPending}
-                  icon={Save}
-                >
-                  {t("settings.database.actions.saveDb")}
-                </Button>
-                <Button
-                  type="button"
-                  size="lg"
-                  variant="secondary"
-                  loading={test.isPending}
-                  onClick={() => runTest(settings)}
-                  icon={PlugZap}
-                >
-                  {t("settings.database.actions.testDb")}
-                </Button>
-                {save.isError ? (
-                  <FormStatus tone="danger" message={saveError} />
-                ) : null}
-              </div>
+              <FormActionBar
+                ariaLabel={t("settings.database.actions.label")}
+                primaryActions={[
+                  {
+                    id: "save",
+                    type: "submit",
+                    label: t("settings.database.actions.saveDb"),
+                    icon: Save,
+                    loading: save.isPending,
+                  },
+                ]}
+                secondaryActions={[
+                  {
+                    id: "test",
+                    label: t("settings.database.actions.testDb"),
+                    icon: PlugZap,
+                    loading: test.isPending,
+                    onClick: () => runTest(settings),
+                  },
+                ]}
+                status={
+                  save.isError ? (
+                    <FormStatus tone="danger" message={saveError} />
+                  ) : null
+                }
+              />
 
               <DatabaseTestResultPanel
                 result={testResult}
@@ -877,14 +881,16 @@ function AdbManagementCard({
     (infoQuery.isError ? t("settings.adb.notify.infoFailed") : null);
 
   return (
-    <Card id="adb-management" className="scroll-mt-4 rounded-md">
-      <CardHeader className="p-6 pb-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-5">
-          <div className="flex items-center gap-2">
-            <Server size={20} aria-hidden />
-            <CardTitle className="text-base">
+    <Card id="adb-management" className="scroll-mt-4">
+      <CardHeader>
+        {/* 見出しの行の右端に、カード全体を対象にする「情報を再取得」を置く。 */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <CardTitle className="flex items-center gap-2">
+              <Server size={16} className="text-accent-fg" aria-hidden />
               {t("settings.adb.title")}
             </CardTitle>
+            <CardDescription>{t("settings.adb.description")}</CardDescription>
           </div>
           <Button
             type="button"
@@ -900,83 +906,72 @@ function AdbManagementCard({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-5 p-6">
-        <p className="text-sm leading-relaxed text-fg-muted">
-          {t("settings.adb.description")}
-        </p>
+      <CardContent className="space-y-5">
 
         {/* リージョン（短い値）と OCID（長い値）を 1:2 で同じ行に置く。 */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-start">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-start">
           <SelectField
             id="adb-region"
             label={t("settings.adb.field.region")}
             value={region}
             options={ADB_REGION_OPTIONS}
             onValueChange={setRegion}
-            buttonClassName="h-11"
           />
-          <div className="space-y-1.5">
-            <label htmlFor="adb-ocid" className="text-sm font-medium text-fg">
-              {t("settings.adb.field.ocid")}
-            </label>
-            <input
-              id="adb-ocid"
-              type="text"
-              value={ocid}
-              readOnly
-              aria-readonly="true"
-              placeholder={t("settings.adb.placeholder.ocidEmpty")}
-              className="h-11 w-full cursor-not-allowed rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg-muted outline-none placeholder:text-fg-muted"
-            />
-            <p className="text-xs leading-relaxed text-fg-muted">
-              {t("settings.adb.helper.ocidReadonly")}
-            </p>
-          </div>
+          <TextField
+            id="adb-ocid"
+            label={t("settings.adb.field.ocid")}
+            value={ocid}
+            readOnly
+            placeholder={t("settings.adb.placeholder.ocidEmpty")}
+            helper={
+              // 環境変数名（PLATFORM_ORACLE_ADB_OCID）は長い 1 語なので、375px でも折り返せるようにする。
+              <span className="pr-break-anywhere">
+                {t("settings.adb.helper.ocidReadonly")}
+              </span>
+            }
+          />
         </div>
 
-        <div className="space-y-2 border-t border-border pt-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="lg"
-              loading={saveButtonLoading}
-              disabled={busy || !ocid.trim()}
-              onClick={() => void handleRefresh("save")}
-              icon={Save}
-            >
-              {t("settings.database.actions.save")}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="secondary"
-              loading={startButtonLoading}
-              disabled={busy || !ocid.trim() || !canStart}
-              onClick={() => void handleStart()}
-              icon={Power}
-            >
-              {t("settings.adb.action.start")}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="secondary"
-              loading={stopButtonLoading}
-              disabled={busy || !ocid.trim() || !canStop}
-              onClick={() => void handleStop()}
-              icon={PowerOff}
-            >
-              {t("settings.adb.action.stop")}
-            </Button>
-          </div>
-          {actionError ? (
-            <FormStatus
-              tone="danger"
-              className="text-xs"
-              message={actionError}
-            />
-          ) : null}
-        </div>
+        <FormActionBar
+          ariaLabel={t("settings.adb.actions.label")}
+          primaryActions={[
+            {
+              id: "save",
+              label: t("settings.database.actions.save"),
+              icon: Save,
+              loading: saveButtonLoading,
+              disabled: busy || !ocid.trim(),
+              onClick: () => void handleRefresh("save"),
+            },
+          ]}
+          secondaryActions={[
+            {
+              id: "start",
+              label: t("settings.adb.action.start"),
+              icon: Power,
+              loading: startButtonLoading,
+              disabled: busy || !ocid.trim() || !canStart,
+              onClick: () => void handleStart(),
+            },
+            {
+              id: "stop",
+              label: t("settings.adb.action.stop"),
+              icon: PowerOff,
+              loading: stopButtonLoading,
+              disabled: busy || !ocid.trim() || !canStop,
+              onClick: () => void handleStop(),
+            },
+          ]}
+          status={
+            actionError ? (
+              <FormStatus
+                tone="danger"
+                className="text-xs"
+                message={actionError}
+              />
+            ) : null
+          }
+        />
 
         {infoError ? (
           <FormStatus tone="danger" className="text-xs" message={infoError} />
@@ -1133,7 +1128,6 @@ function WalletServiceField({
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
         helper={t("settings.database.helper.dsnService")}
-        buttonClassName="h-11"
       />
     );
   }
@@ -1163,143 +1157,6 @@ function WalletServiceField({
       error={error}
     />
   );
-}
-
-function PasswordField({
-  id,
-  label,
-  value,
-  visible,
-  disabled,
-  hasSavedSecret,
-  required,
-  error,
-  helper,
-  placeholder,
-  revealError,
-  revealPending,
-  revealButtonLabels,
-  inputRef,
-  onChange,
-  onToggleVisible,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  visible: boolean;
-  disabled: boolean;
-  hasSavedSecret: boolean;
-  required: boolean;
-  error?: string;
-  helper?: string;
-  placeholder?: string;
-  revealError: string | null;
-  revealPending: boolean;
-  revealButtonLabels?: {
-    show: string;
-    hide: string;
-    revealing: string;
-  };
-  inputRef: RefObject<HTMLInputElement | null>;
-  onChange: (value: string) => void;
-  onToggleVisible: () => void;
-}) {
-  const errorId = `${id}-error`;
-  const revealErrorId = `${id}-reveal-error`;
-  const hintId = `${id}-hint`;
-  const describedBy = [
-    hintId,
-    error ? errorId : "",
-    revealError ? revealErrorId : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const revealButtonLabel = revealPending
-    ? (revealButtonLabels?.revealing ??
-      t("settings.database.secrets.revealingPassword"))
-    : visible
-      ? (revealButtonLabels?.hide ?? t("settings.database.secrets.hide"))
-      : (revealButtonLabels?.show ?? t("settings.database.secrets.show"));
-  const helperText =
-    helper ??
-    (hasSavedSecret
-      ? t("settings.database.helper.passwordSavedCompact")
-      : t("settings.database.helper.passwordRequired"));
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <RequiredLabel id={id} label={label} required={required} />
-        {hasSavedSecret ? (
-          <SavedSecretBadge label={t("settings.database.secrets.saved")} />
-        ) : null}
-      </div>
-      <div className="relative">
-        <input
-          ref={inputRef}
-          id={id}
-          type={visible ? "text" : "password"}
-          value={value}
-          disabled={disabled}
-          required={required}
-          aria-required={required}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={
-            hasSavedSecret
-              ? t("settings.database.placeholder.passwordSaved")
-              : (placeholder ?? t("settings.database.placeholder.password"))
-          }
-          aria-invalid={Boolean(error)}
-          aria-describedby={describedBy}
-          className={cn(
-            "h-11 w-full rounded-md border bg-surface px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
-            error ? "border-danger-fg" : "border-border-control",
-          )}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          iconOnly
-          touchTarget
-          type="button"
-          onClick={onToggleVisible}
-          disabled={disabled || revealPending}
-          aria-busy={revealPending}
-          aria-label={revealButtonLabel}
-          className="absolute right-0 top-0 rounded-l-none"
-        >
-          {revealPending ? (
-            <Spinner size={16} />
-          ) : visible ? (
-            <EyeOff size={16} aria-hidden />
-          ) : (
-            <Eye size={16} aria-hidden />
-          )}
-        </Button>
-      </div>
-      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-        {helperText}
-      </p>
-      <FieldError id={errorId} message={error} />
-      {revealError ? (
-        <div id={revealErrorId}>
-          <FormStatus tone="danger" className="text-xs" message={revealError} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RequiredLabel({
-  id,
-  label,
-  required,
-}: {
-  id: string;
-  label: string;
-  required?: boolean;
-}) {
-  return <FieldLabel htmlFor={id} label={label} required={required} />;
 }
 
 function WalletUploadField({
@@ -1429,28 +1286,6 @@ function StatusLine({
   );
 }
 
-function SecretClearCheckbox({
-  checked,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
-      />
-      <span className="text-fg">{label}</span>
-    </label>
-  );
-}
-
 function DatabaseTestResultPanel({
   result,
   error,
@@ -1554,15 +1389,6 @@ function focusFirstInvalid(
   if (errors.user) refs.user.current?.focus();
   else if (errors.password) refs.password.current?.focus();
   else if (errors.walletPassword) refs.walletPassword.current?.focus();
-}
-
-/** 保存済み secret の表示（NL2SQL の SavedSecretBadge。モデル設定と同じ見た目）。 */
-function SavedSecretBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center justify-center whitespace-nowrap rounded-full border border-success-border bg-success-subtle px-2 py-0.5 text-xs font-medium text-success-fg">
-      {label}
-    </span>
-  );
 }
 
 const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {

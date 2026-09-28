@@ -51,7 +51,9 @@ test("独自のローディングアイコンを持たない", () => {
   assert.deepEqual(offenders, []);
 });
 
-test("raw icon-only button の処理中表示も共有 Spinner を使う", () => {
-  assert.match(databaseSettingsSource, /Spinner/u);
-  assert.match(databaseSettingsSource, /revealPending \? \(\s*<Spinner size=\{16\} \/>/u);
+test("secret の表示切り替えの処理中表示も共有 Button の loading（共有 Spinner）を使う", () => {
+  // DB パスワードの取り出し中は共有 SecretField の revealPending で示す（独自の icon-only button を持たない。#296）。
+  // SecretField 側のスピナーは platform/packages/ui の tests/secret-field.test.tsx が検証する。
+  assert.match(databaseSettingsSource, /<SecretField[\s\S]*revealPending=\{passwordReveal\.isPending\}/u);
+  assert.doesNotMatch(databaseSettingsSource, /<Spinner\b/u);
 });

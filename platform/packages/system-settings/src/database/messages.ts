@@ -7,6 +7,7 @@ export const DATABASE_MESSAGES = {
   "settings.adb.action.refresh": "情報を再取得",
   "settings.adb.action.start": "起動",
   "settings.adb.action.stop": "停止",
+  "settings.adb.actions.label": "Autonomous Database の操作",
   "settings.adb.description":
     "OCI Autonomous Database の情報取得・起動・停止を行います。リージョンと ADB OCID を指定してください。",
   "settings.adb.field.ocid": "ADB OCID",
@@ -40,12 +41,15 @@ export const DATABASE_MESSAGES = {
   "settings.adb.statusUnknown": "不明",
   "settings.adb.title": "Autonomous Database 管理",
   "settings.database.actions.save": "保存",
+  "settings.database.actions.label": "データベース設定の操作",
   "settings.database.actions.saveDb": "DB設定を保存",
   "settings.database.actions.saved": "保存しました",
   "settings.database.actions.testDb": "DB接続テスト",
   "settings.database.actions.uploadingWallet": "アップロード中…",
   "settings.database.actions.walletUploaded":
     "Wallet ZIP をアップロードしました: {fileName}",
+  "settings.database.cardDescription":
+    "アプリが Oracle 26ai へ接続するユーザー・パスワード・Wallet・サービス名を設定します。",
   "settings.database.cardTitle": "データベース設定",
   "settings.database.connectionSecurity.walletMtlS": "Wallet mTLS",
   "settings.database.connectionSecurity.walletMtlS.description":
@@ -97,6 +101,7 @@ export const DATABASE_MESSAGES = {
     "保存済み Wallet パスワードを削除する",
   "settings.database.secrets.hide": "DB パスワードを隠す",
   "settings.database.secrets.hideWalletPassword": "Wallet パスワードを隠す",
+  "settings.database.secrets.notSet": "未設定",
   "settings.database.secrets.revealError":
     "保存済み DB パスワードの取得に失敗しました。入力値または保存状態を確認してください。",
   "settings.database.secrets.revealingPassword": "DB パスワードを取得中",
