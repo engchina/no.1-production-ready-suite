@@ -31,10 +31,33 @@ test("検索・回答設定の概要ハブが工程をフェーズ別カード�
   await expectNoPageOverflow(page);
 });
 
-test("サイドバーの概要リンクからハブへ到達できる", async ({ page }) => {
+test("サイドバーの設定の概要リンクからハブへ到達できる", async ({ page }) => {
   await page.goto("/settings/pipeline");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  // 現在地がハブなので「検索・回答設定」セクションは自動展開し、概要リンクが見える。
-  await expect(sidebar.getByRole("link", { name: "概要" })).toBeVisible();
+  // 現在地がハブなので「検索・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
+  await expect(sidebar.getByRole("link", { name: "設定の概要" })).toBeVisible();
   await expectNoPageOverflow(page);
+});
+
+test("サイドバーの検索・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
+  await page.goto("/settings/pipeline");
+  await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
+  // 概要の工程カード（1. 〜 12.）の名前を順番どおりに読む。
+  const cardNames = await page
+    .getByRole("link", { name: / の設定を開く$/ })
+    .evaluateAll((links) => links.map((link) => (link.getAttribute("aria-label") ?? "").replace(/ の設定を開く$/, "")));
+  expect(cardNames.length).toBeGreaterThan(0);
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const pipelineHrefs = await page
+    .getByRole("link", { name: / の設定を開く$/ })
+    .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+  // サイドバーの同じ工程のリンクを、サイドバー上の並び順で読む（先頭の「設定の概要」は除く）。
+  const sidebarNames = await sidebar.locator("a").evaluateAll(
+    (links, hrefs) =>
+      links
+        .filter((link) => hrefs.includes(link.getAttribute("href")))
+        .map((link) => (link.textContent ?? "").trim()),
+    pipelineHrefs
+  );
+  expect(sidebarNames).toEqual(cardNames);
 });
