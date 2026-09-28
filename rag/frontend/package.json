@@ -16,7 +16,7 @@
     "@engchina/production-ready-ui": "file:../../platform/packages/ui",
     "@fontsource/google-sans-code": "^5.3.1",
     "@tanstack/react-query": "^5.103.2",
-    "@xyflow/react": "^12.11.6",
+    "@xyflow/react": "^12.12.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
