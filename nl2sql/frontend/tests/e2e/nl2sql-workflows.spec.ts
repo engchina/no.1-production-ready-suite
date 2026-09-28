@@ -10074,7 +10074,8 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await candidateProfile.focus();
   await page.keyboard.press("ArrowDown");
   await expect(candidateProfile).toHaveAttribute("aria-expanded", "true");
-  const profileListbox = firstCandidate.getByRole("listbox");
+  // SelectField の一覧は body へ Portal で描くため、ページから引く（#352）。
+  const profileListbox = page.getByRole("listbox", { name: "追加する Profile" });
   await expect(profileListbox.getByText("default", { exact: true })).toHaveCount(0);
   await expect(profileListbox.getByText("payment", { exact: true })).toHaveCount(0);
   await expect(profileListbox.getByText("請求カテゴリ", { exact: true })).toBeVisible();
@@ -10150,7 +10151,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   const mobileCandidate = page.getByTestId("qcm-training-candidate").first();
   const mobileProfile = mobileCandidate.getByRole("combobox", { name: "追加する Profile" });
   await mobileProfile.click();
-  await expectHorizontallyContained(mobileCandidate.getByRole("listbox"), mobileCandidate);
+  await expectHorizontallyContained(page.getByRole("listbox", { name: "追加する Profile" }), mobileCandidate);
   await page.keyboard.press("Escape");
   await expect(mobileCandidate.getByRole("link", { name: "フィードバック管理で確認" })).toBeVisible();
   await expectNoHorizontalScroll(page);
