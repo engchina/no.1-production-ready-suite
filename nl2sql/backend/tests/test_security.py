@@ -14,7 +14,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from fastapi import Request, Response
+from fastapi import FastAPI, Request, Response
 
 from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
@@ -22,7 +22,7 @@ from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import HistoryItem, Nl2SqlEngine, Nl2SqlProfile
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
-from app.main import app
+from app.main import _assert_route_manifest, app
 from app.security import dependencies as security_dependencies
 from app.security.dependencies import authorize_api_request, local_debug_principal
 from app.security.domain import (
@@ -50,6 +50,7 @@ from app.security.permissions import (
     SAMPLE_DATA_MANAGE_PERMISSION,
     SCHEMA_READ_PERMISSION,
     SCHEMA_REFRESH_PERMISSION,
+    SECURITY_USER_ROLE_ROUTE_PERMISSIONS,
     SELECT_AI_ASSETS_MANAGE_PERMISSION,
     SELECT_AI_ASSETS_READ_PERMISSION,
     SELECT_AI_ASSETS_REFRESH_PERMISSION,
@@ -2080,6 +2081,102 @@ def test_security_audit_permission_and_api_are_removed() -> None:
         {UNCLASSIFIED_PERMISSION}
     )
     assert not any(path.startswith("/api/security/audit") for path in app.openapi()["paths"])
+
+
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_USER_ROLE_PREFIXES = ("/security/users", "/security/roles")
+
+
+def _mounted_user_role_operations() -> set[tuple[str, str]]:
+    return {
+        (method.upper(), path.removeprefix("/api"))
+        for path, operations in app.openapi()["paths"].items()
+        if path.startswith("/api") and path.removeprefix("/api").startswith(_USER_ROLE_PREFIXES)
+        for method in operations
+        if method.upper() in _HTTP_METHODS
+    }
+
+
+def _legacy_user_role_permission(method: str, route_path: str) -> frozenset[str]:
+    """#503 より前の前方一致による割り当て（同じ権限のままかを比べるために残す）。"""
+
+    if route_path.startswith("/security/users"):
+        return frozenset({"menu.security_users"})
+    if route_path == "/security/roles/{role_id}/permissions":
+        return frozenset({"menu.security_permissions"})
+    if method == "GET":
+        return frozenset(
+            {"menu.security_users", "menu.security_roles", "menu.security_permissions"}
+        )
+    return frozenset({"menu.security_roles"})
+
+
+def test_user_role_routes_are_registered_per_operation() -> None:
+    """ユーザー・ロール管理の API は (method, path) ごとに登録し、実在の route と一致する。
+
+    #503 で前方一致をやめた。
+    """
+
+    mounted = _mounted_user_role_operations()
+    assert len(mounted) == 17
+    assert set(SECURITY_USER_ROLE_ROUTE_PERMISSIONS) == mounted
+    for permissions in SECURITY_USER_ROLE_ROUTE_PERMISSIONS.values():
+        assert permissions
+        assert permissions <= ALL_PERMISSION_CODES
+
+
+def test_user_role_route_permissions_match_legacy_prefix_rules() -> None:
+    """明示の登録にしても、ユーザー・ロール管理の API の権限は前方一致のときと同じ（#503）。"""
+
+    for method, route_path in sorted(_mounted_user_role_operations()):
+        assert permission_for_route(method, route_path) == _legacy_user_role_permission(
+            method, route_path
+        ), f"{method} {route_path}"
+    assert permission_for_route("DELETE", "/security/users/{user_uuid}") == frozenset(
+        {"menu.security_users"}
+    )
+    assert permission_for_route("POST", "/security/users/{user_uuid}/reset-password") == (
+        frozenset({"menu.security_users"})
+    )
+    assert permission_for_route("POST", "/security/roles/{role_id}/archive") == frozenset(
+        {"menu.security_roles"}
+    )
+    assert permission_for_route("DELETE", "/security/roles/{role_id}") == frozenset(
+        {"menu.security_roles"}
+    )
+
+
+def test_unregistered_user_role_routes_are_denied() -> None:
+    """前方一致をやめたので、登録のない method・path は既定で拒否する（#503）。"""
+
+    unclassified = frozenset({UNCLASSIFIED_PERMISSION})
+    assert permission_for_route("POST", "/security/users/{user_uuid}/impersonate") == unclassified
+    assert permission_for_route("PUT", "/security/users/{user_uuid}") == unclassified
+    assert permission_for_route("GET", "/security/users-export") == unclassified
+    assert permission_for_route("POST", "/security/roles/{role_id}/clone") == unclassified
+    assert permission_for_route("GET", "/security/roles/{role_id}/permissions") == unclassified
+
+
+def test_route_manifest_check_rejects_unregistered_user_route() -> None:
+    """`/security/users` 配下に未登録の route を足すと、起動時の manifest の検査で失敗する。
+
+    #503 の前は前方一致で通っていた。
+    """
+
+    application = FastAPI()
+
+    @application.post("/api/security/users/{user_uuid}/impersonate")
+    def _impersonate(user_uuid: str) -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {"user_uuid": user_uuid}
+
+    @application.get("/api/security/users")
+    def _list_users() -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {}
+
+    with pytest.raises(RuntimeError) as error:
+        _assert_route_manifest(application)
+    missing = str(error.value).split(": ", 1)[1].split(", ")
+    assert missing == ["POST /api/security/users/{user_uuid}/impersonate"]
 
 
 def test_schema_refresh_active_static_route_precedes_job_id_route() -> None:
