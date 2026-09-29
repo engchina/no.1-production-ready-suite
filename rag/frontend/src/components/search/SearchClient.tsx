@@ -18,6 +18,7 @@ import {
   TimedLoadingState,
   Skeleton,
   ListSkeleton,
+  StatusBadge,
 } from "@engchina/production-ready-ui";
 import {
   Clock3,
@@ -205,10 +206,11 @@ export function SearchClient() {
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasFilters =
     Boolean(contentKind) || hasSectionFilters || hasClassificationFilters;
-  const classificationVisible = classificationOpen || hasClassificationFilters;
+  // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
+  const classificationVisible = classificationOpen;
   const hasSearchTuning = topK !== DEFAULT_TOP_K || rerankTopN !== DEFAULT_RERANK_TOP_N;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
-  const sectionFiltersVisible = sectionFiltersOpen || hasSectionFilters;
+  const sectionFiltersVisible = sectionFiltersOpen;
   const rerankTopNOptions = RERANK_TOP_N_SELECT_OPTIONS.filter(
     (option) => Number(option.value) <= Number(topK)
   );
@@ -462,28 +464,23 @@ export function SearchClient() {
               <div className="rounded-md border border-border bg-surface-sunken">
                 <button
                   type="button"
-                  aria-expanded={advancedOpen || hasAdvancedSettings}
+                  aria-expanded={advancedOpen}
                   aria-controls="search-advanced-conditions"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    setAdvancedOpen((open) => !open);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    setAdvancedOpen((open) => !open);
-                  }}
+                  onClick={() => setAdvancedOpen((open) => !open)}
                   className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
                   {t("search.filters.advanced")}
+                  {!advancedOpen && hasAdvancedSettings ? (
+                    <StatusBadge variant="info" label={t("search.filters.active")} />
+                  ) : null}
                   <DisclosureChevron
-                    expanded={advancedOpen || hasAdvancedSettings}
+                    expanded={advancedOpen}
                     size={14}
                     className="ml-auto text-fg-muted"
                   />
                 </button>
-                {advancedOpen || hasAdvancedSettings ? (
+                {advancedOpen ? (
                 <fieldset id="search-advanced-conditions" className="space-y-4 border-t border-border p-3">
                   <legend className="sr-only">{t("search.filters.title")}</legend>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -526,19 +523,16 @@ export function SearchClient() {
                         type="button"
                         aria-expanded={sectionFiltersVisible}
                         aria-controls="search-section-filters"
-                        onPointerDown={(event) => {
-                          event.preventDefault();
-                          setSectionFiltersOpen((open) => !open);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          event.preventDefault();
-                          setSectionFiltersOpen((open) => !open);
-                        }}
+                        onClick={() => setSectionFiltersOpen((open) => !open)}
                         className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         <span>{t("search.filters.sectionGroup")}</span>
-                        <DisclosureChevron expanded={sectionFiltersVisible} size={14} className="text-fg-muted" />
+                        <span className="flex items-center gap-2">
+                          {!sectionFiltersVisible && hasSectionFilters ? (
+                            <StatusBadge variant="info" label={t("search.filters.active")} />
+                          ) : null}
+                          <DisclosureChevron expanded={sectionFiltersVisible} size={14} className="text-fg-muted" />
+                        </span>
                       </button>
                       {sectionFiltersVisible ? (
                         <div id="search-section-filters" className="space-y-3 border-t border-border p-3">
@@ -584,19 +578,16 @@ export function SearchClient() {
                       type="button"
                       aria-expanded={classificationVisible}
                       aria-controls="search-classification-filters"
-                      onPointerDown={(event) => {
-                        event.preventDefault();
-                        setClassificationOpen((open) => !open);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        setClassificationOpen((open) => !open);
-                      }}
+                      onClick={() => setClassificationOpen((open) => !open)}
                       className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <span>{t("search.filters.classificationGroup")}</span>
-                      <DisclosureChevron expanded={classificationVisible} size={14} className="text-fg-muted" />
+                      <span className="flex items-center gap-2">
+                        {!classificationVisible && hasClassificationFilters ? (
+                          <StatusBadge variant="info" label={t("search.filters.active")} />
+                        ) : null}
+                        <DisclosureChevron expanded={classificationVisible} size={14} className="text-fg-muted" />
+                      </span>
                     </button>
                     {classificationVisible ? (
                       <div id="search-classification-filters" className="space-y-3 border-t border-border p-3">
@@ -1026,15 +1017,7 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
             type="button"
             aria-expanded={diagnosticsOpen}
             aria-controls="search-diagnostics-panel"
-            onPointerDown={(event) => {
-              event.preventDefault();
-              setDiagnosticsOpen((open) => !open);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              setDiagnosticsOpen((open) => !open);
-            }}
+            onClick={() => setDiagnosticsOpen((open) => !open)}
             className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             <span>{t("search.meta.diagnostics")}</span>

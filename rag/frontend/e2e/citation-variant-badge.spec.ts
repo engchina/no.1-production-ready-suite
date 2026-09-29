@@ -143,6 +143,8 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
     .getByRole("listbox", { name: /対象の業務ビュー/ })
     .getByRole("option", { name: /経理ビュー/ })
     .click();
+  // 業務ビューの一覧は選んでも開いたままなので閉じてから操作する（外側を押すと一覧を閉じるだけになる）。
+  await page.keyboard.press("Escape");
 
   await page.getByText("詳細条件", { exact: true }).click();
   const topKSelect = page.getByRole("combobox", { name: "候補取得数" });
