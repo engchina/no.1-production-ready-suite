@@ -84,7 +84,7 @@ def new_name(product: str, key: str) -> str | None:
         if upper.startswith(old_prefix):
             return new_prefix + upper.removeprefix(old_prefix)
     prefix = PREFIXES[product]
-    if upper.startswith("PLATFORM_") or upper.startswith(prefix):
+    if upper.startswith(("PLATFORM_", prefix)):
         return upper
     field = key.lower()
     if field in PLATFORM_SETTING_FIELDS:
