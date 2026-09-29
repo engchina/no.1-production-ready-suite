@@ -181,6 +181,54 @@ class _CachedSegmentLoadResult:
     missing_ranges: set[tuple[int, int]]
 
 
+@dataclass(frozen=True)
+class IngestionSuccessOutcome:
+    """索引まで終えた取込の、まだ記録していない成功の監査・metric の内容(#504)。
+
+    本文(抽出テキスト・chunk)は持たない。原本は ``source_sha256`` / ``source_size`` が
+    あればそれを、なければ ``source_bytes`` の hash と長さを監査に残す(記録時に計算する)。
+    レシピの job は active への切り替えが成功した後に :meth:`record` を 1 回だけ呼ぶ。
+    """
+
+    trace_id: str
+    document_id: str
+    started_at: float
+    source_bytes: bytes
+    source_sha256: str | None
+    source_size: int | None
+    document_type: str | None
+    extraction_confidence: float | None
+    parser_backend: str | None
+    parser_profile: str | None
+    segment_count: int
+    fallback_count: int
+    failed_segment_count: int
+    chunk_count: int
+    vector_count: int
+
+    def record(self) -> None:
+        """成功の metric と監査を記録する。経過時間は取込の開始から記録時までとする。"""
+        record_ingestion("success", self.chunk_count)
+        record_rag_ingestion_audit(
+            trace_id=self.trace_id,
+            document_id=self.document_id,
+            outcome="success",
+            source_bytes=self.source_bytes,
+            document_type=self.document_type,
+            extraction_confidence=self.extraction_confidence,
+            parser_backend=self.parser_backend,
+            parser_profile=self.parser_profile,
+            segment_count=self.segment_count,
+            fallback_count=self.fallback_count,
+            failed_segment_count=self.failed_segment_count,
+            chunk_count=self.chunk_count,
+            vector_count=self.vector_count,
+            elapsed_ms=elapsed_ms(self.started_at),
+            source_sha256=self.source_sha256,
+            source_size=self.source_size,
+        )
+
+
 class IngestionPipeline:
     """ドキュメント取込パイプライン。"""
 
@@ -199,6 +247,9 @@ class IngestionPipeline:
         self._settings = settings or get_settings()
         self._recipe_id = recipe_id
         self._recipe_revision = recipe_revision
+        # ``record_outcome=False`` で索引まで終えた取込の、記録していない成功の内容(#504)。
+        # 公開の工程(ingest / index_reviewed / chunk_reviewed / index_chunked)の開始で空に戻す。
+        self.deferred_success_outcome: IngestionSuccessOutcome | None = None
         self._vlm = vlm or OciEnterpriseAiClient(settings=self._settings)
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
@@ -342,6 +393,8 @@ class IngestionPipeline:
         prepared_artifact: DocumentPreprocessArtifact | None = None,
         manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        source_sha256: str | None = None,
+        source_size: int | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。
 
@@ -349,7 +402,10 @@ class IngestionPipeline:
         artifact / 配信を一切更新せず、失敗しても文書を ERROR にしない。レシピ実験で配信中の
         文書を乱さず候補 chunk_set だけ materialize するために使う(REVIEW ゲートも無視して
         必ず索引まで進める)。chunk_set の行確定・配信は呼び出し側が行う。
+        ``source_sha256`` / ``source_size`` を渡すと、成功・失敗の監査の原本の hash とサイズに
+        ``image_bytes`` ではなくそれを使う(処理後ファイルを読むレシピの job。#504)。
         """
+        self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
         strategy = extraction_strategy_for_source(
@@ -626,6 +682,8 @@ class IngestionPipeline:
                 document_title=(
                     source_profile.original_file_name if source_profile is not None else ""
                 ),
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
         except IngestionCancelledError as exc:
             await self._mark_segments_cancelled(checkpoint_segments)
@@ -639,6 +697,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
         except Exception as exc:
@@ -660,6 +720,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
 
@@ -780,11 +842,15 @@ class IngestionPipeline:
         前段(parse/抽出)は再実行せず、保存済み抽出本文を再利用する。
         review gate 無効時や旧互換の複数 chunk_set materialization で使う。
         """
+        self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
         detail = await self._oracle.get_document(document_id)
         if detail is None:
             raise IngestionUserError("ドキュメントが見つかりません。")
+        # 原本 bytes は読まないため、監査には文書に記録済みの原本の hash とサイズを使う(#504)。
+        source_sha256 = detail.content_sha256
+        source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
@@ -812,6 +878,8 @@ class IngestionPipeline:
                 manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
                 document_title=detail.file_name,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
         except IngestionCancelledError as exc:
             record_ingestion("cancelled", 0)
@@ -824,6 +892,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
         except Exception as exc:
@@ -843,6 +913,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
 
@@ -855,11 +927,15 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """REVIEW で承認済みの抽出から chunk だけを作り、CHUNKED で停止する。"""
+        self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
         detail = await self._oracle.get_document(document_id)
         if detail is None:
             raise IngestionUserError("ドキュメントが見つかりません。")
+        # 原本 bytes は読まないため、監査には文書に記録済みの原本の hash とサイズを使う(#504)。
+        source_sha256 = detail.content_sha256
+        source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
@@ -916,6 +992,8 @@ class IngestionPipeline:
                     document_id=document_id,
                     outcome="success",
                     source_bytes=b"",
+                    source_sha256=source_sha256,
+                    source_size=source_size,
                     document_type=_observability_document_type(extraction.document_type),
                     extraction_confidence=extraction.confidence,
                     parser_backend=quality_report.parser_backend,
@@ -939,6 +1017,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
         except Exception as exc:
@@ -958,6 +1038,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
 
@@ -970,11 +1052,15 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """CHUNKED の chunk_set から embedding→index だけを実行する。"""
+        self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
         detail = await self._oracle.get_document(document_id)
         if detail is None:
             raise IngestionUserError("ドキュメントが見つかりません。")
+        # 原本 bytes は読まないため、監査には文書に記録済みの原本の hash とサイズを使う(#504)。
+        source_sha256 = detail.content_sha256
+        source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
@@ -1011,9 +1097,8 @@ class IngestionPipeline:
                 manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
                 reuse_saved_chunks=True,
-                # 原本 bytes は読まないため、文書に記録済みの原本の hash とサイズを監査に使う。
-                source_sha256=detail.content_sha256,
-                source_size=detail.file_size_bytes,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
         except IngestionCancelledError as exc:
             record_ingestion("cancelled", 0)
@@ -1026,6 +1111,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
         except Exception as exc:
@@ -1045,6 +1132,8 @@ class IngestionPipeline:
                 failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
             raise
 
@@ -1168,11 +1257,14 @@ class IngestionPipeline:
         manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         document_title: str = "",
+        source_sha256: str | None = None,
+        source_size: int | None = None,
     ) -> DocumentDetail:
         """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
 
         ``record_outcome=False`` のときは成功 metric / audit を出さない(複数 chunk_set を
         materialize する loop で、1 文書 1 論理取込として記録を 1 回に集約するため)。
+        記録しなかった成功の内容は ``deferred_success_outcome`` に残る。
         ``manage_document_state=False``(candidate モード)では文書 status を INDEXED へ
         遷移させない(配信中文書を乱さない)。
 
@@ -1205,6 +1297,8 @@ class IngestionPipeline:
             manage_document_state=manage_document_state,
             cancel_checker=cancel_checker,
             reuse_saved_chunks=False,
+            source_sha256=source_sha256,
+            source_size=source_size,
         )
 
     def _chunk_embedding_inputs(self, chunks: list[Chunk]) -> list[str]:
@@ -1243,6 +1337,9 @@ class IngestionPipeline:
 
         ``source_sha256`` / ``source_size`` は、``source_bytes`` を持たない工程が成功の監査に
         原本の hash とサイズを残すために渡す。
+        ``record_outcome=False`` のときは成功の metric / 監査を記録せず、その内容を
+        ``deferred_success_outcome`` に残す。レシピの job は active への切り替えが成功した後に
+        それを記録する(#504)。
         """
         await _raise_if_cancelled(cancel_checker)
         embed_inputs = self._chunk_embedding_inputs(chunks)
@@ -1303,26 +1400,27 @@ class IngestionPipeline:
             if current is None:
                 raise IngestionUserError("ドキュメントが見つかりません。")
             detail = current
+        outcome = IngestionSuccessOutcome(
+            trace_id=trace_id,
+            document_id=document_id,
+            started_at=started_at,
+            source_bytes=source_bytes,
+            source_sha256=source_sha256,
+            source_size=source_size,
+            document_type=_observability_document_type(extraction.document_type),
+            extraction_confidence=extraction.confidence,
+            parser_backend=quality_report.parser_backend,
+            parser_profile=quality_report.parser_profile,
+            segment_count=len(checkpoint_segments),
+            fallback_count=1 if quality_report.fallback_used else 0,
+            failed_segment_count=quality_report.failed_segment_count,
+            chunk_count=len(chunks),
+            vector_count=len(vectors),
+        )
         if record_outcome:
-            record_ingestion("success", len(chunks))
-            record_rag_ingestion_audit(
-                trace_id=trace_id,
-                document_id=document_id,
-                outcome="success",
-                source_bytes=source_bytes,
-                document_type=_observability_document_type(extraction.document_type),
-                extraction_confidence=extraction.confidence,
-                parser_backend=quality_report.parser_backend,
-                parser_profile=quality_report.parser_profile,
-                segment_count=len(checkpoint_segments),
-                fallback_count=1 if quality_report.fallback_used else 0,
-                failed_segment_count=quality_report.failed_segment_count,
-                chunk_count=len(chunks),
-                vector_count=len(vectors),
-                elapsed_ms=elapsed_ms(started_at),
-                source_sha256=source_sha256,
-                source_size=source_size,
-            )
+            outcome.record()
+        else:
+            self.deferred_success_outcome = outcome
         return detail
 
     async def _preprocess_source(
