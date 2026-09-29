@@ -192,10 +192,11 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     "parser_adapter_backend": (
         "parser_adapter_backend",
         "parser_docling_enabled",
-        "parser_docling_vision_enabled",
         "parser_unstructured_enabled",
         "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
+        # Vision は解析の後の共通の段で、解析結果(図の要素の本文)を変える(#497)。
+        "vision_enabled",
     ),
     "chunking_strategy": (
         "chunking_strategy",
@@ -207,7 +208,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "graph_profile": ("graph_profile",),
     "field_extraction_enabled": ("field_extraction_enabled",),
-    "asset_summary_enabled": ("asset_summary_enabled",),
     "navigation_summary_enabled": ("navigation_summary_enabled",),
 }
 
@@ -1811,7 +1811,7 @@ def _requested_layer_ids_for_chunk_set(
 
 def _layer_requested(layer: str, settings: Settings) -> bool:
     if layer == "metadata":
-        return bool(settings.rag_field_extraction_enabled or settings.rag_asset_summary_enabled)
+        return bool(settings.rag_field_extraction_enabled)
     if layer == "graph":
         return settings.rag_graph_profile != "off"
     if layer == "navigation":
@@ -2946,9 +2946,8 @@ def _metadata_layer_state(
     extraction: Mapping[str, object],
     settings: Settings,
 ) -> tuple[DocumentLayerStatusName, str]:
-    """項目抽出と図表要約を機能別に判定し、有効な機能すべてに成果物があれば実体化とする。"""
+    """項目抽出の成果物があれば実体化とする(図の要約は Vision の解析結果に含まれる。#497)。"""
     field_enabled = bool(getattr(settings, "rag_field_extraction_enabled", False))
-    asset_enabled = bool(getattr(settings, "rag_asset_summary_enabled", False))
     reasons: list[str] = []
     if field_enabled and not _fields_materialized(extraction):
         if not load_field_schema().fields:
@@ -2958,17 +2957,15 @@ def _metadata_layer_state(
             )
         else:
             reasons.append("項目抽出の成果物がまだありません")
-    if asset_enabled and not _asset_summaries_materialized(extraction):
-        reasons.append("図表要約の成果物がまだありません")
     if reasons:
         return (DocumentLayerStatusName.PLANNED_ONLY, "。".join(reasons) + "。")
-    if field_enabled or asset_enabled:
+    if field_enabled:
         return (
             DocumentLayerStatusName.MATERIALIZED,
             f"{user_label}は保存済み抽出 artifact から実体化済みです。",
         )
-    # どちらも無効なのに layer が要求された場合は旧来の payload 有無で判定する。
-    if _fields_materialized(extraction) or _asset_summaries_materialized(extraction):
+    # 無効なのに layer が要求された場合は旧来の payload 有無で判定する。
+    if _fields_materialized(extraction):
         return (
             DocumentLayerStatusName.MATERIALIZED,
             f"{user_label}は保存済み抽出 artifact から実体化済みです。",
@@ -2983,15 +2980,6 @@ def _fields_materialized(extraction: Mapping[str, object]) -> bool:
     return bool(extraction.get("fields"))
 
 
-def _asset_summaries_materialized(extraction: Mapping[str, object]) -> bool:
-    assets = extraction.get("assets")
-    if isinstance(assets, Sequence):
-        for asset in assets:
-            if isinstance(asset, Mapping) and asset.get("summary"):
-                return True
-    return bool(extraction.get("asset_summary"))
-
-
 def _layer_metrics(layer: str, extraction: Mapping[str, object] | None) -> dict[str, object]:
     if not extraction:
         return {}
@@ -3002,7 +2990,6 @@ def _layer_metrics(layer: str, extraction: Mapping[str, object] | None) -> dict[
     return {
         "field_count": _metadata_item_count(extraction.get("fields")),
         "asset_count": _metadata_item_count(extraction.get("assets")),
-        "has_asset_summary": bool(extraction.get("asset_summary")),
     }
 
 

@@ -11,7 +11,8 @@ sibling repo `../rag_poc`（DocRAG）の、解析から回答生成までの実�
 | 置き場所 | 内容 |
 |---|---|
 | `packages/docrag_core` | rag_poc の `src/docrag` を `entrypoints`（Gradio / HTTP）を除いてそのまま移したもの。import パスは `docrag.*` のまま。backend と docling サービスが依存する。回帰テストは CI の「DocRAG core」ジョブで実行する |
-| `services/parsers/docling` | DocRAG の Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約、装飾画像の判定、任意の Vision 図説明）。`parser_artifacts.docrag_layout` に LayoutRecord を保持する |
+| `services/parsers/docling` | DocRAG の Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約）。`parser_artifacts.docrag_layout` に LayoutRecord を保持する。Vision は行わない（#497） |
+| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、docrag_core の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。Docling は結果を `docrag_layout` の record にも書き戻す（#497） |
 | `backend/app/rag/docrag_chunking.py` | チャンク戦略 `docrag_small_to_big`（画面の表示名は「DocRAG 親子階層」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/docrag_answer.py` | 回答エンジン `docrag`（rag_poc の回答フローを backend の検索・rerank で駆動） |
 | `backend/app/rag/business_view_knowledge.py` | 業務ビュー単位の知識（ドメインキーワード / Approved FAQ / 用語・ルール） |
@@ -23,7 +24,8 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 
 | 機能 | 層 | 設定する場所 |
 |---|---|---|
-| Docling 解析・Vision 図説明 | 文書レシピ | 検索・回答設定 > 文書解析（Docling 選択時の「図・画像を AI で読み取る」）、または文書のレシピ編集 |
+| Docling 解析 | 文書レシピ | 検索・回答設定 > 文書解析、または文書のレシピ編集 |
+| 図・画像を AI で読み取る（Vision） | 文書レシピ | 文書のレシピ編集（解析エンジンに関係なく選べる）。全体の既定は env の `RAG_VISION_ENABLED` だけで決める（#497） |
 | DocRAG 親子階層 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子階層」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
 | 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
@@ -33,17 +35,17 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 
 | DocRAG の回答生成テンプレート（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
-| 図・画像の読み取りプロンプト（`image_retrieval`） | global | 検索・回答設定 > 文書解析（Docling の「図・画像を AI で読み取る」が有効なとき） |
+| 図・画像の読み取りプロンプト（`image_retrieval`） | global | 検索・回答設定 > 文書解析（常に表示。文書のレシピで Vision を有効にしたとき、解析エンジンに関係なく使う） |
 
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。
 
-編集したプロンプトは `rag_docrag_prompts` に保存する（migration `20260926_004_docrag_prompts`）。回答では docrag の runtime の `prompt_overrides` で渡し、解析では `parser_options.image_retrieval_prompt` で docling サービスへ渡す（Vision の段階だけ有効）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
+編集したプロンプトは `rag_docrag_prompts` に保存する（migration `20260926_004_docrag_prompts`）。回答では docrag の runtime の `prompt_overrides` で渡し、解析では backend の Vision の段（`app/rag/vision.py`）が読み取りの指示として使う（#497 以前は docling サービスへ `parser_options` で渡していた）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを完全一致で比べる。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
 ## 使い方（推奨の流れ）
 
-1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、Vision（図・画像を AI で読み取る）を有効にする。有効にすると、画像 1 枚ごとに LLM の呼び出しと時間がかかる。
+1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
 2. **分割**：文書分割を「DocRAG 親子階層」にする。親子の分割は Docling の解析結果（`parser_artifacts.docrag_layout`）を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI の解析結果など）では、失敗させずに「構造認識」（`structure_aware`。chunk size・overlap・最小文字数は文書分割の設定値）で分割する（#300）。縮退したことは各 chunk の metadata（`chunk_strategy=structure_aware`、`chunk_strategy_requested=docrag_small_to_big`、`chunk_strategy_fallback_reason=docrag_layout_missing`）と取込の trace（`effective_chunk_strategy`）に残り、文書詳細の Chunk タブと分割プレビューに「構造認識で分割しました」と表示する。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直す。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
 3. **確認**：文書詳細の抽出タブで、次を確認できる。
    - 要素の種別と bbox
@@ -75,7 +77,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_DOCRAG_PARENT_TARGET_CHARS` | `6000` | 親チャンク目標文字数（1,200〜10,000） |
 | `RAG_DOCRAG_PARENT_MAX_PAGES` | `3` | 親チャンク最大ページ数（1〜5） |
 | `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `12` | 親チャンク最大 child 数（3〜20） |
-| `RAG_PARSER_DOCLING_VISION_ENABLED` | `false` | Docling 解析で図と画像入りの表を Vision で説明する（文書レシピで上書きできる） |
+| `RAG_VISION_ENABLED` | `false` | 解析の後に図と画像入りの表を既定の Vision モデルで説明し、図の要素の本文にする。全ての解析エンジンで使える（文書レシピで上書きできる。#497。旧 `RAG_PARSER_DOCLING_VISION_ENABLED` は読まない） |
 | `RAG_ANSWER_ENGINE` | `standard` | 回答エンジンの全体既定。`docrag` で rag_poc の回答フローを使う（業務ビューで上書きできる） |
 | `RAG_TEXT_SEARCH_TOKENIZER` | `builtin` | Oracle Text クエリの分割方式。`sudachi` で rag_poc の Sudachi 分割を使う（検索・回答設定 > 検索方法で変更でき、業務ビューで上書きできる）。業務ビューにドメインキーワードがあれば、`builtin` でも DocRAG の分割でキーワードを 1 語として優先する |
 | `RAG_DOCRAG_QUERY_STRATEGY` | `auto_routing` | DocRAG 回答の質問拡張戦略（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。業務ビューで上書きできる |
@@ -89,7 +91,18 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
 | `DOCRAG_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
-docling サービスの Vision は、backend のサービス管理が橋渡しする `OCI_ENTERPRISE_AI_*`（endpoint / API キー / project / VLM モデル）を使う。モデル設定を変更したら docling サービスを再起動する。
+Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
+
+Docling 以外の解析エンジンの bbox は単位が違うため、Vision の段がページ画像の px へそろえる。確かでない bbox は切り出さず、要素の metadata に `vision_status=skipped` / `vision_skip_reason=bbox_unit_unknown` と warning `vision_bbox_unit_unknown` を残す。
+
+| 解析エンジン | bbox の単位 | 根拠 |
+|---|---|---|
+| Docling | サービスが描いたページ画像の px（`DOCRAG_RENDER_DPI`） | `docrag_layout.pages` の寸法から同じ解像度で描き直す |
+| Unstructured | coordinates の座標系（PixelSpace 等）の px | registry が `layout_width` / `layout_height` を要素と asset の `page_width` / `page_height` に写す。無ければ不明 |
+| Dots.OCR | 描いたページ画像の px（`RAG_PARSER_DOTS_OCR_DPI`） | `pages` の寸法。画像ファイルは元画像の px |
+| MinerU | 0-1000 に正規化した座標 | MinerU 2.x の content_list の仕様（実サービスでは未確認）。1000 を超えれば不明 |
+| OCI Enterprise AI の VLM 解析 | 0-1 または 0-100 | 構造化抽出の prompt の指定。100 を超えれば不明 |
+| 全ての解析エンジン | 値が全て 1 以下なら 0-1 | 画像ファイル全体の `source_image` の asset も含む |
 
 ## 保存先
 

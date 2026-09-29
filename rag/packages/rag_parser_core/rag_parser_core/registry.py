@@ -3358,6 +3358,10 @@ def _structured_from_adapter_elements(
             section_path = list(section_stack)
         for key, value in _adapter_bbox_lineage_metadata(bbox).items():
             metadata.setdefault(key, value)
+        # bbox の座標系の寸法(Unstructured の coordinates の layout_width / height)は、ページの
+        # 寸法より正確に bbox の基準を表すので先に入れる(解析後の Vision の切り出し。#497)。
+        for key, value in _adapter_coordinate_space(item).items():
+            metadata.setdefault(key, value)
         if page_number is not None and page_number in page_metadata:
             page = page_metadata[page_number]
             if page.width is not None:
@@ -4952,6 +4956,9 @@ def _asset_from_adapter_element(
     confidence = _adapter_element_confidence(item)
     if confidence is not None:
         metadata["confidence"] = confidence
+    # 図だけの block(本文の要素を作らない)も、解析後の Vision が切り出せるよう bbox の基準を残す。
+    metadata.update(_adapter_bbox_lineage_metadata(bbox))
+    metadata.update(_adapter_coordinate_space(item))
     return ExtractionAsset(
         asset_id=asset_id,
         kind=asset_kind,
@@ -5170,6 +5177,34 @@ def _adapter_bbox_value(value: object) -> object | None:
         dumped: object = to_dict()
         return dumped
     return None
+
+
+def _adapter_coordinate_space(item: object) -> dict[str, ExtractionMetadataValue]:
+    """bbox の座標系の寸法を返す(分からなければ空)。
+
+    Unstructured の ``metadata.coordinates`` は ``points`` と座標系(``system``: PixelSpace /
+    PointSpace 等。``width`` / ``height`` を持つ)を持ち、dict 化すると ``layout_width`` /
+    ``layout_height`` / ``system``(クラス名)になる。どちらの形でも ``page_width`` /
+    ``page_height`` に写す。
+    """
+    coordinates = _metadata_get(_object_member(item, "metadata"), "coordinates")
+    if coordinates is None:
+        return {}
+    if isinstance(coordinates, Mapping):
+        width = _float_value(coordinates.get("layout_width"))
+        height = _float_value(coordinates.get("layout_height"))
+        system: object = coordinates.get("system")
+    else:
+        system_object = getattr(coordinates, "system", None)
+        width = _float_value(getattr(system_object, "width", None))
+        height = _float_value(getattr(system_object, "height", None))
+        system = type(system_object).__name__ if system_object is not None else None
+    if width is None or height is None or width <= 0 or height <= 0:
+        return {}
+    space: dict[str, ExtractionMetadataValue] = {"page_width": width, "page_height": height}
+    if isinstance(system, str) and system.strip():
+        space["bbox_coordinate_system"] = system.strip()[:40]
+    return space
 
 
 def _adapter_bbox_lineage_metadata(

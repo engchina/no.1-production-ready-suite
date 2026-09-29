@@ -24,7 +24,7 @@ import json
 from app.config import DOCRAG_CHUNKING_SETTING_FIELDS, Settings
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
-KEY_VERSION = "v4"
+KEY_VERSION = "v5"
 
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
@@ -35,9 +35,11 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_preprocess_enabled",
     "rag_parser_adapter_backend",
     "rag_parser_asr_enabled",
+    # Vision は解析エンジンに関係なく図の要素の本文を変える(#497)。変えると再解析になる。
+    "rag_vision_enabled",
 )
 _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
-    "docling": ("rag_parser_docling_enabled", "rag_parser_docling_vision_enabled"),
+    "docling": ("rag_parser_docling_enabled",),
     "unstructured": ("rag_parser_unstructured_enabled",),
     "mineru": (
         "rag_parser_mineru_enabled",
@@ -66,7 +68,7 @@ _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE = 320
 _DOCRAG_CHUNKING_STRATEGY = "docrag_small_to_big"
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
-_METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled", "rag_asset_summary_enabled")
+_METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled",)
 _GRAPH_FIELDS: tuple[str, ...] = ("rag_graph_profile",)
 _NAV_FIELDS: tuple[str, ...] = ("rag_navigation_summary_enabled", "rag_raptor_enabled")
 

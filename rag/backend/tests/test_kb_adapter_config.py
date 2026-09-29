@@ -189,13 +189,13 @@ def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: 
 
 
 def test_ingestion_scope_overlays_advanced_axes() -> None:
-    """取込側の高度軸(graph / field / asset / nav)も KB 上書きで effective に反映される。"""
+    """取込側の高度軸(graph / field / vision / nav)も KB 上書きで effective に反映される。"""
     settings = get_settings()
     config = _config(
         ingestion={
             "graph_profile": "entities",
             "field_extraction_enabled": True,
-            "asset_summary_enabled": True,
+            "vision_enabled": True,
             "navigation_summary_enabled": True,
         },
     )
@@ -204,14 +204,14 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
     assert overrides == {
         "rag_graph_profile": "entities",
         "rag_field_extraction_enabled": True,
-        "rag_asset_summary_enabled": True,
+        "rag_vision_enabled": True,
         "rag_navigation_summary_enabled": True,
     }
 
     effective = resolve_effective_settings(settings, config, scope="ingestion")
     assert effective.rag_graph_profile == "entities"
     assert effective.rag_field_extraction_enabled is True
-    assert effective.rag_asset_summary_enabled is True
+    assert effective.rag_vision_enabled is True
     assert effective.rag_navigation_summary_enabled is True
     # query 系は不変。
     assert effective.rag_generation_profile == settings.rag_generation_profile

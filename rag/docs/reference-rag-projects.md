@@ -228,7 +228,7 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 | **hkuds/rag-anything** | 非常に高 | マルチモーダル RAG の重点プロジェクト。長期トラッキング推奨。 |
 | **FareedKhan-dev/rag-zero-hallucinations** | 非常に高 | **near-zero hallucination RAG の end-to-end 参照(チュートリアル + コード)**。引用付き生成・claim faithfulness 検証・校正済み棄権・CRAG 自己修正を一通り通す。プロダクトではないが、本プロジェクトの「ハルシネーション抑止 preset」設計の中核参考。確定スタックへの再マップは §2.1(LanceDB / Qwen3+vLLM / bm25s は導入せず Oracle 26ai / OCI Enterprise AI / OCI Cohere へ)。 |
 | **oceanbase/powerrag** | シナリオ型(**取込済**) | RAGFlow ベースの OceanBase 強化版。優点を確定スタックへ再マップ済み: scalar/日付/カテゴリ pre-filter(Oracle 26ai `JSON_VALUE`/`TIMESTAMP`/`IN`)、schema 駆動 field/entity 抽出(`extraction_field_adapter`、LangExtract→OCI Enterprise AI structured output)、prompt 版管理(`prompt_versions`、custom generation profile)、MinerU/Dots.OCR を parser adapter 候補として登録(`rag_parser_mineru_enabled`/`rag_parser_dots_ocr_enabled`、未導入時は安全に fallback)。 |
-| **ontos-ai/knowhere** | 高(**取込済**) | 文書解析 API / RAG-ready chunks。優点を再実装済み: 章節 navigation tree + node 要約 + progressive disclosure(`app/rag/navigation.py`。取込時に抽出結果の `navigation` へ保存する)、図表の VLM 要約を検索可能 chunk へ紐付け(`asset_summary`、`rag_asset_summary_enabled`)。source traceability は既存 citation lineage を継続活用。外部 API 直接依存ではなく adapter として再マップ。 |
+| **ontos-ai/knowhere** | 高(**取込済**) | 文書解析 API / RAG-ready chunks。優点を再実装済み: 章節 navigation tree + node 要約 + progressive disclosure(`app/rag/navigation.py`。取込時に抽出結果の `navigation` へ保存する)、図表の VLM 要約は #497 で「図・画像を AI で読み取る(Vision)」(`rag_vision_enabled`、`app/rag/vision.py`)へ統合し、図の要素の本文を説明文にして検索可能な chunk に入れる。source traceability は既存 citation lineage を継続活用。外部 API 直接依存ではなく adapter として再マップ。 |
 
 ## 6. 用途別おすすめ短縮リスト
 

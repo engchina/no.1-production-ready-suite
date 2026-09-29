@@ -1,18 +1,16 @@
 """Docling parser マイクロサービス(DocRAG 解析実装)。
 
-rag_poc(DocRAG)の Docling 解析(読み順・段組補正、表セル補修、図内 OCR 集約、
-装飾画像判定、任意の Vision 図説明)を実行し、`StructuredExtraction` を返す。
-LayoutRecord 全体は parser_artifacts["docrag_layout"] に保持する。
-Vision は backend が送る parser_options.vision_enabled で有効化し、LLM は
-OCI_ENTERPRISE_AI_* env(openai SDK)を使う。
+rag_poc(DocRAG)の Docling 解析(読み順・段組補正、表セル補修、図内 OCR 集約)を実行し、
+`StructuredExtraction` を返す。LayoutRecord 全体は parser_artifacts["docrag_layout"] に保持する。
+図・画像の Vision は backend の解析後の共通の段が行う(#497)。このサービスは LLM を呼ばず、
+parser_options は受け取っても使わない(旧 backend の vision_enabled などは無視する)。
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
 from rag_parser_core.result import ParseHealth, ParseResponse, service_failure_warning
@@ -52,7 +50,7 @@ async def parse(
     profile = _parse_source_profile(source_profile)
     effective_content_type = content_type or (profile.content_type if profile else "")
     file_name = (profile.sanitized_file_name if profile else "") or (file.filename or "")
-    options = _options(parser_options)
+    _ = parser_options  # 旧 backend が送る Vision の指定(#497 で廃止)は使わない。
     _, version = _detect_version("docling", ("docling",))
     try:
         extraction = await asyncio.to_thread(
@@ -60,8 +58,6 @@ async def parse(
             source_bytes,
             file_name=file_name,
             content_type=effective_content_type,
-            vision_enabled=bool(options.get("vision_enabled")),
-            image_retrieval_prompt=str(options.get("image_retrieval_prompt") or "") or None,
         )
     except Exception as exc:  # noqa: BLE001 - 縮退せず原因を上流へ返す
         logger.exception("docling parse failed")
@@ -80,11 +76,3 @@ async def parse(
         template="docling_docrag",
         warnings=list(extraction.warnings),
     )
-
-
-def _options(raw: str) -> dict[str, Any]:
-    try:
-        value = json.loads(raw) if raw.strip() else {}
-    except ValueError:
-        return {}
-    return value if isinstance(value, dict) else {}

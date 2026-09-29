@@ -210,9 +210,6 @@ export const ja = {
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
   "settings.parserAdapters.capabilities": "対応形式",
-  "settings.parserAdapters.doclingVision.label": "図・画像を AI で読み取る（Vision）",
-  "settings.parserAdapters.doclingVision.hint":
-    "図や画像を含む表を Vision モデルで説明し、検索できる本文にします。画像 1 枚ごとに LLM の呼び出しと解析時間がかかります。",
   "settings.parserAdapters.legacyBackendNotice":
     "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
@@ -355,7 +352,7 @@ export const ja = {
   "settings.pipelineCanvas.stage.index": "検索インデックス",
   "settings.pipelineCanvas.stage.graph": "関係情報",
   "settings.pipelineCanvas.stage.field": "項目抽出",
-  "settings.pipelineCanvas.stage.asset": "図表要約",
+  "settings.pipelineCanvas.stage.vision": "図・画像の読み取り",
   "settings.pipelineCanvas.stage.navigation": "ナビ要約",
   "settings.pipelineCanvas.indexValue": "取込時に生成",
   "settings.preprocess.subtitle":
@@ -1447,7 +1444,9 @@ export const ja = {
   "knowledgeBases.adapter.field.chunkingStrategy": "文書分割",
   "knowledgeBases.adapter.field.graphProfile": "関係情報の構築",
   "knowledgeBases.adapter.field.fieldExtraction": "メタデータ/項目抽出",
-  "knowledgeBases.adapter.field.assetSummary": "図表 VLM 要約",
+  "knowledgeBases.adapter.field.vision": "図・画像を AI で読み取る（Vision）",
+  "knowledgeBases.adapter.field.vision.hint":
+    "解析の後に、図や画像を含む表を既定の Vision モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに Vision モデルの呼び出しと時間がかかります。",
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
@@ -2210,7 +2209,7 @@ export const ja = {
   "settings.docragPrompts.vlm_answer.field": "テンプレート",
   "settings.docragPrompts.image_retrieval.title": "図・画像の読み取りプロンプト",
   "settings.docragPrompts.image_retrieval.description":
-    "Docling の「図・画像を AI で読み取る」で、画像ごとに Vision モデルへ渡す指示です（rag_poc の image_retrieval.txt）。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
+    "文書のレシピで「図・画像を AI で読み取る（Vision）」を有効にしたとき、解析エンジンに関係なく画像ごとに Vision モデルへ渡す指示です（rag_poc の image_retrieval.txt）。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
   "settings.docragPrompts.image_retrieval.field": "プロンプト",
   "settings.docragPrompts.default": "既定値",
   "settings.docragPrompts.customized": "編集済み（{value}）",

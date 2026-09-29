@@ -85,8 +85,9 @@ for (const viewport of [
   });
 }
 
-test("Docling の図・画像の読み取りが有効なら、読み取りプロンプトを編集できる", async ({ page }) => {
-  await mockParserAdapters(page, { docling_vision_enabled: true });
+test("図・画像の読み取りプロンプトは常に編集でき、Vision のスイッチは出さない", async ({ page }) => {
+  // Vision の有効/無効は文書のレシピで選ぶ(#497)。文書解析の画面には出さない。
+  await mockParserAdapters(page);
   let saved: unknown = null;
   await page.route("**/api/settings/docrag-prompts**", async (route) => {
     if (route.request().method() === "PUT") saved = route.request().postDataJSON();
@@ -114,7 +115,9 @@ test("Docling の図・画像の読み取りが有効なら、読み取りプロ
 
   await page.goto("/settings/parser-adapters");
 
+  await expect(page.getByRole("switch", { name: /図・画像を AI で読み取る/ })).toHaveCount(0);
   const card = page.getByRole("heading", { name: "図・画像の読み取りプロンプト" }).locator("xpath=ancestor::*[.//textarea][1]");
+  await expect(card).toContainText("解析エンジンに関係なく");
   await expect(card.getByText("既定値", { exact: true })).toBeVisible();
   await card.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
   await card.getByRole("button", { name: "プロンプトを保存" }).click();
@@ -207,7 +210,6 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   expect(savedPayload).toEqual({
     adapter_backend: "mineru",
     docling_enabled: false,
-    docling_vision_enabled: false,
     unstructured_enabled: false,
     mineru_enabled: true,
     dots_ocr_enabled: false,
