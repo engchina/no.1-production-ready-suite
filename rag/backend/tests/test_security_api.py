@@ -234,6 +234,10 @@ def test_manifest_key_assignments() -> None:
     assert _perm("POST", "/settings/database/system-tables/initialize") == {
         "rag.system_tables.manage"
     }
+    # 参照先のない行の削除（#511）は作成・更新と同じ権限。
+    assert _perm("POST", "/settings/database/system-tables/orphaned-rows/delete") == {
+        "rag.system_tables.manage"
+    }
     assert {"menu.search", "menu.chat", "menu.upload", "menu.file_list"} <= _perm(
         "GET", "/knowledge-bases"
     )

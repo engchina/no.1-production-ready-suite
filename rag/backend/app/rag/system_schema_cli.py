@@ -1,4 +1,4 @@
-"""RAG system schema の status / initialize / recreate CLI。"""
+"""RAG system schema の status / initialize / recreate / delete-orphans CLI。"""
 
 from __future__ import annotations
 
@@ -28,6 +28,27 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=f"確認値: {RECREATE_CONFIRMATION}",
     )
+    # 参照先のない行の削除（#511）。status の orphaned_foreign_keys で件数を確認してから実行する。
+    delete_orphans = subparsers.add_parser(
+        "delete-orphans",
+        help=(
+            "外部キーの参照先のない行を削除し、外部キーを検査済み（VALIDATE）にします。"
+            "削除した行は復元できません。"
+        ),
+    )
+    delete_orphans.add_argument(
+        "--constraint",
+        required=True,
+        help="外部キーの名前（status の orphaned_foreign_keys の name）。",
+    )
+    delete_orphans.add_argument(
+        "--expected-rows",
+        required=True,
+        type=int,
+        help=(
+            "status で確認した参照先のない行の件数。実行時の件数がこれより多いときは削除しません。"
+        ),
+    )
     return parser
 
 
@@ -38,6 +59,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = system_schema_manager.status()
         elif args.command == "initialize":
             result = system_schema_manager.initialize()
+        elif args.command == "delete-orphans":
+            if args.expected_rows < 0:
+                raise SystemSchemaError(
+                    "SCHEMA_ORPHAN_ROWS_INVALID",
+                    "--expected-rows には 0 以上の件数を指定してください。",
+                    status_code=422,
+                )
+            result = system_schema_manager.delete_orphaned_rows(
+                constraint_name=args.constraint,
+                expected_orphan_rows=args.expected_rows,
+            )
         else:
             result = system_schema_manager.initialize(
                 recreate=True,

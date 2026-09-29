@@ -47,6 +47,10 @@ export function SystemTablesCard() {
           dismissOnOverlay: false,
         })
       }
+      // 参照先のない行の削除（#511）は取り消せないため、表・外部キー・件数を示す確認ダイアログで承認させる。
+      confirmDeleteOrphans={(request) =>
+        confirm({ ...request, tone: "danger", dismissOnOverlay: false })
+      }
     />
   );
 }

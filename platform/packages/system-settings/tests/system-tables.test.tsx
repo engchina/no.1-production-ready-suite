@@ -109,6 +109,9 @@ describe("判定の helper", () => {
     expect(isSystemTablesStatusData({ ...statusData("ready"), missing_foreign_keys: [] })).toBe(true);
     expect(isSystemTablesStatusData({ ...statusData("ready"), missing_foreign_keys: {} })).toBe(false);
     expect(isSystemTablesStatusData({ ...statusData("ready"), orphaned_foreign_keys: "x" })).toBe(false);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), mismatched_foreign_keys: [] })).toBe(true);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), mismatched_foreign_keys: {} })).toBe(false);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), disabled_foreign_keys: 1 })).toBe(false);
     expect(isSystemTablesStatusData({ ...statusData("ready"), tables: null })).toBe(false);
     expect(isSystemTablesStatusData({ status: "ready" })).toBe(false);
     expect(isSystemTablesStatusData(null)).toBe(false);
@@ -213,6 +216,73 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).toContain("既存の行は自動では削除しません");
     expect(html).toContain("参照先のない行 3 件");
     expect(html).not.toContain('data-testid="system-tables-missing-foreign-keys"');
+  });
+
+  it("削除規則が違う外部キーと無効な外部キーを更新必要の案内に並べる（#511）", () => {
+    const base = {
+      table_name: "DEMO_ITEMS",
+      columns: ["PARENT_ID"],
+      referenced_table_name: "DEMO_PARENTS",
+      referenced_columns: ["PARENT_ID"],
+      delete_rule: "CASCADE",
+    };
+    const html = renderCard(
+      clientWith(
+        statusData("outdated", {
+          pending_versions: [],
+          mismatched_foreign_keys: [
+            {
+              ...base,
+              name: "DEMO_ITEMS_PARENT_FK",
+              orphan_rows: 0,
+              current_name: "LEGACY_FK",
+              current_delete_rule: "NO ACTION",
+            },
+          ],
+          disabled_foreign_keys: [{ ...base, name: "DEMO_ITEMS_SELF_FK", orphan_rows: 4 }],
+        }),
+      ),
+    );
+    expect(html).toContain('data-testid="system-tables-mismatched-foreign-keys"');
+    expect(html).toContain("削除規則が正本と異なる外部キーが 1 件あります");
+    expect(html).toContain("削除規則 NO ACTION → CASCADE");
+    expect(html).toContain('data-testid="system-tables-disabled-foreign-keys"');
+    expect(html).toContain("無効になっている外部キーが 1 件あります");
+    expect(html).toContain("参照先のない行 4 件");
+  });
+
+  it("参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）", () => {
+    const data = statusData("ready", {
+      orphaned_foreign_keys: [
+        {
+          name: "DEMO_ITEMS_PARENT_FK",
+          table_name: "DEMO_ITEMS",
+          columns: ["PARENT_ID"],
+          referenced_table_name: "DEMO_PARENTS",
+          referenced_columns: ["PARENT_ID"],
+          delete_rule: "CASCADE",
+          orphan_rows: 3,
+        },
+      ],
+    });
+    const withDelete: SystemTablesApi = {
+      ...api,
+      deleteSystemTableOrphanedRows: () => new Promise<never>(() => undefined),
+    };
+    const confirm = () => Promise.resolve(true);
+    const html = renderCard(clientWith(data), { api: withDelete, confirmDeleteOrphans: confirm });
+    expect(html).toContain('aria-label="参照先のない行を削除 DEMO_ITEMS_PARENT_FK"');
+    expect(html).toContain("「参照先のない行を削除」で削除できます");
+
+    for (const props of [
+      { api: withDelete },
+      { confirmDeleteOrphans: confirm },
+      { api: withDelete, confirmDeleteOrphans: confirm, canManage: false },
+    ]) {
+      const hidden = renderCard(clientWith(data), props);
+      expect(hidden).toContain("参照先のない行 3 件");
+      expect(hidden).not.toContain("参照先のない行を削除 DEMO_ITEMS_PARENT_FK");
+    }
   });
 
   it("名前の head はそのまま出し、製品の文言で上書きできる", () => {
