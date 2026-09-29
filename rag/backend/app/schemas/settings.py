@@ -45,6 +45,7 @@ from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploa
 from pr_system_settings.oci import OciSettingsData as OciSettingsData
 from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
 from pr_system_settings.system_schema import SystemSchemaOperation, SystemSchemaStatus
+from pr_system_settings.system_schema import SystemTableForeignKeyData as SystemTableForeignKeyData
 from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
 from pr_system_settings.system_schema import (
     SystemTablesInitializeRequest as SystemTablesInitializeRequest,
@@ -172,6 +173,10 @@ class SystemTablesStatusData(BaseModel):
     existing_table_count: int
     missing_objects: list[SystemTableObjectData]
     retired_objects: list[SystemTableObjectData]
+    # 既存の表に無い正本の外部キー（更新で足す）と、既存の行を検査していない外部キーに残る
+    # 参照先の無い行（#505）。
+    missing_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
+    orphaned_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     tables: list[SystemTableMetadata]
     operation_state: SystemTableOperationState
 

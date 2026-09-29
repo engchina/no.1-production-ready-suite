@@ -17,6 +17,13 @@ export const SYSTEM_TABLES_MESSAGES = {
     "必須オブジェクトが {count} 件不足しています。「作成・更新」で既存データを保持したまま補完できます。",
   "settings.database.systemTables.statusHint.outdated":
     "テーブルは存在しますが migration version または checksum が古くなっています。無損失で更新できます。",
+  "settings.database.systemTables.foreignKeys.missing":
+    "既存のテーブルに外部キーが {count} 件ありません。「作成・更新」で追加します。参照先のない既存の行がある外部キーは、既存の行を検査せずに追加し（新しい行から適用）、既存の行は削除しません。",
+  "settings.database.systemTables.foreignKeys.orphanedTitle": "参照先のない既存の行があります",
+  "settings.database.systemTables.foreignKeys.orphaned":
+    "次の外部キーは既存の行を検査せずに追加したため、参照先のない行が残っています。新しい行には外部キーが適用されます。既存の行は自動では削除しません。",
+  "settings.database.systemTables.foreignKeys.item": "{table} ({columns}) → {referenced}",
+  "settings.database.systemTables.foreignKeys.orphanRows": "参照先のない行 {count} 件",
   "settings.database.systemTables.summary.tables": "存在テーブル / 必須テーブル",
   "settings.database.systemTables.summary.objects": "存在オブジェクト / 必須オブジェクト",
   "settings.database.systemTables.summary.objectsHint": "テーブル・索引などの合計",

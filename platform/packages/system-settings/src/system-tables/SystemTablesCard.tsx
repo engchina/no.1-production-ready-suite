@@ -41,6 +41,7 @@ import {
 } from "./systemTables";
 import type {
   SystemObjectMetadata,
+  SystemTableForeignKey,
   SystemTableSchemaStatus,
   SystemTablesApi,
   SystemTablesStatusData,
@@ -129,6 +130,9 @@ export function SystemTablesCard({
   const data = isSystemTablesStatusData(statusQuery.data) ? statusQuery.data : undefined;
   const statusUnavailable = statusQuery.isError || (statusQuery.data !== undefined && !data);
   const schemaOperationRunning = data?.operation_state.status === "running";
+  // 外部キーの差分（#505。RAG だけが返す。無ければ出さない）。
+  const missingForeignKeys = data?.missing_foreign_keys ?? [];
+  const orphanedForeignKeys = data?.orphaned_foreign_keys ?? [];
   const busy =
     statusQuery.isFetching ||
     statusUnavailable ||
@@ -256,6 +260,28 @@ export function SystemTablesCard({
                 {text(`settings.database.systemTables.statusHint.${data.status}`, {
                   count: data.missing_objects.length,
                 })}
+                {missingForeignKeys.length > 0 ? (
+                  <div className="mt-2" data-testid="system-tables-missing-foreign-keys">
+                    <p>
+                      {text("settings.database.systemTables.foreignKeys.missing", {
+                        count: missingForeignKeys.length,
+                      })}
+                    </p>
+                    <ForeignKeyList foreignKeys={missingForeignKeys} text={text} />
+                  </div>
+                ) : null}
+              </Banner>
+            ) : null}
+
+            {orphanedForeignKeys.length > 0 ? (
+              <Banner
+                severity="warning"
+                title={text("settings.database.systemTables.foreignKeys.orphanedTitle")}
+              >
+                <div data-testid="system-tables-orphaned-foreign-keys">
+                  <p>{text("settings.database.systemTables.foreignKeys.orphaned")}</p>
+                  <ForeignKeyList foreignKeys={orphanedForeignKeys} text={text} />
+                </div>
               </Banner>
             ) : null}
 
@@ -367,6 +393,32 @@ export function SystemTablesCard({
 }
 
 type Text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) => string;
+
+/** 外部キーの一覧（子の表と列 → 参照先の表。参照先のない行があれば件数を添える）。 */
+function ForeignKeyList({ foreignKeys, text }: { foreignKeys: SystemTableForeignKey[]; text: Text }) {
+  return (
+    <ul className="mt-1.5 space-y-1">
+      {foreignKeys.map((foreignKey) => (
+        <li key={foreignKey.name} className="min-w-0">
+          <span className="font-mono text-xs [overflow-wrap:anywhere]">
+            {text("settings.database.systemTables.foreignKeys.item", {
+              table: foreignKey.table_name,
+              columns: foreignKey.columns.join(", "),
+              referenced: foreignKey.referenced_table_name,
+            })}
+          </span>
+          {foreignKey.orphan_rows ? (
+            <span className="ml-2 text-xs text-fg-muted">
+              {text("settings.database.systemTables.foreignKeys.orphanRows", {
+                count: formatNumber(foreignKey.orphan_rows),
+              })}
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function SummaryItem({ label, value, description }: { label: string; value: string; description?: string }) {
   return (

@@ -60,6 +60,41 @@ def test_system_tables_status_is_read_only(monkeypatch: MonkeyPatch) -> None:
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "ready"
     assert calls == 1
+    # 外部キーの差分が無い応答（旧い manager の形）でも空の一覧になる（#505）。
+    assert response.json()["data"]["missing_foreign_keys"] == []
+    assert response.json()["data"]["orphaned_foreign_keys"] == []
+
+
+def test_system_tables_status_returns_foreign_key_drift(monkeypatch: MonkeyPatch) -> None:
+    foreign_key = {
+        "name": "RAG_CHUNK_SETS_DOCUMENT_FK",
+        "table_name": "RAG_CHUNK_SETS",
+        "columns": ["DOCUMENT_ID"],
+        "referenced_table_name": "RAG_DOCUMENTS",
+        "referenced_columns": ["DOCUMENT_ID"],
+        "delete_rule": "CASCADE",
+        "orphan_rows": 240,
+    }
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {
+            **_status_payload(),
+            "status": "outdated",
+            "missing_foreign_keys": [foreign_key],
+            "orphaned_foreign_keys": [{**foreign_key, "name": "RAG_DOC_EXT_DOCUMENT_FK"}],
+        },
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    response = client.get("/api/settings/database/system-tables")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "outdated"
+    assert data["missing_foreign_keys"] == [foreign_key]
+    assert data["orphaned_foreign_keys"][0]["name"] == "RAG_DOC_EXT_DOCUMENT_FK"
+    assert data["orphaned_foreign_keys"][0]["orphan_rows"] == 240
 
 
 def test_initialize_system_tables_returns_typed_operation(monkeypatch: MonkeyPatch) -> None:

@@ -172,6 +172,7 @@ export {
   SYSTEM_TABLES_QUERY_KEY,
   type SystemObjectMetadata,
   type SystemObjectType,
+  type SystemTableForeignKey,
   type SystemTableMetadata,
   type SystemTableObjectRef,
   type SystemTableOperationResult,

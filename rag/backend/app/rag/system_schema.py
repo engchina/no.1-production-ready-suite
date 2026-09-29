@@ -17,15 +17,17 @@ from typing import Any
 from pr_system_settings.auth.migrations import apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.system_schema import (
-    SystemSchemaActiveJobsError as _SharedActiveJobsError,
-)
-from pr_system_settings.system_schema import (
+    ForeignKeySpec,
     SystemSchemaBusyError,
     SystemSchemaError,
     SystemSchemaManagerBase,
     SystemSchemaStatus,
     bind_list,
+    foreign_keys_from_create_table,
     oracle_error_code,
+)
+from pr_system_settings.system_schema import (
+    SystemSchemaActiveJobsError as _SharedActiveJobsError,
 )
 from pr_system_settings.system_schema import (
     classify_system_schema_status as classify_schema_status,
@@ -255,9 +257,31 @@ def managed_manifest_from_schema(
     return objects
 
 
+def managed_foreign_keys_from_schema(
+    sections: Sequence[OracleSchemaSection] | None = None,
+) -> tuple[ForeignKeySpec, ...]:
+    """DDL 正本の CREATE TABLE にある外部キー（#505）。
+
+    表の作成は「無ければ作る」なので、古い版で作った表には後から足した FK が無いまま残る。
+    状態の確認でこの一覧と USER_CONSTRAINTS を比べ、更新の操作で足す。
+    """
+
+    return tuple(
+        foreign_key
+        for section in sections or oracle_schema_sections()
+        for statement in split_sql_statements(section.sql)
+        for foreign_key in foreign_keys_from_create_table(statement)
+    )
+
+
+MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = managed_foreign_keys_from_schema()
+
+
 def classify_system_schema_status(
     objects: set[tuple[str, str]],
     applied_checksums: dict[str, str],
+    *,
+    foreign_keys_current: bool = True,
 ) -> SystemSchemaStatus:
     """Dictionary / ledger snapshot を四つの公開状態へ分類する（分類の規則は platform）。"""
 
@@ -269,6 +293,7 @@ def classify_system_schema_status(
         migrations_current=all(
             applied_checksums.get(migration.name) == migration.checksum for migration in MIGRATIONS
         ),
+        foreign_keys_current=foreign_keys_current,
     )
 
 
@@ -279,6 +304,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_table = MIGRATION_TABLE
     migration_key_column = "MIGRATION_NAME"
     managed_tables = MANAGED_TABLES
+    managed_foreign_keys = MANAGED_FOREIGN_KEYS
     recreate_confirmation = RECREATE_CONFIRMATION
     log_prefix = "rag"
     lock_timeout_guidance = "取込処理を停止してから、"
@@ -342,6 +368,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
         dropped_count += self._drop_retired_objects(connection)
         self._apply_missing_indexes(connection)
+        # 古い版で作った表に、後から正本に足した FK を補う（孤立した行は消さない。#505）。
+        added_foreign_keys = self._apply_missing_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
         if interim["status"] != "ready":
@@ -358,6 +386,10 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             after,
             dropped_object_count=dropped_count,
             applied_migrations=applied_names,
+            added_foreign_keys=[item["name"] for item in added_foreign_keys],
+            novalidate_foreign_keys=[
+                item["name"] for item in added_foreign_keys if not item["validated"]
+            ],
         )
         return {
             **after,
@@ -388,8 +420,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             for migration in MIGRATIONS
             if applied.get(migration.name) != migration.checksum
         ]
+        foreign_keys = self._foreign_key_drift(connection)
         return {
-            "status": classify_system_schema_status(set(objects), applied),
+            "status": classify_system_schema_status(
+                set(objects),
+                applied,
+                foreign_keys_current=not foreign_keys.missing,
+            ),
             "schema_version": SCHEMA_VERSION,
             "schema_head": MIGRATIONS[-1].name if MIGRATIONS else SCHEMA_VERSION,
             "applied_versions": matching,
@@ -410,6 +447,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 for name, object_type in RETIRED_MANAGED_OBJECTS
                 if (name, object_type) in objects
             ],
+            # 既存の表に無い FK（更新で足す）と、既存の行を検査していない FK の孤立した行（#505）。
+            **foreign_keys.status_fields(),
             "tables": self._load_table_metadata(connection, objects),
             "operation_state": self._operation_payload(connection, objects),
         }
@@ -582,6 +621,7 @@ system_schema_manager = SystemSchemaManager()
 __all__ = [
     "CONTROL_TABLE",
     "DOMAIN_TABLES",
+    "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
     "MANAGED_OBJECTS",
     "MANAGED_TABLES",
@@ -597,6 +637,7 @@ __all__ = [
     "SystemSchemaError",
     "SystemSchemaManager",
     "classify_system_schema_status",
+    "managed_foreign_keys_from_schema",
     "managed_manifest_from_schema",
     "oracle_error_code",
     "system_schema_manager",
