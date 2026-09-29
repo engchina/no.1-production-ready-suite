@@ -16,6 +16,21 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from docrag.adapters.parsers.base import AnalysisContext
+from docrag.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
+from docrag.config import Settings, get_settings
+from docrag.models.layout import LayoutRecord, PageImage
+from docrag.parsing.layout_metadata import (
+    layout_record_element_metadata,
+    layout_record_vision_summary,
+)
+from docrag.parsing.rendering import (
+    SUPPORTED_SOURCE_FILE_TYPES,
+    get_source_page_count,
+    prepare_source_for_analysis,
+    source_frame_warnings,
+)
+from docrag.parsing.visual_artifacts import persist_semantic_visual_crops
 from rag_parser_core.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -25,22 +40,6 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
-
-from docrag.adapters.parsers.base import AnalysisContext
-from docrag.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
-from docrag.models.layout import LayoutRecord, PageImage
-from docrag.parsing.rendering import (
-    SUPPORTED_SOURCE_FILE_TYPES,
-    get_source_page_count,
-    prepare_source_for_analysis,
-    source_frame_warnings,
-)
-from docrag.config import Settings, get_settings
-from docrag.parsing.layout_metadata import (
-    layout_record_element_metadata,
-    layout_record_vision_summary,
-)
-from docrag.parsing.visual_artifacts import persist_semantic_visual_crops
 
 logger = logging.getLogger(__name__)
 
