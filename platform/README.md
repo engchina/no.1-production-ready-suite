@@ -123,3 +123,42 @@ import { AppShell, Sidebar } from "@engchina/production-ready-ui";
 
 共通 UI の変更は **必ずこのパッケージで行い** タグを切る。各アプリは `components/ui/*` を
 私的にコピーしない。
+
+---
+
+## 既存環境の更新手順（#499 既定のモデルの変数名）
+
+#499 で「システム設定 › モデル」の既定のモデルを **既定の Vision モデル**（必須。画像を読む処理）と **既定のテキストモデル**
+（任意。画像を扱わない処理。未設定なら既定の Vision モデル）の 2 つに分け、共通 `.env`（`platform/.env`）の変数名を変えた。
+旧名は読まないため、`.env` に既定のモデルを書いている環境は次の手順で書き換える（画面だけで設定している環境は手順 2〜3 は不要）。
+
+| 旧名 | 新名 |
+|---|---|
+| `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL` | `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL` |
+| `PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL` | `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL`（`DEFAULT_MODEL` が無いか空のときだけ。旧版と同じ優先順） |
+| `PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL` | `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL` |
+
+- 画面で保存した `model-settings.json` は書き換えなくてよい。旧 key の `default_model_id` は、backend が読み込むときに
+  既定のテキストモデルへ移し、既定の Vision モデルは従来と同じ規則（既定モデルが Vision 対応ならそれ、そうでなければ一覧で最初の
+  Vision 対応のモデル）で補う。画面の「登録モデル」で保存し直すと新しい key（`default_text_model_id` / `default_vision_model_id`）で書かれる。
+- 登録モデルに Vision 対応のモデルが 1 つもない環境は、画面を開くと「既定の Vision モデル」にエラーが出る。登録モデルの 1 つ以上で
+  「画像入力（Vision）に対応」をオンにして保存する（接続情報・Generative AI の節の保存は止めない）。
+
+1. 3 製品の backend と worker を停止する（Compute では各製品の systemd の unit。RAG は backend と ingestion-worker）。
+2. 書き換えの内容を確認する（書き換えない）。リポジトリ root で実行する。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_model_env_names.py
+   ```
+
+3. 問題がなければ `--apply` で書き換える（`platform/.env.bak-499` を作ってから書き換える）。新名が既にあれば新名の値を残し、
+   旧名の行を消す（競合として表示する）。`PLATFORM_ENV_FILE` で別の場所を使っている場合は `--env-file <path>` を渡す。
+
+   ```bash
+   uv run --project platform/packages/backend_core \
+       python platform/scripts/migrate_model_env_names.py --apply
+   ```
+
+4. 3 製品の backend と worker を起動する。RAG は、解析サービス（parser）に渡す実行用の env（`RAG_SERVICE_RUNTIME_ENV_FILE`）を
+   backend が書き直すので、RAG の「サービス管理」画面から OCI の parser を再起動する（`systemctl restart` だけでは古い env のまま）。

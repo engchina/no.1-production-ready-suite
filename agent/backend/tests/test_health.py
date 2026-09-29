@@ -1537,7 +1537,8 @@ def test_model_settings_save_persists_json_and_env_secret(
                     "vision_enabled": True,
                 }
             ],
-            "default_model_id": "enterprise-model",
+            "default_text_model_id": "",
+            "default_vision_model_id": "enterprise-model",
             "api_path": "/responses",
             "vlm_input_mode": "auto",
             "text_payload_template": "",
@@ -1566,7 +1567,9 @@ def test_model_settings_save_persists_json_and_env_secret(
         encoding="utf-8"
     )
     assert settings.oci_enterprise_ai_models[0].model_id == "enterprise-model"
-    assert saved["enterprise_ai"]["default_model_id"] == "enterprise-model"
+    assert saved["enterprise_ai"]["default_vision_model_id"] == "enterprise-model"
+    assert saved["enterprise_ai"]["default_text_model_id"] == ""
+    assert "default_model_id" not in saved["enterprise_ai"]
     assert saved["generative_ai"]["embedding_dim"] == 1536
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     data = resp.json()["data"]
@@ -1582,7 +1585,7 @@ def test_model_settings_test_uses_saved_secret_for_blank_key(
         request: ModelSettingsTestRequest,
     ) -> dict[str, str | int | float | bool | None]:
         assert cast(Any, settings).oci_enterprise_ai_api_key == "saved-secret"
-        assert cast(Any, settings).oci_enterprise_ai_default_model == "enterprise-model"
+        assert cast(Any, settings).oci_enterprise_ai_default_text_model == "enterprise-model"
         assert request.target_type == "enterprise_text"
         return {"response_chars": 2, "surface": "llm"}
 
@@ -1603,7 +1606,8 @@ def test_model_settings_test_uses_saved_secret_for_blank_key(
                     "vision_enabled": True,
                 }
             ],
-            "default_model_id": "enterprise-model",
+            "default_text_model_id": "",
+            "default_vision_model_id": "enterprise-model",
             "api_path": "/responses",
             "vlm_input_mode": "auto",
             "text_payload_template": "",
@@ -1637,6 +1641,25 @@ def test_model_settings_test_uses_saved_secret_for_blank_key(
     assert data["status"] == "success"
     assert data["details"] == {"response_chars": 2, "surface": "llm"}
     assert "dry_run" not in data["details"]
+
+
+def test_model_test_payloads_use_text_and_vision_defaults() -> None:
+    """テキストは既定のテキストモデル（未設定なら Vision）、画像は既定の Vision モデル（#499）。"""
+    from pr_system_settings.model import EnterpriseAiModelSettings
+
+    settings = EnterpriseAiModelSettings(
+        default_text_model_id="text-model", default_vision_model_id="vision-model"
+    )
+    text = agent_router._enterprise_text_payload(settings, prompt="p", context="")
+    vision = agent_router._enterprise_vision_payload(settings, prompt="p")
+    assert text["model"] == "text-model"
+    assert vision["model"] == "vision-model"
+
+    fallback = settings.model_copy(update={"default_text_model_id": ""})
+    assert (
+        agent_router._enterprise_text_payload(fallback, prompt="p", context="")["model"]
+        == "vision-model"
+    )
 
 
 def test_list_tools_v2_includes_external_tools() -> None:

@@ -13,6 +13,7 @@ import {
   ProcessingIndicator,
   RequiredBadge,
   SecretField,
+  SelectField,
   Skeleton,
   Switch,
   TextField,
@@ -41,6 +42,16 @@ import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
 } from "../oci/SettingsTestResultPanel";
+import {
+  DEFAULT_MODEL_FIELD_IDS,
+  DEFAULT_MODEL_FIELD_ORDER,
+  followModelChange,
+  textModelOptions,
+  validateDefaultModels,
+  visionModelOptions,
+  type DefaultModelErrors,
+  type DefaultModelField,
+} from "./defaultModels";
 import { t } from "./messages";
 import {
   MODEL_SETTINGS_QUERY_KEY,
@@ -75,6 +86,8 @@ export interface ModelSettingsPageProps {
  *
  * - 3節（Enterprise AI 接続 / 登録モデル / Generative AI）をそれぞれ保存する。
  *   画面にない項目（API path・VLM 入力方式・timeout など）は保存済みの値をそのまま送る
+ * - 登録モデルの節の下で、既定の Vision モデル（必須）と既定のテキストモデル（任意）を選ぶ（#499）。
+ *   選んだモデルの削除・Vision 対応のオフ・保存の操作で、保存前にフィールドのエラーを出す
  * - 保存中・テスト中は入力を止め、未保存のまま離れようとすると確認する
  */
 export function ModelSettingsPage({
@@ -116,6 +129,9 @@ export function ModelSettingsPage({
   const [activeSaveSection, setActiveSaveSection] =
     useState<ModelSaveSection | null>(null);
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  // 既定のモデルのエラーは、関係する操作（選択・Vision 対応の切替・削除・保存）の後から出す。
+  // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
+  const [showDefaultErrors, setShowDefaultErrors] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
   const [testResults, setTestResults] = useState<
     Partial<Record<ModelTestKey, ModelSettingsTestResult>>
@@ -125,6 +141,10 @@ export function ModelSettingsPage({
     if (!query.data || draft) return;
     const loaded = cloneSettings(query.data.settings);
     setDraft(loaded);
+    // 保存済みの状態が不正（旧設定で Vision 対応のモデルがない等）なら、開いた時点で案内する。
+    setShowDefaultErrors(
+      Object.keys(validateDefaultModels(loaded.enterprise_ai)).length > 0,
+    );
     setBaselineData(query.data);
     setCheckData(query.data);
   }, [draft, query.data]);
@@ -162,11 +182,10 @@ export function ModelSettingsPage({
     );
     setCheckData(baselineData);
     setTestResults({});
-    clearSaveError(
-      key === "default_model_id"
-        ? "enterprise_models"
-        : "enterprise_connection",
-    );
+    const isDefaultModel =
+      key === "default_text_model_id" || key === "default_vision_model_id";
+    if (isDefaultModel) setShowDefaultErrors(true);
+    clearSaveError(isDefaultModel ? "enterprise_models" : "enterprise_connection");
   };
 
   const updateGenerative = <K extends keyof GenerativeAiModelSettings>(
@@ -214,28 +233,23 @@ export function ModelSettingsPage({
   ) => {
     setDraft((current) => {
       if (!current) return current;
+      const previous = current.enterprise_ai.models[index];
       const models = current.enterprise_ai.models.map((model, modelIndex) =>
         modelIndex === index ? { ...model, ...patch } : model,
       );
-      const previousModelId =
-        current.enterprise_ai.models[index]?.model_id ?? "";
-      const nextModelId =
-        typeof patch.model_id === "string" ? patch.model_id : previousModelId;
-      let defaultModelId = current.enterprise_ai.default_model_id;
-      if (previousModelId && previousModelId === defaultModelId) {
-        defaultModelId = nextModelId;
-      } else if (!defaultModelId && nextModelId.trim()) {
-        defaultModelId = nextModelId;
-      }
+      const next = models[index];
       return {
         ...current,
         enterprise_ai: {
           ...current.enterprise_ai,
           models,
-          default_model_id: defaultModelId,
+          ...(next
+            ? followModelChange(current.enterprise_ai, previous, next)
+            : {}),
         },
       };
     });
+    if (patch.vision_enabled !== undefined) setShowDefaultErrors(true);
     setCheckData(baselineData);
     setTestResults((current) => ({
       ...current,
@@ -277,26 +291,21 @@ export function ModelSettingsPage({
       tone: "danger",
     });
     if (!ok) return;
-    setDraft((current) => {
-      if (!current) return current;
-      const removedModelId =
-        current.enterprise_ai.models[index]?.model_id ?? "";
-      const models = current.enterprise_ai.models.filter(
-        (_, modelIndex) => modelIndex !== index,
-      );
-      const defaultModelId =
-        removedModelId === current.enterprise_ai.default_model_id
-          ? (models.find((model) => model.model_id.trim())?.model_id ?? "")
-          : current.enterprise_ai.default_model_id;
-      return {
-        ...current,
-        enterprise_ai: {
-          ...current.enterprise_ai,
-          models,
-          default_model_id: defaultModelId,
-        },
-      };
-    });
+    // 既定に選んでいたモデルを消しても既定は変えず、フィールドのエラーで選び直しを案内する。
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            enterprise_ai: {
+              ...current.enterprise_ai,
+              models: current.enterprise_ai.models.filter(
+                (_, modelIndex) => modelIndex !== index,
+              ),
+            },
+          }
+        : current,
+    );
+    setShowDefaultErrors(true);
     setCheckData(baselineData);
     setTestResults({});
     clearSaveError("enterprise_models");
@@ -338,6 +347,18 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (!draft || !baselineData || operationBusy) return;
     clearSaveError(section);
+    if (section === "enterprise_models") {
+      const errors = validateDefaultModels(draft.enterprise_ai);
+      const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
+        (field) => errors[field],
+      );
+      if (firstInvalid) {
+        // 送信を止め、最初の不正な欄へフォーカスする（messaging.md §3.2）。
+        setShowDefaultErrors(true);
+        document.getElementById(DEFAULT_MODEL_FIELD_IDS[firstInvalid])?.focus();
+        return;
+      }
+    }
     setActiveSaveSection(section);
     try {
       const payload = buildSectionSavePayload(
@@ -362,6 +383,10 @@ export function ModelSettingsPage({
       setActiveSaveSection(null);
     }
   };
+
+  const defaultModelErrors = draft
+    ? validateDefaultModels(draft.enterprise_ai)
+    : {};
 
   if (query.isError) {
     return (
@@ -512,17 +537,18 @@ export function ModelSettingsPage({
             <CardContent className="space-y-5">
               <ModelCatalogEditor
                 models={draft.enterprise_ai.models}
-                defaultModelId={draft.enterprise_ai.default_model_id}
                 testingKey={testingKey}
                 testResults={testResults}
-                onDefaultChange={(modelId) =>
-                  updateEnterprise("default_model_id", modelId)
-                }
                 onModelChange={updateEnterpriseModel}
                 onAdd={addEnterpriseModel}
                 onRemove={removeEnterpriseModel}
                 onTest={(key, target) => void handleTestModel(key, target)}
                 displayNamePlaceholder={displayNamePlaceholder}
+              />
+              <DefaultModelFields
+                enterprise={draft.enterprise_ai}
+                errors={showDefaultErrors ? defaultModelErrors : {}}
+                onChange={(field, value) => updateEnterprise(field, value)}
               />
               <ModelFormActions
                 sectionLabel={t("settings.model.enterprise.models")}
@@ -651,10 +677,8 @@ function ModelFormActions({
 
 function ModelCatalogEditor({
   models,
-  defaultModelId,
   testingKey,
   testResults,
-  onDefaultChange,
   onModelChange,
   onAdd,
   onRemove,
@@ -662,10 +686,8 @@ function ModelCatalogEditor({
   displayNamePlaceholder,
 }: {
   models: EnterpriseAiConfiguredModel[];
-  defaultModelId: string;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
-  onDefaultChange: (modelId: string) => void;
   onModelChange: (
     index: number,
     patch: Partial<EnterpriseAiConfiguredModel>,
@@ -701,8 +723,12 @@ function ModelCatalogEditor({
         id="enterprise-model-catalog"
         className="overflow-hidden rounded-md border border-border bg-surface-sunken"
       >
-        <div className="hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted md:grid md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:gap-3">
-          <span>{t("settings.model.enterprise.default")}</span>
+        <div
+          className={cn(
+            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted md:grid md:gap-3",
+            CATALOG_COLUMNS,
+          )}
+        >
           <span>{t("settings.model.enterprise.modelId")}</span>
           <span>{t("settings.model.enterprise.displayName")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
@@ -719,24 +745,11 @@ function ModelCatalogEditor({
           return (
             <div
               key={index}
-              className="grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:items-start"
+              className={cn(
+                "grid gap-3 border-b border-border p-3 last:border-b-0 md:items-start",
+                CATALOG_COLUMNS,
+              )}
             >
-              <label className="flex min-h-10 items-center gap-2 text-sm text-fg">
-                <input
-                  type="radio"
-                  name="enterprise-default-model"
-                  checked={
-                    Boolean(trimmedModelId) && defaultModelId === model.model_id
-                  }
-                  disabled={!trimmedModelId}
-                  aria-label={`${t("settings.model.enterprise.default")} ${modelNumber}`}
-                  onChange={() => onDefaultChange(model.model_id)}
-                  className="h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)] disabled:cursor-not-allowed"
-                />
-                <span className="md:sr-only">
-                  {t("settings.model.enterprise.default")}
-                </span>
-              </label>
               <CompactTextInput
                 label={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
                 value={model.model_id}
@@ -795,13 +808,73 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="md:col-span-5 md:col-start-2"
+                className="md:col-span-5"
               />
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/** 登録モデルの一覧の列（モデル ID / 表示名 / 画像入力（Vision）に対応 / テスト / 削除）。 */
+const CATALOG_COLUMNS =
+  "md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_8rem_7rem_3.25rem]";
+
+/**
+ * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
+ * - 既定の Vision モデル: 必須。選択肢は画像入力（Vision）に対応した登録モデルだけ
+ * - 既定のテキストモデル: 任意。未選択は「既定の Vision モデルを使う」
+ * 一覧から消えた・Vision 対応でなくなったモデルが選ばれたままなら、その ID を出したままエラーにする。
+ */
+function DefaultModelFields({
+  enterprise,
+  errors,
+  onChange,
+}: {
+  enterprise: EnterpriseAiModelSettings;
+  errors: DefaultModelErrors;
+  onChange: (field: DefaultModelField, value: string) => void;
+}) {
+  const headingId = "enterprise-default-models-title";
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="space-y-4 border-t border-border pt-5"
+    >
+      <div className="space-y-1">
+        <h3 id={headingId} className="text-sm font-semibold text-fg">
+          {t("settings.model.defaults.title")}
+        </h3>
+        <p className="text-xs leading-relaxed text-fg-muted">
+          {t("settings.model.defaults.description")}
+        </p>
+      </div>
+      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+        <SelectField
+          id={DEFAULT_MODEL_FIELD_IDS.default_vision_model_id}
+          label={t("settings.model.defaults.vision")}
+          required
+          requiredLabel={t("settings.model.required")}
+          value={enterprise.default_vision_model_id}
+          options={visionModelOptions(enterprise.models)}
+          placeholder={t("settings.model.defaults.visionPlaceholder")}
+          helper={t("settings.model.defaults.visionHelp")}
+          error={errors.default_vision_model_id}
+          onValueChange={(value) => onChange("default_vision_model_id", value)}
+        />
+        <SelectField
+          id={DEFAULT_MODEL_FIELD_IDS.default_text_model_id}
+          label={t("settings.model.defaults.text")}
+          value={enterprise.default_text_model_id}
+          options={textModelOptions(enterprise.models)}
+          helper={t("settings.model.defaults.textHelp")}
+          error={errors.default_text_model_id}
+          onValueChange={(value) => onChange("default_text_model_id", value)}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -1085,8 +1158,10 @@ export function buildSectionSavePayload(
     payload.enterprise_ai.models = draft.enterprise_ai.models.map((model) => ({
       ...model,
     }));
-    payload.enterprise_ai.default_model_id =
-      draft.enterprise_ai.default_model_id;
+    payload.enterprise_ai.default_text_model_id =
+      draft.enterprise_ai.default_text_model_id;
+    payload.enterprise_ai.default_vision_model_id =
+      draft.enterprise_ai.default_vision_model_id;
   } else {
     payload.generative_ai = { ...draft.generative_ai };
   }
@@ -1103,7 +1178,8 @@ function mergeSavedSectionIntoDraft(
       enterprise_ai: {
         ...saved.enterprise_ai,
         models: draft.enterprise_ai.models.map((model) => ({ ...model })),
-        default_model_id: draft.enterprise_ai.default_model_id,
+        default_text_model_id: draft.enterprise_ai.default_text_model_id,
+        default_vision_model_id: draft.enterprise_ai.default_vision_model_id,
       },
       generative_ai: { ...draft.generative_ai },
     };

@@ -76,9 +76,8 @@ def test_readiness_oci_missing_config_is_degraded(monkeypatch: MonkeyPatch) -> N
         "oci_enterprise_ai_endpoint",
         "oci_enterprise_ai_project_ocid",
         "oci_enterprise_ai_api_key",
-        "oci_enterprise_ai_default_model",
-        "oci_enterprise_ai_llm_model",
-        "oci_enterprise_ai_vlm_model",
+        "oci_enterprise_ai_default_text_model",
+        "oci_enterprise_ai_default_vision_model",
         "oci_genai_embedding_model",
         "oci_genai_rerank_model",
         "oracle_user",
@@ -157,9 +156,8 @@ def test_readiness_oci_requires_enterprise_ai_model_catalog(
     _configure_oci_readiness(monkeypatch, oracle_wallet_dir=str(wallet_dir))
     settings = get_settings()
     monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
-    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_vision_model", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_payload_template", VLM_TEMPLATE)
 
@@ -602,8 +600,7 @@ def _configure_oci_readiness(
         "oci_enterprise_ai_project_ocid",
         "ocid1.generativeaiproject.oc1..example",
     )
-    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "enterprise-llm")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "enterprise-vlm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_vision_model", "enterprise-vlm")
     monkeypatch.setattr(
         settings,
         "oci_enterprise_ai_models",
@@ -616,7 +613,7 @@ def _configure_oci_readiness(
             ),
         ],
     )
-    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "enterprise-llm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "enterprise-llm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "sk-test-secret")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_path", "/v1/llm/generate")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_path", "/v1/vlm/extract")

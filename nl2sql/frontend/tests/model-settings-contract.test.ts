@@ -20,6 +20,15 @@ const backendSettingsSchemaSource = readFileSync(
   "utf8"
 );
 
+test("Enterprise AI model settings keep the default text / vision model fields in frontend contract (#499)", () => {
+  for (const field of ["default_text_model_id", "default_vision_model_id"]) {
+    assert.match(backendSettingsSchemaSource, new RegExp(`${field}: str`, "u"));
+    assert.match(apiSource, new RegExp(`${field}: string;`, "u"));
+    assert.match(settingsE2eSource, new RegExp(`${field}:`, "u"));
+  }
+  assert.doesNotMatch(apiSource, /\bdefault_model_id\b/u);
+});
+
 test("Enterprise AI model settings keep max output token fields in frontend contract", () => {
   for (const field of ["llm_max_output_tokens", "vlm_max_output_tokens"]) {
     assert.match(backendSettingsSchemaSource, new RegExp(`${field}: int`, "u"));

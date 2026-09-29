@@ -15,7 +15,8 @@ const baseline: ModelSettingsPayload = {
     has_api_key: true,
     clear_api_key: false,
     models: [{ model_id: "saved-llm", display_name: "Saved", vision_enabled: false }],
-    default_model_id: "saved-llm",
+    default_text_model_id: "saved-llm",
+    default_vision_model_id: "",
     api_path: "/custom",
     vlm_input_mode: "files_api",
     text_payload_template: "",
@@ -37,7 +38,8 @@ describe("buildSectionSavePayload", () => {
       endpoint: "https://draft.example",
       api_key: "sk-draft",
       models: [{ model_id: "draft-llm", display_name: "Draft", vision_enabled: true }],
-      default_model_id: "draft-llm",
+      default_text_model_id: "",
+      default_vision_model_id: "draft-llm",
     },
     generative_ai: { ...baseline.generative_ai, rerank_model: "draft-rerank" },
   };
@@ -53,7 +55,9 @@ describe("buildSectionSavePayload", () => {
 
     const models = buildSectionSavePayload(baseline, draft, "enterprise_models");
     expect(models.enterprise_ai.endpoint).toBe("https://saved.example");
-    expect(models.enterprise_ai.default_model_id).toBe("draft-llm");
+    expect(models.enterprise_ai.default_text_model_id).toBe("");
+    expect(models.enterprise_ai.default_vision_model_id).toBe("draft-llm");
+    expect(connection.enterprise_ai.default_vision_model_id).toBe("");
 
     const genai = buildSectionSavePayload(baseline, draft, "generative_ai");
     expect(genai.generative_ai.rerank_model).toBe("draft-rerank");

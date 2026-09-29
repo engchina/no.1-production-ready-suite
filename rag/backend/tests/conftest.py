@@ -237,9 +237,8 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_project_ocid = ""
     settings.set_runtime_enterprise_ai_api_key("")
     settings.oci_enterprise_ai_models = []
-    settings.oci_enterprise_ai_default_model = ""
-    settings.oci_enterprise_ai_llm_model = ""
-    settings.oci_enterprise_ai_vlm_model = ""
+    settings.oci_enterprise_ai_default_text_model = ""
+    settings.oci_enterprise_ai_default_vision_model = ""
     settings.oci_enterprise_ai_llm_path = "/responses"
     settings.oci_enterprise_ai_vlm_path = "/responses"
     settings.oci_enterprise_ai_llm_payload_template = ""

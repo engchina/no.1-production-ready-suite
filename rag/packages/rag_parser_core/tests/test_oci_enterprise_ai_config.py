@@ -13,8 +13,8 @@ def test_config_from_env_reads_platform_names() -> None:
             "PLATFORM_OCI_ENTERPRISE_AI_API_KEY": "sk-test",
             "PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID": "ocid1.generativeaiproject.oc1..x",
             "PLATFORM_OCI_COMPARTMENT_ID": "ocid1.compartment.oc1..x",
-            "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL": "vendor.vision",
-            "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL": "vendor.llm",
+            "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL": "vendor.vision",
+            "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL": "vendor.llm",
             "PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS": "30",
         }
     )
@@ -25,6 +25,20 @@ def test_config_from_env_reads_platform_names() -> None:
     assert config.vision_model_id == "vendor.vision"
     assert config.default_model_id == "vendor.llm"
     assert config.oci_enterprise_ai_timeout_seconds == 30.0
+
+
+def test_config_from_env_text_model_falls_back_to_vision_model() -> None:
+    """既定のテキストモデルがなければ既定の Vision モデルを使う。旧名(#499 以前)は読まない。"""
+    config = OciEnterpriseAiConfig.from_env(
+        {
+            "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL": "vendor.vision",
+            "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL": "vendor.legacy-llm",
+            "PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL": "vendor.legacy-vlm",
+        }
+    )
+
+    assert config.vision_model_id == "vendor.vision"
+    assert config.default_model_id == "vendor.vision"
 
 
 def test_config_from_env_ignores_legacy_names() -> None:

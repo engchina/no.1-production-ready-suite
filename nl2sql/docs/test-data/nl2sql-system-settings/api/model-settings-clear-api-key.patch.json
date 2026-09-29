@@ -9,10 +9,11 @@
       {
         "model_id": "enterprise-nl2sql-llm",
         "display_name": "Enterprise NL2SQL LLM",
-        "vision_enabled": false
+        "vision_enabled": true
       }
     ],
-    "default_model_id": "enterprise-nl2sql-llm",
+    "default_text_model_id": "enterprise-nl2sql-llm",
+    "default_vision_model_id": "enterprise-nl2sql-llm",
     "api_path": "/responses",
     "vlm_input_mode": "auto",
     "text_payload_template": "",

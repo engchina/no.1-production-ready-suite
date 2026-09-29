@@ -57,6 +57,15 @@ stable JSON を返す。設定値は出力しない。終了コードが 0 以�
 非 local 環境は起動時に `NL2SQL_DEBUG=false` を必須とする。認証を有効にする場合は
 `PLATFORM_AUTH_COOKIE_SECURE=true` も必須とする。
 
+## 既存環境の更新手順（#499 既定のモデルの変数名）
+
+#499 で既定のモデルを「既定の Vision モデル」（必須）と「既定のテキストモデル」（任意。未設定なら既定の Vision モデル）の 2 つに分け、
+共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL` / `_LLM_MODEL` / `_VLM_MODEL` を
+`PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL` / `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL` に改名した（旧名は読まない）。
+`platform/.env` に既定のモデルを書いている環境は、backend と worker を止めてから
+`platform/scripts/migrate_model_env_names.py`（確認 → `--apply`）で書き換え、起動し直す。旧名と新名の対応、`model-settings.json` の
+扱い（旧 key は読み込み時に移す）は [platform/README.md の「既存環境の更新手順（#499）」](../../platform/README.md#既存環境の更新手順499-既定のモデルの変数名)を参照。
+
 ## 既存環境の更新手順（#211）
 
 旧名は読まないため、#211 を含む版へ更新するときは `backend/.env` の共通設定を共通 `.env` へ移す。

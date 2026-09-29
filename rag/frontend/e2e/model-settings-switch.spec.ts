@@ -22,7 +22,8 @@ function createModelSettings() {
             vision_enabled: true,
           },
         ],
-        default_model_id: "enterprise-llm",
+        default_text_model_id: "enterprise-llm",
+        default_vision_model_id: "enterprise-vision",
         api_path: "/responses",
         vlm_input_mode: "files_api",
         text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
@@ -55,7 +56,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`モデル設定は Enterprise AI の複数 LLM と既定モデルを表示する (${viewport.name})`, async ({ page }) => {
+  test(`モデル設定は Enterprise AI の複数 LLM と既定のモデル 2 つを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -80,14 +81,22 @@ for (const viewport of [
     await expect(page.getByLabel("モデル ID 1")).toHaveValue("enterprise-llm");
     await expect(page.getByLabel("表示名 1")).toHaveValue("標準 LLM");
     await expect(page.getByLabel("モデル ID 2")).toHaveValue("enterprise-vision");
-    await expect(page.getByRole("radio", { name: "既定 1" })).toBeChecked();
-    await expect(page.getByRole("switch", { name: "Vision 1" })).toHaveAttribute(
+    // 登録モデルの一覧は登録と画像入力（Vision）対応の指定だけ。既定の選択は一覧の下（#499）。
+    await expect(page.getByRole("radio", { name: /既定/ })).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "画像入力（Vision）に対応 1" })).toHaveAttribute(
       "aria-checked",
       "false"
     );
-    await expect(page.getByRole("switch", { name: "Vision 2" })).toHaveAttribute(
+    await expect(page.getByRole("switch", { name: "画像入力（Vision）に対応 2" })).toHaveAttribute(
       "aria-checked",
       "true"
+    );
+    await expect(page.getByRole("heading", { name: "既定のモデル" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "既定の Vision モデル" })).toContainText(
+      "Vision LLM"
+    );
+    await expect(page.getByRole("combobox", { name: "既定のテキストモデル" })).toContainText(
+      "標準 LLM"
     );
     // 共有画面（NL2SQL と同じ。#103）は詳細項目・構成状態・プレビューを表示しない。
     await expect(page.getByLabel("API パス")).toHaveCount(0);
@@ -104,7 +113,7 @@ for (const viewport of [
     await expect(page.getByPlaceholder("業務 RAG 標準").first()).toBeVisible();
 
     await expectControlContentToBeVerticallyCentered(
-      page.getByRole("switch", { name: "Vision 2" }),
+      page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }),
       "span[aria-hidden='true']"
     );
     const enterpriseSave = page.getByRole("button", { name: "OCI Enterprise AI: 保存" });
@@ -163,6 +172,9 @@ test("モデル設定は節ごとに保存し、画面にない項目は保存�
       vlm_input_mode: "files_api",
       text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
       models: [{ model_id: "enterprise-llm" }, { model_id: "enterprise-vision-v2" }],
+      // 既定に選んだモデルの ID を書き換えると、既定も追従する（#499）。
+      default_text_model_id: "enterprise-llm",
+      default_vision_model_id: "enterprise-vision-v2",
     },
   });
   // 保存していない節の入力は画面に残る。
@@ -171,6 +183,82 @@ test("モデル設定は節ごとに保存し、画面にない項目は保存�
       "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
     )
   ).toHaveValue("https://unsaved.example");
+});
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`既定のモデルは Vision 対応のモデルだけを選べ、不正な選択は保存前にフィールドで止める (${scheme})`, async ({
+    page,
+  }) => {
+    await page.addInitScript((theme) => {
+      window.localStorage.setItem(
+        "production-ready-rag.ui",
+        JSON.stringify({ state: { theme }, version: 0 })
+      );
+    }, scheme);
+    const patches: unknown[] = [];
+    await mockModelSettings(page, (payload) => patches.push(payload));
+    await page.goto("/settings/model");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(scheme === "dark");
+
+    const vision = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    await expect(vision).toContainText("Vision LLM");
+
+    // 選択肢: Vision は Vision 対応のモデルだけ、テキストは未選択 + 全モデル。
+    await vision.click();
+    const visionOptions = page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option");
+    await expect(visionOptions).toHaveCount(1);
+    await expect(visionOptions.first()).toContainText("Vision LLM");
+    await page.keyboard.press("Escape");
+    await text.click();
+    const textListbox = page.getByRole("listbox", { name: "既定のテキストモデル" });
+    await expect(textListbox.getByRole("option")).toHaveCount(3);
+    await textListbox.getByRole("option", { name: "既定の Vision モデルを使う" }).click();
+    await expect(text).toContainText("既定の Vision モデルを使う");
+
+    // 選んでいたモデルの Vision 対応を外すと、保存前にフィールドのエラーを出す。
+    await page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }).click();
+    await expect(vision).toHaveAttribute("aria-invalid", "true");
+    await expect(
+      page.getByText("画像入力（Vision）に対応したモデルがありません。", { exact: false })
+    ).toBeVisible();
+
+    // 保存は送信せず、最初の不正な欄へフォーカスする。
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(vision).toBeFocused();
+    expect(patches).toHaveLength(0);
+
+    // Vision 対応を戻して保存すると、既定のモデル 2 つを送る。
+    await page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }).click();
+    await expect(vision).toHaveAttribute("aria-invalid", "false");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(patches[0]).toMatchObject({
+      enterprise_ai: { default_text_model_id: "", default_vision_model_id: "enterprise-vision" },
+    });
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("既定の Vision モデルに選んだモデルを一覧から削除すると、選び直しを案内する", async ({ page }) => {
+  const patches: unknown[] = [];
+  await mockModelSettings(page, (payload) => patches.push(payload));
+  await page.goto("/settings/model");
+
+  await page.getByRole("button", { name: "モデルを削除 2" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
+
+  const vision = page.getByRole("combobox", { name: "既定の Vision モデル" });
+  await expect(vision).toContainText("enterprise-vision");
+  await expect(vision).toHaveAttribute("aria-invalid", "true");
+  await expect(
+    page.getByText("画像入力（Vision）に対応したモデルがありません。", { exact: false })
+  ).toBeVisible();
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(vision).toBeFocused();
+  expect(patches).toHaveLength(0);
 });
 
 test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }) => {

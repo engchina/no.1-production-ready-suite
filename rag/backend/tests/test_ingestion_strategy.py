@@ -1164,8 +1164,8 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
         rag_chunk_overlap=120,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
-        oci_enterprise_ai_default_model="",
-        oci_enterprise_ai_vlm_model="enterprise-vlm",
+        oci_enterprise_ai_default_text_model="",
+        oci_enterprise_ai_default_vision_model="enterprise-vlm",
     )
     pipeline = IngestionPipeline(
         vlm=CapturingVlm(),

@@ -4,6 +4,27 @@
  */
 export const MODEL_MESSAGES = {
   "common.delete": "削除",
+  "settings.model.defaults.description":
+    "処理の種類ごとに使うモデルを登録モデルから選びます。",
+  "settings.model.defaults.error.noVisionModel":
+    "画像入力（Vision）に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力（Vision）に対応」をオンにしてください。",
+  "settings.model.defaults.error.textRemoved":
+    "「{model}」は登録モデルにありません。登録モデルから選び直すか、「既定の Vision モデルを使う」を選んでください。",
+  "settings.model.defaults.error.visionNotCapable":
+    "「{model}」は画像入力（Vision）に対応していません。対応をオンにするか、別のモデルを選んでください。",
+  "settings.model.defaults.error.visionRemoved":
+    "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
+  "settings.model.defaults.error.visionRequired":
+    "既定の Vision モデルを選んでください。",
+  "settings.model.defaults.text": "既定のテキストモデル",
+  "settings.model.defaults.textHelp":
+    "画像を扱わない処理（回答生成・要約・SQL 生成など）で使います。未設定のときは既定の Vision モデルを使います。",
+  "settings.model.defaults.title": "既定のモデル",
+  "settings.model.defaults.useVisionModel": "既定の Vision モデルを使う",
+  "settings.model.defaults.vision": "既定の Vision モデル",
+  "settings.model.defaults.visionHelp":
+    "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
+  "settings.model.defaults.visionPlaceholder": "モデルを選んでください",
   "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",
@@ -14,7 +35,6 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.apiKeySaved": "保存済み",
   "settings.model.enterprise.apiKeyShow": "API key を表示",
   "settings.model.enterprise.clearApiKey": "保存済み API key を削除する",
-  "settings.model.enterprise.default": "既定",
   "settings.model.enterprise.description":
     "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。",
   "settings.model.enterprise.displayName": "表示名",
@@ -26,7 +46,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.modelId": "モデル ID",
   "settings.model.enterprise.models": "登録モデル",
   "settings.model.enterprise.modelsDescription":
-    "回答生成と Vision/OCR 解析に使用するモデルを登録し、既定モデルを選択します。",
+    "回答生成と画像の読み取り（Vision）に使うモデルを登録し、画像入力に対応するかを指定します。",
   "settings.model.enterprise.modelsSaved": "登録モデルを保存しました。",
   "settings.model.enterprise.project": "Project OCID",
   "settings.model.enterprise.projectHelp":
@@ -40,7 +60,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.saved":
     "OCI Enterprise AI 接続設定を保存しました。",
   "settings.model.enterprise.title": "OCI Enterprise AI",
-  "settings.model.enterprise.vision": "Vision",
+  "settings.model.enterprise.vision": "画像入力（Vision）に対応",
   "settings.model.fixed": "固定",
   "settings.model.genai.description":
     "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
@@ -66,6 +86,7 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.project":
     "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
+  "settings.model.required": "必須",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.save": "保存",
   "settings.model.saveError":
