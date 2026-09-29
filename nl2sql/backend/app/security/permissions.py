@@ -544,6 +544,23 @@ AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth
 MCP_API_PATH = "/mcp"
 SERVICE_TOKEN_API_PATHS = frozenset({MCP_API_PATH})
 MCP_AUDIENCE = "nl2sql"
+# 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
+# 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
+OPEN_API_OPERATIONS = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/ready"),
+        ("GET", "/ready/database"),
+        ("POST", "/auth/login"),
+        ("GET", "/auth/me"),
+        ("POST", "/auth/logout"),
+        ("POST", "/auth/password/change"),
+        ("POST", MCP_API_PATH),
+        # DB の状態の確認は、ログインした全員が使う（読み込みの失敗の画面）。
+        # 公開 path ではないのでログインは要る。
+        ("GET", "/nl2sql/persistence"),
+    }
+)
 
 
 def _allowed(*codes: str) -> frozenset[str]:
@@ -554,9 +571,7 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     """FastAPI の method + route template を許可 permission set へ写像する。"""
 
     method = method.upper()
-    if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
-        return None
-    if route_path == MCP_API_PATH:
+    if (method, route_path) in OPEN_API_OPERATIONS:
         return None
     if route_path.startswith("/security/users"):
         return _allowed("menu.security_users")

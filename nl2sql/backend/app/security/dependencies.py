@@ -22,6 +22,7 @@ from .permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
     MCP_AUDIENCE,
+    OPEN_API_OPERATIONS,
     PUBLIC_API_PATHS,
     SERVICE_TOKEN_API_PATHS,
     UNCLASSIFIED_PERMISSION,
@@ -73,6 +74,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         # Agent は MCP を Run の利用者のサービストークンで呼ぶ（#230 / #231）。
         service_token_paths=SERVICE_TOKEN_API_PATHS,
         service_token_audience=MCP_AUDIENCE,
+        open_operations=OPEN_API_OPERATIONS,
     ):
         yield
 
