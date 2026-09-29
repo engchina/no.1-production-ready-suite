@@ -783,7 +783,7 @@ export function useBatchUploadDocuments() {
 export function uploadErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     // 前段の proxy が返す 413 は ApiResponse の本文を持たないため、既定の「APIエラー (413)」を言い換える。
-    if (error.status === 413 && error.message === `APIエラー (${error.status})`) {
+    if (error.status === 413 && error.isFallbackMessage) {
       return t("upload.error.requestTooLarge");
     }
     return error.message;

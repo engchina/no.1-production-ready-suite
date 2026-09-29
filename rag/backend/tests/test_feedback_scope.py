@@ -178,8 +178,8 @@ async def test_detail_is_limited_to_the_owner_and_exists_check_is_not() -> None:
     assert "f.business_view_id IN (:access_business_view_id_0)" in exists_call.statement
 
 
-MESSAGE_OWNER_JOIN = "NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
-AUDIT_OWNER_JOIN = "NVL(a.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
+MESSAGE_OWNER_JOIN = "NVL(am.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
+AUDIT_OWNER_JOIN = "NVL(sa.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
 
 
 @pytest.mark.anyio
@@ -205,6 +205,10 @@ async def test_list_and_detail_join_only_the_senders_conversation_and_audit() ->
     assert MESSAGE_OWNER_JOIN in list_call.statement
     assert MESSAGE_OWNER_JOIN in detail_call.statement
     assert AUDIT_OWNER_JOIN in detail_call.statement
+    # 全件に順位を付けてから結合しない（フィードバックごとに 1 件だけを引く。#471）。
+    for statement in (list_call.statement, detail_call.statement):
+        assert "OUTER APPLY" in statement
+        assert "PARTITION BY m.trace_id" not in statement
 
 
 @pytest.mark.anyio

@@ -79,7 +79,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
               operationKey="knowledge-base-graph-load"
               testId="knowledge-base-graph-loading"
             >
-              <Skeleton className="h-[360px] w-full rounded-md" />
+              <Skeleton className="h-[25.71rem] w-full rounded-md" />
             </TimedLoadingState>
           ) : query.isError ? (
             <ErrorState message={t("knowledgeBases.graph.error")} onRetry={() => void query.refetch()} />
@@ -93,7 +93,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
               <div
                 role="region"
                 aria-label={t("knowledgeBases.graph.title")}
-                className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
+                className="h-[25.71rem] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
               >
                 <ReactFlow
                   nodes={flow.nodes}

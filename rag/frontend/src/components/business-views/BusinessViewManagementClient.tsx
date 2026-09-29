@@ -523,7 +523,7 @@ function BusinessViewList({
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               scrollAriaLabel={t("businessViews.list.scrollLabel")}
               scrollTestId="business-views-scroll-region"
-              tableClassName="w-full min-w-[720px] text-sm"
+              tableClassName="w-full min-w-[51.43rem] text-sm"
               ariaLabel={t("businessViews.list.aria")}
             />
             <ListPagination

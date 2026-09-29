@@ -24,6 +24,7 @@ import {
 import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
 
+import { EmptyState } from "@/components/StateViews";
 import { ListPagination } from "@/components/ListPagination";
 import { ErrorState } from "@/components/StateViews";
 import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
@@ -215,7 +216,7 @@ export function PromptVersionsClient() {
         </CardHeader>
         <CardContent>
           {versions.length === 0 ? (
-            <p className="py-6 text-center text-sm text-fg-muted">{t("settings.prompts.list.empty")}</p>
+            <EmptyState title={t("settings.prompts.list.empty")} />
           ) : (
             <VersionList versions={versions} actionsFor={versionActions} />
           )}

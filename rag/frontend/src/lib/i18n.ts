@@ -10,6 +10,7 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
+  "common.apiError": "APIエラー ({status})",
   "common.clearSearch": "検索語をクリア",
   "common.degraded.title": "データベースに接続できません",
   // DB ゲート（3製品共通の部品。#325）。製品名の入る文言だけ RAG の値にし、他は NL2SQL と同じ文言にそろえる。
@@ -1049,6 +1050,7 @@ export const ja = {
 
   "settings.model.subtitle":
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
+  "settings.model.displayNamePlaceholder": "業務 RAG 標準",
 
   "settings.huggingface.subtitle":
     "parser のモデルダウンロード認証 token・ミラー endpoint を設定します。",
@@ -1703,6 +1705,7 @@ export const ja = {
   "sourceProfile.preview.email": "メール",
   "sourceProfile.preview.office": "Office",
   "sourceProfile.preview.unsupported": "未対応",
+  "sourceProfile.backend.local": "ローカル解析",
   "sourceProfile.parser.pdf": "PDF レイアウト解析",
   "sourceProfile.parser.image": "画像 OCR",
   "sourceProfile.parser.text": "テキスト構造化",
@@ -2185,8 +2188,10 @@ export const ja = {
   "chat.compare.label": "比較するモデル",
   "chat.citations.summary": "根拠（引用） {count} 件",
   "chat.error.send": "メッセージの送信に失敗しました。",
+  "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
 
+  "search.error.failed": "検索に失敗しました。再度お試しください。",
   "search.placeholder": "例：社内規程の申請フローは？",
   "search.button": "検索",
   "search.cancel": "停止",

@@ -262,7 +262,7 @@ function NavigationTreePanel({ nodes }: { nodes: DocumentNavigationNode[] }) {
         {nodes.map((node) => (
           <li
             key={node.section_id}
-            style={{ paddingLeft: `${Math.min(node.depth, 6) * 16}px` }}
+            style={{ paddingLeft: `calc(var(--space-4) * ${Math.min(node.depth, 6)})` }}
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="break-words text-sm font-medium text-fg">
@@ -490,7 +490,7 @@ function TableCellsPanel({
       <h4 className="mb-2 text-sm font-semibold text-fg">
         {t("flow.extraction.tableCells")}
       </h4>
-      <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
+      <div className="max-h-[30rem] space-y-3 overflow-auto pr-1">
         {tables
           .filter((table) => table.cells.length > 0)
           .map((table) => (

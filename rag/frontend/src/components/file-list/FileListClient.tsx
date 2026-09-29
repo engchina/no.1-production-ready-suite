@@ -479,7 +479,7 @@ export function FileListClient() {
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               scrollAriaLabel={t("fileList.scrollLabel")}
               scrollTestId="file-list-scroll-region"
-              tableClassName="w-full min-w-[980px] text-sm"
+              tableClassName="w-full min-w-[70rem] text-sm"
             />
             <ListPagination
               {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
@@ -570,7 +570,7 @@ function documentColumns({
           checked={allSelected}
           onChange={onToggleAll}
           aria-label={t("fileList.selectAllAria")}
-          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
+          className="cursor-pointer accent-accent-emphasis"
         />
       ),
       headerClassName: "w-10",
@@ -580,7 +580,7 @@ function documentColumns({
           checked={isSelected(doc)}
           onChange={() => onToggle(doc)}
           aria-label={t("fileList.selectRowAria")}
-          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
+          className="cursor-pointer accent-accent-emphasis"
         />
       ),
     },
@@ -588,7 +588,7 @@ function documentColumns({
       key: "fileName",
       header: t("fileList.col.fileName"),
       rowHeader: true,
-      className: "max-w-[260px]",
+      className: "max-w-[18.57rem]",
       render: (doc) => (
         <Link
           to={`${APP_ROUTES.documents}/${doc.id}`}
@@ -602,7 +602,7 @@ function documentColumns({
     {
       key: "knowledgeBases",
       header: t("fileList.col.knowledgeBases"),
-      className: "max-w-[240px]",
+      className: "max-w-[17.14rem]",
       render: (doc) => <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />,
     },
     {

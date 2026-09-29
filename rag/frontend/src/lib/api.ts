@@ -1070,8 +1070,8 @@ export interface CompareModel {
 }
 
 export interface SearchDiagnostics {
-  adapter: string;
   mode: string;
+  retrieval_strategy_adapter?: string;
   retrieval_strategy: string;
   generation_profile?: GenerationProfileName | string;
   generation_config_source?: "request" | "business_view" | "global";
@@ -1149,6 +1149,8 @@ export interface SearchRetrievalCandidate {
 
 export interface SearchResponse {
   answer: string;
+  /** 安全チェックが回答を差し替えたか（backend の `answer_replaced`）。 */
+  answer_replaced?: boolean;
   citations: RetrievedChunk[];
   trace_id: string;
   guardrail_warnings: string[];
@@ -1172,7 +1174,8 @@ export interface FeedbackRequestBody {
   corrected_answer?: string | null;
 }
 
-export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
+/** 応答は画面の snapshot を返さない（backend が除外する）。 */
+export interface FeedbackSubmissionResponse extends Omit<FeedbackRequestBody, "content_snapshot"> {
   feedback_id: string;
 }
 
@@ -2284,12 +2287,19 @@ export class ApiError extends Error {
   readonly errorCode?: string;
   readonly fieldErrors: ApiFieldError[];
   readonly requestId?: string;
+  /** 応答に理由がなく、既定の文言（「APIエラー (状態コード)」）にしたか。文言の一致で判定しない。 */
+  readonly isFallbackMessage: boolean;
 
   constructor(status: number, messages: string[], details: ApiErrorDetails = {}) {
-    super(messages[0] ?? `APIエラー (${status})`);
+    const isFallbackMessage = messages.length === 0;
+    const resolved = isFallbackMessage
+      ? [t("common.apiError", { status })]
+      : messages;
+    super(resolved[0]);
     this.name = "ApiError";
     this.status = status;
-    this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    this.messages = resolved;
+    this.isFallbackMessage = isFallbackMessage;
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
@@ -2325,7 +2335,7 @@ export function apiErrorFromEnvelope(
     : [];
   const problemRequestId =
     typeof body.problem?.request_id === "string" ? body.problem.request_id : undefined;
-  return new ApiError(status, messages.length > 0 ? messages : [`APIエラー (${status})`], {
+  return new ApiError(status, messages, {
     errorCode: typeof body.error_code === "string" ? body.error_code : undefined,
     fieldErrors: fieldErrorsOf(body.problem?.field_errors),
     requestId: requestId || problemRequestId,

@@ -6,6 +6,7 @@
  * マルチモデル比較では各イベントに model_id が付き、フロントがカラムへ振り分ける。
  */
 
+import { t } from "./i18n";
 import {
   ApiError,
   apiErrorFromEnvelope,
@@ -79,7 +80,7 @@ export async function streamChatMessage(
     }
     const detail = (envelope as { detail?: unknown } | null)?.detail;
     const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
-    if (error.messages[0] === `APIエラー (${res.status})` && typeof detail === "string") {
+    if (error.isFallbackMessage && typeof detail === "string") {
       throw new ApiError(res.status, [detail], {
         errorCode: error.errorCode,
         requestId: error.requestId,
@@ -162,7 +163,7 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
     case "error":
       handlers.onModelError?.({
         model_id: String(payload.model_id ?? ""),
-        message: String(payload.message ?? "エラーが発生しました。"),
+        message: String(payload.message ?? t("chat.error.model")),
       });
       break;
     case "all_done":
