@@ -22,6 +22,4 @@ def _health() -> ConvertHealth:
     )
 
 
-app = create_preprocess_app(
-    converter=convert, health_probe=_health, title="preprocess-csv-to-json"
-)
+app = create_preprocess_app(converter=convert, health_probe=_health, title="preprocess-csv-to-json")
