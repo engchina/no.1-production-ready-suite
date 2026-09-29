@@ -414,6 +414,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/services/{service_id}/stop"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/restart"): _any(MENU_SETTINGS_SERVICES),
     # ---- 検索・回答設定 ----
+    # 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。
+    ("GET", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),
+    ("PATCH", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),
     # 文書ワークスペースの処理設定パネルも文書解析の設定を読む。
     ("GET", "/settings/parser-adapters"): _any(
         MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
@@ -450,6 +453,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/extraction-fields"): _any(
         MENU_FILE_LIST, MENU_UPLOAD, MENU_SETTINGS_PARSER_ADAPTERS
     ),
+    # 抽出項目の定義は文書解析の「解析後の処理」で編集する（#528）。
+    ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),

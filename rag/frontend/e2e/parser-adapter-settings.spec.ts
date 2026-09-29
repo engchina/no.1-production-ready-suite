@@ -85,9 +85,190 @@ for (const viewport of [
   });
 }
 
-test("図・画像の読み取りプロンプトは常に編集でき、Vision のスイッチは出さない", async ({ page }) => {
-  // Vision の有効/無効は文書のレシピで選ぶ(#497)。文書解析の画面には出さない。
-  await mockParserAdapters(page);
+const SCREENSHOT_DIR = process.env.RAG_E2E_SCREENSHOT_DIR;
+
+async function useTheme(page: Page, scheme: "light" | "dark") {
+  await page.addInitScript((theme) => {
+    window.localStorage.setItem(
+      "production-ready-rag.ui",
+      JSON.stringify({ state: { theme }, version: 0 })
+    );
+  }, scheme);
+}
+
+async function expectTheme(page: Page, scheme: "light" | "dark") {
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+    .toBe(scheme === "dark");
+}
+
+/** 文書解析の GET / PATCH。PATCH の payload を記録し、保存後の値を返す。 */
+async function mockParserAdaptersWithPostParse(
+  page: Page,
+  initial: { vision_enabled: boolean; field_extraction_enabled: boolean; navigation_summary_enabled: boolean }
+) {
+  const patches: Record<string, unknown>[] = [];
+  let current = { ...initial };
+  const envelope = () =>
+    parserAdapterEnvelope({
+      ...current,
+      adapter_backend: "docling",
+      effective_order: ["docling"],
+      config_source: "runtime",
+      adapters: [
+        { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
+        disabledAdapter("unstructured"),
+        disabledAdapter("mineru"),
+        disabledAdapter("dots_ocr"),
+      ],
+    });
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      patches.push(payload);
+      current = { ...current, ...payload } as typeof current;
+    }
+    await route.fulfill({ json: envelope() });
+  });
+  return patches;
+}
+
+async function mockExtractionFields(
+  page: Page,
+  initial: { name: string; description: string; value_type: string }[] = []
+) {
+  const patches: unknown[] = [];
+  let fields = initial;
+  await page.route("**/api/settings/extraction-fields", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON() as { fields: typeof fields };
+      patches.push(payload);
+      fields = payload.fields;
+    }
+    await route.fulfill({ json: { data: { fields }, error_messages: [], warning_messages: [] } });
+  });
+  return patches;
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`解析後の処理は Vision・項目抽出・章節木を処理順に並べ、全体の既定を保存する (${scheme})`, async ({
+    page,
+  }, testInfo) => {
+    // #528: Vision は解析エンジンに関係なく使えるので、全体の既定の入口をこの画面に置く。
+    await useTheme(page, scheme);
+    const patches = await mockParserAdaptersWithPostParse(page, {
+      vision_enabled: false,
+      field_extraction_enabled: false,
+      navigation_summary_enabled: false,
+    });
+    await mockExtractionFields(page);
+
+    await page.goto("/settings/parser-adapters");
+    await expectTheme(page, scheme);
+
+    const card = page.getByRole("heading", { name: "解析後の処理", exact: true }).locator("xpath=ancestor::*[.//ol][1]");
+    await expect(card.getByRole("heading", { level: 3 })).toHaveText([
+      "1. 図・画像を AI で読み取る（Vision）",
+      "2. メタデータ/項目抽出",
+      "3. ナビゲーション要約(章節木)",
+    ]);
+    await expect(card).toContainText("解析エンジンに関係なく");
+    await expect(card).toContainText("既定の Vision モデル");
+    await expect(card.getByRole("link", { name: "モデル設定を開く" })).toHaveAttribute("href", "/settings/model");
+
+    const vision = page.getByRole("switch", { name: "図・画像を AI で読み取る（Vision）" });
+    const fieldExtraction = page.getByRole("switch", { name: "メタデータ/項目抽出" });
+    const navigation = page.getByRole("switch", { name: "ナビゲーション要約(章節木)" });
+    await expect(vision).toHaveAttribute("aria-checked", "false");
+    await vision.click();
+    await fieldExtraction.click();
+    await expect(vision).toHaveAttribute("aria-checked", "true");
+    // 項目の定義が 0 件のまま有効にすると、何も抽出しないことを知らせる。
+    await expect(card.getByText(/項目の定義がないため/)).toBeVisible();
+    await expect(card.getByText("未保存の変更があります。")).toBeVisible();
+
+    if (SCREENSHOT_DIR) {
+      await card.screenshot({ path: `${SCREENSHOT_DIR}/parser-post-parse-${testInfo.project.name}-${scheme}.png` });
+    }
+
+    await card.getByRole("button", { name: "解析後の処理を保存" }).click();
+    await expect(card.getByText("解析後の処理を保存しました。")).toBeVisible();
+    // 解析エンジンの設定は送らない（「解析後の処理」だけを保存する）。
+    expect(patches).toEqual([
+      { vision_enabled: true, field_extraction_enabled: true, navigation_summary_enabled: false },
+    ]);
+    await expect(navigation).toHaveAttribute("aria-checked", "false");
+    // 解析エンジンの側は未保存にならない。
+    await expect(page.getByText("未保存の変更があります。")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("項目抽出の項目の定義を追加・検証・保存できる", async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, {
+    vision_enabled: false,
+    field_extraction_enabled: true,
+    navigation_summary_enabled: false,
+  });
+  const patches = await mockExtractionFields(page, [
+    { name: "請求書番号", description: "請求書の番号", value_type: "string" },
+  ]);
+
+  await page.goto("/settings/parser-adapters");
+
+  const definitions = page.getByText("抽出する項目の定義", { exact: true });
+  await expect(page.getByText("1 件", { exact: true })).toBeVisible();
+  await definitions.click();
+  const editor = page.getByTestId("extraction-fields-editor");
+  await expect(editor.getByLabel("項目名")).toHaveValue("請求書番号");
+
+  await editor.getByRole("button", { name: "項目を追加" }).click();
+  await expect(editor.getByLabel("項目名").nth(1)).toBeFocused();
+  // 項目名が空のまま保存すると、その行で止める。
+  await editor.getByRole("button", { name: "項目の定義を保存" }).click();
+  await expect(editor.getByText("項目名を入力してください。")).toBeVisible();
+  await expect(editor.getByLabel("項目名").nth(1)).toBeFocused();
+  // 大文字小文字の違いだけの重複も止める。
+  await editor.getByLabel("項目名").nth(1).fill("請求書番号");
+  await editor.getByRole("button", { name: "項目の定義を保存" }).click();
+  await expect(editor.getByText("同じ項目名がほかの行にあります。")).toBeVisible();
+  expect(patches).toEqual([]);
+
+  await editor.getByLabel("項目名").nth(1).fill(" 合計金額 ");
+  await editor.getByLabel("説明（任意）").nth(1).fill("税込の合計");
+  await editor.getByRole("combobox", { name: "値の型" }).nth(1).click();
+  await page.getByRole("option", { name: "数値" }).click();
+  await editor.getByRole("button", { name: "項目の定義を保存" }).click();
+  await expect(editor.getByText("項目の定義を保存しました。")).toBeVisible();
+  expect(patches).toEqual([
+    {
+      fields: [
+        { name: "請求書番号", description: "請求書の番号", value_type: "string" },
+        { name: "合計金額", description: "税込の合計", value_type: "number" },
+      ],
+    },
+  ]);
+  await expect(page.getByText("2 件", { exact: true })).toBeVisible();
+  if (SCREENSHOT_DIR) {
+    await editor.screenshot({ path: `${SCREENSHOT_DIR}/extraction-fields-${test.info().project.name}.png` });
+  }
+
+  // 行を削除すると未保存になり、破棄で保存値に戻る。
+  await editor.getByRole("button", { name: "項目 2 を削除" }).click();
+  await expect(editor.getByLabel("項目名")).toHaveCount(1);
+  await editor.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(editor.getByLabel("項目名")).toHaveCount(2);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("図・画像の読み取りプロンプトは Vision の項目の中で編集できる", async ({ page }) => {
+  // 読み取りの指示は全体で 1 つ。Vision の全体の既定を無効にしていても編集できる(#497 / #528)。
+  await mockParserAdaptersWithPostParse(page, {
+    vision_enabled: false,
+    field_extraction_enabled: false,
+    navigation_summary_enabled: false,
+  });
+  await mockExtractionFields(page);
   let saved: unknown = null;
   await page.route("**/api/settings/docrag-prompts**", async (route) => {
     if (route.request().method() === "PUT") saved = route.request().postDataJSON();
@@ -115,15 +296,34 @@ test("図・画像の読み取りプロンプトは常に編集でき、Vision �
 
   await page.goto("/settings/parser-adapters");
 
-  await expect(page.getByRole("switch", { name: /図・画像を AI で読み取る/ })).toHaveCount(0);
-  const card = page.getByRole("heading", { name: "図・画像の読み取りプロンプト" }).locator("xpath=ancestor::*[.//textarea][1]");
-  await expect(card).toContainText("解析エンジンに関係なく");
-  await expect(card.getByText("既定値", { exact: true })).toBeVisible();
-  await card.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
-  await card.getByRole("button", { name: "プロンプトを保存" }).click();
+  const visionItem = page.locator("#post-parse-vision");
+  await visionItem.locator("summary", { hasText: "図・画像の読み取りプロンプト" }).click();
+  await expect(visionItem).toContainText("解析エンジンに関係なく");
+  await expect(visionItem.getByText("既定値", { exact: true })).toBeVisible();
+  await visionItem.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
+  await visionItem.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect.poll(() => saved).toEqual({ content: "図の要点を短く {{image_metadata}}" });
-  await expect(card.getByText("プロンプトを保存しました。")).toBeVisible();
-  await expect(card.getByText(/^編集済み/)).toBeVisible();
+  await expect(visionItem.getByText("プロンプトを保存しました。")).toBeVisible();
+  await expect(visionItem.getByText(/^編集済み/)).toBeVisible();
+});
+
+test("hash 付きの URL で解析後の処理の項目へ移動する", async ({ page }) => {
+  // レシピの「グローバル設定を開く」と設定の概要のリンクの移動先(#528)。読み込み後に描画される節にも届く。
+  await mockParserAdaptersWithPostParse(page, {
+    vision_enabled: false,
+    field_extraction_enabled: false,
+    navigation_summary_enabled: true,
+  });
+  await mockExtractionFields(page);
+
+  await page.goto("/settings/parser-adapters#post-parse-navigation-summary");
+
+  const target = page.locator("#post-parse-navigation-summary");
+  await expect(target).toBeInViewport();
+  await expect(target.getByRole("switch", { name: "ナビゲーション要約(章節木)" })).toHaveAttribute(
+    "aria-checked",
+    "true"
+  );
 });
 
 test("文書解析設定取得に失敗したら再試行できる", async ({ page }) => {
@@ -204,7 +404,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
@@ -295,7 +495,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(card.getByText("接続できました。")).toBeVisible();
 
   await endpoint.fill("ftp://invalid.example.com");
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(
     page.getByText(
       "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
@@ -306,7 +506,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   await endpoint.fill("https://dots-new.example.com/v1");
   await model.fill("served-dots");
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
   const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
   const firstDots = firstConnections.find((item) => item.backend === "dots_ocr");
@@ -323,7 +523,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   ).toBeVisible();
 
   await card.getByLabel("保存済み API key を削除").check();
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
   const secondConnections = payloads[1].connections as Array<Record<string, unknown>>;
   expect(secondConnections.find((item) => item.backend === "dots_ocr")).toEqual({
     backend: "dots_ocr",

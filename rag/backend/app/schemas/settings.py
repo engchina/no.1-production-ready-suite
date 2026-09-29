@@ -100,6 +100,7 @@ from app.config import (
     RetrievalStrategy,
     VectorIndexProfile,
 )
+from app.schemas.document import DocumentProcessingConfig
 
 ParserAdapterBackendName = Literal[
     "docling",
@@ -371,18 +372,39 @@ class ParserAdapterSettingsData(BaseModel):
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
     backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData
     capabilities: list[ParserBackendCapabilityData] = Field(default_factory=list)
+    # 「解析後の処理」の全体の既定（#528）。文書のレシピで上書きしないときに使う。
+    # 保存先は model-settings.json ではなく RAG の backend/.env（RAG_VISION_ENABLED など）。
+    vision_enabled: bool = False
+    field_extraction_enabled: bool = False
+    navigation_summary_enabled: bool = False
     config_source: Literal["runtime"]
 
 
-class ParserAdapterSettingsUpdate(BaseModel):
-    """任意 parser adapter feature flags の更新 payload。"""
+# 「解析後の処理」の項目（#528）。parser の選択（model-settings.json）とは保存先が違う。
+POST_PARSE_SETTING_FIELDS = (
+    "vision_enabled",
+    "field_extraction_enabled",
+    "navigation_summary_enabled",
+)
 
-    adapter_backend: ParserAdapterBackend
+
+class ParserAdapterSettingsUpdate(BaseModel):
+    """任意 parser adapter feature flags と「解析後の処理」の更新 payload。
+
+    `adapter_backend` を省略したときは解析エンジンの設定を変えない
+    （「解析後の処理」だけを保存する）。
+    省略した「解析後の処理」の項目も変えない。
+    """
+
+    adapter_backend: ParserAdapterBackend | None = None
     docling_enabled: bool | None = None
     unstructured_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
+    vision_enabled: bool | None = None
+    field_extraction_enabled: bool | None = None
+    navigation_summary_enabled: bool | None = None
 
     @field_validator("adapter_backend", mode="before")
     @classmethod
@@ -826,6 +848,34 @@ class ExtractionFieldsSettingsData(BaseModel):
 
     fields: list[FieldDefinitionData] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
+
+
+class ExtractionFieldsSettingsUpdate(BaseModel):
+    """field 抽出 schema 定義の更新 payload（文書解析の「解析後の処理」で編集する。#528）。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
+
+
+class PipelineSettingsData(BaseModel):
+    """設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。
+
+    `recipe_defaults` は文書のレシピで何も上書きしないときの実効値（レシピの
+    「グローバル設定に従う」と同じ解決）。読み取り専用で、各項目はそれぞれの設定画面で変える。
+    """
+
+    auto_parse_after_preprocess_enabled: bool
+    auto_chunk_after_extract_enabled: bool
+    auto_index_after_chunk_enabled: bool
+    recipe_defaults: DocumentProcessingConfig
+    config_source: Literal["runtime"] = "runtime"
+
+
+class PipelineSettingsUpdate(BaseModel):
+    """工程の自動進行の更新 payload。省略した項目は変えない。"""
+
+    auto_parse_after_preprocess_enabled: bool | None = None
+    auto_chunk_after_extract_enabled: bool | None = None
+    auto_index_after_chunk_enabled: bool | None = None
 
 
 class GuardrailPolicyStatusData(BaseModel):

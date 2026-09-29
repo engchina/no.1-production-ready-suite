@@ -58,7 +58,7 @@ import {
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { DocragPromptCard } from "./DocragPromptEditor";
+import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
 type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
@@ -125,8 +125,10 @@ export function ParserAdapterSettingsClient() {
   const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
+  // 解析エンジンの server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
+  // 「解析後の処理」の保存でも query.data は変わるため、解析エンジンの部分だけを比べる（#528）。
+  const serverForm = query.data ? serializeForm(formFromSettings(query.data)) : null;
+  const serverChanged = useValuesChanged([serverForm, save.isPending]);
   if (serverChanged && query.data && !save.isPending) {
     setForm(formFromSettings(query.data));
   }
@@ -249,8 +251,8 @@ export function ParserAdapterSettingsClient() {
         onReset={resetForm}
         onSubmit={submit}
       />
-      {/* Vision の有効/無効は文書のレシピで選ぶ(#497)。読み取りの指示は全体で 1 つなので常に出す。 */}
-      <DocragPromptCard promptKey="image_retrieval" />
+      {/* 解析の後の Vision・項目抽出・章節木の全体の既定（#528）。Vision の読み取りの指示もこの中で編集する。 */}
+      <PostParseSettingsCard settings={settings} />
     </PageBody>
   );
 }

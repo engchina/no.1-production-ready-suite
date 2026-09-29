@@ -283,3 +283,12 @@ export function visibleNavSections(
     }))
     .filter((section) => section.items.length > 0);
 }
+
+/**
+ * ナビの画面（route）を利用者が開けるか。画面の中のリンク（レシピの「グローバル設定を開く」や
+ * 設定の概要の一覧。#528）を、サイドナビと同じ権限の判定で出し分ける。ナビに無い route は開けない扱い。
+ */
+export function canOpenNavRoute(route: string, hasPermission: HasPermission): boolean {
+  const item = NAV_ITEMS.find((candidate) => candidate.href === route);
+  return item ? hasPermission(item.permission) : false;
+}

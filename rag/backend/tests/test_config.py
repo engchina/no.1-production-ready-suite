@@ -506,7 +506,7 @@ def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str)
 def test_saved_parser_settings_ignore_stale_docling_vision_flag() -> None:
     """model-settings.json に残った docling_vision_enabled(#497 で画面から削除)は読まない。
 
-    Vision の全体の既定は env の RAG_VISION_ENABLED だけで決める。読み込みは失敗せず、
+    Vision の全体の既定は backend/.env の RAG_VISION_ENABLED で決める（#528）。読み込みは失敗せず、
     次に保存すると消える。
     """
     settings = Settings(_env_file=None, rag_vision_enabled=False)
