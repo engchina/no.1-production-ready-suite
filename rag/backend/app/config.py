@@ -1915,8 +1915,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
 @lru_cache
 def _settings_singleton() -> Settings:
-    """環境変数/.env と永続化ファイルから初期 Settings を作る。"""
-    settings = Settings()
+    """環境変数/.env と永続化ファイルから初期 Settings を作る。
+
+    `.env` は module の `PLATFORM_ENV_FILE` / `BACKEND_ENV_FILE` から読む
+    （本番は model_config と同じパス）。テストはこの 2 つを差し替えて、
+    開発者の手元の `.env` を読まないようにする（#483）。
+    """
+    settings = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
     load_persisted_model_settings(settings)
     # 以後の .env の変更を差分で取り込むため、今の .env の内容を基準として覚える。
     reload_env_settings_if_changed(settings)
