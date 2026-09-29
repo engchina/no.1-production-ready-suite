@@ -1200,26 +1200,9 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
   });
 }
 
-/** 保存済み DocRAG 回答の一覧(業務ビュー単位、新しい順。サーバー側のページング。#304)。 */
-export function useDocragAnswers(
-  businessViewId: string | null,
-  page: { limit: number; offset: number },
-) {
-  return useQuery({
-    queryKey: ["docrag-answers", businessViewId, page.limit, page.offset],
-    queryFn: () =>
-      api.listDocragAnswers({
-        businessViewId: businessViewId as string,
-        limit: page.limit,
-        offset: page.offset,
-      }),
-    enabled: Boolean(businessViewId),
-  });
-}
-
 /**
  * 指定した trace_id のうち、保存済みの DocRAG 回答があるもの（チャットの会話の回答用。#304）。
- * 回答履歴のページングに依存せず、開いている会話の回答だけを引き当てる。
+ * 開いている会話の回答だけを引き当てる。
  */
 export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: string[]) {
   const ids = traceIds.slice(-ANSWER_TRACE_ID_FILTER_MAX);

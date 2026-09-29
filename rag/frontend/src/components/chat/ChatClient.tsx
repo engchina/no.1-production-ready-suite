@@ -37,7 +37,7 @@ import { ListPagination } from "@/components/ListPagination";
 import { RunStopButton } from "@/components/RunStopButton";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
-import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
+import { SavedDocragAnswer } from "@/components/search/SavedDocragAnswer";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";

@@ -4,8 +4,8 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpe
 
 /**
  * RAG 検索・回答の不足の回帰テスト（#304）。
- * 参照 KB が 0 件の業務ビューでは検索・チャットしない、回答履歴のサーバー側のページング、
- * チャットは会話の回答の trace_id で保存済みの回答を引き当てる。
+ * 参照 KB が 0 件の業務ビューでは検索・チャットしない、
+ * チャットは会話の回答の trace_id で保存済みの回答を引き当て、開き直し・削除できる。
  */
 
 const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
@@ -157,44 +157,13 @@ test("backend が参照 KB のない業務ビューを 409 で断ったら、そ
   await expect(page.getByText(NO_KB_MESSAGE)).toBeVisible();
 });
 
-test("回答履歴はサーバー側でページングし、ページを作業状態として保つ", async ({ page }) => {
-  const offsets = await mockAnswerHistory(page, 23);
-
-  await page.goto("/search");
-  await selectView(page, /経理ビュー/);
-  const history = page.getByRole("list", { name: "DocRAG の回答履歴" });
-  const pagination = page.getByRole("navigation", { name: "回答履歴のページ" });
-  await expect(history.getByRole("button", { name: /質問 1 番/ })).toBeVisible();
-  await expect(history.getByRole("listitem")).toHaveCount(10);
-  await expect(pagination).toContainText("1 - 10 / 23 件");
-  await expect(pagination.getByRole("button", { name: "前へ" })).toBeDisabled();
-
-  await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(history.getByRole("button", { name: /質問 11 番/ })).toBeVisible();
-  await expect(pagination).toContainText("11 - 20 / 23 件");
-  expect(offsets).toContain(10);
-  await expectNoPageOverflow(page);
-
-  // 再読込してもページは残る（workspace-state.md）。
-  await page.reload();
-  await expect(
-    page.getByRole("list", { name: "DocRAG の回答履歴" }).getByRole("button", { name: /質問 11 番/ })
-  ).toBeVisible();
-
-  await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(history.getByRole("listitem")).toHaveCount(3);
-  await expect(pagination).toContainText("21 - 23 / 23 件");
-  await expect(pagination.getByRole("button", { name: "次へ" })).toBeDisabled();
-});
-
-test("回答履歴が 1 ページに収まるときはページングを出さない", async ({ page }) => {
+test("RAG 検索画面には DocRAG の回答履歴の一覧を出さない（#444）", async ({ page }) => {
   await mockAnswerHistory(page, 4);
 
   await page.goto("/search");
   await selectView(page, /経理ビュー/);
-  await expect(
-    page.getByRole("list", { name: "DocRAG の回答履歴" }).getByRole("listitem")
-  ).toHaveCount(4);
+  await expect(page.getByRole("textbox", { name: "RAG 検索" })).toBeVisible();
+  await expect(page.getByText("DocRAG の回答履歴")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "回答履歴のページ" })).toHaveCount(0);
 });
 
@@ -257,11 +226,17 @@ test("チャットは参照 KB が 0 件の業務ビューで理由を示し、�
   await expectNoPageOverflow(page);
 });
 
-test("チャットは会話の回答の trace_id で保存済みの回答を引き当てる", async ({ page }) => {
+test("チャットは会話の回答の trace_id で保存済みの回答を引き当て、削除できる", async ({ page }) => {
   await mockChat(page, "bv-1");
   const requested: string[][] = [];
+  let deleted = false;
   await page.route("**/api/search/answers**", async (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() === "DELETE") {
+      deleted = true;
+      await route.fulfill(envelope({ trace_id: "trace-chat" }));
+      return;
+    }
     if (url.pathname.endsWith("/answers/trace-chat")) {
       await route.fulfill(
         envelope({
@@ -279,7 +254,10 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
     requested.push(traceIds);
     await route.fulfill(
       envelope({
-        items: traceIds.includes("trace-chat") ? [{ ...summary(1), trace_id: "trace-chat", surface: "chat" }] : [],
+        items:
+          !deleted && traceIds.includes("trace-chat")
+            ? [{ ...summary(1), trace_id: "trace-chat", surface: "chat" }]
+            : [],
         total: 1,
         limit: 1,
         offset: 0,
@@ -294,4 +272,18 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await page.getByRole("list", { name: "会話" }).getByRole("button").first().click();
   await expect(page.getByText("DocRAG の根拠と実行記録")).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
+
+  // 保存された回答は、チャットの「DocRAG の根拠と実行記録」から確認を通して削除できる（#147）。
+  await page.getByText("DocRAG の根拠と実行記録").click();
+  const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
+  await answerActions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "この回答を削除" }).click();
+  await page
+    .getByRole("alertdialog", { name: "保存された回答を削除しますか？" })
+    .getByRole("button", { name: "削除" })
+    .click();
+  // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
+  await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
+  expect(deleted).toBe(true);
+  await expect(page.getByText("DocRAG の根拠と実行記録")).toHaveCount(0);
 });

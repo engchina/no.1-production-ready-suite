@@ -26,7 +26,6 @@ export type WorkspaceField =
   | "search.topK"
   | "search.rerankTopN"
   | "search.advancedOpen"
-  | "search.historyPage"
   | "chat.businessViewId"
   | "chat.conversationId"
   | "chat.composer"
