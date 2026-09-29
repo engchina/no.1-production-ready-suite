@@ -914,7 +914,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         scrollAriaLabel={t("evaluation.case.scrollLabel")}
         scrollTestId="evaluation-case-scroll-region"
         paginationTestId="evaluation-case-pagination"
-        tableClassName="w-full min-w-[680px] text-sm"
+        tableClassName="w-full min-w-[48.57rem] text-sm"
       />
     </section>
   );
@@ -1014,7 +1014,7 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
         visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         scrollAriaLabel={t("evaluation.compare.scrollLabel")}
         className="[contain:paint]"
-        tableClassName="w-full min-w-[640px] text-sm"
+        tableClassName="w-full min-w-[45.71rem] text-sm"
       />
     </section>
   );

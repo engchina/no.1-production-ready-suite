@@ -450,7 +450,8 @@ function RecipeCard({
         {/* 選んでいるレシピは、下の詳細の工程の丸がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。 */}
         <RecipeStatusBadge recipe={recipe} spin={!selected} />
       </div>
-      <div className="mt-3 grid grid-cols-4 gap-1" aria-label={`${completed}/4`}>
+      {/* 完了した工程の数は上の「{completed}/4」で読める（role のない div の aria-label は読み上げられない）。 */}
+      <div className="mt-3 grid grid-cols-4 gap-1">
         {PHASES.map(({ phase }) => {
           const step = recipe.steps.find((item) => item.phase === phase);
           return (

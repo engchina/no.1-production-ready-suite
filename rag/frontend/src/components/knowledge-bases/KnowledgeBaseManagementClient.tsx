@@ -198,7 +198,7 @@ export function KnowledgeBaseManagementClient() {
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               scrollAriaLabel={t("knowledgeBases.scrollLabel")}
               scrollTestId="knowledge-bases-scroll-region"
-              tableClassName="w-full min-w-[760px] text-sm"
+              tableClassName="w-full min-w-[54.29rem] text-sm"
             />
             <ListPagination
               {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}

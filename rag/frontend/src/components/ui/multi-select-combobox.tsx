@@ -384,7 +384,7 @@ export function MultiSelectCombobox<T>({
                   type="checkbox"
                   checked={hideEmpty}
                   onChange={(event) => setHideEmpty(event.target.checked)}
-                  className="cursor-pointer accent-[var(--color-accent-emphasis)]"
+                  className="cursor-pointer accent-accent-emphasis"
                 />
                 {strings.hideEmpty}
               </label>
@@ -423,7 +423,7 @@ export function MultiSelectCombobox<T>({
                     }}
                     onMouseEnter={() => setActiveIndex(index)}
                     className={cn(
-                      "flex min-h-[44px] cursor-pointer items-center gap-2.5 px-3 py-2 text-sm",
+                      "flex min-h-[var(--control-height-touch)] cursor-pointer items-center gap-2.5 px-3 py-2 text-sm",
                       isActive && "bg-info-subtle",
                       isSelected && "bg-info-subtle"
                     )}

@@ -101,7 +101,7 @@ export function ReviewTextEditor({
           <h4 className="text-sm font-semibold text-fg">
             {t("flow.review.edit.elements")}
           </h4>
-          <ol className="max-h-[520px] space-y-3 overflow-auto pr-1">
+          <ol className="max-h-[37.14rem] space-y-3 overflow-auto pr-1">
             {editableElements.map((element) => {
               const id = editableElementId(element) as string;
               const fieldId = `review-edit-${id}`;

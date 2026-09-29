@@ -34,8 +34,8 @@ const PARSER_BACKEND_LABELS: Record<string, string> = {
   oci_genai_vision: "OCI Generative AI Vision",
   oci_document_understanding: "OCI Document Understanding",
   enterprise_ai: "OCI Enterprise AI",
-  local: "ローカル解析",
-  local_partition: "ローカル解析",
+  local: t("sourceProfile.backend.local"),
+  local_partition: t("sourceProfile.backend.local"),
 };
 
 const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
