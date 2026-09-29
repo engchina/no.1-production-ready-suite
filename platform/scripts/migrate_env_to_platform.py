@@ -84,7 +84,7 @@ def new_name(product: str, key: str) -> str | None:
         if upper.startswith(old_prefix):
             return new_prefix + upper.removeprefix(old_prefix)
     prefix = PREFIXES[product]
-    if upper.startswith("PLATFORM_") or upper.startswith(prefix):
+    if upper.startswith(("PLATFORM_", prefix)):
         return upper
     field = key.lower()
     if field in PLATFORM_SETTING_FIELDS:
@@ -102,9 +102,7 @@ def _existing_values(path: Path) -> dict[str, str]:
     return values
 
 
-def migrate(
-    product: str, backend_env: Path, platform_env: Path
-) -> tuple[str, str, list[str]]:
+def migrate(product: str, backend_env: Path, platform_env: Path) -> tuple[str, str, list[str]]:
     """(新しい製品の .env, 新しい共通 .env, 表示するメッセージ) を返す。"""
     messages: list[str] = []
     platform_values = _existing_values(platform_env)
@@ -131,14 +129,10 @@ def migrate(
             platform_additions.append(f"{renamed}={value}")
             messages.append(f"共通へ移動: {key} → {renamed}")
         elif current.strip() != value.strip():
-            messages.append(
-                f"競合: {renamed} は共通 .env の値を残す（{key} の値は捨てる）"
-            )
+            messages.append(f"競合: {renamed} は共通 .env の値を残す（{key} の値は捨てる）")
         else:
             messages.append(f"共通と同じ値: {key}（製品から削除）")
-    platform_text = (
-        platform_env.read_text(encoding="utf-8") if platform_env.is_file() else ""
-    )
+    platform_text = platform_env.read_text(encoding="utf-8") if platform_env.is_file() else ""
     if platform_additions:
         if platform_text and not platform_text.endswith("\n"):
             platform_text += "\n"
@@ -161,24 +155,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--product", choices=sorted(PREFIXES), required=True)
     parser.add_argument("--backend-env", type=Path)
-    parser.add_argument(
-        "--platform-env", type=Path, default=REPO_ROOT / "platform" / ".env"
-    )
+    parser.add_argument("--platform-env", type=Path, default=REPO_ROOT / "platform" / ".env")
     parser.add_argument("--apply", action="store_true", help="確認だけでなく書き換える")
     args = parser.parse_args(argv)
     backend_env = args.backend_env or REPO_ROOT / args.product / "backend" / ".env"
     if not backend_env.is_file():
         parser.error(f"{backend_env} がありません。")
-    product_text, platform_text, messages = migrate(
-        args.product, backend_env, args.platform_env
-    )
+    product_text, platform_text, messages = migrate(args.product, backend_env, args.platform_env)
     for message in messages:
         print(message)
     model_settings = backend_env.parent / "model-settings.json"
     shared_model_settings = args.platform_env.parent / "model-settings.json"
-    copy_model_settings = (
-        model_settings.is_file() and not shared_model_settings.exists()
-    )
+    copy_model_settings = model_settings.is_file() and not shared_model_settings.exists()
     if copy_model_settings:
         print(f"コピー: {model_settings} → {shared_model_settings}")
     if not args.apply:
@@ -188,9 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     _write(args.platform_env, platform_text)
     if copy_model_settings:
         shutil.copy2(model_settings, shared_model_settings)
-    print(
-        f"更新しました: {backend_env} / {args.platform_env}（元のファイルは *.bak-211）"
-    )
+    print(f"更新しました: {backend_env} / {args.platform_env}（元のファイルは *.bak-211）")
     return 0
 
 
