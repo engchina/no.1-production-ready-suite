@@ -635,7 +635,6 @@ UI 実装時の必須確認:
 - `get_knowledge_base(...)`
 - `update_knowledge_base(...)`
 - `archive_knowledge_base(...)`
-- `ensure_default_knowledge_base(...)`
 - `assign_documents_to_knowledge_base(...)`
 - `remove_document_from_knowledge_base(...)`
 - `replace_document_knowledge_bases(...)`

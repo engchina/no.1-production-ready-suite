@@ -419,16 +419,6 @@ async def test_default_business_view_is_checked_without_user_scope() -> None:
     assert pool.connection.many_calls == []
 
 
-@pytest.mark.anyio
-async def test_default_knowledge_base_lookup_ignores_user_scope() -> None:
-    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(name="DEFAULT")]])
-    with _scope(knowledge_base_ids={"kb-other"}):
-        knowledge_base = await _client(pool).ensure_default_knowledge_base()
-    assert knowledge_base.name == "DEFAULT"
-    assert "access_knowledge_base_id" not in pool.connection.calls[0].statement
-    assert len(pool.connection.calls) == 1
-
-
 # ---------------------------------------------------------------------------
 # 検索の KB は範囲との積集合
 # ---------------------------------------------------------------------------

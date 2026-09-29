@@ -1,16 +1,18 @@
 """chunk_set 永続化の実 Oracle 統合テスト(3 層モデル: 文書単位 serving)。
 
 実 Oracle 26ai を使い、文書単位 serving(is_serving)の確定/付け替え、所属 KB の
-membership 由来導出、save_index の chunk_set スコープ、extraction 層の永続化を検証する。
+membership 由来導出、save_index の chunk_set スコープ、抽出 artifact の永続化を検証する。
 未到達なら oracle_db fixture が skip し、作成行は cleanup_to_baseline で後始末する。
 """
+
+from uuid import uuid4
 
 import pytest
 
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
 from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
-from app.schemas.document import DocumentProcessingConfig, FileStatus
+from app.schemas.document import DocumentProcessingConfig
 from app.schemas.extraction import StructuredExtraction
 
 _EMBEDDING = [0.1] * 1536
@@ -21,6 +23,16 @@ def _chunks(prefix: str, count: int) -> list[Chunk]:
         Chunk(index=i, text=f"{prefix}{i}", start_offset=i * 4, end_offset=i * 4 + 2)
         for i in range(count)
     ]
+
+
+async def _stored_chunk_count(client: OracleClient, document_id: str) -> int:
+    """文書に保存された chunk 行の数(検索対象かどうかに関係なく chunk_set をまたいで数える)。"""
+    return len(await client.list_document_chunks(document_id))
+
+
+def _unique_id(prefix: str) -> str:
+    """実行ごとに一意な ID。前回の実行の行と衝突させない。"""
+    return f"{prefix}_{uuid4().hex[:16]}"
 
 
 async def _new_document(client: OracleClient) -> str:
@@ -53,8 +65,8 @@ async def test_set_document_serving_chunk_set_marks_exactly_one_serving() -> Non
     """3 層モデル: set_document_serving_chunk_set は指定 1 つだけ is_serving=1、他は 0。"""
     client = OracleClient()
     document_id = await _new_document(client)
-    cs_a = "cs_serving_aaaaaaaaaa"
-    cs_b = "cs_serving_bbbbbbbbbb"
+    cs_a = _unique_id("cs_serving")
+    cs_b = _unique_id("cs_serving")
     await client.upsert_chunk_set(chunk_set_id=cs_a, document_id=document_id)
     await client.upsert_chunk_set(chunk_set_id=cs_b, document_id=document_id)
 
@@ -78,8 +90,8 @@ async def test_list_document_chunk_sets_derives_membership_and_serving() -> None
     """3 層モデル: 所属 KB は文書 membership、配信は cs.is_serving から導出する(binding 非依存)。"""
     client = OracleClient()
     document_id = await _new_document(client)
-    cs_a = "cs_list_aaaaaaaaaaaa"
-    cs_b = "cs_list_bbbbbbbbbbbb"
+    cs_a = _unique_id("cs_list")
+    cs_b = _unique_id("cs_list")
     await client.upsert_chunk_set(chunk_set_id=cs_a, document_id=document_id)
     await client.upsert_chunk_set(chunk_set_id=cs_b, document_id=document_id)
 
@@ -120,11 +132,12 @@ async def test_upsert_chunk_set_is_idempotent_and_mark_indexed() -> None:
     """upsert は冪等(重複行を作らない)、mark_chunk_set_indexed が status/件数を更新する。"""
     client = OracleClient()
     document_id = await _new_document(client)
-    cs = "cs_test_idempotent000"
+    cs = _unique_id("cs_test")
 
     await client.upsert_chunk_set(chunk_set_id=cs, document_id=document_id)
     await client.upsert_chunk_set(chunk_set_id=cs, document_id=document_id)
-    assert await client.list_document_chunk_set_ids(document_id) == [cs]
+    rows = await client.list_document_chunk_sets(document_id)
+    assert [str(row["chunk_set_id"]) for row in rows] == [cs]
 
     before = await client.get_chunk_set(cs)
     assert before is not None
@@ -144,8 +157,8 @@ async def test_save_index_chunk_set_scope_keeps_other_chunk_sets() -> None:
     client = OracleClient()
     document_id = await _new_document(client)
     extraction = StructuredExtraction(raw_text="本文", confidence=0.9)
-    cs_a = "cs_scope_aaaaaaaaaa"
-    cs_b = "cs_scope_bbbbbbbbbb"
+    cs_a = _unique_id("cs_scope")
+    cs_b = _unique_id("cs_scope")
 
     # chunk_set A: 2 chunk、chunk_set B: 3 chunk を共存させる。
     await client.save_index(
@@ -154,16 +167,14 @@ async def test_save_index_chunk_set_scope_keeps_other_chunk_sets() -> None:
     await client.save_index(
         document_id, extraction, _chunks("B", 3), [_EMBEDDING] * 3, chunk_set_id=cs_b
     )
-    # count_document_chunks は INDEXED 文書のみ数えるため状態を進める。
-    await client.update_document_status(document_id, FileStatus.INDEXED)
     # B 保存で A は消えていない(scoped delete)= 2 + 3 = 5。
-    assert await client.count_document_chunks(document_id) == 5
+    assert await _stored_chunk_count(client, document_id) == 5
 
     # A を 1 chunk で置換 → A の 2 は消え 1 追加、B の 3 は不変 = 4。
     await client.save_index(
         document_id, extraction, _chunks("A", 1), [_EMBEDDING], chunk_set_id=cs_a
     )
-    assert await client.count_document_chunks(document_id) == 4
+    assert await _stored_chunk_count(client, document_id) == 4
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -174,60 +185,84 @@ async def test_save_index_without_chunk_set_replaces_all_chunks() -> None:
     extraction = StructuredExtraction(raw_text="本文", confidence=0.9)
 
     await client.save_index(document_id, extraction, _chunks("X", 3), [_EMBEDDING] * 3)
-    await client.update_document_status(document_id, FileStatus.INDEXED)
-    assert await client.count_document_chunks(document_id) == 3
+    assert await _stored_chunk_count(client, document_id) == 3
     # 再保存は全置換(2 件)= 2(加算されない)。
     await client.save_index(document_id, extraction, _chunks("Y", 2), [_EMBEDDING] * 2)
-    assert await client.count_document_chunks(document_id) == 2
+    assert await _stored_chunk_count(client, document_id) == 2
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_document_extraction_upsert_get_list_and_gc() -> None:
-    """extraction 層(#6 P1b)の永続化: upsert/get/list/mark/GC が実 Oracle で動く。
+async def test_document_extraction_artifact_round_trip_and_gc() -> None:
+    """抽出 artifact の永続化: upsert / get / 状態更新 / GC が実 Oracle で動く。
 
-    migration が rag_document_extractions 表 + rag_chunk_sets.extraction_id を作る前提
-    (ensure_schema が適用)。1 文書が複数抽出(preprocess×parser)を持てることの永続層。
+    1 文書が複数の抽出 recipe(前処理 × 解析)を持てること、抽出 payload が JSON 列を往復して
+    索引段階の読み込み(coerce → validate)で復元できることを確かめる。
     """
     client = OracleClient()
     document_id = await _new_document(client)
-    extraction = StructuredExtraction(raw_text="抽出本文の一文目です。")
+    payload = StructuredExtraction(raw_text="抽出本文の一文目です。").to_document_payload()
 
-    ex_a = "ex_test_aaaaaaaaaa01"
-    ex_b = "ex_test_bbbbbbbbbb02"
-    await client.upsert_document_extraction(
-        extraction_id=ex_a,
+    ex_a = _unique_id("ex_a")
+    ex_b = _unique_id("ex_b")
+    await client.upsert_document_extraction_artifact(
         document_id=document_id,
-        extraction=extraction,
+        extraction_recipe_id=ex_a,
+        source_sha256="a" * 64,
         recipe_subset={"preprocess": "none", "parser": "docling"},
-        status="EXTRACTED",
+        extraction=payload,
+        status="materialized",
     )
-    await client.upsert_document_extraction(
-        extraction_id=ex_b,
+    await client.upsert_document_extraction_artifact(
         document_id=document_id,
-        extraction=extraction,
+        extraction_recipe_id=ex_b,
+        source_sha256="a" * 64,
         recipe_subset={"preprocess": "none", "parser": "unstructured"},
-        status="EXTRACTED",
+        extraction=payload,
+        status="materialized",
     )
 
-    got = await client.get_document_extraction(ex_a)
+    got = await client.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=ex_a
+    )
     assert got is not None
-    assert got["status"] == "EXTRACTED"
+    assert got["status"] == "materialized"
     assert got["document_id"] == document_id
-    assert got["extraction_json"]  # 抽出 payload が保存されている
-    # #6 P1c の index 読み経路(get → coerce → validate)が実 Oracle JSON 列を往復できる。
-    payload = _coerce_extraction_payload(got["extraction_json"])
-    assert payload is not None
-    assert _validate_structured_extraction_payload(payload).raw_text == "抽出本文の一文目です。"
+    assert got["recipe_subset"] == {"preprocess": "none", "parser": "docling"}
+    # 索引段階の読み込み(get → coerce → validate)が実 Oracle の JSON 列を往復できる。
+    coerced = _coerce_extraction_payload(got["extraction_json"])
+    assert coerced is not None
+    assert _validate_structured_extraction_payload(coerced).raw_text == "抽出本文の一文目です。"
 
-    assert set(await client.list_document_extraction_ids(document_id)) == {ex_a, ex_b}
-
-    await client.mark_document_extraction(extraction_id=ex_a, status="ERROR")
-    reloaded = await client.get_document_extraction(ex_a)
-    assert reloaded is not None and reloaded["status"] == "ERROR"
+    # 状態だけの更新(extraction なし)は保存済みの payload を消さない。
+    await client.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=ex_a,
+        source_sha256="a" * 64,
+        recipe_subset={"preprocess": "none", "parser": "docling"},
+        status="error",
+        reason="解析に失敗しました。",
+    )
+    reloaded = await client.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=ex_a
+    )
+    assert reloaded is not None
+    assert reloaded["status"] == "error"
+    assert reloaded["extraction_json"] == got["extraction_json"]
 
     # ex_b 以外を残す GC → ex_a が消える。
     removed = await client.delete_document_extractions_except(
         document_id=document_id, keep_extraction_ids=[ex_b]
     )
     assert removed == [ex_a]
-    assert await client.list_document_extraction_ids(document_id) == [ex_b]
+    assert (
+        await client.get_document_extraction_artifact(
+            document_id=document_id, extraction_recipe_id=ex_a
+        )
+        is None
+    )
+    assert (
+        await client.get_document_extraction_artifact(
+            document_id=document_id, extraction_recipe_id=ex_b
+        )
+        is not None
+    )

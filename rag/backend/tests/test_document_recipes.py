@@ -549,16 +549,6 @@ class _FakeRecipeJobOracle:
     async def get_ingestion_job(self, job_id: str) -> IngestionJob | None:
         return self.jobs.get(job_id)
 
-    async def update_ingestion_job(self, job_id: str, **updates: object) -> IngestionJob | None:
-        job = self.jobs.get(job_id)
-        if job is None:
-            return None
-        updated = job.model_copy(
-            update={key: value for key, value in updates.items() if value is not None}
-        )
-        self.jobs[job_id] = updated
-        return updated
-
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
         if job.recipe_id is not None and any(
             existing.recipe_id == job.recipe_id

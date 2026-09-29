@@ -106,67 +106,64 @@ def capture_baseline() -> None:
         connection.close()
 
 
-def cleanup_to_baseline() -> None:
-    """テストが作成した rag_documents / rag_chunks 行だけを削除する。
+# 文書に従属する表。正本の schema は `rag_documents` への ON DELETE CASCADE を持つが、
+# 古い環境で作った表には FK がないことがあるため、文書の前に明示して消す（子 → 親の順。
+# 表がなければ飛ばす）。
+_DOCUMENT_CHILD_TABLES = (
+    "rag_artifact_layers",
+    "rag_graph_entity_chunks",
+    "rag_ingestion_segments",
+    "rag_ingestion_jobs",
+    "rag_chunks",
+    "rag_chunk_sets",
+    "rag_document_extractions",
+    "rag_document_knowledge_bases",
+    "rag_document_recipes",
+)
 
-    テスト開始前から存在した baseline ドキュメント（将来の実運用データ）は
-    残し、テスト中に作成された行のみ削除して分離を担保する。
+
+def _not_in_predicate(
+    column: str, prefix: str, values: tuple[str, ...]
+) -> tuple[str, dict[str, str]]:
+    if not values:
+        return "1 = 1", {}
+    placeholders = ", ".join(f":{prefix}{i}" for i in range(len(values)))
+    return f"{column} NOT IN ({placeholders})", {
+        f"{prefix}{i}": value for i, value in enumerate(values)
+    }
+
+
+def cleanup_to_baseline() -> None:
+    """テストが作成した文書・KB と、それに従属する行だけを削除する。
+
+    テスト開始前から存在した baseline の文書・KB（将来の実運用データ）は残し、テスト中に
+    作成された行（と、削除済みの文書を指したまま残った行）だけを削除して分離を担保する。
     """
     connection = _connect()
     try:
         cursor = connection.cursor()
-        kb_baseline = tuple(_BASELINE_KNOWLEDGE_BASE_IDS)
-        baseline = tuple(_BASELINE_DOCUMENT_IDS)
-        if kb_baseline:
-            kb_placeholders = ", ".join(f":kb{i}" for i in range(len(kb_baseline)))
-            kb_params = {f"kb{i}": value for i, value in enumerate(kb_baseline)}
-            cursor.execute(
-                f"""
-                DELETE FROM rag_document_knowledge_bases
-                WHERE knowledge_base_id NOT IN ({kb_placeholders})
-                """,
-                kb_params,
-            )
-        else:
-            with suppress(Exception):
-                cursor.execute("DELETE FROM rag_document_knowledge_bases")
+        document_sql, document_binds = _not_in_predicate(
+            "document_id", "b", tuple(_BASELINE_DOCUMENT_IDS)
+        )
+        kb_sql, kb_binds = _not_in_predicate(
+            "knowledge_base_id", "kb", tuple(_BASELINE_KNOWLEDGE_BASE_IDS)
+        )
         with suppress(Exception):
-            if baseline:
-                placeholders = ", ".join(f":b{i}" for i in range(len(baseline)))
-                params = {f"b{i}": value for i, value in enumerate(baseline)}
-                cursor.execute(
-                    f"DELETE FROM rag_ingestion_segments WHERE document_id NOT IN ({placeholders})",
-                    params,
-                )
-            else:
-                cursor.execute("DELETE FROM rag_ingestion_segments")
-        if baseline:
-            placeholders = ", ".join(f":b{i}" for i in range(len(baseline)))
-            params = {f"b{i}": value for i, value in enumerate(baseline)}
-            cursor.execute(
-                f"DELETE FROM rag_chunks WHERE document_id NOT IN ({placeholders})",
-                params,
-            )
-            cursor.execute(
-                f"DELETE FROM rag_documents WHERE document_id NOT IN ({placeholders})",
-                params,
-            )
-        else:
-            cursor.execute("DELETE FROM rag_chunks")
-            cursor.execute("DELETE FROM rag_documents")
-        if kb_baseline:
-            kb_placeholders = ", ".join(f":kb{i}" for i in range(len(kb_baseline)))
-            kb_params = {f"kb{i}": value for i, value in enumerate(kb_baseline)}
-            cursor.execute(
-                f"""
-                DELETE FROM rag_knowledge_bases
-                WHERE knowledge_base_id NOT IN ({kb_placeholders})
-                """,
-                kb_params,
-            )
-        else:
+            cursor.execute(f"DELETE FROM rag_document_knowledge_bases WHERE {kb_sql}", kb_binds)
+        for table in _DOCUMENT_CHILD_TABLES:
             with suppress(Exception):
-                cursor.execute("DELETE FROM rag_knowledge_bases")
+                cursor.execute(f"DELETE FROM {table} WHERE {document_sql}", document_binds)
+        cursor.execute(
+            f"""
+            UPDATE rag_documents SET duplicate_of_document_id = NULL
+            WHERE duplicate_of_document_id IS NOT NULL
+              AND {document_sql.replace("document_id", "duplicate_of_document_id")}
+            """,
+            document_binds,
+        )
+        cursor.execute(f"DELETE FROM rag_documents WHERE {document_sql}", document_binds)
+        with suppress(Exception):
+            cursor.execute(f"DELETE FROM rag_knowledge_bases WHERE {kb_sql}", kb_binds)
         connection.commit()
     finally:
         connection.close()

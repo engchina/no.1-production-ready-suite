@@ -130,7 +130,7 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 
 ## Oracle 26ai DDL 例
 
-`OracleClient.oracle_document_schema_sql()` / `OracleClient.oracle_vector_schema_sql()` / `OracleClient.oracle_audit_schema_sql()` が返す DDL をベースにする。
+`app.clients.oracle` の `oracle_document_schema_sql()` / `oracle_vector_schema_sql()` / `oracle_search_audit_schema_sql()` / `oracle_ingestion_audit_schema_sql()` が返す DDL をベースにする。
 
 ```sql
 CREATE TABLE rag_documents (
