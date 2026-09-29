@@ -30,6 +30,4 @@ def _health() -> ConvertHealth:
     )
 
 
-app = create_preprocess_app(
-    converter=convert, health_probe=_health, title="preprocess-pii-redact"
-)
+app = create_preprocess_app(converter=convert, health_probe=_health, title="preprocess-pii-redact")

@@ -414,6 +414,29 @@ jobs:
           uv sync --locked --extra pdf --extra japanese --extra excel --extra oracle
           uv run --locked --no-sync python -m pytest -q tests
 
+  services-scripts-lint:
+    name: Lint / services & scripts
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      # 各 backend の job は自分のディレクトリだけを検査するため、RAG のマイクロサービス（rag/services）と
+      # platform のスクリプト（platform/scripts）は、venv を作らずに ruff だけで検査する（#517）。
+      # 設定は各サービスの pyproject.toml と platform/scripts/ruff.toml。版は rag/backend の uv.lock の ruff にそろえる。
+      - name: Ruff
+        run: |
+          version="$(sed -n '/^name = "ruff"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
+          test -n "${version}"
+          uvx "ruff@${version}" check rag/services platform/scripts
+          uvx "ruff@${version}" format --check rag/services platform/scripts
+
   rag-frontend:
     name: RAG / Frontend
     needs: changes
@@ -940,6 +963,7 @@ jobs:
       - platform-system-settings-backend
       - rag-backend
       - rag-docrag-core
+      - services-scripts-lint
       - rag-frontend
       - rag-e2e
       - rag-init-script
