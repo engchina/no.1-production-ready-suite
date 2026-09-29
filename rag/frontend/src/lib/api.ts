@@ -1701,17 +1701,42 @@ export interface ParserAdapterSettingsData {
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
   capabilities: ParserBackendCapabilityData[];
   connections: ExternalParserConnectionData[];
+  /** 「解析後の処理」の全体の既定（#528）。保存先は backend/.env。 */
+  vision_enabled: boolean;
+  field_extraction_enabled: boolean;
+  navigation_summary_enabled: boolean;
   config_source: "runtime";
 }
 
+/** `adapter_backend` を省略すると解析エンジンの設定は変えない（「解析後の処理」だけの保存。#528）。 */
 export interface ParserAdapterSettingsUpdate {
-  adapter_backend: ParserAdapterBackend;
+  adapter_backend?: ParserAdapterBackend;
   docling_enabled?: boolean;
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
+  vision_enabled?: boolean;
+  field_extraction_enabled?: boolean;
+  navigation_summary_enabled?: boolean;
 }
+
+/** 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。 */
+export interface PipelineSettingsData {
+  auto_parse_after_preprocess_enabled: boolean;
+  auto_chunk_after_extract_enabled: boolean;
+  auto_index_after_chunk_enabled: boolean;
+  /** レシピで何も上書きしないときの実効値（レシピの「グローバル設定に従う」と同じ）。 */
+  recipe_defaults: DocumentProcessingConfig;
+  config_source: "runtime";
+}
+
+export type PipelineAutoAdvanceField =
+  | "auto_parse_after_preprocess_enabled"
+  | "auto_chunk_after_extract_enabled"
+  | "auto_index_after_chunk_enabled";
+
+export type PipelineSettingsUpdate = Partial<Record<PipelineAutoAdvanceField, boolean>>;
 
 // --- 設定: Chunking アダプター ---
 export type ChunkingStrategyName =
@@ -2048,8 +2073,16 @@ export interface GuardrailPolicyStatusData {
 }
 
 /** メタデータ/項目抽出のスキーマ定義(検索・回答設定)。 */
+export type ExtractionFieldValueType = "string" | "number" | "date" | "bool";
+
+export interface ExtractionFieldDefinition {
+  name: string;
+  description: string;
+  value_type: ExtractionFieldValueType;
+}
+
 export interface ExtractionFieldsSettingsData {
-  fields: Array<{ name: string; description: string; value_type: string }>;
+  fields: ExtractionFieldDefinition[];
 }
 
 export interface GuardrailSettingsData {
@@ -3288,6 +3321,19 @@ export const api = {
   // 設定: Guardrail アダプター
   getExtractionFieldsSettings: () =>
     request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields"),
+  updateExtractionFieldsSettings: (body: { fields: ExtractionFieldDefinition[] }) =>
+    request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getPipelineSettings: () => request<PipelineSettingsData>("/api/settings/pipeline"),
+  updatePipelineSettings: (body: PipelineSettingsUpdate) =>
+    request<PipelineSettingsData>("/api/settings/pipeline", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getGuardrailSettings: () =>
     request<GuardrailSettingsData>("/api/settings/guardrail"),
   updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>

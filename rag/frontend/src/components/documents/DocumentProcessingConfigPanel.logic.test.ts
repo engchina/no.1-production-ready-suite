@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RECIPE_CONFIG_FIELDS,
   RECIPE_CONFIG_ITEMS,
+  globalSettingsHref,
   recipeConfigGroups,
 } from "./DocumentProcessingConfigPanel.logic";
 import { t } from "@/lib/i18n";
@@ -55,5 +56,26 @@ describe("選択中レシピの設定の項目と並び順", () => {
       RECIPE_CONFIG_ITEMS.filter((item) => item.phase !== "INDEX")
     );
     expect(groups.map((group) => group.phase)).toEqual(["PREPROCESS", "EXTRACT", "CHUNK"]);
+  });
+});
+
+// #528: 「グローバル設定に従う」の各行から、その全体の既定を変える画面へ移動する。
+describe("グローバル設定を開くリンク", () => {
+  it("11 項目それぞれに、全体の既定を変える画面がある", () => {
+    expect(
+      Object.fromEntries(RECIPE_CONFIG_ITEMS.map((item) => [item.field, globalSettingsHref(item)]))
+    ).toEqual({
+      preprocess_profile: "/settings/preprocess",
+      auto_parse_after_preprocess_enabled: "/settings/pipeline#pipeline-gate-auto-parse",
+      parser_adapter_backend: "/settings/parser-adapters",
+      vision_enabled: "/settings/parser-adapters#post-parse-vision",
+      field_extraction_enabled: "/settings/parser-adapters#post-parse-field-extraction",
+      navigation_summary_enabled: "/settings/parser-adapters#post-parse-navigation-summary",
+      auto_chunk_after_extract_enabled: "/settings/pipeline#pipeline-gate-auto-chunk",
+      chunking_strategy: "/settings/chunking",
+      chunk_context_header_enabled: "/settings/chunking",
+      auto_index_after_chunk_enabled: "/settings/pipeline#pipeline-gate-auto-index",
+      graph_profile: "/settings/graph",
+    });
   });
 });

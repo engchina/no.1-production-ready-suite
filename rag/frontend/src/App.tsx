@@ -282,7 +282,12 @@ function useMainScrollRestoration(
     let animationFrame = 0;
     const restore = () => {
       scroll();
-      if (location.hash || Math.abs(main.scrollTop - nextTop) <= 1) return;
+      // hash の移動先は、読み込みの後に描画されることがある（設定画面の節など。#528）。
+      // 移動先が現れるまで同じ期限まで待つ。
+      const settled = location.hash
+        ? document.getElementById(decodeHashId(location.hash)) !== null
+        : Math.abs(main.scrollTop - nextTop) <= 1;
+      if (settled) return;
       if (performance.now() > deadline) return;
       animationFrame = window.requestAnimationFrame(restore);
     };

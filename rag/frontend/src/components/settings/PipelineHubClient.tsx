@@ -8,6 +8,8 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { APP_ROUTES } from "@/lib/routes";
 import { ja, t, type I18nKey } from "@/lib/i18n";
 
+import { PipelineRecipeDefaultsSection } from "./PipelineRecipeDefaultsSection";
+
 // 「ナレッジ構築(取込)」工程の href。これ以外の検索・回答設定工程は「検索・回答」に分類する。
 const INGESTION_HREFS = new Set<string>([
   APP_ROUTES.settingsPreprocess,
@@ -34,6 +36,7 @@ function stageDescription(item: NavItem): string {
  * ナレッジ構築 / 検索・回答 の 2 フェーズに分け、各工程へのカード導線を 1 画面で提供する。
  * セクション項目を動的に読むため、工程の増減に追従して drift しない。
  * 権限のない工程はサイドナビと同じ判定で出さず、工程が 0 件のフェーズは見出しごと出さない（#214）。
+ * 先頭に、取込の流れと全体の既定（工程の自動進行のスイッチを含む。#528）を置く。
  */
 export function PipelineHubClient() {
   const { hasPermission } = useAuth();
@@ -46,6 +49,8 @@ export function PipelineHubClient() {
 
   return (
     <PageBody wide>
+      {/* 取込の流れ・工程の自動進行・レシピ 11 項目の全体の既定（#528）。この画面の権限で読み書きする。 */}
+      <PipelineRecipeDefaultsSection />
       <PhaseGroup
         title={t("settings.pipeline.phase.ingestion")}
         hint={t("settings.pipeline.phase.ingestionHint")}

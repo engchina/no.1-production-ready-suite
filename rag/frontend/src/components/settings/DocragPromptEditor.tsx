@@ -35,8 +35,6 @@ export function DocragPromptCard({
   promptKey: DocragPromptKey;
   showStages?: boolean;
 }) {
-  const query = useDocragPrompts();
-  const prompt = query.data?.prompts.find((item) => item.key === promptKey);
   return (
     <Card>
       <CardHeader>
@@ -44,18 +42,36 @@ export function DocragPromptCard({
         <CardDescription>{t(`settings.docragPrompts.${promptKey}.description`)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {query.isPending ? (
-          <Skeleton className="h-40 w-full" />
-        ) : query.isError || !prompt ? (
-          <ErrorState message={t("settings.docragPrompts.loadError")} onRetry={() => void query.refetch()} />
-        ) : (
-          <>
-            <DocragPromptEditor prompt={prompt} />
-            {showStages ? <ReadonlyStages stages={query.data.stages} /> : null}
-          </>
-        )}
+        <DocragPromptPanel promptKey={promptKey} showStages={showStages} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
+ * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
+ */
+export function DocragPromptPanel({
+  promptKey,
+  showStages = false,
+}: {
+  promptKey: DocragPromptKey;
+  showStages?: boolean;
+}) {
+  const query = useDocragPrompts();
+  const prompt = query.data?.prompts.find((item) => item.key === promptKey);
+  if (query.isPending) return <Skeleton className="h-40 w-full" />;
+  if (query.isError || !prompt) {
+    return (
+      <ErrorState message={t("settings.docragPrompts.loadError")} onRetry={() => void query.refetch()} />
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <DocragPromptEditor prompt={prompt} />
+      {showStages ? <ReadonlyStages stages={query.data.stages} /> : null}
+    </div>
   );
 }
 

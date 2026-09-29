@@ -272,7 +272,8 @@ class _PersistedParserAdapterSettings(BaseModel):
     dots_ocr_api_key: str = Field(default="", max_length=4096)
 
     # 削除済みエンジンの項目(marker_enabled 等)と、画面から外した docling_vision_enabled(#497。
-    # Vision の既定は env の RAG_VISION_ENABLED だけで決める)は既定の extra=ignore で読み捨てる。
+    # Vision の既定は backend/.env の RAG_VISION_ENABLED で決める。#528)は
+    # 既定の extra=ignore で読み捨てる。
     # adapter_backend に削除済みエンジンが残っていれば既定エンジンへ寄せる(#270)。
     @field_validator("adapter_backend", mode="before")
     @classmethod
@@ -1274,7 +1275,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "文書解析の後に図・画像を OCI Enterprise AI の VLM で読み取り、図の要素の本文を"
             "説明文にする(全ての解析エンジン。Docling は解析サービスの中で読み取る)。"
-            "全体の既定は env だけで決め、文書のレシピで上書きする。画像 1 枚ごとに VLM を呼ぶ。"
+            "全体の既定は backend/.env で決め(文書解析の画面の「解析後の処理」から"
+            "保存できる。#528)、文書のレシピで上書きする。画像 1 枚ごとに VLM を呼ぶ。"
         ),
     )
     rag_parser_unstructured_enabled: bool = Field(

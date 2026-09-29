@@ -256,6 +256,11 @@ def test_manifest_key_assignments() -> None:
     assert _perm("POST", "/security/roles") == {"menu.security_roles"}
     assert _perm("PATCH", "/security/users/{user_uuid}") == {"menu.security_users"}
     assert _perm("PUT", "/security/roles/{role_id}/access") == {"menu.security_permissions"}
+    # 全体の既定の入口（#528）: 設定の概要と、文書解析の「解析後の処理」。
+    assert _perm("GET", "/settings/pipeline") == {"menu.settings_pipeline"}
+    assert _perm("PATCH", "/settings/pipeline") == {"menu.settings_pipeline"}
+    assert _perm("PATCH", "/settings/parser-adapters") == {"menu.settings_parser_adapters"}
+    assert _perm("PATCH", "/settings/extraction-fields") == {"menu.settings_parser_adapters"}
 
 
 def test_capabilities_imply_their_menu() -> None:

@@ -49,6 +49,7 @@ from app.rag.request_context import current_audit_request_context, unrestricted_
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.schemas.business_view import (
+    DEFAULT_BUSINESS_VIEW_DESCRIPTION,
     DEFAULT_BUSINESS_VIEW_NAME,
     BusinessViewDetail,
     BusinessViewKnowledgeBaseRef,
@@ -72,6 +73,7 @@ from app.schemas.document import (
 )
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import (
+    DEFAULT_KNOWLEDGE_BASE_DESCRIPTION,
     DEFAULT_KNOWLEDGE_BASE_NAME,
     KnowledgeBaseDetail,
     KnowledgeBaseRef,
@@ -10418,13 +10420,36 @@ def _ensure_default_knowledge_base(
     if existing is not None:
         if existing.status != KnowledgeBaseStatus.ACTIVE:
             raise ValueError("DEFAULT ナレッジベースがアーカイブ済みです。")
-        return existing
+        if (existing.description or "").strip():
+            return existing
+        # 説明が必須になる前（#521）に作った DEFAULT は、既定の説明を補う（改名できないため）。
+        described = updated_copy_knowledge_base(
+            existing,
+            description=DEFAULT_KNOWLEDGE_BASE_DESCRIPTION,
+            updated_at=datetime.now(UTC),
+        )
+        _execute(
+            connection,
+            _render_sql(
+                """
+            UPDATE rag_knowledge_bases
+            SET
+                description = :description,
+                updated_at = :updated_at
+            WHERE knowledge_base_id = :knowledge_base_id
+              AND {tenant_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(),
+            ),
+            _knowledge_base_binds(described),
+        )
+        return described
     now = datetime.now(UTC)
     knowledge_base = StoredKnowledgeBase(
         id=uuid4().hex,
         tenant_id_hash=_current_tenant_id_hash(),
         name=name,
-        description=None,
+        description=DEFAULT_KNOWLEDGE_BASE_DESCRIPTION,
         status=KnowledgeBaseStatus.ACTIVE,
         default_search_mode=SearchMode.HYBRID,
         retrieval_config={},
@@ -10444,7 +10469,7 @@ def _ensure_default_business_view(connection: OracleConnectionProtocol) -> Busin
             id=uuid4().hex,
             tenant_id_hash=_current_tenant_id_hash(),
             name=DEFAULT_BUSINESS_VIEW_NAME,
-            description=None,
+            description=DEFAULT_BUSINESS_VIEW_DESCRIPTION,
             status=BusinessViewStatus.ACTIVE,
             view_config=dump_business_view_config(
                 BusinessViewConfig(knowledge_base_ids=[knowledge_base.id])
@@ -10457,15 +10482,19 @@ def _ensure_default_business_view(connection: OracleConnectionProtocol) -> Busin
 
     config = parse_business_view_config(existing.view_config)
     normalized_config = config.model_copy(update={"knowledge_base_ids": [knowledge_base.id]})
+    # 説明が必須になる前（#521）に作った DEFAULT は、既定の説明を補う（改名できないため）。
+    described = bool((existing.description or "").strip())
     if (
         existing.status == BusinessViewStatus.ACTIVE
         and existing.archived_at is None
         and config == normalized_config
+        and described
     ):
         return _to_business_view_detail(existing)
 
     normalized = updated_copy_business_view(
         existing,
+        description=existing.description if described else DEFAULT_BUSINESS_VIEW_DESCRIPTION,
         status=BusinessViewStatus.ACTIVE,
         view_config=dump_business_view_config(normalized_config),
         updated_at=now,
@@ -10477,6 +10506,7 @@ def _ensure_default_business_view(connection: OracleConnectionProtocol) -> Busin
             """
         UPDATE rag_business_views
         SET
+            description = :description,
             status = :status,
             view_config = :view_config,
             updated_at = :updated_at,

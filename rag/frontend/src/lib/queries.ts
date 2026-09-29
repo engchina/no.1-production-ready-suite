@@ -74,7 +74,10 @@ import {
   type GenerationSettingsUpdate,
   type PromptVersionsData,
   type PromptVersionCreate,
+  type ExtractionFieldDefinition,
   type ExtractionFieldsSettingsData,
+  type PipelineSettingsData,
+  type PipelineSettingsUpdate,
   type GuardrailSettingsData,
   type GuardrailSettingsUpdate,
   type VectorIndexSettingsData,
@@ -188,6 +191,7 @@ export const queryKeys = {
   promptVersions: ["settings", "prompts"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
   extractionFieldsSettings: ["settings", "extraction-fields"] as const,
+  pipelineSettings: ["settings", "pipeline"] as const,
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
@@ -1884,6 +1888,40 @@ export function useUpdateParserAdapterSettings() {
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.parserAdapterSettings, data);
       void qc.resetQueries({ queryKey: queryKeys.externalParserStatuses });
+      // 設定の概要の全体の既定（解析エンジン・解析後の処理）も変わる（#528）。
+      void qc.invalidateQueries({ queryKey: queryKeys.pipelineSettings });
+    },
+  });
+}
+
+/** 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。 */
+export function usePipelineSettings() {
+  return useQuery<PipelineSettingsData>({
+    queryKey: queryKeys.pipelineSettings,
+    queryFn: api.getPipelineSettings,
+    retry: false,
+  });
+}
+
+/** 工程の自動進行を保存する（#528）。 */
+export function useUpdatePipelineSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PipelineSettingsUpdate) => api.updatePipelineSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.pipelineSettings, data);
+    },
+  });
+}
+
+/** 抽出項目の定義を保存する（文書解析の「解析後の処理」。#528）。 */
+export function useUpdateExtractionFieldsSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fields: ExtractionFieldDefinition[]) =>
+      api.updateExtractionFieldsSettings({ fields }),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.extractionFieldsSettings, data);
     },
   });
 }

@@ -87,7 +87,9 @@ test("permission editor saves profile access and supports bulk selection", () =>
     /draftGrantsAll\(target\) \? \[\] : \(draft\.targets\[target\.key\] \?\? \[\]\)/u
   );
   assert.match(permissionsPageSource, /const idPrefix = `security-roles-\$\{target\.key\}`/u);
-  assert.match(permissionsPageSource, /onChange=\{\(\) => toggle\(item\.id\)\}/u);
+  // 行は共有の RolePermissionTargetOption に切り出した（#521）。onToggle で item.id を切り替える。
+  assert.match(permissionsPageSource, /onToggle=\{\(\) => toggle\(item\.id\)\}/u);
+  assert.match(permissionsPageSource, /onChange=\{onToggle\}/u);
   assert.match(permissionsPageSource, /onSelectAll=\{selectVisible\}/u);
   assert.match(permissionsPageSource, /onClearAll=\{clearVisible\}/u);
   assert.match(permissionsPageSource, /dataTestId=\{`\$\{idPrefix\}-selection-actions`\}/u);
@@ -147,7 +149,7 @@ test("built-in and archived roles cannot be edited from the permission editor", 
     permissionsPageSource,
     /disabled=\{targetReadOnly\}\s*onChange=\{\(value\) => \{\s*if \(targetReadOnly\) return;\s*onSearchChange\(value\);/u
   );
-  assert.match(permissionsPageSource, /disabled=\{targetReadOnly\}\s*onChange=\{\(\) => toggle/u);
+  assert.match(permissionsPageSource, /disabled=\{targetReadOnly\}[\s\S]{0,200}?onToggle=\{\(\) => toggle\(item\.id\)\}/u);
   assert.match(securityManagementSharedSource, /disabled\?: boolean/u);
   // 検索欄は共有の TextField（無効の見た目は TextField が持つ。#384）に disabled を渡す。
   assert.match(securityManagementSharedSource, /export function SecuritySearchField[\s\S]*?<TextField[\s\S]*?disabled=\{disabled\}/u);

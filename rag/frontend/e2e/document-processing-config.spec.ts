@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const documentDetail = {
   id: "doc-1",
@@ -392,6 +392,77 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
     summary.locator('[data-config-field="chunk_context_header_enabled"]')
   ).toContainText("上書き");
   await expectNoPageOverflow(page);
+});
+
+// #528: 「グローバル設定に従う」の各行から、その全体の既定を変える画面へ移動できる。
+test("グローバル設定に従う行に、全体の既定を変える画面へのリンクを出す", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.route("**/api/settings/pipeline", (route) =>
+    route.fulfill({
+      json: ok({
+        auto_parse_after_preprocess_enabled: true,
+        auto_chunk_after_extract_enabled: true,
+        auto_index_after_chunk_enabled: true,
+        recipe_defaults: effectiveBase,
+        config_source: "runtime",
+      }),
+    })
+  );
+  await page.goto("/documents/doc-1");
+
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+  await panel.getByRole("button", { name: "処理設定を編集" }).click();
+  const editor = panel.getByTestId("document-processing-config-editor-items");
+  const links = editor.getByRole("link", { name: / のグローバル設定を開く$/ });
+  // すべて継承のときは 11 行すべてにリンクがある。
+  await expect(links).toHaveCount(PROCESSING_ORDER.length);
+  await expect(
+    editor.getByRole("link", { name: "図・画像を AI で読み取る（Vision） のグローバル設定を開く" })
+  ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
+  await expect(
+    editor.getByRole("link", { name: "関係情報の構築 のグローバル設定を開く" })
+  ).toHaveAttribute("href", "/settings/graph");
+  const visionRow = editor.locator('[data-config-field="vision_enabled"]');
+  await expect(visionRow).toContainText("グローバル設定に従う: 無効");
+  await expect(visionRow.getByRole("link", { name: /グローバル設定を開く/ })).toHaveText(
+    "グローバル設定を開く"
+  );
+
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+    await editor.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/recipe-global-links-${test.info().project.name}.png`,
+    });
+  }
+
+  // 上書きした行には出さない（全体の既定を使っていないため）。
+  await visionRow.getByText("上書き", { exact: true }).click();
+  await expect(links).toHaveCount(PROCESSING_ORDER.length - 1);
+  await visionRow.getByText("グローバルを継承", { exact: true }).click();
+  await expect(links).toHaveCount(PROCESSING_ORDER.length);
+
+  // 自動進行のゲートは設定の概要の工程の流れへ移動する。
+  await editor
+    .getByRole("link", { name: "抽出後に Chunk 作成へ進む のグローバル設定を開く" })
+    .click();
+  await expect(page).toHaveURL(/\/settings\/pipeline#pipeline-gate-auto-chunk$/);
+  await expect(page.getByRole("switch", { name: "抽出後に Chunk 作成へ進む" })).toBeInViewport();
+  await expectNoPageOverflow(page);
+});
+
+test("権限のない設定画面へのグローバル設定のリンクは出さない", async ({ page }) => {
+  await mockAuthUser(page, {
+    permissions: ["menu.file_list", "menu.settings_chunking"],
+    allowed_knowledge_base_ids: null,
+  });
+  await mockWorkspace(page);
+  await page.goto("/documents/doc-1");
+
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+  await panel.getByRole("button", { name: "処理設定を編集" }).click();
+  const editor = panel.getByTestId("document-processing-config-editor-items");
+  await expect(editor.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
+  // 文書分割と文脈ヘッダ（どちらも文書分割の画面）だけ。
+  await expect(editor.getByRole("link", { name: / のグローバル設定を開く$/ })).toHaveCount(2);
 });
 
 test("レシピ比較で空の引用を理由付きの状態として表示する", async ({ page }) => {

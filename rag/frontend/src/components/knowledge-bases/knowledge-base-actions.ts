@@ -6,6 +6,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, DEFAULT_KNOWLEDGE_BASE_NAME, type KnowledgeBaseSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
+import { requiredTextError } from "@/lib/required-fields";
 import { useArchiveKnowledgeBase } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
@@ -24,6 +25,11 @@ export function validateKnowledgeBaseName(name: string) {
     return t("knowledgeBases.validation.nameReserved");
   }
   return null;
+}
+
+/** 説明の検証（作成・編集で共通。#521）。空・空白だけは入力を求める。 */
+export function validateKnowledgeBaseDescription(description: string) {
+  return requiredTextError(description, t("knowledgeBases.validation.descriptionRequired"));
 }
 
 /**

@@ -2016,6 +2016,16 @@ def _merge_document_processing_config(
     )
 
 
+def global_document_processing_config(
+    global_settings: Settings | None = None,
+) -> DocumentProcessingConfig:
+    """レシピで何も上書きしないときの実効値（「グローバル設定に従う」の値。#528）。
+
+    設定の概要の画面が、レシピと同じ解決で全体の既定を表示するために使う。
+    """
+    return _merge_document_processing_config(DocumentProcessingConfig(), global_settings)[1]
+
+
 def _processing_recipe_snapshot(
     config: DocumentProcessingConfig,
     effective: DocumentProcessingConfig,

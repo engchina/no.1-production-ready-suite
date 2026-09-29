@@ -1,5 +1,7 @@
 import type { IngestionJobPhase } from "@/lib/api";
 import type { I18nKey } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 
 /**
  * 「選択中レシピの設定」の項目と並び順の正本（#523）。
@@ -36,9 +38,25 @@ type BooleanConfigField =
   | "chunk_context_header_enabled"
   | "auto_index_after_chunk_enabled";
 
+/**
+ * 全体の既定（グローバル設定）を変える画面（#528）。レシピの「グローバル設定を開く」と、
+ * 設定の概要の全体の既定の一覧が、この 1 か所の定義からリンクを作る。
+ */
+export interface GlobalSettingsLocation {
+  route: string;
+  /** 画面の中の節の id（URL の hash）。無ければ画面の先頭へ移動する。 */
+  anchor?: string;
+}
+
+type RecipeConfigItemBase = {
+  label: I18nKey;
+  phase: IngestionJobPhase;
+  globalSettings: GlobalSettingsLocation;
+};
+
 export type RecipeConfigItem =
-  | { field: SelectConfigField; kind: "select"; label: I18nKey; phase: IngestionJobPhase }
-  | { field: BooleanConfigField; kind: "boolean"; label: I18nKey; phase: IngestionJobPhase };
+  | ({ field: SelectConfigField; kind: "select" } & RecipeConfigItemBase)
+  | ({ field: BooleanConfigField; kind: "boolean" } & RecipeConfigItemBase);
 
 export type RecipeConfigField = RecipeConfigItem["field"];
 
@@ -48,68 +66,91 @@ export const RECIPE_CONFIG_ITEMS = [
     kind: "select",
     label: "knowledgeBases.adapter.field.preprocessProfile",
     phase: "PREPROCESS",
+    globalSettings: { route: APP_ROUTES.settingsPreprocess },
   },
   {
     field: "auto_parse_after_preprocess_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.autoParseAfterPreprocess",
     phase: "PREPROCESS",
+    globalSettings: { route: APP_ROUTES.settingsPipeline, anchor: SETTINGS_ANCHORS.autoParseGate },
   },
   {
     field: "parser_adapter_backend",
     kind: "select",
     label: "knowledgeBases.adapter.field.parserBackend",
     phase: "EXTRACT",
+    globalSettings: { route: APP_ROUTES.settingsParserAdapters },
   },
   {
     field: "vision_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.vision",
     phase: "EXTRACT",
+    globalSettings: { route: APP_ROUTES.settingsParserAdapters, anchor: SETTINGS_ANCHORS.vision },
   },
   {
     field: "field_extraction_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.fieldExtraction",
     phase: "EXTRACT",
+    globalSettings: {
+      route: APP_ROUTES.settingsParserAdapters,
+      anchor: SETTINGS_ANCHORS.fieldExtraction,
+    },
   },
   {
     field: "navigation_summary_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.navigationSummary",
     phase: "EXTRACT",
+    globalSettings: {
+      route: APP_ROUTES.settingsParserAdapters,
+      anchor: SETTINGS_ANCHORS.navigationSummary,
+    },
   },
   {
     field: "auto_chunk_after_extract_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.autoChunkAfterExtract",
     phase: "EXTRACT",
+    globalSettings: { route: APP_ROUTES.settingsPipeline, anchor: SETTINGS_ANCHORS.autoChunkGate },
   },
   {
     field: "chunking_strategy",
     kind: "select",
     label: "knowledgeBases.adapter.field.chunkingStrategy",
     phase: "CHUNK",
+    globalSettings: { route: APP_ROUTES.settingsChunking },
   },
   {
     field: "chunk_context_header_enabled",
     kind: "boolean",
     label: "documents.processingConfig.contextHeader",
     phase: "CHUNK",
+    globalSettings: { route: APP_ROUTES.settingsChunking },
   },
   {
     field: "auto_index_after_chunk_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.autoIndexAfterChunk",
     phase: "CHUNK",
+    globalSettings: { route: APP_ROUTES.settingsPipeline, anchor: SETTINGS_ANCHORS.autoIndexGate },
   },
   {
     field: "graph_profile",
     kind: "select",
     label: "knowledgeBases.adapter.field.graphProfile",
     phase: "INDEX",
+    globalSettings: { route: APP_ROUTES.settingsGraph },
   },
 ] as const satisfies readonly RecipeConfigItem[];
+
+/** 全体の既定を変える画面の URL（`/settings/parser-adapters#post-parse-vision` など）。 */
+export function globalSettingsHref(item: RecipeConfigItem): string {
+  const { route, anchor } = item.globalSettings;
+  return anchor ? `${route}#${anchor}` : route;
+}
 
 /** 上書きの件数（n / 全体）を数える対象。項目の正本と同じ集合。 */
 export const RECIPE_CONFIG_FIELDS: RecipeConfigField[] = RECIPE_CONFIG_ITEMS.map(

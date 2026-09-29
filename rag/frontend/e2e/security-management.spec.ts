@@ -218,3 +218,103 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
     ["menu.search", "rag.knowledge_bases.manage"].sort()
   );
 });
+
+// #521: 業務ビュー・KB の候補の行は名前と説明を出し、内部の ID は出さない。長い説明は 2 行で省略し、
+// 行の高さをそろえて重ねない（375px の 1 列でも）。ライト / ダークの両方で確かめる。
+const LONG_DESCRIPTION =
+  "人事規程・就業規則・勤怠管理・福利厚生・評価制度・出張旅費・経費精算・情報セキュリティに関する社内の問い合わせにまとめて回答するための業務ビューです。" +
+  "説明が長い場合は 2 行で省略し、全文は title で確かめられることを確かめます。";
+const hexId = (index: number) => index.toString(16).padStart(32, "0");
+const MANY_TARGETS = {
+  business_views: Array.from({ length: 8 }, (_, index) => ({
+    id: hexId(index + 1),
+    name:
+      index === 1
+        ? "人事と総務と経理をまとめて扱う全社共通の問い合わせ窓口の業務ビュー"
+        : `業務ビュー ${index + 1}`,
+    status: index === 3 ? "ARCHIVED" : "ACTIVE",
+    description: index % 3 === 0 ? null : index % 3 === 1 ? LONG_DESCRIPTION : "短い説明",
+  })),
+  knowledge_bases: Array.from({ length: 8 }, (_, index) => ({
+    id: hexId(index + 101),
+    name: `ナレッジベース ${index + 1}`,
+    status: index === 2 ? "ARCHIVED" : "ACTIVE",
+    description: index % 2 === 0 ? LONG_DESCRIPTION : "規程集",
+  })),
+};
+
+async function setTheme(page: Page, theme: "light" | "dark") {
+  // 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。
+  await page.addInitScript((value) => {
+    window.localStorage.setItem(
+      "production-ready-rag.ui",
+      JSON.stringify({ state: { theme: value }, version: 0 })
+    );
+  }, theme);
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`権限管理の業務ビュー・KB の候補は名前と説明を出し、ID を出さず、行が重ならない (${theme})`, async ({
+    page,
+  }) => {
+    await setTheme(page, theme);
+    await mockSecurityApi(page);
+    await page.route("**/api/security/access-targets", (route) =>
+      route.fulfill({ json: apiEnvelope(MANY_TARGETS) })
+    );
+
+    await page.goto("/settings/security/permissions?role=role-hr");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    await page
+      .getByTestId("security-permissions-detail-actions")
+      .getByRole("button", { name: "権限を編集" })
+      .click();
+
+    for (const [key, targets] of [
+      ["business-view-access", MANY_TARGETS.business_views],
+      ["knowledge-base-access", MANY_TARGETS.knowledge_bases],
+    ] as const) {
+      const list = page.getByTestId(`security-roles-${key}-list`);
+      await expect(list).toBeVisible();
+      // 内部の ID（32 桁）は出さない。名前・説明・アーカイブ済みは出す。
+      for (const target of targets) await expect(list).not.toContainText(target.id);
+      const longDescription = list.getByText(LONG_DESCRIPTION).first();
+      await expect(longDescription).toBeVisible();
+      await expect(list.getByText("アーカイブ済み")).toBeVisible();
+      // 省略した全文は title で確かめられ、チェックボックスの名前は全文のまま。
+      await expect(longDescription).toHaveAttribute("title", LONG_DESCRIPTION);
+      await expect(list.getByRole("checkbox", { name: new RegExp(targets[1].name) })).toHaveCount(1);
+
+      const boxes = await list
+        .getByTestId(`security-roles-${key}-option`)
+        .evaluateAll((rows) =>
+          rows.map((row) => {
+            const { top, bottom, left, right, height } = row.getBoundingClientRect();
+            return { top, bottom, left, right, height };
+          })
+        );
+      expect(boxes).toHaveLength(targets.length);
+      // 行の高さはそろい（説明の有無・長さによらない）、どの 2 行も重ならない。
+      const heights = boxes.map((box) => Math.round(box.height));
+      expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+      for (const [index, a] of boxes.entries()) {
+        for (const b of boxes.slice(index + 1)) {
+          const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+          expect(overlapX > 0.5 && overlapY > 0.5).toBe(false);
+        }
+      }
+      // 長い説明は 2 行までで省略する。
+      const clamped = await longDescription.evaluate((element) => ({
+        scroll: element.scrollHeight,
+        client: element.clientHeight,
+        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+      }));
+      expect(clamped.client).toBeLessThanOrEqual(Math.ceil(clamped.lineHeight * 2) + 1);
+      expect(clamped.scroll).toBeGreaterThan(clamped.client);
+    }
+    await expectNoPageOverflow(page);
+  });
+}

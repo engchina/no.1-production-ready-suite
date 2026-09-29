@@ -10,9 +10,17 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, field_validator
 
 from app.rag.business_view_config import BusinessViewConfig
-from app.schemas.knowledge_base import KnowledgeBaseRef, KnowledgeBaseStatus
+from app.schemas.knowledge_base import (
+    DESCRIPTION_REQUIRED_MESSAGE,
+    KnowledgeBaseRef,
+    KnowledgeBaseStatus,
+)
 
 DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT"
+# DEFAULT は改名できないため、説明は既定の文言を補う（作成・読み込み時と migration。#521）。
+DEFAULT_BUSINESS_VIEW_DESCRIPTION = (
+    "DEFAULT ナレッジベースを検索・回答に使う、既定の業務ビューです。"
+)
 
 
 class BusinessViewStatus(StrEnum):
@@ -74,7 +82,7 @@ class BusinessViewCreateRequest(BaseModel):
     """業務ビュー作成 request。"""
 
     name: str = Field(..., min_length=1, max_length=256)
-    description: str | None = Field(default=None, max_length=2000)
+    description: str = Field(..., max_length=2000)
     config: BusinessViewConfig = Field(default_factory=BusinessViewConfig)
 
     @field_validator("name")
@@ -84,8 +92,9 @@ class BusinessViewCreateRequest(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def normalize_description(cls, value: str | None) -> str | None:
-        return _optional_clean_text(value)
+    def normalize_description(cls, value: str) -> str:
+        """前後空白を取り、空の説明を拒否する（#521）。"""
+        return _required_clean_text(value, DESCRIPTION_REQUIRED_MESSAGE)
 
 
 class BusinessViewUpdateRequest(BaseModel):
@@ -107,8 +116,9 @@ class BusinessViewUpdateRequest(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def normalize_description(cls, value: str | None) -> str | None:
-        return _optional_clean_text(value)
+    def normalize_description(cls, value: str | None) -> str:
+        """指定したときは空・空白だけ・null を拒否する。省略すれば変更しない（#521）。"""
+        return _required_clean_text(value or "", DESCRIPTION_REQUIRED_MESSAGE)
 
 
 def _required_clean_text(value: str, message: str) -> str:
@@ -123,10 +133,3 @@ def _business_view_name(value: str) -> str:
     if cleaned.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
         raise ValueError("DEFAULT は予約名のため使用できません。")
     return cleaned
-
-
-def _optional_clean_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = value.strip()
-    return cleaned or None

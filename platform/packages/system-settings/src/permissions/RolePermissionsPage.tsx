@@ -933,6 +933,9 @@ function TargetFieldset<R extends PermissionRole>({
       )
     : displayItems;
   const visibleIds = filteredItems.map((item) => item.id);
+  // 説明を持つ候補が 1 件でもあれば、すべての行で説明の 2 行分を取って高さをそろえる。
+  // 説明を持たない対象（例: Agent の業務ビュー）は、名前だけの低い行にする。
+  const reserveDescription = displayItems.some((item) => Boolean(item.description?.trim()));
   const selectedVisibleCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
   const toggle = (id: string) => {
     if (targetReadOnly) return;
@@ -1007,39 +1010,89 @@ function TargetFieldset<R extends PermissionRole>({
               aria-labelledby={`${idPrefix}-label`}
               tabIndex={0}
               data-testid={`${idPrefix}-list`}
-              className={`grid min-w-0 gap-2 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-3 pr-4 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+              // 行の高さは内容（max-content）で決める。高さに上限のあるスクロール領域の grid は、
+              // 行を min-height まで縮めて次の行と重ねるため（#521）。
+              className={`grid min-w-0 auto-rows-max content-start gap-1 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-2 pr-3 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
             >
               {filteredItems.map((item) => (
-                <label
+                <RolePermissionTargetOption
                   key={item.id}
-                  className={`flex min-h-11 items-start gap-2 text-sm ${
-                    targetReadOnly ? "cursor-not-allowed opacity-80" : "cursor-pointer"
-                  }`}
-                >
-                  <input
-                    className="mt-0.5 h-4 w-4 accent-accent-emphasis disabled:cursor-not-allowed"
-                    type="checkbox"
-                    checked={selectedIds.includes(item.id)}
-                    disabled={targetReadOnly}
-                    onChange={() => toggle(item.id)}
-                  />
-                  <span className="min-w-0">
-                    <span className="flex flex-wrap items-center gap-1.5 font-medium">
-                      <span>{targetItemLabel(item)}</span>
-                      {item.status ? <StatusBadge icon={false} variant="neutral" label={item.status} /> : null}
-                    </span>
-                    {item.description ? (
-                      <span className="block text-xs leading-5 text-fg-muted">{item.description}</span>
-                    ) : null}
-                    <code className="block break-all text-xs text-fg-muted">{item.id}</code>
-                  </span>
-                </label>
+                  item={item}
+                  checked={selectedIds.includes(item.id)}
+                  disabled={targetReadOnly}
+                  reserveDescription={reserveDescription}
+                  testId={`${idPrefix}-option`}
+                  onToggle={() => toggle(item.id)}
+                />
               ))}
             </div>
           )}
         </>
       )}
     </fieldset>
+  );
+}
+
+/**
+ * 利用できる対象の候補 1 行（#521）。名前と説明を出し、内部の ID は出さない（利用者には意味を持たない）。
+ * 名前は 1 行、説明は 2 行で省略する。`reserveDescription` のときは説明の 2 行分の高さを常に取り、
+ * 説明の有無・長さによらず行の高さをそろえる。
+ * 省略した全文は `title` で確かめられ、チェックボックスの名前（読み上げ）は全文のまま。
+ */
+export function RolePermissionTargetOption({
+  item,
+  checked,
+  disabled,
+  reserveDescription = true,
+  testId,
+  onToggle,
+}: {
+  item: RolePermissionTargetItem;
+  checked: boolean;
+  disabled: boolean;
+  reserveDescription?: boolean;
+  testId?: string;
+  onToggle: () => void;
+}) {
+  const label = targetItemLabel(item);
+  const description = item.description?.trim() ?? "";
+  return (
+    <label
+      data-testid={testId}
+      className={`flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm ${
+        disabled ? "cursor-not-allowed opacity-80" : "cursor-pointer hover:bg-surface-hover"
+      }`}
+    >
+      <input
+        className="mt-0.5 h-4 w-4 shrink-0 accent-accent-emphasis disabled:cursor-not-allowed"
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={onToggle}
+      />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        {/* 名前の行は状態のバッジの高さ（1.5rem）を常に取り、バッジの有無で行の高さを変えない。 */}
+        <span className="flex min-h-6 min-w-0 items-center gap-1.5 font-medium">
+          <span className="min-w-0 truncate" title={label}>
+            {label}
+          </span>
+          {item.status ? (
+            <span className="shrink-0">
+              <StatusBadge icon={false} variant="neutral" label={item.status} />
+            </span>
+          ) : null}
+        </span>
+        {description || reserveDescription ? (
+          <span
+            className="line-clamp-2 min-h-[2lh] text-xs leading-5 text-fg-muted"
+            title={description || undefined}
+            aria-hidden={description ? undefined : true}
+          >
+            {description}
+          </span>
+        ) : null}
+      </span>
+    </label>
   );
 }
 
