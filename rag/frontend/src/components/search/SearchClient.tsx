@@ -54,10 +54,9 @@ import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
-import { isOneOf, removeWorkspace, useWorkspaceState } from "@/lib/workspace-state";
+import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
-import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
@@ -283,8 +282,6 @@ export function SearchClient() {
                 : current
             ),
           onMetadata: (m) => {
-            // 新しい回答は回答履歴の先頭に入るため、履歴を 1 ページ目に戻す（#304）。
-            removeWorkspace("search.historyPage");
             setMeta({
               trace_id: m.trace_id,
               elapsed_ms: m.elapsed_ms,
@@ -770,12 +767,6 @@ export function SearchClient() {
             </>
           )}
         </section>
-        {businessViewIds.length > 0 ? (
-          <DocragAnswerHistory
-            key={`${businessViewIds[0]}-${meta?.trace_id ?? ""}`}
-            businessViewId={businessViewIds[0]}
-          />
-        ) : null}
       </PageBody>
     </div>
   );

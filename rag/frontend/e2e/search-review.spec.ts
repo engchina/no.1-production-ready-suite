@@ -264,58 +264,6 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
 });
 
-test("回答履歴で別の回答を開くと、前の回答の削除エラーを持ち越さない", async ({ page }) => {
-  const summary = (traceId: string, question: string) => ({
-    trace_id: traceId,
-    business_view_id: "bv-1",
-    surface: "search",
-    answer_engine: "docrag",
-    question,
-    rewritten_question: null,
-    confidence: null,
-    created_at: "2026-09-25T01:00:00Z",
-  });
-  const answers = [summary("trace-a", "交通費の上限は？"), summary("trace-b", "出張の日当は？")];
-  await page.route("**/api/search/answers**", (route) => {
-    const request = route.request();
-    const traceId = new URL(request.url()).pathname.split("/")[4];
-    if (request.method() === "DELETE") {
-      return route.fulfill({
-        status: 500,
-        json: { data: null, error_messages: ["回答を削除できませんでした。"], warning_messages: [] },
-      });
-    }
-    if (traceId) {
-      const item = answers.find((answer) => answer.trace_id === traceId);
-      return route.fulfill(
-        envelope({ ...item, answer: `${item?.question} の回答`, citations: [], docrag: {} })
-      );
-    }
-    return route.fulfill(
-      envelope({ items: answers, total: answers.length, limit: 10, offset: 0, has_next: false })
-    );
-  });
-
-  await page.goto("/search");
-  await selectViews(page, [/経理ビュー/]);
-  const history = page.getByRole("list", { name: "DocRAG の回答履歴" });
-  await history.getByRole("button", { name: /交通費の上限は？/ }).click();
-  await expect(page.getByText("交通費の上限は？ の回答")).toBeVisible();
-
-  const actions = page.getByRole("group", { name: "保存された回答 の操作" });
-  await actions.getByRole("button", { name: "その他の操作" }).click();
-  await page.getByRole("menuitem", { name: "この回答を削除" }).click();
-  await page
-    .getByRole("alertdialog", { name: "保存された回答を削除しますか？" })
-    .getByRole("button", { name: "削除" })
-    .click();
-  await expect(page.getByText("回答を削除できませんでした。")).toBeVisible();
-
-  await history.getByRole("button", { name: /出張の日当は？/ }).click();
-  await expect(page.getByText("出張の日当は？ の回答")).toBeVisible();
-  await expect(page.getByText("回答を削除できませんでした。")).toHaveCount(0);
-});
-
 test("業務ビューの読み込み中は読み込み中の状態として読み上げる", async ({ page }) => {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));
