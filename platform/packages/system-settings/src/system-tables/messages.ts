@@ -22,8 +22,24 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.foreignKeys.orphanedTitle": "参照先のない既存の行があります",
   "settings.database.systemTables.foreignKeys.orphaned":
     "次の外部キーは既存の行を検査せずに追加したため、参照先のない行が残っています。新しい行には外部キーが適用されます。既存の行は自動では削除しません。",
+  "settings.database.systemTables.foreignKeys.mismatched":
+    "削除規則が正本と異なる外部キーが {count} 件あります。「作成・更新」で外部キーを正本の定義で作り直します。既存の行は削除しません。",
+  "settings.database.systemTables.foreignKeys.disabled":
+    "無効になっている外部キーが {count} 件あります。「作成・更新」で有効にします。参照先のない既存の行がある外部キーは、既存の行を検査せずに有効にし（新しい行から適用）、既存の行は削除しません。",
+  "settings.database.systemTables.foreignKeys.deleteRule": "削除規則 {current} → {expected}",
+  "settings.database.systemTables.foreignKeys.orphanedDeleteHint":
+    "件数を確認してから「参照先のない行を削除」で削除できます。削除した後に、外部キーで既存の行も検査します。",
   "settings.database.systemTables.foreignKeys.item": "{table} ({columns}) → {referenced}",
   "settings.database.systemTables.foreignKeys.orphanRows": "参照先のない行 {count} 件",
+  "settings.database.systemTables.action.deleteOrphans": "参照先のない行を削除",
+  "settings.database.systemTables.action.deleteOrphansLabel": "参照先のない行を削除 {name}",
+  "settings.database.systemTables.deleteOrphans.confirmTitle": "参照先のない行を {count} 件削除しますか？",
+  "settings.database.systemTables.deleteOrphans.confirmDescription":
+    "表 {table} の行のうち、外部キー {name}（{columns} → {referenced}）の参照先がない {count} 件を削除し、外部キーで既存の行を検査します。これらの行を ON DELETE CASCADE の外部キーで参照している他の表の行も削除されます。削除した行は復元できません。",
+  "settings.database.systemTables.deleteOrphans.done":
+    "{table} の参照先のない行を {count} 件削除し、外部キー {name} を検査済みにしました。",
+  "settings.database.systemTables.deleteOrphans.noOp":
+    "削除する行はありませんでした。外部キー {name} は検査済みです。",
   "settings.database.systemTables.summary.tables": "存在テーブル / 必須テーブル",
   "settings.database.systemTables.summary.objects": "存在オブジェクト / 必須オブジェクト",
   "settings.database.systemTables.summary.objectsHint": "テーブル・索引などの合計",

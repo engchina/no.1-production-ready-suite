@@ -187,7 +187,7 @@ class IngestionSuccessOutcome:
 
     本文(抽出テキスト・chunk)は持たない。原本は ``source_sha256`` / ``source_size`` が
     あればそれを、なければ ``source_bytes`` の hash と長さを監査に残す(記録時に計算する)。
-    レシピの job は active への切り替えが成功した後に :meth:`record` を 1 回だけ呼ぶ。
+    レシピの job は、job を SUCCEEDED にできた後に :meth:`record` を 1 回だけ呼ぶ(#514)。
     """
 
     trace_id: str
@@ -1338,8 +1338,8 @@ class IngestionPipeline:
         ``source_sha256`` / ``source_size`` は、``source_bytes`` を持たない工程が成功の監査に
         原本の hash とサイズを残すために渡す。
         ``record_outcome=False`` のときは成功の metric / 監査を記録せず、その内容を
-        ``deferred_success_outcome`` に残す。レシピの job は active への切り替えが成功した後に
-        それを記録する(#504)。
+        ``deferred_success_outcome`` に残す。レシピの job は active への切り替えまで終え、
+        job を SUCCEEDED にできた後にそれを記録する(#504 / #514)。
         """
         await _raise_if_cancelled(cancel_checker)
         embed_inputs = self._chunk_embedding_inputs(chunks)

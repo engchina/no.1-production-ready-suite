@@ -1856,6 +1856,7 @@ export const ja = {
   "documents.processingConfig.parserRemovedDetail":
     "このレシピが参照する解析エンジン（{engine}）は削除されました。旧結果は保持されますが、新しい処理は開始できません。利用可能な解析エンジンを選び直してください。",
   "documents.processingConfig.contextHeader": "文脈ヘッダを検索対象へ追加",
+  "documents.processingConfig.phaseHeading": "{index}. {phase}",
   "documents.recipes.title": "処理レシピ",
   "documents.recipes.subtitle": "各レシピの索引を自動で融合検索します。",
   "documents.recipes.count": "{count} / 3",

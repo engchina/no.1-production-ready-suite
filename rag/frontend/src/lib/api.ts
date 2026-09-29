@@ -1536,8 +1536,25 @@ export interface SystemTablesStatusData {
   existing_table_count: number;
   missing_objects: SystemTableObjectData[];
   retired_objects: SystemTableObjectData[];
+  // 外部キーの差分（不足・参照先のない行は #505、削除規則の違い・無効化は #511）。
+  missing_foreign_keys?: SystemTableForeignKeyData[];
+  orphaned_foreign_keys?: SystemTableForeignKeyData[];
+  mismatched_foreign_keys?: SystemTableForeignKeyData[];
+  disabled_foreign_keys?: SystemTableForeignKeyData[];
   tables: SystemTableMetadata[];
   operation_state: SystemTableOperationState;
+}
+
+export interface SystemTableForeignKeyData {
+  name: string;
+  table_name: string;
+  columns: string[];
+  referenced_table_name: string;
+  referenced_columns: string[];
+  delete_rule: string;
+  orphan_rows: number | null;
+  current_name?: string | null;
+  current_delete_rule?: string | null;
 }
 
 export interface SystemTablesInitializeRequest {
@@ -1549,6 +1566,18 @@ export interface SystemTablesOperationData extends SystemTablesStatusData {
   operation: SystemTableOperationResult;
   dropped_object_count: number;
   created_object_count: number;
+}
+
+/** 参照先のない行の削除（#511）。`expected_orphan_rows` は利用者が確認した件数。 */
+export interface SystemTablesDeleteOrphansRequest {
+  constraint_name: string;
+  expected_orphan_rows: number;
+}
+
+export interface SystemTablesOrphanDeletionData extends SystemTablesStatusData {
+  operation: "no_op" | "orphans_deleted";
+  deleted_row_count: number;
+  foreign_key: SystemTableForeignKeyData;
 }
 
 // --- 設定: HuggingFace モデルダウンロード ---
@@ -3120,6 +3149,11 @@ export const api = {
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     request<SystemTablesOperationData>(
       "/api/settings/database/system-tables/initialize",
+      jsonBody(body),
+    ),
+  deleteSystemTableOrphanedRows: (body: SystemTablesDeleteOrphansRequest) =>
+    request<SystemTablesOrphanDeletionData>(
+      "/api/settings/database/system-tables/orphaned-rows/delete",
       jsonBody(body),
     ),
 

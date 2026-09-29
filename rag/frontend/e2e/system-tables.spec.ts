@@ -81,16 +81,58 @@ async function mockSettings(
     statusDelayMs?: number;
     /** 古い版の表に外部キーが無い（#505）。更新後は参照先のない行が残る警告を返す。 */
     foreignKeyDrift?: boolean;
+    /** 状態の応答に足す項目（削除規則の違い・無効化・参照先のない行。#511）。 */
+    statusExtra?: Record<string, unknown>;
+    /** 参照先のない行の削除の応答（#511）。conflict は件数が増えたときの 409。 */
+    orphanDeletion?: "ok" | "conflict";
+    orphanDeletionDelayMs?: number;
   } = {}
 ) {
   let status = options.initialStatus ?? "missing";
   let initializeCalls = 0;
   let recreatePayload: Record<string, unknown> | null = null;
+  const orphanDeletePayloads: Record<string, unknown>[] = [];
+  let orphansDeleted = false;
 
   await mockLocalAuth(page);
   await page.route("**/api/settings/database**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/settings/database/system-tables/orphaned-rows/delete") {
+      orphanDeletePayloads.push(JSON.parse(request.postData() ?? "{}"));
+      if (options.orphanDeletionDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.orphanDeletionDelayMs));
+      }
+      if (options.orphanDeletion === "conflict") {
+        await route.fulfill({
+          status: 409,
+          json: {
+            data: null,
+            error_messages: [
+              "参照先のない行の件数が確認したときより増えています（確認時 240 件、現在 241 件）。状態を再取得し、件数を確認してから再実行してください。",
+            ],
+            warning_messages: [],
+            error_code: "SCHEMA_ORPHAN_ROWS_CHANGED",
+          },
+        });
+        return;
+      }
+      orphansDeleted = true;
+      await route.fulfill({
+        json: {
+          data: {
+            ...systemTables("ready"),
+            orphaned_foreign_keys: [],
+            operation: "orphans_deleted",
+            deleted_row_count: 240,
+            foreign_key: { ...chunkSetsDocumentForeignKey, orphan_rows: 0 },
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
     if (url.pathname === "/api/settings/database/system-tables/initialize") {
       initializeCalls += 1;
       recreatePayload = JSON.parse(request.postData() ?? "{}");
@@ -145,7 +187,9 @@ async function mockSettings(
                     },
                   ],
                 }
-              : systemTables(status),
+              : options.statusExtra && !orphansDeleted
+                ? { ...systemTables(status), ...options.statusExtra }
+                : systemTables(status),
           error_messages: [],
           warning_messages: [],
         },
@@ -184,6 +228,7 @@ async function mockSettings(
   return {
     initializeCalls: () => initializeCalls,
     recreatePayload: () => recreatePayload,
+    orphanDeletePayloads: () => orphanDeletePayloads,
   };
 }
 
@@ -320,4 +365,246 @@ test("不足している外部キーを更新必要として並べ、更新後�
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
   );
   expect(pageOverflow).toBeLessThanOrEqual(1);
+});
+
+// ---- 削除規則の違い・無効化・参照先のない行の削除（#511） ----------------------------
+
+const mismatchedForeignKey = {
+  ...chunkSetsDocumentForeignKey,
+  name: "RAG_DOC_RECIPES_DOCUMENT_FK",
+  table_name: "RAG_DOCUMENT_RECIPES",
+  orphan_rows: 0,
+  current_name: "RAG_DOC_RECIPES_DOC_FK_OLD",
+  current_delete_rule: "NO ACTION",
+};
+const disabledForeignKey = {
+  ...chunkSetsDocumentForeignKey,
+  name: "RAG_ARTIFACT_LAYERS_DOCUMENT_FK",
+  table_name: "RAG_ARTIFACT_LAYERS",
+  orphan_rows: 12,
+};
+const orphanedForeignKey = { ...chunkSetsDocumentForeignKey, orphan_rows: 240 };
+
+/** アプリの外観の設定（localStorage）でテーマを切り替える（`emulateMedia` では切り替わらない）。 */
+async function useTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem(
+      "production-ready-rag.ui",
+      JSON.stringify({ state: { theme: value }, version: 0 })
+    );
+  }, theme);
+}
+
+/**
+ * 領域の中の文字（段落・一覧・ボタン）の、背景に対するコントラスト比の最小値。
+ * 色は canvas に塗って sRGB に直し、半透明の文字・背景は祖先の背景に重ねて求める（WCAG 2.x）。
+ */
+async function minimumTextContrast(page: Page, selector: string) {
+  return page.evaluate((rootSelector) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("canvas を使えません");
+    type Rgba = [number, number, number, number];
+    const toRgba = (color: string): Rgba => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (top: Rgba, bottom: Rgba): Rgba => [
+      top[0] * top[3] + bottom[0] * (1 - top[3]),
+      top[1] * top[3] + bottom[1] * (1 - top[3]),
+      top[2] * top[3] + bottom[2] * (1 - top[3]),
+      1,
+    ];
+    const background = (element: Element): Rgba => {
+      const layers: Rgba[] = [];
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        const layer = toRgba(getComputedStyle(node).backgroundColor);
+        if (layer[3] > 0) layers.push(layer);
+        if (layer[3] >= 1) break;
+      }
+      return layers.reduceRight<Rgba>((under, layer) => over(layer, under), [255, 255, 255, 1]);
+    };
+    const luminance = ([r, g, b]: Rgba) =>
+      [r, g, b]
+        .map((value) => value / 255)
+        .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+        .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const results: { text: string; ratio: number }[] = [];
+    for (const root of document.querySelectorAll(rootSelector)) {
+      for (const element of root.querySelectorAll("p, span, li, button")) {
+        const text = Array.from(element.childNodes)
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent ?? "")
+          .join("")
+          .trim();
+        if (!text) continue;
+        const back = background(element);
+        const fore = over(toRgba(getComputedStyle(element).color), back);
+        const [lighter, darker] = [luminance(fore), luminance(back)].sort((a, b) => b - a);
+        results.push({ text, ratio: (lighter + 0.05) / (darker + 0.05) });
+      }
+    }
+    results.sort((a, b) => a.ratio - b.ratio);
+    return { count: results.length, minimum: results[0] };
+  }, selector);
+}
+
+const screenshotDir = process.env.SYSTEM_TABLES_SCREENSHOT_DIR;
+
+for (const theme of ["light", "dark"] as const) {
+  test(`外部キーの差分と参照先のない行の警告を並べ、文字のコントラストを保つ（#511・${theme}）`, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    await mockSettings(page, {
+      initialStatus: "outdated",
+      statusExtra: {
+        pending_versions: [],
+        missing_foreign_keys: [{ ...chunkSetsDocumentForeignKey, orphan_rows: 3 }],
+        mismatched_foreign_keys: [mismatchedForeignKey],
+        disabled_foreign_keys: [disabledForeignKey],
+        orphaned_foreign_keys: [
+          {
+            ...orphanedForeignKey,
+            name: "RAG_DOC_EXT_DOCUMENT_FK",
+            table_name: "RAG_DOCUMENT_EXTRACTIONS",
+          },
+        ],
+      },
+    });
+    await page.goto("/settings/database#system-tables");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    const card = page.locator("#system-tables");
+
+    const mismatched = card.getByTestId("system-tables-mismatched-foreign-keys");
+    await expect(mismatched).toContainText("削除規則が正本と異なる外部キーが 1 件あります");
+    await expect(mismatched).toContainText("RAG_DOCUMENT_RECIPES (DOCUMENT_ID) → RAG_DOCUMENTS");
+    await expect(mismatched).toContainText("削除規則 NO ACTION → CASCADE");
+    const disabled = card.getByTestId("system-tables-disabled-foreign-keys");
+    await expect(disabled).toContainText("無効になっている外部キーが 1 件あります");
+    await expect(disabled).toContainText("参照先のない行 12 件");
+    await expect(card.getByTestId("system-tables-missing-foreign-keys")).toContainText(
+      "参照先のない行 3 件"
+    );
+    await expect(
+      card.getByRole("button", { name: "参照先のない行を削除 RAG_DOC_EXT_DOCUMENT_FK" })
+    ).toBeVisible();
+
+    const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
+    expect(contrast.count).toBeGreaterThan(5);
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+
+    // 目視用の画像（環境変数を指定したときだけ。CI では撮らない）。
+    if (screenshotDir) {
+      const widths = testInfo.project.name === "mobile" ? [375] : [1280, 1920];
+      const banners = card.locator("[role='status']");
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const [index, name] of ["outdated", "orphaned"].entries()) {
+          await banners.nth(index).screenshot({
+            path: `${screenshotDir}/system-tables-fk-${name}-${theme}-${width}.png`,
+            animations: "disabled",
+          });
+        }
+      }
+      await card.getByRole("button", { name: "参照先のない行を削除 RAG_DOC_EXT_DOCUMENT_FK" }).click();
+      const dialog = page.getByRole("alertdialog");
+      await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeVisible();
+      await dialog.screenshot({
+        path: `${screenshotDir}/system-tables-fk-dialog-${theme}-${widths[widths.length - 1]}.png`,
+        animations: "disabled",
+      });
+    }
+  });
+}
+
+test("参照先のない行の削除は確認ダイアログで表・外部キー・件数を示し、承認したときだけ確認した件数で削除する（#511）", async ({
+  page,
+}) => {
+  const mock = await mockSettings(page, {
+    initialStatus: "ready",
+    statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
+    orphanDeletionDelayMs: 300,
+  });
+  await page.goto("/settings/database#system-tables");
+  const card = page.locator("#system-tables");
+  const orphaned = card.getByTestId("system-tables-orphaned-foreign-keys");
+  await expect(orphaned).toContainText("「参照先のない行を削除」で削除できます");
+  const trigger = orphaned.getByRole("button", {
+    name: "参照先のない行を削除 RAG_CHUNK_SETS_DOCUMENT_FK",
+  });
+
+  // 取り消したときは削除しない。
+  await trigger.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("参照先のない行を 240 件削除しますか？");
+  await expect(dialog).toContainText("表 RAG_CHUNK_SETS");
+  await expect(dialog).toContainText("外部キー RAG_CHUNK_SETS_DOCUMENT_FK（DOCUMENT_ID → RAG_DOCUMENTS）");
+  await expect(dialog).toContainText("削除した行は復元できません");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(mock.orphanDeletePayloads()).toEqual([]);
+
+  await trigger.click();
+  await dialog.getByRole("button", { name: "参照先のない行を削除" }).click();
+  await expect(dialog).toHaveCount(0);
+  // 実行中は他の操作を止める（ラベルは変えずに loading）。
+  await expect(card.getByRole("button", { name: "作成・更新" })).toBeDisabled();
+  await expect(
+    page.getByText(
+      "RAG_CHUNK_SETS の参照先のない行を 240 件削除し、外部キー RAG_CHUNK_SETS_DOCUMENT_FK を検査済みにしました。"
+    )
+  ).toBeVisible();
+  await expect(orphaned).toHaveCount(0);
+  expect(mock.orphanDeletePayloads()).toEqual([
+    { constraint_name: "RAG_CHUNK_SETS_DOCUMENT_FK", expected_orphan_rows: 240 },
+  ]);
+});
+
+test("参照先のない行が確認時より増えていたら削除せず、理由へフォーカスする（#511）", async ({
+  page,
+}) => {
+  const mock = await mockSettings(page, {
+    initialStatus: "ready",
+    statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
+    orphanDeletion: "conflict",
+  });
+  await page.goto("/settings/database#system-tables");
+  const card = page.locator("#system-tables");
+  await card
+    .getByRole("button", { name: "参照先のない行を削除 RAG_CHUNK_SETS_DOCUMENT_FK" })
+    .click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "参照先のない行を削除" }).click();
+
+  const error = page.getByTestId("system-tables-operation-error");
+  await expect(error).toBeFocused();
+  await expect(error).toContainText("確認時 240 件、現在 241 件");
+  expect(mock.orphanDeletePayloads()).toHaveLength(1);
+});
+
+test("システムテーブル管理の権限が無い利用者には参照先のない行の削除を出さない（#511）", async ({
+  page,
+}) => {
+  await mockSettings(page, {
+    initialStatus: "ready",
+    statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
+  });
+  await mockAuthUser(page, { permissions: ["menu.settings_database"] });
+  await page.goto("/settings/database#system-tables");
+  const orphaned = page.locator("#system-tables").getByTestId("system-tables-orphaned-foreign-keys");
+  await expect(orphaned).toContainText("参照先のない行 240 件");
+  await expect(orphaned.getByRole("button")).toHaveCount(0);
+  await expect(orphaned).not.toContainText("「参照先のない行を削除」で削除できます");
 });

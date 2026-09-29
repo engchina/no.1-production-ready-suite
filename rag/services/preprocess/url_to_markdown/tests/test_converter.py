@@ -109,9 +109,7 @@ def test_default_fetcher_blocks_redirect_to_internal_ip() -> None:
         raise AssertionError("内部 IP へは接続してはならない")
 
     with pytest.raises(RuntimeError, match="url_blocked_redirect"):
-        converters._default_fetcher(
-            f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler)
-        )
+        converters._default_fetcher(f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler))
 
 
 def test_default_fetcher_caps_redirect_chain() -> None:
@@ -119,9 +117,7 @@ def test_default_fetcher_caps_redirect_chain() -> None:
         return httpx.Response(302, headers={"location": f"http://{_PUBLIC_IP_ALT}/next"})
 
     with pytest.raises(RuntimeError, match="url_too_many_redirects"):
-        converters._default_fetcher(
-            f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler)
-        )
+        converters._default_fetcher(f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler))
 
 
 def test_default_fetcher_follows_safe_redirect() -> None:

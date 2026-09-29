@@ -48,6 +48,7 @@ from docrag.parsing.rendering import (
     prepare_source_for_analysis,
 )
 from pydantic import ValidationError
+from rag_pipeline_core.chunking import table_vision_supplement
 
 from app.schemas.extraction import (
     DocumentElement,
@@ -72,6 +73,11 @@ VISION_ASSET_KINDS = frozenset(
 _FINAL_VISION_STATUSES = frozenset({"succeeded", "skipped"})
 # bbox の値が座標系の外へはみ出してよい割合(丸め誤差)。
 _BBOX_TOLERANCE = 0.01
+# 原点が左下(y が上向き)の座標系。Unstructured の ``Orientation.CARTESIAN`` の PointSpace と
+# RelativeCoordinateSystem(unstructured/documents/coordinates.py)。PixelSpace は左上原点
+# (``Orientation.SCREEN``)。0.27.8 の PDF はどの戦略でも PixelSpace(pdfminer の左下原点は
+# ``rect_to_bbox`` で左上へ直してある)なので、通常はこの変換を通らない(#512)。
+_BOTTOM_LEFT_COORDINATE_SYSTEMS = frozenset({"pointspace", "relativecoordinatesystem"})
 
 WARNING_PARTIAL_FAILURE = "vision_partial_failure"
 WARNING_BBOX_UNIT_UNKNOWN = "vision_bbox_unit_unknown"
@@ -710,6 +716,9 @@ def _page_px_bbox(
     x0, y0, x1, y1 = (float(value) for value in bbox[:4])
     left, right = sorted((x0, x1))
     top, bottom = sorted((y0, y1))
+    if _is_bottom_left_origin(metadata):
+        # 左下原点を左上原点へ(ai-foundations-lab の pdf_bottom_left_to_image_top_left と同じ)。
+        top, bottom = base_height - bottom, base_height - top
     if (
         left < -base_width * _BBOX_TOLERANCE
         or top < -base_height * _BBOX_TOLERANCE
@@ -730,6 +739,11 @@ def _page_px_bbox(
     ]
 
 
+def _is_bottom_left_origin(metadata: Mapping[str, object]) -> bool:
+    system = str(metadata.get("bbox_coordinate_system") or "").strip().casefold()
+    return system in _BOTTOM_LEFT_COORDINATE_SYSTEMS
+
+
 def _bbox_scale(
     bbox: Sequence[float],
     *,
@@ -741,16 +755,23 @@ def _bbox_scale(
 ) -> tuple[float, float] | None:
     """bbox の座標系の寸法(幅, 高さ)。解析エンジンごとの単位の表(#497・#502)。
 
+    x と y はそれぞれの寸法で別々に換算する(縦横比は保たない)。原点は左上。ただし座標系が
+    左下原点(``_BOTTOM_LEFT_COORDINATE_SYSTEMS``)なら ``_page_px_bbox`` が y を反転する。
+    ai-foundations-lab(engchina/ai-foundations-lab、commit 572e9fa の ``20260819/``)の
+    ビューアで、ページ画像に重ねて確かめた換算と同じ(#512。根拠は docs/docrag-port.md)。
+
     - 値が全て 1 以下: ページに対する割合(0-1。VLM・画像全体の source_image)。
     - Unstructured: coordinates の座標系の寸法(layout_width / height。registry が
       ``page_width`` / ``page_height`` に写す)。無ければ不明。hi_res の PDF は PixelSpace
       (350 dpi 相当のページ画像の px)、画像ファイルは元画像の px(実サービスで確認。#502)。
+      lab の ``adapters/unstructured_adapter.py`` も ``system.width / height`` で割る。
     - Dots.OCR: 描いたページ画像の px。寸法は ``pages``(PDF)。画像ファイルは元画像の px。
       モデルの出力は入力画像を smart_resize した寸法の px なので、``external_parser`` が
       受け取ったときに送った画像の px へ戻している(#502)。
-    - MinerU: ページに対して 0-1000 に正規化した座標(content_list)。MinerU 2.5.4 の
-      ``make_blocks_to_content_list``(``x * 1000 / page_width``)と、4.0.10 の
-      ``normalize_bbox``(MiddleJson の 0-1 を ``int(v * 1000)``)で確認(#502)。1000 を
+    - MinerU: ページに対して 0-1000 に正規化した左上原点の座標(content_list)。MinerU 2.5.4
+      の ``make_blocks_to_content_list``(``x * 1000 / page_width``)と、4.0.10 の
+      ``normalize_bbox``(MiddleJson の 0-1 を ``int(v * 1000)``)で確認(#502)。lab の
+      ``adapters/mineru.py`` も content_list を 1000x1000 で割り、y を反転しない。1000 を
       超えれば不明。
     - OCI Enterprise AI の VLM 解析: 0-1 か 0-100(prompt の指定)。それを超えれば不明。
     - それ以外(OCI Document Understanding など): 不明。
@@ -808,8 +829,13 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
                     metadata["vision_source_text"] = element.text
                 text = record.text
                 raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
-            elif record.category == "Table" and record.raw.get("table_vision_text"):
-                supplement = f"表内画像の補足:\n{record.raw['table_vision_text']}"
+            elif record.category == "Table" and (
+                supplement := table_vision_supplement(
+                    str(record.raw.get("table_vision_text") or "")
+                )
+            ):
+                # 分割(rag_pipeline_core.chunking)と同じ書式。分割は本文に説明文がある表へ
+                # 補足を二重に足さない(#513)。
                 text = f"{element.text}\n{supplement}"
                 raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
             elements[target.element_index] = element.model_copy(

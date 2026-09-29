@@ -92,7 +92,10 @@ def test_system_tables_status_returns_foreign_key_drift(monkeypatch: MonkeyPatch
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["status"] == "outdated"
-    assert data["missing_foreign_keys"] == [foreign_key]
+    # 削除規則の違い（#511）の項目は、それ以外の FK では null。
+    assert data["missing_foreign_keys"] == [
+        {**foreign_key, "current_name": None, "current_delete_rule": None}
+    ]
     assert data["orphaned_foreign_keys"][0]["name"] == "RAG_DOC_EXT_DOCUMENT_FK"
     assert data["orphaned_foreign_keys"][0]["orphan_rows"] == 240
 
@@ -183,3 +186,112 @@ def test_initialize_system_tables_requires_system_tables_manage(
     )
     assert allowed.status_code == 200
     assert allowed.json()["data"]["operation"] == "no_op"
+
+
+_ORPHANED_FOREIGN_KEY = {
+    "name": "RAG_CHUNK_SETS_DOCUMENT_FK",
+    "table_name": "RAG_CHUNK_SETS",
+    "columns": ["DOCUMENT_ID"],
+    "referenced_table_name": "RAG_DOCUMENTS",
+    "referenced_columns": ["DOCUMENT_ID"],
+    "delete_rule": "CASCADE",
+    "orphan_rows": 0,
+}
+
+
+def test_status_returns_delete_rule_mismatch_and_disabled_foreign_keys(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    mismatched = {
+        **_ORPHANED_FOREIGN_KEY,
+        "orphan_rows": 3,
+        "current_name": "RAG_CHUNK_SETS_DOC_FK_OLD",
+        "current_delete_rule": "NO ACTION",
+    }
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {
+            **_status_payload(),
+            "status": "outdated",
+            "mismatched_foreign_keys": [mismatched],
+            "disabled_foreign_keys": [{**_ORPHANED_FOREIGN_KEY, "name": "RAG_DOC_EXT_DOCUMENT_FK"}],
+        },
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    data = client.get("/api/settings/database/system-tables").json()["data"]
+
+    assert data["mismatched_foreign_keys"] == [mismatched]
+    assert data["disabled_foreign_keys"][0]["name"] == "RAG_DOC_EXT_DOCUMENT_FK"
+    assert data["disabled_foreign_keys"][0]["current_delete_rule"] is None
+
+
+def test_delete_orphaned_rows_returns_result_and_requires_system_tables_manage(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def delete_orphaned_rows(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            **_status_payload(),
+            "operation": "orphans_deleted",
+            "deleted_row_count": 240,
+            "foreign_key": _ORPHANED_FOREIGN_KEY,
+        }
+
+    monkeypatch.setattr(system_schema_manager, "delete_orphaned_rows", delete_orphaned_rows)
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("db-viewer", ["menu.settings_database"])
+    auth.user_with_permissions("table-manager", ["rag.system_tables.manage"])
+    body = {"constraint_name": "RAG_CHUNK_SETS_DOCUMENT_FK", "expected_orphan_rows": 240}
+
+    viewer = login(client, "db-viewer")
+    forbidden = client.post(
+        "/api/settings/database/system-tables/orphaned-rows/delete", json=body, headers=viewer
+    )
+    assert forbidden.status_code == 403
+    assert captured == {}
+
+    manager = login(client, "table-manager")
+    allowed = client.post(
+        "/api/settings/database/system-tables/orphaned-rows/delete", json=body, headers=manager
+    )
+    assert allowed.status_code == 200
+    data = allowed.json()["data"]
+    assert (data["operation"], data["deleted_row_count"]) == ("orphans_deleted", 240)
+    assert data["foreign_key"]["name"] == "RAG_CHUNK_SETS_DOCUMENT_FK"
+    assert captured == {
+        "constraint_name": "RAG_CHUNK_SETS_DOCUMENT_FK",
+        "expected_orphan_rows": 240,
+    }
+
+
+def test_delete_orphaned_rows_validates_body_and_maps_business_errors(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def delete_orphaned_rows(**_kwargs: Any) -> dict[str, Any]:
+        raise SystemSchemaError(
+            "SCHEMA_ORPHAN_ROWS_CHANGED",
+            "参照先のない行の件数が確認したときより増えています。",
+            status_code=409,
+        )
+
+    monkeypatch.setattr(system_schema_manager, "delete_orphaned_rows", delete_orphaned_rows)
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    invalid = client.post(
+        "/api/settings/database/system-tables/orphaned-rows/delete",
+        json={"constraint_name": "RAG_CHUNK_SETS_DOCUMENT_FK", "expected_orphan_rows": -1},
+    )
+    assert invalid.status_code == 422
+
+    conflict = client.post(
+        "/api/settings/database/system-tables/orphaned-rows/delete",
+        json={"constraint_name": "RAG_CHUNK_SETS_DOCUMENT_FK", "expected_orphan_rows": 1},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error_code"] == "SCHEMA_ORPHAN_ROWS_CHANGED"
+    assert "retry-after" not in conflict.headers

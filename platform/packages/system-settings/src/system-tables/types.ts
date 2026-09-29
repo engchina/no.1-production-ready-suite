@@ -1,11 +1,14 @@
 /**
  * システムテーブルの管理 API（`GET /api/settings/database/system-tables` と
- * `POST /api/settings/database/system-tables/initialize`。#325）の契約。
+ * `POST /api/settings/database/system-tables/initialize`。#325）と、参照先のない行の削除
+ * （RAG の `POST /api/settings/database/system-tables/orphaned-rows/delete`。#511）の契約。
  * backend の骨格は `pr_system_settings.system_schema`、manifest と DDL の正本は製品が持つ。
  */
 export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
 export type SystemTableOperationStatus = "idle" | "running" | "failed";
 export type SystemTableOperationResult = "no_op" | "initialized" | "migrated" | "recreated";
+/** 参照先のない行の削除の結果（削除も検査も要らなかったときは `no_op`。#511）。 */
+export type SystemTableOrphanOperationResult = "no_op" | "orphans_deleted";
 /** Oracle の object の種類（NL2SQL は TABLE / INDEX / SEQUENCE / PACKAGE / PACKAGE BODY）。 */
 export type SystemObjectType = string;
 
@@ -24,6 +27,9 @@ export interface SystemTableForeignKey {
   delete_rule: string;
   /** 参照先の無い既存の行の件数（数えられなかったときは null）。 */
   orphan_rows: number | null;
+  /** 削除規則が正本と違う FK（#511）の、既存の FK の名前と削除規則（それ以外は null / 無し）。 */
+  current_name?: string | null;
+  current_delete_rule?: string | null;
 }
 
 export interface SystemTableMetadata {
@@ -67,6 +73,10 @@ export interface SystemTablesStatusData {
   missing_foreign_keys?: SystemTableForeignKey[];
   /** 既存の行を検査せずに追加した外部キーに残る、参照先の無い行（RAG。#505）。 */
   orphaned_foreign_keys?: SystemTableForeignKey[];
+  /** 削除規則が正本と違う外部キー（「作成・更新」で作り直す。RAG。#511）。 */
+  mismatched_foreign_keys?: SystemTableForeignKey[];
+  /** 無効化（DISABLED）された外部キー（「作成・更新」で有効にする。RAG。#511）。 */
+  disabled_foreign_keys?: SystemTableForeignKey[];
   tables: SystemTableMetadata[];
   /** 全管理 object（NL2SQL）。無ければ `tables` をテーブルとして並べる。 */
   objects?: SystemObjectMetadata[];
@@ -84,9 +94,25 @@ export interface SystemTablesOperationData extends SystemTablesStatusData {
   created_object_count: number;
 }
 
+/** 参照先のない行の削除（#511）。`expected_orphan_rows` は利用者が確認した件数。 */
+export interface SystemTablesDeleteOrphansRequest {
+  constraint_name: string;
+  expected_orphan_rows: number;
+}
+
+export interface SystemTablesOrphanDeletionData extends SystemTablesStatusData {
+  operation: SystemTableOrphanOperationResult;
+  deleted_row_count: number;
+  foreign_key: SystemTableForeignKey;
+}
+
 export interface SystemTablesApi {
   getSystemTablesStatus: (options?: { signal?: AbortSignal }) => Promise<SystemTablesStatusData>;
   initializeSystemTables: (body: SystemTablesInitializeRequest) => Promise<SystemTablesOperationData>;
+  /** 参照先のない行の削除（RAG だけが持つ。無ければ削除の操作を出さない。#511）。 */
+  deleteSystemTableOrphanedRows?: (
+    body: SystemTablesDeleteOrphansRequest,
+  ) => Promise<SystemTablesOrphanDeletionData>;
 }
 
 /** 3 製品で同じ query key にする。 */
