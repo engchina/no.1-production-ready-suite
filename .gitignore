@@ -5,8 +5,9 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 
-# pr_system_settings が .env の保存時に作る排他用の lock ファイル
+# pr_system_settings が .env・モデル設定の保存時に作る排他用の lock ファイル
 ..env.lock
+model-settings.json.lock
 
 # 統合 Terraform stack（terraform/stack）の作業ファイルと package 出力
 terraform/dist/
