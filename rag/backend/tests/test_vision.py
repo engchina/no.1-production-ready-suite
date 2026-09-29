@@ -16,6 +16,7 @@ from typing import Any
 
 import fitz  # type: ignore[import-untyped]
 import pytest
+from docrag.models.layout import PageImage
 from PIL import Image
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 
@@ -29,6 +30,7 @@ from app.rag.vision import (
     read_figures_with_vision,
     vision_failure,
 )
+from app.rag.vision import _page_px_bbox as page_px_bbox
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -95,9 +97,11 @@ class FakeDescriber:
     ) -> dict[str, Any]:
         with Image.open(crop_path) as image:
             size = image.size
+            center = image.convert("RGB").getpixel((size[0] // 2, size[1] // 2))
         self.calls.append(
             {
                 "size": size,
+                "center": center,
                 "kind": target_kind,
                 "contexts": len(context_image_paths),
                 "metadata": metadata,
@@ -137,6 +141,10 @@ def _read(
 def _expected_crop_width(points: Sequence[float]) -> float:
     # docrag の crop は bbox の外側に 8px の余白を付ける。
     return (points[2] - points[0]) * RENDER_DPI / 72 + 16
+
+
+def _expected_crop_height(points: Sequence[float]) -> float:
+    return (points[3] - points[1]) * RENDER_DPI / 72 + 16
 
 
 def _figure_extraction(
@@ -249,6 +257,148 @@ def test_mineru_bbox_over_1000_is_unknown_unit() -> None:
     assert describer.calls == []
     assert result.elements[1].metadata["vision_skip_reason"] == "bbox_unit_unknown"
     assert WARNING_BBOX_UNIT_UNKNOWN in result.warnings
+
+
+# ai-foundations-lab(engchina/ai-foundations-lab、commit 572e9fa の 20260819/)が、ページ画像に
+# 重ねて確かめた換算の例(#512)。lab の tests/test_mineru_adapter.py・test_unstructured_adapter.py の
+# 座標と期待値だけを使う(文書の本文は使わない)。
+LAB_A4_PAGE = PageImage(
+    page=1, width=2480, height=3500, pdf_width=595.0, pdf_height=841.0, image_path=""
+)
+# 350 dpi 相当の PixelSpace(2894x1930)の Unstructured を、300 dpi のページ画像(2481x1654)へ。
+LAB_A5_LANDSCAPE_PAGE = PageImage(
+    page=1, width=2481, height=1654, pdf_width=595.28, pdf_height=396.85, image_path=""
+)
+
+
+@pytest.mark.parametrize(
+    ("bbox", "expected"),
+    [
+        ([166, 810, 820, 829], [411.68, 2835.0, 2033.6, 2901.5]),
+        ([277, 554, 705, 574], [686.96, 1939.0, 1748.4, 2009.0]),
+    ],
+    ids=["content_list", "content_list_v2"],
+)
+def test_mineru_bbox_matches_ai_foundations_lab(bbox: list[float], expected: list[float]) -> None:
+    """MinerU の content_list は 0-1000・左上原点。x と y を別々の寸法で換算する(lab と同じ)。"""
+    mapped = page_px_bbox(
+        bbox,
+        parser_backend="mineru",
+        metadata={},
+        extraction_page=None,
+        page=LAB_A4_PAGE,
+        source_is_image=False,
+    )
+
+    assert mapped == pytest.approx(expected)
+
+
+def test_unstructured_bbox_matches_ai_foundations_lab() -> None:
+    """Unstructured の points(PixelSpace)を座標系の寸法で割り、ページ内へ収める(lab と同じ)。"""
+    from rag_parser_core.registry import remap_external_ocr_output
+
+    element = {
+        "type": "Header",
+        "text": "見出し",
+        "metadata": {
+            "page_number": 1,
+            "coordinates": {
+                "points": [[2484, 180], [2484, 233], [2894, 233], [2894, 180]],
+                "system": "PixelSpace",
+                "layout_width": 2894,
+                "layout_height": 1930,
+            },
+        },
+    }
+    result = remap_external_ocr_output("unstructured", [element], source_profile=None)
+    assert result.extraction is not None
+    remapped = result.extraction.elements[0]
+    assert remapped.bbox == [2484.0, 180.0, 2894.0, 233.0]
+
+    mapped = page_px_bbox(
+        remapped.bbox,
+        parser_backend="unstructured",
+        metadata=remapped.metadata,
+        extraction_page=None,
+        page=LAB_A5_LANDSCAPE_PAGE,
+        source_is_image=False,
+    )
+
+    assert mapped == pytest.approx(
+        [2484 * 2481 / 2894, 180 * 1654 / 1930, 2481.0, 233 * 1654 / 1930]
+    )
+
+
+@pytest.mark.parametrize(
+    ("system", "bbox", "size"),
+    [
+        ("PointSpace", [100.0, 592.0, 300.0, 742.0], (595.0, 842.0)),
+        (
+            "RelativeCoordinateSystem",
+            [100 / 595, 592 / 842, 300 / 595, 742 / 842],
+            (1.0, 1.0),
+        ),
+    ],
+    ids=["point_space", "relative"],
+)
+def test_bottom_left_coordinate_system_is_flipped(
+    system: str, bbox: list[float], size: tuple[float, float]
+) -> None:
+    """左下原点の座標系(Unstructured の CARTESIAN)は y を反転してページ画像の px にする。
+
+    PDF の [100, 592, 300, 742](左下原点の pt)は、左上原点で FIGURE_PT の
+    [100, 100, 300, 250]。lab の pdf_bottom_left_to_image_top_left と同じ換算(#512)。
+    """
+    page = PageImage(
+        page=1,
+        width=2480,
+        height=3508,
+        pdf_width=PAGE_PT[0],
+        pdf_height=PAGE_PT[1],
+        image_path="",
+    )
+
+    mapped = page_px_bbox(
+        bbox,
+        parser_backend="unstructured",
+        metadata={
+            "page_width": size[0],
+            "page_height": size[1],
+            "bbox_coordinate_system": system,
+        },
+        extraction_page=None,
+        page=page,
+        source_is_image=False,
+    )
+
+    assert mapped == pytest.approx(
+        [
+            FIGURE_PT[0] * 2480 / PAGE_PT[0],
+            FIGURE_PT[1] * 3508 / PAGE_PT[1],
+            FIGURE_PT[2] * 2480 / PAGE_PT[0],
+            FIGURE_PT[3] * 3508 / PAGE_PT[1],
+        ]
+    )
+
+
+def test_unstructured_point_space_figure_is_cropped_at_top_left_position() -> None:
+    """PointSpace の図は、反転した位置(左上原点で FIGURE_PT)を切り出す。"""
+    extraction = _figure_extraction(
+        [FIGURE_PT[0], PAGE_PT[1] - FIGURE_PT[3], FIGURE_PT[2], PAGE_PT[1] - FIGURE_PT[1]],
+        element_metadata={
+            "page_width": PAGE_PT[0],
+            "page_height": PAGE_PT[1],
+            "bbox_coordinate_system": "PointSpace",
+        },
+    )
+
+    result, describer = _read(extraction, _pdf(), backend="unstructured")
+
+    assert len(describer.calls) == 1
+    assert abs(describer.calls[0]["size"][0] - _expected_crop_width(FIGURE_PT)) <= 4
+    assert abs(describer.calls[0]["size"][1] - _expected_crop_height(FIGURE_PT)) <= 4
+    assert describer.calls[0]["center"] == (0, 0, 128)  # 図(navy)の中央を切り出した
+    assert result.elements[1].metadata["vision_status"] == "succeeded"
 
 
 def test_dots_ocr_picture_asset_becomes_searchable_figure_element() -> None:
