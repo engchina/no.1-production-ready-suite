@@ -214,20 +214,6 @@ async def rename_conversation(
     return ApiResponse(data=_to_conversation_summary(conversation))
 
 
-@router.post(
-    "/conversations/{conversation_id}/archive", response_model=ApiResponse[ConversationSummary]
-)
-async def archive_conversation(conversation_id: str) -> ApiResponse[ConversationSummary]:
-    """会話をアーカイブする。"""
-    settings = get_settings()
-    _require_chat_enabled(settings)
-    try:
-        conversation = await OracleClient().archive_conversation(conversation_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE) from exc
-    return ApiResponse(data=_to_conversation_summary(conversation))
-
-
 @router.delete("/conversations/{conversation_id}", response_model=ApiResponse[None])
 async def delete_conversation(conversation_id: str) -> ApiResponse[None]:
     """会話とそのメッセージを削除する。"""

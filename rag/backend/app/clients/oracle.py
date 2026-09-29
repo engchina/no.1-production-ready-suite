@@ -3129,35 +3129,6 @@ class OracleClient:
             return None
         return _stored_conversation_from_row(rows[0])
 
-    async def archive_conversation(self, conversation_id: str) -> StoredConversation:
-        """会話を ARCHIVED にする。"""
-
-        def operation(connection: OracleConnectionProtocol) -> StoredConversation:
-            existing = _select_conversation(connection, conversation_id)
-            if existing is None:
-                raise KeyError(f"conversation_id={conversation_id} は存在しません。")
-            now = datetime.now(UTC)
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_conversations
-                SET status = 'ARCHIVED', updated_at = :updated_at
-                WHERE conversation_id = :conversation_id
-                  AND {access_sql}
-                """,
-                    access_sql=_oracle_conversation_access_predicate_sql(),
-                ),
-                _with_conversation_access_bind(
-                    {"conversation_id": conversation_id, "updated_at": now}
-                ),
-            )
-            existing.status = "ARCHIVED"
-            existing.updated_at = now
-            return existing
-
-        return await self._run_transaction(operation)
-
     async def delete_conversation(self, conversation_id: str) -> None:
         """会話を削除する。メッセージは FK の ON DELETE CASCADE で消える。"""
 
