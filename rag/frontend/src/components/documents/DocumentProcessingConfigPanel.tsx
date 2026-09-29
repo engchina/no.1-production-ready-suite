@@ -91,12 +91,11 @@ const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES.map(
 const EDITED_FIELDS: Array<keyof DocumentProcessingConfig> = [
   "preprocess_profile",
   "parser_adapter_backend",
-  "parser_docling_vision_enabled",
+  "vision_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
   "graph_profile",
   "field_extraction_enabled",
-  "asset_summary_enabled",
   "navigation_summary_enabled",
   "auto_parse_after_preprocess_enabled",
   "auto_chunk_after_extract_enabled",
@@ -108,10 +107,10 @@ function emptyConfig(): DocumentProcessingConfig {
     preprocess_profile: null,
     parser_adapter_backend: null,
     parser_docling_enabled: null,
-    parser_docling_vision_enabled: null,
     parser_unstructured_enabled: null,
     parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
+    vision_enabled: null,
     chunking_strategy: null,
     chunk_size: null,
     chunk_overlap: null,
@@ -119,7 +118,6 @@ function emptyConfig(): DocumentProcessingConfig {
     chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
-    asset_summary_enabled: null,
     navigation_summary_enabled: null,
     auto_parse_after_preprocess_enabled: null,
     auto_chunk_after_extract_enabled: null,
@@ -182,8 +180,8 @@ function stagesFor(
     },
     ...(
       [
+        ["vision", "vision", "vision_enabled"],
         ["field", "fieldExtraction", "field_extraction_enabled"],
-        ["asset", "assetSummary", "asset_summary_enabled"],
         ["navigation", "navigationSummary", "navigation_summary_enabled"],
         ["auto-parse", "autoParseAfterPreprocess", "auto_parse_after_preprocess_enabled"],
         ["auto-chunk", "autoChunkAfterExtract", "auto_chunk_after_extract_enabled"],
@@ -407,16 +405,16 @@ export function DocumentProcessingConfigPanel({
                   hint={parserHint}
                   warning={parserWarning}
                 />
-                {effectiveParserBackend === "docling" ? (
-                  <BooleanRow
-                    id={`document-docling-vision-${documentId}`}
-                    label={t("settings.parserAdapters.doclingVision.label")}
-                    value={form.parser_docling_vision_enabled ?? null}
-                    effectiveValue={configs.effective.parser_docling_vision_enabled ?? null}
-                    disabled={disabled}
-                    onChange={(value) => update({ parser_docling_vision_enabled: value })}
-                  />
-                ) : null}
+                {/* Vision は解析エンジンに関係なく使える(#497)。全体の既定は env だけで決める。 */}
+                <BooleanRow
+                  id={`document-vision-${documentId}`}
+                  label={t("knowledgeBases.adapter.field.vision")}
+                  value={form.vision_enabled ?? null}
+                  effectiveValue={configs.effective.vision_enabled ?? null}
+                  disabled={disabled}
+                  onChange={(value) => update({ vision_enabled: value })}
+                  hint={t("knowledgeBases.adapter.field.vision.hint")}
+                />
                 <SelectRow
                   id={`document-chunking-${documentId}`}
                   label={t("knowledgeBases.adapter.field.chunkingStrategy")}
@@ -455,14 +453,6 @@ export function DocumentProcessingConfigPanel({
                   warning={
                     fieldSchemaEmpty ? t("documents.processingConfig.fieldSchemaEmpty") : null
                   }
-                />
-                <BooleanRow
-                  id={`document-asset-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.assetSummary")}
-                  value={form.asset_summary_enabled}
-                  effectiveValue={configs.effective.asset_summary_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ asset_summary_enabled: value })}
                 />
                 <BooleanRow
                   id={`document-navigation-${documentId}`}
@@ -610,6 +600,7 @@ function BooleanRow({
   effectiveValue,
   disabled,
   onChange,
+  hint = null,
   warning = null,
 }: {
   id: string;
@@ -618,6 +609,7 @@ function BooleanRow({
   effectiveValue: boolean | null;
   disabled: boolean;
   onChange: (value: boolean | null) => void;
+  hint?: string | null;
   warning?: string | null;
 }) {
   const overriding = value !== null;
@@ -658,6 +650,7 @@ function BooleanRow({
           {t("knowledgeBases.adapter.inheritResolved", { value: boolLabel(effectiveValue) })}
         </p>
       )}
+      {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
       {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
     </div>
   );

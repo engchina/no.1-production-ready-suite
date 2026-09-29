@@ -65,57 +65,38 @@ def test_layout_records_map_to_elements_tables_assets_and_layout_artifact() -> N
     assert "image_path" not in layout["pages"][0]
 
 
-def test_parse_endpoint_passes_vision_option() -> None:
+def test_parse_endpoint_ignores_legacy_vision_options() -> None:
+    """Vision は backend の共通の段が行う(#497)。旧 backend の parser_options は使わない。"""
     captured: dict[str, object] = {}
 
     def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
         captured.update(kwargs, size=len(source_bytes))
         return StructuredExtraction(raw_text="ok")
 
+    options = '{"vision_enabled": true, "image_retrieval_prompt": "独自 {{image_metadata}}"}'
     with patch("app.main.analyze_source", side_effect=fake_analyze):
         response = TestClient(app).post(
             "/parse",
             files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
-            data={"content_type": "application/pdf", "parser_options": '{"vision_enabled": true}'},
+            data={"content_type": "application/pdf", "parser_options": options},
         )
 
     assert response.status_code == 200
     assert response.json()["extraction"]["raw_text"] == "ok"
-    assert captured["vision_enabled"] is True
     assert captured["file_name"] == "manual.pdf"
+    assert "vision_enabled" not in captured
+    assert "image_retrieval_prompt" not in captured
 
 
-def test_parse_endpoint_passes_image_retrieval_prompt() -> None:
-    captured: dict[str, object] = {}
+def test_layout_artifact_has_no_service_vision_summary() -> None:
+    page = PageImage(
+        page=1, width=1000, height=1400, pdf_width=600, pdf_height=840, image_path="/x.png"
+    )
+    picture = _record("docling-p1-1", "Picture", "")
+    picture.raw_type = "picture"
 
-    def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
-        captured.update(kwargs)
-        return StructuredExtraction(raw_text="ok")
+    extraction = layout_to_extraction([picture], [page], source_page_count=1)
 
-    options = '{"vision_enabled": true, "image_retrieval_prompt": "独自 {{image_metadata}}"}'
-    with patch("app.main.analyze_source", side_effect=fake_analyze):
-        TestClient(app).post(
-            "/parse",
-            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
-            data={"content_type": "application/pdf", "parser_options": options},
-        )
-        TestClient(app).post(
-            "/parse",
-            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
-            data={"parser_options": '{"vision_enabled": true}'},
-        )
-
-    assert captured["image_retrieval_prompt"] is None  # 2 回目は未編集(既定値)
-
-
-def test_image_retrieval_prompt_override_applies_only_inside_block() -> None:
-    from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt
-
-    from app.extraction import _image_retrieval_prompt_override
-
-    default = read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
-    with _image_retrieval_prompt_override("独自 {{image_metadata}}"):
-        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == "独自 {{image_metadata}}"
-    with _image_retrieval_prompt_override(None):
-        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default
-    assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default
+    assert "vision" not in extraction.parser_artifacts
+    assert extraction.assets[0].summary is None
+    assert extraction.assets[0].metadata["vision_status"] == ""

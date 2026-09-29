@@ -9,9 +9,9 @@ from docrag.models.layout import LayoutRecord, PageImage
 
 
 def missing_table_image_regions(
-    records: list[LayoutRecord], pages: list[PageImage], pdf_path: Path,
+    records: list[LayoutRecord], pages: list[PageImage], pdf_path: Path, *, engine: str = "docling",
 ) -> dict[str, list[list[float]]]:
-    """未処理画像を含む Docling Table の ID と画像領域を返します。
+    """未処理画像を含む ``engine`` の Table の ID と画像領域を返します。
 
     PDF の画像 object（Form 内も含む）をページ画像と同じ左上原点の pixel 座標へ
     変換します。画像との重複が小さい表や、説明生成済みの Picture が画像領域の 80% 以上を
@@ -20,7 +20,7 @@ def missing_table_image_regions(
     表罫線のような細い path は対象外です。PDFium は共有 lock 内で読み取り、
     失敗は呼び出し元へ伝播します。
     """
-    tables = [r for r in records if r.engine == "docling" and r.category == "Table"]
+    tables = [r for r in records if r.engine == engine and r.category == "Table"]
     if not tables:
         return {}
     for table in tables:
@@ -55,7 +55,7 @@ def missing_table_image_regions(
                         target = images if obj.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE else vectors
                         target.append([min(x for x, _ in points), min(y for _, y in points),
                                        max(x for x, _ in points), max(y for _, y in points)])
-                    pictures = [r.bbox for r in records if r.engine == "docling" and r.page == number
+                    pictures = [r.bbox for r in records if r.engine == engine and r.page == number
                                 and r.category == "Picture" and r.raw_type == "picture"
                                 and r.text.strip() and not r.raw.get("vision_error")
                                 and not r.raw.get("rag_excluded") and not r.raw.get("vision_skipped")]

@@ -1,8 +1,10 @@
-"""DocRAG 解析(Docling + 任意 Vision)を実行し、共通抽出 schema へ変換する。
+"""DocRAG 解析(Docling)を実行し、共通抽出 schema へ変換する。
 
-rag_poc の analyze_pdf から UI・run 保存・再開を除いた最小のオーケストレーション。
+rag_poc の analyze_pdf から UI・run 保存・再開・Vision を除いた最小のオーケストレーション。
 LayoutRecord 全体(raw を含む)は parser_artifacts["docrag_layout"] に保持し、
 Small-to-Big チャンク化(backend)が rag_poc と同じ入力で分割できるようにする。
+図・画像の Vision は解析エンジンに依存しない backend の共通の段(``app.rag.vision``)が
+docrag_layout の record を読み取って反映する(#497)。このサービスは LLM を呼ばない。
 """
 
 from __future__ import annotations
@@ -10,9 +12,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,10 @@ from docrag.parsing.rendering import (
     source_frame_warnings,
 )
 from docrag.config import Settings, get_settings
-from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+from docrag.parsing.layout_metadata import (
+    layout_record_element_metadata,
+    layout_record_vision_summary,
+)
 from docrag.parsing.visual_artifacts import persist_semantic_visual_crops
 
 logger = logging.getLogger(__name__)
@@ -59,33 +62,16 @@ CATEGORY_KINDS = {
     "Text": "text",
 }
 
-# element metadata へ写す raw のスカラー値(プレビューと診断に使う)。
-_RAW_SCALAR_KEYS = (
-    "vision_status",
-    "vision_error",
-    "vision_model",
-    "vision_skipped",
-    "visual_role",
-    "visual_role_reason",
-    "visual_kind",
-    "picture_kind",
-    "rag_excluded",
-    "table_vision_text",
-    "table_image_detection_status",
-)
-
 
 def analyze_source(
     source_bytes: bytes,
     *,
     file_name: str,
     content_type: str,
-    vision_enabled: bool,
     settings: Settings | None = None,
-    image_retrieval_prompt: str | None = None,
 ) -> StructuredExtraction:
     """PDF / 画像を解析し、DocRAG の LayoutRecord を保持した StructuredExtraction を返す。"""
-    # env(DOCRAG_* / DOCLING_* / OCI_ENTERPRISE_AI_*)から解決する。.env は読まない。
+    # env(DOCRAG_* / DOCLING_*)から解決する。.env は読まない。
     settings = settings or get_settings(dotenv_path=None)
     suffix = _source_suffix(file_name, content_type)
     settings.output_dir.mkdir(parents=True, exist_ok=True)
@@ -104,76 +90,12 @@ def analyze_source(
         )
         persist_semantic_visual_crops(records, pages, run_dir=run_dir)
         warnings = list(source_frame_warnings(source_path))
-        vision_summary: dict[str, Any] = {"enabled": vision_enabled}
-        if vision_enabled:
-            with _image_retrieval_prompt_override(image_retrieval_prompt):
-                vision_summary.update(
-                    _describe(records, pages, run_dir, file_name, settings, pdf_path)
-                )
-            if vision_summary.get("failed"):
-                warnings.append("docling_vision_partial_failure")
         return layout_to_extraction(
             records,
             pages,
             source_page_count=page_count,
             warnings=warnings,
-            vision_summary=vision_summary,
         )
-
-
-@contextmanager
-def _image_retrieval_prompt_override(prompt: str | None) -> Iterator[None]:
-    """backend の画面で編集した画像検索のプロンプトを、Vision の間だけ docrag に渡す。
-
-    docrag の read_prompt は runtime の prompt_overrides を返す。Docling の解析本体は runtime の
-    有無で環境の準備が変わるため、Vision の段階だけ有効にする。profile は今の current_profile()
-    に上書きだけを足す(backend の app.rag.docrag_prompts.prompt_overrides と同じ)。
-    """
-    if not prompt:
-        yield
-        return
-    from docrag.resources.runtime import ResourcePaths, Runtime, current_profile
-
-    profile = current_profile()
-    overrides = {**dict(profile.prompt_overrides), IMAGE_RETRIEVAL_PROMPT_KEY: prompt}
-    with tempfile.TemporaryDirectory(prefix="docrag-prompts-") as work:
-        runtime = Runtime(
-            ResourcePaths(workspace=Path(work), output=Path(work)),
-            replace(profile, prompt_overrides=tuple(overrides.items())),
-        )
-        with runtime.activate():
-            yield
-
-
-def _describe(
-    records: list[LayoutRecord],
-    pages: list[PageImage],
-    run_dir: Path,
-    file_name: str,
-    settings: Settings,
-    pdf_path: str,
-) -> dict[str, Any]:
-    # Vision は任意機能。依存(Pillow 等)と LLM 設定が揃う場合だけ import する。
-    from docrag.parsing.picture_descriptions import describe_docling_pictures
-
-    try:
-        stats = describe_docling_pictures(
-            records,
-            pages,
-            run_dir=run_dir,
-            pdf_name=file_name,
-            settings=settings,
-            pdf_path=Path(pdf_path),
-        )
-    except Exception as exc:  # 個別失敗は record に残る。準備失敗は解析全体を止めない。
-        logger.warning("docling vision failed", extra={"error": str(exc)})
-        return {"error": str(exc), "failed": 1}
-    return {
-        "targets": stats.targets,
-        "succeeded": stats.succeeded,
-        "failed": stats.failed,
-        "discovery_failed": stats.discovery_failed,
-    }
 
 
 def layout_to_extraction(
@@ -182,7 +104,6 @@ def layout_to_extraction(
     *,
     source_page_count: int,
     warnings: list[str] | None = None,
-    vision_summary: dict[str, Any] | None = None,
 ) -> StructuredExtraction:
     """LayoutRecord 群を共通抽出 schema(要素・ページ・表・図)へ写す。"""
     elements: list[DocumentElement] = []
@@ -238,7 +159,6 @@ def layout_to_extraction(
             "source_page_count": source_page_count,
             "table_count": len(tables),
             "picture_count": len(assets),
-            "vision": _json_value(vision_summary or {"enabled": False}),
             DOCRAG_LAYOUT_ARTIFACT: {
                 "version": DOCRAG_LAYOUT_VERSION,
                 "pages": [_page_payload(page) for page in pages],
@@ -249,23 +169,7 @@ def layout_to_extraction(
 
 
 def _element_metadata(record: LayoutRecord) -> dict[str, ExtractionMetadataValue]:
-    metadata: dict[str, ExtractionMetadataValue] = {
-        "category": record.category,
-        "raw_type": record.raw_type,
-        "page_width": float(record.page_width),
-        "page_height": float(record.page_height),
-        "bbox_unit": "absolute",
-        "bbox_mode": "xyxy",
-        "seq_no": record.seq_no,
-    }
-    for key in _RAW_SCALAR_KEYS:
-        value = record.raw.get(key)
-        if isinstance(value, str | int | float | bool) and value != "":
-            metadata[key] = value
-    description = record.raw.get("vision_description")
-    if isinstance(description, dict) and description.get("retrieval_text"):
-        metadata["vision_retrieval_text"] = str(description["retrieval_text"])
-    return metadata
+    return dict(layout_record_element_metadata(record))
 
 
 def _table(record: LayoutRecord) -> ExtractionTable:
@@ -284,10 +188,7 @@ def _table(record: LayoutRecord) -> ExtractionTable:
 
 
 def _asset(record: LayoutRecord) -> ExtractionAsset:
-    description = record.raw.get("vision_description")
-    summary = ""
-    if isinstance(description, dict):
-        summary = str(description.get("retrieval_text") or "")
+    summary = layout_record_vision_summary(record)
     return ExtractionAsset(
         asset_id=f"asset-{record.id}",
         kind="figure",

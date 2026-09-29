@@ -730,10 +730,11 @@ export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
-  parser_docling_vision_enabled?: boolean | null;
   parser_unstructured_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
+  /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
+  vision_enabled: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
@@ -746,7 +747,6 @@ export interface KnowledgeBaseIngestionConfig {
   docrag_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   field_extraction_enabled: boolean | null;
-  asset_summary_enabled: boolean | null;
   navigation_summary_enabled: boolean | null;
   auto_parse_after_preprocess_enabled: boolean | null;
   auto_chunk_after_extract_enabled: boolean | null;
@@ -1673,13 +1673,11 @@ export interface ParserAdapterSettingsData {
   capabilities: ParserBackendCapabilityData[];
   connections: ExternalParserConnectionData[];
   config_source: "runtime";
-  docling_vision_enabled?: boolean;
 }
 
 export interface ParserAdapterSettingsUpdate {
   adapter_backend: ParserAdapterBackend;
   docling_enabled?: boolean;
-  docling_vision_enabled?: boolean;
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;

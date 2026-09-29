@@ -17,7 +17,7 @@ import contextlib
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -551,6 +551,39 @@ class OciEnterpriseAiClient:
         finally:
             if uploaded_file_id:
                 await self._delete_uploaded_file(uploaded_file_id)
+
+    async def generate_from_images(
+        self,
+        images: Sequence[bytes],
+        prompt: str,
+        *,
+        system_prompt: str = "",
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "image_description",
+        mime_type: str = "image/png",
+    ) -> str:
+        """複数の画像(対象の切り出しと周辺文脈など)と指示から text を生成する。
+
+        解析後の図・画像の読み取り(Vision。#497)に使う。画像は inline data URL で渡す。
+        ``response_schema`` を渡すと、対応する model では Responses の JSON Schema 出力を使う。
+        """
+        payload = _build_images_text_payload(
+            self._config,
+            images,
+            prompt,
+            system_prompt=system_prompt,
+            response_schema=response_schema,
+            response_schema_name=response_schema_name,
+            mime_type=mime_type,
+        )
+        response = await self._post_enterprise_ai(
+            self._config.oci_enterprise_ai_vlm_path,
+            payload,
+        )
+        return _parse_generated_text(
+            response,
+            response_path=self._config.oci_enterprise_ai_vlm_response_path,
+        )
 
     def preview_llm_request(self, prompt: str, context: str) -> EnterpriseAiRequestPreview:
         """LLM endpoint request の非機密プレビューを返す。"""
@@ -1216,6 +1249,50 @@ def _build_vision_text_payload(
             }
         ],
     }
+
+
+def _build_images_text_payload(
+    config: OciEnterpriseAiConfig,
+    images: Sequence[bytes],
+    prompt: str,
+    *,
+    system_prompt: str,
+    response_schema: Mapping[str, Any] | None,
+    response_schema_name: str,
+    mime_type: str,
+) -> dict[str, Any]:
+    """複数画像を渡す OpenAI Responses payload を作る(画像は指示の後に並べる)。"""
+    model_id = config.vision_model_id
+    _require_value(model_id, "OCI Enterprise AI Vision model")
+    if not images:
+        raise EnterpriseAiUnsupportedInputError("読み取る画像がありません。")
+    normalized_mime_type = _normalized_mime_type(mime_type)
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    content.extend(
+        {
+            "type": "input_image",
+            "image_url": (
+                f"data:{normalized_mime_type};base64,{base64.b64encode(image).decode('ascii')}"
+            ),
+        }
+        for image in images
+    )
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "input": [{"role": "user", "content": content}],
+        "max_output_tokens": _vlm_max_output_tokens(config),
+    }
+    if system_prompt:
+        payload["instructions"] = system_prompt
+    if response_schema and _supports_responses_json_schema(model_id):
+        payload["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": response_schema_name,
+                "schema": dict(response_schema),
+            }
+        }
+    return payload
 
 
 def _build_llm_payload(

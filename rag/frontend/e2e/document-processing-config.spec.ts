@@ -50,7 +50,7 @@ function config(): DocumentProcessingConfig {
     chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
-    asset_summary_enabled: null,
+    vision_enabled: null,
     navigation_summary_enabled: null,
     auto_parse_after_preprocess_enabled: null,
     auto_chunk_after_extract_enabled: null,
@@ -65,7 +65,7 @@ const effectiveBase: DocumentProcessingConfig = {
   chunking_strategy: "page_level",
   graph_profile: "off",
   field_extraction_enabled: false,
-  asset_summary_enabled: false,
+  vision_enabled: false,
   navigation_summary_enabled: false,
   auto_parse_after_preprocess_enabled: true,
   auto_chunk_after_extract_enabled: true,
@@ -305,10 +305,24 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   await page.getByRole("option", { name: "MinerU" }).click();
+  // Vision は解析エンジンに関係なくレシピで選べる。「図表 VLM 要約」は Vision に統合した(#497)。
+  await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
+  // 概要(読み取り専用)にも同じ見出しがあるので、編集欄(説明付き)に絞る。
+  const visionRow = panel
+    .getByText("図・画像を AI で読み取る（Vision）", { exact: true })
+    .locator("../..")
+    .filter({ hasText: "どの解析エンジンでも使えます" });
+  await expect(visionRow).toBeVisible();
+  await visionRow.getByText("上書き", { exact: true }).click();
+  await visionRow.getByText("有効", { exact: true }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
-  expect(state.saved()).toMatchObject({ parser_adapter_backend: "mineru", chunk_size: 800 });
+  expect(state.saved()).toMatchObject({
+    parser_adapter_backend: "mineru",
+    vision_enabled: true,
+    chunk_size: 800,
+  });
   expect(state.ingestionPosts()).toBe(0);
   await expectNoPageOverflow(page);
 });

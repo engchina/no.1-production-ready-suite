@@ -5,10 +5,11 @@ from __future__ import annotations
 import math
 import time
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from docrag.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 from docrag.adapters.oci import describe_picture, _image_retrieval_template, _render_prompt, VISION_SYSTEM_PROMPT
@@ -332,6 +333,56 @@ def _bounded_vision_description(payload: dict[str, Any]) -> dict[str, Any]:
     return description
 
 
+class PictureDescriber(Protocol):
+    """Vision の呼び出し先。解析エンジンに依存しない読み取り(#497)で差し替える。
+
+    ``provider()`` は checkpoint の key と ``vision_provider`` / ``vision_model`` の記録に使う
+    接続先(provider_id / model / region / base_url / project_id を持つ object)を返す。
+    ``describe()`` は ``PictureDescriptionOutput`` 相当の dict を返す(失敗は例外)。
+    """
+
+    api_mode: str
+    max_tokens: int
+
+    def provider(self) -> Any: ...
+
+    def describe(
+        self,
+        crop_path: Path,
+        metadata: dict[str, Any],
+        *,
+        context_image_paths: Sequence[Path],
+        target_kind: str,
+        rendered_prompt: str,
+    ) -> dict[str, Any]: ...
+
+
+class _SettingsPictureDescriber:
+    """docrag の settings(openai SDK)で Vision を呼ぶ既定の呼び出し先(rag_poc 互換)。"""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self.api_mode = settings.llm_api_mode
+        self.max_tokens = max(1, int(settings.answer_max_tokens))
+
+    def provider(self) -> Any:
+        return get_llm_provider(self._settings, self._settings.default_vision_llm)
+
+    def describe(
+        self,
+        crop_path: Path,
+        metadata: dict[str, Any],
+        *,
+        context_image_paths: Sequence[Path],
+        target_kind: str,
+        rendered_prompt: str,
+    ) -> dict[str, Any]:
+        return describe_picture(
+            crop_path, metadata, self._settings, context_image_paths=list(context_image_paths),
+            rendered_prompt=rendered_prompt, **({"target_kind": "table"} if target_kind == "table" else {}),
+        )
+
+
 def describe_docling_pictures(
     records: list[LayoutRecord], pages: list[PageImage], *, run_dir: Path,
     pdf_name: str, settings: Settings, pdf_path: Path | None = None,
@@ -341,19 +392,50 @@ def describe_docling_pictures(
     recordsを変更し、run_dirへ応答・結果・進捗を保存する。外部APIを呼ぶ。
     保存不能・同じrunの同時処理はCheckpointError。個別API失敗はrecordへ記録する。
     """
-    with checkpoint_lock(run_dir, '.vision.lock'):
-        return _describe_docling_pictures(records, pages, run_dir=run_dir,
-                                         pdf_name=pdf_name, settings=settings, pdf_path=pdf_path)
+    return describe_layout_pictures(
+        records, pages, run_dir=run_dir, pdf_name=pdf_name,
+        describer=_SettingsPictureDescriber(settings), pdf_path=pdf_path,
+    )
 
 
-def _describe_docling_pictures(
+def describe_layout_pictures(
     records: list[LayoutRecord],
     pages: list[PageImage],
     *,
     run_dir: Path,
     pdf_name: str,
-    settings: Settings,
+    describer: PictureDescriber,
     pdf_path: Path | None = None,
+    engine: str = "docling",
+    prompt_template: str | None = None,
+    cancel_check: Callable[[], None] | None = None,
+) -> VisionDescriptionStats:
+    """``engine`` の LayoutRecord の Picture と画像入り Table を ``describer`` で読み取る。
+
+    解析エンジンに依存しない Vision(#497)の入口。Docling 以外の解析結果も、bbox をページ画像の
+    px へそろえた LayoutRecord にすれば同じ規則(対象と周辺文脈の 2 枚の画像、装飾画像の skip、
+    表内画像の検出、prompt の metadata)で読み取れる。``prompt_template`` は画像検索の prompt
+    (未指定は保存済みの prompt)。``cancel_check`` は対象ごとの前に呼び、例外で中断する。
+    """
+    with checkpoint_lock(run_dir, '.vision.lock'):
+        return _describe_layout_pictures(
+            records, pages, run_dir=run_dir, pdf_name=pdf_name, describer=describer,
+            pdf_path=pdf_path, engine=engine, prompt_template=prompt_template,
+            cancel_check=cancel_check,
+        )
+
+
+def _describe_layout_pictures(
+    records: list[LayoutRecord],
+    pages: list[PageImage],
+    *,
+    run_dir: Path,
+    pdf_name: str,
+    describer: PictureDescriber,
+    pdf_path: Path | None = None,
+    engine: str = "docling",
+    prompt_template: str | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> VisionDescriptionStats:
     """Picture と未抽出画像を含む Table に Vision 説明を追加します。
 
@@ -365,11 +447,11 @@ def _describe_docling_pictures(
                    else digest_json({'name': pdf_name, 'pages': [
                        [page.page, file_digest(Path(page.image_path)) if Path(page.image_path).is_file() else None]
                        for page in pages]}))
-    ledger = VisionCheckpoints(run_dir / "docling" / "vision", source_hash)
+    ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash)
     vlm_targets: list[LayoutRecord] = []
     for record in records:
         if not (
-            record.engine == "docling"
+            record.engine == engine
             and record.category == "Picture"
             and record.raw_type == "picture"
             and not record.text.strip()
@@ -398,12 +480,12 @@ def _describe_docling_pictures(
             from docrag.parsing.table_vision import missing_table_image_regions
 
             try:
-                table_regions = missing_table_image_regions(records, pages, pdf_path)
+                table_regions = missing_table_image_regions(records, pages, pdf_path, engine=engine)
             except Exception as exc:
                 discovery_failed = True
                 table_regions = {}
                 for record in records:
-                    if record.engine == "docling" and record.category == "Table":
+                    if record.engine == engine and record.category == "Table":
                         record.raw["table_image_detection_status"] = "failed"
                         record.raw["table_vision_detection_error"] = f"{type(exc).__name__}: {exc}"[:500]
             for record in records:
@@ -420,8 +502,9 @@ def _describe_docling_pictures(
 
     page_lookup = {page.page: page for page in pages}
     # 対象ごとに読むと、解析中の prompt 保存で同じ文書の説明が新旧の方針で混ざる。
-    prompt_template = _image_retrieval_template()
-    crop_dir = run_dir / "docling" / "vision"
+    if prompt_template is None:
+        prompt_template = _image_retrieval_template()
+    crop_dir = run_dir / engine / "vision"
     crop_dir.mkdir(parents=True, exist_ok=True)
     page_images: dict[int, Image.Image] = {}
     succeeded = 0
@@ -429,6 +512,8 @@ def _describe_docling_pictures(
     target_count = 0
     try:
         for record in pending_targets():
+            if cancel_check is not None:
+                cancel_check()
             target_count += 1
             record.raw["visual_processing_version"] = 2
             item_started = time.monotonic()
@@ -440,7 +525,7 @@ def _describe_docling_pictures(
             record.raw["vision_status"] = "running"
             ledger.update(record, "running")
             try:
-                provider = get_llm_provider(settings, settings.default_vision_llm)
+                provider = describer.provider()
                 page = page_lookup.get(record.page)
                 if page is None:
                     raise RuntimeError(f"{record.page} ページ目の画像がありません。")
@@ -488,14 +573,14 @@ def _describe_docling_pictures(
                 prompt = _render_prompt(metadata, target_kind=kind, template=prompt_template)
                 key = ledger.key(crop=crop_path, context=context_crop.path, prompt=prompt,
                                  system_prompt=VISION_SYSTEM_PROMPT, provider=provider,
-                                 max_tokens=max(1, int(settings.answer_max_tokens)), kind=kind,
-                                 api_mode=settings.llm_api_mode)
+                                 max_tokens=describer.max_tokens, kind=kind,
+                                 api_mode=describer.api_mode)
                 response = ledger.load(key)
                 reused = response is not None
                 if response is None:
-                    response = describe_picture(
-                        crop_path, metadata, settings, context_image_paths=[context_crop.path],
-                        rendered_prompt=prompt, **({"target_kind": "table"} if kind == "table" else {}),
+                    response = describer.describe(
+                        crop_path, metadata, context_image_paths=[context_crop.path],
+                        target_kind=kind, rendered_prompt=prompt,
                     )
                     # 応答受信直後に保存し、後続の分類・整表処理が落ちても再送を避ける。
                     ledger.save(key, response, record, state="received")
