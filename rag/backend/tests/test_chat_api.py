@@ -766,3 +766,27 @@ def test_stream_message_rejects_business_view_without_knowledge_bases(
     assert resp.status_code == 409
     assert resp.json()["error_messages"] == [search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE]
     assert fake.messages["conv-empty"] == []
+
+
+def test_stream_returns_prepare_errors_before_starting_the_stream(
+    fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    """準備（業務ビューの解決など）の 409 は、stream を始める前に理由付きで返す（#463）。"""
+    from fastapi import HTTPException
+
+    async def conflict(*_args: object, **_kwargs: object) -> None:
+        raise HTTPException(status_code=409, detail="回答プロンプトが無効です。")
+
+    monkeypatch.setattr(chat_route, "_resolve_query_context", conflict)
+    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
+        "data"
+    ]
+
+    response = client.post(
+        f"/api/chat/conversations/{created['id']}/messages/stream",
+        json={"content": "経費の上限は？"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_messages"] == ["回答プロンプトが無効です。"]
+    assert fake_oracle.messages[created["id"]] == []
