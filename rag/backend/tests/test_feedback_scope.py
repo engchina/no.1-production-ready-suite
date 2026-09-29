@@ -178,6 +178,35 @@ async def test_detail_is_limited_to_the_owner_and_exists_check_is_not() -> None:
     assert "f.business_view_id IN (:access_business_view_id_0)" in exists_call.statement
 
 
+MESSAGE_OWNER_JOIN = "NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
+AUDIT_OWNER_JOIN = "NVL(a.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
+
+
+@pytest.mark.anyio
+async def test_list_and_detail_join_only_the_senders_conversation_and_audit() -> None:
+    """他人の trace を指定したフィードバックに、他人の会話・監査を結び付けない（#457）。"""
+    pool = FakeOraclePool(execute_results=[[], [{"total": 0}], [], [], []])
+    with _scope(user_id_hash="admin-hash", feedback_all_users=True):
+        oracle = _client(pool)
+        await oracle.list_feedback_dashboard_rows(
+            business_view_id=None,
+            target_type=None,
+            rating=None,
+            reason=None,
+            period_days=30,
+            search_query=None,
+            sort_order="newest",
+            limit=50,
+            offset=0,
+        )
+        await oracle.get_feedback_detail("feedback-1")
+    list_call = pool.connection.calls[0]
+    detail_call = pool.connection.calls[-1]
+    assert MESSAGE_OWNER_JOIN in list_call.statement
+    assert MESSAGE_OWNER_JOIN in detail_call.statement
+    assert AUDIT_OWNER_JOIN in detail_call.statement
+
+
 @pytest.mark.anyio
 async def test_detail_is_not_limited_for_system_admin() -> None:
     pool = FakeOraclePool(execute_results=[[_detail_row()]])

@@ -262,7 +262,12 @@ async def _resolve_feedback_details(
     oracle: OracleClient,
     request: FeedbackRequest,
 ) -> dict[str, object] | None:
-    """chat は server record、検索は検証済み trace の画面 snapshot を保存する。"""
+    """chat は server record、検索は画面の snapshot を保存する。
+
+    検索の snapshot は画面が送る内容なので、trace の存在は確かめない
+    （監査の保存先に依存させない。#457）。業務ビューの利用範囲は呼び出し元が確かめ、
+    一覧・詳細はフィードバックを送った本人の会話・監査だけを結び付ける。
+    """
     details: dict[str, object] | None = None
     if request.message_id:
         details = await oracle.get_feedback_message_context(request.message_id, request.trace_id)
@@ -270,8 +275,6 @@ async def _resolve_feedback_details(
             raise HTTPException(status_code=404, detail="評価対象のメッセージが見つかりません。")
         details["citations"] = _feedback_citations(details.get("citations"))
     elif request.content_snapshot is not None:
-        if not await oracle.feedback_trace_exists(request.trace_id):
-            raise HTTPException(status_code=404, detail="評価対象の検索結果が見つかりません。")
         details = {
             "message_id": None,
             "content_source": FeedbackContentSource.SEARCH_SNAPSHOT.value,

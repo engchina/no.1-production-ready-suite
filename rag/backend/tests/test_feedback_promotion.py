@@ -282,7 +282,18 @@ class FakePromotionClient:
 async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> None:
     """実 Oracle 26ai で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
     from app.clients.oracle import OracleClient, _execute_count
+    from app.rag.request_context import (
+        AuditRequestContext,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
 
+    # 詳細は送信者だけが見られる（#408）。送信者を決めて保存・取得する（未設定だと詳細が None）。
+    # user_id_hash は CHAR(64) なので、実際と同じ 64 文字の値にする
+    # （短いと空白で埋まり、等号で一致しない）。
+    context_token = set_audit_request_context(
+        AuditRequestContext(request_id="feedback-promotion-test", user_id_hash="0" * 64)
+    )
     oracle = OracleClient()
     request = FeedbackRequest.model_validate(
         {
@@ -320,6 +331,7 @@ async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> No
             {"trace_id": "pytest-feedback-promotion"},
         )
     )
+    reset_audit_request_context(context_token)
 
     assert row is not None
     assert row["reason"] == "missing_knowledge"

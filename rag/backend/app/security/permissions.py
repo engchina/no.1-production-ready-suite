@@ -348,7 +348,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 業務ビュー: 検索と回答履歴 ----
     # 文書ワークスペースのレシピ検索テストも同期検索を使う。
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
-    ("POST", "/search/citation-feedback"): _ANSWER_USE,
     # KB 詳細の検索テストもストリーム検索を使う。
     ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
     ("GET", "/search/answers"): _ANSWER_USE,

@@ -1192,23 +1192,6 @@ export interface SearchResponse {
   diagnostics: SearchDiagnostics;
 }
 
-export interface CitationFeedbackRequestBody {
-  trace_id: string;
-  document_id: string;
-  chunk_id: string;
-  rating: CitationFeedbackRating;
-  reason?: CitationFeedbackReason | null;
-  comment?: string | null;
-}
-
-export interface CitationFeedbackResponse {
-  feedback_id: string;
-  trace_id: string;
-  document_id: string;
-  chunk_id: string;
-  rating: CitationFeedbackRating;
-}
-
 export interface FeedbackRequestBody {
   trace_id: string;
   business_view_id: string;
@@ -3229,11 +3212,6 @@ export const api = {
     request<SearchResponse>("/api/search", jsonBody(body), {
       timeoutMs: ANSWER_GENERATION_TIMEOUT_MS,
     }),
-  submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
-    request<CitationFeedbackResponse>(
-      "/api/search/citation-feedback",
-      jsonBody(body),
-    ),
   submitFeedback: (body: FeedbackRequestBody) =>
     request<FeedbackSubmissionResponse>("/api/feedback", jsonBody(body)),
   getCurrentFeedback: (traceId: string) => {

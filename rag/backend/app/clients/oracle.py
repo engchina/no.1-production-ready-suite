@@ -4266,16 +4266,6 @@ class OracleClient:
         await self._run_transaction(operation)
         return feedback_id
 
-    async def save_citation_feedback(self, feedback: Mapping[str, object]) -> str:
-        """旧 API の引用 feedback を一般化した保存経路へ委譲する。"""
-        return await self.save_feedback(
-            {
-                "target_type": "citation",
-                "source_surface": "search",
-                **feedback,
-            }
-        )
-
     async def list_current_feedback(self, trace_id: str) -> list[dict[str, object]]:
         """現在の利用者・trace について対象ごとの最新 feedback を返す。"""
         context = current_audit_request_context()
@@ -4362,31 +4352,6 @@ class OracleClient:
             "content_source": "chat_message",
         }
 
-    async def feedback_trace_exists(self, trace_id: str) -> bool:
-        """検索 snapshot を現在の tenant/user に属する trace へだけ紐付ける。"""
-        context = current_audit_request_context()
-        user_sql = ""
-        binds: dict[str, object] = {"trace_id": trace_id}
-        if context.user_id_hash is not None:
-            user_sql = "AND a.user_id_hash = :feedback_user_id_hash"
-            binds["feedback_user_id_hash"] = context.user_id_hash
-        row = await self._fetch_one(
-            _render_sql(
-                """
-                SELECT 1 AS found
-                FROM rag_search_audit a
-                WHERE a.trace_id = :trace_id
-                  AND {tenant_sql}
-                  {user_sql}
-                FETCH NEXT 1 ROWS ONLY
-                """,
-                tenant_sql=_oracle_tenant_predicate(alias="a"),
-                user_sql=user_sql,
-            ),
-            _with_tenant_bind(binds),
-        )
-        return row is not None
-
     async def list_feedback_dashboard_rows(
         self,
         *,
@@ -4424,6 +4389,9 @@ class OracleClient:
             previous_period=True,
         )
         cte = _feedback_latest_cte()
+        # メッセージ・会話・監査は、フィードバックを送った本人のものだけを結び付ける
+        # （他人の trace を指定しても他人の会話を出さない。#457）。
+        # SQL の中に `--` のコメントを書かない（実行前に改行をつぶすため、後ろがコメントになる）。
         order_sql = (
             "f.created_at ASC, f.feedback_id ASC"
             if sort_order == "oldest"
@@ -4439,6 +4407,7 @@ class OracleClient:
                     m.trace_id,
                     m.model,
                     m.tenant_id_hash,
+                    m.user_id_hash,
                     ROW_NUMBER() OVER (
                         PARTITION BY m.trace_id
                         ORDER BY m.created_at DESC, m.message_id DESC
@@ -4481,6 +4450,7 @@ class OracleClient:
                     )
                  )
              AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+             AND NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
             LEFT JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
              AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
@@ -4560,6 +4530,7 @@ class OracleClient:
         SYSTEM_ADMIN 以外は、自分が送った feedback だけ（#408）。
         """
         owner_predicates, owner_binds = _feedback_owner_scope("f.user_id_hash")
+        # メッセージ・会話・監査は、フィードバックを送った本人のものだけを結び付ける（#457）。
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -4635,13 +4606,16 @@ class OracleClient:
                         )
                      )
                  AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                     AND NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
                 LEFT JOIN rag_conversations c
                   ON c.conversation_id = m.conversation_id
                  AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
                 LEFT JOIN rag_documents d
                   ON d.document_id = f.document_id
                  AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-                LEFT JOIN latest_audit a ON a.trace_id = f.trace_id
+                LEFT JOIN latest_audit a
+                  ON a.trace_id = f.trace_id
+                 AND NVL(a.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
                 WHERE f.feedback_id = :feedback_id
                   AND {feedback_tenant_sql}
                   AND {feedback_scope_sql}
@@ -10196,7 +10170,7 @@ def _citation_feedback_binds(
     *,
     feedback_id: str,
 ) -> dict[str, object]:
-    """CitationFeedbackRequest を Oracle bind 値へ変換する。"""
+    """FeedbackRequest を Oracle bind 値へ変換する。"""
     context = current_audit_request_context()
     return {
         "feedback_id": feedback_id,
