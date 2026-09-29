@@ -44,7 +44,6 @@ from app.clients.parser_service import (
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings, get_settings
-from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_chunking_params
@@ -89,6 +88,11 @@ from app.rag.variant_keys import (
     compute_extraction_recipe_id,
     extraction_recipe_subset,
 )
+from app.rag.vision import (
+    EnterpriseAiPictureDescriber,
+    read_figures_with_vision,
+    vision_failure,
+)
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -99,7 +103,6 @@ from app.schemas.document import (
 )
 from app.schemas.extraction import (
     ExtractionArtifactValue,
-    ExtractionAsset,
     ExtractionField,
     IngestionQualityReport,
     StructuredExtraction,
@@ -297,7 +300,7 @@ class IngestionPipeline:
         )
 
     async def _image_retrieval_prompt(self) -> str | None:
-        """画面で編集した画像検索のプロンプト(Docling の Vision 用)。未編集・読込失敗は既定値。"""
+        """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
         from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 
         try:
@@ -353,8 +356,6 @@ class IngestionPipeline:
             source_profile=source_profile,
             base_prompt=prompt,
         )
-        if self._settings.rag_parser_docling_vision_enabled:
-            self._parser_service.image_retrieval_prompt = await self._image_retrieval_prompt()
         checkpoint_segments: list[IngestionSegment] = []
         try:
             # status は cancel を確かめてから書く。取り消し後に中間の status を書き戻さない(#305)。
@@ -535,6 +536,19 @@ class IngestionPipeline:
             )
             # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
             extraction = _extraction_with_source_derivation(extraction, source_derivation)
+            # 図・画像の読み取り(Vision)は解析エンジンに関係なくここで行う(#497)。抽出の cache より
+            # 前に行い、後段の失敗から再開しても読み取り済みの図を読み直さない。
+            extraction = await self._attach_vision(
+                trace_id,
+                extraction,
+                source_bytes=parse_bytes,
+                content_type=parse_content_type,
+                file_name=(
+                    source_profile.sanitized_file_name if source_profile is not None else ""
+                ),
+                parser_backend=parser_result.parser_backend,
+                cancel_checker=cancel_checker,
+            )
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
@@ -559,7 +573,6 @@ class IngestionPipeline:
                 fallback_used=parser_result.fallback_used,
             )
             extraction = extraction.model_copy(update={"quality_report": quality_report})
-            extraction = await self._attach_asset_summaries(trace_id, extraction)
             extraction = await self._attach_extraction_fields(trace_id, extraction)
             extraction = await self._attach_navigation_tree(trace_id, extraction)
             checkpoint_segments = await self._mark_segments_succeeded(
@@ -998,6 +1011,9 @@ class IngestionPipeline:
                 manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
                 reuse_saved_chunks=True,
+                # 原本 bytes は読まないため、文書に記録済みの原本の hash とサイズを監査に使う。
+                source_sha256=detail.content_sha256,
+                source_size=detail.file_size_bytes,
             )
         except IngestionCancelledError as exc:
             record_ingestion("cancelled", 0)
@@ -1220,8 +1236,14 @@ class IngestionPipeline:
         manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         reuse_saved_chunks: bool,
+        source_sha256: str | None = None,
+        source_size: int | None = None,
     ) -> DocumentDetail:
-        """chunk を embedding し、Oracle index として検索可能にする。"""
+        """chunk を embedding し、Oracle index として検索可能にする。
+
+        ``source_sha256`` / ``source_size`` は、``source_bytes`` を持たない工程が成功の監査に
+        原本の hash とサイズを残すために渡す。
+        """
         await _raise_if_cancelled(cancel_checker)
         embed_inputs = self._chunk_embedding_inputs(chunks)
         vectors = await _observe_ingestion_stage(
@@ -1298,6 +1320,8 @@ class IngestionPipeline:
                 chunk_count=len(chunks),
                 vector_count=len(vectors),
                 elapsed_ms=elapsed_ms(started_at),
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
         return detail
 
@@ -1591,57 +1615,65 @@ class IngestionPipeline:
                 "再実行してください。"
             ) from exc
 
-    async def _attach_asset_summaries(
+    async def _attach_vision(
         self,
         trace_id: str,
         extraction: StructuredExtraction,
+        *,
+        source_bytes: bytes,
+        content_type: str,
+        file_name: str,
+        parser_backend: str,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
     ) -> StructuredExtraction:
-        """`rag_asset_summary_enabled` が真なら図・表・chart を要約して紐付ける。
+        """`rag_vision_enabled` が真なら、図・画像を既定の Vision モデルで読み取る(#497)。
 
-        object_path がある asset は Object Storage から画像を取得し OCI Enterprise AI VLM で、
-        画像がない asset は alt_text を OCI Enterprise AI LLM で要約する。既定 OFF。
+        Docling を含む全ての解析エンジンで同じ共通の段(``app.rag.vision``)を使う。1 件ごとの
+        失敗は要素の metadata と warning に残して取込を続ける。段の全体が失敗したときも元の
+        解析結果のまま続け、warning(``vision_failed``)とログを残す。取り消しは止める。
         """
-        if not getattr(self._settings, "rag_asset_summary_enabled", False):
+        if not self._settings.rag_vision_enabled:
             return extraction
-        if not extraction.assets:
-            return extraction
+        from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+        from docrag.parsing.vision_prompt_rules import refine_image_retrieval_prompt
 
-        async def _summarize(asset: ExtractionAsset) -> str | None:
-            prompt = (
-                "この図表の内容を日本語で1〜2文に要約してください。"
-                "読み取れない場合は空で返してください。"
-            )
-            if asset.object_path:
-                try:
-                    image_bytes = await self._object_storage.get(asset.object_path)
-                except Exception as exc:
-                    raise IngestionUserError(
-                        "図表要約に必要な画像 artifact を取得できませんでした。"
-                        "別経路には切り替えずに取込を停止しました。Object Storage の保存先、"
-                        "権限、artifact path を確認してから再実行してください。"
-                    ) from exc
-                if image_bytes:
-                    return await self._vlm.generate_from_image(image_bytes, prompt)
-            caption = (asset.alt_text or "").strip()
-            if not caption:
-                return None
-            return await self._vlm.generate(prompt, caption)
+        from app.clients.oci_enterprise_ai import config_from_settings
+        from app.rag.docrag_prompts import default_prompt
+
+        override = await self._image_retrieval_prompt()
+        template = refine_image_retrieval_prompt(
+            override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+        ).strip()
+        loop = asyncio.get_running_loop()
+        config = config_from_settings(self._settings)
+        describer = EnterpriseAiPictureDescriber(
+            self._vlm,
+            loop,
+            model_id=config.vision_model_id,
+            endpoint=config.oci_enterprise_ai_endpoint,
+            project_id=config.oci_enterprise_ai_project_ocid,
+        )
+
+        def cancel_check() -> None:
+            asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
 
         try:
-            return await summarize_assets(
+            return await asyncio.to_thread(
+                read_figures_with_vision,
                 extraction,
-                _summarize,
-                max_assets=getattr(self._settings, "rag_asset_summary_max_assets", 24),
+                source_bytes=source_bytes,
+                content_type=content_type,
+                file_name=file_name,
+                parser_backend=parser_backend,
+                describer=describer,
+                prompt_template=template,
+                cancel_check=cancel_check if cancel_checker is not None else None,
             )
-        except IngestionUserError:
+        except IngestionCancelledError:
             raise
-        except Exception as exc:
-            logger.warning("asset_summary_failed", extra={"trace_id": trace_id})
-            raise IngestionUserError(
-                "図表要約に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "図表要約設定、Object Storage、Enterprise AI の応答を確認してから"
-                "再実行してください。"
-            ) from exc
+        except Exception:
+            logger.warning("vision_failed", extra={"trace_id": trace_id}, exc_info=True)
+            return vision_failure(extraction, parser_backend)
 
     async def _attach_navigation_tree(
         self,

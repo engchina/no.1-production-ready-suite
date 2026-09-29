@@ -262,7 +262,6 @@ class _PersistedParserAdapterSettings(BaseModel):
     # 既定エンジンは Docling(#286)。選択中の engine の flag だけを既定で有効にする。
     adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
     docling_enabled: bool = True
-    docling_vision_enabled: bool = False
     unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
@@ -272,8 +271,9 @@ class _PersistedParserAdapterSettings(BaseModel):
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
     dots_ocr_api_key: str = Field(default="", max_length=4096)
 
-    # 削除済みエンジンの項目(marker_enabled 等)は既定の extra=ignore で読み捨て、
-    # adapter_backend に残っていれば既定エンジンへ寄せる(#270)。
+    # 削除済みエンジンの項目(marker_enabled 等)と、画面から外した docling_vision_enabled(#497。
+    # Vision の既定は env の RAG_VISION_ENABLED だけで決める)は既定の extra=ignore で読み捨てる。
+    # adapter_backend に削除済みエンジンが残っていれば既定エンジンへ寄せる(#270)。
     @field_validator("adapter_backend", mode="before")
     @classmethod
     def normalize_adapter_backend(cls, value: object) -> object:
@@ -755,19 +755,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=1,
         le=200,
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
-    )
-    rag_asset_summary_enabled: bool = Field(
-        default=False,
-        description=(
-            "取込時に図・表・chart を OCI Enterprise AI VLM/LLM で要約し、検索可能な figure "
-            "element として source chunk に紐付ける（Knowhere 由来。既定 OFF）。"
-        ),
-    )
-    rag_asset_summary_max_assets: int = Field(
-        default=24,
-        ge=1,
-        le=200,
-        description="asset 要約を生成する asset 数の上限（VLM/LLM 呼び出し回数の bound）。",
     )
     rag_field_extraction_enabled: bool = Field(
         default=False,
@@ -1282,11 +1269,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "取込時は parser-docling マイクロサービスの常時起動が前提。"
         ),
     )
-    rag_parser_docling_vision_enabled: bool = Field(
+    rag_vision_enabled: bool = Field(
         default=False,
         description=(
-            "Docling 解析で図・画像を含む表を Vision(openai SDK)で説明する。"
-            "画像 1 枚ごとに LLM 呼び出しと時間を消費する。"
+            "文書解析の後に図・画像を OCI Enterprise AI の VLM で読み取り、図の要素の本文を"
+            "説明文にする(全ての解析エンジン。Docling は解析サービスの中で読み取る)。"
+            "全体の既定は env だけで決め、文書のレシピで上書きする。画像 1 枚ごとに VLM を呼ぶ。"
         ),
     )
     rag_parser_unstructured_enabled: bool = Field(

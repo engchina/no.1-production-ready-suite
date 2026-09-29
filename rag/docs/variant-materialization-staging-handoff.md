@@ -22,7 +22,7 @@
 |---|---|---|
 | `variant_keys` | 層別 keying。`compute_extraction_recipe_id(source_sha256, settings)` / `compute_chunk_set_id(...)` / `compute_layer_ids(...)`。抽出 recipe → `er_*`、chunk 軸 → `cs_*`、派生層 → `gr_*`/`md_*`/`nv_*`。 | [variant_keys.py](../backend/app/rag/variant_keys.py) |
 | `variant_planner` | dedup/refcount/GC の計画。`plan_document_materializations(source, global_settings, kb_configs)` → `MaterializationPlan`(層 ID→参照 KB 群=refcount、chunk_set→extraction_recipe)。`diff_plan(existing_ids, plan)` → `to_create` / `to_collect`(GC)。 | [variant_planner.py](../backend/app/rag/variant_planner.py) |
-| KB 取込上書き | `_INGESTION_FIELD_MAP` に preprocess/parser/chunking(+params)/graph/field/asset/nav。`apply_adapter_config_or_global(scope="ingestion")` で effective 取込 settings を解決。 | [kb_adapter_config.py](../backend/app/rag/kb_adapter_config.py) |
+| KB 取込上書き | `_INGESTION_FIELD_MAP` に preprocess/parser/vision/chunking(+params)/graph/field/nav(図表 VLM 要約の asset は #497 で Vision に統合)。`apply_adapter_config_or_global(scope="ingestion")` で effective 取込 settings を解決。 | [kb_adapter_config.py](../backend/app/rag/kb_adapter_config.py) |
 | query per-field merge | **配線済み**(`compose_query_settings` + `resolve_business_view_settings(kb_query=…)`)。query 側はこの引き継ぎ範囲外。 | [search.py](../backend/app/api/routes/search.py) |
 
 ユニットテスト済み:`tests/test_variant_keys.py` / `tests/test_variant_planner.py` / `tests/test_kb_adapter_config.py`。

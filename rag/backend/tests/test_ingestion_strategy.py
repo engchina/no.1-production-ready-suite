@@ -17,6 +17,7 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.config import Settings
 from app.rag import ingestion as ingestion_module
+from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk
 from app.rag.graph_index import GraphIndex
 from app.rag.ingestion import (
@@ -1429,47 +1430,57 @@ def test_chunk_embedding_inputs_skip_context_header_when_disabled() -> None:
     assert pipeline._chunk_embedding_inputs([chunk]) == ["本文です。"]
 
 
+class _ResumeOracle(FakeOracle):
+    """保存済み Chunk(CHUNKED)から索引だけを行うレシピの工程用の fake。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.updated_chunks: list[Chunk] = []
+        self.recipe_rows["recipe-1"] = {"recipe_id": "recipe-1"}
+
+    async def get_document(self, document_id: str) -> DocumentDetail | None:
+        return DocumentDetail(
+            id=document_id,
+            file_name="製品マニュアル.pdf",
+            status=FileStatus.CHUNKED,
+            uploaded_at=datetime.now(UTC),
+            content_sha256="a" * 64,
+            file_size_bytes=2048,
+        )
+
+    async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
+        _ = chunk_set_id
+        return [
+            DocumentChunkView(
+                document_id="doc-1",
+                chunk_id="chunk-1",
+                chunk_index=0,
+                text="本文です。",
+                section_path="第1章 > 概要",
+                element_ids=["e1"],
+                metadata={"section_path": "第1章 > 概要"},
+            )
+        ]
+
+    async def update_chunk_set_embeddings(
+        self,
+        *,
+        chunk_set_id: str,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> None:
+        _ = chunk_set_id, embeddings
+        self.updated_chunks = chunks
+
+
+class _ResumePipeline(IngestionPipeline):
+    async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
+        _ = detail
+        return StructuredExtraction(raw_text="本文です。")
+
+
 async def test_index_chunked_rebuilds_context_header_without_document_lookup() -> None:
     """CHUNKED 再開時も既取得の detail と chunk metadata だけで検索入力を再構築する。"""
-
-    class ResumeOracle(FakeOracle):
-        def __init__(self) -> None:
-            super().__init__()
-            self.updated_chunks: list[Chunk] = []
-            self.recipe_rows["recipe-1"] = {"recipe_id": "recipe-1"}
-
-        async def get_document(self, document_id: str) -> DocumentDetail | None:
-            return DocumentDetail(
-                id=document_id,
-                file_name="製品マニュアル.pdf",
-                status=FileStatus.CHUNKED,
-                uploaded_at=datetime.now(UTC),
-                content_sha256="a" * 64,
-            )
-
-        async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
-            _ = chunk_set_id
-            return [
-                DocumentChunkView(
-                    document_id="doc-1",
-                    chunk_id="chunk-1",
-                    chunk_index=0,
-                    text="本文です。",
-                    section_path="第1章 > 概要",
-                    element_ids=["e1"],
-                    metadata={"section_path": "第1章 > 概要"},
-                )
-            ]
-
-        async def update_chunk_set_embeddings(
-            self,
-            *,
-            chunk_set_id: str,
-            chunks: list[Chunk],
-            embeddings: list[list[float]],
-        ) -> None:
-            _ = chunk_set_id, embeddings
-            self.updated_chunks = chunks
 
     class CapturingEmbeddingClient(FakeEmbeddingClient):
         def __init__(self) -> None:
@@ -1484,14 +1495,9 @@ async def test_index_chunked_rebuilds_context_header_without_document_lookup() -
             self.texts = texts
             return await super().embed(texts, input_type=input_type)
 
-    class ResumePipeline(IngestionPipeline):
-        async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
-            _ = detail
-            return StructuredExtraction(raw_text="本文です。")
-
-    oracle = ResumeOracle()
+    oracle = _ResumeOracle()
     embedding = CapturingEmbeddingClient()
-    pipeline = ResumePipeline(
+    pipeline = _ResumePipeline(
         vlm=cast(Any, object()),
         genai=embedding,
         oracle=cast(Any, oracle),
@@ -1509,3 +1515,46 @@ async def test_index_chunked_rebuilds_context_header_without_document_lookup() -
     expected = "製品マニュアル.pdf > 第1章 > 概要"
     assert embedding.texts == [f"{expected}\n本文です。"]
     assert oracle.updated_chunks[0].metadata["context_header"] == expected
+
+
+async def test_recipe_index_chunked_records_single_success_audit_with_document_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レシピの索引工程は成功の監査を 1 回だけ出し、原本は文書の hash / サイズで残す(#493)。
+
+    保存済み Chunk の索引は原本 bytes を読まないため、空 bytes の hash ではなく、文書に
+    記録済みの原本の hash とサイズを使う。本文(抽出テキスト)は監査に含めない。
+    """
+    events: list[dict[str, Any]] = []
+    metrics: list[tuple[str, int]] = []
+
+    def spy_audit(**kwargs: Any) -> object:
+        event = record_rag_ingestion_audit(**kwargs)
+        events.append(event.model_dump(mode="json"))
+        return event
+
+    monkeypatch.setattr(ingestion_module, "record_rag_ingestion_audit", spy_audit)
+    monkeypatch.setattr(
+        ingestion_module,
+        "record_ingestion",
+        lambda outcome, chunk_count: metrics.append((outcome, chunk_count)),
+    )
+    pipeline = _ResumePipeline(
+        vlm=cast(Any, object()),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, _ResumeOracle()),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(rag_graph_profile="off"),
+        recipe_id="recipe-1",
+        recipe_revision=1,
+    )
+
+    await pipeline.index_chunked("doc-1", chunk_set_id="chunk-set-1", record_outcome=True)
+
+    assert [event["outcome"] for event in events] == ["success"]
+    assert events[0]["source_sha256"] == "a" * 64
+    assert events[0]["source_bytes"] == 2048
+    assert events[0]["chunk_count"] == 1
+    assert events[0]["vector_count"] == 1
+    assert "本文です。" not in json.dumps(events[0], ensure_ascii=False)
+    assert metrics == [("success", 1)]

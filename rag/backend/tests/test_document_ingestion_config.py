@@ -42,6 +42,46 @@ def test_saved_recipe_with_removed_engine_inherits_global_default(removed: str) 
     assert effective.rag_parser_adapter_backend == get_settings().rag_parser_adapter_backend
 
 
+@pytest.mark.parametrize(
+    ("saved", "expected"),
+    [
+        ({"parser_docling_vision_enabled": True}, True),
+        ({"parser_docling_vision_enabled": False, "asset_summary_enabled": True}, False),
+        ({"parser_docling_vision_enabled": None, "asset_summary_enabled": True}, True),
+        ({"asset_summary_enabled": False}, False),
+        ({"vision_enabled": False, "parser_docling_vision_enabled": True}, False),
+        ({"parser_docling_vision_enabled": None, "asset_summary_enabled": None}, None),
+    ],
+    ids=["docling", "docling_first", "asset_when_unset", "asset_off", "new_key_wins", "all_null"],
+)
+def test_saved_recipe_legacy_vision_keys_move_to_vision_enabled(
+    saved: dict[str, object], expected: bool | None
+) -> None:
+    """保存済みレシピの旧 key(Docling の Vision・図表 VLM 要約)は vision_enabled へ移す(#497)。
+
+    文書レシピは extra="forbid" だが、旧 key は検証前に移して捨てる。次に保存すると消える。
+    """
+    config = DocumentProcessingConfig.model_validate({**saved, "chunk_size": 900})
+
+    assert config.vision_enabled is expected
+    assert config.chunk_size == 900
+    dumped = config.model_dump_json()
+    assert "parser_docling_vision_enabled" not in dumped
+    assert "asset_summary_enabled" not in dumped
+    effective, _ = documents_route._merge_document_processing_config(config)
+    assert effective.rag_vision_enabled is (
+        expected if expected is not None else get_settings().rag_vision_enabled
+    )
+
+
+def test_recipe_vision_change_is_parser_output_drift() -> None:
+    """Vision の変更は解析結果(図の要素の本文)を変えるので、解析の出力の差分に入る。"""
+    groups = documents_route.DOCUMENT_PROCESSING_OUTPUT_GROUPS
+    assert "vision_enabled" in groups["parser_adapter_backend"]
+    assert "asset_summary_enabled" not in groups
+    assert all("asset_summary_enabled" not in fields for fields in groups.values())
+
+
 @pytest.fixture()
 def _isolated_field_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.rag import extraction_field_adapter as fields_mod
@@ -49,19 +89,14 @@ def _isolated_field_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "extraction-fields.json"))
 
 
-def _metadata_state(
-    extraction: Mapping[str, object], *, field: bool, asset: bool
-) -> tuple[str, str]:
+def _metadata_state(extraction: Mapping[str, object], *, field: bool) -> tuple[str, str]:
     from app.config import Settings
     from app.schemas.document import DocumentLayerStatusName
 
     status, reason = documents_route._metadata_layer_state(
         "項目抽出",
         extraction,
-        Settings.model_construct(
-            rag_field_extraction_enabled=field,
-            rag_asset_summary_enabled=asset,
-        ),
+        Settings.model_construct(rag_field_extraction_enabled=field),
     )
     assert isinstance(status, DocumentLayerStatusName)
     return status.value, reason
@@ -70,29 +105,22 @@ def _metadata_state(
 @pytest.mark.usefixtures("_isolated_field_schema")
 def test_metadata_layer_planned_only_with_empty_field_schema() -> None:
     """項目抽出 有効 + スキーマ未設定は planned_only になり理由で案内する。"""
-    status, reason = _metadata_state({}, field=True, asset=False)
+    status, reason = _metadata_state({}, field=True)
     assert status == "planned_only"
     assert "項目定義" in reason
 
 
 @pytest.mark.usefixtures("_isolated_field_schema")
-def test_metadata_layer_materialized_with_asset_summary_only() -> None:
-    """図表要約のみ有効で summary 付き asset があれば materialized。"""
-    extraction = {"assets": [{"asset_id": "a1", "summary": "図の説明"}]}
-    status, _reason = _metadata_state(extraction, field=False, asset=True)
-    assert status == "materialized"
-
-
-@pytest.mark.usefixtures("_isolated_field_schema")
-def test_metadata_layer_not_conflated_when_fields_missing() -> None:
-    """両方有効で assets だけ成果がある場合は materialized と誤報しない。"""
+def test_metadata_layer_ignores_asset_summaries() -> None:
+    """図の要約(Vision の解析結果。#497)は派生情報のレイヤーの成果物として数えない。"""
     from app.rag import extraction_field_adapter as fields_mod
 
     fields_mod.save_field_schema([fields_mod.FieldDefinition(name="請求書番号")])
     extraction = {"assets": [{"asset_id": "a1", "summary": "図の説明"}]}
-    status, reason = _metadata_state(extraction, field=True, asset=True)
+    status, reason = _metadata_state(extraction, field=True)
     assert status == "planned_only"
     assert "項目抽出" in reason
+    assert "has_asset_summary" not in documents_route._layer_metrics("metadata", extraction)
 
 
 @pytest.mark.usefixtures("_isolated_field_schema")
@@ -102,5 +130,5 @@ def test_metadata_layer_materialized_with_fields_only() -> None:
 
     fields_mod.save_field_schema([fields_mod.FieldDefinition(name="請求書番号")])
     extraction = {"fields": [{"name": "請求書番号", "value": "INV-1"}]}
-    status, _reason = _metadata_state(extraction, field=True, asset=False)
+    status, _reason = _metadata_state(extraction, field=True)
     assert status == "materialized"

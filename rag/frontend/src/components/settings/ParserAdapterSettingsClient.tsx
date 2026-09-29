@@ -10,7 +10,6 @@ import {
   Button,
   FormStatus,
   ProcessingIndicator,
-  Switch,
   TimedLoadingState,
   FormSkeleton,
   TextField,
@@ -64,7 +63,6 @@ import { DocragPromptCard } from "./DocragPromptEditor";
 type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
   docling_enabled: boolean;
-  docling_vision_enabled: boolean;
   unstructured_enabled: boolean;
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
@@ -78,7 +76,7 @@ type ExternalParserConnectionForm = {
 };
 type ParserAdapterFlagField = Exclude<
   keyof ParserAdapterForm,
-  "adapter_backend" | "connections" | "docling_vision_enabled"
+  "adapter_backend" | "connections"
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
@@ -247,14 +245,12 @@ export function ParserAdapterSettingsClient() {
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
-        onVisionChange={(checked) => updateForm({ docling_vision_enabled: checked })}
         onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
       />
-      {settings.adapter_backend === "docling" && settings.docling_vision_enabled ? (
-        <DocragPromptCard promptKey="image_retrieval" />
-      ) : null}
+      {/* Vision の有効/無効は文書のレシピで選ぶ(#497)。読み取りの指示は全体で 1 つなので常に出す。 */}
+      <DocragPromptCard promptKey="image_retrieval" />
     </PageBody>
   );
 }
@@ -268,7 +264,6 @@ function OverviewCard({
   errorMessage,
   connectionErrors,
   onBackendChange,
-  onVisionChange,
   onConnectionChange,
   onReset,
   onSubmit,
@@ -281,7 +276,6 @@ function OverviewCard({
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
-  onVisionChange: (checked: boolean) => void;
   onConnectionChange: (
     backend: ExternalParserBackendName,
     update: Partial<ExternalParserConnectionForm>
@@ -459,24 +453,6 @@ function OverviewCard({
               </div>
             ))}
           </div>
-          {form.adapter_backend === "docling" ? (
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-fg">
-                  {t("settings.parserAdapters.doclingVision.label")}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                  {t("settings.parserAdapters.doclingVision.hint")}
-                </p>
-              </div>
-              <Switch
-                checked={form.docling_vision_enabled}
-                disabled={saving}
-                aria-label={t("settings.parserAdapters.doclingVision.label")}
-                onCheckedChange={onVisionChange}
-              />
-            </div>
-          ) : null}
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}
@@ -827,7 +803,6 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
   return {
     adapter_backend: normalizeBackend(settings.adapter_backend),
     docling_enabled: enabledByBackend.get("docling") ?? false,
-    docling_vision_enabled: settings.docling_vision_enabled ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
@@ -874,7 +849,6 @@ function serializeForm(form: ParserAdapterForm) {
   return JSON.stringify({
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
-    docling_vision_enabled: form.docling_vision_enabled,
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
@@ -886,7 +860,6 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
   return {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
-    docling_vision_enabled: form.docling_vision_enabled,
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,

@@ -114,8 +114,6 @@ class ParserServiceClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._timeout = float(settings.rag_parser_service_timeout_seconds)
-        # 画面で編集した画像検索のプロンプト(未編集は None)。取込の開始時に設定する。
-        self.image_retrieval_prompt: str | None = None
         self._retry = retry_config_from_settings(settings)
         self._external = ExternalParserClient(settings)
 
@@ -128,17 +126,6 @@ class ParserServiceClient:
 
         url = resolve_service_base_url(self._settings, field)
         return url or None
-
-    def _parser_options(self, backend: str) -> dict[str, object]:
-        """backend 固有のレシピ設定を parser サービスへ渡す(現状 docling の Vision のみ)。"""
-        if backend == "docling":
-            options: dict[str, object] = {
-                "vision_enabled": bool(self._settings.rag_parser_docling_vision_enabled)
-            }
-            if self.image_retrieval_prompt:
-                options["image_retrieval_prompt"] = self.image_retrieval_prompt
-            return options
-        return {}
 
     def runner(
         self,
@@ -194,7 +181,6 @@ class ParserServiceClient:
             "source_profile": (
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
-            "parser_options": json.dumps(self._parser_options(backend)),
         }
         try:
             payload = self._post_parse_json(backend, url, files=files, data=data)

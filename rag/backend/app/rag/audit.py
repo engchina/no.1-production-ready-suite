@@ -211,8 +211,14 @@ def record_rag_ingestion_audit(
     chunk_count: int = 0,
     vector_count: int = 0,
     error: Exception | None = None,
+    source_sha256: str | None = None,
+    source_size: int | None = None,
 ) -> RagIngestionAuditEvent:
-    """RAG 取込の監査イベントを構造化ログへ出す。"""
+    """RAG 取込の監査イベントを構造化ログへ出す。
+
+    原本 bytes を持たない後段の工程(保存済み Chunk の索引など)は、文書に記録済みの原本の
+    hash とサイズを ``source_sha256`` / ``source_size`` で渡す(空 bytes の hash を残さない)。
+    """
     request_context = current_audit_request_context()
     event = RagIngestionAuditEvent(
         trace_id=trace_id,
@@ -221,8 +227,10 @@ def record_rag_ingestion_audit(
         user_id_hash=request_context.user_id_hash,
         document_id=document_id,
         outcome=outcome,
-        source_sha256=_query_hash_bytes(source_bytes),
-        source_bytes=len(source_bytes),
+        source_sha256=(
+            source_sha256 if source_sha256 is not None else _query_hash_bytes(source_bytes)
+        ),
+        source_bytes=source_size if source_size is not None else len(source_bytes),
         document_type=document_type,
         extraction_confidence=extraction_confidence,
         parser_backend=parser_backend,

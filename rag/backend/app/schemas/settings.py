@@ -360,7 +360,6 @@ class ParserAdapterSettingsData(BaseModel):
     adapter_backend: ParserAdapterBackend
     effective_order: list[ParserAdapterBackendName]
     adapters: list[ParserAdapterStatusData]
-    docling_vision_enabled: bool = False
     connections: list[ExternalParserConnectionData] = Field(default_factory=list)
     service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
     scorecard: ParserAdapterScorecardData
@@ -375,7 +374,6 @@ class ParserAdapterSettingsUpdate(BaseModel):
 
     adapter_backend: ParserAdapterBackend
     docling_enabled: bool | None = None
-    docling_vision_enabled: bool | None = None
     unstructured_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None

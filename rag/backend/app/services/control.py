@@ -50,8 +50,9 @@ ServiceLogsSource = Literal["journald"]
 ServiceFailureReason = Literal["unit_not_found", "permission_denied", "unavailable", "failed"]
 
 # サービス実行用の env ファイルに書く key(値は backend の実効設定)。
-# HF_TOKEN / HF_ENDPOINT は huggingface_hub が読む標準名。OCI_ENTERPRISE_AI_* は docling の
-# DocRAG Vision 図説明が読む名前、PLATFORM_OCI_ENTERPRISE_AI_* は OCI parser が読む名前。
+# HF_TOKEN / HF_ENDPOINT は huggingface_hub が読む標準名。PLATFORM_OCI_ENTERPRISE_AI_* は
+# OCI parser が読む名前。docling の Vision が読んでいた接頭辞なしの OCI_ENTERPRISE_AI_* は、
+# Vision を backend の解析後の共通の段へ移した(#497)ため渡さない(docling は LLM を呼ばない)。
 SERVICE_RUNTIME_ENV_KEYS = (
     "HF_TOKEN",
     "HF_ENDPOINT",
@@ -63,11 +64,6 @@ SERVICE_RUNTIME_ENV_KEYS = (
     "PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH",
     "PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH",
     "PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE",
-    "OCI_ENTERPRISE_AI_ENDPOINT",
-    "OCI_ENTERPRISE_AI_API_KEY",
-    "OCI_ENTERPRISE_AI_PROJECT_OCID",
-    "OCI_ENTERPRISE_AI_VLM_MODEL",
-    "OCI_ENTERPRISE_AI_DEFAULT_MODEL",
 )
 _RUNTIME_ENV_FILE_MODE = 0o600
 _ACTION_LABELS: dict[ServiceAction, str] = {
@@ -152,10 +148,10 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     """マイクロサービスの unit に渡す実行用の環境変数(backend の実効設定)。
 
     HuggingFace 設定(``RAG_HUGGINGFACE_*``)を ``HF_TOKEN`` / ``HF_ENDPOINT`` として渡す。
-    OCI parser(parser-oci-genai-vision 等)と docling の Vision 図説明はモデル設定 JSON を読まず
-    env からのみ OCI 設定を読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を
-    渡す。これで「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回
-    だけ env を読むため再起動が必要)。
+    OCI parser(parser-oci-genai-vision 等)はモデル設定 JSON を読まず env からのみ OCI 設定を
+    読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を渡す。これで
+    「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を
+    読むため再起動が必要)。
     """
     endpoint = settings.oci_enterprise_ai_endpoint
     api_key = settings.oci_enterprise_ai_api_key
@@ -175,11 +171,6 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
         "PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH": settings.oci_enterprise_ai_vlm_path,
         "PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH": settings.oci_enterprise_ai_llm_path,
         "PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE": str(settings.oci_enterprise_ai_vlm_input_mode),
-        "OCI_ENTERPRISE_AI_ENDPOINT": endpoint,
-        "OCI_ENTERPRISE_AI_API_KEY": api_key,
-        "OCI_ENTERPRISE_AI_PROJECT_OCID": project,
-        "OCI_ENTERPRISE_AI_VLM_MODEL": vlm_model,
-        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": default_model,
     }
 
 

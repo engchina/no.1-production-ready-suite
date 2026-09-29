@@ -962,7 +962,6 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
     return ParserAdapterSettingsData(
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
-        docling_vision_enabled=settings.rag_parser_docling_vision_enabled,
         service_backends=_parser_service_backends_data(settings),
         adapters=[
             ParserAdapterStatusData(
@@ -1085,10 +1084,6 @@ def _parser_adapter_settings_candidate(
         "rag_parser_docling_enabled": _optional_bool(
             payload.docling_enabled,
             base.rag_parser_docling_enabled,
-        ),
-        "rag_parser_docling_vision_enabled": _optional_bool(
-            payload.docling_vision_enabled,
-            base.rag_parser_docling_vision_enabled,
         ),
         "rag_parser_unstructured_enabled": _optional_bool(
             payload.unstructured_enabled,

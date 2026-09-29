@@ -353,6 +353,28 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. migration の前でも画面は動く。レシピ行の無い文書は、一覧・詳細でレシピ1を仮の行として返し、最初の書き込み
    （設定の保存・処理の開始など）で行を作る。
 
+## 既存環境の更新手順（#497 図・画像の読み取り（Vision）の統合）
+
+「図・画像を AI で読み取る（Vision）」を解析エンジンに依存しない設定にし、「図表 VLM 要約」を削除した。
+Vision は Docling を含む全ての解析エンジンで、解析の後に backend の共通の段（`app/rag/vision.py`）がモデル設定の
+既定の Vision モデルで読み取る。docling サービスは Vision を行わない（LLM を呼ばない）。データの移行（migration）は不要。
+
+1. 全体の既定を `backend/.env` の `RAG_VISION_ENABLED` へ移す。旧名は読まない（#211 と同じく互換を持たない）。
+   - `RAG_PARSER_DOCLING_VISION_ENABLED=true` だった環境は `RAG_VISION_ENABLED=true` にする。
+   - `RAG_ASSET_SUMMARY_ENABLED` / `RAG_ASSET_SUMMARY_MAX_ASSETS` は削除する（図表 VLM 要約は Vision に統合した。
+     読み取る画像の件数の上限は設けない）。
+   - 旧名が残っていても読まないので害はない。
+2. 「検索・回答設定 › 文書解析」の Vision のスイッチは削除した。`model-settings.json` の
+   `parser_adapters.docling_vision_enabled` は読まない（残っていても読み込みは失敗せず、次に保存すると消える）。
+   画面のスイッチで有効にしていた環境は、手順 1 の `RAG_VISION_ENABLED=true` にするか、文書のレシピで Vision を有効にする。
+3. 保存済みの文書レシピ・KB 構築設定は読み込み時に移す。`parser_docling_vision_enabled` は `vision_enabled` に、
+   `asset_summary_enabled` は `vision_enabled` が未設定のときだけ `vision_enabled` にする。次に保存すると旧 key は消える。
+4. `extraction_recipe_id` の key に Vision（`rag_vision_enabled`）を全ての解析エンジンで入れ、図表 VLM 要約を派生情報の
+   レイヤーの key から外したため、layer の ID の版（`variant_keys.KEY_VERSION`）を `v5` に上げた。既存の配信中の chunk は
+   そのまま検索対象に残る。Vision を有効にして読み取り直すには、その文書を再解析する。
+5. docling サービスへ渡していた接頭辞なしの `OCI_ENTERPRISE_AI_*`（Vision 用）はサービス実行用の env ファイルに書かなくなった。
+   backend を更新した後、サービス管理画面で docling サービスを再起動すると反映される（残っていても使わない）。
+
 ## 既存環境の更新手順（#270 文書解析エンジン Marker・Unlimited-OCR・GLM-OCR の削除）
 
 文書解析エンジンの Marker（CPU）・Unlimited-OCR（GPU の外部 API）・GLM-OCR（GPU の外部 API）への対応を削除した。

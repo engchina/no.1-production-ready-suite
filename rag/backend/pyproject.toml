@@ -26,7 +26,8 @@ dependencies = [
     "rag-pipeline-core",
     # rag_poc(DocRAG)由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
     # 日本語分割(Sudachi)と FAQ の Excel 取込を使う。docling/torch は入れない。
-    "docrag-core[japanese,excel]",
+    # pdf(pypdfium2 / Pillow)は解析後の Vision(図の切り出し・表内画像の検出。#497)で使う。
+    "docrag-core[japanese,excel,pdf]",
     "production-ready-backend-core",
     "production-ready-system-settings-backend",
 ]

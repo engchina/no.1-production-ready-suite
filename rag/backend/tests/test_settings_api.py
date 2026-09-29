@@ -262,6 +262,33 @@ def test_update_parser_adapter_settings_rejects_legacy_auto_without_mutating_run
     assert settings.rag_parser_unstructured_enabled is False
 
 
+def test_parser_adapter_settings_no_longer_handle_docling_vision(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """文書解析の画面から Vision のスイッチを削除した(#497)。API も受け取らず返さない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
+    monkeypatch.setattr(settings, "rag_vision_enabled", False)
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={"adapter_backend": "docling", "docling_vision_enabled": True},
+    )
+
+    assert resp.status_code == 200
+    assert "docling_vision_enabled" not in resp.json()["data"]
+    assert settings.rag_vision_enabled is False
+    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
+    assert "docling_vision_enabled" not in persisted["parser_adapters"]
+    assert (
+        "docling_vision_enabled" not in client.get("/api/settings/parser-adapters").json()["data"]
+    )
+
+
 def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
 ) -> None:

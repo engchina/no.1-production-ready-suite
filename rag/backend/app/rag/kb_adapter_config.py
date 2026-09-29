@@ -68,10 +68,11 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "preprocess_profile": "rag_preprocess_profile",
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
-    "parser_docling_vision_enabled": "rag_parser_docling_vision_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
+    # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
+    "vision_enabled": "rag_vision_enabled",
     "chunking_strategy": "rag_chunking_strategy",
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
@@ -86,7 +87,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
     "field_extraction_enabled": "rag_field_extraction_enabled",
-    "asset_summary_enabled": "rag_asset_summary_enabled",
     "navigation_summary_enabled": "rag_navigation_summary_enabled",
     "auto_parse_after_preprocess_enabled": "rag_auto_parse_after_preprocess_enabled",
     "auto_chunk_after_extract_enabled": "rag_auto_chunk_after_extract_enabled",
@@ -130,6 +130,24 @@ class KbAdapterConfigError(ValueError):
 _REMOVED_PARSER_FLAG_FIELDS = frozenset(
     f"parser_{backend}_enabled" for backend in REMOVED_PARSER_ADAPTER_BACKENDS
 )
+# Vision を解析エンジンに依存しない ``vision_enabled`` へ統合した(#497)ときの旧 key。
+# 読み込むときに ``vision_enabled`` へ移す。優先は新しい key の明示値 > Docling の Vision >
+# 図表 VLM 要約。
+_LEGACY_VISION_FIELDS: tuple[str, ...] = ("parser_docling_vision_enabled", "asset_summary_enabled")
+
+
+def _migrate_legacy_vision_fields(data: dict[object, object]) -> dict[object, object]:
+    """旧 key(Docling の Vision・図表 VLM 要約)を ``vision_enabled`` へ移し、旧 key は捨てる。"""
+    if not any(key in data for key in _LEGACY_VISION_FIELDS):
+        return data
+    migrated = {key: value for key, value in data.items() if key not in _LEGACY_VISION_FIELDS}
+    if migrated.get("vision_enabled") is None:
+        for key in _LEGACY_VISION_FIELDS:
+            value = data.get(key)
+            if value is not None:
+                migrated["vision_enabled"] = value
+                break
+    return migrated
 
 
 class KnowledgeBaseIngestionConfig(BaseModel):
@@ -146,12 +164,15 @@ class KnowledgeBaseIngestionConfig(BaseModel):
         ``settings_overrides`` に JSON で残る。読み込みは全てこのモデルの検証を通るため、ここで
         正規化すれば取込・画面の両方が壊れず、次回保存時に旧値は消える。文書レシピの
         ``DocumentProcessingConfig`` は ``extra="forbid"`` なので、旧フラグも検証前に取り除く。
+        Vision の旧 key(#497)も同じ理由でここで ``vision_enabled`` へ移す。
         Oracle 上の JSON を書き換える migration は持たない(値の置換だけで済み、再保存で消えるため)。
         """
         if not isinstance(data, dict):
             return data
         cleaned = {
-            key: value for key, value in data.items() if key not in _REMOVED_PARSER_FLAG_FIELDS
+            key: value
+            for key, value in _migrate_legacy_vision_fields(data).items()
+            if key not in _REMOVED_PARSER_FLAG_FIELDS
         }
         backend = cleaned.get("parser_adapter_backend")
         if (
@@ -164,10 +185,10 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     preprocess_profile: PreprocessProfile | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
-    parser_docling_vision_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None
     parser_mineru_enabled: bool | None = None
     parser_dots_ocr_enabled: bool | None = None
+    vision_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
     chunk_size: int | None = Field(
         default=None,
@@ -196,7 +217,6 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None
     field_extraction_enabled: bool | None = None
-    asset_summary_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
     auto_parse_after_preprocess_enabled: bool | None = None
     auto_chunk_after_extract_enabled: bool | None = None

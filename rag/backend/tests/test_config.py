@@ -503,6 +503,39 @@ def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str)
     assert not [key for key in dumped if removed in key]
 
 
+def test_saved_parser_settings_ignore_stale_docling_vision_flag() -> None:
+    """model-settings.json に残った docling_vision_enabled(#497 で画面から削除)は読まない。
+
+    Vision の全体の既定は env の RAG_VISION_ENABLED だけで決める。読み込みは失敗せず、
+    次に保存すると消える。
+    """
+    settings = Settings(_env_file=None, rag_vision_enabled=False)
+    config_module._load_parser_adapters(
+        settings,
+        {"adapter_backend": "docling", "docling_enabled": True, "docling_vision_enabled": True},
+        3,
+    )
+
+    assert settings.rag_parser_adapter_backend == "docling"
+    assert settings.rag_vision_enabled is False
+    assert not hasattr(settings, "rag_parser_docling_vision_enabled")
+    assert "docling_vision_enabled" not in config_module._dump_parser_adapters(settings)
+
+
+def test_vision_setting_reads_only_the_new_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Vision は RAG_VISION_ENABLED で有効にする。旧 env(#497 で削除)は読まない。"""
+    monkeypatch.setenv("RAG_PARSER_DOCLING_VISION_ENABLED", "true")
+    monkeypatch.setenv("RAG_ASSET_SUMMARY_ENABLED", "true")
+    monkeypatch.delenv("RAG_VISION_ENABLED", raising=False)
+    assert Settings(_env_file=None).rag_vision_enabled is False
+
+    monkeypatch.setenv("RAG_VISION_ENABLED", "true")
+    settings = Settings(_env_file=None)
+    assert settings.rag_vision_enabled is True
+    assert "rag_asset_summary_enabled" not in Settings.model_fields
+    assert "rag_asset_summary_max_assets" not in Settings.model_fields
+
+
 def test_saved_parser_settings_without_backend_load_as_docling() -> None:
     """保存済み parser 節に backend が無い / 旧 auto なら既定 Docling で読む(#286)。"""
     settings = Settings(

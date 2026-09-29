@@ -25,7 +25,7 @@ const adapterConfig = {
     chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
-    asset_summary_enabled: null,
+    vision_enabled: null,
     navigation_summary_enabled: null,
     auto_parse_after_preprocess_enabled: null,
     auto_chunk_after_extract_enabled: null,

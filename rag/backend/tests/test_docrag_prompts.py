@@ -146,16 +146,23 @@ async def test_docrag_answer_uses_saved_answer_template(
     assert read_prompt(VLM_ANSWER_PROMPT_KEY) == default_prompt(VLM_ANSWER_PROMPT_KEY)
 
 
-def test_parser_options_send_saved_image_retrieval_prompt() -> None:
-    parser = ParserServiceClient(Settings(rag_parser_docling_vision_enabled=True))
+def test_parser_service_does_not_send_vision_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Vision は backend の解析後の共通の段で行う(#497)。Docling サービスへ指定を送らない。"""
+    sent: dict[str, Any] = {}
 
-    assert parser._parser_options("docling") == {"vision_enabled": True}
-    parser.image_retrieval_prompt = "独自 {{image_metadata}}"
-    assert parser._parser_options("docling") == {
-        "vision_enabled": True,
-        "image_retrieval_prompt": "独自 {{image_metadata}}",
-    }
-    assert parser._parser_options("unstructured") == {}
+    def fake_post(self: Any, backend: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        sent.update(kwargs["data"])
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(ParserServiceClient, "_post_parse_json", fake_post)
+    parser = ParserServiceClient(Settings(rag_vision_enabled=True))
+    monkeypatch.setattr(parser, "service_url", lambda backend: "http://parser.test")
+
+    with pytest.raises(RuntimeError, match="stop"):
+        parser.runner("docling", b"%PDF-1.4", None, "application/pdf")
+
+    assert "parser_options" not in sent
+    assert not hasattr(parser, "image_retrieval_prompt")
 
 
 async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

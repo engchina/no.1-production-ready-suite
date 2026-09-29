@@ -113,7 +113,7 @@ function buildGraph(config: KnowledgeBaseAdapterConfig): { nodes: Node[]; edges:
       value: ing.graph_profile ?? undefined,
     },
     { id: "field", key: "settings.pipelineCanvas.stage.field", on: Boolean(ing.field_extraction_enabled) },
-    { id: "asset", key: "settings.pipelineCanvas.stage.asset", on: Boolean(ing.asset_summary_enabled) },
+    { id: "vision", key: "settings.pipelineCanvas.stage.vision", on: Boolean(ing.vision_enabled) },
     {
       id: "navigation",
       key: "settings.pipelineCanvas.stage.navigation",
