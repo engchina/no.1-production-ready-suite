@@ -425,7 +425,9 @@ export function SqlToQuestionPage() {
                   required
                   aria-required="true"
                   className="min-h-56 min-w-0 resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
-                  disabled={actionBusy}
+                  // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
+                  // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
+                  disabled={actionBusy || !selectedProfileId}
                 />
               </div>
 

@@ -8538,6 +8538,26 @@ test("sql to question page uses shared tabs, panel styling and a step indicator"
   await expectNoHorizontalScroll(page);
 });
 
+test("sql to question keeps the SQL typed while business profiles are loading (#455)", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    await gate;
+    await route.fallback();
+  });
+  await page.goto("/sql-to-question");
+  const input = sqlToQuestionInput(page);
+  await expect(input).toBeVisible();
+  // 業務プロファイルが決まるまでは入力させない（決まった時点で下書きのキーが変わり、入力が消えるため）。
+  await expect(input).toBeDisabled();
+  release();
+  await expect(input).toBeEnabled();
+  await input.fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await expect(page.getByRole("button", { name: "SQL 分析・質問生成", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
+});
+
 test("sql to question page shows a reserved loading state and retries reference-data errors", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.unroute("**/api/schema/objects?*");
