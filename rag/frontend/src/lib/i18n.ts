@@ -2417,6 +2417,7 @@ export const ja = {
   "search.mode.keyword": "キーワード",
   "search.filters.title": "検索条件",
   "search.filters.advanced": "詳細条件",
+  "search.filters.active": "設定中",
   "search.filters.contentKind": "内容種別",
   "search.filters.contentKind.all": "すべて",
   "search.filters.contentKind.text": "本文",
