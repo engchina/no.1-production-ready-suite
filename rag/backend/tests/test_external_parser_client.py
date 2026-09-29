@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from collections.abc import Callable
@@ -9,10 +10,13 @@ from collections.abc import Callable
 import fitz  # type: ignore[import-untyped]
 import httpx
 import pytest
+from PIL import Image
 
 from app.clients.external_parser import (
     ExternalParserCallError,
     ExternalParserClient,
+    _dots_bboxes_to_page_px,
+    _dots_model_input_size,
     _RenderedPage,
 )
 from app.config import Settings
@@ -315,3 +319,79 @@ def test_api_key_is_not_exposed_in_error_or_logs(
 
     assert secret not in str(exc_info.value)
     assert secret not in caplog.text
+
+
+# dots.ocr の smart_resize(公式の dots_ocr/utils/image_utils.py)で計算した、モデルへ入る画像の寸法。
+# A4 を 200 dpi で描いた寸法は丸めで数 px、max_pixels(11289600)を超える寸法は縮小される(#502)。
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        ((1653, 2339), (1652, 2352)),
+        ((1200, 800), (1204, 812)),
+        ((3306, 4678), (2800, 3976)),
+        ((10, 10), (56, 56)),
+    ],
+    ids=["a4_200dpi", "image_1200x800", "a4_400dpi_over_max_pixels", "under_min_pixels"],
+)
+def test_dots_model_input_size_matches_official_smart_resize(
+    size: tuple[int, int], expected: tuple[int, int]
+) -> None:
+    assert _dots_model_input_size(*size) == expected
+
+
+def test_dots_bbox_is_mapped_from_model_input_to_rendered_page_pixels() -> None:
+    """dots.ocr の bbox(smart_resize した入力画像の px)を、描いたページ画像の px へ戻す。"""
+    page = _RenderedPage(1, b"", 3306, 4678)
+    # 図の実際の位置 [556, 1111, 2556, 2445](ページ画像の px)をモデルの入力の寸法で表した値。
+    elements: list[dict[str, object]] = [{"bbox": [471, 945, 2165, 2078], "category": "Picture"}]
+
+    mapped = _dots_bboxes_to_page_px(elements, page)
+
+    bbox = mapped[0]["bbox"]
+    assert isinstance(bbox, list)
+    assert [round(value) for value in bbox] == [556, 1112, 2556, 2445]
+
+
+def test_dots_bbox_is_not_mapped_without_page_size() -> None:
+    elements: list[dict[str, object]] = [{"bbox": [1, 2, 30, 20], "category": "Text"}]
+
+    assert _dots_bboxes_to_page_px(elements, _RenderedPage(1, b"png", 0, 0)) == [
+        {"bbox": [1, 2, 30, 20], "category": "Text"}
+    ]
+
+
+def test_dots_image_file_bbox_and_page_size_use_original_image_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """画像ファイルは元画像の寸法をページの寸法にし、bbox を元画像の px へ戻す(#502)。"""
+    buffer = io.BytesIO()
+    Image.new("RGB", (1200, 800), "white").save(buffer, format="PNG")
+    layout = [{"bbox": [100, 101, 1104, 710], "category": "Picture"}]
+    _install_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(layout)}}]
+            },
+        ),
+    )
+
+    result = ExternalParserClient(
+        Settings(
+            rag_parser_dots_ocr_api_host="https://dots.example.com/v1/",
+            rag_parser_dots_ocr_model="dots-model",
+        )
+    ).parse(
+        "dots_ocr",
+        buffer.getvalue(),
+        _profile("screen.png", content_type="image/png"),
+        "image/png",
+    )
+
+    assert result.extraction is not None
+    page = result.extraction.pages[0]
+    assert (page.width, page.height) == (1200.0, 800.0)
+    asset = result.extraction.assets[0]
+    assert asset.bbox is not None
+    assert [round(value) for value in asset.bbox] == [100, 100, 1100, 700]

@@ -97,12 +97,18 @@ Docling 以外の解析エンジンの bbox は単位が違うため、Vision �
 
 | 解析エンジン | bbox の単位 | 根拠 |
 |---|---|---|
-| Docling | サービスが描いたページ画像の px（`DOCRAG_RENDER_DPI`） | `docrag_layout.pages` の寸法から同じ解像度で描き直す |
-| Unstructured | coordinates の座標系（PixelSpace 等）の px | registry が `layout_width` / `layout_height` を要素と asset の `page_width` / `page_height` に写す。無ければ不明 |
-| Dots.OCR | 描いたページ画像の px（`RAG_PARSER_DOTS_OCR_DPI`） | `pages` の寸法。画像ファイルは元画像の px |
-| MinerU | 0-1000 に正規化した座標 | MinerU 2.x の content_list の仕様（実サービスでは未確認）。1000 を超えれば不明 |
+| Docling | サービスが描いたページ画像の px（`DOCRAG_RENDER_DPI`） | `docrag_layout.pages` の寸法から同じ解像度で描き直す。実サービス（docling 2.129.0）で確認済み（A4 の PDF は 2480x3509、画像は元画像の px）。#502 |
+| Unstructured | coordinates の座標系（PixelSpace 等）の px | registry が `layout_width` / `layout_height` を要素と asset の `page_width` / `page_height` に写す。無ければ不明。実サービス（unstructured 0.27.8、hi_res）で確認済み（PDF は PixelSpace で 350 dpi 相当のページ画像の px。A4 で 2893x4094。画像は元画像の px）。#502 |
+| Dots.OCR | 描いたページ画像の px（`RAG_PARSER_DOTS_OCR_DPI`） | `pages` の寸法。画像ファイルは元画像の px（寸法を `pages` に入れる）。モデルが返す bbox は、入力画像を smart_resize（28 の倍数、画素数 3136〜11289600）した寸法の px なので、backend（`app/clients/external_parser.py`）が受け取ったときに送った画像の px へ戻す（公式の parser の `post_process_cells` と同じ換算）。根拠は下の「座標系の根拠」 |
+| MinerU | ページに対して 0-1000 に正規化した座標 | content_list の bbox。1000 を超えれば不明。根拠は下の「座標系の根拠」（実サービスでは未確認） |
 | OCI Enterprise AI の VLM 解析 | 0-1 または 0-100 | 構造化抽出の prompt の指定。100 を超えれば不明 |
 | 全ての解析エンジン | 値が全て 1 以下なら 0-1 | 画像ファイル全体の `source_image` の asset も含む |
+
+座標系の根拠（#502。ローカルに接続先がない MinerU と Dots.OCR は公式のソースで確認した）:
+
+- MinerU: 2.5.4（tag `mineru-2.5.4-released`）の `mineru/backend/pipeline/pipeline_middle_json_mkcontent.py` の `make_blocks_to_content_list` が `int(x0 * 1000 / page_width)` などで 0-1000 にする。4.0.10（tag `mineru-4.0.10-released`）の `mineru/render/_internal/content_list/common.py` の `normalize_bbox` も「MiddleJson の 0-1 の bbox を Content List の 0-1000 の整数にする」（`int(value * 1000)`）。原点（左上）は、backend の変換と同じ前提のまま（ソースでは未確認）。
+- Dots.OCR: github.com/rednote-hilab/dots.ocr（commit `36d7248`、2026-03-24）の `dots_ocr/utils/layout_utils.py` の `post_process_cells` が、bbox を smart_resize した入力画像の寸法（コメント: 「server input width, also has smart_resize in server」）から元画像の寸法へ戻している。`dots_ocr/utils/image_utils.py` の `smart_resize` と `dots_ocr/utils/consts.py`（`IMAGE_FACTOR=28`・`MIN_PIXELS=3136`・`MAX_PIXELS=11289600`）、Hugging Face の `rednote-hilab/dots.ocr` の `preprocessor_config.json`（`Qwen2VLImageProcessor`、`patch_size` 14・`merge_size` 2・同じ min / max pixels）。backend は OpenAI 互換 API を直接呼ぶので、この換算を backend で行う。換算しないと、A4 を 200 dpi で描いたページで縦に約 0.5%（最大 13px）、400 dpi など 11289600 px を超えるページでは約 15% ずれていた。
+- Dots.OCR の Picture（本文のない図）は asset の kind が `picture` になる。#502 までは Vision の対象の種類に入っておらず、読み取っていなかった。
 
 ## 保存先
 
