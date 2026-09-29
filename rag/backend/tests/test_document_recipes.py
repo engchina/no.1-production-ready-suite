@@ -1084,7 +1084,6 @@ def _layer_settings(*, enabled: bool) -> Settings:
     return Settings(
         rag_graph_profile="off",
         rag_field_extraction_enabled=False,
-        rag_asset_summary_enabled=False,
         rag_navigation_summary_enabled=False,
         rag_raptor_enabled=False,
     )
