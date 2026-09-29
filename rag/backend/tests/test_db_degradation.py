@@ -133,7 +133,7 @@ async def test_load_or_degrade_degrades_db_side_errors() -> None:
     """DB 側の問題（RuntimeError なども含む）は、従来どおり fallback と warning にする。"""
     from app.db_degradation import load_or_degrade
 
-    async def loader() -> object:
+    async def loader() -> str:
         raise RuntimeError("database is down")
 
     value, degraded = await load_or_degrade(
