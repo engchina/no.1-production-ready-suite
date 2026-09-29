@@ -343,7 +343,7 @@ for (const viewport of [
     await page.keyboard.press("Enter");
     await expect(citationDetails).toHaveAttribute("open", "");
     await expect(page.getByText("経費規程.pdf")).toBeVisible();
-    await expect(page.getByRole("button", { name: "プレビュー" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /の引用箇所を表示$/ })).toBeVisible();
     await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
 

@@ -1,4 +1,4 @@
-import { Eye, FileText, Layers, LocateFixed, X } from "lucide-react";
+import { ExternalLink, FileText, Layers, LocateFixed, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -153,27 +153,17 @@ export function CitationCard({
         <CitationScores chunk={chunk} />
       </div>
       <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 sm:flex-row sm:items-center sm:justify-between">
+        {/* 引用箇所は画面を移動せずダイアログで見せる。文書の詳細はダイアログの中から別タブで開く（#442）。 */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={openPreview}
+            aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
             className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
           >
-            <Eye size={16} aria-hidden />
+            <LocateFixed size={16} aria-hidden />
             {t("search.citation.previewOpen")}
           </button>
-          {canOpenDetail ? (
-            <Link
-              to={previewUrl}
-              className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
-              aria-label={t("search.citation.openPreview", {
-                file: previewFileName,
-              })}
-            >
-              <LocateFixed size={16} aria-hidden />
-              {t("search.citation.openPreviewShort")}
-            </Link>
-          ) : null}
         </div>
         {traceId && businessViewId ? (
           <FeedbackControls
@@ -212,9 +202,12 @@ export function CitationCard({
                 {canOpenDetail ? (
                   <Link
                     to={previewUrl}
-                    className="text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    {t("search.citation.previewFullpage")}
+                    {t("search.citation.openDetail")}
+                    <ExternalLink size={14} aria-hidden />
                   </Link>
                 ) : null}
                 <button
