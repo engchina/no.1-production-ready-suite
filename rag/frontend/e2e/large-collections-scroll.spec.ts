@@ -13,13 +13,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const viewport of VIEWPORTS) {
-test(`知識ベース詳細の所属文書は多くても高さ固定でスクロールする (${viewport.name})`, async ({ page }) => {
+test(`ナレッジベース詳細の所属文書は多くても高さ固定でスクロールする (${viewport.name})`, async ({ page }) => {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const DOC_COUNT = 30;
   const kb = {
     id: "kb-1",
     name: "社内規程",
-    description: "多数の文書を含む知識ベース",
+    description: "多数の文書を含むナレッジベース",
     status: "ACTIVE" as const,
     default_search_mode: "hybrid" as const,
     document_count: DOC_COUNT,

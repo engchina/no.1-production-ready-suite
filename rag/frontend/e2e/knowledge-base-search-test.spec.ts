@@ -123,7 +123,7 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
 
   await expect(page.getByRole("heading", { name: "このナレッジで検索テスト" })).toBeVisible();
 
-  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
 
   // 回答と引用(原本ファイル名)が表示される。
@@ -197,7 +197,7 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   );
 
   await page.goto("/knowledge-bases/kb-1");
-  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
   await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
 
@@ -231,7 +231,7 @@ test("KB 検索テストの引用が内部スクロールしてもページ末�
   );
 
   await page.goto("/knowledge-bases/kb-1");
-  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
 
   const citationList = page.locator("ul.bounded-scroll-area-lg");
@@ -249,7 +249,7 @@ test("索引済み文書が無い KB は検索テストを促す空状態を出�
 
   await expect(page.getByText("索引済みの文書がありません。")).toBeVisible();
   // 索引前は入力欄を出さない。
-  await expect(page.getByPlaceholder("この知識ベースに質問してみる…")).toHaveCount(0);
+  await expect(page.getByPlaceholder("このナレッジベースに質問してみる…")).toHaveCount(0);
 
   await expectNoPageOverflow(page);
 });
@@ -268,7 +268,7 @@ test("Office 引用プレビューの降格表示では原本をダウンロー�
   );
 
   await page.goto("/knowledge-bases/kb-1");
-  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
   await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
 
@@ -331,7 +331,7 @@ test("文書の詳細を開けない利用者には、所属文書と引用か�
   await expect(member).toBeVisible();
   await expect(member.getByRole("link")).toHaveCount(0);
 
-  await page.getByPlaceholder("この知識ベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
   await expect(page.getByText("これはテスト回答です。")).toBeVisible();
 
@@ -359,7 +359,7 @@ test("検索テストと停止は同じボタンで、フォーカスを保っ�
   });
 
   await page.goto("/knowledge-bases/kb-1");
-  const input = page.getByPlaceholder("この知識ベースに質問してみる…");
+  const input = page.getByPlaceholder("このナレッジベースに質問してみる…");
   await input.fill("有給休暇の付与日数は？");
   const button = page.getByTestId("kb-search-test-run-stop");
   await expect(button).toHaveAccessibleName("検索テスト");

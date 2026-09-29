@@ -38,7 +38,7 @@ test("狭い画面幅(375px)でも検索ページがページを横スクロー�
   await expectNoPageOverflow(page);
 });
 
-test("文書インデックスは知識ベースで絞り込み、所属を表示する", async ({ page }) => {
+test("文書インデックスはナレッジベースで絞り込み、所属を表示する", async ({ page }) => {
   let lastKnowledgeBaseId: string | null = null;
   await page.route("**/api/documents**", async (route) => {
     const url = new URL(route.request().url());
@@ -64,9 +64,9 @@ test("文書インデックスは知識ベースで絞り込み、所属を表�
 
   await page.goto("/file-list");
 
-  const filter = page.getByRole("combobox", { name: "知識ベース" });
+  const filter = page.getByRole("combobox", { name: "ナレッジベース" });
   await filter.click();
-  await page.getByRole("listbox", { name: "知識ベース" }).getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("listbox", { name: "ナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
 
   await expect.poll(() => lastKnowledgeBaseId).toBe("kb-1");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
@@ -74,7 +74,7 @@ test("文書インデックスは知識ベースで絞り込み、所属を表�
   await expectNoHorizontalOverflow(page);
 });
 
-test("評価実行と比較実行は選択した知識ベースを使う", async ({ page }) => {
+test("評価実行と比較実行は選択したナレッジベースを使う", async ({ page }) => {
   const jobs = await mockEvaluationJobs(page, {
     runResult: () => evaluationMetrics(),
     compareResult: () => comparisonResult(),
@@ -83,10 +83,10 @@ test("評価実行と比較実行は選択した知識ベースを使う", async
 
   await page.goto("/evaluation");
 
-  const kbCombo = page.getByRole("combobox", { name: "知識ベース" });
+  const kbCombo = page.getByRole("combobox", { name: "ナレッジベース" });
   await kbCombo.click();
   await page
-    .getByRole("listbox", { name: "知識ベース" })
+    .getByRole("listbox", { name: "ナレッジベース" })
     .getByRole("option", { name: /社内規程/ })
     .click();
   await kbCombo.press("Escape");

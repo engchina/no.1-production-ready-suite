@@ -149,7 +149,7 @@ test("管理権限が無い利用者には、業務ビュー / KB の作成・�
   const main = page.getByRole("main");
   await expect(main.getByRole("heading", { name: "ナレッジベース", level: 1 })).toBeVisible();
   await expect(main.getByText("社内規程")).toBeVisible();
-  await expect(main.getByText("知識ベースを作成")).toHaveCount(0);
+  await expect(main.getByText("ナレッジベースを作成")).toHaveCount(0);
   // 行の操作はアーカイブだけなので、操作メニューごと出さない。
   await expect(page.getByTestId("knowledge-base-row-actions-kb-1")).toHaveCount(0);
 
@@ -175,7 +175,7 @@ test("管理権限が無い利用者には、業務ビュー / KB の作成・�
     })
   );
   await page.goto("/knowledge-bases");
-  await expect(main.getByText("知識ベースを作成")).toBeVisible();
+  await expect(main.getByText("ナレッジベースを作成")).toBeVisible();
   await expect(page.getByTestId("knowledge-base-row-actions-kb-1")).toBeVisible();
   await page.goto("/business-views");
   await expect(main.getByRole("button", { name: "新規作成" })).toBeVisible();

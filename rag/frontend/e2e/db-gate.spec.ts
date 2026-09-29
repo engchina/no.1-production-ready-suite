@@ -124,7 +124,7 @@ test("再試行で DB が使えるようになったら本来のページを表�
 
   available = true;
   await page.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByRole("heading", { name: "ナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(page.locator('section[aria-labelledby="database-unavailable-title"]')).toHaveCount(0);
 });
 
@@ -193,7 +193,7 @@ test("DB 利用可能時は本来のページを表示する", async ({ page }) 
 
   await page.goto("/knowledge-bases");
 
-  await expect(page.getByRole("heading", { name: "ナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "データベースを起動してください" })
   ).toHaveCount(0);
