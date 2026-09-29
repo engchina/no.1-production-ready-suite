@@ -169,7 +169,9 @@ def _search(query: str) -> dict[str, Any]:
 
 def _add_to_new_knowledge_base(document_id: str, name: str) -> str:
     """新しい KB を作り、文書を所属させる(KB は所属だけを持ち、処理設定は持たない)。"""
-    kb_resp = client.post("/api/knowledge-bases", json={"name": name})
+    kb_resp = client.post(
+        "/api/knowledge-bases", json={"name": name, "description": f"{name} の検証用"}
+    )
     assert kb_resp.status_code == 200
     knowledge_base_id = cast(str, kb_resp.json()["data"]["id"])
     assign_resp = client.post(

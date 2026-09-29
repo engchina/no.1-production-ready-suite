@@ -43,6 +43,8 @@ from app.clients.oracle import (
     oracle_text_preferences_sql,
     oracle_vector_schema_sql,
 )
+from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION
+from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "2"
@@ -513,6 +515,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260928_005_evaluation_jobs",
             table_name="rag_evaluation_jobs",
             sql=_evaluation_jobs_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260930_001_default_descriptions",
+            table_name="rag_business_views",
+            sql=_default_descriptions_migration_sql(),
         ),
     ]
 
@@ -1553,6 +1560,36 @@ WHERE LOWER(kb.name) = 'default'
 
 COMMIT;
 """.strip()
+
+
+def _default_descriptions_migration_sql() -> str:
+    """説明が空の DEFAULT ナレッジベース・業務ビューに既定の説明を補う(冪等。#521)。
+
+    名前と説明は必須だが、DEFAULT は改名できず利用者が作るものでもないため、既定の文言を入れる。
+    利用者が入れた説明は上書きしない。
+    """
+    return f"""
+UPDATE rag_knowledge_bases
+SET
+    description = {_sql_string_literal(DEFAULT_KNOWLEDGE_BASE_DESCRIPTION)},
+    updated_at = SYSTIMESTAMP
+WHERE LOWER(name) = 'default'
+  AND TRIM(description) IS NULL;
+
+UPDATE rag_business_views
+SET
+    description = {_sql_string_literal(DEFAULT_BUSINESS_VIEW_DESCRIPTION)},
+    updated_at = SYSTIMESTAMP
+WHERE LOWER(name) = 'default'
+  AND TRIM(description) IS NULL;
+
+COMMIT;
+""".strip()
+
+
+def _sql_string_literal(value: str) -> str:
+    """SQL の文字列リテラルにする(単一引用符を重ねる)。"""
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _conversation_titles_migration_sql() -> str:

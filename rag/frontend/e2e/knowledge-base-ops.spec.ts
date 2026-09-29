@@ -146,6 +146,45 @@ test("DEFAULT は名前を変えられず、説明だけを保存する", async 
   expect(patches.at(-1)).toEqual({ description: "未分類の文書" });
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`説明が空のナレッジベースは保存するときに説明を求め、空白だけでは送らない (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const patches: Record<string, unknown>[] = [];
+    await mockKnowledgeBases(page, defaultKnowledgeBases(), patches);
+    await mockDocuments(page);
+
+    // 説明が必須になる前に作った KB（説明なし）も読み込める（#521）。
+    await page.goto("/knowledge-bases/kb-2");
+    await expect(page.getByRole("heading", { name: "製品 FAQ", level: 1 })).toBeVisible();
+    await page.getByTestId("knowledge-base-detail-actions").getByRole("button", { name: "編集" }).click();
+
+    const form = page.getByTestId("knowledge-base-edit-form");
+    const description = form.getByLabel("説明");
+    await expect(description).toHaveAttribute("aria-required", "true");
+    // 変更しなくても、説明が空なら閉じずに入力を求める。
+    await form.getByRole("button", { name: "保存" }).click();
+    await expect(form.getByText("説明を入力してください。")).toBeVisible();
+    await expect(description).toHaveAttribute("aria-invalid", "true");
+    await expect(description).toBeFocused();
+
+    await description.fill("  ");
+    await form.getByRole("button", { name: "保存" }).click();
+    await expect(form.getByText("説明を入力してください。")).toBeVisible();
+    expect(patches).toEqual([]);
+
+    await description.fill(" 製品の問い合わせ ");
+    await form.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
+    expect(patches.at(-1)).toEqual({ name: "製品 FAQ", description: "製品の問い合わせ" });
+    await expectNoPageOverflow(page);
+  });
+}
+
 test("アーカイブ済みのナレッジベースには編集を出さない", async ({ page }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   await mockDocuments(page);
@@ -277,7 +316,7 @@ async function mockBusinessViews(
     return {
       id: view.id,
       name: view.name,
-      description: null,
+      description: `${view.name}の用途`,
       status: "ACTIVE",
       knowledge_base_count: view.knowledgeBaseIds.length,
       archived_knowledge_base_count: refs.filter((ref) => ref.status === "ARCHIVED").length,

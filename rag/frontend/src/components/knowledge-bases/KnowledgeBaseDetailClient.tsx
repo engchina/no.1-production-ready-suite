@@ -44,6 +44,7 @@ import {
   useRemoveDocumentFromKnowledgeBase,
   useUpdateKnowledgeBase,
 } from "@/lib/queries";
+import { firstInvalidFieldId, focusFirstInvalidField } from "@/lib/required-fields";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
@@ -56,6 +57,7 @@ import {
   DESCRIPTION_MAX_LENGTH,
   NAME_MAX_LENGTH,
   useKnowledgeBaseActions,
+  validateKnowledgeBaseDescription,
   validateKnowledgeBaseName,
 } from "./knowledge-base-actions";
 
@@ -187,14 +189,17 @@ function KnowledgeBaseEditForm({
   const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
   const [name, setName] = useState(knowledgeBase.name);
   const [description, setDescription] = useState(knowledgeBase.description ?? "");
-  const [touched, setTouched] = useState(false);
+  // 欄ごとに、フォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2）。
+  const [touched, setTouched] = useState({ name: false, description: false });
   const dirty =
     name.trim() !== knowledgeBase.name ||
     description.trim() !== (knowledgeBase.description ?? "");
   // 保存していない変更があるときだけ離脱を確認する。
   useLeaveGuard(dirty);
 
-  const nameError = !isDefault && touched ? validateKnowledgeBaseName(name) : null;
+  const nameError = !isDefault && touched.name ? validateKnowledgeBaseName(name) : null;
+  // 説明は必須（#521）。説明が空の既存の KB は、保存するときに入力を求める。
+  const descriptionError = touched.description ? validateKnowledgeBaseDescription(description) : null;
   const serverError = update.isError
     ? update.error instanceof ApiError
       ? update.error.message
@@ -205,8 +210,16 @@ function KnowledgeBaseEditForm({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setTouched(true);
-    if (!isDefault && validateKnowledgeBaseName(name)) return;
+    setTouched({ name: true, description: true });
+    const errors = [
+      ["knowledge-base-edit-name", isDefault ? null : validateKnowledgeBaseName(name)],
+      ["knowledge-base-edit-description", validateKnowledgeBaseDescription(description)],
+    ] as const;
+    // 変更が無くても、説明が空（必須になる前の KB）なら閉じずに入力を求める。
+    if (firstInvalidFieldId(errors)) {
+      focusFirstInvalidField(errors);
+      return;
+    }
     if (!dirty) {
       onDone();
       return;
@@ -216,7 +229,7 @@ function KnowledgeBaseEditForm({
         id: knowledgeBase.id,
         payload: {
           ...(isDefault ? {} : { name: name.trim() }),
-          description: description.trim() || null,
+          description: description.trim(),
         },
       },
       {
@@ -250,7 +263,7 @@ function KnowledgeBaseEditForm({
             requiredLabel={t("common.required")}
             value={name}
             onValueChange={setName}
-            onBlur={() => setTouched(true)}
+            onBlur={() => setTouched((current) => ({ ...current, name: true }))}
             readOnly={isDefault}
             aria-readonly={isDefault || undefined}
             helper={isDefault ? t("knowledgeBases.edit.defaultNameFixed") : undefined}
@@ -262,8 +275,14 @@ function KnowledgeBaseEditForm({
         <TextField
           id="knowledge-base-edit-description"
           label={t("knowledgeBases.field.description")}
+          required
+          requiredLabel={t("common.required")}
           value={description}
           onValueChange={setDescription}
+          onBlur={() => setTouched((current) => ({ ...current, description: true }))}
+          placeholder={t("knowledgeBases.field.descriptionPlaceholder")}
+          helper={t("knowledgeBases.field.descriptionHelper")}
+          error={descriptionError ?? undefined}
           maxLength={DESCRIPTION_MAX_LENGTH}
           autoFocus={isDefault}
         />

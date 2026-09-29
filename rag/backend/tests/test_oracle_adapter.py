@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pr_backend_core.oracle_session import init_oracle_session
@@ -54,7 +54,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.business_view import BusinessViewStatus
+from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION, BusinessViewStatus
 from app.schemas.document import (
     DocumentProcessingConfig,
     FileStatus,
@@ -64,7 +64,7 @@ from app.schemas.document import (
     IngestionSegment,
 )
 from app.schemas.extraction import StructuredExtraction
-from app.schemas.knowledge_base import KnowledgeBaseStatus
+from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION, KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode
 
 
@@ -353,8 +353,111 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     assert detail.config.knowledge_base_ids == ["kb-default"]
     assert detail.config.query.generation_profile == "detailed_cited"
     assert detail.config.system_prompt == "全社共通の回答担当です。"
+    # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
+    assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
     assert len(connection.calls) == 1
     assert "UPDATE rag_business_views" in connection.calls[0].statement
+    assert "description = :description" in connection.calls[0].statement
+    assert connection.calls[0].parameters["description"] == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("description", "expected_calls"),
+    [(None, 1), ("   ", 1), ("全社の既定ビュー", 0)],
+    ids=["null", "blank", "entered"],
+)
+async def test_ensure_default_business_view_fills_only_empty_description(
+    monkeypatch: pytest.MonkeyPatch,
+    description: str | None,
+    expected_calls: int,
+) -> None:
+    """DEFAULT 業務ビューの説明は空のときだけ既定の説明で補う（利用者の説明は残す。#521）。"""
+    client = OracleClient(settings=Settings.model_construct())
+    connection = FakeOracleConnection([])
+    now = datetime.now(UTC)
+    knowledge_base = oracle_module.StoredKnowledgeBase(
+        id="kb-default",
+        name="DEFAULT",
+        status=KnowledgeBaseStatus.ACTIVE,
+        created_at=now,
+        updated_at=now,
+    )
+    existing = oracle_module.StoredBusinessView(
+        id="bv-default",
+        name="DEFAULT",
+        description=description,
+        status=BusinessViewStatus.ACTIVE,
+        created_at=now,
+        updated_at=now,
+        view_config=dump_business_view_config(
+            BusinessViewConfig(knowledge_base_ids=["kb-default"])
+        ),
+    )
+
+    async def run_transaction(operation: Callable[[object], object]) -> object:
+        return operation(connection)
+
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
+    monkeypatch.setattr(oracle_module, "_ensure_default_knowledge_base", lambda *_: knowledge_base)
+    monkeypatch.setattr(oracle_module, "_select_business_view_by_name", lambda *_: existing)
+
+    detail = await client.ensure_default_business_view()
+
+    assert len(connection.calls) == expected_calls
+    if expected_calls:
+        assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+    else:
+        assert detail.description == "全社の既定ビュー"
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_calls"),
+    [(None, 1), ("", 1), ("既存の説明", 0)],
+    ids=["null", "empty", "entered"],
+)
+def test_ensure_default_knowledge_base_fills_only_empty_description(
+    monkeypatch: pytest.MonkeyPatch,
+    description: str | None,
+    expected_calls: int,
+) -> None:
+    """既存の DEFAULT ナレッジベースの説明は空のときだけ既定の説明で補う（#521）。"""
+    connection = FakeOracleConnection([])
+    now = datetime.now(UTC)
+    existing = oracle_module.StoredKnowledgeBase(
+        id="kb-default",
+        name="DEFAULT",
+        description=description,
+        status=KnowledgeBaseStatus.ACTIVE,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(oracle_module, "_select_knowledge_base_by_name", lambda *_: existing)
+
+    knowledge_base = oracle_module._ensure_default_knowledge_base(cast(Any, connection), "DEFAULT")
+
+    assert len(connection.calls) == expected_calls
+    if expected_calls:
+        assert knowledge_base.description == DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
+        assert "UPDATE rag_knowledge_bases" in connection.calls[0].statement
+        assert "name =" not in connection.calls[0].statement
+        assert connection.calls[0].parameters["description"] == DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
+    else:
+        assert knowledge_base.description == "既存の説明"
+
+
+def test_ensure_default_knowledge_base_creates_with_default_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DEFAULT ナレッジベースを新しく作るときは既定の説明を入れる（#521）。"""
+    connection = FakeOracleConnection([])
+    monkeypatch.setattr(oracle_module, "_select_knowledge_base_by_name", lambda *_: None)
+
+    knowledge_base = oracle_module._ensure_default_knowledge_base(cast(Any, connection), "DEFAULT")
+
+    assert knowledge_base.description == DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
+    assert "INSERT INTO rag_knowledge_bases" in connection.calls[0].statement
+    assert connection.calls[0].parameters["description"] == DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
 
 
 def test_oracle_connection_refuses_password_wallet_without_prompt(

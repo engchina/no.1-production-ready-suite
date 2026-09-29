@@ -9,6 +9,7 @@ from app.api.routes import business_views as business_views_route
 from app.main import app
 from app.rag.business_view_config import BusinessViewConfig, parse_business_view_config
 from app.schemas.business_view import (
+    DEFAULT_BUSINESS_VIEW_DESCRIPTION,
     DEFAULT_BUSINESS_VIEW_NAME,
     BusinessViewDetail,
     BusinessViewKnowledgeBaseRef,
@@ -65,11 +66,13 @@ class FakeBusinessViewOracle:
         if existing is None:
             return await self.create_business_view(
                 name=DEFAULT_BUSINESS_VIEW_NAME,
+                description=DEFAULT_BUSINESS_VIEW_DESCRIPTION,
                 config=BusinessViewConfig(knowledge_base_ids=["kb-default"]),
             )
         config = existing.config.model_copy(update={"knowledge_base_ids": ["kb-default"]})
         normalized = existing.model_copy(
             update={
+                "description": existing.description or DEFAULT_BUSINESS_VIEW_DESCRIPTION,
                 "status": BusinessViewStatus.ACTIVE,
                 "archived_at": None,
                 "config": config,
@@ -208,8 +211,14 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
 
 def test_list_business_views(fake_oracle: FakeBusinessViewOracle) -> None:
     """作成した業務ビューを一覧・検索できる。"""
-    client.post("/api/business-views", json={"name": "経理アシスタント"})
-    client.post("/api/business-views", json={"name": "営業アシスタント"})
+    client.post(
+        "/api/business-views",
+        json={"name": "経理アシスタント", "description": "経理アシスタントの説明"},
+    )
+    client.post(
+        "/api/business-views",
+        json={"name": "営業アシスタント", "description": "営業アシスタントの説明"},
+    )
 
     page = client.get("/api/business-views?q=経理").json()["data"]
     assert page["total"] == 1
@@ -218,7 +227,10 @@ def test_list_business_views(fake_oracle: FakeBusinessViewOracle) -> None:
 
 def test_list_ensures_default_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
     """初回一覧で DEFAULT KB だけを参照する DEFAULT 業務ビューを冪等に保証する。"""
-    client.post("/api/business-views", json={"name": "経理アシスタント"})
+    client.post(
+        "/api/business-views",
+        json={"name": "経理アシスタント", "description": "経理アシスタントの説明"},
+    )
     first = client.get("/api/business-views").json()["data"]
     second = client.get("/api/business-views").json()["data"]
 
@@ -228,6 +240,8 @@ def test_list_ensures_default_business_view(fake_oracle: FakeBusinessViewOracle)
     assert default.status == BusinessViewStatus.ACTIVE
     assert default.config.knowledge_base_ids == ["kb-default"]
     assert [kb.name for kb in default.knowledge_bases] == ["DEFAULT"]
+    # DEFAULT は改名できないため、既定の説明を持つ（#521）。
+    assert default.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
 
 
 @pytest.mark.parametrize("reserved_name", ["DEFAULT", "default", " DEFAULT "])
@@ -236,15 +250,124 @@ def test_default_is_a_reserved_business_view_name(
     reserved_name: str,
 ) -> None:
     """DEFAULT は大文字小文字・前後空白にかかわらずユーザー名に使えない。"""
-    response = client.post("/api/business-views", json={"name": reserved_name})
+    response = client.post(
+        "/api/business-views", json={"name": reserved_name, "description": "予約名の確認"}
+    )
 
     assert response.status_code == 422
     assert "DEFAULT は予約名のため使用できません。" in response.json()["error_messages"][0]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "経理ビュー"},
+        {"name": "経理ビュー", "description": ""},
+        {"name": "経理ビュー", "description": " \u3000\n"},
+        {"name": "経理ビュー", "description": None},
+    ],
+    ids=["missing", "empty", "blank", "null"],
+)
+def test_create_business_view_requires_description(
+    fake_oracle: FakeBusinessViewOracle,
+    payload: dict[str, object],
+) -> None:
+    """業務ビューの説明は必須。未指定・空・空白だけ・null は 422 で作成しない（#521）。"""
+    response = client.post("/api/business-views", json=payload)
+
+    assert response.status_code == 422
+    assert any("description" in message for message in response.json()["error_messages"])
+    assert fake_oracle.views == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"name": ""}, {"name": "   "}],
+    ids=["empty", "blank"],
+)
+def test_create_business_view_requires_name(
+    fake_oracle: FakeBusinessViewOracle,
+    payload: dict[str, object],
+) -> None:
+    """業務ビューの名前は必須。空・空白だけは 422 で作成しない。"""
+    response = client.post("/api/business-views", json={**payload, "description": "説明"})
+
+    assert response.status_code == 422
+    assert fake_oracle.views == {}
+
+
+def test_create_business_view_trims_description(fake_oracle: FakeBusinessViewOracle) -> None:
+    """説明の前後の空白は取り除いて保存する。"""
+    response = client.post(
+        "/api/business-views", json={"name": "経理ビュー", "description": "  経理の問い合わせ  "}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["description"] == "経理の問い合わせ"
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["", "   ", None],
+    ids=["empty", "blank", "null"],
+)
+def test_update_business_view_rejects_empty_description(
+    fake_oracle: FakeBusinessViewOracle,
+    description: str | None,
+) -> None:
+    """更新で説明を空・空白だけ・null にはできない（#521）。"""
+    detail = client.post(
+        "/api/business-views", json={"name": "経理ビュー", "description": "経理の問い合わせ"}
+    ).json()["data"]
+
+    response = client.patch(
+        f"/api/business-views/{detail['id']}", json={"description": description}
+    )
+
+    assert response.status_code == 422
+    assert "説明を入力してください。" in response.json()["error_messages"][0]
+    assert fake_oracle.views[detail["id"]].description == "経理の問い合わせ"
+
+
+def test_business_view_without_description_still_loads_and_updates_settings(
+    fake_oracle: FakeBusinessViewOracle,
+) -> None:
+    """説明が必須になる前の説明なしの業務ビューも読み込め、説明を送らない更新（設定だけ）もできる。"""
+    legacy = BusinessViewDetail(
+        id="bv-legacy",
+        name="旧ビュー",
+        description=None,
+        status=BusinessViewStatus.ACTIVE,
+        knowledge_base_count=1,
+        config=BusinessViewConfig(knowledge_base_ids=["kb-1"]),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake_oracle.views[legacy.id] = legacy
+
+    listed = client.get("/api/business-views").json()["data"]["items"]
+    assert next(item for item in listed if item["id"] == "bv-legacy")["description"] is None
+    assert client.get("/api/business-views/bv-legacy").json()["data"]["description"] is None
+
+    update = client.patch(
+        "/api/business-views/bv-legacy",
+        json={"config": {"knowledge_base_ids": ["kb-2"]}},
+    )
+    assert update.status_code == 200
+    assert update.json()["data"]["knowledge_base_count"] == 1
+
+    described = client.patch(
+        "/api/business-views/bv-legacy", json={"name": "旧ビュー", "description": "旧の用途"}
+    )
+    assert described.status_code == 200
+    assert described.json()["data"]["description"] == "旧の用途"
+
+
 def test_update_and_archive_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
     """業務ビューの更新とアーカイブができる。"""
-    detail = client.post("/api/business-views", json={"name": "FAQ ビュー"}).json()["data"]
+    detail = client.post(
+        "/api/business-views", json={"name": "FAQ ビュー", "description": "FAQ ビューの説明"}
+    ).json()["data"]
 
     update_resp = client.patch(
         f"/api/business-views/{detail['id']}",
@@ -280,6 +403,14 @@ def test_default_business_view_allows_settings_but_protects_identity_and_scope(
     assert update.json()["data"]["description"] == "全社共通の検索設定"
     assert update.json()["data"]["config"]["knowledge_base_ids"] == ["kb-default"]
     assert update.json()["data"]["config"]["query"]["generation_profile"] == "detailed_cited"
+
+    # 画面の保存と同じ形（名前を送らず説明と設定を送る）で DEFAULT を保存できる（#521）。
+    assert default["description"] == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+    empty_description = client.patch(
+        f"/api/business-views/{business_view_id}",
+        json={"description": " ", "config": {"knowledge_base_ids": ["kb-default"]}},
+    )
+    assert empty_description.status_code == 422
 
     rename = client.patch(
         f"/api/business-views/{business_view_id}",

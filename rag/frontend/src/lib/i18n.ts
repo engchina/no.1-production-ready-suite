@@ -1242,7 +1242,9 @@ export const ja = {
   "businessViews.field.name": "名前",
   "businessViews.field.namePlaceholder": "例: 経理規程ビュー",
   "businessViews.field.description": "説明",
-  "businessViews.field.descriptionPlaceholder": "この業務ビューの用途(任意)",
+  "businessViews.field.descriptionPlaceholder": "例: 経理規程の問い合わせに回答します",
+  "businessViews.field.descriptionHelper":
+    "業務ビューの一覧・権限管理・RAG 検索で、用途を見分けるために表示します。",
   "businessViews.field.knowledgeBases": "参照するナレッジベース",
   "businessViews.field.knowledgeBasesHelper":
     "この業務ビューへの質問が検索対象とするナレッジベースを選びます(1 件以上)。",
@@ -1298,6 +1300,7 @@ export const ja = {
     "利用できる業務ビューがありません。必要な場合は管理者に利用権限を依頼してください。",
   "businessViews.error.title": "業務ビューを読み込めません",
   "businessViews.nameRequired": "名前を入力してください。",
+  "businessViews.descriptionRequired": "説明を入力してください。",
   "businessViews.nameReserved": "DEFAULT は予約名のため使用できません。",
   "businessViews.knowledgeBasesRequired": "参照するナレッジベースを 1 件以上選んでください。",
   "businessViews.default.nameFixed": "DEFAULT の名前は変更できません。",
@@ -1338,6 +1341,9 @@ export const ja = {
   "knowledgeBases.create.title": "ナレッジベースを作成",
   "knowledgeBases.field.name": "名前",
   "knowledgeBases.field.description": "説明",
+  "knowledgeBases.field.descriptionPlaceholder": "例: 就業規則と社内規程の文書",
+  "knowledgeBases.field.descriptionHelper":
+    "ナレッジベースの一覧・権限管理・業務ビューの選択で、用途を見分けるために表示します。",
   "knowledgeBases.actions.create": "作成",
   "knowledgeBases.actions.archive": "アーカイブ",
   "knowledgeBases.actions.edit": "編集",
@@ -1385,6 +1391,7 @@ export const ja = {
     "利用できるナレッジベースがありません。必要な場合は管理者に利用権限を依頼してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",
   "knowledgeBases.validation.nameReserved": "DEFAULT は予約名のため使用できません。",
+  "knowledgeBases.validation.descriptionRequired": "説明を入力してください。",
   "knowledgeBases.default.archiveDisabled": "DEFAULT はアーカイブできません",
   "knowledgeBases.confirm.archive.title": "ナレッジベースをアーカイブしますか？",
   "knowledgeBases.confirm.archive.description":
