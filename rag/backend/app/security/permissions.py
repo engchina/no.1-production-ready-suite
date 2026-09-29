@@ -419,7 +419,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
     ),
     ("PATCH", "/settings/parser-adapters"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
-    ("GET", "/settings/parser-adapters/contract"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/parser-adapters/{backend}/status"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),

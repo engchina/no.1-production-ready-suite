@@ -119,17 +119,6 @@ ParserAdapterScoreBackendName = Literal[
     "dots_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
-ParserAdapterContractStatus = Literal[
-    "passed",
-    "failed",
-    "fallback",
-    "available",
-    "ignored",
-    "disabled",
-    "missing",
-    "unsupported",
-    "fixture_missing",
-]
 ParserAdapterScoreStatus = Literal[
     "recommended",
     "eligible",
@@ -342,84 +331,6 @@ class ParserAdapterBackendSourceMatrixData(BaseModel):
         default_factory=dict
     )
     route_evidence: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
-
-
-class ParserAdapterContractCaseData(BaseModel):
-    """adapter/source の実 remap compatibility 結果。"""
-
-    backend: ParserAdapterBackendName
-    source_kind: str
-    fixture_name: str
-    content_type: str
-    status: ParserAdapterContractStatus
-    blocking: bool
-    parser_backend: str | None = None
-    parser_version: str | None = None
-    adapter_import_name: str | None = None
-    adapter_distribution_name: str | None = None
-    adapter_package_version: str | None = None
-    template: str | None = None
-    element_count: int = 0
-    page_count: int = 0
-    table_count: int = 0
-    table_cell_count: int = 0
-    asset_count: int = 0
-    bbox_count: int = 0
-    warning_codes: list[str] = Field(default_factory=list)
-    reason_codes: list[str] = Field(default_factory=list)
-
-
-class ParserAdapterContractSummaryData(BaseModel):
-    """compatibility matrix の低機密 summary。"""
-
-    passed: bool
-    case_count: int
-    blocking_failure_count: int
-    source_kinds: list[str] = Field(default_factory=list)
-    backends: list[ParserAdapterBackendName] = Field(default_factory=list)
-    passed_source_kinds: list[str] = Field(default_factory=list)
-    missing_source_kinds: list[str] = Field(default_factory=list)
-    blocking_failure_source_kinds: list[str] = Field(default_factory=list)
-    blocking_failure_backends: list[ParserAdapterBackendName] = Field(default_factory=list)
-    backend_status_counts: dict[ParserAdapterBackendName, dict[str, int]] = Field(
-        default_factory=dict
-    )
-    backend_source_status: dict[ParserAdapterBackendName, dict[str, str]] = Field(
-        default_factory=dict
-    )
-    backend_source_status_counts: dict[
-        ParserAdapterBackendName,
-        dict[str, dict[str, int]],
-    ] = Field(default_factory=dict)
-    source_kind_status_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
-    backend_passed_source_kinds: dict[ParserAdapterBackendName, list[str]] = Field(
-        default_factory=dict
-    )
-    scenarios: list[str] = Field(default_factory=list)
-    passed_scenarios: list[str] = Field(default_factory=list)
-    missing_scenarios: list[str] = Field(default_factory=list)
-    blocking_failure_scenarios: list[str] = Field(default_factory=list)
-    backend_passed_scenarios: dict[ParserAdapterBackendName, list[str]] = Field(
-        default_factory=dict
-    )
-    reason_code_counts: dict[str, int] = Field(default_factory=dict)
-    warning_code_counts: dict[str, int] = Field(default_factory=dict)
-    blocking_failure_reason_counts: dict[str, int] = Field(default_factory=dict)
-    blocking_failures: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ParserAdapterContractData(BaseModel):
-    """parser adapter compatibility matrix の API payload。"""
-
-    passed: bool
-    fixture_root: str
-    source_kinds: list[str] = Field(default_factory=list)
-    backends: list[ParserAdapterBackendName] = Field(default_factory=list)
-    case_count: int
-    blocking_failure_count: int
-    cases: list[ParserAdapterContractCaseData] = Field(default_factory=list)
-    summary: ParserAdapterContractSummaryData
-    config_source: Literal["runtime"]
 
 
 class ParserServiceBackendData(BaseModel):

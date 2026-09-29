@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Disclosure,
   PageBody,
   Card,
   CardContent,
@@ -11,22 +10,18 @@ import {
   Button,
   FormStatus,
   ProcessingIndicator,
-  Skeleton,
   Switch,
   TimedLoadingState,
   FormSkeleton,
   TextField,
 } from "@engchina/production-ready-ui";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  PackageX,
   Plug,
-  RefreshCw,
   RotateCcw,
   Save,
-  ShieldCheck,
 } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -43,9 +38,6 @@ import {
   type ExternalParserConnectionStatus,
   type ParserAdapterBackend,
   type ParserAdapterBackendName,
-  type ParserAdapterContractCaseData,
-  type ParserAdapterContractData,
-  type ParserAdapterContractStatus,
   type ParserAdapterSettingsData,
   type ParserAdapterSettingsUpdate,
   type ParserServiceBackendData,
@@ -61,7 +53,6 @@ import {
   formatSupportedFormats,
 } from "@/lib/parser-capabilities";
 import {
-  useParserAdapterContract,
   useParserAdapterSettings,
   useExternalParserStatus,
   useServiceStatusQueries,
@@ -131,7 +122,6 @@ function isExternalBackend(
 /** Optional parser adapter の runtime 設定と readiness を管理する設定画面。 */
 export function ParserAdapterSettingsClient() {
   const query = useParserAdapterSettings();
-  const contractQuery = useParserAdapterContract();
   const save = useUpdateParserAdapterSettings();
   const [form, setForm] = useState<ParserAdapterForm | null>(null);
   const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
@@ -183,10 +173,6 @@ export function ParserAdapterSettingsClient() {
   const dirty = serializeForm(form) !== serializeForm(formFromSettings(settings));
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.parserAdapters.saveError");
-  const contractError =
-    contractQuery.error instanceof ApiError
-      ? contractQuery.error.message
-      : t("settings.parserAdapters.contract.loadError");
 
   function updateForm(update: Partial<ParserAdapterForm>) {
     save.reset();
@@ -269,21 +255,6 @@ export function ParserAdapterSettingsClient() {
       {settings.adapter_backend === "docling" && settings.docling_vision_enabled ? (
         <DocragPromptCard promptKey="image_retrieval" />
       ) : null}
-      <Disclosure
-        variant="plain"
-        summary={t("settings.parserAdapters.diagnostics.title")}
-        className="border-t border-border pt-4"
-        summaryClassName="font-semibold"
-        contentClassName="pt-4"
-      >
-        <ParserAdapterContractCard
-          data={contractQuery.data}
-          checking={contractQuery.isFetching}
-          errorMessage={contractQuery.isError ? contractError : null}
-          hasFetched={contractQuery.isFetched}
-          onRun={() => void contractQuery.refetch()}
-        />
-      </Disclosure>
     </PageBody>
   );
 }
@@ -777,399 +748,11 @@ function ConnectionTestStatus({ status }: { status: ExternalParserConnectionStat
   );
 }
 
-function ParserAdapterContractCard({
-  data,
-  checking,
-  errorMessage,
-  hasFetched,
-  onRun,
-}: {
-  data: ParserAdapterContractData | undefined;
-  checking: boolean;
-  errorMessage: string | null;
-  hasFetched: boolean;
-  onRun: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
-              <ShieldCheck size={20} aria-hidden />
-            </div>
-            <div>
-              <CardTitle>{t("settings.parserAdapters.contract.title")}</CardTitle>
-              <CardDescription>
-                {t("settings.parserAdapters.contract.description")}
-              </CardDescription>
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            loading={checking}
-            onClick={onRun}
-            aria-label={t("settings.parserAdapters.contract.run")}
-            className="w-full md:w-auto" icon={RefreshCw}>
-            {t("settings.parserAdapters.contract.run")}
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {errorMessage ? <FormStatus tone="danger" message={errorMessage} /> : null}
-        {!hasFetched && !checking ? (
-          <FormStatus tone="info" message={t("settings.parserAdapters.contract.notRun")} />
-        ) : null}
-        {checking && !data ? (
-          // 初回の確認は結果の形の Skeleton で寸法を予約し、その先頭に経過時間を出す。
-          <TimedLoadingState
-            label={t("settings.parserAdapters.contract.running")}
-            operationKey="parser-adapter-contract"
-            placement="result"
-            framed={false}
-            testId="parser-adapter-contract-loading"
-          >
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <Skeleton className="h-16 rounded-md" />
-              <Skeleton className="h-16 rounded-md" />
-              <Skeleton className="h-16 rounded-md" />
-              <Skeleton className="h-16 rounded-md" />
-            </div>
-          </TimedLoadingState>
-        ) : null}
-        {checking && data ? (
-          // 再確認は前の結果を残し、先頭に compact な表示を出す（messaging.md §3.7）。
-          <ProcessingIndicator
-            active
-            label={t("settings.parserAdapters.contract.running")}
-            operationKey="parser-adapter-contract"
-            placement="result"
-            activityIcon="none"
-            testId="parser-adapter-contract-processing"
-          />
-        ) : null}
-        {data ? <ParserAdapterContractResult data={data} /> : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ParserAdapterContractResult({ data }: { data: ParserAdapterContractData }) {
-  return (
-    <div className="space-y-4">
-      <dl className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <div className="rounded-md border border-border bg-surface-hover p-3">
-          <dt className="text-xs font-medium text-fg-muted">
-            {t("settings.parserAdapters.contract.judgement")}
-          </dt>
-          <dd className="mt-2">
-            <ContractVerdict passed={data.passed} />
-          </dd>
-        </div>
-        <RuntimeFact
-          label={t("settings.parserAdapters.contract.caseCount")}
-          value={String(data.case_count)}
-        />
-        <RuntimeFact
-          label={t("settings.parserAdapters.contract.blockingFailureCount")}
-          value={String(data.blocking_failure_count)}
-        />
-        <RuntimeFact
-          label={t("settings.parserAdapters.contract.passedSources")}
-          value={
-            data.summary.passed_source_kinds.length
-              ? data.summary.passed_source_kinds.map(sourceKindLabel).join(", ")
-            : t("settings.parserAdapters.routes.noMissing")
-          }
-        />
-      </dl>
-      <ContractCodeSummary data={data} />
-      <ContractBackendMatrix data={data} />
-      <ContractCaseTable cases={data.cases} />
-    </div>
-  );
-}
-
-function ContractVerdict({ passed }: { passed: boolean }) {
-  const Icon = passed ? CheckCircle2 : PackageX;
-  return (
-    <span
-      className={cn(
-        "inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold",
-        passed ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg"
-      )}
-    >
-      <Icon size={14} aria-hidden />
-      {passed
-        ? t("settings.parserAdapters.contract.passed")
-        : t("settings.parserAdapters.contract.failed")}
-    </span>
-  );
-}
-
-function ContractCodeSummary({ data }: { data: ParserAdapterContractData }) {
-  return (
-    <div
-      className="grid grid-cols-1 gap-3 md:grid-cols-3"
-      aria-label={t("settings.parserAdapters.contract.codeSummary")}
-    >
-      <CodeCountPanel
-        title={t("settings.parserAdapters.contract.blockingReasons")}
-        counts={data.summary.blocking_failure_reason_counts}
-        labelForCode={contractReasonLabel}
-      />
-      <CodeCountPanel
-        title={t("settings.parserAdapters.contract.warningCodes")}
-        counts={data.summary.warning_code_counts}
-        labelForCode={routeWarningLabel}
-      />
-      <CodeCountPanel
-        title={t("settings.parserAdapters.contract.reasonCodes")}
-        counts={data.summary.reason_code_counts}
-        labelForCode={contractReasonLabel}
-      />
-    </div>
-  );
-}
-
-function CodeCountPanel({
-  title,
-  counts,
-  labelForCode,
-}: {
-  title: string;
-  counts: Record<string, number>;
-  labelForCode: (code: string) => string;
-}) {
-  const entries = Object.entries(counts)
-    .filter(([, count]) => count > 0)
-    .sort(([leftCode, leftCount], [rightCode, rightCount]) => {
-      if (rightCount !== leftCount) return rightCount - leftCount;
-      return labelForCode(leftCode).localeCompare(labelForCode(rightCode), "ja");
-    });
-  return (
-    <section className="rounded-md border border-border bg-surface-hover p-3">
-      <h3 className="text-xs font-medium text-fg-muted">{title}</h3>
-      {entries.length ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {entries.map(([code, count]) => (
-            <span
-              key={code}
-              className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
-              title={code}
-            >
-              {labelForCode(code)}
-              <span className="ml-1 font-semibold text-fg-muted"> {count}</span>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-2 text-sm text-fg">
-          {t("settings.parserAdapters.contract.noCodes")}
-        </p>
-      )}
-    </section>
-  );
-}
-
-function ContractBackendMatrix({ data }: { data: ParserAdapterContractData }) {
-  return (
-    <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-      {data.backends.map((backend) => {
-        const sourceStatus = data.summary.backend_source_status[backend] ?? {};
-        const statusCounts = data.summary.backend_status_counts[backend] ?? {};
-        return (
-          <div key={backend} className="rounded-md border border-border bg-surface-hover p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-fg">
-                {adapterLabel(backend)}
-              </div>
-              <div className="text-xs text-fg-muted">
-                {formatStatusCounts(statusCounts)}
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {Object.entries(sourceStatus).map(([sourceKind, status]) => (
-                <span
-                  key={`${backend}-${sourceKind}`}
-                  className={cn(
-                    "inline-flex min-h-6 items-center gap-1 rounded-md px-2 text-xs font-medium",
-                    contractStatusToneClass(status as ParserAdapterContractStatus)
-                  )}
-                >
-                  {sourceKindLabel(sourceKind)}
-                  <span className="text-xs opacity-80">
-                    {contractStatusLabel(status)}
-                  </span>
-                </span>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ContractCaseTable({ cases }: { cases: ParserAdapterContractCaseData[] }) {
-  if (!cases.length) {
-    return <FormStatus tone="warning" message={t("settings.parserAdapters.contract.empty")} />;
-  }
-  return (
-    <div className="overflow-hidden rounded-md border border-border">
-      <div className="hidden border-b border-border bg-surface-hover text-xs font-medium text-fg-muted md:grid md:grid-cols-[0.85fr_0.65fr_0.8fr_1.25fr_1.05fr_1.25fr]">
-        <div className="px-3 py-2">{t("settings.parserAdapters.adapter")}</div>
-        <div className="px-3 py-2">{t("settings.parserAdapters.routes.sourceKind")}</div>
-        <div className="px-3 py-2">{t("settings.parserAdapters.status")}</div>
-        <div className="px-3 py-2">
-          {t("settings.parserAdapters.contract.runtimeEvidence")}
-        </div>
-        <div className="px-3 py-2">{t("settings.parserAdapters.contract.schemaCounts")}</div>
-        <div className="px-3 py-2">{t("settings.parserAdapters.warning")}</div>
-      </div>
-      <ul className="divide-y divide-border">
-        {cases.map((contractCase) => (
-          <ContractCaseRow
-            key={`${contractCase.backend}-${contractCase.source_kind}`}
-            contractCase={contractCase}
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function ContractCaseRow({
-  contractCase,
-}: {
-  contractCase: ParserAdapterContractCaseData;
-}) {
-  return (
-    <li className="grid grid-cols-1 gap-3 px-0 py-4 md:grid-cols-[0.85fr_0.65fr_0.8fr_1.25fr_1.05fr_1.25fr] md:gap-0 md:py-0">
-      <RowCell label={t("settings.parserAdapters.adapter")}>
-        <div className="text-sm font-medium text-fg">
-          {adapterLabel(contractCase.backend)}
-        </div>
-        <div className="break-words text-xs text-fg-muted">
-          {contractCase.parser_backend ?? contractCase.fixture_name}
-        </div>
-      </RowCell>
-      <RowCell label={t("settings.parserAdapters.routes.sourceKind")}>
-        <span className="inline-flex min-h-6 items-center rounded-md bg-surface-hover px-2 text-xs font-semibold text-fg">
-          {sourceKindLabel(contractCase.source_kind)}
-        </span>
-      </RowCell>
-      <RowCell label={t("settings.parserAdapters.status")}>
-        <ContractStatusPill status={contractCase.status} blocking={contractCase.blocking} />
-      </RowCell>
-      <RowCell label={t("settings.parserAdapters.contract.runtimeEvidence")}>
-        <ContractRuntimeEvidence contractCase={contractCase} />
-      </RowCell>
-      <RowCell label={t("settings.parserAdapters.contract.schemaCounts")}>
-        <span className="break-words text-sm text-fg">
-          {formatContractCounts(contractCase)}
-        </span>
-      </RowCell>
-      <RowCell label={t("settings.parserAdapters.warning")}>
-        <ContractCodeList contractCase={contractCase} />
-      </RowCell>
-    </li>
-  );
-}
-
-function ContractRuntimeEvidence({
-  contractCase,
-}: {
-  contractCase: ParserAdapterContractCaseData;
-}) {
-  return (
-    <div className="space-y-1 text-xs text-fg-muted">
-      <EvidenceLine
-        label={t("settings.parserAdapters.contract.packageEvidence")}
-        value={formatPackageEvidence(contractCase)}
-      />
-      <EvidenceLine
-        label={t("settings.parserAdapters.contract.parserEvidence")}
-        value={formatParserEvidence(contractCase)}
-      />
-      <EvidenceLine
-        label={t("settings.parserAdapters.contract.fixtureEvidence")}
-        value={contractCase.fixture_name}
-      />
-    </div>
-  );
-}
-
-function EvidenceLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid grid-cols-[4.8rem_minmax(0,1fr)] gap-2">
-      <span className="text-fg-muted">{label}</span>
-      <span className="break-words font-medium text-fg">{value}</span>
-    </div>
-  );
-}
-
-function ContractStatusPill({
-  status,
-  blocking,
-}: {
-  status: ParserAdapterContractStatus;
-  blocking: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex min-h-6 items-center rounded-md px-2 text-xs font-semibold",
-        contractStatusToneClass(status)
-      )}
-    >
-      {contractStatusLabel(status)}
-      {blocking ? ` / ${t("settings.parserAdapters.contract.blocking")}` : ""}
-    </span>
-  );
-}
-
-function ContractCodeList({
-  contractCase,
-}: {
-  contractCase: ParserAdapterContractCaseData;
-}) {
-  const labels = [
-    ...contractCase.warning_codes.map(routeWarningLabel),
-    ...contractCase.reason_codes.map(contractReasonLabel),
-  ].filter(Boolean);
-  if (!labels.length) {
-    return <span className="text-sm text-fg">{t("settings.parserAdapters.noWarning")}</span>;
-  }
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {labels.map((label, index) => (
-        <span
-          key={`${contractCase.backend}-${contractCase.source_kind}-${label}-${index}`}
-          className="inline-flex min-h-6 items-center rounded-md bg-surface-hover px-2 text-xs font-medium text-fg"
-        >
-          {label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-surface-hover p-3">
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
-    </div>
-  );
-}
-
-function RowCell({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0 px-3 md:py-3">
-      <div className="mb-1 text-xs font-medium text-fg-muted md:hidden">{label}</div>
-      {children}
     </div>
   );
 }
@@ -1235,178 +818,6 @@ function backendDescriptionKey(backend: ParserAdapterBackend): I18nKey {
 function formatEffectiveOrder(order: ParserAdapterBackendName[]) {
   if (!order.length) return t("settings.parserAdapters.noEffectiveOrder");
   return order.map(adapterLabel).join(" -> ");
-}
-
-function sourceKindLabel(sourceKind: string) {
-  if (isKnownSourceKind(sourceKind)) {
-    return t(`settings.parserAdapters.sourceKind.${sourceKind}` as I18nKey);
-  }
-  return sourceKind;
-}
-
-function isKnownSourceKind(sourceKind: string) {
-  return ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"].includes(
-    sourceKind
-  );
-}
-
-function routeWarningLabel(code: string) {
-  if (!code) return "";
-  if (code === "adapter_package_missing") {
-    return t("settings.parserAdapters.warning.adapter_package_missing");
-  }
-  if (code === "adapter_feature_flag_disabled") {
-    return t("settings.parserAdapters.warning.adapter_feature_flag_disabled");
-  }
-  if (code === "adapter_flag_ignored_by_backend") {
-    return t("settings.parserAdapters.warning.adapter_flag_ignored_by_backend");
-  }
-  if (code === "unsupported_audio") {
-    return t("settings.parserAdapters.warning.unsupported_audio");
-  }
-  if (code === "audio_transcription_not_configured") {
-    return t("settings.parserAdapters.warning.audio_transcription_not_configured");
-  }
-  if (code.endsWith("_adapter_source_unsupported")) {
-    return t("settings.parserAdapters.warning.adapter_source_unsupported");
-  }
-  if (code.endsWith("_adapter_feature_flag_disabled")) {
-    return t("settings.parserAdapters.warning.adapter_feature_flag_disabled");
-  }
-  if (code.endsWith("_adapter_package_missing")) {
-    return t("settings.parserAdapters.warning.adapter_package_missing");
-  }
-  if (code.endsWith("_adapter_flag_ignored_by_backend")) {
-    return t("settings.parserAdapters.warning.adapter_flag_ignored_by_backend");
-  }
-  return code;
-}
-
-function routeReasonLabel(code: string) {
-  if (!code) return "";
-  const knownReasonKeys = [
-    "local_parser_preferred_for_source",
-    "audio_transcription_not_configured",
-    "local_backend_selected",
-    "selected_adapter_supported_for_source",
-    "selected_adapter_unsupported_for_source",
-    "active_adapter_available_for_source",
-    "adapter_attempt_requires_fallback",
-  ];
-  if (knownReasonKeys.includes(code)) {
-    return t(`settings.parserAdapters.reason.${code}` as I18nKey);
-  }
-  return code;
-}
-
-function contractReasonLabel(code: string) {
-  if (!code) return "";
-  const knownReasonKeys = [
-    "adapter_active",
-    "adapter_available",
-    "adapter_disabled",
-    "adapter_failed",
-    "adapter_fallback_used",
-    "adapter_ignored",
-    "adapter_import_name_missing",
-    "adapter_distribution_name_missing",
-    "adapter_missing",
-    "adapter_not_routed_for_source",
-    "adapter_package_version_missing",
-    "fixture_missing",
-    "schema_remap_contract_ok",
-    "schema_remap_empty",
-  ];
-  if (knownReasonKeys.includes(code)) {
-    return t(`settings.parserAdapters.contract.reason.${code}` as I18nKey);
-  }
-  return routeReasonLabel(code) || code;
-}
-
-function contractStatusLabel(status: string) {
-  if (isKnownContractStatus(status)) {
-    return t(`settings.parserAdapters.contract.status.${status}` as I18nKey);
-  }
-  return status;
-}
-
-function isKnownContractStatus(status: string): status is ParserAdapterContractStatus {
-  return [
-    "passed",
-    "failed",
-    "fallback",
-    "available",
-    "ignored",
-    "disabled",
-    "missing",
-    "unsupported",
-    "fixture_missing",
-  ].includes(status);
-}
-
-function contractStatusToneClass(status: ParserAdapterContractStatus | string) {
-  if (status === "passed") return "bg-success-subtle text-success-fg";
-  if (status === "failed" || status === "fallback" || status === "missing") {
-    return "bg-danger-subtle text-danger-fg";
-  }
-  if (status === "disabled" || status === "fixture_missing") {
-    return "bg-warning-subtle text-warning-fg";
-  }
-  if (status === "ignored" || status === "unsupported") {
-    return "bg-warning-subtle text-warning-fg";
-  }
-  if (status === "available") return "bg-info-subtle text-info-fg";
-  return "bg-surface-hover text-fg";
-}
-
-function formatContractCounts(contractCase: ParserAdapterContractCaseData) {
-  return [
-    t("settings.parserAdapters.contract.count.elements", {
-      count: contractCase.element_count,
-    }),
-    t("settings.parserAdapters.contract.count.pages", {
-      count: contractCase.page_count,
-    }),
-    t("settings.parserAdapters.contract.count.tables", {
-      count: contractCase.table_count,
-    }),
-    t("settings.parserAdapters.contract.count.cells", {
-      count: contractCase.table_cell_count,
-    }),
-    t("settings.parserAdapters.contract.count.assets", {
-      count: contractCase.asset_count,
-    }),
-    t("settings.parserAdapters.contract.count.bbox", {
-      count: contractCase.bbox_count,
-    }),
-  ].join(" / ");
-}
-
-function formatPackageEvidence(contractCase: ParserAdapterContractCaseData) {
-  if (contractCase.adapter_distribution_name && contractCase.adapter_package_version) {
-    return `${contractCase.adapter_distribution_name} ${contractCase.adapter_package_version}`;
-  }
-  if (contractCase.adapter_import_name && contractCase.adapter_package_version) {
-    return `${contractCase.adapter_import_name} ${contractCase.adapter_package_version}`;
-  }
-  if (contractCase.adapter_import_name) {
-    return contractCase.adapter_import_name;
-  }
-  return t("settings.parserAdapters.contract.noPackageEvidence");
-}
-
-function formatParserEvidence(contractCase: ParserAdapterContractCaseData) {
-  if (contractCase.parser_backend && contractCase.parser_version) {
-    return `${contractCase.parser_backend} ${contractCase.parser_version}`;
-  }
-  return contractCase.parser_backend ?? t("settings.parserAdapters.contract.noParserEvidence");
-}
-
-function formatStatusCounts(statusCounts: Partial<Record<string, number>>) {
-  const labels = Object.entries(statusCounts)
-    .filter(([, count]) => Boolean(count))
-    .map(([status, count]) => `${contractStatusLabel(status)} ${count}`);
-  return labels.length ? labels.join(" / ") : t("settings.parserAdapters.noWarning");
 }
 
 function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterForm {

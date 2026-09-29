@@ -196,77 +196,14 @@ def test_parser_adapter_settings_reports_service_backends(
     )
 
 
-def test_parser_adapter_contract_endpoint_reports_non_sensitive_matrix(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """adapter contract endpoint は fixture 本文なしで実行証跡を返す。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
-    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(
-        parser_adapter_readiness,
-        "_package_info",
-        lambda *_args: (False, None, None),
-    )
+def test_parser_adapter_contract_endpoint_is_removed() -> None:
+    """画面の「運用診断」とともに互換性確認の API を削除した（#492）。
 
+    検査は CLI と nightly の評価が行う。
+    """
     resp = client.get("/api/settings/parser-adapters/contract")
 
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["passed"] is True
-    assert body["case_count"] == len(body["cases"])
-    assert body["blocking_failure_count"] == 0
-    assert body["summary"]["case_count"] == body["case_count"]
-    assert body["summary"]["blocking_failure_count"] == 0
-    assert body["summary"]["backend_source_status"]["docling"]["pdf"] == "disabled"
-    assert body["summary"]["source_kind_status_counts"]["pdf"]["disabled"] > 0
-    assert body["summary"]["missing_source_kinds"]
-    assert body["summary"]["blocking_failure_source_kinds"] == []
-    assert body["summary"]["blocking_failure_backends"] == []
-    assert body["summary"]["reason_code_counts"]["adapter_disabled"] > 0
-    assert body["summary"]["warning_code_counts"] == {}
-    assert body["summary"]["blocking_failure_reason_counts"] == {}
-    assert all(case["blocking"] is False for case in body["cases"])
-    assert body["fixture_root"].startswith("fixture_root:")
-    assert all(":" in case["fixture_name"] for case in body["cases"])
-    assert body["config_source"] == "runtime"
-    assert "raw_text" not in resp.text
-    assert "policy-ja.pdf" not in resp.text
-    assert "file-processing-fixtures" not in resp.text
-
-
-def test_parser_adapter_contract_endpoint_blocks_enabled_missing_adapter(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """有効化された adapter package がない場合は contract summary で失敗を返す。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
-    monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(
-        parser_adapter_readiness,
-        "_package_info",
-        lambda *_args: (False, None, None),
-    )
-
-    resp = client.get("/api/settings/parser-adapters/contract")
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["passed"] is False
-    assert body["blocking_failure_count"] > 0
-    assert body["summary"]["blocking_failure_count"] == body["blocking_failure_count"]
-    assert body["summary"]["backend_status_counts"]["docling"]["missing"] > 0
-    assert "pdf" in body["summary"]["blocking_failure_source_kinds"]
-    assert body["summary"]["blocking_failure_backends"] == ["docling"]
-    assert body["summary"]["warning_code_counts"]["adapter_package_missing"] > 0
-    assert body["summary"]["blocking_failure_reason_counts"]["adapter_missing"] > 0
-    assert any(
-        failure["backend"] == "docling" and failure["status"] == "missing"
-        for failure in body["summary"]["blocking_failures"]
-    )
-    assert "adapter_package_missing" in resp.text
+    assert resp.status_code == 404
 
 
 def test_parser_adapter_settings_explicit_backend_requires_feature_flag(

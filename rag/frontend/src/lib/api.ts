@@ -216,16 +216,6 @@ export type ParserAdapterStatus =
 export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
   "recommended" | "eligible" | "available" | "disabled" | "ignored" | "missing";
-export type ParserAdapterContractStatus =
-  | "passed"
-  | "failed"
-  | "fallback"
-  | "available"
-  | "ignored"
-  | "disabled"
-  | "missing"
-  | "unsupported"
-  | "fixture_missing";
 export type ParserAdapterSourceKind =
   "pdf" | "image" | "office" | "html" | "email" | "audio" | "text" | "unknown";
 
@@ -1633,84 +1623,6 @@ export interface ParserAdapterBackendSourceMatrixData {
   missing_source_kinds: string[];
   backend_source_kinds: Partial<Record<ParserAdapterScoreBackend, string[]>>;
   route_evidence: ParserAdapterSourceRouteData[];
-}
-
-export interface ParserAdapterContractCaseData {
-  backend: ParserAdapterBackendName;
-  source_kind: string;
-  fixture_name: string;
-  content_type: string;
-  status: ParserAdapterContractStatus;
-  blocking: boolean;
-  parser_backend: string | null;
-  parser_version: string | null;
-  adapter_import_name: string | null;
-  adapter_distribution_name: string | null;
-  adapter_package_version: string | null;
-  template: string | null;
-  element_count: number;
-  page_count: number;
-  table_count: number;
-  table_cell_count: number;
-  asset_count: number;
-  bbox_count: number;
-  warning_codes: string[];
-  reason_codes: string[];
-}
-
-export interface ParserAdapterContractSummaryData {
-  passed: boolean;
-  case_count: number;
-  blocking_failure_count: number;
-  source_kinds: string[];
-  backends: ParserAdapterBackendName[];
-  passed_source_kinds: string[];
-  missing_source_kinds: string[];
-  blocking_failure_source_kinds: string[];
-  blocking_failure_backends: ParserAdapterBackendName[];
-  backend_status_counts: Partial<
-    Record<ParserAdapterBackendName, Partial<Record<string, number>>>
-  >;
-  backend_source_status: Partial<
-    Record<ParserAdapterBackendName, Record<string, string>>
-  >;
-  backend_source_status_counts: Partial<
-    Record<
-      ParserAdapterBackendName,
-      Record<string, Partial<Record<string, number>>>
-    >
-  >;
-  source_kind_status_counts: Record<string, Partial<Record<string, number>>>;
-  backend_passed_source_kinds: Partial<
-    Record<ParserAdapterBackendName, string[]>
-  >;
-  scenarios: string[];
-  passed_scenarios: string[];
-  missing_scenarios: string[];
-  blocking_failure_scenarios: string[];
-  backend_passed_scenarios: Partial<Record<ParserAdapterBackendName, string[]>>;
-  reason_code_counts: Record<string, number>;
-  warning_code_counts: Record<string, number>;
-  blocking_failure_reason_counts: Record<string, number>;
-  blocking_failures: Array<{
-    backend?: string;
-    source_kind?: string;
-    status?: string;
-    warning_codes?: string[];
-    reason_codes?: string[];
-  }>;
-}
-
-export interface ParserAdapterContractData {
-  passed: boolean;
-  fixture_root: string;
-  source_kinds: string[];
-  backends: ParserAdapterBackendName[];
-  case_count: number;
-  blocking_failure_count: number;
-  cases: ParserAdapterContractCaseData[];
-  summary: ParserAdapterContractSummaryData;
-  config_source: "runtime";
 }
 
 export interface ParserServiceBackendData {
@@ -3245,10 +3157,6 @@ export const api = {
     }),
   getParserAdapterSettings: () =>
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
-  getParserAdapterContract: () =>
-    request<ParserAdapterContractData>(
-      "/api/settings/parser-adapters/contract",
-    ),
   getExternalParserStatus: (backend: ExternalParserBackendName) =>
     request<ExternalParserConnectionStatusData>(
       `/api/settings/parser-adapters/${encodeURIComponent(backend)}/status`,

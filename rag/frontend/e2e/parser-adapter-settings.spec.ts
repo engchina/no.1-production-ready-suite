@@ -22,7 +22,6 @@ for (const viewport of [
       });
     }
     await mockParserAdapters(page);
-    await mockParserAdapterContract(page);
 
     await page.goto("/settings/parser-adapters");
 
@@ -62,7 +61,7 @@ for (const viewport of [
     await expect(page.getByLabel("Endpoint")).toHaveCount(2);
     await expect(page.getByLabel("Model")).toHaveCount(2);
     await expect(page.getByLabel("API key", { exact: true })).toHaveCount(2);
-    await page.getByText("運用診断", { exact: true }).click();
+    await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
     await expect(page.getByText("未導入", { exact: true })).toHaveCount(0);
@@ -74,24 +73,6 @@ for (const viewport of [
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\)/ })
     ).toBeVisible();
     await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole("heading", { name: "StructuredExtraction 互換性確認" })).toBeVisible();
-    await expect(page.getByText("StructuredExtraction 互換性確認は未実行です。")).toBeVisible();
-    await page.getByRole("button", { name: "互換性を確認" }).click();
-    await expect(page.getByText("失敗", { exact: true }).first()).toBeVisible();
-    await expect(page.getByLabel("コード別サマリ")).toBeVisible();
-    await expect(page.getByText("阻害理由", { exact: true })).toBeVisible();
-    await expect(page.getByText("警告分布", { exact: true })).toBeVisible();
-    await expect(page.getByText("理由分布", { exact: true })).toBeVisible();
-    await expect(page.getByText("未確認 / 阻害")).toBeVisible();
-    await expect(page.getByText("未導入", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("パッケージ未導入", { exact: true })).toHaveCount(0);
-    await expect(
-      page.getByText("現在の設定の証跡", { exact: true }).nth(viewport.width >= 768 ? 0 : 1)
-    ).toBeVisible();
-    await expect(page.getByText("docling 1.2.3", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("pdf_fixture:hash-policy", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("要素 1 / ページ 1 / 表 0 / セル 0 / アセット 0 / BBox 1")).toBeVisible();
-    await expect(page.getByText("schema remap 成功", { exact: true })).toBeVisible();
 
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     const navLink = (await openSidebarNav(page)).getByRole("link", { name: "文書解析" });
@@ -104,131 +85,8 @@ for (const viewport of [
   });
 }
 
-async function mockParserAdapterContract(page: Page) {
-  await page.route("**/api/settings/parser-adapters/contract", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          passed: false,
-          fixture_root: "fixture_root:hash-fixtures",
-          source_kinds: ["pdf", "email"],
-          backends: ["docling", "mineru", "unstructured"],
-          case_count: 3,
-          blocking_failure_count: 1,
-          cases: [
-            {
-              backend: "docling",
-              source_kind: "pdf",
-              fixture_name: "pdf_fixture:hash-policy",
-              content_type: "application/pdf",
-              status: "passed",
-              blocking: true,
-              parser_backend: "docling",
-              parser_version: "1.2.3",
-              adapter_import_name: "docling",
-              adapter_distribution_name: "docling",
-              adapter_package_version: "1.2.3",
-              template: "pdf_layout",
-              element_count: 1,
-              page_count: 1,
-              table_count: 0,
-              table_cell_count: 0,
-              asset_count: 0,
-              bbox_count: 1,
-              warning_codes: [],
-              reason_codes: ["schema_remap_contract_ok"],
-            },
-            {
-              backend: "mineru",
-              source_kind: "pdf",
-              fixture_name: "pdf_fixture:hash-policy",
-              content_type: "application/pdf",
-              status: "missing",
-              blocking: true,
-              parser_backend: null,
-              parser_version: null,
-              adapter_import_name: "external_api",
-              adapter_distribution_name: null,
-              adapter_package_version: null,
-              template: null,
-              element_count: 0,
-              page_count: 0,
-              table_count: 0,
-              table_cell_count: 0,
-              asset_count: 0,
-              bbox_count: 0,
-              warning_codes: ["adapter_package_missing"],
-              reason_codes: ["adapter_missing"],
-            },
-            {
-              backend: "unstructured",
-              source_kind: "email",
-              fixture_name: "email_fixture:hash-approval",
-              content_type: "message/rfc822",
-              status: "available",
-              blocking: false,
-              parser_backend: null,
-              parser_version: null,
-              adapter_import_name: "unstructured",
-              adapter_distribution_name: "unstructured",
-              adapter_package_version: "0.18.32",
-              template: null,
-              element_count: 0,
-              page_count: 0,
-              table_count: 0,
-              table_cell_count: 0,
-              asset_count: 0,
-              bbox_count: 0,
-              warning_codes: [],
-              reason_codes: ["adapter_available"],
-            },
-          ],
-          summary: {
-            passed: false,
-            case_count: 3,
-            blocking_failure_count: 1,
-            source_kinds: ["pdf", "email"],
-            backends: ["docling", "mineru", "unstructured"],
-            passed_source_kinds: ["pdf"],
-            backend_status_counts: {
-              docling: { passed: 1 },
-              mineru: { missing: 1 },
-              unstructured: { available: 1 },
-            },
-            backend_source_status: {
-              docling: { pdf: "passed" },
-              mineru: { pdf: "missing" },
-              unstructured: { email: "available" },
-            },
-            reason_code_counts: {
-              schema_remap_contract_ok: 1,
-              adapter_missing: 1,
-              adapter_available: 1,
-            },
-            warning_code_counts: { adapter_package_missing: 1 },
-            blocking_failure_reason_counts: { adapter_missing: 1 },
-            blocking_failures: [
-              {
-                backend: "mineru",
-                source_kind: "pdf",
-                status: "missing",
-                warning_codes: ["adapter_package_missing"],
-                reason_codes: ["adapter_missing"],
-              },
-            ],
-          },
-          config_source: "runtime",
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
-}
-
 test("Docling の図・画像の読み取りが有効なら、読み取りプロンプトを編集できる", async ({ page }) => {
   await mockParserAdapters(page, { docling_vision_enabled: true });
-  await mockParserAdapterContract(page);
   let saved: unknown = null;
   await page.route("**/api/settings/docrag-prompts**", async (route) => {
     if (route.request().method() === "PUT") saved = route.request().postDataJSON();
