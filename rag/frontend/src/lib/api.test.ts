@@ -468,41 +468,6 @@ describe("api.request envelope", () => {
     });
   });
 
-  it("文書処理設定 API は ingestion-config へ PUT する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ data: {}, error_messages: [], warning_messages: [] })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await api.updateDocumentIngestionConfig("doc-1", {
-      preprocess_profile: null,
-      parser_adapter_backend: "mineru",
-      parser_docling_enabled: null,
-      parser_unstructured_enabled: null,
-      parser_mineru_enabled: null,
-      parser_dots_ocr_enabled: null,
-      chunking_strategy: null,
-      chunk_size: 512,
-      chunk_overlap: null,
-      chunk_min_chars: null,
-      chunk_context_header_enabled: null,
-      graph_profile: null,
-      field_extraction_enabled: null,
-      asset_summary_enabled: null,
-      navigation_summary_enabled: null,
-      auto_parse_after_preprocess_enabled: null,
-      auto_chunk_after_extract_enabled: null,
-      auto_index_after_chunk_enabled: null,
-    });
-
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/ingestion-config");
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PUT" });
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
-      parser_adapter_backend: "mineru",
-      chunk_size: 512,
-    });
-  });
-
   it("updateModelSettings は Enterprise AI payload template を保持して送る", async () => {
     const payload = {
       enterprise_ai: {

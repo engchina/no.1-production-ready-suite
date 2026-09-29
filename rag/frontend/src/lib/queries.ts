@@ -628,19 +628,6 @@ export function useSaveDocumentRecipeReviewEdits() {
   });
 }
 
-/** 文書単位の処理レシピ上書きを保存する。既存 chunk_set は変更しない。 */
-export function useUpdateDocumentIngestionConfig() {
-  return useMutation({
-    mutationFn: ({
-      id,
-      config,
-    }: {
-      id: string;
-      config: DocumentProcessingConfig;
-    }) => api.updateDocumentIngestionConfig(id, config),
-  });
-}
-
 /** 文書のナレッジベース所属を置き換える。 */
 export function useSaveDocumentClassification() {
   const qc = useQueryClient();

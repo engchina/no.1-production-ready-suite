@@ -17,7 +17,7 @@ import {
 import {
   ApiError,
   type ChunkingStrategyName,
-  type DocumentIngestionConfigData,
+  type DocumentProcessingConfigData,
   type DocumentProcessingConfig,
   type GraphProfileName,
   type ParserAdapterBackend,
@@ -34,7 +34,6 @@ import {
 import {
   useExtractionFieldsSettings,
   useParserAdapterSettings,
-  useUpdateDocumentIngestionConfig,
   useUpdateDocumentRecipe,
 } from "@/lib/queries";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
@@ -128,15 +127,8 @@ function emptyConfig(): DocumentProcessingConfig {
   };
 }
 
-function resolvedConfigs(data: DocumentIngestionConfigData) {
-  const processing = data.processing_config ?? emptyConfig();
-  const effective = data.effective_processing_config ?? {
-    ...emptyConfig(),
-    preprocess_profile: data.effective_preprocess_profile,
-    parser_adapter_backend: data.effective_parser_adapter_backend as ParserAdapterBackend,
-    chunking_strategy: data.effective_chunking_strategy as ChunkingStrategyName,
-  };
-  return { processing, effective };
+function resolvedConfigs(data: DocumentProcessingConfigData) {
+  return { processing: data.processing_config, effective: data.effective_processing_config };
 }
 
 function boolLabel(value: boolean | null) {
@@ -217,18 +209,17 @@ export function DocumentProcessingConfigPanel({
   sourceModality = null,
 }: {
   documentId: string;
-  recipeId?: string;
-  data: DocumentIngestionConfigData | null;
+  recipeId: string;
+  data: DocumentProcessingConfigData | null;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
   disabled: boolean;
   sourceModality?: string | null;
 }) {
-  const saveLegacy = useUpdateDocumentIngestionConfig();
   const saveRecipe = useUpdateDocumentRecipe();
-  const savePending = recipeId ? saveRecipe.isPending : saveLegacy.isPending;
-  const saveError = recipeId ? saveRecipe.error : saveLegacy.error;
+  const savePending = saveRecipe.isPending;
+  const saveError = saveRecipe.error;
   const [expanded, setExpanded] = useState(false);
   const configs = useMemo(() => (data ? resolvedConfigs(data) : null), [data]);
   const [form, setForm] = useState<DocumentProcessingConfig>(emptyConfig);
@@ -291,11 +282,7 @@ export function DocumentProcessingConfigPanel({
     const options = {
       onSuccess: () => toast.success(t("documents.processingConfig.toast.saved")),
     };
-    if (recipeId) {
-      saveRecipe.mutate({ id: documentId, recipeId, config: form }, options);
-      return;
-    }
-    saveLegacy.mutate({ id: documentId, config: form }, options);
+    saveRecipe.mutate({ id: documentId, recipeId, config: form }, options);
   };
 
   return (
