@@ -47,6 +47,7 @@ from app.security.permissions import (
     PROFILE_MANAGE_PERMISSION,
     PROFILE_READ_PERMISSION,
     QUERY_GENERATE_PERMISSION,
+    ROUTE_PERMISSIONS,
     SAMPLE_DATA_MANAGE_PERMISSION,
     SCHEMA_READ_PERMISSION,
     SCHEMA_REFRESH_PERMISSION,
@@ -2177,6 +2178,318 @@ def test_route_manifest_check_rejects_unregistered_user_route() -> None:
         _assert_route_manifest(application)
     missing = str(error.value).split(": ", 1)[1].split(", ")
     assert missing == ["POST /api/security/users/{user_uuid}/impersonate"]
+
+
+def _mounted_api_operations() -> set[tuple[str, str]]:
+    return {
+        (method.upper(), path.removeprefix("/api"))
+        for path, operations in app.openapi()["paths"].items()
+        if path.startswith("/api")
+        for method in operations
+        if method.upper() in _HTTP_METHODS
+    }
+
+
+def test_route_permissions_cover_every_mounted_route() -> None:
+    """mount された API は OPEN_API_OPERATIONS か ROUTE_PERMISSIONS の一方だけに載る（#510）。
+
+    前方一致をやめたので、manifest に登録のない route は拒否になる。ここで登録と実在の
+    route の差（登録漏れ・消えた route の登録の残り）を見つける。
+    """
+
+    mounted = _mounted_api_operations()
+    assert len(mounted) == 272
+    assert len(ROUTE_PERMISSIONS) == 263
+    assert set(ROUTE_PERMISSIONS).isdisjoint(OPEN_API_OPERATIONS)
+    assert set(ROUTE_PERMISSIONS) | set(OPEN_API_OPERATIONS) == mounted
+    for key, permissions in ROUTE_PERMISSIONS.items():
+        assert permissions, key
+        assert permissions <= ALL_PERMISSION_CODES, key
+
+
+# #510 の前（前方一致）の判定結果。前方一致の分岐ごとに代表の route を 1 つ以上置き、
+# method で分けていた分岐は両方の method を置く。明示の登録にしても同じ権限であることを確かめる。
+_LEGACY_PREFIX_RULE_RESULTS: tuple[tuple[str, str, set[str]], ...] = (
+    ("GET", "/security/permissions", {"menu.security_permissions"}),
+    ("GET", "/security/profile-access/profiles", {"menu.security_permissions"}),
+    ("PATCH", "/security/deepsec/config", {"menu.security_deepsec"}),
+    (
+        "PATCH",
+        "/settings/oci/object-storage",
+        {"menu.settings_oci", "menu.settings_upload_storage"},
+    ),
+    ("POST", "/settings/oci/key-file", {"menu.settings_oci"}),
+    ("GET", "/settings/upload-storage", {"menu.settings_oci", "menu.settings_upload_storage"}),
+    ("PATCH", "/settings/upload-storage", {"menu.settings_upload_storage"}),
+    ("POST", "/settings/model/test", {"menu.settings_model"}),
+    ("POST", "/settings/database/system-tables/initialize", {"menu.settings_system_tables"}),
+    ("POST", "/settings/database/wallet", {"menu.settings_database"}),
+    ("POST", "/schema/refresh-jobs", {"nl2sql.schema.refresh"}),
+    ("GET", "/schema/refresh-jobs/{job_id}", {"nl2sql.schema.read"}),
+    ("GET", "/schema/owners", {"nl2sql.schema.read"}),
+    (
+        "GET",
+        "/nl2sql/db-admin/tables/{table_name}/export.xlsx",
+        {
+            "menu.annotation_management",
+            "menu.comment_management",
+            "menu.domain_management",
+            "menu.table_management",
+        },
+    ),
+    (
+        "GET",
+        "/nl2sql/db-admin/views",
+        {
+            "menu.annotation_management",
+            "menu.comment_management",
+            "menu.domain_management",
+            "menu.view_management",
+        },
+    ),
+    ("POST", "/nl2sql/db-admin/truncate-table", {"menu.data_management", "menu.table_management"}),
+    ("POST", "/nl2sql/db-admin/drop-table", {"menu.table_management"}),
+    ("POST", "/nl2sql/db-admin/drop-view", {"menu.view_management"}),
+    ("POST", "/nl2sql/db-admin/import-tabular", {"menu.data_management", "menu.table_management"}),
+    ("POST", "/nl2sql/db-admin/upload-csv", {"menu.data_management"}),
+    (
+        "POST",
+        "/nl2sql/db-admin/preview-data/export.xlsx",
+        {
+            "menu.annotation_management",
+            "menu.comment_management",
+            "menu.data_management",
+            "menu.domain_management",
+            "menu.table_management",
+            "menu.view_management",
+        },
+    ),
+    ("POST", "/nl2sql/db-admin/execute", {"menu.admin_sql"}),
+    (
+        "POST",
+        "/nl2sql/db-admin/statements",
+        {
+            "menu.admin_sql",
+            "menu.annotation_management",
+            "menu.comment_management",
+            "menu.data_management",
+            "menu.domain_management",
+            "menu.table_management",
+            "menu.view_management",
+        },
+    ),
+    (
+        "GET",
+        "/nl2sql/db-admin/objects",
+        {
+            "menu.admin_sql",
+            "menu.annotation_management",
+            "menu.comment_management",
+            "menu.data_management",
+            "menu.domain_management",
+            "menu.global_rules",
+            "menu.glossary_rules",
+            "menu.sample_data",
+            "menu.table_management",
+            "menu.view_management",
+        },
+    ),
+    ("POST", "/nl2sql/db-admin/analyze-error", {"menu.admin_sql"}),
+    ("POST", "/nl2sql/sample-data/delete", {"nl2sql.sample_data.manage"}),
+    ("POST", "/nl2sql/comments/suggest", {"menu.comment_management"}),
+    ("POST", "/nl2sql/annotations/apply", {"menu.annotation_management"}),
+    ("POST", "/nl2sql/domains/inventory", {"menu.domain_management"}),
+    (
+        "POST",
+        "/nl2sql/metadata-samples",
+        {"menu.annotation_management", "menu.comment_management", "menu.domain_management"},
+    ),
+    (
+        "POST",
+        "/nl2sql/synthetic-data/runs/{run_id}/apply",
+        {"menu.data_management", "menu.sample_data"},
+    ),
+    ("GET", "/nl2sql/profiles/search", {"nl2sql.profiles.read"}),
+    ("GET", "/nl2sql/profiles/{profile_id}/usage-context", {"nl2sql.profiles.read"}),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/learning-material/import",
+        {"nl2sql.learning_material.manage", "nl2sql.profiles.manage"},
+    ),
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities",
+        {
+            "menu.ontology_build",
+            "nl2sql.ontology.actions.execute",
+            "nl2sql.profiles.read",
+            "nl2sql.sql.execute",
+        },
+    ),
+    (
+        "PATCH",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/binding",
+        {"nl2sql.ontology.capabilities.manage"},
+    ),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/invoke",
+        {"nl2sql.sql.execute"},
+    ),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/preview",
+        {"nl2sql.ontology.actions.execute"},
+    ),
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/workspace",
+        {"menu.ontology_build", "nl2sql.profiles.read", "nl2sql.query.generate"},
+    ),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-releases/{release_id}/rollback",
+        {"menu.ontology_build", "nl2sql.profiles.manage"},
+    ),
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-validation-jobs/{job_id}",
+        {"menu.ontology_build", "nl2sql.profiles.read", "nl2sql.query.generate"},
+    ),
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-proposals", {"nl2sql.profiles.manage"}),
+    ("DELETE", "/nl2sql/profiles/{profile_id}", {"nl2sql.profiles.manage"}),
+    ("POST", "/nl2sql/legacy-learning-material/rules/import", {"nl2sql.learning_material.manage"}),
+    ("POST", "/nl2sql/ontology/revisions/{revision_id}/publish", {"menu.ontology_build"}),
+    ("GET", "/nl2sql/ontology-build/{job_id}", {"menu.ontology_build"}),
+    (
+        "POST",
+        "/nl2sql/oracle-sync-jobs/{job_id}/retry",
+        {"nl2sql.profiles.manage", "nl2sql.select_ai_assets.refresh"},
+    ),
+    ("GET", "/nl2sql/select-ai/db-profile-refresh-jobs/{job_id}", {"nl2sql.select_ai_assets.read"}),
+    ("POST", "/nl2sql/select-ai/db-profiles/refresh-jobs", {"nl2sql.select_ai_assets.refresh"}),
+    ("PATCH", "/nl2sql/select-ai/db-profiles/{profile_name}", {"nl2sql.select_ai_assets.manage"}),
+    ("GET", "/nl2sql/select-ai/db-profiles/{profile_name}", {"nl2sql.select_ai_assets.read"}),
+    (
+        "POST",
+        "/nl2sql/select-ai/feedback/vector-index",
+        {"nl2sql.feedback.manage", "nl2sql.select_ai_assets.manage"},
+    ),
+    ("POST", "/nl2sql/select-ai/profiles/refresh", {"nl2sql.select_ai_assets.refresh"}),
+    ("GET", "/nl2sql/select-ai/profiles/export.json", {"nl2sql.select_ai_assets.manage"}),
+    ("POST", "/nl2sql/select-ai/profiles/import-json", {"nl2sql.select_ai_assets.manage"}),
+    ("POST", "/nl2sql/select-ai/assets/cleanup", {"nl2sql.select_ai_assets.manage"}),
+    ("POST", "/nl2sql/select-ai-agent/assets/refresh", {"nl2sql.select_ai_assets.refresh"}),
+    ("POST", "/nl2sql/select-ai-agent/assets/cleanup", {"nl2sql.select_ai_assets.manage"}),
+    ("POST", "/nl2sql/select-ai-agent/run-team", {"nl2sql.select_ai_assets.manage"}),
+    ("POST", "/nl2sql/select-ai-agent/conversations/create", {"nl2sql.select_ai_assets.manage"}),
+    ("GET", "/nl2sql/select-ai-agent/privileges/check", {"nl2sql.select_ai_assets.read"}),
+    ("POST", "/nl2sql/feedback/admin-review", {"nl2sql.feedback.manage"}),
+    ("POST", "/nl2sql/feedback-index/rebuild", {"nl2sql.feedback.manage"}),
+    ("PATCH", "/nl2sql/feedback-config", {"nl2sql.feedback.manage"}),
+    ("GET", "/nl2sql/feedback", {"nl2sql.feedback.manage"}),
+    ("POST", "/nl2sql/feedback", {"nl2sql.feedback.manage", "nl2sql.feedback.write"}),
+    (
+        "DELETE",
+        "/nl2sql/feedback/{history_id}",
+        {"nl2sql.feedback.manage", "nl2sql.feedback.write"},
+    ),
+    (
+        "DELETE",
+        "/nl2sql/classifier/training-data/{example_id}",
+        {"menu.question_classifier_models"},
+    ),
+    ("GET", "/nl2sql/quality-evaluations/{job_id}/results.xlsx", {"menu.evaluation"}),
+    ("POST", "/nl2sql/reverse/deep", {"menu.sql_to_question"}),
+    ("GET", "/nl2sql/history", {"menu.history", "nl2sql.feedback.manage", "nl2sql.query.generate"}),
+    ("POST", "/nl2sql/preview", {"nl2sql.query.generate"}),
+    ("POST", "/nl2sql/analyze", {"nl2sql.sql.execute"}),
+    ("POST", "/nl2sql/jobs", {"nl2sql.query.generate"}),
+    (
+        "POST",
+        "/nl2sql/jobs/{job_id}/cancel",
+        {"menu.history", "nl2sql.feedback.manage", "nl2sql.query.generate"},
+    ),
+    ("POST", "/nl2sql/query-sessions/{session_id}/execute", {"nl2sql.sql.execute"}),
+    ("PATCH", "/nl2sql/query-sessions/{session_id}/intent", {"nl2sql.query.generate"}),
+    ("POST", "/nl2sql/similar-history", {"nl2sql.query.generate"}),
+    ("POST", "/nl2sql/recommend-profile", {"nl2sql.query.generate"}),
+    (
+        "POST",
+        "/nl2sql/demo/learning",
+        {"nl2sql.feedback.manage", "nl2sql.learning_material.manage"},
+    ),
+    ("POST", "/nl2sql/persistence/recover", {"nl2sql.persistence.recover"}),
+    ("GET", "/nl2sql/diagnostics", {"nl2sql.system_status.read"}),
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "route_path", "expected"),
+    _LEGACY_PREFIX_RULE_RESULTS,
+    ids=[f"{method} {path}" for method, path, _ in _LEGACY_PREFIX_RULE_RESULTS],
+)
+def test_route_permissions_match_legacy_prefix_rules(
+    method: str, route_path: str, expected: set[str]
+) -> None:
+    """前方一致をやめても、登録済みの API の権限は変わらない（#510）。"""
+
+    assert (method, route_path) in ROUTE_PERMISSIONS
+    assert permission_for_route(method, route_path) == frozenset(expected)
+
+
+@pytest.mark.parametrize(
+    ("method", "route_path"),
+    [
+        # いずれも #510 の前は前方一致で既存の権限に割り当てられていた。
+        ("GET", "/nl2sql/new-feature"),
+        ("POST", "/nl2sql/new-feature/export"),
+        ("POST", "/nl2sql/db-admin/new-operation"),
+        ("GET", "/nl2sql/profiles/{profile_id}/new-view"),
+        ("DELETE", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}"),
+        ("PUT", "/nl2sql/select-ai/db-profiles/{profile_name}"),
+        ("POST", "/nl2sql/persistence/new-operation"),
+        ("GET", "/schema/new-listing"),
+        ("POST", "/settings/oci/new-operation"),
+        ("DELETE", "/settings/database"),
+        ("GET", "/security/deepsec/new-listing"),
+        ("POST", "/security/profile-access/profiles"),
+    ],
+)
+def test_unregistered_routes_are_denied(method: str, route_path: str) -> None:
+    """登録のない method・path は、前方一致の範囲の下でも既定で拒否する（#510）。"""
+
+    assert permission_for_route(method, route_path) == frozenset({UNCLASSIFIED_PERMISSION})
+
+
+def test_route_manifest_check_rejects_unregistered_routes_under_former_prefixes() -> None:
+    """前方一致の範囲に未登録の route を足すと、起動時の manifest の検査で失敗する（#510）。"""
+
+    application = FastAPI()
+
+    @application.post("/api/nl2sql/profiles/{profile_id}/new-operation")
+    def _new_profile_operation(profile_id: str) -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {"profile_id": profile_id}
+
+    @application.get("/api/settings/model/new-listing")
+    def _new_model_listing() -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {}
+
+    @application.get("/api/nl2sql/profiles/search")
+    def _search_profiles() -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {}
+
+    @application.get("/api/nl2sql/persistence")
+    def _persistence() -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {}
+
+    with pytest.raises(RuntimeError) as error:
+        _assert_route_manifest(application)
+    missing = str(error.value).split(": ", 1)[1].split(", ")
+    assert missing == [
+        "GET /api/settings/model/new-listing",
+        "POST /api/nl2sql/profiles/{profile_id}/new-operation",
+    ]
 
 
 def test_schema_refresh_active_static_route_precedes_job_id_route() -> None:

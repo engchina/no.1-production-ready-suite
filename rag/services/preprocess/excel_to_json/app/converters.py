@@ -97,9 +97,7 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[dict] | None, list[str]]:
     except Exception:
         return None, ["openpyxl_unavailable"]
     try:
-        workbook = openpyxl.load_workbook(
-            io.BytesIO(source_bytes), read_only=True, data_only=True
-        )
+        workbook = openpyxl.load_workbook(io.BytesIO(source_bytes), read_only=True, data_only=True)
     except Exception:
         return None, ["excel_open_failed"]
     sheets: list[dict] = []
@@ -148,8 +146,7 @@ def _sheet_payload(name: str, rows: list[list[str]]) -> dict:
     records: list[dict[str, str]] = []
     for row in rows[1:]:
         record = {
-            column: (row[index] if index < len(row) else "")
-            for index, column in enumerate(columns)
+            column: (row[index] if index < len(row) else "") for index, column in enumerate(columns)
         }
         records.append(record)
     return {"name": name, "columns": columns, "row_count": len(records), "rows": records}

@@ -372,15 +372,6 @@ BUSINESS_MODEL_MENUS = frozenset(
         "menu.global_rules",
     }
 )
-IMPROVEMENT_MENUS = frozenset(
-    {
-        "menu.profiles",
-        "menu.ontology_build",
-        "menu.feedback_management",
-        "menu.question_classifier_models",
-        "menu.evaluation",
-    }
-)
 SCHEMA_READ_MENUS = frozenset(
     {
         "menu.query",
@@ -598,234 +589,427 @@ SECURITY_USER_ROLE_ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 権限の付与はロール管理から分けた権限管理だけが行う（NL2SQL の router。#206）。
     ("PUT", "/security/roles/{role_id}/permissions"): _SECURITY_PERMISSIONS,
 }
-_SECURITY_USER_ROLE_PREFIXES = ("/security/users", "/security/roles")
+
+# ---- ROUTE_PERMISSIONS で使う権限の組（いずれかを持てば通す） ----
+_ADMIN_SQL = _allowed("menu.admin_sql")
+_ANNOTATION_MANAGEMENT = _allowed("menu.annotation_management")
+_COMMENT_MANAGEMENT = _allowed("menu.comment_management")
+_EVALUATION = _allowed("menu.evaluation")
+_FEEDBACK_MANAGE = _allowed(FEEDBACK_MANAGE_PERMISSION)
+_LEARNING_MATERIAL_MANAGE = _allowed(LEARNING_MATERIAL_MANAGE_PERMISSION)
+_ONTOLOGY_BUILD = _allowed("menu.ontology_build")
+_PROFILE_MANAGE = _allowed(PROFILE_MANAGE_PERMISSION)
+_QUERY_GENERATE = _allowed(QUERY_GENERATE_PERMISSION)
+_QUESTION_CLASSIFIER_MODELS = _allowed("menu.question_classifier_models")
+_SAMPLE_DATA_MANAGE = _allowed(SAMPLE_DATA_MANAGE_PERMISSION)
+_SCHEMA_READ = _allowed(SCHEMA_READ_PERMISSION)
+_SECURITY_DEEPSEC = _allowed("menu.security_deepsec")
+_SELECT_AI_ASSETS_MANAGE = _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
+_SELECT_AI_ASSETS_READ = _allowed(SELECT_AI_ASSETS_READ_PERMISSION)
+_SELECT_AI_ASSETS_REFRESH = _allowed(SELECT_AI_ASSETS_REFRESH_PERMISSION)
+_SETTINGS_DATABASE = _allowed("menu.settings_database")
+_SETTINGS_MODEL = _allowed("menu.settings_model")
+_SETTINGS_OCI = _allowed("menu.settings_oci")
+_SQL_EXECUTE = _allowed(SQL_EXECUTE_PERMISSION)
+_SQL_TO_QUESTION = _allowed("menu.sql_to_question")
+_SETTINGS_OBJECT_STORAGE = _allowed("menu.settings_oci", "menu.settings_upload_storage")
+_QUERY_HISTORY_READ = _allowed(
+    "menu.history", QUERY_GENERATE_PERMISSION, FEEDBACK_MANAGE_PERMISSION
+)
+_FEEDBACK_WRITE = _allowed(FEEDBACK_WRITE_PERMISSION, FEEDBACK_MANAGE_PERMISSION)
+_DB_ADMIN_TABLE_DETAIL = _allowed(
+    "menu.table_management",
+    "menu.comment_management",
+    "menu.annotation_management",
+    "menu.domain_management",
+)
+_DB_ADMIN_VIEW_DETAIL = _allowed(
+    "menu.view_management",
+    "menu.comment_management",
+    "menu.annotation_management",
+    "menu.domain_management",
+)
+_DB_ADMIN_TABLE_DATA = _allowed("menu.table_management", "menu.data_management")
+_DB_ADMIN_PREVIEW = _allowed(
+    "menu.table_management",
+    "menu.view_management",
+    "menu.data_management",
+    "menu.comment_management",
+    "menu.annotation_management",
+    "menu.domain_management",
+)
+_SYNTHETIC_DATA = _allowed("menu.sample_data", "menu.data_management")
+_PROFILE_LEARNING_MATERIAL = _allowed(
+    PROFILE_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION
+)
+_ONTOLOGY_CAPABILITY_READ = _allowed(
+    PROFILE_READ_PERMISSION,
+    "menu.ontology_build",
+    "nl2sql.ontology.actions.execute",
+    SQL_EXECUTE_PERMISSION,
+)
+_ONTOLOGY_READ = _allowed("menu.ontology_build", PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION)
+_ONTOLOGY_WRITE = _allowed("menu.ontology_build", PROFILE_MANAGE_PERMISSION)
+_ORACLE_SYNC = _allowed(PROFILE_MANAGE_PERMISSION, SELECT_AI_ASSETS_REFRESH_PERMISSION)
+_SELECT_AI_FEEDBACK = _allowed(FEEDBACK_MANAGE_PERMISSION, SELECT_AI_ASSETS_MANAGE_PERMISSION)
+
+# (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
+# 前方一致では割り当てない。登録のない route は `UNCLASSIFIED_PERMISSION` になり、
+# 起動時の manifest の検査（`app.main._assert_route_manifest`）で失敗し、実行時も拒否する
+# （#510。RAG は #476）。
+# 権限なしで通す操作は OPEN_API_OPERATIONS に置き、ここには登録しない。
+ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
+    # ---- ユーザーとロール（platform の共通 router。#503） ----
+    **SECURITY_USER_ROLE_ROUTE_PERMISSIONS,
+    # ---- NL2SQL セキュリティ: 権限管理・業務プロファイル利用権限 ----
+    ("GET", "/security/permissions"): _SECURITY_PERMISSIONS,
+    ("GET", "/security/profile-access/profiles"): _SECURITY_PERMISSIONS,
+    # ---- NL2SQL セキュリティ: Deep Data Security ----
+    ("PATCH", "/security/deepsec/config"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/config/sync-password"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/data-entitlements"): _SECURITY_DEEPSEC,
+    ("PATCH", "/security/deepsec/data-entitlements/{role_id}"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/data-entitlements/{role_id}/apply"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/data-entitlements/{role_id}/preview"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/plan"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/plan/{version}/reset"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/plan/{version}/steps/{step_no}/apply"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/relations"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/scope-profiles"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/status"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/target-objects"): _SECURITY_DEEPSEC,
+    ("GET", "/security/deepsec/target-objects/{owner}/{object_name}"): _SECURITY_DEEPSEC,
+    ("POST", "/security/deepsec/verify"): _SECURITY_DEEPSEC,
+    # ---- システム設定: OCI 認証（Object Storage の設定はアップロード保存先の画面も使う） ----
+    ("GET", "/settings/oci"): _SETTINGS_OCI,
+    ("PATCH", "/settings/oci"): _SETTINGS_OCI,
+    ("POST", "/settings/oci/config/read"): _SETTINGS_OCI,
+    ("POST", "/settings/oci/config/test"): _SETTINGS_OCI,
+    ("POST", "/settings/oci/key-file"): _SETTINGS_OCI,
+    ("PATCH", "/settings/oci/object-storage"): _SETTINGS_OBJECT_STORAGE,
+    ("POST", "/settings/oci/object-storage/namespace"): _SETTINGS_OBJECT_STORAGE,
+    # ---- システム設定: アップロード保存先（参照は OCI 認証の画面も使う） ----
+    ("GET", "/settings/upload-storage"): _SETTINGS_OBJECT_STORAGE,
+    ("PATCH", "/settings/upload-storage"): _allowed("menu.settings_upload_storage"),
+    # ---- システム設定: モデル ----
+    ("GET", "/settings/model"): _SETTINGS_MODEL,
+    ("PATCH", "/settings/model"): _SETTINGS_MODEL,
+    ("POST", "/settings/model/test"): _SETTINGS_MODEL,
+    # ---- システム設定: システムテーブル ----
+    ("GET", "/settings/database/system-tables"): _allowed("menu.settings_system_tables"),
+    ("POST", "/settings/database/system-tables/initialize"): _allowed(
+        "menu.settings_system_tables"
+    ),
+    # ---- システム設定: データベース ----
+    ("GET", "/settings/database"): _SETTINGS_DATABASE,
+    ("PATCH", "/settings/database"): _SETTINGS_DATABASE,
+    ("GET", "/settings/database/adb"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/adb/settings"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/adb/start"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/adb/stop"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/password/reveal"): _SETTINGS_DATABASE,
+    ("GET", "/settings/database/select-ai-credential"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/select-ai-credential"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/test"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/wallet"): _SETTINGS_DATABASE,
+    ("POST", "/settings/database/wallet/download"): _SETTINGS_DATABASE,
+    # ---- DB 構造（schema catalog） ----
+    ("GET", "/schema/catalog"): _SCHEMA_READ,
+    ("GET", "/schema/catalog/head"): _SCHEMA_READ,
+    ("GET", "/schema/objects"): _SCHEMA_READ,
+    ("GET", "/schema/objects/{owner}/{object_name}"): _SCHEMA_READ,
+    ("GET", "/schema/owners"): _SCHEMA_READ,
+    ("POST", "/schema/refresh-jobs"): _allowed(SCHEMA_REFRESH_PERMISSION),
+    ("GET", "/schema/refresh-jobs/active"): _SCHEMA_READ,
+    ("GET", "/schema/refresh-jobs/{job_id}"): _SCHEMA_READ,
+    # ---- システムの状態（`GET /nl2sql/persistence` は OPEN_API_OPERATIONS） ----
+    ("POST", "/nl2sql/persistence/recover"): _allowed(PERSISTENCE_RECOVER_PERMISSION),
+    ("GET", "/nl2sql/diagnostics"): _allowed(SYSTEM_STATUS_READ_PERMISSION),
+    # ---- SQL 生成・実行 ----
+    ("POST", "/nl2sql/preview"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/jobs"): _QUERY_GENERATE,
+    ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
+    ("POST", "/nl2sql/jobs/{job_id}/cancel"): _QUERY_HISTORY_READ,
+    ("POST", "/nl2sql/execute"): _SQL_EXECUTE,
+    ("POST", "/nl2sql/analyze"): _SQL_EXECUTE,
+    ("POST", "/nl2sql/rewrite"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/recommend-profile"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/similar-history"): _QUERY_GENERATE,
+    # ---- Ontology の query session（実行だけ SQL 実行の権限） ----
+    ("POST", "/nl2sql/query-sessions"): _QUERY_GENERATE,
+    ("GET", "/nl2sql/query-sessions/{session_id}"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/cancel"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/clarification-answers"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/confirm-sql"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/execute"): _SQL_EXECUTE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/generate-sql"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/improvement-proposal"): _QUERY_GENERATE,
+    ("PATCH", "/nl2sql/query-sessions/{session_id}/intent"): _QUERY_GENERATE,
+    # ---- 履歴 ----
+    ("GET", "/nl2sql/history"): _QUERY_HISTORY_READ,
+    # ---- フィードバック（一覧は管理、登録は利用者も） ----
+    ("GET", "/nl2sql/feedback"): _FEEDBACK_MANAGE,
+    ("POST", "/nl2sql/feedback"): _FEEDBACK_WRITE,
+    ("GET", "/nl2sql/feedback-config"): _FEEDBACK_MANAGE,
+    ("PATCH", "/nl2sql/feedback-config"): _FEEDBACK_MANAGE,
+    ("GET", "/nl2sql/feedback-entries"): _FEEDBACK_MANAGE,
+    ("POST", "/nl2sql/feedback-entries/delete"): _FEEDBACK_MANAGE,
+    ("GET", "/nl2sql/feedback-index"): _FEEDBACK_MANAGE,
+    ("POST", "/nl2sql/feedback-index/clear"): _FEEDBACK_MANAGE,
+    ("POST", "/nl2sql/feedback-index/rebuild"): _FEEDBACK_MANAGE,
+    ("POST", "/nl2sql/feedback/admin-review"): _FEEDBACK_MANAGE,
+    ("DELETE", "/nl2sql/feedback/{history_id}"): _FEEDBACK_WRITE,
+    # ---- データ準備: DB 管理（表・ビュー・データ・管理 SQL） ----
+    ("POST", "/nl2sql/db-admin/analyze-error"): _ADMIN_SQL,
+    ("POST", "/nl2sql/db-admin/drop-table"): _allowed("menu.table_management"),
+    ("POST", "/nl2sql/db-admin/drop-view"): _allowed("menu.view_management"),
+    ("POST", "/nl2sql/db-admin/execute"): _ADMIN_SQL,
+    ("POST", "/nl2sql/db-admin/extract-join-where"): _ADMIN_SQL,
+    ("POST", "/nl2sql/db-admin/import-tabular"): _DB_ADMIN_TABLE_DATA,
+    ("GET", "/nl2sql/db-admin/objects"): DATA_PREP_MENUS,
+    ("POST", "/nl2sql/db-admin/preview-data"): _DB_ADMIN_PREVIEW,
+    ("POST", "/nl2sql/db-admin/preview-data/export.xlsx"): _DB_ADMIN_PREVIEW,
+    ("POST", "/nl2sql/db-admin/statements"): _allowed(
+        "menu.admin_sql",
+        "menu.annotation_management",
+        "menu.comment_management",
+        "menu.data_management",
+        "menu.domain_management",
+        "menu.table_management",
+        "menu.view_management",
+    ),
+    ("GET", "/nl2sql/db-admin/tables"): _DB_ADMIN_TABLE_DETAIL,
+    ("GET", "/nl2sql/db-admin/tables/{table_name}"): _DB_ADMIN_TABLE_DETAIL,
+    ("GET", "/nl2sql/db-admin/tables/{table_name}/export.xlsx"): _DB_ADMIN_TABLE_DETAIL,
+    ("POST", "/nl2sql/db-admin/truncate-table"): _DB_ADMIN_TABLE_DATA,
+    ("POST", "/nl2sql/db-admin/upload-csv"): _allowed("menu.data_management"),
+    ("GET", "/nl2sql/db-admin/views"): _DB_ADMIN_VIEW_DETAIL,
+    ("GET", "/nl2sql/db-admin/views/{view_name}"): _DB_ADMIN_VIEW_DETAIL,
+    ("GET", "/nl2sql/db-admin/views/{view_name}/export.xlsx"): _DB_ADMIN_VIEW_DETAIL,
+    # ---- データ準備: コメント・アノテーション・ドメイン ----
+    ("POST", "/nl2sql/comments/apply"): _COMMENT_MANAGEMENT,
+    ("POST", "/nl2sql/comments/generate-sql"): _COMMENT_MANAGEMENT,
+    ("POST", "/nl2sql/comments/suggest"): _COMMENT_MANAGEMENT,
+    ("POST", "/nl2sql/annotations/apply"): _ANNOTATION_MANAGEMENT,
+    ("POST", "/nl2sql/annotations/generate"): _ANNOTATION_MANAGEMENT,
+    ("POST", "/nl2sql/annotations/generate-sql"): _ANNOTATION_MANAGEMENT,
+    ("POST", "/nl2sql/domains/generate-sql"): _allowed("menu.domain_management"),
+    ("POST", "/nl2sql/domains/inventory"): _allowed("menu.domain_management"),
+    ("POST", "/nl2sql/metadata-samples"): _allowed(
+        "menu.annotation_management", "menu.comment_management", "menu.domain_management"
+    ),
+    # ---- データ準備: サンプルデータ・合成データ ----
+    ("GET", "/nl2sql/sample-data"): _SAMPLE_DATA_MANAGE,
+    ("POST", "/nl2sql/sample-data/delete"): _SAMPLE_DATA_MANAGE,
+    ("POST", "/nl2sql/sample-data/import"): _SAMPLE_DATA_MANAGE,
+    ("POST", "/nl2sql/synthetic-data/generate"): _SYNTHETIC_DATA,
+    ("GET", "/nl2sql/synthetic-data/results"): _SYNTHETIC_DATA,
+    ("GET", "/nl2sql/synthetic-data/runs"): _SYNTHETIC_DATA,
+    ("POST", "/nl2sql/synthetic-data/runs"): _SYNTHETIC_DATA,
+    ("GET", "/nl2sql/synthetic-data/runs/{run_id}"): _SYNTHETIC_DATA,
+    ("POST", "/nl2sql/synthetic-data/runs/{run_id}/apply"): _SYNTHETIC_DATA,
+    ("POST", "/nl2sql/synthetic-data/runs/{run_id}/discard"): _SYNTHETIC_DATA,
+    ("GET", "/nl2sql/synthetic-data/runs/{run_id}/results"): _SYNTHETIC_DATA,
+    # ---- 業務プロファイル ----
+    ("GET", "/nl2sql/profiles"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/search"): _allowed(PROFILE_READ_PERMISSION),
+    ("GET", "/nl2sql/profiles/{profile_id}"): _PROFILE_MANAGE,
+    ("PATCH", "/nl2sql/profiles/{profile_id}"): _PROFILE_MANAGE,
+    ("DELETE", "/nl2sql/profiles/{profile_id}"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/archive"): _PROFILE_MANAGE,
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/learning-material/export.xlsx",
+    ): _PROFILE_LEARNING_MATERIAL,
+    ("POST", "/nl2sql/profiles/{profile_id}/learning-material/import"): _PROFILE_LEARNING_MATERIAL,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-build"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-build-jobs"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-capabilities"): _ONTOLOGY_CAPABILITY_READ,
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/executions/{execution_id}",
+    ): _ONTOLOGY_CAPABILITY_READ,
+    (
+        "PATCH",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/binding",
+    ): _allowed("nl2sql.ontology.capabilities.manage"),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/execute",
+    ): _allowed("nl2sql.ontology.actions.execute"),
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/invoke",
+    ): _SQL_EXECUTE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/preview",
+    ): _allowed("nl2sql.ontology.actions.execute"),
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-capabilities/{definition_id}/previews/{preview_id}/outcome",
+    ): _ONTOLOGY_CAPABILITY_READ,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-context/search"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-markdown"): _PROFILE_MANAGE,
+    ("PATCH", "/nl2sql/profiles/{profile_id}/ontology-markdown/draft"): _PROFILE_MANAGE,
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-markdown/preparations/{preparation_id}",
+    ): _PROFILE_MANAGE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-markdown/preparations/{preparation_id}/validate-data",
+    ): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-markdown/prepare"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-markdown/publication-outcome"): _PROFILE_MANAGE,
+    (
+        "GET",
+        "/nl2sql/profiles/{profile_id}/ontology-markdown/publications/{snapshot_id}/diagnostics",
+    ): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-markdown/publish"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-proposals"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-published"): _ONTOLOGY_READ,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-releases/{release_id}"): _ONTOLOGY_READ,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-releases/{release_id}/rollback",
+    ): _ONTOLOGY_WRITE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-results"): _ONTOLOGY_READ,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}"): _ONTOLOGY_READ,
+    ("PATCH", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}"): _ONTOLOGY_WRITE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/analyze"): _ONTOLOGY_WRITE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/changes/{change_id}/apply",
+    ): _ONTOLOGY_WRITE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/conflicts/{index}/resolve",
+    ): _ONTOLOGY_WRITE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/notes"): _ONTOLOGY_WRITE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/publish"): _ONTOLOGY_WRITE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/review"): _ONTOLOGY_WRITE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/validate",
+    ): _ONTOLOGY_WRITE,
+    (
+        "POST",
+        "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/validation-jobs",
+    ): _ONTOLOGY_WRITE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-results/{result_id}/workspace"): _ONTOLOGY_READ,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-source-documents"): _PROFILE_MANAGE,
+    (
+        "DELETE",
+        "/nl2sql/profiles/{profile_id}/ontology-source-documents/{source_document_id}",
+    ): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-validation-jobs/{job_id}"): _ONTOLOGY_READ,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-view"): _PROFILE_MANAGE,
+    ("PATCH", "/nl2sql/profiles/{profile_id}/ontology-view"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/ontology-view/materialize"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/ontology-view/mermaid"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/oracle-sync-jobs"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/restore"): _PROFILE_MANAGE,
+    ("POST", "/nl2sql/profiles/{profile_id}/select-ai-profile"): _PROFILE_MANAGE,
+    ("GET", "/nl2sql/profiles/{profile_id}/usage-context"): _allowed(PROFILE_READ_PERMISSION),
+    # ---- 学習素材（旧形式）・デモ学習 ----
+    ("GET", "/nl2sql/legacy-learning-material"): _LEARNING_MATERIAL_MANAGE,
+    ("GET", "/nl2sql/legacy-learning-material/rules/export.xlsx"): _LEARNING_MATERIAL_MANAGE,
+    ("POST", "/nl2sql/legacy-learning-material/rules/import"): _LEARNING_MATERIAL_MANAGE,
+    ("GET", "/nl2sql/legacy-learning-material/terms/export.xlsx"): _LEARNING_MATERIAL_MANAGE,
+    ("POST", "/nl2sql/legacy-learning-material/terms/import"): _LEARNING_MATERIAL_MANAGE,
+    ("POST", "/nl2sql/demo/learning"): _allowed(
+        FEEDBACK_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION
+    ),
+    # ---- Ontology の構築 ----
+    ("GET", "/nl2sql/ontology-build/{job_id}"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology-build/{job_id}/cancel"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology-build/{job_id}/retry"): _ONTOLOGY_BUILD,
+    ("GET", "/nl2sql/ontology-publish/{job_id}"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/profile-recommendations"): _ONTOLOGY_BUILD,
+    (
+        "POST",
+        "/nl2sql/ontology/profile-recommendations/{recommendation_id}/confirm",
+    ): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/proposals/batch-accept"): _ONTOLOGY_BUILD,
+    ("GET", "/nl2sql/ontology/proposals/{proposal_id}"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/proposals/{proposal_id}/accept"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/proposals/{proposal_id}/reject"): _ONTOLOGY_BUILD,
+    ("GET", "/nl2sql/ontology/revisions"): _ONTOLOGY_BUILD,
+    ("GET", "/nl2sql/ontology/revisions/current"): _ONTOLOGY_BUILD,
+    ("GET", "/nl2sql/ontology/revisions/{revision_id}"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/revisions/{revision_id}/drafts"): _ONTOLOGY_BUILD,
+    ("POST", "/nl2sql/ontology/revisions/{revision_id}/publish"): _ONTOLOGY_BUILD,
+    # ---- Oracle への同期 ----
+    ("GET", "/nl2sql/oracle-sync-jobs/{job_id}"): _ORACLE_SYNC,
+    ("POST", "/nl2sql/oracle-sync-jobs/{job_id}/retry"): _ORACLE_SYNC,
+    # ---- Select AI / Select AI Agent の資産 ----
+    ("GET", "/nl2sql/select-ai-agent/assets"): _SELECT_AI_ASSETS_READ,
+    ("POST", "/nl2sql/select-ai-agent/assets/cleanup"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai-agent/assets/refresh"): _SELECT_AI_ASSETS_REFRESH,
+    ("GET", "/nl2sql/select-ai-agent/conversations"): _SELECT_AI_ASSETS_READ,
+    ("POST", "/nl2sql/select-ai-agent/conversations/create"): _SELECT_AI_ASSETS_MANAGE,
+    ("GET", "/nl2sql/select-ai-agent/privileges/check"): _SELECT_AI_ASSETS_READ,
+    ("POST", "/nl2sql/select-ai-agent/run-team"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai-agent/run-tool"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai/assets/cleanup"): _SELECT_AI_ASSETS_MANAGE,
+    ("GET", "/nl2sql/select-ai/db-profile-refresh-jobs/{job_id}"): _SELECT_AI_ASSETS_READ,
+    ("GET", "/nl2sql/select-ai/db-profiles"): _SELECT_AI_ASSETS_READ,
+    ("POST", "/nl2sql/select-ai/db-profiles"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai/db-profiles/refresh-jobs"): _SELECT_AI_ASSETS_REFRESH,
+    ("GET", "/nl2sql/select-ai/db-profiles/{profile_name}"): _SELECT_AI_ASSETS_READ,
+    ("PATCH", "/nl2sql/select-ai/db-profiles/{profile_name}"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai/db-profiles/{profile_name}/drop"): _SELECT_AI_ASSETS_MANAGE,
+    ("GET", "/nl2sql/select-ai/feedback"): _SELECT_AI_FEEDBACK,
+    ("POST", "/nl2sql/select-ai/feedback/add"): _SELECT_AI_FEEDBACK,
+    ("POST", "/nl2sql/select-ai/feedback/delete"): _SELECT_AI_FEEDBACK,
+    ("POST", "/nl2sql/select-ai/feedback/vector-index"): _SELECT_AI_FEEDBACK,
+    ("GET", "/nl2sql/select-ai/profiles/export.json"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai/profiles/import-json"): _SELECT_AI_ASSETS_MANAGE,
+    ("POST", "/nl2sql/select-ai/profiles/refresh"): _SELECT_AI_ASSETS_REFRESH,
+    # ---- 質問分類モデル ----
+    ("GET", "/nl2sql/classifier"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/model/import"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/models/import"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/predict"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/train"): _QUESTION_CLASSIFIER_MODELS,
+    ("GET", "/nl2sql/classifier/training-candidates"): _QUESTION_CLASSIFIER_MODELS,
+    ("GET", "/nl2sql/classifier/training-data"): _QUESTION_CLASSIFIER_MODELS,
+    ("GET", "/nl2sql/classifier/training-data/export.xlsx"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/training-data/from-feedback"): _QUESTION_CLASSIFIER_MODELS,
+    ("POST", "/nl2sql/classifier/training-data/import"): _QUESTION_CLASSIFIER_MODELS,
+    ("PATCH", "/nl2sql/classifier/training-data/{example_id}"): _QUESTION_CLASSIFIER_MODELS,
+    ("DELETE", "/nl2sql/classifier/training-data/{example_id}"): _QUESTION_CLASSIFIER_MODELS,
+    # ---- 品質評価 ----
+    ("GET", "/nl2sql/quality-evaluations"): _EVALUATION,
+    ("POST", "/nl2sql/quality-evaluations"): _EVALUATION,
+    ("GET", "/nl2sql/quality-evaluations/capabilities"): _EVALUATION,
+    ("GET", "/nl2sql/quality-evaluations/template.xlsx"): _EVALUATION,
+    ("GET", "/nl2sql/quality-evaluations/{job_id}"): _EVALUATION,
+    ("DELETE", "/nl2sql/quality-evaluations/{job_id}"): _EVALUATION,
+    ("POST", "/nl2sql/quality-evaluations/{job_id}/cancel"): _EVALUATION,
+    ("GET", "/nl2sql/quality-evaluations/{job_id}/results"): _EVALUATION,
+    ("GET", "/nl2sql/quality-evaluations/{job_id}/results.xlsx"): _EVALUATION,
+    # ---- SQL から質問 ----
+    ("POST", "/nl2sql/reverse"): _SQL_TO_QUESTION,
+    ("POST", "/nl2sql/reverse/deep"): _SQL_TO_QUESTION,
+    ("POST", "/nl2sql/reverse/question-sql"): _SQL_TO_QUESTION,
+    ("POST", "/nl2sql/reverse/sql"): _SQL_TO_QUESTION,
+}
 
 
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
-    """FastAPI の method + route template を許可 permission set へ写像する。"""
+    """method + route template（`/api` なし）→ 許可する権限の集合。
+
+    None は公開 API・ログインだけで使える API・MCP（ツールごとに権限を判定）。
+    登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
+    """
 
     method = method.upper()
     if (method, route_path) in OPEN_API_OPERATIONS:
         return None
-    exact = SECURITY_USER_ROLE_ROUTE_PERMISSIONS.get((method, route_path))
+    exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:
         return exact
-    if route_path.startswith(_SECURITY_USER_ROLE_PREFIXES):
-        return _allowed(UNCLASSIFIED_PERMISSION)
-    if route_path.startswith("/security/profile-access") or route_path == "/security/permissions":
-        return _allowed("menu.security_permissions")
-    if route_path.startswith("/security/deepsec"):
-        return _allowed("menu.security_deepsec")
-    if route_path.startswith("/settings/oci/object-storage"):
-        return _allowed("menu.settings_oci", "menu.settings_upload_storage")
-    if route_path.startswith("/settings/oci"):
-        return _allowed("menu.settings_oci")
-    if route_path.startswith("/settings/upload-storage"):
-        if method == "GET":
-            return _allowed("menu.settings_upload_storage", "menu.settings_oci")
-        return _allowed("menu.settings_upload_storage")
-    if route_path.startswith("/settings/model"):
-        return _allowed("menu.settings_model")
-    if route_path.startswith("/settings/database/system-tables"):
-        return _allowed("menu.settings_system_tables")
-    if route_path.startswith("/settings/database"):
-        return _allowed("menu.settings_database")
-    if route_path.startswith("/schema/refresh-jobs"):
-        if method == "POST":
-            return _allowed(SCHEMA_REFRESH_PERMISSION)
-        return _allowed(SCHEMA_READ_PERMISSION)
-    if route_path.startswith("/schema"):
-        return _allowed(SCHEMA_READ_PERMISSION)
-    if route_path.startswith("/nl2sql/db-admin"):
-        if route_path.startswith("/nl2sql/db-admin/tables"):
-            return _allowed(
-                "menu.table_management",
-                "menu.comment_management",
-                "menu.annotation_management",
-                "menu.domain_management",
-            )
-        if route_path.startswith("/nl2sql/db-admin/views"):
-            return _allowed(
-                "menu.view_management",
-                "menu.comment_management",
-                "menu.annotation_management",
-                "menu.domain_management",
-            )
-        if route_path.endswith("/truncate-table"):
-            return _allowed("menu.table_management", "menu.data_management")
-        if route_path.endswith("/drop-table"):
-            return _allowed("menu.table_management")
-        if route_path.endswith("/drop-view"):
-            return _allowed("menu.view_management")
-        if route_path.endswith("/import-tabular"):
-            return _allowed("menu.table_management", "menu.data_management")
-        if route_path.endswith("/upload-csv"):
-            return _allowed("menu.data_management")
-        if route_path.endswith("/preview-data") or route_path.endswith("/preview-data/export.xlsx"):
-            return _allowed(
-                "menu.table_management",
-                "menu.view_management",
-                "menu.data_management",
-                "menu.comment_management",
-                "menu.annotation_management",
-                "menu.domain_management",
-            )
-        if route_path.endswith("/execute"):
-            return _allowed("menu.admin_sql")
-        if route_path.endswith("/statements"):
-            return _allowed(
-                "menu.admin_sql",
-                "menu.table_management",
-                "menu.view_management",
-                "menu.data_management",
-                "menu.comment_management",
-                "menu.annotation_management",
-                "menu.domain_management",
-            )
-        if method == "GET":
-            return DATA_PREP_MENUS
-        return _allowed("menu.admin_sql")
-    if route_path.startswith("/nl2sql/sample-data"):
-        return _allowed(SAMPLE_DATA_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/comments"):
-        return _allowed("menu.comment_management")
-    if route_path.startswith("/nl2sql/annotations"):
-        return _allowed("menu.annotation_management")
-    if route_path.startswith("/nl2sql/domains"):
-        return _allowed("menu.domain_management")
-    if route_path.startswith("/nl2sql/metadata-samples"):
-        return _allowed(
-            "menu.comment_management",
-            "menu.annotation_management",
-            "menu.domain_management",
-        )
-    if route_path.startswith("/nl2sql/synthetic-data"):
-        return _allowed("menu.sample_data", "menu.data_management")
-    if route_path.startswith("/nl2sql/profiles/search"):
-        return _allowed(PROFILE_READ_PERMISSION)
-    if route_path.endswith("/usage-context") and route_path.startswith("/nl2sql/profiles/"):
-        return _allowed(PROFILE_READ_PERMISSION)
-    if "/learning-material/" in route_path and route_path.startswith("/nl2sql/profiles/"):
-        return _allowed(PROFILE_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION)
-    if "/ontology-capabilities" in route_path and route_path.startswith("/nl2sql/profiles/"):
-        if method == "GET":
-            return _allowed(
-                PROFILE_READ_PERMISSION,
-                "menu.ontology_build",
-                "nl2sql.ontology.actions.execute",
-                SQL_EXECUTE_PERMISSION,
-            )
-        if route_path.endswith("/binding"):
-            return _allowed("nl2sql.ontology.capabilities.manage")
-        if route_path.endswith("/invoke"):
-            return _allowed(SQL_EXECUTE_PERMISSION)
-        return _allowed("nl2sql.ontology.actions.execute")
-    if route_path.startswith("/nl2sql/profiles/") and any(
-        part in route_path
-        for part in (
-            "/ontology-results",
-            "/ontology-published",
-            "/ontology-releases",
-            "/ontology-validation-jobs",
-        )
-    ):
-        if method == "GET":
-            return _allowed(
-                "menu.ontology_build", PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION
-            )
-        return _allowed("menu.ontology_build", PROFILE_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/profiles"):
-        return _allowed(PROFILE_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/legacy-learning-material"):
-        return _allowed(LEARNING_MATERIAL_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/ontology"):
-        return _allowed("menu.ontology_build")
-    if route_path.startswith("/nl2sql/oracle-sync-jobs"):
-        return _allowed(PROFILE_MANAGE_PERMISSION, SELECT_AI_ASSETS_REFRESH_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/db-profile-refresh-jobs"):
-        return _allowed(SELECT_AI_ASSETS_READ_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/db-profiles/refresh-jobs"):
-        return _allowed(SELECT_AI_ASSETS_REFRESH_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/db-profiles"):
-        if method == "GET":
-            return _allowed(SELECT_AI_ASSETS_READ_PERMISSION)
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/feedback"):
-        return _allowed(FEEDBACK_MANAGE_PERMISSION, SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/profiles/refresh"):
-        return _allowed(SELECT_AI_ASSETS_REFRESH_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/profiles/export"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/profiles/import"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai/assets/cleanup"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai-agent/assets/refresh"):
-        return _allowed(SELECT_AI_ASSETS_REFRESH_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai-agent/assets/cleanup"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai-agent/run"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai-agent/conversations/create"):
-        return _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/select-ai-agent"):
-        return _allowed(SELECT_AI_ASSETS_READ_PERMISSION)
-    if route_path.startswith("/nl2sql/feedback/admin-review"):
-        return _allowed(FEEDBACK_MANAGE_PERMISSION)
-    if (
-        route_path.startswith("/nl2sql/feedback-index")
-        or route_path.startswith("/nl2sql/feedback-entries")
-        or route_path.startswith("/nl2sql/feedback-config")
-    ):
-        return _allowed(FEEDBACK_MANAGE_PERMISSION)
-    if route_path == "/nl2sql/feedback":
-        if method == "GET":
-            return _allowed(FEEDBACK_MANAGE_PERMISSION)
-        return _allowed(FEEDBACK_WRITE_PERMISSION, FEEDBACK_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/feedback/"):
-        return _allowed(FEEDBACK_WRITE_PERMISSION, FEEDBACK_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/classifier"):
-        return _allowed("menu.question_classifier_models")
-    if route_path.startswith("/nl2sql/quality-evaluations"):
-        return _allowed("menu.evaluation")
-    if route_path.startswith("/nl2sql/reverse"):
-        return _allowed("menu.sql_to_question")
-    if route_path.startswith("/nl2sql/history"):
-        return _allowed("menu.history", QUERY_GENERATE_PERMISSION, FEEDBACK_MANAGE_PERMISSION)
-    if route_path == "/nl2sql/preview":
-        return _allowed(QUERY_GENERATE_PERMISSION)
-    if route_path == "/nl2sql/execute" or route_path == "/nl2sql/analyze":
-        return _allowed(SQL_EXECUTE_PERMISSION)
-    if route_path == "/nl2sql/jobs":
-        return _allowed(QUERY_GENERATE_PERMISSION)
-    if route_path.startswith("/nl2sql/jobs/"):
-        return _allowed(QUERY_GENERATE_PERMISSION, "menu.history", FEEDBACK_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql/query-sessions/") and route_path.endswith("/execute"):
-        return _allowed(SQL_EXECUTE_PERMISSION)
-    if route_path.startswith("/nl2sql/query-sessions"):
-        return _allowed(QUERY_GENERATE_PERMISSION)
-    if route_path in {
-        "/nl2sql/similar-history",
-        "/nl2sql/recommend-profile",
-        "/nl2sql/rewrite",
-    }:
-        return _allowed(QUERY_GENERATE_PERMISSION)
-    if route_path.startswith("/nl2sql/demo/learning"):
-        return _allowed(LEARNING_MATERIAL_MANAGE_PERMISSION, FEEDBACK_MANAGE_PERMISSION)
-    if route_path.startswith("/nl2sql"):
-        if route_path == "/nl2sql/persistence" and method == "GET":
-            return None
-        if route_path.startswith("/nl2sql/persistence"):
-            if method == "POST":
-                return _allowed(PERSISTENCE_RECOVER_PERMISSION)
-            return _allowed(SYSTEM_STATUS_READ_PERMISSION)
-        if route_path.startswith("/nl2sql/diagnostics"):
-            if method == "POST":
-                return _allowed(PERSISTENCE_RECOVER_PERMISSION)
-            return _allowed(SYSTEM_STATUS_READ_PERMISSION)
-        if method == "GET":
-            return AI_USE_MENUS | IMPROVEMENT_MENUS
-        if "export" in route_path:
-            return _allowed("menu.query", "menu.direct_sql", "menu.history")
-        return _allowed("menu.query", "menu.direct_sql")
     return _allowed(UNCLASSIFIED_PERMISSION)
