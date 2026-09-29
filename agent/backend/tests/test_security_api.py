@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from pytest import MonkeyPatch
 from security_support import (
     CONFIGURED_ADMIN_PASSWORD,
@@ -86,9 +87,9 @@ def _agent(agent_id: str, name: str | None = None) -> Iterator[AgentProfile]:
 # ---------------------------------------------------------------------------
 
 
-def _api_operations() -> list[tuple[str, str]]:
+def _api_operations(application: FastAPI = app) -> list[tuple[str, str]]:
     operations: list[tuple[str, str]] = []
-    for path, methods in app.openapi()["paths"].items():
+    for path, methods in application.openapi()["paths"].items():
         if not path.startswith("/api"):
             continue
         for method in methods:
@@ -97,17 +98,20 @@ def _api_operations() -> list[tuple[str, str]]:
     return operations
 
 
-def test_every_api_route_is_classified_by_manifest() -> None:
-    """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
-    operations = _api_operations()
-    assert len(operations) > 120
-    unclassified = [
+def _unclassified_operations(operations: list[tuple[str, str]]) -> list[str]:
+    return [
         f"{method} {path}"
         for method, path in operations
         if (permissions := permission_for_route(method, path)) is not None
         and UNCLASSIFIED_PERMISSION in permissions
     ]
-    assert unclassified == []
+
+
+def test_every_api_route_is_classified_by_manifest() -> None:
+    """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
+    operations = _api_operations()
+    assert len(operations) > 120
+    assert _unclassified_operations(operations) == []
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
@@ -131,6 +135,80 @@ def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:
         if type(route).__name__ == "APIWebSocketRoute"
     }
     assert websocket_paths == set(WEBSOCKET_PERMISSIONS)
+
+
+_USER_ROLE_PREFIXES = ("/security/users", "/security/roles")
+# 製品固有の権限管理の route（`/security/roles` 配下だが共通のロール管理ではない）。
+_AGENT_ROLE_ACCESS_ROUTE = ("PUT", "/security/roles/{role_id}/access")
+
+
+def _mounted_user_role_operations() -> set[tuple[str, str]]:
+    return {
+        (method, path)
+        for method, path in _api_operations()
+        if path.startswith(_USER_ROLE_PREFIXES) and (method, path) != _AGENT_ROLE_ACCESS_ROUTE
+    }
+
+
+def _legacy_user_role_permission(method: str, route_path: str) -> frozenset[str]:
+    """#503 より前の前方一致による割り当て（同じ権限のままかを比べるために残す）。"""
+    if route_path == "/security/users" or route_path.startswith("/security/users/"):
+        return frozenset({"menu.security_users"})
+    if method == "GET":
+        return frozenset(
+            {"menu.security_users", "menu.security_roles", "menu.security_permissions"}
+        )
+    return frozenset({"menu.security_roles"})
+
+
+def test_user_role_routes_are_registered_per_operation() -> None:
+    """共通のユーザー・ロール管理の API は (method, path) ごとに manifest に登録する（#503）。"""
+    mounted = _mounted_user_role_operations()
+    assert len(mounted) == 16
+    assert mounted <= set(ROUTE_PERMISSIONS)
+
+
+def test_user_role_route_permissions_match_legacy_prefix_rules() -> None:
+    """明示の登録にしても、ユーザー・ロール管理の API の権限は前方一致のときと同じ（#503）。"""
+    for method, route_path in sorted(_mounted_user_role_operations()):
+        assert permission_for_route(method, route_path) == _legacy_user_role_permission(
+            method, route_path
+        ), f"{method} {route_path}"
+    assert _perm("GET", "/security/users") == {"menu.security_users"}
+    assert _perm("POST", "/security/users/{user_uuid}/unlock") == {"menu.security_users"}
+    assert _perm("GET", "/security/roles") == {
+        "menu.security_users",
+        "menu.security_roles",
+        "menu.security_permissions",
+    }
+    assert _perm("DELETE", "/security/roles/{role_id}") == {"menu.security_roles"}
+    assert _perm("POST", "/security/roles/{role_id}/archive") == {"menu.security_roles"}
+
+
+def test_unregistered_user_role_routes_are_denied() -> None:
+    """前方一致をやめたので、登録のない method・path は既定で拒否する（#503）。"""
+    unclassified = frozenset({UNCLASSIFIED_PERMISSION})
+    assert permission_for_route("POST", "/security/users/{user_uuid}/impersonate") == unclassified
+    assert permission_for_route("PUT", "/security/users/{user_uuid}") == unclassified
+    assert permission_for_route("POST", "/security/roles/{role_id}/clone") == unclassified
+    assert permission_for_route("GET", "/security/roles/{role_id}/access") == unclassified
+
+
+def test_completeness_check_flags_unregistered_user_route() -> None:
+    """`/security/users` 配下に未登録の route を足すと、完全性の検査で見つかる（#503）。"""
+    application = FastAPI()
+
+    @application.post("/api/security/users/{user_uuid}/impersonate")
+    def _impersonate(user_uuid: str) -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {"user_uuid": user_uuid}
+
+    @application.get("/api/security/users")
+    def _list_users() -> dict[str, str]:  # pragma: no cover - 呼ばない
+        return {}
+
+    assert _unclassified_operations(_api_operations(application)) == [
+        "POST /security/users/{user_uuid}/impersonate"
+    ]
 
 
 def test_manifest_denies_unknown_routes_by_default() -> None:

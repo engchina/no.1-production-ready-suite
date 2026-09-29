@@ -433,6 +433,24 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
+    # ---- ユーザーとロール（platform の共通 router。RAG / NL2SQL と同じ割り当て）----
+    # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#503）。
+    ("GET", "/security/users"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users"): _any(MENU_SECURITY_USERS),
+    ("GET", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("PATCH", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("DELETE", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/disable"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/enable"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/reset-password"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/unlock"): _any(MENU_SECURITY_USERS),
+    ("GET", "/security/roles"): _SECURITY_ROLE_READ,
+    ("GET", "/security/roles/{role_id}"): _SECURITY_ROLE_READ,
+    ("POST", "/security/roles"): _any(MENU_SECURITY_ROLES),
+    ("PATCH", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
+    ("DELETE", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
+    ("POST", "/security/roles/{role_id}/archive"): _any(MENU_SECURITY_ROLES),
+    ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
     # ---- Agent セキュリティ: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets"): _any(MENU_SECURITY_PERMISSIONS),
@@ -456,11 +474,4 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:
         return exact
-    # ユーザー管理・ロール管理（platform の共通 router）は NL2SQL / RAG と同じ割り当て。
-    if route_path == "/security/users" or route_path.startswith("/security/users/"):
-        return _any(MENU_SECURITY_USERS)
-    if route_path == "/security/roles" or route_path.startswith("/security/roles/"):
-        if method == "GET":
-            return _SECURITY_ROLE_READ
-        return _any(MENU_SECURITY_ROLES)
     return _any(UNCLASSIFIED_PERMISSION)

@@ -141,6 +141,9 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
   権限の更新に対して従来どおり適用する。
 - ロールの一覧・詳細の参照（`GET /api/security/roles*`）は、ユーザー管理・ロール管理・権限管理の
   いずれかの menu 権限で行える。アーカイブ済みを含む全ロールの参照はロール管理または権限管理を要求する。
+- route manifest（`app/security/permissions.py` の `SECURITY_USER_ROLE_ROUTE_PERMISSIONS`）は、
+  `/security/users`・`/security/roles` 配下の API を `(method, route template)` ごとに登録する。前方一致では
+  割り当てないため、登録のない API は起動時の manifest の検査で失敗し、実行時も拒否する（#503）。
 - 旧「ロール・権限管理」（`menu.security_roles`）を持つロールには、`app_security_migrate` の
   migration 023 が `menu.security_permissions` を追加し、権限の付与を続けられるようにする。
   旧 action 権限 `security.roles.manage` も両方へ正規化する。

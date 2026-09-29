@@ -73,6 +73,9 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 
 ### manifest（抜粋。正本は `backend/app/security/permissions.py`）
 
+API は `(method, route template)` ごとに登録し、登録のない API は拒否します（前方一致では割り当てない。
+共通のユーザー管理・ロール管理の API も同じ。#503）。
+
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
 | `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
@@ -91,9 +94,9 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 | `GET /observability/status`・`GET /settings/trace-policy` | `menu.audit`（画面からは使わない。運用スクリプトの確認用） | — |
 | ナビに出さない設定（ツール権限・Command Policy・Runtime Safety・Planner） | `agent.admin` | — |
 | legacy Memory の検索 | `agent.audit.view` / `agent.admin` | — |
-| `/security/users*` | `menu.security_users` | 共通の昇格防止 |
-| `/security/roles*`（GET） | `menu.security_users` / `menu.security_roles` / `menu.security_permissions` | — |
-| `/security/roles*`（変更） | `menu.security_roles` | — |
+| ユーザー管理（`GET`・`POST /security/users`、`GET`・`PATCH`・`DELETE /security/users/{user_uuid}`、`POST /security/users/{user_uuid}/disable`・`enable`・`reset-password`・`unlock`） | `menu.security_users` | 共通の昇格防止 |
+| ロールの参照（`GET /security/roles`・`GET /security/roles/{role_id}`） | `menu.security_users` / `menu.security_roles` / `menu.security_permissions` | — |
+| ロールの変更（`POST /security/roles`、`PATCH`・`DELETE /security/roles/{role_id}`、`POST /security/roles/{role_id}/archive`・`restore`） | `menu.security_roles` | — |
 | `GET /security/permissions`・`/security/access-targets`、`PUT /security/roles/{id}/access` | `menu.security_permissions` | 昇格防止 |
 
 ## 4. 対象範囲（エージェント・業務ビュー）
