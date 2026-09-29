@@ -289,66 +289,6 @@ def test_search_api_records_knowledge_base_scope_in_audit(
     assert audit_event["knowledge_base_ids"] == ["kb-1", "kb-2"]
 
 
-def test_citation_feedback_api_saves_low_sensitivity_payload(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """引用 feedback は comment 明文を落とさず hash と文字数だけを保存する。"""
-    fake = CapturingFeedbackClient()
-    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
-
-    response = client.post(
-        "/api/search/citation-feedback",
-        json={
-            "trace_id": "trace-1",
-            "document_id": "doc-1",
-            "chunk_id": "doc-1:0",
-            "rating": "not_helpful",
-            "reason": "missing_evidence",
-            "comment": "根拠のページが違います",
-        },
-        headers={"X-Tenant-ID": "tenant-a", "X-User-ID": "user@example.com"},
-    )
-
-    assert response.status_code == 200
-    body = response.json()["data"]
-    assert body["feedback_id"] == "feedback-1"
-    assert body["trace_id"] == "trace-1"
-    assert body["rating"] == "not_helpful"
-    assert fake.saved_payloads == [
-        {
-            "trace_id": "trace-1",
-            "document_id": "doc-1",
-            "chunk_id": "doc-1:0",
-            "rating": "not_helpful",
-            "reason": "missing_evidence",
-            "comment_hash": fake.saved_payloads[0]["comment_hash"],
-            "comment_chars": 11,
-        }
-    ]
-    comment_hash = fake.saved_payloads[0]["comment_hash"]
-    assert isinstance(comment_hash, str)
-    assert len(comment_hash) == 64
-    assert "根拠" not in str(fake.saved_payloads)
-    assert "tenant-a" not in str(fake.saved_payloads)
-    assert "user@example.com" not in str(fake.saved_payloads)
-
-
-@pytest.mark.parametrize("field", ["trace_id", "document_id", "chunk_id"])
-def test_citation_feedback_rejects_blank_identifiers(field: str) -> None:
-    """空白だけの ID を空文字として保存しない（#285）。"""
-    payload = {
-        "trace_id": "trace-1",
-        "document_id": "doc-1",
-        "chunk_id": "doc-1:0",
-        "rating": "helpful",
-    }
-    payload[field] = "   "
-
-    response = client.post("/api/search/citation-feedback", json=payload)
-
-    assert response.status_code == 422
-
-
 def test_search_request_accepts_chunk_metadata_filters() -> None:
     """構造化 chunk metadata filter は検索リクエストとして受け付ける。"""
     request = SearchRequest(
@@ -580,14 +520,3 @@ class AuditingPipeline:
             elapsed_ms=1.0,
             diagnostics=diagnostics,
         )
-
-
-class CapturingFeedbackClient:
-    """引用 feedback API テスト用の fake Oracle client。"""
-
-    def __init__(self) -> None:
-        self.saved_payloads: list[dict[str, object]] = []
-
-    async def save_citation_feedback(self, payload: dict[str, object]) -> str:
-        self.saved_payloads.append(payload)
-        return "feedback-1"

@@ -198,6 +198,29 @@ def test_submit_feedback_saves_search_snapshot_and_optional_comment(
     ]
 
 
+def test_submit_search_snapshot_does_not_depend_on_the_search_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """監査を Oracle に保存しない既定の構成でも、検索のフィードバックを保存できる（#457）。"""
+    fake = FakeFeedbackClient()
+    monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
+
+    response = client.post(
+        "/api/feedback",
+        json={
+            "trace_id": "trace-without-audit",
+            "business_view_id": "bv-1",
+            "target_type": "answer",
+            "source_surface": "search",
+            "rating": "helpful",
+            "content_snapshot": {"question": "質問", "answer": "回答", "citations": []},
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake.saved[0]["trace_id"] == "trace-without-audit"
+
+
 def test_submit_feedback_resolves_chat_content_server_side(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -464,9 +487,6 @@ class FakeFeedbackClient:
     ) -> dict[str, object] | None:
         self.message_lookup = (message_id, trace_id)
         return self.message_context
-
-    async def feedback_trace_exists(self, trace_id: str) -> bool:
-        return trace_id == "trace-1"
 
     async def list_current_feedback(self, trace_id: str) -> list[dict[str, object]]:
         self.current_trace = trace_id
