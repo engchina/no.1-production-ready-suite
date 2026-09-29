@@ -52,6 +52,17 @@ class VisionCheckpointTests(unittest.TestCase):
         self.assertTrue(self.progress()['items'][self.record.id]['reused'])
         self.assertEqual(self.progress()['phase'], 'completed')
 
+    def test_progress_is_logged_not_printed(self):
+        """進捗は logging へ出し、stdout へ print しない(backend の Vision の段。#502)。"""
+        ledger = VisionCheckpoints(self.root/'vision', 'hash')
+        ledger.register([self.record])
+        with patch('builtins.print') as printed, \
+                self.assertLogs('docrag.parsing.vision_checkpoints', level='INFO') as logs:
+            ledger.update(self.record, 'succeeded')
+        printed.assert_not_called()
+        self.assertIn('[vision-progress] phase=pictures', logs.output[0])
+        self.assertIn('succeeded=1', logs.output[0])
+
     def test_failed_api_retries_and_empty_response_is_not_reused(self):
         for response in [RuntimeError('network'), {}]:
             with patch('docrag.parsing.picture_descriptions.describe_picture',

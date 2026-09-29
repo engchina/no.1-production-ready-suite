@@ -173,9 +173,10 @@ def _figure_extraction(
     )
 
 
-def test_unstructured_bbox_uses_coordinate_system_size() -> None:
+# 350 は実際の Unstructured(0.27.8、hi_res)の PDF の PixelSpace(A4 で 2893x4094。#502)。
+@pytest.mark.parametrize("dpi", [200, 350], ids=["dpi200", "hi_res_350dpi"])
+def test_unstructured_bbox_uses_coordinate_system_size(dpi: int) -> None:
     """Unstructured は coordinates の座標系(layout_width / height)の px を基準に切り出す。"""
-    dpi = 200
     width, height = _px(PAGE_PT, dpi)
     extraction = _figure_extraction(
         _px(FIGURE_PT, dpi),
@@ -251,7 +252,10 @@ def test_mineru_bbox_over_1000_is_unknown_unit() -> None:
 
 
 def test_dots_ocr_picture_asset_becomes_searchable_figure_element() -> None:
-    """Dots.OCR の Picture(本文なしの asset)は描いたページの px。説明を図の要素として足す。"""
+    """Dots.OCR の Picture(本文なしの asset)は描いたページの px。説明を図の要素として足す。
+
+    asset の kind は registry の変換の実際の値(picture)。#502 までは読み取りの対象外だった。
+    """
     dpi = 200
     width, height = _px(PAGE_PT, dpi)
     extraction = StructuredExtraction(
@@ -275,7 +279,7 @@ def test_dots_ocr_picture_asset_becomes_searchable_figure_element() -> None:
         assets=[
             ExtractionAsset(
                 asset_id="dots-picture-1",
-                kind="figure",
+                kind="picture",
                 page_number=1,
                 bbox=_px(FIGURE_PT, dpi),
                 metadata={"parser_backend": "dots_ocr"},
