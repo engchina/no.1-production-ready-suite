@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw, Save, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   Banner,
@@ -39,6 +39,14 @@ import {
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+
+import {
+  RECIPE_CONFIG_FIELDS,
+  recipeConfigGroups,
+  type RecipeConfigField,
+  type RecipeConfigGroup,
+  type RecipeConfigItem,
+} from "./DocumentProcessingConfigPanel.logic";
 
 const PREPROCESS_VALUES = [
   "passthrough",
@@ -88,20 +96,6 @@ const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES.map(
   (value) => ({ value, label: t(`settings.graph.profile.${value}` as I18nKey) })
 );
 
-const EDITED_FIELDS: Array<keyof DocumentProcessingConfig> = [
-  "preprocess_profile",
-  "parser_adapter_backend",
-  "vision_enabled",
-  "chunking_strategy",
-  "chunk_context_header_enabled",
-  "graph_profile",
-  "field_extraction_enabled",
-  "navigation_summary_enabled",
-  "auto_parse_after_preprocess_enabled",
-  "auto_chunk_after_extract_enabled",
-  "auto_index_after_chunk_enabled",
-];
-
 function emptyConfig(): DocumentProcessingConfig {
   return {
     preprocess_profile: null,
@@ -147,53 +141,37 @@ function parserOptionLabel(value: ParserAdapterBackend | null) {
   return option?.label ?? t("documents.processingConfig.parserRemoved", { engine: value });
 }
 
-type Stage = { key: string; label: string; value: string; overridden: boolean };
+/** 上書きの一覧の各行の DOM id の接尾辞（`document-<接尾辞>-<documentId>`）。 */
+const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
+  preprocess_profile: "preprocess",
+  auto_parse_after_preprocess_enabled: "auto-parse",
+  parser_adapter_backend: "parser",
+  vision_enabled: "vision",
+  field_extraction_enabled: "field",
+  navigation_summary_enabled: "navigation",
+  auto_chunk_after_extract_enabled: "auto-chunk",
+  chunking_strategy: "chunking",
+  chunk_context_header_enabled: "context-header",
+  auto_index_after_chunk_enabled: "auto-index",
+  graph_profile: "graph",
+};
 
-function stagesFor(
-  processing: DocumentProcessingConfig,
-  effective: DocumentProcessingConfig
-): Stage[] {
-  return [
-    {
-      key: "preprocess",
-      label: t("knowledgeBases.adapter.field.preprocessProfile"),
-      value: optionLabel(effective.preprocess_profile, PREPROCESS_OPTIONS),
-      overridden: processing.preprocess_profile !== null,
-    },
-    {
-      key: "parser",
-      label: t("knowledgeBases.adapter.field.parserBackend"),
-      value: parserOptionLabel(effective.parser_adapter_backend),
-      overridden: processing.parser_adapter_backend !== null,
-    },
-    {
-      key: "chunking",
-      label: t("knowledgeBases.adapter.field.chunkingStrategy"),
-      value: optionLabel(effective.chunking_strategy, CHUNKING_OPTIONS),
-      overridden: processing.chunking_strategy !== null,
-    },
-    {
-      key: "graph",
-      label: t("knowledgeBases.adapter.field.graphProfile"),
-      value: optionLabel(effective.graph_profile, GRAPH_OPTIONS),
-      overridden: processing.graph_profile !== null,
-    },
-    ...(
-      [
-        ["vision", "vision", "vision_enabled"],
-        ["field", "fieldExtraction", "field_extraction_enabled"],
-        ["navigation", "navigationSummary", "navigation_summary_enabled"],
-        ["auto-parse", "autoParseAfterPreprocess", "auto_parse_after_preprocess_enabled"],
-        ["auto-chunk", "autoChunkAfterExtract", "auto_chunk_after_extract_enabled"],
-        ["auto-index", "autoIndexAfterChunk", "auto_index_after_chunk_enabled"],
-      ] as const
-    ).map(([key, label, field]) => ({
-      key,
-      label: t(`knowledgeBases.adapter.field.${label}`),
-      value: boolLabel(effective[field]),
-      overridden: processing[field] !== null,
-    })),
-  ];
+const CONFIG_GROUPS = recipeConfigGroups();
+
+/** 要約のカードに出す実効値。項目の並びは RECIPE_CONFIG_ITEMS が決める(#523)。 */
+function summaryValue(item: RecipeConfigItem, effective: DocumentProcessingConfig) {
+  switch (item.field) {
+    case "preprocess_profile":
+      return optionLabel(effective.preprocess_profile, PREPROCESS_OPTIONS);
+    case "parser_adapter_backend":
+      return parserOptionLabel(effective.parser_adapter_backend);
+    case "chunking_strategy":
+      return optionLabel(effective.chunking_strategy, CHUNKING_OPTIONS);
+    case "graph_profile":
+      return optionLabel(effective.graph_profile, GRAPH_OPTIONS);
+    default:
+      return boolLabel(effective[item.field] ?? null);
+  }
 }
 
 export function DocumentProcessingConfigPanel({
@@ -229,11 +207,7 @@ export function DocumentProcessingConfigPanel({
   const dirty = configs ? JSON.stringify(form) !== JSON.stringify(configs.processing) : false;
   // レシピの未保存の上書き設定があるときだけ離脱を確認する。
   useLeaveGuard(dirty);
-  const overrideCount = EDITED_FIELDS.filter((field) => form[field] !== null).length;
-  const stages = useMemo(
-    () => (configs ? stagesFor(form, configs.effective) : []),
-    [configs, form]
-  );
+  const overrideCount = RECIPE_CONFIG_FIELDS.filter((field) => form[field] !== null).length;
 
   // 項目抽出が実効 ON のときだけスキーマ定義を引き、空なら無言 no-op を警告する。
   const fieldExtractionEffective =
@@ -275,6 +249,98 @@ export function DocumentProcessingConfigPanel({
 
   const update = (patch: Partial<DocumentProcessingConfig>) =>
     setForm((current) => ({ ...current, ...patch }));
+
+  const renderEditorRow = (item: RecipeConfigItem) => {
+    if (!configs) return null;
+    const id = `document-${EDITOR_ID_SUFFIX[item.field]}-${documentId}`;
+    const label = t(item.label);
+    switch (item.field) {
+      case "preprocess_profile":
+        return (
+          <SelectRow
+            key={item.field}
+            field={item.field}
+            id={id}
+            label={label}
+            value={form.preprocess_profile}
+            effectiveValue={configs.effective.preprocess_profile}
+            options={PREPROCESS_OPTIONS}
+            defaultValue="passthrough"
+            disabled={disabled}
+            onChange={(value) => update({ preprocess_profile: value })}
+          />
+        );
+      case "parser_adapter_backend":
+        return (
+          <SelectRow
+            key={item.field}
+            field={item.field}
+            id={id}
+            label={label}
+            value={form.parser_adapter_backend}
+            effectiveValue={configs.effective.parser_adapter_backend}
+            options={PARSER_OPTIONS}
+            defaultValue="docling"
+            disabled={disabled}
+            onChange={(value) => update({ parser_adapter_backend: value })}
+            hint={parserHint}
+            warning={parserWarning}
+          />
+        );
+      case "chunking_strategy":
+        return (
+          <SelectRow
+            key={item.field}
+            field={item.field}
+            id={id}
+            label={label}
+            value={form.chunking_strategy}
+            effectiveValue={configs.effective.chunking_strategy}
+            options={CHUNKING_OPTIONS}
+            defaultValue="structure_aware"
+            disabled={disabled}
+            onChange={(value) => update({ chunking_strategy: value })}
+          />
+        );
+      case "graph_profile":
+        return (
+          <SelectRow
+            key={item.field}
+            field={item.field}
+            id={id}
+            label={label}
+            value={form.graph_profile}
+            effectiveValue={configs.effective.graph_profile}
+            options={GRAPH_OPTIONS}
+            defaultValue="off"
+            disabled={disabled}
+            onChange={(value) => update({ graph_profile: value })}
+          />
+        );
+      default: {
+        const field = item.field;
+        return (
+          <BooleanRow
+            key={field}
+            field={field}
+            id={id}
+            label={label}
+            value={form[field] ?? null}
+            effectiveValue={configs.effective[field] ?? null}
+            disabled={disabled}
+            onChange={(value) => update({ [field]: value })}
+            // Vision は解析エンジンに関係なく使える(#497)。全体の既定は env だけで決める。
+            hint={field === "vision_enabled" ? t("knowledgeBases.adapter.field.vision.hint") : null}
+            warning={
+              field === "field_extraction_enabled" && fieldSchemaEmpty
+                ? t("documents.processingConfig.fieldSchemaEmpty")
+                : null
+            }
+          />
+        );
+      }
+    }
+  };
 
   const handleSave = () => {
     const options = {
@@ -332,27 +398,38 @@ export function DocumentProcessingConfigPanel({
         </Banner>
       ) : configs ? (
         <>
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-            {stages.map((stage) => (
-              <div
-                key={stage.key}
-                className={cn(
-                  "min-w-0 rounded-md border px-2.5 py-2",
-                  stage.overridden ? "border-info-border bg-info-subtle" : "border-border bg-surface"
-                )}
-              >
-                <div className="flex min-w-0 items-start justify-between gap-1">
-                  <span className="min-w-0 text-xs leading-4 text-fg-muted">{stage.label}</span>
-                  {stage.overridden ? (
-                    <span className="shrink-0 rounded-sm bg-info-subtle px-1 text-xs font-medium text-info-fg">
-                      {t("knowledgeBases.adapter.ribbon.overrideBadge")}
-                    </span>
-                  ) : null}
+          {/* 要約も上書きの一覧も CONFIG_GROUPS（処理順）だけから作る(#523)。 */}
+          <div className="mt-3 space-y-3" data-testid="document-processing-config-summary">
+            {CONFIG_GROUPS.map((group) => (
+              <PhaseGroup key={group.phase} group={group} idPrefix={`summary-${documentId}`}>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  {group.items.map((item) => {
+                    const overridden = form[item.field] !== null;
+                    return (
+                      <div
+                        key={item.field}
+                        data-config-field={item.field}
+                        className={cn(
+                          "min-w-0 rounded-md border px-2.5 py-2",
+                          overridden ? "border-info-border bg-info-subtle" : "border-border bg-surface"
+                        )}
+                      >
+                        <div className="flex min-w-0 items-start justify-between gap-1">
+                          <span className="min-w-0 text-xs leading-4 text-fg-muted">{t(item.label)}</span>
+                          {overridden ? (
+                            <span className="shrink-0 rounded-sm bg-info-subtle px-1 text-xs font-medium text-info-fg">
+                              {t("knowledgeBases.adapter.ribbon.overrideBadge")}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="mt-0.5 block break-words text-xs font-medium text-fg">
+                          {summaryValue(item, configs.effective)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
-                <span className="mt-0.5 block break-words text-xs font-medium text-fg">
-                  {stage.value}
-                </span>
-              </div>
+              </PhaseGroup>
             ))}
           </div>
 
@@ -364,7 +441,7 @@ export function DocumentProcessingConfigPanel({
                   {overrideCount > 0
                     ? t("knowledgeBases.adapter.overrideCount", {
                         count: overrideCount,
-                        total: EDITED_FIELDS.length,
+                        total: RECIPE_CONFIG_FIELDS.length,
                       })
                     : t("knowledgeBases.adapter.overrideNone")}
                 </span>
@@ -382,110 +459,15 @@ export function DocumentProcessingConfigPanel({
                 />
               ) : null}
 
-              <div className="grid gap-3 lg:grid-cols-2">
-                <SelectRow
-                  id={`document-preprocess-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.preprocessProfile")}
-                  value={form.preprocess_profile}
-                  effectiveValue={configs.effective.preprocess_profile}
-                  options={PREPROCESS_OPTIONS}
-                  defaultValue="passthrough"
-                  disabled={disabled}
-                  onChange={(value) => update({ preprocess_profile: value })}
-                />
-                <SelectRow
-                  id={`document-parser-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.parserBackend")}
-                  value={form.parser_adapter_backend}
-                  effectiveValue={configs.effective.parser_adapter_backend}
-                  options={PARSER_OPTIONS}
-                  defaultValue="docling"
-                  disabled={disabled}
-                  onChange={(value) => update({ parser_adapter_backend: value })}
-                  hint={parserHint}
-                  warning={parserWarning}
-                />
-                {/* Vision は解析エンジンに関係なく使える(#497)。全体の既定は env だけで決める。 */}
-                <BooleanRow
-                  id={`document-vision-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.vision")}
-                  value={form.vision_enabled ?? null}
-                  effectiveValue={configs.effective.vision_enabled ?? null}
-                  disabled={disabled}
-                  onChange={(value) => update({ vision_enabled: value })}
-                  hint={t("knowledgeBases.adapter.field.vision.hint")}
-                />
-                <SelectRow
-                  id={`document-chunking-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.chunkingStrategy")}
-                  value={form.chunking_strategy}
-                  effectiveValue={configs.effective.chunking_strategy}
-                  options={CHUNKING_OPTIONS}
-                  defaultValue="structure_aware"
-                  disabled={disabled}
-                  onChange={(value) => update({ chunking_strategy: value })}
-                />
-                <BooleanRow
-                  id={`document-context-header-${documentId}`}
-                  label={t("documents.processingConfig.contextHeader")}
-                  value={form.chunk_context_header_enabled}
-                  effectiveValue={configs.effective.chunk_context_header_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ chunk_context_header_enabled: value })}
-                />
-                <SelectRow
-                  id={`document-graph-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.graphProfile")}
-                  value={form.graph_profile}
-                  effectiveValue={configs.effective.graph_profile}
-                  options={GRAPH_OPTIONS}
-                  defaultValue="off"
-                  disabled={disabled}
-                  onChange={(value) => update({ graph_profile: value })}
-                />
-                <BooleanRow
-                  id={`document-field-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.fieldExtraction")}
-                  value={form.field_extraction_enabled}
-                  effectiveValue={configs.effective.field_extraction_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ field_extraction_enabled: value })}
-                  warning={
-                    fieldSchemaEmpty ? t("documents.processingConfig.fieldSchemaEmpty") : null
-                  }
-                />
-                <BooleanRow
-                  id={`document-navigation-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.navigationSummary")}
-                  value={form.navigation_summary_enabled}
-                  effectiveValue={configs.effective.navigation_summary_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ navigation_summary_enabled: value })}
-                />
-                <BooleanRow
-                  id={`document-auto-parse-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.autoParseAfterPreprocess")}
-                  value={form.auto_parse_after_preprocess_enabled}
-                  effectiveValue={configs.effective.auto_parse_after_preprocess_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ auto_parse_after_preprocess_enabled: value })}
-                />
-                <BooleanRow
-                  id={`document-auto-chunk-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.autoChunkAfterExtract")}
-                  value={form.auto_chunk_after_extract_enabled}
-                  effectiveValue={configs.effective.auto_chunk_after_extract_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ auto_chunk_after_extract_enabled: value })}
-                />
-                <BooleanRow
-                  id={`document-auto-index-${documentId}`}
-                  label={t("knowledgeBases.adapter.field.autoIndexAfterChunk")}
-                  value={form.auto_index_after_chunk_enabled}
-                  effectiveValue={configs.effective.auto_index_after_chunk_enabled}
-                  disabled={disabled}
-                  onChange={(value) => update({ auto_index_after_chunk_enabled: value })}
-                />
+              <div className="space-y-4" data-testid="document-processing-config-editor-items">
+                {CONFIG_GROUPS.map((group) => (
+                  <PhaseGroup key={group.phase} group={group} idPrefix={`editor-${documentId}`}>
+                    {/* 2 列でも左から右・上から下で処理順に読める(#523)。 */}
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      {group.items.map((item) => renderEditorRow(item))}
+                    </div>
+                  </PhaseGroup>
+                ))}
               </div>
 
               {saveError ? (
@@ -525,7 +507,32 @@ export function DocumentProcessingConfigPanel({
   );
 }
 
+/** 工程ごとの区切り。見出しは上のレシピの工程表示と同じ工程名に番号を付ける。 */
+function PhaseGroup({
+  group,
+  idPrefix,
+  children,
+}: {
+  group: RecipeConfigGroup;
+  idPrefix: string;
+  children: ReactNode;
+}) {
+  const headingId = `${idPrefix}-phase-${group.phase.toLowerCase()}`;
+  return (
+    <section aria-labelledby={headingId} data-config-phase={group.phase}>
+      <h4 id={headingId} className="mb-1.5 text-xs font-medium text-fg-muted">
+        {t("documents.processingConfig.phaseHeading", {
+          index: group.index,
+          phase: t(group.label),
+        })}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
 function SelectRow<T extends string>({
+  field,
   id,
   label,
   value,
@@ -537,6 +544,7 @@ function SelectRow<T extends string>({
   hint = null,
   warning = null,
 }: {
+  field: RecipeConfigField;
   id: string;
   label: string;
   value: T | null;
@@ -554,7 +562,10 @@ function SelectRow<T extends string>({
     if (value !== null) lastOverride.current = value;
   }, [value]);
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
+    <div
+      data-config-field={field}
+      className="space-y-2 rounded-lg border border-border bg-surface p-3"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm font-medium text-fg">{label}</span>
         <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
@@ -594,6 +605,7 @@ function SelectRow<T extends string>({
 }
 
 function BooleanRow({
+  field,
   id,
   label,
   value,
@@ -603,6 +615,7 @@ function BooleanRow({
   hint = null,
   warning = null,
 }: {
+  field: RecipeConfigField;
   id: string;
   label: string;
   value: boolean | null;
@@ -618,7 +631,10 @@ function BooleanRow({
     if (value !== null) lastOverride.current = value;
   }, [value]);
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
+    <div
+      data-config-field={field}
+      className="space-y-2 rounded-lg border border-border bg-surface p-3"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span id={id} className="text-sm font-medium text-fg">
           {label}

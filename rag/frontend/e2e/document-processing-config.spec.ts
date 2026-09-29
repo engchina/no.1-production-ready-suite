@@ -327,6 +327,73 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await expectNoPageOverflow(page);
 });
 
+// 要約と上書きの一覧は、同じ項目を取込の処理順に並べる(#523)。
+const PROCESSING_ORDER = [
+  "preprocess_profile",
+  "auto_parse_after_preprocess_enabled",
+  "parser_adapter_backend",
+  "vision_enabled",
+  "field_extraction_enabled",
+  "navigation_summary_enabled",
+  "auto_chunk_after_extract_enabled",
+  "chunking_strategy",
+  "chunk_context_header_enabled",
+  "auto_index_after_chunk_enabled",
+  "graph_profile",
+];
+
+/** 画面上の読み順（上から下、同じ行は左から右）に並べた data-config-field。 */
+async function fieldsInReadingOrder(container: ReturnType<Page["locator"]>) {
+  const boxes = await container.locator("[data-config-field]").evaluateAll((elements) =>
+    elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        field: element.getAttribute("data-config-field") ?? "",
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+      };
+    })
+  );
+  return boxes
+    .sort((a, b) => (a.top === b.top ? a.left - b.left : a.top - b.top))
+    .map((box) => box.field);
+}
+
+test("要約と上書きの一覧は、同じ項目を取込の処理順に並べる", async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto("/documents/doc-1");
+
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+  const summary = panel.getByTestId("document-processing-config-summary");
+  await expect(summary.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
+  // 以前は要約に無かった文脈ヘッダも出す。
+  await expect(summary).toContainText("文脈ヘッダを検索対象へ追加");
+  expect(await fieldsInReadingOrder(summary)).toEqual(PROCESSING_ORDER);
+  await expect(summary.getByRole("heading")).toHaveText([
+    "1. ファイル準備",
+    "2. 抽出",
+    "3. Chunk 作成",
+    "4. Embedding / 索引",
+  ]);
+
+  await panel.getByRole("button", { name: "処理設定を編集" }).click();
+  const editor = panel.getByTestId("document-processing-config-editor-items");
+  await expect(editor.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
+  // 2 列でも、左から右・上から下に読むと処理順になる。
+  expect(await fieldsInReadingOrder(editor)).toEqual(PROCESSING_ORDER);
+  await expect(panel).toContainText("すべてグローバル継承");
+  // 文脈ヘッダを上書きすると、件数と要約のカードの両方に反映される。
+  await editor
+    .locator('[data-config-field="chunk_context_header_enabled"]')
+    .getByText("上書き", { exact: true })
+    .click();
+  await expect(panel).toContainText(`個別設定 1 / ${PROCESSING_ORDER.length} 項目`);
+  await expect(
+    summary.locator('[data-config-field="chunk_context_header_enabled"]')
+  ).toContainText("上書き");
+  await expectNoPageOverflow(page);
+});
+
 test("レシピ比較で空の引用を理由付きの状態として表示する", async ({ page }) => {
   await mockWorkspace(page, { recipeCount: 2 });
   const searchRequests: Array<Record<string, unknown>> = [];
