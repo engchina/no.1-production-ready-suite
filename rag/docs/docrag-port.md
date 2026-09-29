@@ -123,7 +123,7 @@ DocRAG の回答フロー（`DocragAnswerEngine`）は `rag_docrag_*` の設定�
 LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧の同じ位置（再帰文字分割の次）に DocRAG 親子階層を置いた。
 
 - 保存済みの `hierarchical_parent_child`（`backend/.env` の `RAG_CHUNKING_STRATEGY`、文書・レシピの処理設定、KB の構築設定）は、読み込み時に `docrag_small_to_big` として扱う。子サイズ `chunk_child_size` / `RAG_CHUNK_CHILD_SIZE` は読まない。DB の移行は不要で、次に保存すると新しい値だけが残る（文書分割の設定を保存すると `.env` から `RAG_CHUNK_CHILD_SIZE` の行も消える）。
-- 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。`GET /api/documents/{id}/ingestion-config` は `chunking_strategy` の差分（`chunking_drift`）として返す。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない。DocRAG 親子階層で作り直すには、その文書の Chunk を再作成する。
+- 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。文書の処理設定の保存（`PUT /api/documents/{id}/ingestion-config`）の応答は `chunking_strategy` の差分（`chunking_drift`）として返す。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない。DocRAG 親子階層で作り直すには、その文書の Chunk を再作成する。
 - DocRAG 親子階層は Docling の解析結果で親子に分割する。旧「親子階層」は Docling 以外の解析結果でも動いていたため、そうした文書の Chunk を作り直すと、失敗させずに構造認識で分割する（上の「使い方」2.。#300 より前は失敗していた）。親子で分割したい文書は、文書解析を Docling にして再解析する。
 - 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は DocRAG 親子階層として読み、後者は無視する）。Docling を使わない環境では、Chunk は構造認識で作られる。最初から構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
 

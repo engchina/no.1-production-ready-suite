@@ -349,7 +349,7 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.ingestDocument("doc-1", true);
+    await api.enqueueDocumentIngestionJob("doc-1", true);
     await api.enqueueDocumentIngestionJob("doc-2");
     await api.getIngestionJob("job-1");
     await api.retryIngestionJob("job-1");
@@ -385,7 +385,7 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[6][0]).toContain("offset=20");
   });
 
-  it("document workspace API は chunk / export / segment endpoint を呼ぶ", async () => {
+  it("document workspace API はレシピの chunk / export と segment endpoint を呼ぶ", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [],
@@ -395,19 +395,19 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.listDocumentChunks("doc-1");
-    await api.exportDocumentExtraction("doc-1", "chunks");
-    await api.exportDocumentExtraction("doc-1", "html");
+    await api.listDocumentRecipeChunks("doc-1", "recipe-1");
+    await api.exportDocumentRecipeExtraction("doc-1", "recipe-1", "chunks");
+    await api.exportDocumentRecipeExtraction("doc-1", "recipe-1", "html");
     await api.listDocumentIngestionJobs("doc-1");
     await api.listDocumentIngestionSegments("doc-1");
     await api.retryFailedDocumentIngestionSegments("doc-1", "recipe-2");
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/chunks");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/recipes/recipe-1/chunks");
     expect(fetchMock.mock.calls[1][0]).toBe(
-      "/api/documents/doc-1/extraction-export?format=chunks"
+      "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=chunks"
     );
     expect(fetchMock.mock.calls[2][0]).toBe(
-      "/api/documents/doc-1/extraction-export?format=html"
+      "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=html"
     );
     expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-jobs");
     expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments");
@@ -468,13 +468,12 @@ describe("api.request envelope", () => {
     });
   });
 
-  it("文書処理設定 API は GET と PUT を同じ resource に送る", async () => {
+  it("文書処理設定 API は ingestion-config へ PUT する", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ data: {}, error_messages: [], warning_messages: [] })
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.getDocumentIngestionConfig("doc-1");
     await api.updateDocumentIngestionConfig("doc-1", {
       preprocess_profile: null,
       parser_adapter_backend: "mineru",
@@ -497,38 +496,11 @@ describe("api.request envelope", () => {
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/ingestion-config");
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-1/ingestion-config");
-    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "PUT" });
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PUT" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
       parser_adapter_backend: "mineru",
       chunk_size: 512,
     });
-  });
-
-  it("getReadiness は 503 の degraded envelope も data として返す", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse(
-          {
-            data: {
-              status: "degraded",
-              version: "0.1.0",
-              message: "oci",
-              checks: { oci_common: "missing" },
-            },
-            error_messages: [],
-            warning_messages: [],
-          },
-          503
-        )
-      )
-    );
-
-    const result = await api.getReadiness();
-
-    expect(result.status).toBe("degraded");
-    expect(result.checks.oci_common).toBe("missing");
   });
 
   it("updateModelSettings は Enterprise AI payload template を保持して送る", async () => {
@@ -1328,36 +1300,6 @@ describe("api.services", () => {
       "/api/settings/parser-adapters/dots_ocr/status",
       expect.anything()
     );
-  });
-
-  it("getServices は /api/services から一覧を取り出す", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: {
-          control_enabled: false,
-          services: [
-            {
-              service_id: "parser-docling",
-              category: "parser",
-              profile: "cpu",
-              label_key: "settings.services.item.parserDocling",
-              execution_policy: "selected_adapter",
-              status: "stopped",
-              configured: true,
-            },
-          ],
-        },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await api.getServices();
-
-    expect(result.control_enabled).toBe(false);
-    expect(result.services[0].service_id).toBe("parser-docling");
-    expect(fetchMock).toHaveBeenCalledWith("/api/services", expect.anything());
   });
 
   it("controlService は service_id を URL エンコードして POST する", async () => {

@@ -453,15 +453,6 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route(`**/api/documents/${documentId}/chunks`, async (route) => {
-    await route.fulfill({
-      json: {
-        data: [],
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
   await page.route(`**/api/documents/${documentId}/ingestion-segments`, async (route) => {
     await route.fulfill({
       json: {

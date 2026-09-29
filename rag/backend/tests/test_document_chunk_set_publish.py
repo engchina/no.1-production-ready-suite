@@ -21,10 +21,6 @@ class FakePublishOracle:
         _ = document_id
         return 2
 
-    async def get_owning_knowledge_base(self, document_id: str) -> None:
-        _ = document_id
-        return None
-
     async def upsert_chunk_set(self, **_kwargs: Any) -> None:
         return None
 

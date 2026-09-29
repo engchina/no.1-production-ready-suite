@@ -48,9 +48,10 @@ uv run bandit -r app          # セキュリティ
 | `GET /api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要） |
 | `POST /api/documents/upload` | ドキュメントファイルを Object Storage 境界へ保存 |
 | `GET /api/documents?status=UPLOADED&q=manual&limit=50&offset=0` | 文書一覧をページング・状態・ファイル名で絞り込み |
-| `GET /api/documents/stats` | 状態別ドキュメント件数を取得 |
-| `POST /api/documents/{id}/ingest?force=false` | 旧互換入口。取込 job をキュー投入して即時に `IngestionJob` を返す |
-| `POST /api/documents/{id}/ingestion-jobs?force=false` | 保存済みドキュメントを永続取込 job としてキュー投入 |
+| `POST /api/documents/{id}/ingestion-jobs?force=false&phase=PREPROCESS` | 保存済みドキュメント（既定レシピ）を永続取込 job としてキュー投入 |
+| `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs` | 処理レシピ単位で取込 job をキュー投入 |
+| `POST /api/documents/{id}/recipes/{recipe_id}/approve` | 確認待ちのレシピ（ファイル準備・抽出・Chunk）を承認して次の工程の job を投入。抽出の修正を同時に保存できる |
+| `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` | 確認待ち（REVIEW）のレシピの抽出の修正を保存（job は投入しない） |
 | `GET /api/documents/ingestion-jobs?status=QUEUED` | 取込 job 履歴・状態をページング取得 |
 | `POST /api/documents/ingestion-jobs/drain` | 永続化済み QUEUED job を再実行 |
 | `POST /api/documents/ingestion-jobs/{job_id}/retry` | 失敗・完了・キャンセル済み job の対象文書を新規 job として再投入 |
@@ -179,7 +180,7 @@ Object Storage client の key は保存時に安全な文字へ正規化しま�
 
 ## 取込ステートマシン
 
-`POST /api/documents/{id}/ingest` と `POST /api/documents/{id}/ingestion-jobs` は、どちらも HTTP リクエスト内では取込を実行せず、永続化済み `IngestionJob` を返します。`UPLOADED` / `ERROR` は `EXTRACT` job として `QUEUED`、`REVIEW` 承認後は `INDEX` job として `QUEUED`、`INDEXED` は既定で `SKIPPED(already_indexed)`、`force=true` では再取込用の `QUEUED` になります。`INGESTING` / `INDEXING` は二重実行を避けるため 409 を返します。実際の OCR/本文抽出、chunking、embedding、Oracle 26ai 索引は `IngestionQueueWorker` が消費します。
+`POST /api/documents/{id}/ingestion-jobs` と `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（確認待ちの工程を進める `POST /api/documents/{id}/recipes/{recipe_id}/approve` も同じ）は、HTTP リクエスト内では取込を実行せず、永続化済み `IngestionJob` を返します。`UPLOADED` / `ERROR` は `EXTRACT` job として `QUEUED`、`REVIEW` 承認後は `INDEX` job として `QUEUED`、`INDEXED` は既定で `SKIPPED(already_indexed)`、`force=true` では再取込用の `QUEUED` になります。`INGESTING` / `INDEXING` は二重実行を避けるため 409 を返します。実際の OCR/本文抽出、chunking、embedding、Oracle 26ai 索引は `IngestionQueueWorker` が消費します。
 
 ローカル開発の既定では `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED=true` です。API process 内の worker は軽量 dispatcher として動き、job 本体は `python -m app.rag.ingestion_job_runner <job_id>` の subprocess で実行されます。Docling / OCR / CUDA 初期化が API event loop や他画面の設定 API を塞がないようにするためです。本番（#286 以降の systemd の配備）では `production-ready-rag-backend.service`（`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false`）と `production-ready-rag-ingestion-worker.service` を分け、取込ジョブの consumer は worker の unit だけにします（process isolation は既定の true のまま）。
 

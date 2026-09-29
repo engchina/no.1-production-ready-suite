@@ -18,7 +18,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - 取込 job の一覧・取得（`GET /api/documents/ingestion-jobs` ほか）は、文書のファイル名を `document_file_name` として返す（#306）。
 
 2. OCR・本文抽出と索引
-   - API: `POST /api/documents/{document_id}/ingest`
+   - API: `POST /api/documents/{document_id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）で取込 job を投入する。確認待ちの工程は `POST /api/documents/{document_id}/recipes/{recipe_id}/approve` で次の工程へ進める。
    - LLM/VLM は **OCI Enterprise AI** のみを使う。OCI Generative AI chat API は使わない。
    - Object Storage から取得した原本 bytes は、保存済み `file_size_bytes` / `content_sha256` と照合してから OCR へ渡す。
    - アップロード時の MIME type を VLM payload へ渡し、PDF / 画像 / text の real endpoint 解析条件を維持する。
@@ -28,7 +28,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と軽量な raw text element 推定に再実装する。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - `python -m app.rag.enterprise_ai_probe` で LLM/VLM endpoint の request preview と実 response parsing を Oracle / Object Storage から切り離して確認できる。probe 出力には raw prompt、context、OCR 本文、回答本文を含めず、payload shape と parse summary だけを残す。
-   - `GET /api/documents/{document_id}/extraction-export?format=json|markdown|html|chunks` で保存済み `StructuredExtraction` を JSON / Markdown / escaped HTML / 非 embedding chunk view として監査できる。DocumentPreviewWorkspace では抽出本文 panel 内の「抽出エクスポート」で同じ 4 形式を切り替えて確認できる。HTML は `tables[].cells` を safe `<table>` として再構成し、row / col / bbox lineage を保持する。Marker / Docling 的な多形式出力はここで本プロジェクト schema へ再マップし、再解析や外部 LLM / vector DB 呼び出しは行わない。
+   - `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks` で、レシピの保存済み `StructuredExtraction` を JSON / Markdown / escaped HTML / 非 embedding chunk view として監査できる。DocumentPreviewWorkspace では抽出本文 panel 内の「抽出エクスポート」で同じ 4 形式を切り替えて確認できる。HTML は `tables[].cells` を safe `<table>` として再構成し、row / col / bbox lineage を保持する。Marker / Docling 的な多形式出力はここで本プロジェクト schema へ再マップし、再解析や外部 LLM / vector DB 呼び出しは行わない。
    - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
    - `INDEXED` は force なしなら既存結果を返す。`force=true` は `INDEXED` の再取込に使える。
    - **方針(2 段階処理): parse → 人がプレビュー確認 → index。** parse/抽出の完了後はいったん `REVIEW`(プレビュー確認待ち)で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。抽出 artifact は再利用し、`INDEX` job は再 OCR せず保存済み `StructuredExtraction` から chunk / embedding / Oracle index を作る。

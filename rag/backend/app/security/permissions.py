@@ -273,7 +273,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/documents/upload"): _any(MENU_UPLOAD),
     ("POST", "/documents/batch-upload"): _any(MENU_UPLOAD),
     ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),
-    ("GET", "/documents/stats"): _any(MENU_FILE_LIST),
     # 削除の確認で使う（削除と同じ権限。#303）。
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
@@ -284,7 +283,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_D}/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_D}/ingestion-segments/retry"): _DOCUMENT_WORKSPACE,
-    ("GET", f"{_D}/chunks"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/recipes"): _DOCUMENT_VIEW,
     ("POST", f"{_D}/recipes"): _DOCUMENT_WORKSPACE,
     ("PUT", _R): _DOCUMENT_WORKSPACE,
@@ -298,26 +296,14 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
     ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_R}/reject"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/chunk-sets"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/chunk-set-experiments"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/chunk-set-experiments/{{chunk_set_id}}/promote"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/parser-extraction-experiments"): _DOCUMENT_WORKSPACE,
-    ("GET", f"{_D}/ingestion-config"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/ingestion-config"): _DOCUMENT_WORKSPACE,
-    ("GET", f"{_D}/extraction-export"): _DOCUMENT_WORKSPACE,
-    ("GET", f"{_D}/navigation"): _DOCUMENT_WORKSPACE,
-    ("GET", f"{_D}/extracted-fields"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/ingest"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/approve"): _DOCUMENT_WORKSPACE,
-    ("PATCH", f"{_D}/review-edits"): _DOCUMENT_WORKSPACE,
-    ("POST", f"{_D}/reject"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
@@ -329,7 +315,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/archive"): _any(KNOWLEDGE_BASES_MANAGE),
-    ("GET", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
     ("DELETE", f"{_KB}/documents/{{document_id}}"): _any(MENU_KNOWLEDGE_BASES),
     # ---- 業務ビュー ----
@@ -420,7 +405,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 運用設定 ----
     ("GET", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),
     ("PATCH", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),
-    ("GET", "/services"): _any(MENU_SETTINGS_SERVICES),
     ("GET", "/services/catalog"): _any(MENU_SETTINGS_SERVICES),
     # 文書解析の設定画面も parser サービスの状態を表示する。
     ("GET", "/services/{service_id}/status"): _any(
@@ -468,7 +452,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/extraction-fields"): _any(
         MENU_FILE_LIST, MENU_UPLOAD, MENU_SETTINGS_PARSER_ADAPTERS
     ),
-    ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),

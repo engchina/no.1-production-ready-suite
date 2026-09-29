@@ -171,11 +171,6 @@ async function mockServices(
       },
     });
   });
-  await page.route("**/api/services", async (route) => {
-    await route.fulfill({
-      json: { data: state, error_messages: [], warning_messages: [] },
-    });
-  });
   await page.route("**/api/services/*/start", async (route) => {
     const id = route.request().url().match(/services\/([^/]+)\/start/)?.[1] ?? "";
     const target = state.services.find((s) => s.service_id === decodeURIComponent(id));

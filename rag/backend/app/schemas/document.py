@@ -21,8 +21,6 @@ from app.config import (
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     ChunkingStrategy,
-    ParserAdapterBackend,
-    PreprocessProfile,
 )
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.common import JsonValue
@@ -337,68 +335,6 @@ class DocumentChunkSet(BaseModel):
     )
 
 
-class ChunkSetExperimentRequest(BaseModel):
-    """別 chunking レシピで候補 chunk_set を試す実験リクエスト(分割軸)。
-
-    指定したフィールドだけ global 既定を上書きする。parser/前処理は変えない(再抽出不要・
-    既存抽出を再利用して re-chunk する)ので、上書きできるのは chunking 系のみ。
-    """
-
-    chunking_strategy: ChunkingStrategy | None = None
-    chunk_size: int | None = Field(
-        default=None,
-        ge=CHUNK_SIZE_MIN_CHARS,
-        le=CHUNK_SIZE_MAX_CHARS,
-    )
-    chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
-    chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
-    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
-    docrag_child_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
-    )
-    docrag_table_child_target_chars: int | None = Field(
-        default=None,
-        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
-    )
-    docrag_parent_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
-    )
-    docrag_parent_max_pages: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
-    )
-    docrag_parent_max_children: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
-    )
-
-    _FIELD_TO_SETTING = {
-        "chunking_strategy": "rag_chunking_strategy",
-        "chunk_size": "rag_chunk_size",
-        "chunk_overlap": "rag_chunk_overlap",
-        "chunk_min_chars": "rag_chunk_min_chars",
-        "chunk_delimiter": "rag_chunk_delimiter",
-        "docrag_child_target_chars": "rag_docrag_child_target_chars",
-        "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
-        "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
-        "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
-        "docrag_parent_max_children": "rag_docrag_parent_max_children",
-    }
-
-    @model_validator(mode="after")
-    def _require_at_least_one_override(self) -> "ChunkSetExperimentRequest":
-        if not self.settings_overrides():
-            raise ValueError("少なくとも 1 つの chunking 設定を指定してください。")
-        return self
-
-    def settings_overrides(self) -> dict[str, object]:
-        """非 None の値を Settings の rag_* キーへ写した上書き dict を返す。"""
-        return {
-            setting: getattr(self, field)
-            for field, setting in self._FIELD_TO_SETTING.items()
-            if getattr(self, field) is not None
-        }
-
-
 class DocumentChunkPreviewRequest(BaseModel):
     """保存しない分割プレビュー用の一時 chunking 上書き。"""
 
@@ -469,37 +405,6 @@ class DocumentChunkPreviewResponse(BaseModel):
     chunks: list[DocumentChunkView] = Field(default_factory=list)
     stats: DocumentChunkPreviewStats
     warnings: list[str] = Field(default_factory=list)
-
-
-class ParserExtractionExperimentRequest(BaseModel):
-    """parser/前処理を変えた候補を試す実験リクエスト(再抽出軸・非同期ジョブ)。
-
-    parser/前処理を変えると抽出結果が変わるため再抽出が必要で、配信中文書を乱さない
-    candidate モードの非同期ジョブで materialize する。指定フィールドだけ global 既定を
-    上書きする(最低 1 つ必須)。
-    """
-
-    preprocess_profile: PreprocessProfile | None = None
-    parser_adapter_backend: ParserAdapterBackend | None = None
-
-    _FIELD_TO_SETTING = {
-        "preprocess_profile": "rag_preprocess_profile",
-        "parser_adapter_backend": "rag_parser_adapter_backend",
-    }
-
-    @model_validator(mode="after")
-    def _require_at_least_one_override(self) -> "ParserExtractionExperimentRequest":
-        if not self.settings_overrides():
-            raise ValueError("前処理プロファイルか文書解析 backend のいずれかを指定してください。")
-        return self
-
-    def settings_overrides(self) -> dict[str, object]:
-        """非 None の値を Settings の rag_* キーへ写した上書き dict を返す。"""
-        return {
-            setting: getattr(self, field)
-            for field, setting in self._FIELD_TO_SETTING.items()
-            if getattr(self, field) is not None
-        }
 
 
 class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
@@ -695,10 +600,3 @@ class DocumentDeleteImpact(BaseModel):
     document_id: str
     duplicate_count: int = 0
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
-
-
-class DocumentStats(BaseModel):
-    """ドキュメント状態別の集計。"""
-
-    total: int
-    by_status: dict[FileStatus, int]

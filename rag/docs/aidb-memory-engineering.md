@@ -62,7 +62,7 @@ Agent Memory は外部ストアを使わず、Oracle 26ai 内の `rag_agent_memo
 - vector: `memory_text` を OCI Generative AI Cohere Embed v4 で `SEARCH_DOCUMENT` embedding 化し、`VECTOR(1536, FLOAT32)` に保存する。
 - search: 検索 request に user / agent / thread scope がある場合だけ、query embedding で Agent Memory Search を行う。取得結果は `retrieval_mode=agent_memory`、`context_role=history` として扱う。
 - writeback: 回答が guardrail を通過し、引用付き context がある場合だけ、query 原文ではなく「回答要約 + 根拠 ID」の短い memory を保存する。
-- eval: `evaluate_agent_memory()` で helpful / not helpful を `usefulness_score` の移動平均として更新できる。
+- eval: `usefulness_score`（既定 0.5）の列を持つ。helpful / not helpful で更新する経路は未実装（更新用の `evaluate_agent_memory()` は呼び出し元がなかったため #473 で削除した）。
 
 `History` は継続性の補助であり、回答主張の必須根拠ではない。rerank では Evidence / Support 候補を優先し、Agent Memory が一次根拠を押し出さないようにする。
 

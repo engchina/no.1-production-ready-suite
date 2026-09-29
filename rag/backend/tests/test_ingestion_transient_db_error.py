@@ -256,10 +256,6 @@ class _LightOracle:
             )
         ]
 
-    async def list_document_chunks(self, document_id: str) -> list[object]:
-        _ = document_id
-        return []
-
     async def list_document_knowledge_bases(self, document_id: str) -> list[object]:
         _ = document_id
         return []
@@ -281,11 +277,10 @@ class _LightOracle:
     "call",
     [
         lambda: documents_route.list_document_ingestion_jobs("doc-1"),
-        lambda: documents_route.list_document_chunks("doc-1"),
         lambda: documents_route.list_document_ingestion_segments("doc-1"),
         lambda: documents_route.list_document_knowledge_bases("doc-1"),
     ],
-    ids=["ingestion-jobs", "chunks", "ingestion-segments", "knowledge-bases"],
+    ids=["ingestion-jobs", "ingestion-segments", "knowledge-bases"],
 )
 async def test_polling_routes_do_not_read_document_json_columns(
     monkeypatch: pytest.MonkeyPatch,
@@ -319,7 +314,6 @@ async def test_chunk_sets_route_does_not_read_document_json_columns(
     "call",
     [
         lambda: documents_route.list_document_ingestion_jobs("doc-missing"),
-        lambda: documents_route.list_document_chunks("doc-missing"),
         lambda: documents_route.list_document_ingestion_segments("doc-missing"),
         lambda: documents_route.list_document_chunk_sets("doc-missing"),
     ],

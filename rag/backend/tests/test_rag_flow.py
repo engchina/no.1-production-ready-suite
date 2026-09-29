@@ -21,7 +21,9 @@ from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
+from app.rag.navigation import build_navigation_tree
 from app.schemas.document import FileStatus, SourceModality, SourceProfile
+from app.schemas.extraction import StructuredExtraction
 from tests.support import AsgiTestClient
 from tests.support import test_audit_request_context as audit_request_context
 
@@ -45,7 +47,7 @@ def _enqueue_ingestion(
 ) -> dict[str, Any]:
     params = {"force": "true"} if force else None
     response = client.post(
-        f"/api/documents/{document_id}/ingest",
+        f"/api/documents/{document_id}/ingestion-jobs",
         params=params,
         headers=headers,
     )
@@ -561,83 +563,6 @@ async def test_candidate_mode_failure_does_not_error_document() -> None:
         assert reloaded is not None and reloaded.status == FileStatus.INDEXED
 
 
-def test_parser_extraction_experiment_job_materializes_isolated_candidate() -> None:
-    """parser/前処理 実験ジョブは配信中文書を乱さず候補 chunk_set(is_serving=0)を作る。
-
-    Phase 3b: settings_overrides 付きジョブを worker が candidate モードで再抽出 materialize し、
-    文書 status・serving を変えないことを実 Oracle で固定する。
-    """
-    from app.rag.variant_keys import compute_chunk_set_id
-
-    content = "社内規程 クラウド利用料 実験対象の本文です。".encode()
-    upload_resp = client.post(
-        "/api/documents/upload",
-        files={"file": ("experiment.txt", content, "text/plain")},
-    )
-    assert upload_resp.status_code == 200
-    document_id = upload_resp.json()["data"]["id"]
-
-    async def _setup_serving() -> str:
-        oracle = OracleClient()
-        detail = await oracle.get_document(document_id)
-        assert detail is not None
-        settings = Settings.model_construct(
-            rag_review_gate_enabled=False,
-            rag_auto_parse_after_preprocess_enabled=True,
-        )
-        pipeline = IngestionPipeline(oracle=oracle, settings=settings)
-        serving_cs = compute_chunk_set_id(cast(str, detail.content_sha256), settings)
-        await pipeline.ingest(
-            document_id,
-            content,
-            "prompt",
-            content_type="text/plain",
-            source_profile=detail.source_profile,
-            chunk_set_id=serving_cs,
-        )
-        await oracle.upsert_chunk_set(chunk_set_id=serving_cs, document_id=document_id)
-        await oracle.mark_chunk_set_indexed(
-            chunk_set_id=serving_cs,
-            chunk_count=await oracle.count_chunk_set_chunks(serving_cs),
-            vector_count=await oracle.count_chunk_set_chunks(serving_cs),
-        )
-        await oracle.set_document_serving_chunk_set(
-            document_id=document_id, chunk_set_id=serving_cs
-        )
-        return serving_cs
-
-    serving_cs = asyncio.run(_setup_serving())
-
-    # parser を docling に変えた実験ジョブを投入(global 既定 = unstructured と異なる)。
-    exp_resp = client.post(
-        f"/api/documents/{document_id}/parser-extraction-experiments",
-        json={"parser_adapter_backend": "docling"},
-    )
-    assert exp_resp.status_code == 200
-    job = exp_resp.json()["data"]
-    assert job["settings_overrides"] == {"rag_parser_adapter_backend": "docling"}
-
-    _run_ingestion_job(cast(str, job["id"]))
-
-    job_after = client.get(f"/api/documents/ingestion-jobs/{job['id']}").json()["data"]
-    assert job_after["status"] == "SUCCEEDED"
-
-    async def _assert_isolated() -> None:
-        oracle = OracleClient()
-        reloaded = await oracle.get_document(document_id)
-        assert reloaded is not None and reloaded.status == FileStatus.INDEXED
-        chunk_set_ids = await oracle.list_document_chunk_set_ids(document_id)
-        candidates = [cs for cs in chunk_set_ids if cs != serving_cs]
-        assert len(candidates) == 1
-        serving_row = await oracle.get_chunk_set(serving_cs)
-        candidate_row = await oracle.get_chunk_set(candidates[0])
-        assert serving_row is not None and int(str(serving_row["is_serving"])) == 1
-        assert candidate_row is not None and int(str(candidate_row["is_serving"])) == 0
-        assert await oracle.count_chunk_set_chunks(candidates[0]) > 0
-
-    asyncio.run(_assert_isolated())
-
-
 def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
     """プロンプト注入らしい検索は拒否する。"""
     with caplog.at_level(logging.INFO, logger="app.audit"):
@@ -843,7 +768,7 @@ def test_search_scalar_prefilters_are_applied_to_retrieval() -> None:
 
 
 def test_document_navigation_tree_is_built_from_headings() -> None:
-    """取込済み文書の章節 navigation tree（Knowhere 由来）を API から取得できる。"""
+    """取込済み文書の抽出結果から章節 navigation tree（Knowhere 由来）を得られる。"""
     markdown = (
         "# 第1章 概要\n\n"
         "クラウド利用料の概要を説明します。\n\n"
@@ -858,18 +783,19 @@ def test_document_navigation_tree_is_built_from_headings() -> None:
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
-    assert _ingest_document(document_id).status_code == 200
+    detail_resp = _ingest_document(document_id)
+    assert detail_resp.status_code == 200
 
-    nav_resp = client.get(f"/api/documents/{document_id}/navigation")
-    assert nav_resp.status_code == 200
-    nodes = nav_resp.json()["data"]
+    # 取込時に保存した navigation を使い、未保存なら保存済み抽出から決定論的に組み立てる。
+    extraction = StructuredExtraction.model_validate(detail_resp.json()["data"]["extraction"])
+    nodes = extraction.navigation or build_navigation_tree(extraction)
     assert nodes, "見出しから navigation node が構築されるはず"
-    titles = {node["title"] for node in nodes}
+    titles = {node.title for node in nodes}
     assert any("第1章" in title for title in titles)
     # depth1 の親 node は parent を持たず、子 section を link する。
-    roots = [node for node in nodes if node["depth"] == 1]
+    roots = [node for node in nodes if node.depth == 1]
     assert roots
-    assert all(node["parent_section_id"] is None for node in roots)
+    assert all(node.parent_section_id is None for node in roots)
 
 
 def test_search_status_filter_is_case_insensitive() -> None:
@@ -1022,14 +948,14 @@ def test_get_missing_document_preserves_business_error_message() -> None:
 
 def test_ingest_missing_document_preserves_business_error_message() -> None:
     """取込 API の 404 detail は汎用メッセージで上書きしない。"""
-    response = client.post("/api/documents/missing-document/ingest")
+    response = client.post("/api/documents/missing-document/ingestion-jobs")
 
     assert response.status_code == 404
     assert response.json()["error_messages"] == ["ドキュメントが見つかりません。"]
 
 
-def test_upload_sanitizes_filename_and_document_stats() -> None:
-    """アップロード時は basename を保存し、状態別 stats を返す。"""
+def test_upload_sanitizes_filename() -> None:
+    """アップロード時は basename を保存する。"""
     response = client.post(
         "/api/documents/upload",
         files={"file": ("../nested/policy.txt", b"sample text", "text/plain")},
@@ -1040,12 +966,7 @@ def test_upload_sanitizes_filename_and_document_stats() -> None:
     detail_resp = client.get(f"/api/documents/{document_id}")
     assert detail_resp.status_code == 200
     assert detail_resp.json()["data"]["file_name"] == "policy.txt"
-
-    stats_resp = client.get("/api/documents/stats")
-    assert stats_resp.status_code == 200
-    stats = stats_resp.json()["data"]
-    assert stats["total"] == 1
-    assert stats["by_status"]["UPLOADED"] == 1
+    assert detail_resp.json()["data"]["status"] == "UPLOADED"
 
 
 def test_upload_records_file_hash_size_and_duplicate_source() -> None:
@@ -1307,7 +1228,9 @@ def test_ingest_rejects_document_already_ingesting() -> None:
         )
         asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INGESTING))
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        response = client.post(
+            f"/api/documents/{detail.id}/ingestion-jobs", headers=NO_TENANT_HEADERS
+        )
 
         assert response.status_code == 409
         assert response.json()["error_messages"] == ["このドキュメントは現在取込中です。"]
@@ -1328,7 +1251,9 @@ def test_ingest_is_idempotent_for_already_indexed_document() -> None:
         )
         asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        response = client.post(
+            f"/api/documents/{detail.id}/ingestion-jobs", headers=NO_TENANT_HEADERS
+        )
 
         assert response.status_code == 200
         data = response.json()["data"]
@@ -1377,7 +1302,9 @@ def test_indexed_document_is_idempotent_without_force() -> None:
         )
         asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        response = client.post(
+            f"/api/documents/{detail.id}/ingestion-jobs", headers=NO_TENANT_HEADERS
+        )
 
         assert response.status_code == 200
         data = response.json()["data"]

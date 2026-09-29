@@ -90,7 +90,6 @@ from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadFailedItem,
     BatchUploadResult,
-    ChunkSetExperimentRequest,
     DocumentApproveRequest,
     DocumentChunkPreviewRequest,
     DocumentChunkPreviewResponse,
@@ -117,7 +116,6 @@ from app.schemas.document import (
     DocumentRecipeStepStatus,
     DocumentRecipeView,
     DocumentReviewEditsRequest,
-    DocumentStats,
     DocumentSummary,
     DocumentTableCellTextEdit,
     DuplicateDocumentRef,
@@ -127,7 +125,6 @@ from app.schemas.document import (
     IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
-    ParserExtractionExperimentRequest,
     ParserSourceNotice,
     SourceProfile,
     UploadResult,
@@ -139,7 +136,6 @@ from app.schemas.extraction import (
     DocumentElement,
     DocumentNavigationNode,
     ExtractionAsset,
-    ExtractionField,
     ExtractionTable,
     ExtractionTableCell,
     StructuredExtraction,
@@ -545,22 +541,6 @@ async def list_documents(
     )
 
 
-@router.get("/stats", response_model=ApiResponse[DocumentStats])
-async def document_stats() -> ApiResponse[DocumentStats]:
-    """ドキュメント状態別の集計を返す。DB 停止時はゼロ集計 + warning で縮退する。"""
-    settings = get_settings()
-    stats, degraded = await load_or_degrade(
-        OracleClient().document_stats,
-        timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=DocumentStats(total=0, by_status={}),
-        log_label="document_stats",
-    )
-    return ApiResponse(
-        data=stats,
-        warning_messages=[degraded.message] if degraded else [],
-    )
-
-
 DELETE_IMPACT_MAX_DOCUMENTS = 100
 
 
@@ -773,15 +753,6 @@ async def retry_failed_document_ingestion_segments(
         recipe_id=recipe_id,
     )
     return ApiResponse(data=job)
-
-
-@router.get("/{document_id}/chunks", response_model=ApiResponse[list[DocumentChunkView]])
-async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChunkView]]:
-    """文書 preview workspace 用に chunk/citation metadata を返す。"""
-    oracle = OracleClient()
-    if not await oracle.document_exists(document_id):
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return ApiResponse(data=await oracle.list_document_chunks(document_id))
 
 
 _RECIPE_PHASES = (
@@ -1447,29 +1418,25 @@ async def save_document_recipe_review_edits(
     return ApiResponse(data=await _document_recipe_view(oracle, row))
 
 
-@router.post(
-    "/{document_id}/recipes/{recipe_id}/reject",
-    response_model=ApiResponse[DocumentRecipeView],
-)
-async def reject_document_recipe(
-    http_request: Request,
-    document_id: str,
-    recipe_id: str,
-) -> ApiResponse[DocumentRecipeView]:
-    enforce_rate_limit("ingest", http_request)
-    oracle = OracleClient()
-    row = await oracle.get_document_recipe(document_id, recipe_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-    if FileStatus(str(row.get("status"))) != FileStatus.REVIEW:
-        raise HTTPException(status_code=409, detail="確認待ちのレシピのみ却下できます。")
-    await oracle.update_document_recipe_status(
-        recipe_id=recipe_id,
-        status=FileStatus.UPLOADED,
-    )
-    updated = await oracle.get_document_recipe(document_id, recipe_id)
-    assert updated is not None
-    return ApiResponse(data=await _document_recipe_view(oracle, updated))
+def _candidate_chunking_settings(base: Settings, overrides: Mapping[str, object]) -> Settings:
+    """global 設定に chunking 上書きを重ねた候補レシピ設定を返す(cross-field 検証込み)。
+
+    model_copy は Settings の model_validator を再実行しないため、chunking の相互制約だけ
+    ここで明示検証する(不正なら 422)。parser/前処理は変えない=既存抽出を再利用できる。
+    """
+    candidate = base.model_copy(update=dict(overrides))
+    if candidate.rag_chunk_overlap >= candidate.rag_chunk_size:
+        raise HTTPException(
+            status_code=422, detail="overlap は chunk_size より小さくしてください。"
+        )
+    if (
+        candidate.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
+        and candidate.rag_chunk_min_chars >= candidate.rag_chunk_size
+    ):
+        raise HTTPException(
+            status_code=422, detail="min_chars は chunk_size より小さくしてください。"
+        )
+    return candidate
 
 
 @router.get("/{document_id}/chunk-sets", response_model=ApiResponse[list[DocumentChunkSet]])
@@ -1511,251 +1478,6 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
             )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
-
-
-def _candidate_chunking_settings(base: Settings, overrides: Mapping[str, object]) -> Settings:
-    """global 設定に chunking 上書きを重ねた候補レシピ設定を返す(cross-field 検証込み)。
-
-    model_copy は Settings の model_validator を再実行しないため、chunking の相互制約だけ
-    ここで明示検証する(不正なら 422)。parser/前処理は変えない=既存抽出を再利用できる。
-    """
-    candidate = base.model_copy(update=dict(overrides))
-    if candidate.rag_chunk_overlap >= candidate.rag_chunk_size:
-        raise HTTPException(
-            status_code=422, detail="overlap は chunk_size より小さくしてください。"
-        )
-    if (
-        candidate.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
-        and candidate.rag_chunk_min_chars >= candidate.rag_chunk_size
-    ):
-        raise HTTPException(
-            status_code=422, detail="min_chars は chunk_size より小さくしてください。"
-        )
-    return candidate
-
-
-async def _chunk_set_experiment_view(
-    oracle: OracleClient, document_id: str, chunk_set_id: str
-) -> DocumentChunkSet:
-    """指定 chunk_set を DocumentChunkSet ビューで返す(一覧と同じ導出を再利用)。"""
-    for row in await oracle.list_document_chunk_sets(document_id):
-        if str(row.get("chunk_set_id")) == chunk_set_id:
-            return DocumentChunkSet.model_validate(row)
-    raise HTTPException(status_code=500, detail="chunk_set の取得に失敗しました。")
-
-
-@router.post("/{document_id}/chunk-set-experiments", response_model=ApiResponse[DocumentChunkSet])
-async def create_chunk_set_experiment(
-    document_id: str, request: ChunkSetExperimentRequest
-) -> ApiResponse[DocumentChunkSet]:
-    """別 chunking レシピで候補 chunk_set を materialize する(配信は切り替えない)。
-
-    既存抽出を再利用して候補レシピで re-chunk→index し、is_serving=0 の候補として残す。
-    検索精度の比較は ``chunk_set_id`` フィルタで候補/配信中をそれぞれ検索して横並びにする。
-    """
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.INDEXED:
-        raise HTTPException(
-            status_code=409, detail="索引済み(INDEXED)の文書のみ別レシピを試せます。"
-        )
-    if not detail.content_sha256:
-        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
-    serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(document_id)
-    if serving_chunk_set_id is None:
-        raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
-    base_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    candidate_settings = _candidate_chunking_settings(base_settings, request.settings_overrides())
-    candidate_config = processing_config.model_copy(
-        update={field: value for field, value in request.model_dump().items() if value is not None}
-    )
-    _, effective_candidate_config = _merge_document_processing_config(candidate_config)
-    base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
-    if base_chunk_set_id == serving_chunk_set_id:
-        raise HTTPException(
-            status_code=409,
-            detail="現在配信中のレシピと同じ設定です。別の chunking 設定を指定してください。",
-        )
-    recipes = await oracle.list_document_recipes(document_id)
-    source_recipe = recipes[0] if recipes else None
-    source_recipe_id = str(source_recipe["recipe_id"]) if source_recipe else None
-    source_extraction_recipe_id = (
-        str(source_recipe.get("active_extraction_recipe_id"))
-        if source_recipe and source_recipe.get("active_extraction_recipe_id")
-        else None
-    )
-    source_extraction = (
-        await oracle.get_document_extraction_artifact(
-            document_id=document_id,
-            extraction_recipe_id=source_extraction_recipe_id,
-        )
-        if source_extraction_recipe_id is not None
-        else None
-    )
-    if source_extraction is None or not source_extraction.get("extraction_json"):
-        raise HTTPException(status_code=409, detail="再利用できる抽出結果がありません。")
-    try:
-        created_recipe = await oracle.create_document_recipe(
-            document_id,
-            copy_from_recipe_id=source_recipe_id,
-        )
-        created_recipe = await oracle.update_document_recipe_config(
-            document_id,
-            str(created_recipe["recipe_id"]),
-            candidate_config,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    recipe_id = str(created_recipe["recipe_id"])
-    recipe_revision = int(str(created_recipe.get("config_revision") or 1))
-    extraction_recipe_id = compute_document_recipe_extraction_id(
-        compute_extraction_recipe_id(detail.content_sha256, candidate_settings),
-        recipe_id,
-        recipe_revision,
-    )
-    raw_recipe_subset = source_extraction.get("recipe_subset")
-    await oracle.upsert_document_extraction_artifact(
-        document_id=document_id,
-        extraction_recipe_id=extraction_recipe_id,
-        source_sha256=detail.content_sha256,
-        recipe_subset=(
-            {str(key): value for key, value in raw_recipe_subset.items()}
-            if isinstance(raw_recipe_subset, Mapping)
-            else None
-        ),
-        extraction=StructuredExtraction.model_validate(
-            source_extraction["extraction_json"]
-        ).to_document_payload(),
-        status=str(source_extraction.get("status") or "materialized"),
-    )
-    await oracle.update_document_recipe_status(
-        recipe_id=recipe_id,
-        status=FileStatus.REVIEW,
-        active_extraction_recipe_id=extraction_recipe_id,
-    )
-    candidate_chunk_set_id = hashlib.sha256(
-        f"{base_chunk_set_id}:{recipe_id}:compat".encode()
-    ).hexdigest()
-    pipeline = IngestionPipeline(
-        oracle=oracle,
-        settings=candidate_settings,
-        recipe_id=recipe_id,
-        recipe_revision=recipe_revision,
-    )
-    try:
-        await pipeline.index_reviewed(
-            document_id, chunk_set_id=candidate_chunk_set_id, record_outcome=False
-        )
-    except IngestionUserError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
-    await oracle.upsert_chunk_set(
-        chunk_set_id=candidate_chunk_set_id,
-        document_id=document_id,
-        recipe_id=recipe_id,
-        extraction_recipe_id=extraction_recipe_id,
-        recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
-    )
-    await oracle.mark_chunk_set_indexed(
-        chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
-    )
-    await oracle.activate_recipe_chunk_set(
-        recipe_id=recipe_id,
-        chunk_set_id=candidate_chunk_set_id,
-        extraction_recipe_id=extraction_recipe_id,
-        materialized_revision=recipe_revision,
-    )
-    return ApiResponse(
-        data=await _chunk_set_experiment_view(oracle, document_id, candidate_chunk_set_id)
-    )
-
-
-@router.post(
-    "/{document_id}/chunk-set-experiments/{chunk_set_id}/promote",
-    response_model=ApiResponse[DocumentChunkSet],
-)
-async def promote_chunk_set_experiment(
-    document_id: str, chunk_set_id: str
-) -> ApiResponse[DocumentChunkSet]:
-    """互換 API。全レシピ融合では昇格操作を行わない。"""
-    _ = (document_id, chunk_set_id)
-    raise HTTPException(
-        status_code=409,
-        detail="全レシピ融合モードでは昇格は不要です。処理レシピから管理してください。",
-    )
-
-
-@router.post(
-    "/{document_id}/parser-extraction-experiments", response_model=ApiResponse[IngestionJob]
-)
-async def create_parser_extraction_experiment(
-    document_id: str, request: ParserExtractionExperimentRequest
-) -> ApiResponse[IngestionJob]:
-    """parser/前処理を変えた候補を**再抽出**で materialize する非同期ジョブを投入する。
-
-    分割軸(chunk-set-experiments)と違い parser/前処理は抽出結果が変わるため再抽出が必要で、
-    配信中文書を乱さない candidate モードのジョブで実行する。ジョブ完了で候補 chunk_set が
-    is_serving=0 として残り、横並び比較・昇格は既存の導線を使う。
-    """
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.INDEXED:
-        raise HTTPException(
-            status_code=409, detail="索引済み(INDEXED)の文書のみ別レシピを試せます。"
-        )
-    if not detail.content_sha256:
-        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
-    if await oracle.get_document_serving_chunk_set_id(document_id) is None:
-        raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
-    overrides = request.settings_overrides()
-    base_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    candidate_config = processing_config.model_copy(
-        update={field: value for field, value in request.model_dump().items() if value is not None}
-    )
-    candidate_settings, _effective_candidate_config = _merge_document_processing_config(
-        candidate_config
-    )
-    # parser/前処理が現状と同じなら再抽出は不要(分割だけ変えるなら chunk-set-experiments を使う)。
-    if compute_extraction_recipe_id(
-        detail.content_sha256, candidate_settings
-    ) == compute_extraction_recipe_id(detail.content_sha256, base_settings):
-        raise HTTPException(
-            status_code=409,
-            detail="現在配信中の前処理/解析と同じ設定です。分割だけ変える場合は別レシピ実験を使ってください。",
-        )
-    recipes = await oracle.list_document_recipes(document_id)
-    source_recipe_id = str(recipes[0]["recipe_id"]) if recipes else None
-    try:
-        created_recipe = await oracle.create_document_recipe(
-            document_id,
-            copy_from_recipe_id=source_recipe_id,
-        )
-        created_recipe = await oracle.update_document_recipe_config(
-            document_id,
-            str(created_recipe["recipe_id"]),
-            candidate_config,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    job = await _create_ingestion_job_record(
-        oracle=oracle,
-        document_id=document_id,
-        recipe_id=str(created_recipe["recipe_id"]),
-        recipe_revision=int(str(created_recipe.get("config_revision") or 1)),
-        parser_profile=_source_profile_for_detail(detail).parser_profile,
-        quality_warnings=[],
-        phase=IngestionJobPhase.PREPROCESS,
-        settings_overrides={
-            **overrides,
-            "processing_config": candidate_config.model_dump(mode="json", exclude_none=True),
-        },
-    )
-    _dispatch_ingestion_job(job.id)
-    return ApiResponse(data=job)
 
 
 def _experiment_candidate_settings(base: Settings, overrides: dict[str, object]) -> Settings:
@@ -2314,21 +2036,6 @@ async def _document_ingestion_config_data(
     )
 
 
-@router.get(
-    "/{document_id}/ingestion-config",
-    response_model=ApiResponse[DocumentIngestionConfigData],
-)
-async def get_document_ingestion_config(
-    document_id: str,
-) -> ApiResponse[DocumentIngestionConfigData]:
-    """文書の処理レシピ上書き・有効値・配信中レシピとの差分を返す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return ApiResponse(data=await _document_ingestion_config_data(oracle, detail))
-
-
 @router.put(
     "/{document_id}/ingestion-config",
     response_model=ApiResponse[DocumentIngestionConfigData],
@@ -2359,94 +2066,6 @@ async def update_document_ingestion_config(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await oracle.update_document_processing_config(document_id, request)
     return ApiResponse(data=await _document_ingestion_config_data(oracle, detail))
-
-
-@router.get(
-    "/{document_id}/extraction-export",
-    response_model=ApiResponse[DocumentExtractionExport],
-)
-async def export_document_extraction(
-    document_id: str,
-    format: Annotated[DocumentExtractionExportFormat, Query()] = (
-        DocumentExtractionExportFormat.MARKDOWN
-    ),
-) -> ApiResponse[DocumentExtractionExport]:
-    """保存済み extraction を JSON / Markdown / HTML / chunks 形式で監査用に返す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    extraction = _structured_extraction_from_detail(detail)
-    payload = extraction.to_document_payload()
-    chunks: list[DocumentChunkView] = []
-    if format == DocumentExtractionExportFormat.CHUNKS:
-        chunks = await oracle.list_document_chunks(document_id)
-        payload = {"chunks": [chunk.model_dump(mode="json") for chunk in chunks]}
-    content = _document_extraction_export_content(format, extraction, payload)
-    return ApiResponse(
-        data=DocumentExtractionExport(
-            document_id=document_id,
-            file_name=detail.file_name,
-            format=format,
-            content_type=_document_extraction_export_content_type(format),
-            content=content,
-            payload=(
-                payload
-                if format
-                not in {
-                    DocumentExtractionExportFormat.MARKDOWN,
-                    DocumentExtractionExportFormat.HTML,
-                }
-                else {}
-            ),
-            chunks=chunks,
-            parser_backend=_extraction_parser_backend(extraction),
-            parser_profile=_extraction_parser_profile(extraction),
-            page_count=len(extraction.pages),
-            element_count=len(extraction.elements),
-            table_count=len(extraction.tables),
-            asset_count=len(extraction.assets),
-        )
-    )
-
-
-@router.get(
-    "/{document_id}/navigation",
-    response_model=ApiResponse[list[DocumentNavigationNode]],
-)
-async def get_document_navigation(
-    document_id: str,
-) -> ApiResponse[list[DocumentNavigationNode]]:
-    """文書の章節 navigation tree（progressive disclosure 用）を返す。
-
-    取込時に要約付きで永続化されていればそれを返し、未保存の旧文書では保存済み
-    extraction から決定論的に tree を再構築する（要約なし）。
-    """
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    extraction = _structured_extraction_from_detail(detail)
-    nodes = extraction.navigation or build_navigation_tree(extraction)
-    return ApiResponse(data=nodes)
-
-
-@router.get(
-    "/{document_id}/extracted-fields",
-    response_model=ApiResponse[list[ExtractionField]],
-)
-async def get_document_extracted_fields(
-    document_id: str,
-) -> ApiResponse[list[ExtractionField]]:
-    """文書から schema 駆動で抽出した named field/entity を返す(PoweRAG 由来)。
-
-    帳票項目の編集 endpoint(`/fields`)とは別概念で、こちらは読み取り専用。
-    """
-    detail = await OracleClient().get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    extraction = _structured_extraction_from_detail(detail)
-    return ApiResponse(data=extraction.fields)
 
 
 @router.get(
@@ -2686,92 +2305,6 @@ async def save_document_classification(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
     return ApiResponse(data=detail)
-
-
-@router.post("/{document_id}/ingest", response_model=ApiResponse[IngestionJob])
-async def ingest_document(
-    http_request: Request,
-    document_id: str,
-    force: bool = Query(default=False),
-) -> ApiResponse[IngestionJob]:
-    """旧互換入口。HTTP では実行せず、取込 job をキュー投入して即時に返す。"""
-    enforce_rate_limit("ingest", http_request)
-    job = await _enqueue_ingestion_job_for_document(document_id, force=force)
-    return ApiResponse(data=job)
-
-
-@router.post("/{document_id}/approve", response_model=ApiResponse[IngestionJob])
-async def approve_document(
-    http_request: Request,
-    document_id: str,
-    body: DocumentApproveRequest | None = None,
-) -> ApiResponse[IngestionJob]:
-    """現在のレビュー段階を承認し、次の取込 job を投入する。
-
-    body に REVIEW 中のテキスト修正(raw_text / element_edits / table_cell_edits)を
-    含む場合は、bbox・構造を保持したままテキストのみ差し替えてから chunk する。
-    """
-    enforce_rate_limit("ingest", http_request)
-    detail = await OracleClient().get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status == FileStatus.PREPROCESSED:
-        # ファイル準備の承認: 保存済み preprocess artifact から EXTRACT ジョブを投入し、
-        # parse → REVIEW へ進める。
-        job = await _enqueue_ingestion_job_for_document(
-            document_id, force=False, phase=IngestionJobPhase.EXTRACT
-        )
-    elif detail.status == FileStatus.REVIEW:
-        # 3 層モデル: レシピは文書単位の単一 extraction recipe なので、保存済みプレビューから
-        # 安全に後段 chunk/index できる(KB 別の解析分岐に伴う再取込ゲートは廃止)。
-        if body is not None and (
-            body.element_edits or body.table_cell_edits or body.raw_text is not None
-        ):
-            await _apply_review_text_edits(document_id, body)
-        job = await _enqueue_chunk_phase_job_for_document(document_id)
-    elif detail.status == FileStatus.CHUNKED:
-        job = await _enqueue_index_phase_job_for_document(document_id)
-    else:
-        raise HTTPException(
-            status_code=409,
-            detail="確認待ちの文書のみ承認できます。",
-        )
-    return ApiResponse(data=job)
-
-
-@router.patch("/{document_id}/review-edits", response_model=ApiResponse[DocumentDetail])
-async def save_document_review_edits(
-    http_request: Request,
-    document_id: str,
-    body: DocumentReviewEditsRequest,
-) -> ApiResponse[DocumentDetail]:
-    """REVIEW 中の構造化要素修正を保存し、文書状態は REVIEW のまま維持する。"""
-    enforce_rate_limit("ingest", http_request)
-    detail = await _apply_review_text_edits(document_id, body)
-    return ApiResponse(data=detail)
-
-
-async def _apply_review_text_edits(
-    document_id: str,
-    edits: DocumentReviewEditsRequest | DocumentApproveRequest,
-) -> DocumentDetail:
-    """REVIEW 中の人手テキスト修正を保存済み抽出へ適用する(テキストのみ)。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.REVIEW:
-        raise HTTPException(
-            status_code=409,
-            detail="プレビュー確認待ちの文書のみ修正できます。",
-        )
-    if not detail.extraction:
-        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
-    extraction = _reviewed_extraction_with_edits(
-        StructuredExtraction.model_validate(detail.extraction),
-        edits,
-    )
-    return await oracle.save_review_extraction(document_id, extraction)
 
 
 async def _apply_recipe_review_text_edits(
@@ -3089,26 +2622,6 @@ def _apply_table_cell_edits(
         for table in extraction.tables
     ]
     return extraction.model_copy(update={"tables": updated_tables})
-
-
-@router.post("/{document_id}/reject", response_model=ApiResponse[DocumentDetail])
-async def reject_document(
-    http_request: Request,
-    document_id: str,
-) -> ApiResponse[DocumentDetail]:
-    """REVIEW の文書を却下し、UPLOADED へ戻す(抽出結果は保持・再取込で上書き)。"""
-    enforce_rate_limit("ingest", http_request)
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.REVIEW:
-        raise HTTPException(
-            status_code=409,
-            detail="プレビュー確認待ちの文書のみ却下できます。",
-        )
-    updated = await oracle.update_document_status(document_id, FileStatus.UPLOADED)
-    return ApiResponse(data=updated)
 
 
 async def _load_source_bytes(
@@ -4408,25 +3921,6 @@ def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _structured_extraction_from_detail(detail: DocumentDetail) -> StructuredExtraction:
-    """保存済み extraction JSON を export 用 StructuredExtraction へ正規化する。"""
-    try:
-        return StructuredExtraction.model_validate(detail.extraction)
-    except Exception:
-        raw_text = (
-            detail.extraction.get("raw_text") if isinstance(detail.extraction, Mapping) else ""
-        )
-        document_type = (
-            detail.extraction.get("document_type")
-            if isinstance(detail.extraction, Mapping)
-            else None
-        )
-        return StructuredExtraction(
-            raw_text=raw_text if isinstance(raw_text, str) else "",
-            document_type=document_type if isinstance(document_type, str) else "ドキュメント",
-        )
 
 
 def _document_extraction_export_content(

@@ -42,11 +42,6 @@ def readiness_checks(settings: Settings) -> dict[str, str]:
     return checks
 
 
-def upload_storage_readiness_checks(settings: Settings) -> dict[str, str]:
-    """アップロード原本保存先の readiness checks を返す。"""
-    return _upload_storage_checks(settings)
-
-
 def pending_legacy_local_storage_dir(
     settings: Settings,
     *,

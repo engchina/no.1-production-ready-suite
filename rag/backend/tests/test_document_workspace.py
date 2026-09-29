@@ -1,7 +1,7 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
 import hashlib
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -95,6 +95,8 @@ class FakeWorkspaceOracle:
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
         self.processing_configs: dict[str, DocumentProcessingConfig] = {}
         self.recipes: dict[str, dict[str, object]] = {}
+        self.extraction_artifacts: dict[str, dict[str, object]] = {}
+        self.chunk_set_chunks: dict[str, list[DocumentChunkView]] = {}
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         for detail in self.documents.values():
@@ -210,10 +212,6 @@ class FakeWorkspaceOracle:
     async def count_document_chunks(self, document_id: str) -> int:
         return len(self.chunks.get(document_id, []))
 
-    async def get_owning_knowledge_base(self, document_id: str) -> None:
-        # この fake は KB 別の取込上書きを使わない(グローバル設定で取込する)。
-        return None
-
     async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
         return list(self.documents[document_id].knowledge_bases)
 
@@ -229,17 +227,6 @@ class FakeWorkspaceOracle:
     async def get_document_summary(self, document_id: str) -> DocumentDetail | None:
         # 実装は JSON 列を読まない DocumentSummary を返す。fake は詳細(その上位型)で代用する。
         return self.documents.get(document_id)
-
-    async def save_review_extraction(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-    ) -> DocumentDetail:
-        detail = self.documents[document_id].model_copy(
-            update={"extraction": extraction.to_document_payload()}
-        )
-        self.documents[document_id] = detail
-        return detail
 
     async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
         return self.processing_configs.get(document_id, DocumentProcessingConfig())
@@ -541,7 +528,23 @@ class FakeWorkspaceOracle:
         _ = kwargs
 
     async def upsert_document_extraction_artifact(self, **kwargs: object) -> None:
-        _ = kwargs
+        extraction_recipe_id = kwargs.get("extraction_recipe_id")
+        if isinstance(extraction_recipe_id, str) and "extraction" in kwargs:
+            self.extraction_artifacts[extraction_recipe_id] = {
+                "extraction_json": kwargs["extraction"],
+                "recipe_subset": kwargs.get("recipe_subset"),
+                "status": kwargs.get("status"),
+            }
+
+    async def get_document_extraction_artifact(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object] | None:
+        _ = document_id
+        artifact = self.extraction_artifacts.get(extraction_recipe_id)
+        return dict(artifact) if artifact is not None else None
+
+    async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
+        return list(self.chunk_set_chunks.get(chunk_set_id, []))
 
 
 class FakeWorkspaceIngestionPipeline:
@@ -609,6 +612,44 @@ def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> FakeWorkspace
     return fake_oracle
 
 
+def _seed_recipe(
+    fake: FakeWorkspaceOracle,
+    document_id: str,
+    *,
+    status: FileStatus,
+    extraction: Mapping[str, object] | None = None,
+    chunks: list[DocumentChunkView] | None = None,
+    preprocess_artifact: DocumentPreprocessArtifact | None = None,
+) -> str:
+    """文書にレシピ 1 を用意し、抽出結果(レシピの extraction artifact)と chunk を紐づける。"""
+    recipe_id = "recipe-1"
+    now = datetime.now(UTC)
+    row: dict[str, object] = {
+        "recipe_id": recipe_id,
+        "document_id": document_id,
+        "slot_no": 1,
+        "status": status.value,
+        "config_revision": 1,
+        "processing_config": {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    if extraction is not None:
+        row["active_extraction_recipe_id"] = "er-recipe-1"
+        fake.extraction_artifacts["er-recipe-1"] = {
+            "extraction_json": dict(extraction),
+            "recipe_subset": {},
+            "status": "materialized",
+        }
+    if chunks is not None:
+        row["active_chunk_set_id"] = "cs-recipe-1"
+        fake.chunk_set_chunks["cs-recipe-1"] = chunks
+    if preprocess_artifact is not None:
+        row["preprocess_artifact"] = preprocess_artifact.model_dump(mode="json")
+    fake.recipes[recipe_id] = row
+    return recipe_id
+
+
 def _upload(file_name: str, body: bytes, content_type: str) -> str:
     resp = client.post(
         "/api/documents/upload",
@@ -618,13 +659,8 @@ def _upload(file_name: str, body: bytes, content_type: str) -> str:
     return str(resp.json()["data"]["id"])
 
 
-def test_review_edits_patch_saves_without_creating_chunks(
-    fake_document_dependencies: FakeWorkspaceOracle,
-) -> None:
-    """PATCH は REVIEW を維持して正本を更新し、Chunk は生成しない。"""
-    document_id = _upload("policy.txt", b"sample", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    extraction = StructuredExtraction(
+def _review_extraction_payload() -> dict[str, object]:
+    return StructuredExtraction(
         raw_text="経費申請",
         elements=[
             DocumentElement(
@@ -635,55 +671,76 @@ def test_review_edits_patch_saves_without_creating_chunks(
                 page_number=1,
             )
         ],
-    )
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.REVIEW,
-            "extraction": extraction.to_document_payload(),
-        }
+    ).to_document_payload()
+
+
+def test_recipe_review_edits_patch_saves_without_creating_chunks(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """PATCH はレシピを REVIEW のまま抽出結果だけ更新し、Chunk job は作らない。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
     )
 
     response = client.patch(
-        f"/api/documents/{document_id}/review-edits",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
         json={"element_edits": [{"element_id": "el-0000", "text": "経費申請（レビュー済み）"}]},
     )
 
     assert response.status_code == 200
     saved = response.json()["data"]
     assert saved["status"] == "REVIEW"
-    assert saved["extraction"]["raw_text"] == "経費申請（レビュー済み）"
-    assert fake_document_dependencies.chunks.get(document_id, []) == []
+    # 共有の抽出結果は変えず、レシピ固有の抽出結果へ copy-on-write で保存する。
+    edited_id = saved["active_extraction_recipe_id"]
+    assert edited_id != "er-recipe-1"
+    edited = fake_document_dependencies.extraction_artifacts[edited_id]["extraction_json"]
+    assert isinstance(edited, dict)
+    assert edited["raw_text"] == "経費申請（レビュー済み）"
+    assert fake_document_dependencies.ingestion_jobs == {}
 
 
-def test_review_edits_patch_rejects_unknown_element(
+def test_recipe_review_edits_patch_rejects_unknown_element(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """存在しない要素 ID は新しい保存 API でも 400 にする。"""
+    """存在しない要素 ID の修正は 400 にする。"""
     document_id = _upload("policy.txt", b"sample", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.REVIEW,
-            "extraction": StructuredExtraction(
-                raw_text="経費申請",
-                elements=[
-                    DocumentElement(
-                        kind="title",
-                        text="経費申請",
-                        order=0,
-                        element_id="el-0000",
-                    )
-                ],
-            ).to_document_payload(),
-        }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
     )
 
     response = client.patch(
-        f"/api/documents/{document_id}/review-edits",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
         json={"element_edits": [{"element_id": "missing", "text": "x"}]},
     )
 
     assert response.status_code == 400
+
+
+def test_recipe_review_edits_patch_requires_review_status(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """REVIEW でないレシピへは修正を保存しない(409)。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.UPLOADED,
+        extraction=_review_extraction_payload(),
+    )
+
+    response = client.patch(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
+        json={"element_edits": []},
+    )
+
+    assert response.status_code == 409
 
 
 def test_document_upload_returns_assigned_knowledge_bases() -> None:
@@ -1236,78 +1293,123 @@ def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     assert job["skip_reason"] == "already_indexed"
 
 
-def test_document_approve_review_queues_chunk_phase(
+def test_recipe_approve_review_queues_chunk_phase(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """REVIEW 承認は INDEX ではなく CHUNK job を投入する。"""
+    """REVIEW のレシピの承認は INDEX ではなく CHUNK job を投入する。"""
     document_id = _upload("review-policy.txt", b"review text", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.REVIEW,
-            "extraction": {"document_type": "text", "raw_text": "review text"},
-        }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction={"document_type": "text", "raw_text": "review text"},
     )
 
-    resp = client.post(f"/api/documents/{document_id}/approve")
+    resp = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
 
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "CHUNK"
     assert job["status"] == "QUEUED"
-    assert fake_document_dependencies.documents[document_id].status == FileStatus.REVIEW
+    assert job["recipe_id"] == recipe_id
+    assert fake_document_dependencies.recipes[recipe_id]["status"] == "REVIEW"
 
 
-def test_document_approve_chunked_queues_index_phase(
+def test_recipe_approve_review_with_edits_saves_before_chunk_phase(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """CHUNKED 承認は embedding/index 専用の INDEX job を投入する。"""
-    document_id = _upload("chunked-policy.txt", b"chunked text", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.CHUNKED,
-            "extraction": {"document_type": "text", "raw_text": "chunked text"},
-        }
+    """承認時のテキスト修正は、CHUNK job の投入前にレシピの抽出結果へ保存する。"""
+    document_id = _upload("review-policy.txt", b"review text", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
     )
-    fake_document_dependencies.chunks[document_id] = [
-        DocumentChunkView(
-            document_id=document_id,
-            chunk_id=f"{document_id}:chunk-0",
-            chunk_index=0,
-            text="chunked text",
-        )
-    ]
 
-    resp = client.post(f"/api/documents/{document_id}/approve")
+    resp = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/approve",
+        json={"element_edits": [{"element_id": "el-0000", "text": "経費申請（承認時修正）"}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["phase"] == "CHUNK"
+    edited_id = fake_document_dependencies.recipes[recipe_id]["active_extraction_recipe_id"]
+    assert isinstance(edited_id, str) and edited_id != "er-recipe-1"
+    edited = fake_document_dependencies.extraction_artifacts[edited_id]["extraction_json"]
+    assert isinstance(edited, dict)
+    assert edited["raw_text"] == "経費申請（承認時修正）"
+
+
+def test_recipe_approve_review_with_unknown_element_is_rejected(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """承認時の修正に存在しない要素 ID があれば 400 にし、job を投入しない。"""
+    document_id = _upload("review-policy.txt", b"review text", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
+    )
+
+    resp = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/approve",
+        json={"element_edits": [{"element_id": "does-not-exist", "text": "x"}]},
+    )
+
+    assert resp.status_code == 400
+    assert fake_document_dependencies.ingestion_jobs == {}
+
+
+def test_recipe_approve_chunked_queues_index_phase(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """CHUNKED のレシピの承認は embedding/index 専用の INDEX job を投入する。"""
+    document_id = _upload("chunked-policy.txt", b"chunked text", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.CHUNKED,
+        extraction={"document_type": "text", "raw_text": "chunked text"},
+        chunks=[
+            DocumentChunkView(
+                document_id=document_id,
+                chunk_id=f"{document_id}:chunk-0",
+                chunk_index=0,
+                text="chunked text",
+            )
+        ],
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
 
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "INDEX"
     assert job["status"] == "QUEUED"
-    assert fake_document_dependencies.documents[document_id].status == FileStatus.CHUNKED
+    assert fake_document_dependencies.recipes[recipe_id]["status"] == "CHUNKED"
 
 
-def test_document_approve_preprocessed_queues_extract_phase(
+def test_recipe_approve_preprocessed_queues_extract_phase(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """PREPROCESSED 承認は保存済み準備ファイルから EXTRACT 専用 job を投入する。"""
+    """PREPROCESSED のレシピの承認は保存済み準備ファイルから EXTRACT 専用 job を投入する。"""
     document_id = _upload("preprocessed-policy.txt", b"prepared text", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.PREPROCESSED,
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-1",
-                profile="passthrough",
-                file_name="preprocessed-policy.txt",
-                object_storage_path="local://prepared/preprocessed-policy.txt",
-                content_type="text/plain",
-            ),
-        }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="der-1",
+            profile="passthrough",
+            file_name="preprocessed-policy.txt",
+            object_storage_path="local://prepared/preprocessed-policy.txt",
+            content_type="text/plain",
+        ),
     )
 
-    resp = client.post(f"/api/documents/{document_id}/approve")
+    resp = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
 
     assert resp.status_code == 200
     job = resp.json()["data"]
@@ -1315,31 +1417,33 @@ def test_document_approve_preprocessed_queues_extract_phase(
     assert job["status"] == "QUEUED"
 
 
-def test_document_approve_preprocessed_duplicate_still_queues_extract_phase(
+def test_recipe_approve_preprocessed_duplicate_still_queues_extract_phase(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """重複文書でも PREPROCESSED まで進んでいれば承認で EXTRACT を投入する。
+    """重複文書でも、レシピが PREPROCESSED まで進んでいれば承認で EXTRACT を投入する。
 
     重複スキップは初回 PREPROCESS の入口だけ。ここで skip すると重複文書は承認しても
-    解析中へ進めず PREPROCESSED で詰まる(本不具合の回帰防止)。
+    解析中へ進めず PREPROCESSED で詰まる(回帰防止)。
     """
     document_id = _upload("dup-preprocessed.txt", b"prepared dup text", "text/plain")
     detail = fake_document_dependencies.documents[document_id]
     fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.PREPROCESSED,
-            "duplicate_of_document_id": "doc-original",
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-1",
-                profile="passthrough",
-                file_name="dup-preprocessed.txt",
-                object_storage_path="local://prepared/dup-preprocessed.txt",
-                content_type="text/plain",
-            ),
-        }
+        update={"duplicate_of_document_id": "doc-original"}
+    )
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="der-1",
+            profile="passthrough",
+            file_name="dup-preprocessed.txt",
+            object_storage_path="local://prepared/dup-preprocessed.txt",
+            content_type="text/plain",
+        ),
     )
 
-    resp = client.post(f"/api/documents/{document_id}/approve")
+    resp = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
 
     assert resp.status_code == 200
     job = resp.json()["data"]
@@ -1348,10 +1452,33 @@ def test_document_approve_preprocessed_duplicate_still_queues_extract_phase(
     assert job["skip_reason"] is None
 
 
+@pytest.mark.parametrize("status", [FileStatus.UPLOADED, FileStatus.INDEXED])
+def test_recipe_approve_requires_confirmation_status(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    status: FileStatus,
+) -> None:
+    """確認待ち(PREPROCESSED / REVIEW / CHUNKED)でないレシピの承認は 409。"""
+    document_id = _upload("policy.txt", b"policy", "text/plain")
+    recipe_id = _seed_recipe(fake_document_dependencies, document_id, status=status)
+
+    resp = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
+
+    assert resp.status_code == 409
+    assert fake_document_dependencies.ingestion_jobs == {}
+
+
+def test_recipe_approve_returns_404_for_unknown_recipe() -> None:
+    document_id = _upload("policy.txt", b"policy", "text/plain")
+
+    resp = client.post(f"/api/documents/{document_id}/recipes/missing/approve")
+
+    assert resp.status_code == 404
+
+
 def test_document_ingestion_config_returns_effective_preprocess_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """取込設定 API はファイル準備方式も返す。"""
+    """取込設定の保存 API の応答はファイル準備方式も返す。"""
     monkeypatch.setattr(
         documents_route,
         "get_settings",
@@ -1359,7 +1486,7 @@ def test_document_ingestion_config_returns_effective_preprocess_profile(
     )
     document_id = _upload("config-policy.txt", b"config text", "text/plain")
 
-    resp = client.get(f"/api/documents/{document_id}/ingestion-config")
+    resp = client.put(f"/api/documents/{document_id}/ingestion-config", json={})
 
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -2987,7 +3114,7 @@ def test_document_detail_returns_extraction_after_ingest() -> None:
         "社内規程: 経費申請\n部門長が承認します。".encode(),
         "text/plain",
     )
-    ingest = client.post(f"/api/documents/{document_id}/ingest")
+    ingest = client.post(f"/api/documents/{document_id}/ingestion-jobs")
     assert ingest.status_code == 200
     job = ingest.json()["data"]
     assert job["document_id"] == document_id
@@ -3011,63 +3138,60 @@ def test_document_extraction_export_returns_markdown_view(
 ) -> None:
     """保存済み StructuredExtraction を Markdown で監査できる。"""
     document_id = _upload("manual.html", "<h1>検索運用</h1>".encode(), "text/html")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.INDEXED,
-            "extraction": {
-                "raw_text": "検索運用\nインデックスを確認します。",
-                "document_type": "運用マニュアル",
-                "confidence": 0.91,
-                "elements": [
-                    {
-                        "kind": "title",
-                        "text": "検索運用",
-                        "order": 0,
-                        "element_id": "h1",
-                        "page_number": 1,
-                        "section_path": ["検索運用"],
-                    },
-                    {
-                        "kind": "code",
-                        "text": "ragctl reindex",
-                        "order": 1,
-                        "element_id": "code-1",
-                        "page_number": 1,
-                        "section_path": ["検索運用"],
-                        "metadata": {"code_language": "bash"},
-                    },
-                    {
-                        "kind": "table",
-                        "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
-                        "order": 2,
-                        "element_id": "tbl-1",
-                        "page_number": 2,
-                        "section_path": ["検索運用", "確認表"],
-                    },
-                ],
-                "assets": [
-                    {
-                        "asset_id": "fig-1",
-                        "kind": "figure",
-                        "page_number": 2,
-                        "bbox": {"x": 10, "y": 20, "w": 30, "h": 40},
-                        "alt_text": "検索フロー図",
-                    }
-                ],
-                "quality_report": {
-                    "parser_backend": "local_partition",
-                    "parser_profile": "local_html_semantic",
-                    "page_count": 2,
-                    "page_coverage": 1.0,
-                    "element_count": 3,
-                },
+    extraction = {
+        "raw_text": "検索運用\nインデックスを確認します。",
+        "document_type": "運用マニュアル",
+        "confidence": 0.91,
+        "elements": [
+            {
+                "kind": "title",
+                "text": "検索運用",
+                "order": 0,
+                "element_id": "h1",
+                "page_number": 1,
+                "section_path": ["検索運用"],
             },
-        }
+            {
+                "kind": "code",
+                "text": "ragctl reindex",
+                "order": 1,
+                "element_id": "code-1",
+                "page_number": 1,
+                "section_path": ["検索運用"],
+                "metadata": {"code_language": "bash"},
+            },
+            {
+                "kind": "table",
+                "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
+                "order": 2,
+                "element_id": "tbl-1",
+                "page_number": 2,
+                "section_path": ["検索運用", "確認表"],
+            },
+        ],
+        "assets": [
+            {
+                "asset_id": "fig-1",
+                "kind": "figure",
+                "page_number": 2,
+                "bbox": {"x": 10, "y": 20, "w": 30, "h": 40},
+                "alt_text": "検索フロー図",
+            }
+        ],
+        "quality_report": {
+            "parser_backend": "local_partition",
+            "parser_profile": "local_html_semantic",
+            "page_count": 2,
+            "page_coverage": 1.0,
+            "element_count": 3,
+        },
+    }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies, document_id, status=FileStatus.INDEXED, extraction=extraction
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/extraction-export",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export",
         params={"format": DocumentExtractionExportFormat.MARKDOWN.value},
     )
 
@@ -3095,103 +3219,100 @@ def test_document_extraction_export_returns_html_view(
 ) -> None:
     """HTML export は保存済み extraction から escaped review HTML を返す。"""
     document_id = _upload("manual.html", b"<h1>html</h1>", "text/html")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.INDEXED,
-            "extraction": {
-                "raw_text": "検索運用\n<script>alert(1)</script>",
-                "document_type": "運用マニュアル",
-                "elements": [
-                    {
-                        "kind": "title",
-                        "text": "検索運用",
-                        "order": 0,
-                        "element_id": "title-1",
-                        "page_number": 1,
-                        "bbox": [0, 0, 100, 20],
-                    },
-                    {
-                        "kind": "text",
-                        "text": "<script>alert(1)</script>",
-                        "order": 1,
-                        "element_id": "txt-1",
-                        "page_number": 1,
-                        "content_kind": "text",
-                    },
-                    {
-                        "kind": "code",
-                        "text": "ragctl reindex",
-                        "order": 2,
-                        "element_id": "code-1",
-                        "page_number": 1,
-                        "metadata": {"code_language": "bash"},
-                    },
-                    {
-                        "kind": "table",
-                        "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
-                        "order": 3,
-                        "element_id": "tbl-1",
-                        "page_number": 2,
-                    },
-                ],
-                "tables": [
-                    {
-                        "table_id": "tbl-1",
-                        "element_id": "tbl-1",
-                        "page_number": 2,
-                        "caption": "検索状態表",
-                        "cells": [
-                            {"row": 0, "col": 0, "text": "項目"},
-                            {"row": 0, "col": 1, "text": "値"},
-                            {
-                                "row": 1,
-                                "col": 0,
-                                "text": "状態",
-                                "bbox": {
-                                    "left": 10,
-                                    "top": 20,
-                                    "right": 30,
-                                    "bottom": 40,
-                                },
-                            },
-                            {
-                                "row": 1,
-                                "col": 1,
-                                "text": "<INDEXED>",
-                                "metadata": {
-                                    "formula_cell_ref": "B2",
-                                    "equation_format": "excel_formula",
-                                    "formula": 'IF(A2="状態","<INDEXED>","ERROR")',
-                                    "formula_value": "<INDEXED>",
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "assets": [
-                    {
-                        "asset_id": "fig-1",
-                        "kind": "figure",
-                        "object_path": "oci://namespace/bucket/internal/figure.png",
-                        "page_number": 2,
-                        "bbox": {"x": 5, "y": 10, "w": 25, "h": 35},
-                        "alt_text": "<画像プレビュー>",
-                    }
-                ],
-                "quality_report": {
-                    "parser_backend": "local_partition",
-                    "parser_profile": "local_html_semantic",
-                    "page_count": 2,
-                    "page_coverage": 1.0,
-                    "element_count": 4,
-                },
+    extraction = {
+        "raw_text": "検索運用\n<script>alert(1)</script>",
+        "document_type": "運用マニュアル",
+        "elements": [
+            {
+                "kind": "title",
+                "text": "検索運用",
+                "order": 0,
+                "element_id": "title-1",
+                "page_number": 1,
+                "bbox": [0, 0, 100, 20],
             },
-        }
+            {
+                "kind": "text",
+                "text": "<script>alert(1)</script>",
+                "order": 1,
+                "element_id": "txt-1",
+                "page_number": 1,
+                "content_kind": "text",
+            },
+            {
+                "kind": "code",
+                "text": "ragctl reindex",
+                "order": 2,
+                "element_id": "code-1",
+                "page_number": 1,
+                "metadata": {"code_language": "bash"},
+            },
+            {
+                "kind": "table",
+                "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
+                "order": 3,
+                "element_id": "tbl-1",
+                "page_number": 2,
+            },
+        ],
+        "tables": [
+            {
+                "table_id": "tbl-1",
+                "element_id": "tbl-1",
+                "page_number": 2,
+                "caption": "検索状態表",
+                "cells": [
+                    {"row": 0, "col": 0, "text": "項目"},
+                    {"row": 0, "col": 1, "text": "値"},
+                    {
+                        "row": 1,
+                        "col": 0,
+                        "text": "状態",
+                        "bbox": {
+                            "left": 10,
+                            "top": 20,
+                            "right": 30,
+                            "bottom": 40,
+                        },
+                    },
+                    {
+                        "row": 1,
+                        "col": 1,
+                        "text": "<INDEXED>",
+                        "metadata": {
+                            "formula_cell_ref": "B2",
+                            "equation_format": "excel_formula",
+                            "formula": 'IF(A2="状態","<INDEXED>","ERROR")',
+                            "formula_value": "<INDEXED>",
+                        },
+                    },
+                ],
+            }
+        ],
+        "assets": [
+            {
+                "asset_id": "fig-1",
+                "kind": "figure",
+                "object_path": "oci://namespace/bucket/internal/figure.png",
+                "page_number": 2,
+                "bbox": {"x": 5, "y": 10, "w": 25, "h": 35},
+                "alt_text": "<画像プレビュー>",
+            }
+        ],
+        "quality_report": {
+            "parser_backend": "local_partition",
+            "parser_profile": "local_html_semantic",
+            "page_count": 2,
+            "page_coverage": 1.0,
+            "element_count": 4,
+        },
+    }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies, document_id, status=FileStatus.INDEXED, extraction=extraction
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/extraction-export",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export",
         params={"format": DocumentExtractionExportFormat.HTML.value},
     )
 
@@ -3236,29 +3357,26 @@ def test_document_extraction_export_returns_json_payload(
 ) -> None:
     """JSON export は保存済み extraction payload を機械可読に返す。"""
     document_id = _upload("policy.txt", b"policy", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.INDEXED,
-            "extraction": {
-                "raw_text": "部門長が承認します。",
-                "document_type": "社内規程",
-                "confidence": 0.9,
-                "elements": [
-                    {
-                        "kind": "text",
-                        "text": "部門長が承認します。",
-                        "order": 0,
-                        "element_id": "el-1",
-                    }
-                ],
-                "parser_artifacts": {"parser_backend": "local_partition"},
-            },
-        }
+    extraction = {
+        "raw_text": "部門長が承認します。",
+        "document_type": "社内規程",
+        "confidence": 0.9,
+        "elements": [
+            {
+                "kind": "text",
+                "text": "部門長が承認します。",
+                "order": 0,
+                "element_id": "el-1",
+            }
+        ],
+        "parser_artifacts": {"parser_backend": "local_partition"},
+    }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies, document_id, status=FileStatus.INDEXED, extraction=extraction
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/extraction-export",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export",
         params={"format": DocumentExtractionExportFormat.JSON.value},
     )
 
@@ -3276,30 +3394,30 @@ def test_document_extraction_export_returns_chunk_view_without_embeddings(
 ) -> None:
     """chunks export は embedding なしの可視化 metadata だけを返す。"""
     document_id = _upload("policy.txt", b"policy", "text/plain")
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.INDEXED,
-            "extraction": {"raw_text": "承認条件", "document_type": "社内規程"},
-        }
+    extraction = {"raw_text": "承認条件", "document_type": "社内規程"}
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.INDEXED,
+        extraction=extraction,
+        chunks=[
+            DocumentChunkView(
+                document_id=document_id,
+                chunk_id=f"{document_id}:0",
+                chunk_index=0,
+                text="承認条件: 部門長",
+                page_start=1,
+                page_end=1,
+                section_path="経費申請 > 承認",
+                content_kind="text",
+                element_ids=["el-1"],
+                metadata={"chunk_template": "markdown_by_heading"},
+            )
+        ],
     )
-    fake_document_dependencies.chunks[document_id] = [
-        DocumentChunkView(
-            document_id=document_id,
-            chunk_id=f"{document_id}:0",
-            chunk_index=0,
-            text="承認条件: 部門長",
-            page_start=1,
-            page_end=1,
-            section_path="経費申請 > 承認",
-            content_kind="text",
-            element_ids=["el-1"],
-            metadata={"chunk_template": "markdown_by_heading"},
-        )
-    ]
 
     resp = client.get(
-        f"/api/documents/{document_id}/extraction-export",
+        f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export",
         params={"format": DocumentExtractionExportFormat.CHUNKS.value},
     )
 

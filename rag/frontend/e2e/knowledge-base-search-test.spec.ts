@@ -94,9 +94,6 @@ async function mockKbPage(page: Page, indexedDocumentCount: number): Promise<voi
       json: ok({ items: [kbDetail(indexedDocumentCount)], total: 1, limit: 20, offset: 0, has_next: false }),
     })
   );
-  await page.route("**/api/knowledge-bases/kb-1/documents**", (route) =>
-    route.fulfill({ json: ok({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
-  );
   await page.route("**/api/knowledge-bases/kb-1", (route) =>
     route.fulfill({ json: ok(kbDetail(indexedDocumentCount)) })
   );

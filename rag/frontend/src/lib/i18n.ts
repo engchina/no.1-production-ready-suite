@@ -13,8 +13,6 @@ export const ja = {
   "common.apiError": "APIエラー ({status})",
   "common.clearSearch": "検索語をクリア",
   "common.degraded.title": "データベースに接続できません",
-  "common.degraded.fallback":
-    "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
   // DB ゲート（3製品共通の部品。#325）。製品名の入る文言だけ RAG の値にし、他は NL2SQL と同じ文言にそろえる。
   "dbGate.checking": "データベースの状態を確認しています…",
   "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
@@ -37,7 +35,6 @@ export const ja = {
     "バックエンドの起動状態を確認して再試行してください。",
   "dbGate.reasonCode": "診断コード: {code}",
   "common.delete": "削除",
-  "common.undo": "元に戻す",
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",
   // 対象オブジェクトの操作（platform ux-contracts/buttons.md §5.1。RowActionMenu / ObjectActionBar）
@@ -207,7 +204,6 @@ export const ja = {
   "settings.parserAdapters.backend.oci_genai_vision.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
   // 後方互換エイリアス(旧称)。表示は oci_genai_vision に統一。
-  "settings.parserAdapters.backend.enterprise_ai_vlm": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.enterprise_ai_vlm.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
@@ -332,7 +328,6 @@ export const ja = {
   "settings.parserAdapters.loadError": "文書解析設定を取得できませんでした。",
   "settings.parserAdapters.saveError": "文書解析設定を保存できませんでした。",
   "settings.parserAdapters.actions.save": "保存",
-  "settings.parserAdapters.actions.saving": "保存中",
   "settings.parserAdapters.actions.reset": "元に戻す",
   "settings.parserAdapters.actions.saved": "文書解析設定を保存しました。",
   "settings.parserAdapters.actions.unsaved": "未保存の変更があります。",
@@ -364,9 +359,7 @@ export const ja = {
   "settings.chunking.serviceNote":
     "ここで選ぶ 7 個は分割方式です。DocRAG 親子階層は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
-  "settings.chunking.selected": "選択中",
   "settings.chunking.recommendedFor": "推奨用途",
-  "settings.chunking.origin": "由来",
   "settings.chunking.source": "設定元",
   "settings.chunking.strategy.structure_aware": "構造認識",
   "settings.chunking.strategy.structure_aware.description":
@@ -411,7 +404,6 @@ export const ja = {
     "1 つの親に入れる子の数（3〜20、既定 12）。",
   "settings.chunking.params.fixedSizeDescription":
     "固定長戦略で使う chunk サイズと overlap を設定します。",
-  "settings.chunking.params.delimiterTitle": "固定分割符",
   "settings.chunking.params.delimiterDescription":
     "固定分割符戦略で使う分割符文字列を設定します。",
   "settings.chunking.params.active": "有効パラメータ",
@@ -437,7 +429,6 @@ export const ja = {
   "settings.chunking.params.contextHeaderHint":
     "文書名と章節パスを embedding / キーワード索引へ追加します。表示本文と引用は変わりません。",
   "settings.chunking.actions.save": "保存",
-  "settings.chunking.actions.saving": "保存中",
   "settings.chunking.actions.saved": "文書分割設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
@@ -470,9 +461,6 @@ export const ja = {
   "settings.preprocess.overview.description":
     "原本を canonical な中間物へ変換し、原本を保全したまま派生系譜(溯源)を残してから解析します。",
   "settings.preprocess.profile": "変換方式",
-  "settings.preprocess.selected": "選択中",
-  "settings.preprocess.recommendedFor": "推奨用途",
-  "settings.preprocess.origin": "由来",
   "settings.preprocess.source": "設定元",
   "settings.preprocess.inProcess": "in-process",
   "settings.preprocess.requiresService": "サービス必須",
@@ -506,7 +494,6 @@ export const ja = {
   "settings.preprocess.profile.pii_redact.description":
     "個人情報(PII)を検出してマスクしてから解析(テキスト向け・サービス)",
   "settings.preprocess.actions.save": "保存",
-  "settings.preprocess.actions.saving": "保存中",
   "settings.preprocess.actions.saved": "前処理設定を保存しました。",
   "settings.preprocess.actions.reset": "変更を破棄",
   "settings.preprocess.actions.unsaved": "未保存の変更があります。",
@@ -543,7 +530,6 @@ export const ja = {
     "開発環境で GPU parser(ASR 音声文字起こし)を登録",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
-  "settings.services.refreshing": "更新中",
   "settings.services.lastUpdated": "最終更新: {time}",
   "settings.services.cpuSuffix": "{stage}(CPU)",
   "settings.services.gpuSuffix": "{stage}(GPU)",
@@ -562,9 +548,6 @@ export const ja = {
   "settings.services.stage.evaluation": "品質評価",
   "settings.services.stage.graphrag": "関係情報",
   "settings.services.stage.agentic": "高度な検索",
-  "settings.services.column.service": "サービス",
-  "settings.services.column.status": "状態",
-  "settings.services.column.actions": "操作",
   "settings.services.cpuNote":
     "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を処理レシピで選んだ場合だけ使用します。",
   "settings.services.gpuNote":
@@ -596,7 +579,6 @@ export const ja = {
     "systemd の unit が登録されていません。本番は Terraform の stack で配備を選び、開発は rag/scripts/rag-services.sh install で登録します。",
   "settings.services.failedHint":
     "起動に失敗しました。ログで原因を確認してから起動し直してください。",
-  "settings.services.requiredService": "必須サービス",
   "settings.services.executionPolicy.requiredNoFallback": "必須 / fallbackなし",
   "settings.services.executionPolicy.inProcessWhenDisabled": "既定は backend 内処理",
   "settings.services.executionPolicy.selectedAdapter": "選択時のみ使用",
@@ -657,7 +639,6 @@ export const ja = {
   "settings.services.item.pipelineGrounding": "根拠確認",
   "settings.services.item.pipelineEvaluation": "品質評価",
   "settings.services.item.pipelineRetrieval": "検索方法",
-  "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
     "業務ビューの検索で使う検索モードとオプションを選択します。",
@@ -673,15 +654,10 @@ export const ja = {
     "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は質問拡張戦略で作った検索文ごとにハイブリッド検索します。",
   "settings.retrieval.docragUnused.toggles":
     "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の質問拡張と補正は、業務ビューの「DocRAG の質問拡張戦略」「DocRAG の回答生成フロー」で選びます。",
-  "settings.retrieval.selected": "選択中",
-  "settings.retrieval.recommendedFor": "推奨用途",
-  "settings.retrieval.source": "設定元",
-  "settings.retrieval.techniques": "有効な手法",
   "settings.retrieval.queryExpansion": "クエリ拡張",
   "settings.retrieval.gapStop": "gap-stop",
   "settings.retrieval.corrective": "補正検索",
   "settings.retrieval.businessFit": "業務適合加重",
-  "settings.retrieval.none": "なし",
   "settings.retrieval.toggle.queryExpansion.description":
     "業務同義語でクエリを広げ、多クエリを RRF 融合して再現率を上げます。",
   "settings.retrieval.toggle.queryExpansionLlm": "LLM マルチクエリ生成",
@@ -729,7 +705,6 @@ export const ja = {
   "settings.retrieval.strategy.corrective_multi_query.description":
     "多クエリ拡張 + 根拠 0 件時に再検索",
   "settings.retrieval.actions.save": "保存",
-  "settings.retrieval.actions.saving": "保存中",
   "settings.retrieval.actions.saved": "検索方法を保存しました。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
@@ -743,16 +718,11 @@ export const ja = {
   "settings.grounding.pipeline": "処理方式",
   "settings.grounding.docragUnused":
     "この画面の設定は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の根拠確認は、業務ビューの「DocRAG の回答生成フロー」（補正 RAG / 通常 RAG）で選びます。",
-  "settings.grounding.selected": "選択中",
-  "settings.grounding.recommendedFor": "推奨用途",
-  "settings.grounding.source": "設定元",
-  "settings.grounding.stages": "有効な段",
   "settings.grounding.dependency": "依存昇格",
   "settings.grounding.diversity": "多様化(MMR)",
   "settings.grounding.expansion": "context 拡張",
   "settings.grounding.compression": "context 圧縮",
   "settings.grounding.corrective": "補正(CRAG)",
-  "settings.grounding.none": "なし",
   "settings.grounding.useCase.advanced": "高度な設定",
   "settings.grounding.useCase.manual": "手動調整",
   "settings.grounding.useCase.low_latency": "低遅延",
@@ -766,10 +736,6 @@ export const ja = {
   "settings.grounding.useCase.compliance": "コンプライアンス",
   "settings.grounding.useCase.max_quality": "最高品質",
   "settings.grounding.useCase.unknown": "その他",
-  "settings.grounding.expansionMode.none": "なし",
-  "settings.grounding.expansionMode.neighbor": "隣接",
-  "settings.grounding.expansionMode.group": "グループ",
-  "settings.grounding.expansionMode.adaptive": "適応",
   "settings.grounding.pipeline.custom": "カスタム",
   "settings.grounding.pipeline.custom.description":
     "既存の個別フラグを尊重(現行挙動)",
@@ -788,7 +754,6 @@ export const ja = {
   "settings.grounding.pipeline.full_governed.description":
     "依存 + 多様化 + 適応拡張 + 圧縮 + 補正検索(最大品質)",
   "settings.grounding.actions.save": "保存",
-  "settings.grounding.actions.saving": "保存中",
   "settings.grounding.actions.saved": "根拠確認設定を保存しました。",
   "settings.grounding.actions.reset": "変更を破棄",
   "settings.grounding.actions.unsaved": "未保存の変更があります。",
@@ -819,8 +784,6 @@ export const ja = {
   "settings.generation.profile": "回答スタイル",
   "settings.generation.docragUnused":
     "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は「回答プロンプト」画面の「DocRAG の回答生成テンプレート」で回答します（下の「DocRAG 回答の保存期間」は使われます）。",
-  "settings.generation.selected": "選択中",
-  "settings.generation.recommendedFor": "推奨用途",
   "settings.generation.source": "設定元",
   "settings.generation.source.oracle": "Oracle グローバル設定",
   "settings.generation.structuredOutput": "構造化出力",
@@ -865,7 +828,6 @@ export const ja = {
   "settings.generation.profile.custom.description":
     "有効な system prompt 版を公共の安全制約と合成して使用",
   "settings.generation.actions.save": "保存",
-  "settings.generation.actions.saving": "保存中",
   "settings.generation.actions.saved": "回答スタイルを保存しました。",
   "settings.generation.actions.reset": "変更を破棄",
   "settings.generation.actions.unsaved": "未保存の変更があります。",
@@ -893,7 +855,6 @@ export const ja = {
   "settings.prompts.form.notePlaceholder": "変更点や用途のメモ",
   "settings.prompts.form.activate": "作成時に有効化する",
   "settings.prompts.actions.create": "版を作成",
-  "settings.prompts.actions.creating": "作成中",
   "settings.prompts.actions.created": "回答プロンプト版を作成しました。",
   "settings.prompts.actions.activate": "有効化",
   "settings.prompts.actions.alreadyActive": "この版はすでに有効です",
@@ -913,9 +874,6 @@ export const ja = {
   "settings.guardrail.overview.description":
     "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。",
   "settings.guardrail.policy": "根拠チェック方針",
-  "settings.guardrail.selected": "選択中",
-  "settings.guardrail.recommendedFor": "推奨用途",
-  "settings.guardrail.source": "設定元",
   "settings.guardrail.groundingOverlap": "根拠一致数 下限",
   "settings.guardrail.groundingRatio": "根拠一致率 下限",
   "settings.guardrail.auditEmphasis": "低根拠を阻止",
@@ -947,7 +905,6 @@ export const ja = {
   "settings.guardrail.policy.regulated.description":
     "厳格な一致数・一致率を満たさない回答を阻止",
   "settings.guardrail.actions.save": "保存",
-  "settings.guardrail.actions.saving": "保存中",
   "settings.guardrail.actions.saved": "安全チェックを保存しました。",
   "settings.guardrail.actions.reset": "変更を破棄",
   "settings.guardrail.actions.unsaved": "未保存の変更があります。",
@@ -965,9 +922,6 @@ export const ja = {
   "settings.vectorIndex.overview.description":
     "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現索引には未反映の参考値で、下に生成される再作成 SQL を DBA が適用したときに反映されます。",
   "settings.vectorIndex.profile": "検索精度",
-  "settings.vectorIndex.selected": "選択中",
-  "settings.vectorIndex.recommendedFor": "推奨用途",
-  "settings.vectorIndex.source": "設定元",
   "settings.vectorIndex.targetAccuracy": "検索時 target accuracy",
   "settings.vectorIndex.neighbors": "NEIGHBORS",
   "settings.vectorIndex.efconstruction": "EFCONSTRUCTION",
@@ -975,7 +929,6 @@ export const ja = {
   "settings.vectorIndex.build": "推奨ビルド",
   "settings.vectorIndex.reprovision":
     "この検索精度の推奨ビルドパラメータを適用するには索引の再作成が必要です。検索時 accuracy は保存後すぐ反映されます。下の再作成 SQL を DBA が実行すると NEIGHBORS / EFCONSTRUCTION が反映されます。",
-  "settings.vectorIndex.reprovisionBadge": "索引再作成が必要",
   "settings.vectorIndex.profile.balanced": "バランス",
   "settings.vectorIndex.profile.balanced.description":
     "現行設定の target accuracy を使用",
@@ -984,7 +937,6 @@ export const ja = {
   "settings.vectorIndex.profile.fast": "高速",
   "settings.vectorIndex.profile.fast.description": "target accuracy 85。低レイテンシ",
   "settings.vectorIndex.actions.save": "保存",
-  "settings.vectorIndex.actions.saving": "保存中",
   "settings.vectorIndex.actions.saved": "検索インデックス設定を保存しました。",
   "settings.vectorIndex.actions.reset": "変更を破棄",
   "settings.vectorIndex.actions.unsaved": "未保存の変更があります。",
@@ -1000,9 +952,6 @@ export const ja = {
   "settings.evaluation.overview.description":
     "Ragas / AutoRAG / FlashRAG 観点の名前付き閾値スイートを既定として選びます。評価実行時に明示した thresholds が最優先です。",
   "settings.evaluation.suite": "品質評価",
-  "settings.evaluation.selected": "選択中",
-  "settings.evaluation.recommendedFor": "推奨用途",
-  "settings.evaluation.source": "設定元",
   "settings.evaluation.thresholds": "閾値",
   "settings.evaluation.noThresholds": "プリセット閾値なし(request の thresholds を使用)",
   "settings.evaluation.suite.request_only": "リクエスト準拠",
@@ -1021,7 +970,6 @@ export const ja = {
   "settings.evaluation.suite.ragas_like.description":
     "faithfulness / context precision・recall / response relevancy",
   "settings.evaluation.actions.save": "保存",
-  "settings.evaluation.actions.saving": "保存中",
   "settings.evaluation.actions.saved": "品質評価設定を保存しました。",
   "settings.evaluation.actions.reset": "変更を破棄",
   "settings.evaluation.actions.unsaved": "未保存の変更があります。",
@@ -1033,7 +981,6 @@ export const ja = {
   "settings.graph.overview.description":
     "Oracle 26ai 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
   "settings.graph.profile": "構築方式",
-  "settings.graph.build": "構築内容",
   "settings.graph.claims": "claims 抽出",
   "settings.graph.community": "community summary",
   "settings.graph.enabled": "知識グラフ構築",
@@ -1048,7 +995,6 @@ export const ja = {
   "settings.graph.profile.full.description":
     "entities + relationships + claims + community summary",
   "settings.graph.actions.save": "保存",
-  "settings.graph.actions.saving": "保存中",
   "settings.graph.actions.saved": "関係情報の構築設定を保存しました。",
   "settings.graph.actions.reset": "変更を破棄",
   "settings.graph.actions.unsaved": "未保存の変更があります。",
@@ -1062,7 +1008,6 @@ export const ja = {
   "settings.agentic.overview.description":
     "OCI Enterprise AI でクエリの書き換え / sub-question 分解 / multi-hop を行い、既存のマルチクエリ RRF 融合へ注入します。",
   "settings.agentic.profile": "検索方式",
-  "settings.agentic.behavior": "解決内容",
   "settings.agentic.rewrite": "クエリ書き換え",
   "settings.agentic.decompose": "sub-question 分解",
   "settings.agentic.multiHop": "multi-hop",
@@ -1093,7 +1038,6 @@ export const ja = {
   "settings.agentic.profile.hyde.description":
     "仮説的な回答文書を 1 つ生成し、その埋め込みで検索する",
   "settings.agentic.actions.save": "保存",
-  "settings.agentic.actions.saving": "保存中",
   "settings.agentic.actions.saved": "高度な検索設定を保存しました。",
   "settings.agentic.actions.reset": "変更を破棄",
   "settings.agentic.actions.unsaved": "未保存の変更があります。",
@@ -1107,12 +1051,6 @@ export const ja = {
   "settings.model.subtitle":
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
   "settings.model.displayNamePlaceholder": "業務 RAG 標準",
-
-
-
-
-
-
 
   "settings.huggingface.subtitle":
     "parser のモデルダウンロード認証 token・ミラー endpoint を設定します。",
@@ -1147,12 +1085,6 @@ export const ja = {
   "settings.huggingface.hintCache":
     "モデルは各 parser の実行ユーザーのキャッシュ(~/.cache)へ保存します。本番は配備時にモデルを取得済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
-  "settings.database.readiness.ok": "OK",
-  "settings.database.readiness.missing": "未設定",
-  "settings.database.readiness.missingCredentials": "認証情報不足",
-  "settings.database.readiness.invalid": "無効",
-  "settings.database.readiness.walletNotFound": "Wallet 未検出",
-  "settings.database.readiness.error": "エラー",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
   "settings.database.systemTables.title": "RAG システムテーブル",
@@ -1187,7 +1119,6 @@ export const ja = {
   "settings.database.systemTables.confirm.description":
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
-
   "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
@@ -1202,13 +1133,11 @@ export const ja = {
   "fileList.knowledgeBaseFilter.label": "ナレッジベース",
   "fileList.knowledgeBaseFilter.all": "利用できるすべてのナレッジベース",
   "fileList.selected": "{count} 件選択中",
-  "fileList.bulkIngest": "一括取込",
   "fileList.bulkQueue": "一括投入",
   "fileList.bulkDelete": "一括削除",
   "fileList.clearSelection": "選択解除",
   "fileList.selectAllAria": "すべて選択",
   "fileList.selectRowAria": "この行を選択",
-  "fileList.bulkRunning": "ファイル準備を実行中… ({done}/{total})",
   "fileList.bulkQueueRunning": "投入中… ({done}/{total})",
   "fileList.bulkDeleteRunning": "削除中… ({done}/{total})",
   "fileList.bulkDelete.confirm.title": "選択した {count} 件を削除しますか？",
@@ -1425,9 +1354,6 @@ export const ja = {
     "役割と口調は回答スタイル・言語・公共の安全制約と合成されます。空欄ではグローバル既定を継承します。",
   "businessViews.field.defaultLanguage": "既定の回答言語",
   "businessViews.field.defaultLanguagePlaceholder": "例: 日本語",
-  "businessViews.field.servingMode": "配信モード",
-  "businessViews.field.servingModeHelper":
-    "1 文書が複数チャンク集合(レシピ)を持つときの検索時の配信方法。single は配信中の単一集合のみ、fused は複数集合を融合し重複を除去、routed は query ごとに選択(後続)。",
   "businessViews.query.title": "検索・回答設定",
   "businessViews.query.helper":
     "業務ビューで上書きできる項目をサイドバーと同じ順に表示します。未設定の項目はグローバル既定を継承します。",
@@ -1489,7 +1415,6 @@ export const ja = {
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務ビュー",
   "businessViews.scope.helper": "選択した業務ビューに紐づく KB を検索対象にします。",
-  "businessViews.scope.placeholder": "業務ビューを検索して追加…",
   "businessViews.scope.required": "対象の業務ビューを選択してください。",
   "businessViews.scope.noKnowledgeBases":
     "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加してください。",
@@ -1534,9 +1459,6 @@ export const ja = {
   "knowledgeBases.metric.documents": "文書",
   "knowledgeBases.metric.indexed": "索引済み",
   "knowledgeBases.metric.errors": "エラー",
-  "knowledgeBases.detail.title": "選択中のナレッジベース",
-  "knowledgeBases.detail.empty.title": "ナレッジベースを選択してください。",
-  "knowledgeBases.detail.empty.hint": "一覧から名前を選ぶと、所属文書を確認できます。",
   "knowledgeBases.detail.archivedHint":
     "アーカイブ済みのナレッジベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
@@ -1549,17 +1471,6 @@ export const ja = {
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
   "knowledgeBases.documents.empty.hint": "上の選択欄から既存文書を追加してください。",
-  "knowledgeBases.variant.title": "チャンク構成",
-  "knowledgeBases.variant.expand": "チャンク構成を表示",
-  "knowledgeBases.variant.collapse": "チャンク構成を隠す",
-  "knowledgeBases.variant.loading": "チャンク構成を読み込んでいます…",
-  "knowledgeBases.variant.error": "チャンク構成の取得に失敗しました。",
-  "knowledgeBases.variant.empty": "この文書にチャンク構成はまだありません。",
-  "knowledgeBases.variant.chunkCount": "{count} チャンク",
-  "knowledgeBases.variant.servingCount": "配信 {count} KB",
-  "knowledgeBases.variant.extractionRecipe": "解析レシピ",
-  "knowledgeBases.variant.extractionStatus": "解析状態",
-  "knowledgeBases.variant.layers": "派生情報",
   "knowledgeBases.variant.layer.metadata": "項目抽出",
   "knowledgeBases.variant.layer.graph": "関係情報",
   "knowledgeBases.variant.layer.navigation": "ナビ",
@@ -1568,16 +1479,6 @@ export const ja = {
   "knowledgeBases.variant.layerStatus.materialized": "構築済み",
   "knowledgeBases.variant.layerStatus.needs_reingest": "再取込",
   "knowledgeBases.variant.layerStatus.error": "エラー",
-  "knowledgeBases.variant.reingestTitle": "現在の構築設定で再取込が必要です",
-  "knowledgeBases.variant.reingestDescription":
-    "この文書は保存済みの解析結果だけでは現在の構築設定に合わせられません。再取込すると解析からやり直します。",
-  "knowledgeBases.variant.reingestAction": "現在の設定で再取込",
-  "knowledgeBases.variant.reingestQueued": "再取込を開始しました。",
-  "knowledgeBases.variant.reingestFailed":
-    "再取込の開始に失敗しました。文書の状態を確認して再試行してください。",
-  "knowledgeBases.variant.addHint":
-    "別の構築設定を使う場合は、この文書を別のナレッジベースにも追加できます。",
-  "knowledgeBases.variant.addAction": "別のナレッジベースに追加",
   "knowledgeBases.empty.title": "ナレッジベースがありません。",
   "knowledgeBases.empty.hint": "名前を入力して、最初のナレッジベースを作成してください。",
   "knowledgeBases.empty.restrictedHint":
@@ -1618,7 +1519,6 @@ export const ja = {
     "業務ビューを作らずに、このナレッジベース単体で検索の手応えをその場で確認できます。",
   "knowledgeBases.searchTest.placeholder": "このナレッジベースに質問してみる…",
   "knowledgeBases.searchTest.button": "検索テスト",
-  "knowledgeBases.searchTest.searching": "検索中…",
   "knowledgeBases.searchTest.cancel": "停止",
   "knowledgeBases.searchTest.initialHint":
     "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
@@ -1639,15 +1539,6 @@ export const ja = {
   "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
   "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 
-  "knowledgeBases.adapter.title": "構築設定",
-  "knowledgeBases.adapter.subtitle":
-    "このナレッジベースで文書をどう準備・解析・分割・索引するかを設定します。検索・回答設定は業務ビューで管理します。",
-  "knowledgeBases.adapter.section.ingestion": "ナレッジ構築設定",
-  "knowledgeBases.adapter.section.ingestionHint":
-    "文書解析・分割は取込の瞬間に確定します。変更後は対象文書を再取込しないと既存チャンクには反映されません。",
-  "knowledgeBases.adapter.section.query": "検索・回答設定(legacy)",
-  "knowledgeBases.adapter.section.queryHint":
-    "互換読み取りのみです。検索・回答設定は業務ビューで管理します。",
   "knowledgeBases.adapter.field.preprocessProfile": "ファイル準備",
   "knowledgeBases.adapter.field.parserBackend": "文書解析",
   "knowledgeBases.adapter.field.chunkingStrategy": "文書分割",
@@ -1668,37 +1559,18 @@ export const ja = {
   "knowledgeBases.adapter.field.evaluationSuite": "品質評価",
   "knowledgeBases.adapter.inherit": "グローバルを継承",
   "knowledgeBases.adapter.override": "上書き",
-  "knowledgeBases.adapter.inheritValue": "グローバル設定に従う",
   "knowledgeBases.adapter.inheritResolved": "グローバル設定に従う: {value}",
   "knowledgeBases.adapter.overrideCount": "個別設定 {count} / {total} 項目",
   "knowledgeBases.adapter.overrideNone": "すべてグローバル継承",
-  "knowledgeBases.adapter.ribbon.title": "構築フロー",
-  "knowledgeBases.adapter.ribbon.ingest": "現在の構築設定",
-  "knowledgeBases.adapter.ribbon.query": "検索・回答設定",
   "knowledgeBases.adapter.ribbon.overrideBadge": "上書き",
   "knowledgeBases.adapter.actions.save": "構築設定を保存",
   "knowledgeBases.adapter.actions.reset": "変更を取り消す",
-  "knowledgeBases.adapter.toast.saved": "構築設定を保存しました。",
-  "knowledgeBases.adapter.error.save":
-    "構築設定の保存に失敗しました。値を確認して再試行してください。",
-  "knowledgeBases.adapter.archivedHint":
-    "アーカイブ済みのナレッジベースは構築設定を変更できません。",
   "knowledgeBases.detail.back": "ナレッジベース一覧へ戻る",
   "knowledgeBases.detail.loading": "ナレッジベース詳細を読み込んでいます",
   "knowledgeBases.loading": "ナレッジベースを読み込んでいます",
   "knowledgeBases.scrollLabel": "ナレッジベース一覧。スクロールできます。",
-  "ingestionDrift.title": "取込設定が更新されています",
-  "ingestionDrift.description":
-    "この文書は現在の処理設定と異なる設定で取り込まれています。再取込すると現在の設定で作り直されます。",
-  "ingestionDrift.changedFields": "変更項目: {fields}",
-  "ingestionDrift.chunking": "文書分割: {observed} → {effective}",
-  "ingestionDrift.parser": "文書解析: {observed} → {effective}",
-  "ingestionDrift.action": "現在の設定で再取込",
-  "ingestionDrift.toast.queued": "再取込を開始しました。",
-  "ingestionDrift.error": "再取込の開始に失敗しました。状態を確認して再試行してください。",
   "knowledgeBaseScope.label": "ナレッジベース",
   "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべてのナレッジベースを対象にします。",
-  "knowledgeBaseScope.clear": "クリア",
   "knowledgeBaseScope.loading": "ナレッジベースを読み込んでいます。",
   "knowledgeBaseScope.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "knowledgeBaseScope.loadWarningHint":
@@ -1707,10 +1579,6 @@ export const ja = {
   "knowledgeBaseScope.selected": "{count} 件選択中",
   "knowledgeBaseScope.all": "利用できるすべてのナレッジベースを対象にします。",
   "knowledgeBaseScope.empty": "有効なナレッジベースがありません。",
-  "knowledgeBasePicker.filterPlaceholder": "ナレッジベース名で絞り込み",
-  "knowledgeBasePicker.filterAria": "ナレッジベースを名前で絞り込む",
-  "knowledgeBasePicker.filterClear": "絞り込みを解除",
-  "knowledgeBasePicker.selectAll": "全選択",
   "knowledgeBasePicker.selectAllVisible": "表示中をすべて選択",
   "knowledgeBasePicker.clear": "クリア",
   "knowledgeBasePicker.done": "完了",
@@ -1736,7 +1604,6 @@ export const ja = {
     "PDF・画像・テキスト・HTML・メール・Office をここにドラッグ＆ドロップ",
   "upload.dropzoneHint":
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。音声は保存のみで取込はスキップされます。",
-  "upload.selectFile": "ファイルを選択",
   "upload.uploading": "{count} 件のファイルをアップロードしています",
   "upload.progress.aria": "送信の進み具合",
   "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
@@ -1797,7 +1664,6 @@ export const ja = {
   "upload.knowledgeBases.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "upload.knowledgeBases.loadWarningHint":
     "未選択のままアップロードすると、DEFAULT へ登録されます。",
-  "upload.knowledgeBases.documentCount": "{count} 文書",
   "upload.knowledgeBases.emptyHint":
     "まだナレッジベースがありません。未選択のままアップロードすると DEFAULT へ登録されます。",
   "upload.knowledgeBases.manage": "ナレッジベース管理",
@@ -1812,7 +1678,6 @@ export const ja = {
     "登録先のナレッジベースを選択できないため、アップロードできません。再読み込みしてください。",
   "upload.knowledgeBases.reload": "再読み込み",
 
-  "sourceProfile.title": "原本の処理情報",
   "sourceProfile.documentWorkspaceTitle": "原本情報",
   "sourceProfile.parser": "原本判定",
   "sourceProfile.previewKind": "プレビュー",
@@ -1882,7 +1747,6 @@ export const ja = {
     "旧形式の Office バイナリ文書は現在未対応です。DOCX/PPTX/XLSX へ変換してください。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
-  "flow.title": "処理フロー",
   "flow.jobs.title": "工程ごとの実行状況",
   "flow.jobs.loading": "工程ごとの実行状況を読み込んでいます",
   "flow.jobs.count": "全 {count} 件",
@@ -2047,8 +1911,6 @@ export const ja = {
     "保存済みの抽出結果を一時設定で分割します。レシピ設定や工程状態は変更しません。",
   "flow.chunkPreview.strategy": "分割方式",
   "flow.chunkPreview.contextHeader": "文脈ヘッダ",
-  "flow.chunkPreview.enabled": "有効",
-  "flow.chunkPreview.disabled": "無効",
   "flow.chunkPreview.run": "プレビュー実行",
   "flow.chunkPreview.running": "チャンク分割をプレビューしています",
   "flow.chunkPreview.rerun": "再プレビュー",
@@ -2066,9 +1928,6 @@ export const ja = {
   "flow.buildConfig.loading": "構築設定を読み込んでいます",
   "flow.buildConfig.loadError": "構築設定を取得できません",
   "flow.buildConfig.loadErrorHint": "時間をおいて再試行してください。",
-  "flow.buildConfig.preprocess": "ファイル準備",
-  "flow.buildConfig.parser": "文書解析",
-  "flow.buildConfig.chunking": "文書分割",
   "documents.processingConfig.subtitle":
     "選択中のレシピだけの処理設定です。個別設定がない項目は検索・回答設定の既定値を使います。",
   "documents.processingConfig.editHint":
@@ -2093,7 +1952,6 @@ export const ja = {
   "documents.recipes.count": "{count} / 3",
   "documents.recipes.add": "レシピを追加",
   "documents.recipes.max": "レシピは最大3件です",
-  "documents.recipes.min": "少なくとも1件必要です",
   "documents.recipes.name": "レシピ{slot}",
   "documents.recipes.select": "表示するレシピ",
   "documents.recipes.status.searchable": "検索対象",
@@ -2133,7 +1991,6 @@ export const ja = {
   "documents.recipes.phase.index": "索引",
   "flow.segments.retryFailed": "失敗 segment を再試行",
   "flow.ingestFailed": "文書処理に失敗しました。",
-  "flow.error.title": "文書処理に失敗しました",
   "flow.error.atStep": "{step}で失敗しました",
   "flow.error.fallback":
     "文書処理に失敗しました。時間をおいて再実行し、解消しない場合は「処理の詳細(診断)」を確認してください。",
@@ -2148,57 +2005,11 @@ export const ja = {
   "flow.phase.skipped": "{phase}はスキップされました。",
   "flow.phase.startFailed": "{phase}を開始できませんでした。",
   "flow.indexed": "索引が完了し、RAG 検索の対象になりました。",
-  "documents.experiment.title": "別レシピを試す",
-  "documents.experiment.description":
-    "同じ文書を別のレシピ(分割、または解析・ファイル準備)で作り直した候補を用意し、配信中と横並びで検索結果を比べて、良ければ配信に昇格できます。候補は配信に載らないため通常の検索には影響しません。",
-  "documents.experiment.loading": "チャンク構成を読み込み中",
-  "documents.experiment.loadError": "チャンク構成を読み込めませんでした。",
-  "documents.experiment.noServing": "配信中のチャンク構成がありません。",
-  "documents.experiment.current": "現在のチャンク構成",
-  "documents.experiment.serving": "配信中",
-  "documents.experiment.candidate": "候補",
-  "documents.experiment.chunkCount": "{count} チャンク",
-  "documents.experiment.form.title": "別レシピで候補を作成",
-  "documents.experiment.form.strategy": "分割方式",
-  "documents.experiment.form.strategyDefault": "既定(変更なし)",
-  "documents.experiment.form.chunkSize": "チャンク長",
-  "documents.experiment.form.overlap": "オーバーラップ",
-  "documents.experiment.form.submit": "候補を作成",
-  "documents.experiment.form.required": "分割方式・チャンク長・オーバーラップのいずれかを指定してください。",
-  "documents.experiment.form.error": "候補の作成に失敗しました。",
   "documents.experiment.compare.title": "検索結果を横並びで比較",
-  "documents.experiment.compare.needsCandidate": "候補を作成すると、配信中と横並びで比較できます。",
-  "documents.experiment.compare.candidate": "比較する候補",
   "documents.experiment.compare.queryLabel": "比較用の検索クエリ",
   "documents.experiment.compare.placeholder": "この文書に投げたい検索クエリを入力",
   "documents.experiment.compare.run": "比較",
-  "documents.experiment.compare.hint": "クエリを入力して比較すると、配信中と候補の上位チャンクを並べて確認できます。",
   "documents.experiment.compare.error": "比較検索に失敗しました。",
-  "documents.experiment.compare.servingColumn": "配信中",
-  "documents.experiment.compare.candidateColumn": "候補",
-  "documents.experiment.promote.action": "昇格",
-  "documents.experiment.promote.confirmTitle": "この候補を配信に昇格しますか?",
-  "documents.experiment.promote.confirmDescription":
-    "この候補を配信中(serving)に切り替えます。これまで配信していた構成と他の候補は削除されます。この操作は元に戻せません。",
-  "documents.experiment.promote.confirm": "昇格する",
-  "documents.experiment.promote.error": "昇格に失敗しました。",
-  "documents.experiment.toast.created": "候補のチャンク構成を作成しました。",
-  "documents.experiment.toast.promoted": "候補を配信に昇格しました。",
-  "documents.experiment.reparse.title": "解析・ファイル準備を変えて試す(再抽出)",
-  "documents.experiment.reparse.description":
-    "ファイル準備や文書解析(parser)を変えると抽出結果そのものが変わるため、再抽出が必要です。非同期ジョブで候補を作り直し、完了すると上の一覧に候補として並びます。",
-  "documents.experiment.reparse.preprocess": "ファイル準備",
-  "documents.experiment.reparse.parser": "文書解析",
-  "documents.experiment.reparse.unchanged": "変更なし",
-  "documents.experiment.reparse.current": "現在: {value}",
-  "documents.experiment.reparse.submit": "再抽出して候補を作成",
-  "documents.experiment.reparse.required":
-    "ファイル準備か文書解析のいずれかを現在と違う値に変更してください。",
-  "documents.experiment.reparse.error": "再抽出ジョブの投入に失敗しました。",
-  "documents.experiment.reparse.queued": "再抽出ジョブを待機中…",
-  "documents.experiment.reparse.running": "再抽出を実行中…",
-  "documents.experiment.reparse.toast.enqueued": "再抽出ジョブを投入しました。完了すると候補が追加されます。",
-  "documents.experiment.reparse.toast.done": "再抽出した候補を追加しました。",
   "flow.preprocessed.description":
     "ファイル準備が完了しました。処理後ファイルを確認し、問題なければ解析(抽出)へ進めてください。",
   "flow.preprocessed.persistFailed":
@@ -2209,14 +2020,10 @@ export const ja = {
     "抽出が完了しました。内容を確認し、問題なければ Chunk 作成へ進めてください。",
   "flow.chunked.description":
     "Chunk 作成が完了しました。Chunk / Citation を確認し、問題なければ Embedding / 索引へ進めてください。",
-  "flow.approve": "承認して次へ",
   "flow.approvePreprocess": "承認して解析へ",
   "flow.approveExtraction": "承認して Chunk 作成",
   "flow.approveChunks": "承認して Embedding / 索引",
-  "flow.approved": "承認しました。次の処理を開始します。",
   "flow.approveFailed": "承認に失敗しました。",
-  "flow.reingest": "現在の設定で再取込",
-  "flow.reingestQueued": "再取込を開始しました。",
   "flow.reprocess.preprocess": "ファイル準備から再処理",
   "flow.reprocess.extract": "抽出から再処理",
   "flow.reprocess.chunk": "Chunk から再処理",
@@ -2250,12 +2057,6 @@ export const ja = {
   "flow.retry.INDEX.title": "Embedding / 索引を再実行しますか?",
   "flow.retry.INDEX.description":
     "保存済みの Chunk から Embedding / 索引を再実行します。",
-  "flow.reject": "却下",
-  "flow.rejected": "却下しました。アップロード済みに戻しました。",
-  "flow.rejectFailed": "却下に失敗しました。",
-  "flow.rejectConfirm.title": "この抽出結果を却下しますか?",
-  "flow.rejectConfirm.description":
-    "却下すると文書はアップロード済みに戻ります。再度確認するには取込をやり直す必要があります。",
   "flow.review.edit.structuredOpen": "構造化要素を修正",
   "flow.review.edit.close": "編集を閉じる",
   "flow.review.edit.structuredHint":
@@ -2342,15 +2143,8 @@ export const ja = {
   "documents.knowledgeBases.loadWarningHint":
     "文書詳細に含まれる所属情報を表示しています。保存前に接続状態を確認してください。",
 
-  "action.ingest": "取込する",
-  "action.ingesting": "実行中…",
   "action.enqueueIngestion": "ファイル準備を実行",
   "action.enqueueDuplicateIngestion": "重複を無視してファイル準備",
-  "action.queueing": "投入中…",
-  "action.processing": "処理中…",
-  "action.reingest": "再取込",
-  "action.requeueIngestion": "文書処理を再実行",
-  "action.viewList": "一覧で確認",
 
   // チャット（会話 / マルチモデル比較）
   "chat.title": "チャット",
@@ -2370,7 +2164,6 @@ export const ja = {
   "chat.sessions.new": "新しい会話",
   "chat.sessions.empty": "まだ会話がありません。「新しい会話」から始めてください。",
   "chat.sessions.untitled": "新しい会話",
-  "chat.sessions.messageCount": "{count} 件のメッセージ",
   "chat.sessions.metadata": "{count}件・{updatedAt}",
   "chat.sessions.rename": "「{title}」の名前を変更",
   "chat.sessions.renameLabel": "会話名",
@@ -2388,29 +2181,19 @@ export const ja = {
   "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "最初のメッセージを送信して会話を始めましょう。",
   "chat.messages.error": "会話を読み込めませんでした。",
-  "chat.message.you": "あなた",
-  "chat.message.assistant": "アシスタント",
   "chat.composer.placeholder": "メッセージを入力…（Enter で送信 / Shift+Enter で改行）",
   "chat.composer.send": "送信",
-  "chat.composer.sending": "送信中…",
   "chat.composer.stop": "停止",
   "chat.composer.selectConversation": "会話を選択するか、新しい会話を始めてください。",
   "chat.compare.label": "比較するモデル",
-  "chat.compare.hint": "未選択なら既定モデルで回答します。最大 {count} モデルまで比較できます。",
-  "chat.compare.none": "比較できるモデルがありません。システム設定 > モデルで登録してください。",
-  "chat.compare.singleModel": "既定モデル",
-  "chat.citations.title": "根拠（引用）",
   "chat.citations.summary": "根拠（引用） {count} 件",
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
-  "chat.disabled.title": "チャットは無効です",
-  "chat.disabled.hint": "管理者がチャット機能を有効にすると利用できます。",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",
   "search.placeholder": "例：社内規程の申請フローは？",
   "search.button": "検索",
-  "search.searching": "検索中…",
   "search.cancel": "停止",
   "search.cancelled": "検索ストリームを停止しました。",
   "search.stream.incomplete":
@@ -2587,8 +2370,6 @@ export const ja = {
   "search.docrag.role.anchor": "検索の起点",
   "search.docrag.role.adjacent": "同じ節の前後",
   "search.citations": "引用（根拠）",
-  "search.citation.variant": "variant {id}",
-  "search.citation.variantTitle": "引用元のチャンク集合 (variant): {id}",
   "search.citation.score.retrieval": "取得スコア",
   "search.citation.score.rerank": "Rerank スコア",
   "search.citation.score.rerankMissing": "Rerank 未実行",
@@ -2613,16 +2394,11 @@ export const ja = {
   "search.citation.previewOpenLabel": "{file} の引用箇所を表示",
   "search.citation.previewClose": "閉じる",
   "search.citation.openDetail": "文書の詳細を別タブで開く",
-  "search.citation.feedback.group": "引用フィードバック",
   "search.citation.feedback.helpful": "この引用は役に立った",
   "search.citation.feedback.notHelpful": "この引用は役に立たなかった",
-  "search.citation.feedback.saved": "フィードバックを保存しました。",
-  "search.citation.feedback.failed": "フィードバックを保存できませんでした。",
 
   "feedback.controls.answerQuestion": "この回答は役に立ちましたか？",
   "feedback.controls.citationQuestion": "この引用は役に立ちましたか？",
-  "feedback.controls.helpful": "役に立った",
-  "feedback.controls.notHelpful": "役に立たなかった",
   "feedback.controls.answerHelpful": "この回答は役に立った",
   "feedback.controls.answerNotHelpful": "この回答は役に立たなかった",
   "feedback.controls.reasonLegend": "役に立たなかった理由を選択してください",
@@ -2691,19 +2467,13 @@ export const ja = {
   "feedback.list.empty": "フィードバックがありません",
   "feedback.list.emptyHint": "期間や絞り込み条件を変更するか、検索・チャットで回答を評価してください。",
   "feedback.list.unknownBusinessView": "業務ビュー不明（旧データ）",
-  "feedback.list.reason": "理由",
   "feedback.list.openConversation": "会話を開く",
   "feedback.list.openCitation": "引用元を開く",
   "feedback.list.selectNamed": "{name} の詳細を表示",
   "feedback.list.hasComment": "コメントあり",
   "feedback.list.legacyPreview": "本文未保存（旧データ）",
-  "feedback.list.surface": "送信元",
   "feedback.list.model": "モデル",
-  "feedback.list.document": "文書",
   "feedback.list.trace": "Trace ID",
-  "feedback.list.copyTrace": "Trace IDをコピー",
-  "feedback.list.traceCopied": "Trace IDをコピーしました。",
-  "feedback.list.traceCopyError": "Trace IDをコピーできませんでした。",
   "feedback.surface.search": "RAG検索",
   "feedback.surface.chat": "チャット",
   "feedback.surface.unknown": "不明（旧データ）",
@@ -2814,10 +2584,8 @@ export const ja = {
   "search.meta.flow.overlap": "重複",
   "search.meta.flow.fused": "融合後",
   "search.meta.flow.fusionDropped": "融合除外",
-  "search.meta.flow.rerankInput": "Rerank 入力",
   "search.meta.flow.rerankKept": "Rerank 採用",
   "search.meta.flow.rerankDropped": "Rerank 除外",
-  "search.meta.flow.evidence": "根拠採用",
   "search.meta.flow.citation": "引用",
   "search.meta.flow.dropped": "除外",
   "search.meta.diagnostics": "診断",

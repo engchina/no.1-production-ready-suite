@@ -62,7 +62,6 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
-    DocumentStats,
     DocumentSummary,
     FileStatus,
     IngestionJob,
@@ -258,19 +257,6 @@ class StoredDocument:
 
 
 @dataclass
-class StoredChunk:
-    """テスト補助で使うチャンク行。"""
-
-    id: str
-    document_id: str
-    tenant_id_hash: str | None
-    chunk_index: int
-    text: str
-    embedding: list[float] | None
-    metadata: dict[str, MetadataValue] = field(default_factory=dict)
-
-
-@dataclass
 class StoredKnowledgeBase:
     """ナレッジベース行。"""
 
@@ -387,12 +373,6 @@ class StoredAgentMemory:
 class LocalOracleStore:
     """Oracle row 変換などの単体テストで使う補助ストア。"""
 
-    documents: dict[str, StoredDocument] = field(default_factory=dict)
-    chunks: dict[str, StoredChunk] = field(default_factory=dict)
-    knowledge_bases: dict[str, StoredKnowledgeBase] = field(default_factory=dict)
-    document_knowledge_bases: set[tuple[str, str]] = field(default_factory=set)
-    ingestion_jobs: dict[str, IngestionJob] = field(default_factory=dict)
-    ingestion_segments: dict[str, IngestionSegment] = field(default_factory=dict)
     agent_memories: dict[str, StoredAgentMemory] = field(default_factory=dict)
 
 
@@ -839,17 +819,6 @@ class OracleClient:
     async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
-
-    async def get_owning_knowledge_base(self, document_id: str) -> KnowledgeBaseDetail | None:
-        """取込設定の基準となる owning KB(最古割当)を返す。所属無しなら None。
-
-        文書-KB は多対多だが、取込時の Parser/Chunking 上書きを決定論的にするため、
-        最も早く割り当てられた KB を owning KB とする(同時刻は knowledge_base_id 昇順)。
-        """
-        owning_id = await self._get_owning_knowledge_base_id_with_oracle(document_id)
-        if owning_id is None:
-            return None
-        return await self.get_knowledge_base(owning_id)
 
     # ------------------------------------------------------------------
     # variant materialization: chunk_set / KB binding 永続層
@@ -1470,33 +1439,6 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def update_document_extractions_payload(
-        self, *, document_id: str, extraction: StructuredExtraction
-    ) -> None:
-        """文書の全 extraction の extraction_json を差し替える(レビュー編集の反映)。
-
-        単一 materialization 前提(現状 1 文書 1 抽出)。無ければ 0 件更新(legacy へ縮退)。
-        P3 の複数抽出編集では per-extraction 化する。
-        """
-        binds = {
-            "document_id": document_id,
-            "extraction_json": _json_bind(extraction.to_document_payload()),
-        }
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                UPDATE rag_document_extractions
-                SET extraction_json = :extraction_json, updated_at = SYSTIMESTAMP
-                WHERE document_id = :document_id
-                """,
-                binds,
-                input_sizes=_json_input_sizes("extraction_json"),
-            )
-
-        await self._run_transaction(operation)
-
     async def delete_document_extractions_except(
         self, *, document_id: str, keep_extraction_ids: Sequence[str]
     ) -> list[str]:
@@ -2052,23 +1994,6 @@ class OracleClient:
             return removed
 
         return await self._run_transaction(operation)
-
-    async def tag_document_chunks_with_chunk_set(
-        self, *, document_id: str, chunk_set_id: str
-    ) -> None:
-        """文書の全 chunk を指定 chunk_set に紐付ける(取込後のタグ付け)。"""
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                UPDATE rag_chunks SET chunk_set_id = :chunk_set_id
-                WHERE document_id = :document_id
-                """,
-                {"chunk_set_id": chunk_set_id, "document_id": document_id},
-            )
-
-        await self._run_transaction(operation)
 
     async def delete_stale_document_chunk_sets(
         self, *, document_id: str, keep_chunk_set_id: str
@@ -3704,10 +3629,6 @@ class OracleClient:
         """指定 document の chunk/citation 可視化用 metadata を返す。"""
         return await self._list_document_chunks_with_oracle(document_id)
 
-    async def document_stats(self) -> DocumentStats:
-        """ドキュメント状態別の集計を返す。"""
-        return await self._document_stats_with_oracle()
-
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         """ドキュメント詳細を返す(抽出結果などの JSON 列を含む)。"""
         return await self._get_document_with_oracle(document_id)
@@ -3927,12 +3848,6 @@ class OracleClient:
     ) -> DocumentDetail:
         """VLM/LLM の抽出本文を保存する。"""
         return await self._save_extraction_with_oracle(document_id, extraction)
-
-    async def save_review_extraction(
-        self, document_id: str, extraction: StructuredExtraction
-    ) -> DocumentDetail:
-        """REVIEW 修正を抽出正本と legacy mirror へ同一 transaction で保存する。"""
-        return await self._save_review_extraction_with_oracle(document_id, extraction)
 
     async def save_chunks(
         self,
@@ -5037,62 +4952,6 @@ class OracleClient:
             )
         )
         return memory_id
-
-    async def evaluate_agent_memory(
-        self,
-        memory_id: str,
-        *,
-        useful: bool,
-    ) -> None:
-        """memory feedback を usefulness_score の移動平均として保存する。"""
-        cleaned_memory_id = memory_id.strip()
-        if not cleaned_memory_id or not _agent_memory_scope_available():
-            return
-        if cleaned_memory_id in _LOCAL_STORE.agent_memories and not _oracle_connection_configured(
-            self
-        ):
-            stored = _LOCAL_STORE.agent_memories[cleaned_memory_id]
-            next_count = stored.eval_count + 1
-            next_score = (stored.usefulness_score * stored.eval_count) + (1.0 if useful else 0.0)
-            next_score = next_score / next_count
-            _LOCAL_STORE.agent_memories[cleaned_memory_id] = replace(
-                stored,
-                usefulness_score=round(next_score, 6),
-                eval_count=next_count,
-                updated_at=datetime.now(UTC),
-            )
-            return
-        if not _oracle_connection_configured(self):
-            return
-        where_sql, binds = _oracle_agent_memory_where()
-        binds.update(
-            {
-                "memory_id": cleaned_memory_id,
-                "useful_score": 1.0 if useful else 0.0,
-            }
-        )
-        await self._run_transaction(
-            lambda connection: _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_agent_memories m
-                SET usefulness_score =
-                        ROUND(
-                            ((usefulness_score * eval_count) + :useful_score)
-                            / (eval_count + 1),
-                            6
-                        ),
-                    eval_count = eval_count + 1,
-                    updated_at = SYSTIMESTAMP
-                WHERE m.memory_id = :memory_id
-                  AND {where_sql}
-                """,
-                    where_sql=where_sql,
-                ),
-                binds,
-            )
-        )
 
     async def _agent_memory_search_with_oracle(
         self,
@@ -6489,35 +6348,6 @@ class OracleClient:
             KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
             for row in rows
         ]
-
-    async def _get_owning_knowledge_base_id_with_oracle(
-        self,
-        document_id: str,
-    ) -> str | None:
-        """最古割当の所属 KB の id を返す。所属が無ければ None。"""
-        rows = await self._fetch_all(
-            """
-            SELECT
-                dkb.knowledge_base_id
-            FROM rag_document_knowledge_bases dkb
-            JOIN rag_knowledge_bases kb
-                ON kb.knowledge_base_id = dkb.knowledge_base_id
-            JOIN rag_documents d
-                ON d.document_id = dkb.document_id
-            WHERE dkb.document_id = :document_id
-              AND {document_access_sql}
-              AND {knowledge_base_access_sql}
-            ORDER BY dkb.assigned_at ASC, dkb.knowledge_base_id ASC
-            FETCH FIRST 1 ROWS ONLY
-            """.format(
-                document_access_sql=_oracle_access_predicate_sql(alias="d"),
-                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
-            ),
-            _with_tenant_bind({"document_id": document_id}),
-        )
-        if not rows:
-            return None
-        return str(rows[0]["knowledge_base_id"])
 
     async def _document_knowledge_base_refs_by_document_id_with_oracle(
         self,
@@ -8186,36 +8016,6 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def _document_stats_with_oracle(self) -> DocumentStats:
-        """Oracle document table の状態別集計を取得する。"""
-        where_sql, binds = _oracle_document_where()
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT status, COUNT(*) AS count_value
-            FROM rag_documents
-            WHERE {where_sql}
-            GROUP BY status
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        counts = {status: 0 for status in FileStatus}
-        for row in rows:
-            status_value = row.get("status")
-            if isinstance(status_value, FileStatus):
-                status = status_value
-            elif isinstance(status_value, str):
-                try:
-                    status = FileStatus(status_value)
-                except ValueError:
-                    continue
-            else:
-                continue
-            counts[status] = _int_value(row.get("count_value", 0))
-        return DocumentStats(total=sum(counts.values()), by_status=counts)
-
     async def _get_document_with_oracle(self, document_id: str) -> DocumentDetail | None:
         """Oracle document table から詳細取得する。"""
         row = await self._fetch_one(
@@ -8870,67 +8670,6 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _save_review_extraction_with_oracle(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-    ) -> DocumentDetail:
-        """レビュー済み抽出を正本と互換列へ原子的に保存する。"""
-        payload = extraction.to_document_payload()
-        binds = _with_tenant_bind(
-            {
-                "document_id": document_id,
-                "legacy_extraction": _json_dumps(payload),
-                "extraction_json": _json_bind(payload),
-            }
-        )
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :legacy_extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                binds,
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_document_extractions
-                SET extraction_json = :extraction_json, updated_at = SYSTIMESTAMP
-                WHERE document_id = :document_id
-                  AND EXISTS (
-                      SELECT 1 FROM rag_documents d
-                      WHERE d.document_id = rag_document_extractions.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                binds,
-                input_sizes=_json_input_sizes("extraction_json"),
-            )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
-
-        return await self._run_transaction(operation)
-
     @staticmethod
     def _chunk_insert_rows(
         document_id: str,
@@ -9450,24 +9189,6 @@ class OracleClient:
         )
         _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
         return _SHARED_ORACLE_POOL
-
-    def _to_retrieved_chunk(
-        self,
-        chunk: StoredChunk,
-        score: float,
-        document: StoredDocument | None = None,
-    ) -> RetrievedChunk:
-        """StoredChunk を API スキーマへ変換する。"""
-        source = document or _LOCAL_STORE.documents.get(chunk.document_id)
-        return RetrievedChunk(
-            document_id=chunk.document_id,
-            chunk_id=chunk.id,
-            text=chunk.text,
-            score=round(score, 6),
-            file_name=source.file_name if source else None,
-            category_name=source.category_name if source else None,
-            metadata=chunk.metadata,
-        )
 
     def _validate_embedding_width(self, embedding: list[float], label: str) -> None:
         """Oracle VECTOR(1536, FLOAT32) に保存/検索できる幅か検証する。"""
@@ -12916,12 +12637,6 @@ def _bounded_int_literal(value: int, *, name: str, minimum: int, maximum: int) -
 
 def reset_local_store() -> None:
     """テスト用にローカルストアを初期化する。"""
-    _LOCAL_STORE.documents.clear()
-    _LOCAL_STORE.chunks.clear()
-    _LOCAL_STORE.knowledge_bases.clear()
-    _LOCAL_STORE.document_knowledge_bases.clear()
-    _LOCAL_STORE.ingestion_jobs.clear()
-    _LOCAL_STORE.ingestion_segments.clear()
     _LOCAL_STORE.agent_memories.clear()
 
 
@@ -13845,34 +13560,6 @@ CREATE INDEX rag_artifact_layers_parent_idx
 """.strip()
 
 
-def oracle_document_extractions_schema_sql() -> str:
-    """variant の extraction 層(1 文書 × N 抽出 = preprocess×parser ごと)の DDL を返す。
-
-    chunk_set_id は preprocess/parser をキーに含むのに抽出が 1 文書 1 つだと parser 軸が潰れる
-    問題を解く土台。各 chunk_set は親 extraction_id を指し、extract は parser グループごとに 1 回。
-    """
-    return """
-CREATE TABLE rag_document_extractions (
-    extraction_id   VARCHAR2(64) PRIMARY KEY,
-    document_id     VARCHAR2(64) NOT NULL,
-    tenant_id_hash  CHAR(64),
-    recipe_subset   JSON,
-    extraction_json JSON,
-    status          VARCHAR2(32) DEFAULT 'EXTRACTING' NOT NULL,
-    quality_json    JSON,
-    created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_document_extractions_document_fk
-        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
-    CONSTRAINT rag_document_extractions_status_ck
-        CHECK (status IN ('EXTRACTING', 'EXTRACTED', 'ERROR'))
-);
-
-CREATE INDEX rag_document_extractions_document_idx
-    ON rag_document_extractions (document_id, status);
-""".strip()
-
-
 def oracle_document_schema_sql(table_name: str = "rag_documents") -> str:
     """Oracle document table の DDL 例を返す。"""
     return f"""
@@ -14378,117 +14065,6 @@ CREATE INDEX {table_name}_owner_created_idx
 """.strip()
 
 
-def _require_document(document_id: str) -> StoredDocument:
-    document = _LOCAL_STORE.documents.get(document_id)
-    if document is None or not _document_matches_current_tenant(document):
-        raise KeyError(f"document_id={document_id} は存在しません。")
-    return document
-
-
-def _delete_document_chunks(document_id: str) -> None:
-    """指定 document の chunk/index 行を削除する。"""
-    for chunk_id in [
-        chunk_id
-        for chunk_id, stored in _LOCAL_STORE.chunks.items()
-        if stored.document_id == document_id
-    ]:
-        del _LOCAL_STORE.chunks[chunk_id]
-
-
-def _filtered_documents(
-    status: FileStatus | None = None,
-    query: str | None = None,
-) -> list[StoredDocument]:
-    """ローカル store から一覧条件に合う document を返す。"""
-    normalized_query = query.casefold().strip() if query else None
-    documents = sorted(
-        (
-            document
-            for document in _LOCAL_STORE.documents.values()
-            if _document_matches_current_tenant(document)
-        ),
-        key=lambda document: document.uploaded_at,
-        reverse=True,
-    )
-    if status is not None:
-        documents = [document for document in documents if document.status == status]
-    if normalized_query:
-        documents = [
-            document
-            for document in documents
-            if normalized_query in document.file_name.casefold()
-            or (
-                document.category_name is not None
-                and normalized_query in document.category_name.casefold()
-            )
-        ]
-    return documents
-
-
-def _chunk_matches_filters(chunk: StoredChunk, filters: dict[str, str] | None) -> bool:
-    """検索 filter が chunk/document に一致するか判定する。"""
-    document = _LOCAL_STORE.documents.get(chunk.document_id)
-    if document is None:
-        return False
-    if not _document_matches_current_tenant(document):
-        return False
-    if document.status not in SEARCHABLE_FILE_STATUSES:
-        return False
-    if not filters:
-        return True
-    if (document_id := filters.get("document_id")) and document.id != document_id:
-        return False
-    if (status := filters.get("status")) and document.status.value != status:
-        return False
-    if (file_name := filters.get("file_name")) and (
-        file_name.casefold() not in document.file_name.casefold()
-    ):
-        return False
-    if category_name := filters.get("category_name"):
-        if document.category_name is None:
-            return False
-        if category_name.casefold() not in document.category_name.casefold():
-            return False
-    knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
-    if knowledge_base_ids and not any(
-        (knowledge_base_id, document.id) in _LOCAL_STORE.document_knowledge_bases
-        for knowledge_base_id in knowledge_base_ids
-    ):
-        return False
-    if (content_kind := filters.get("content_kind")) and not _metadata_value_equals(
-        chunk.metadata,
-        "content_kind",
-        content_kind,
-    ):
-        return False
-    if (section_title := filters.get("section_title")) and not _metadata_value_contains(
-        chunk.metadata,
-        "section_title",
-        section_title,
-    ):
-        return False
-    if (section_path := filters.get("section_path")) and not _metadata_value_contains(
-        chunk.metadata,
-        "section_path",
-        section_path,
-    ):
-        return False
-    if (source_acl := filters.get("source_acl")) and not _metadata_value_equals(
-        chunk.metadata,
-        "source_acl",
-        source_acl,
-    ):
-        return False
-    return not (
-        (document_version := filters.get("document_version"))
-        and not _metadata_value_equals(
-            chunk.metadata,
-            "document_version",
-            document_version,
-        )
-    )
-
-
 def _local_agent_memory_search(
     query: str,
     embedding: list[float],
@@ -14570,36 +14146,6 @@ def _metadata_value_contains(
 def _current_tenant_id_hash() -> str | None:
     """現在の request context にある tenant hash を返す。"""
     return current_audit_request_context().tenant_id_hash
-
-
-def _document_matches_current_tenant(document: StoredDocument) -> bool:
-    """tenant と認可済み access scope に一致する document だけ許可する。"""
-    context = current_audit_request_context()
-    if context.tenant_id_hash is not None and document.tenant_id_hash != context.tenant_id_hash:
-        return False
-    if context.allowed_document_ids is not None and document.id not in context.allowed_document_ids:
-        return False
-    if context.allowed_category_names is not None:
-        category_name = document.category_name.casefold() if document.category_name else ""
-        if category_name not in context.allowed_category_names:
-            return False
-    if context.allowed_knowledge_base_ids is not None:
-        document_knowledge_base_ids = {
-            knowledge_base_id
-            for knowledge_base_id, document_id in _LOCAL_STORE.document_knowledge_bases
-            if document_id == document.id
-        }
-        if not (document_knowledge_base_ids & set(context.allowed_knowledge_base_ids)):
-            return False
-    return True
-
-
-def _stored_chunk_score_sort_key(
-    item: tuple[StoredChunk, float],
-) -> tuple[float, str, int, str]:
-    """score 降順、document/chunk 昇順の安定した検索順を返す。"""
-    chunk, score = item
-    return (-score, chunk.document_id, chunk.chunk_index, chunk.id)
 
 
 def _retrieved_chunk_score_sort_key(
@@ -14724,14 +14270,6 @@ def _unique_dependency_tokens(values: Sequence[str]) -> list[str]:
         seen.add(normalized)
         tokens.append(cleaned)
     return tokens
-
-
-def _context_neighbor_offsets(window: int) -> list[int]:
-    """近い順に前後 offset を返す。"""
-    return sorted(
-        (offset for offset in range(-window, window + 1) if offset != 0),
-        key=lambda offset: (abs(offset), offset),
-    )
 
 
 def _with_context_neighbor_metadata(

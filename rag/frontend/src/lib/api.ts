@@ -292,14 +292,6 @@ export interface RoleAccessUpdate {
   knowledge_base_ids: string[];
 }
 
-// --- ヘルスチェック ---
-export interface HealthData {
-  status: "ok" | "degraded" | "error" | string;
-  version: string;
-  message: string | null;
-  checks: Record<string, string>;
-}
-
 export type DatabaseAvailability =
   "ok" | "not_configured" | "unreachable" | "setup_required";
 
@@ -655,20 +647,6 @@ export interface DocumentChunkSet {
   layer_statuses: DocumentChunkSetLayerStatuses;
 }
 
-/** 別 chunking レシピで候補 chunk_set を試す実験リクエスト(分割軸・最低 1 項目)。 */
-export interface ChunkSetExperimentRequest {
-  chunking_strategy?: string;
-  chunk_size?: number;
-  chunk_overlap?: number;
-  chunk_min_chars?: number;
-  chunk_delimiter?: string;
-  docrag_child_target_chars?: number;
-  docrag_table_child_target_chars?: number;
-  docrag_parent_target_chars?: number;
-  docrag_parent_max_pages?: number;
-  docrag_parent_max_children?: number;
-}
-
 export interface DocumentChunkPreviewRequest {
   chunking_strategy?: ChunkingStrategyName;
   chunk_size?: number;
@@ -696,15 +674,6 @@ export interface DocumentChunkPreviewResponse {
   chunks: DocumentChunkView[];
   stats: DocumentChunkPreviewStats;
   warnings: string[];
-}
-
-/**
- * parser/前処理を変えた候補を**再抽出**(非同期ジョブ)で試す実験リクエスト(最低 1 項目)。
- * 抽出結果が変わるため chunk-set-experiments(分割のみ)と違い再抽出が必要。
- */
-export interface ParserExtractionExperimentRequest {
-  preprocess_profile?: string;
-  parser_adapter_backend?: string;
 }
 
 export type DocumentExtractionExportFormat =
@@ -742,11 +711,6 @@ export interface IngestionSegment {
   artifact_path: string | null;
   error_code: string | null;
   error_message: string | null;
-}
-
-export interface DocumentStats {
-  total: number;
-  by_status: Partial<Record<FileStatus, number>>;
 }
 
 export interface BatchUploadResult {
@@ -1925,12 +1889,6 @@ export interface ServiceCatalogData {
   services: ServiceCatalogItemData[];
 }
 
-export interface ServiceListData {
-  control_enabled: boolean;
-  deployment_mode: DeploymentMode;
-  services: ServiceStatusData[];
-}
-
 export interface ServiceControlResultData {
   service_id: string;
   action: ServiceAction;
@@ -2430,7 +2388,6 @@ async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
 }
 
 interface RequestOptions {
-  allowStatus?: number[];
   timeoutMs?: number;
 }
 
@@ -2479,7 +2436,7 @@ async function requestEnvelope<T>(
       headers,
     });
     const envelope = await parseEnvelope<T>(res);
-    if (!res.ok && !options.allowStatus?.includes(res.status)) {
+    if (!res.ok) {
       const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
       // 本文は読み終えているので、読み取った error_code で通知する（#224）。
       notifyAuthStatus(res.status, error.requestId, error.errorCode);
@@ -2600,10 +2557,6 @@ function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
 export const api = {
   // 認証・ユーザー / ロール・権限管理は securityApi（lib/security-api.ts。#214）。
 
-  // ヘルスチェック
-  getReadiness: () =>
-    request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
-
   // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
   getDatabaseStatus: () => request<DatabaseStatusData>("/api/ready/database"),
 
@@ -2631,10 +2584,6 @@ export const api = {
   },
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
-  listDocumentChunks: (id: string) =>
-    request<DocumentChunkView[]>(
-      `/api/documents/${encodeURIComponent(id)}/chunks`,
-    ),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,
@@ -2689,44 +2638,11 @@ export const api = {
       )}/extraction-export?${search.toString()}`,
     );
   },
-  createChunkSetExperiment: (id: string, body: ChunkSetExperimentRequest) =>
-    request<DocumentChunkSet>(
-      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments`,
-      jsonBody(body),
-    ),
-  promoteChunkSetExperiment: (id: string, chunkSetId: string) =>
-    request<DocumentChunkSet>(
-      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments/${encodeURIComponent(
-        chunkSetId,
-      )}/promote`,
-      { method: "POST" },
-    ),
-  createParserExtractionExperiment: (
-    id: string,
-    body: ParserExtractionExperimentRequest,
-  ) =>
-    request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/parser-extraction-experiments`,
-      jsonBody(body),
-    ),
-  getDocumentIngestionConfig: (id: string) =>
-    request<DocumentIngestionConfigData>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
-    ),
   updateDocumentIngestionConfig: (id: string, body: DocumentProcessingConfig) =>
     request<DocumentIngestionConfigData>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
       { ...jsonBody(body), method: "PUT" },
     ),
-  exportDocumentExtraction: (
-    id: string,
-    format: DocumentExtractionExportFormat = "markdown",
-  ) => {
-    const search = new URLSearchParams({ format });
-    return request<DocumentExtractionExport>(
-      `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`,
-    );
-  },
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs`,
@@ -2741,8 +2657,6 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     ),
-  getDocumentStats: () =>
-    requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
@@ -2800,15 +2714,6 @@ export const api = {
       onUploadProgress,
     );
   },
-  ingestDocument: (
-    id: string,
-    force = false,
-    phase: IngestionJobPhase = "PREPROCESS",
-  ) =>
-    request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
-      { method: "POST" },
-    ),
   enqueueDocumentIngestionJob: (
     id: string,
     force = false,
@@ -2839,12 +2744,6 @@ export const api = {
       }`,
       { method: "POST" },
     ),
-  /** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
-  approveDocument: (id: string, payload?: DocumentApproveRequest) =>
-    request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/approve`,
-      payload ? jsonBody(payload) : { method: "POST" },
-    ),
   approveDocumentRecipe: (
     id: string,
     recipeId: string,
@@ -2855,15 +2754,6 @@ export const api = {
         recipeId,
       )}/approve`,
       payload ? jsonBody(payload) : { method: "POST" },
-    ),
-  /** REVIEW 中の構造化要素修正を保存する。Chunk job は開始しない。 */
-  saveDocumentReviewEdits: (id: string, payload: DocumentReviewEditsRequest) =>
-    request<DocumentDetail>(
-      `/api/documents/${encodeURIComponent(id)}/review-edits`,
-      {
-        ...jsonBody(payload),
-        method: "PATCH",
-      },
     ),
   saveDocumentRecipeReviewEdits: (
     id: string,
@@ -2876,11 +2766,6 @@ export const api = {
       )}/review-edits`,
       { ...jsonBody(payload), method: "PATCH" },
     ),
-  /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
-  rejectDocument: (id: string) =>
-    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {
-      method: "POST",
-    }),
   listIngestionJobs: (
     params: {
       status?: IngestionJobStatus;
@@ -3400,7 +3285,6 @@ export const api = {
     request<ServiceLogsData>(
       `/api/services/${encodeURIComponent(serviceId)}/logs?lines=${encodeURIComponent(String(lines))}`,
     ),
-  getServices: () => request<ServiceListData>("/api/services"),
   controlService: (serviceId: string, action: ServiceAction) =>
     request<ServiceControlResultData>(
       `/api/services/${encodeURIComponent(serviceId)}/${action}`,

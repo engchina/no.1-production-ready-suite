@@ -76,21 +76,6 @@ class ServiceCatalogData(BaseModel):
     services: list[ServiceCatalogItemData] = Field(default_factory=list)
 
 
-class ServiceListData(BaseModel):
-    """サービス一覧 + 制御可否 + 配備モード。"""
-
-    control_enabled: bool = Field(
-        description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
-    )
-    deployment_mode: DeploymentMode = Field(
-        description=(
-            "RAG_ENVIRONMENT 由来。dev/prod とも systemd の unit を操作する。"
-            "dev は起動/停止を自動で有効にする。"
-        ),
-    )
-    services: list[ServiceStatusData] = Field(default_factory=list)
-
-
 class ServiceControlResultData(BaseModel):
     """起動/停止実行後の結果(更新後ステータス込み)。"""
 

@@ -118,24 +118,14 @@ def test_field_round_trips_through_document_payload_only_when_present() -> None:
     assert restored.fields[0].value == "INV-1"
 
 
-def test_extraction_fields_settings_api_get_and_patch() -> None:
+def test_extraction_fields_settings_api_returns_saved_schema() -> None:
     get_resp = client.get("/api/settings/extraction-fields")
     assert get_resp.status_code == 200
     assert get_resp.json()["data"]["fields"] == []
 
-    patch_resp = client.patch(
-        "/api/settings/extraction-fields",
-        json={"fields": [{"name": "請求書番号", "description": "invoice", "value_type": "string"}]},
+    fields_mod.save_field_schema(
+        [FieldDefinition(name="請求書番号", description="invoice", value_type="string")]
     )
-    assert patch_resp.status_code == 200
-    assert [f["name"] for f in patch_resp.json()["data"]["fields"]] == ["請求書番号"]
-    # 永続化を別 GET で確認。
-    assert len(client.get("/api/settings/extraction-fields").json()["data"]["fields"]) == 1
 
-
-def test_extraction_fields_settings_api_rejects_duplicate() -> None:
-    resp = client.patch(
-        "/api/settings/extraction-fields",
-        json={"fields": [{"name": "a"}, {"name": "a"}]},
-    )
-    assert resp.status_code == 422
+    fields = client.get("/api/settings/extraction-fields").json()["data"]["fields"]
+    assert [f["name"] for f in fields] == ["請求書番号"]

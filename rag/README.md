@@ -69,9 +69,8 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 ## 実装済みの参照フロー
 
 - `POST /api/documents/upload`: 原本を Object Storage 境界へ保存し、SHA-256 / サイズ / 重複元を記録してドキュメント行を作成。
-- `POST /api/documents/{id}/ingest`: OCI Enterprise AI 境界で OCR/構造化要素抽出し、ページ・章節・表・リスト感知 chunking、embedding、Oracle 26ai 境界への索引まで実行。
+- `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle 26ai 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
 - `POST /api/search`: Business Context Pack、Retrieval Plan、hybrid/vector/keyword 検索、Oracle 26ai Agent Memory Search、rerank、Resolver / Verifier、Evidence / Support / History 分離、citation-grounded 回答、Agent Memory writeback、trace ID、guardrail warning を返却。
-- `POST /api/search/select-ai`: Oracle Select AI profile を使い、自然言語から SQL (`showsql`) または明示的な SQL 実行結果 (`runsql`) を取得。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
 - `POST /api/evaluation/compare`: 同じ golden set で複数の検索設定を比較し、ranking metric に基づく best experiment を返却。
 - `/metrics`: Prometheus metrics を公開。

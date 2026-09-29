@@ -10,7 +10,7 @@ import importlib
 import json
 import math
 import re
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
@@ -447,18 +447,3 @@ def _validate_rerank_results(
 def _tokens(text: str) -> list[str]:
     """日本語・英数字の簡易トークン化。"""
     return [match.group(0).lower() for match in TOKEN_PATTERN.finditer(text)]
-
-
-def _lexical_relevance(
-    query_tokens: list[str], document_tokens: list[str], query: str, document: str
-) -> float:
-    """ローカル rerank 用の語彙一致スコア。"""
-    if not query_tokens or not document_tokens:
-        return 0.0
-    query_counts = Counter(query_tokens)
-    doc_counts = Counter(document_tokens)
-    overlap = sum(min(query_counts[token], doc_counts[token]) for token in query_counts)
-    recall = overlap / max(1, sum(query_counts.values()))
-    precision = overlap / max(1, sum(doc_counts.values()))
-    phrase_boost = 0.25 if query.lower() in document.lower() else 0.0
-    return round((0.7 * recall) + (0.3 * precision) + phrase_boost, 6)

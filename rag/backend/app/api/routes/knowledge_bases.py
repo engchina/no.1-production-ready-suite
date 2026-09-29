@@ -12,7 +12,6 @@ from app.rag.kb_adapter_config import (
     resolve_effective_adapter_config,
 )
 from app.schemas.common import ApiResponse, Page
-from app.schemas.document import DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseDetail,
@@ -214,41 +213,6 @@ async def archive_knowledge_base(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await _refreshed_detail_response(oracle, detail)
-
-
-@router.get("/{knowledge_base_id}/documents", response_model=ApiResponse[Page[DocumentSummary]])
-async def list_knowledge_base_documents(
-    knowledge_base_id: str,
-    status: FileStatus | None = None,
-    q: str | None = Query(default=None, min_length=1, max_length=200),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-) -> ApiResponse[Page[DocumentSummary]]:
-    """対象ナレッジベースの文書一覧を返す。"""
-    oracle = OracleClient()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
-        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
-    items = await oracle.list_documents(
-        status=status,
-        query=q,
-        limit=limit,
-        offset=offset,
-        knowledge_base_id=knowledge_base_id,
-    )
-    total = await oracle.count_documents(
-        status=status,
-        query=q,
-        knowledge_base_id=knowledge_base_id,
-    )
-    return ApiResponse(
-        data=Page(
-            items=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
-        )
-    )
 
 
 @router.post("/{knowledge_base_id}/documents", response_model=ApiResponse[KnowledgeBaseDetail])

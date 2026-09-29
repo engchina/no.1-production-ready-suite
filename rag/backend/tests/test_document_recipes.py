@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.api.routes import documents as documents_route
 from app.api.routes.documents import (
     _apply_recipe_review_text_edits,
+    _candidate_chunking_settings,
     _enqueue_failed_segment_retry_job_for_document,
     _materialize_experiment_candidate,
     _recipe_steps,
@@ -20,9 +21,10 @@ from app.clients.oracle import (
     oracle_document_recipe_schema_sql,
     oracle_ingestion_job_schema_sql,
 )
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.rag.ingestion import IngestionCancelledError
 from app.schemas.document import (
+    DocumentChunkPreviewRequest,
     DocumentDetail,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
@@ -888,3 +890,11 @@ async def test_restore_recipe_status_after_cancel_returns_to_state_before_phase(
 
     assert recorded["recipe_id"] == "recipe-1"
     assert recorded["status"] == expected
+
+
+def test_chunk_preview_settings_reject_overlap_not_smaller_than_size() -> None:
+    """分割プレビューの一時上書きも overlap < chunk_size の相互制約を検証する(422)。"""
+    request = DocumentChunkPreviewRequest(chunk_size=300, chunk_overlap=300)
+    with pytest.raises(HTTPException) as exc:
+        _candidate_chunking_settings(get_settings(), request.settings_overrides())
+    assert exc.value.status_code == 422
