@@ -3,6 +3,10 @@
 import json
 
 import pytest
+from rag_pipeline_core.chunking import (
+    TABLE_VISION_SUPPLEMENT_LABEL,
+    chunk_extraction_with_strategy,
+)
 
 from app.rag.chunking import chunk_extraction, chunk_text
 from app.schemas.extraction import DocumentElement, StructuredExtraction
@@ -596,3 +600,111 @@ def test_split_sentences_without_terminal_punctuation_returns_whole_text() -> No
 
     parts = _split_sentences("句読点のないテキスト")
     assert parts == ["句読点のないテキスト"]
+
+
+def _table_vision_extraction(*, table_first: bool = False) -> StructuredExtraction:
+    """Docling と同じ形(raw_text は表を含まず、説明文は表の要素の metadata にだけある)。"""
+    table = DocumentElement(
+        kind="table",
+        text="<table><tr><td>部品A</td></tr></table>",
+        element_id="docling-p1-2",
+        page_number=1,
+        metadata={"table_vision_text": "登録ボタンの画面"},
+    )
+    after = DocumentElement(kind="text", text="登録後に確認します。", page_number=1)
+    if table_first:
+        return StructuredExtraction(raw_text=after.text, elements=[table, after])
+    before = DocumentElement(kind="text", text="部品の一覧です。", page_number=1)
+    return StructuredExtraction(
+        raw_text=f"{before.text}\n\n{after.text}", elements=[before, table, after]
+    )
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    ["recursive_character", "markdown_heading", "fixed_size", "fixed_delimiter"],
+)
+def test_raw_text_strategies_insert_table_vision_text_at_the_table(strategy: str) -> None:
+    """raw_text を分割する方法も、表の位置(直前の要素の後ろ)に説明文の補足を入れる(#513)。"""
+    extraction = _table_vision_extraction()
+
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=800, overlap=120
+    )
+
+    joined = " ".join(chunk.text for chunk in chunks)
+    before = joined.index("部品の一覧です。")
+    supplement = joined.index(TABLE_VISION_SUPPLEMENT_LABEL)
+    assert before < supplement < joined.index("登録後に確認します。")
+    assert "登録ボタンの画面" in joined
+    # 保存する抽出結果(表の本文と raw_text)は変えない。
+    assert extraction.raw_text == "部品の一覧です。\n\n登録後に確認します。"
+    assert extraction.elements[1].text == "<table><tr><td>部品A</td></tr></table>"
+
+
+def test_raw_text_strategy_puts_table_vision_text_first_when_table_leads() -> None:
+    chunks = chunk_extraction_with_strategy(
+        _table_vision_extraction(table_first=True),
+        strategy="fixed_delimiter",
+        delimiter="\\n\\n",
+    )
+
+    assert [chunk.text for chunk in chunks] == [
+        f"{TABLE_VISION_SUPPLEMENT_LABEL}\n登録ボタンの画面",
+        "登録後に確認します。",
+    ]
+
+
+def test_table_vision_text_is_not_added_twice_when_body_has_it() -> None:
+    """Docling 以外(Vision の段が本文と raw_text に補足を足した表)には足さない。"""
+    body = f"| 品目 |\n| --- |\n| 部品A |\n{TABLE_VISION_SUPPLEMENT_LABEL}\n登録ボタンの画面"
+    extraction = StructuredExtraction(
+        raw_text=f"部品の一覧です。\n\n{body}",
+        elements=[
+            DocumentElement(kind="text", text="部品の一覧です。", page_number=1),
+            DocumentElement(
+                kind="table",
+                text=body,
+                page_number=1,
+                metadata={"table_vision_text": "登録ボタンの画面"},
+            ),
+        ],
+    )
+
+    for strategy in ("structure_aware", "page_level", "recursive_character", "fixed_size"):
+        chunks = chunk_extraction_with_strategy(
+            extraction, strategy=strategy, chunk_size=800, overlap=120
+        )
+        joined = "\n".join(chunk.text for chunk in chunks)
+        assert joined.count(TABLE_VISION_SUPPLEMENT_LABEL) == 1, strategy
+
+
+def test_structure_aware_appends_table_vision_text_without_moving_offsets() -> None:
+    """構造認識は表の本文の後ろに補足を足し、chunk の位置(offset)は変えない(#513)。"""
+    extraction = _table_vision_extraction()
+    plain = extraction.model_copy(
+        update={
+            "elements": [
+                element.model_copy(update={"metadata": {}}) for element in extraction.elements
+            ]
+        }
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=800, overlap=0)
+    plain_chunks = chunk_extraction(plain, chunk_size=800, overlap=0)
+
+    table = next(chunk for chunk in chunks if chunk.metadata.get("content_kind") == "table")
+    assert table.text == (
+        f"<table><tr><td>部品A</td></tr></table>\n{TABLE_VISION_SUPPLEMENT_LABEL}\n登録ボタンの画面"
+    )
+    assert [(chunk.start_offset, chunk.end_offset) for chunk in chunks] == [
+        (chunk.start_offset, chunk.end_offset) for chunk in plain_chunks
+    ]
+
+
+def test_table_vision_text_on_non_table_element_is_ignored() -> None:
+    figure = DocumentElement(kind="figure", text="図", metadata={"table_vision_text": "説明"})
+
+    chunks = chunk_extraction(StructuredExtraction(raw_text="図", elements=[figure]))
+
+    assert "説明" not in chunks[0].text
