@@ -47,6 +47,7 @@ import {
   useEnqueueDocumentIngestionJob,
   useAllKnowledgeBases,
 } from "@/lib/queries";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
@@ -377,7 +378,7 @@ export function FileListClient() {
               value={search}
               onValueChange={setSearch}
               onKeyDown={(e) => {
-                if (e.key === "Enter") commitSearch();
+                if (isSubmitEnter(e)) commitSearch();
               }}
               onBlur={commitSearch}
               onClear={clearSearch}
