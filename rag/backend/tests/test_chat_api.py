@@ -130,13 +130,6 @@ class FakeChatOracle:
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
         return self.conversations.get(conversation_id)
 
-    async def archive_conversation(self, conversation_id: str) -> StoredConversation:
-        existing = self.conversations.get(conversation_id)
-        if existing is None:
-            raise KeyError(conversation_id)
-        existing.status = "ARCHIVED"
-        return existing
-
     async def delete_conversation(self, conversation_id: str) -> None:
         if self.conversations.pop(conversation_id, None) is None:
             raise KeyError(conversation_id)
@@ -220,16 +213,11 @@ def test_create_conversation_rejects_unknown_business_view(fake_oracle: FakeChat
     assert resp.status_code == 404
 
 
-def test_list_and_archive_conversation(fake_oracle: FakeChatOracle) -> None:
-    """会話を一覧・アーカイブできる。"""
-    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
-        "data"
-    ]
+def test_list_conversations(fake_oracle: FakeChatOracle) -> None:
+    """会話を一覧できる。"""
+    client.post("/api/chat/conversations", json={"business_view_id": "bv-1"})
     page = client.get("/api/chat/conversations?business_view_id=bv-1").json()["data"]
     assert page["total"] == 1
-    archived = client.post(f"/api/chat/conversations/{created['id']}/archive")
-    assert archived.status_code == 200
-    assert archived.json()["data"]["status"] == "ARCHIVED"
 
 
 def test_delete_conversation_removes_it_from_list(fake_oracle: FakeChatOracle) -> None:
