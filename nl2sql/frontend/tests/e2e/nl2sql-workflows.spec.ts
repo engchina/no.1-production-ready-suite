@@ -304,6 +304,19 @@ function sqlToQuestionInput(scope: Page | Locator) {
   return scope.locator("#sql-to-question-sql-input");
 }
 
+/**
+ * SQL を入力して「SQL 分析・質問生成」を押す。再読み込みの直後は初期化（下書きの復元など）が fill の後に走り、
+ * 入力が空へ戻ってボタンが無効のまま残ることがあるため、ボタンが有効になるまで fill をやり直す（#431）。
+ */
+async function fillSqlAndGenerateQuestions(page: Page, sql: string) {
+  const button = page.getByRole("button", { name: "SQL 分析・質問生成", exact: true });
+  await expect(async () => {
+    await sqlToQuestionInput(page).fill(sql);
+    await expect(button).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await button.click();
+}
+
 async function expectRequiredTextarea(scope: Page | Locator, id: string, label: string) {
   const field = scope.locator(`#${id}`);
   const fieldLabel = scope.locator(`label[for="${id}"]`);
@@ -16788,8 +16801,7 @@ test("sql to question isolates candidate snapshots by DB and account and clears 
   await page.route("**/api/ready/database", (route) => fulfillJson(route, { status: "ok", check: "ok", detail: null, context_id: database }));
   await page.route("**/api/auth/me", (route) => fulfillJson(route, user));
   await page.goto("/sql-to-question");
-  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "SQL 分析・質問生成", exact: true }).click();
+  await fillSqlAndGenerateQuestions(page, "SELECT TOTAL_AMOUNT FROM INVOICES");
   const candidates = page.getByRole("region", { name: "質問候補", exact: true });
   await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
   database = "question-db-b";
@@ -16807,8 +16819,7 @@ test("sql to question isolates candidate snapshots by DB and account and clears 
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(candidates).toContainText("質問候補は未生成です");
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
-  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "SQL 分析・質問生成", exact: true }).click();
+  await fillSqlAndGenerateQuestions(page, "SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
   await page.evaluate(() => window.dispatchEvent(new Event("app-auth-unauthorized")));
   await expect(page).toHaveURL(/\/login/);

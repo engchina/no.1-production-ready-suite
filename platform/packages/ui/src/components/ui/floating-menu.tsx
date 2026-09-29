@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils";
 const MENU_GAP = 4;
 const MENU_VIEWPORT_PADDING = 8;
 /** `--z-dropdown` を読めないとき（テスト環境など）の既定値。elevation.css と同じ値。 */
-const DEFAULT_DROPDOWN_Z_INDEX = 100;
+const DEFAULT_DROPDOWN_Z_INDEX = 850;
 
 export type FloatingMenuPlacement = "top" | "bottom";
 /** start / end は左右の端をトリガーに合わせる。stretch はトリガーと同じ幅にする（SelectField）。 */

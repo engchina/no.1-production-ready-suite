@@ -55,7 +55,10 @@ async function fulfillJson(route: Route, data: unknown) {
   });
 }
 
-/** ジョブを running のまま返し続け、実行ボタンを loading 状態で固定する。 */
+/**
+ * ジョブ作成の要求（POST /api/nl2sql/jobs）に応答せず、実行ボタンを送信中（loading）で固定する。
+ * 実行ボタンが loading なのは送信中だけで、ジョブの実行中は disabled になりスピナーは進行状況が 1 つ出す（#416）。
+ */
 async function mockWorkbenchWithPendingJob(page: Page) {
   await mockDatabaseGateReady(page);
   await page.route("**/api/nl2sql/profiles/search?*", (route) =>
@@ -132,29 +135,8 @@ async function mockWorkbenchWithPendingJob(page: Page) {
       warnings: [],
     })
   );
-  await page.route("**/api/nl2sql/jobs", (route) =>
-    fulfillJson(route, {
-      job_id: "job-spinner-001",
-      status: "pending",
-      created_at: "2026-08-16T00:00:00.000Z",
-      steps: [],
-    })
-  );
-  // 完了させず running を返し続けることでスピナーを表示したままにする
-  await page.route("**/api/nl2sql/jobs/job-spinner-001", (route) =>
-    fulfillJson(route, {
-      job_id: "job-spinner-001",
-      status: "running",
-      created_at: "2026-08-16T00:00:00.000Z",
-      started_at: "2026-08-16T00:00:00.010Z",
-      finished_at: null,
-      elapsed_ms: null,
-      error_message: null,
-      timing: null,
-      steps: [{ stage: "generate_sql", status: "running", elapsed_ms: null }],
-      result: null,
-    })
-  );
+  // 応答しないことで送信中（submitting）のまま保ち、ボタンのスピナーを表示したままにする（#431）。
+  await page.route("**/api/nl2sql/jobs", () => new Promise<void>(() => undefined));
 }
 
 async function startPendingRun(page: Page) {
