@@ -23,9 +23,15 @@ from app.clients.oracle import (
 )
 from app.config import Settings, get_settings
 from app.rag.ingestion import IngestionCancelledError
+from app.rag.variant_keys import (
+    compute_graph_layer_id,
+    compute_metadata_layer_id,
+    compute_nav_layer_id,
+)
 from app.schemas.document import (
     DocumentChunkPreviewRequest,
     DocumentDetail,
+    DocumentLayerStatusName,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
     DocumentRecipeStepStatus,
@@ -907,3 +913,250 @@ async def test_legacy_experiment_job_without_recipe_is_rejected() -> None:
         await documents_route._materialize_experiment_candidate(
             cast(Any, object()), cast(Any, legacy_job)
         )
+
+
+_NAVIGATION_EXTRACTION = StructuredExtraction(
+    raw_text=(
+        "# 第1章 概要\n\n"
+        "社内規程の概要を説明します。\n\n"
+        "## 1.1 経費申請\n\n"
+        "部門長の承認後、経理部が確認します。\n"
+    ),
+).to_document_payload()
+
+
+class _CompletingRecipeOracle(_FakeRecipeJobOracle):
+    """レシピの job が索引を終えて chunk_set を active にするまでを支える fake。
+
+    記録した派生情報レイヤーは ``/chunk-sets`` の API からも読めるようにする。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.activated: list[str] = []
+        self.chunk_set_rows: dict[str, dict[str, object]] = {}
+        self.layers: dict[str, dict[str, object]] = {}
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+        row = await super().get_document_recipe(document_id, recipe_id)
+        return {**row, "active_extraction_recipe_id": "extraction-1"}
+
+    async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
+        return [await self.get_document_recipe(document_id, "recipe-1")]
+
+    async def get_latest_recipe_chunk_set(
+        self, *args: object, **kwargs: object
+    ) -> dict[str, object]:
+        _ = args, kwargs
+        return {"chunk_set_id": "chunk-set-pending"}
+
+    async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
+        _ = chunk_set_id
+        return 3
+
+    async def upsert_chunk_set(self, *, chunk_set_id: str, **kwargs: object) -> None:
+        self.chunk_set_rows[chunk_set_id] = {"chunk_set_id": chunk_set_id, **kwargs}
+
+    async def mark_chunk_set_chunked(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def mark_chunk_set_indexed(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def activate_recipe_chunk_set(self, *, chunk_set_id: str, **kwargs: object) -> None:
+        _ = kwargs
+        self.activated.append(chunk_set_id)
+
+    async def update_document_status(self, *args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+
+    async def get_document_extraction_artifact(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object]:
+        return {
+            "document_id": document_id,
+            "extraction_recipe_id": extraction_recipe_id,
+            "status": "materialized",
+            "reason": None,
+            "extraction_json": _NAVIGATION_EXTRACTION,
+        }
+
+    async def upsert_artifact_layer(self, *, layer_id: str, **kwargs: object) -> None:
+        self.layers[layer_id] = {"layer_id": layer_id, **kwargs}
+
+    # --- GET /chunk-sets 用 ---
+    async def get_document_summary(self, document_id: str) -> DocumentDetail:
+        return await self.get_document(document_id)
+
+    async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
+        _ = document_id
+        return [
+            {
+                "chunk_set_id": chunk_set_id,
+                "recipe_id": "recipe-1",
+                "extraction_recipe_id": "extraction-1",
+                "status": "INDEXED",
+                "chunk_count": 3,
+                "vector_count": 3,
+                "is_serving": True,
+                "knowledge_base_ids": ["kb-1"],
+            }
+            for chunk_set_id in self.activated
+        ]
+
+    async def list_document_knowledge_base_configs(self, document_id: str) -> list[object]:
+        _ = document_id
+        return []
+
+    async def list_artifact_layers_for_chunk_sets(
+        self, chunk_set_ids: Collection[str]
+    ) -> dict[str, dict[str, object]]:
+        return {
+            layer_id: layer
+            for layer_id, layer in self.layers.items()
+            if layer["parent_chunk_set_id"] in chunk_set_ids
+        }
+
+
+class _RecordingRecipePipeline:
+    """呼ばれた工程と ``record_outcome`` を記録する fake pipeline。"""
+
+    calls: list[tuple[str, object]] = []
+
+    def __init__(self, **_kwargs: object) -> None:
+        pass
+
+    async def ingest(self, *args: object, **kwargs: object) -> None:
+        _ = args
+        _RecordingRecipePipeline.calls.append(("ingest", kwargs.get("record_outcome")))
+
+    async def chunk_reviewed(self, *args: object, **kwargs: object) -> None:
+        _ = args
+        _RecordingRecipePipeline.calls.append(("chunk_reviewed", kwargs.get("record_outcome")))
+
+    async def index_chunked(self, *args: object, **kwargs: object) -> None:
+        _ = args
+        _RecordingRecipePipeline.calls.append(("index_chunked", kwargs.get("record_outcome")))
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_calls"),
+    [
+        (IngestionJobPhase.INDEX, [("index_chunked", True)]),
+        # Chunk 作成は途中の工程。自動で続ける索引だけが成功を記録する。
+        (IngestionJobPhase.CHUNK, [("chunk_reviewed", False), ("index_chunked", True)]),
+        # 確認待ちのゲートなし: 抽出の job が索引まで進むため、ingest が成功を記録する。
+        (IngestionJobPhase.EXTRACT, [("ingest", True)]),
+    ],
+    ids=["index", "chunk_then_auto_index", "extract_single_pass"],
+)
+async def test_recipe_job_records_success_outcome_only_on_indexing_step(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: IngestionJobPhase,
+    expected_calls: list[tuple[str, bool]],
+) -> None:
+    """レシピの job は、索引を終える呼び出しだけに成功の監査・metric を任せる(#493)。
+
+    成功の監査は pipeline 側で ``record_outcome=True`` かつ索引まで進んだときだけ出るため、
+    1 つの job で成功の監査は 1 回になる。途中の工程(Chunk 作成)では出さない。
+    """
+    fake = _CompletingRecipeOracle()
+    await ObjectStorageClient().put("prepared/policy.pdf", b"prepared pdf bytes", "application/pdf")
+    _RecordingRecipePipeline.calls = []
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _RecordingRecipePipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: Settings())
+    job = _extract_job().model_copy(update={"phase": phase, "status": IngestionJobStatus.RUNNING})
+
+    next_phase = await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+
+    assert next_phase is None
+    assert _RecordingRecipePipeline.calls == expected_calls
+    assert len(fake.activated) == 1
+
+
+def _layer_settings(*, enabled: bool) -> Settings:
+    if enabled:
+        return Settings(
+            rag_graph_profile="entities",
+            rag_field_extraction_enabled=True,
+            rag_navigation_summary_enabled=True,
+        )
+    return Settings(
+        rag_graph_profile="off",
+        rag_field_extraction_enabled=False,
+        rag_asset_summary_enabled=False,
+        rag_navigation_summary_enabled=False,
+        rag_raptor_enabled=False,
+    )
+
+
+async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レシピの job の完了で派生情報レイヤーを記録し、/chunk-sets がその状態を返す(#494)。
+
+    レシピの chunk_set ID は planner の ID と一致しないため、レシピの設定から層 ID を作る。
+    """
+    fake = _CompletingRecipeOracle()
+    settings = _layer_settings(enabled=True)
+    _RecordingRecipePipeline.calls = []
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _RecordingRecipePipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: settings)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
+    job = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+
+    await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+
+    assert fake.activated == ["chunk-set-pending"]
+    expected_ids = {
+        "metadata": compute_metadata_layer_id("chunk-set-pending", settings),
+        "graph": compute_graph_layer_id("chunk-set-pending", settings),
+        "navigation": compute_nav_layer_id("chunk-set-pending", settings),
+    }
+    assert {
+        str(layer["layer_kind"]): layer_id for layer_id, layer in fake.layers.items()
+    } == expected_ids
+    assert all(
+        layer["parent_chunk_set_id"] == "chunk-set-pending" for layer in fake.layers.values()
+    )
+    assert fake.layers[expected_ids["navigation"]]["status"] == "materialized"
+
+    response = await documents_route.list_document_chunk_sets("doc-1")
+
+    assert response.data is not None
+    assert len(response.data) == 1
+    statuses = response.data[0].layer_statuses
+    by_layer = {
+        "metadata": statuses.metadata,
+        "graph": statuses.graph,
+        "navigation": statuses.navigation,
+    }
+    assert all(status.requested for status in by_layer.values())
+    assert {name: status.layer_id for name, status in by_layer.items()} == expected_ids
+    assert statuses.navigation.status == DocumentLayerStatusName.MATERIALIZED
+
+
+async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レシピの設定で使わないレイヤーは記録せず、/chunk-sets では「使用しません」を返す。"""
+    fake = _CompletingRecipeOracle()
+    _RecordingRecipePipeline.calls = []
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _RecordingRecipePipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: _layer_settings(enabled=False))
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
+    job = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+
+    await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+    response = await documents_route.list_document_chunk_sets("doc-1")
+
+    assert fake.layers == {}
+    assert response.data is not None
+    statuses = response.data[0].layer_statuses
+    for status in (statuses.metadata, statuses.graph, statuses.navigation):
+        assert status.requested is False
+        assert status.status == DocumentLayerStatusName.NOT_REQUESTED
