@@ -28,9 +28,9 @@ for (const viewport of [
     );
     await expect(breadcrumbs.getByText("業務ビューを作成")).toHaveAttribute("aria-current", "page");
     await expect(page.getByLabel("名前", { exact: true })).toBeVisible();
-    await expect(page.getByText("参照する知識ベース", { exact: false }).first()).toBeVisible();
-    // 知識ベースはコンボボックスを開くと候補として現れる。
-    await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+    await expect(page.getByText("参照するナレッジベース", { exact: false }).first()).toBeVisible();
+    // ナレッジベースはコンボボックスを開くと候補として現れる。
+    await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
     await expect(page.getByRole("option", { name: /社内規程/ })).toBeVisible();
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
@@ -92,9 +92,9 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   await page.getByRole("button", { name: "新規作成" }).click();
   await expect(page).toHaveURL(/\/business-views\?id=new$/);
 
-  await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照する知識ベース" }).press("Escape");
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
   await page.getByLabel("名前", { exact: true }).fill("経理ビュー");
   const retrievalSetting = page.getByRole("heading", { name: "検索方法", level: 3 }).locator("..");
   const override = retrievalSetting.getByRole("button", { name: "業務ビューで上書き" });
@@ -138,9 +138,9 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
   });
   await page.goto("/business-views?id=new");
 
-  await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照する知識ベース" }).press("Escape");
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
   await page.getByLabel("名前", { exact: true }).fill("DocRAG ビュー");
 
   const engine = page.getByRole("heading", { name: "回答エンジン", level: 3 }).locator("..");
@@ -223,8 +223,8 @@ for (const viewport of [
 
     await expect(page.getByLabel("名前", { exact: true })).toHaveAttribute("readonly", "");
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "参照する知識ベース" })).toBeDisabled();
-    await expect(page.getByText(/DEFAULT 知識ベースだけを参照します/)).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "参照するナレッジベース" })).toBeDisabled();
+    await expect(page.getByText(/DEFAULT ナレッジベースだけを参照します/)).toBeVisible();
 
     await page.getByLabel("説明", { exact: true }).fill("全社共通の検索設定");
     await page.getByLabel("回答の役割・口調").fill("全社共通の回答担当です。");
@@ -345,9 +345,9 @@ for (const viewport of [
     await expect(page.getByText("業務ビューを作成してください")).toBeVisible();
     await expect(page.getByRole("button", { name: "業務ビューを作成" })).toBeVisible();
 
-    // 検索入力・知識ベースピッカーは出さない(業務ビュー一本化)。
+    // 検索入力・ナレッジベースピッカーは出さない(業務ビュー一本化)。
     await expect(page.getByRole("textbox", { name: "RAG 検索" })).toHaveCount(0);
-    await expect(page.getByText("知識ベース名で絞り込み")).toHaveCount(0);
+    await expect(page.getByText("ナレッジベース名で絞り込み")).toHaveCount(0);
 
     await expectNoPageOverflow(page);
 

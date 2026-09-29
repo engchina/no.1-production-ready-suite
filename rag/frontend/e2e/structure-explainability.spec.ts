@@ -127,12 +127,12 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
   await expectNoHorizontalOverflow(page);
 });
 
-test("文書詳細で所属知識ベースを更新できる", async ({ page }) => {
+test("文書詳細で所属ナレッジベースを更新できる", async ({ page }) => {
   const state = await mockDocumentDetail(page);
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByRole("heading", { name: "所属知識ベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "所属ナレッジベース" })).toBeVisible();
   // 既存の所属はチップで可視化される。
   await expect(page.getByLabel("社内規程 を選択から外す")).toBeVisible();
   // 候補はサーバー側で検索するため（#302）、空（0 文書）の FAQ も隠さずに出る。
@@ -147,7 +147,7 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
   await expect
     .poll(() => state.lastReplacePayload)
     .toEqual({ knowledge_base_ids: ["kb-1", "kb-2"] });
-  await expect(page.getByText("所属知識ベースを保存しました。")).toBeVisible();
+  await expect(page.getByText("所属ナレッジベースを保存しました。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

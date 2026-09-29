@@ -453,7 +453,7 @@ export const ja = {
   "settings.pipelineCanvas.show": "パイプライン図を表示",
   "settings.pipelineCanvas.hide": "パイプライン図を隠す",
   "settings.pipelineCanvas.hint":
-    "この知識ベースの取込工程(ファイル準備→解析→分割→索引と派生情報)を図で確認できます。",
+    "このナレッジベースの取込工程(ファイル準備→解析→分割→索引と派生情報)を図で確認できます。",
   "settings.pipelineCanvas.stage.preprocess": "ファイル準備",
   "settings.pipelineCanvas.stage.parser": "文書解析",
   "settings.pipelineCanvas.stage.chunking": "文書分割",
@@ -1191,14 +1191,14 @@ export const ja = {
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",
   "fileList.col.fileName": "ファイル名",
-  "fileList.col.knowledgeBases": "知識ベース",
+  "fileList.col.knowledgeBases": "ナレッジベース",
   "fileList.col.category": "文書種別",
   "fileList.col.status": "状態",
   "fileList.col.size": "サイズ",
   "fileList.col.uploadedAt": "アップロード日時",
   "fileList.col.actions": "操作",
-  "fileList.knowledgeBaseFilter.label": "知識ベース",
-  "fileList.knowledgeBaseFilter.all": "利用できるすべての知識ベース",
+  "fileList.knowledgeBaseFilter.label": "ナレッジベース",
+  "fileList.knowledgeBaseFilter.all": "利用できるすべてのナレッジベース",
   "fileList.selected": "{count} 件選択中",
   "fileList.bulkIngest": "一括取込",
   "fileList.bulkQueue": "一括投入",
@@ -1387,34 +1387,34 @@ export const ja = {
   "businessViews.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
   "businessViews.draftPending": "作成中の業務ビューに保存していない下書きがあります。",
   "businessViews.archivedReadonly": "アーカイブ済みの業務ビューは編集・保存できません。",
-  "businessViews.knowledgeBaseIssues.title": "参照する知識ベースの一部が検索対象になっていません",
+  "businessViews.knowledgeBaseIssues.title": "参照するナレッジベースの一部が検索対象になっていません",
   "businessViews.knowledgeBaseIssues.archived":
     "アーカイブ済み（{count} 件）: {names}",
   "businessViews.knowledgeBaseIssues.missing":
-    "見つからない（{count} 件。削除済みか、参照できない知識ベース）: {names}",
+    "見つからない（{count} 件。削除済みか、参照できないナレッジベース）: {names}",
   "businessViews.knowledgeBaseIssues.hint":
-    "これらの知識ベースは検索されません。選択から外して保存するか、別の知識ベースを選んでください。",
+    "これらのナレッジベースは検索されません。選択から外して保存するか、別のナレッジベースを選んでください。",
   "businessViews.knowledgeBaseIssues.allUnavailable":
-    "参照するすべての知識ベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。",
+    "参照するすべてのナレッジベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。",
   "businessViews.knowledgeBaseIssues.listTitle":
-    "参照する知識ベースにアーカイブ済み・見つからないものがある業務ビューがあります",
+    "参照するナレッジベースにアーカイブ済み・見つからないものがある業務ビューがあります",
   "businessViews.knowledgeBaseIssues.listHint":
-    "「参照 KB」列に「要確認」が付いた業務ビューを開き、参照する知識ベースを見直してください。",
+    "「参照 KB」列に「要確認」が付いた業務ビューを開き、参照するナレッジベースを見直してください。",
   "businessViews.knowledgeBaseIssues.badge": "要確認",
   "businessViews.knowledgeBaseIssues.more": " ほか {count} 件",
   "businessViews.knowledgeBaseIssues.badgeAria":
     "参照 KB {total} 件のうち、アーカイブ済み {archived} 件・見つからない {missing} 件",
   "businessViews.form.title": "基本情報と検索・回答設定",
   "businessViews.subtitle":
-    "複数の知識ベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
+    "複数のナレッジベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
   "businessViews.create.title": "業務ビューを作成",
   "businessViews.field.name": "名前",
   "businessViews.field.namePlaceholder": "例: 経理規程ビュー",
   "businessViews.field.description": "説明",
   "businessViews.field.descriptionPlaceholder": "この業務ビューの用途(任意)",
-  "businessViews.field.knowledgeBases": "参照する知識ベース",
+  "businessViews.field.knowledgeBases": "参照するナレッジベース",
   "businessViews.field.knowledgeBasesHelper":
-    "この業務ビューへの質問が検索対象とする知識ベースを選びます(1 件以上)。",
+    "この業務ビューへの質問が検索対象とするナレッジベースを選びます(1 件以上)。",
   "businessViews.field.prompt": "回答プロンプト",
   "businessViews.field.systemPrompt": "回答の役割・口調",
   "businessViews.field.systemPromptPlaceholder":
@@ -1465,16 +1465,16 @@ export const ja = {
   "businessViews.status.ACTIVE": "有効",
   "businessViews.status.ARCHIVED": "アーカイブ済み",
   "businessViews.empty.title": "業務ビューがありません",
-  "businessViews.empty.description": "知識ベースを束ねた業務ビューを作成しましょう。",
+  "businessViews.empty.description": "ナレッジベースを束ねた業務ビューを作成しましょう。",
   "businessViews.empty.restrictedDescription":
     "利用できる業務ビューがありません。必要な場合は管理者に利用権限を依頼してください。",
   "businessViews.error.title": "業務ビューを読み込めません",
   "businessViews.nameRequired": "名前を入力してください。",
   "businessViews.nameReserved": "DEFAULT は予約名のため使用できません。",
-  "businessViews.knowledgeBasesRequired": "参照する知識ベースを 1 件以上選んでください。",
+  "businessViews.knowledgeBasesRequired": "参照するナレッジベースを 1 件以上選んでください。",
   "businessViews.default.nameFixed": "DEFAULT の名前は変更できません。",
   "businessViews.default.knowledgeBaseFixed":
-    "DEFAULT は DEFAULT 知識ベースだけを参照します。追加・削除はできません。",
+    "DEFAULT は DEFAULT ナレッジベースだけを参照します。追加・削除はできません。",
   "businessViews.default.archiveDisabled": "DEFAULT はアーカイブできません",
   "businessViews.toast.created": "業務ビューを作成しました。",
   "businessViews.toast.updated": "業務ビューを更新しました。",
@@ -1484,7 +1484,7 @@ export const ja = {
   "businessViews.error.archive": "業務ビューのアーカイブに失敗しました。",
   "businessViews.confirm.archive.title": "業務ビューをアーカイブしますか?",
   "businessViews.confirm.archive.description":
-    "「{name}」をアーカイブします。参照先の知識ベース・文書は削除されません。",
+    "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務ビュー",
   "businessViews.scope.helper": "選択した業務ビューに紐づく KB を検索対象にします。",
   "businessViews.scope.placeholder": "業務ビューを検索して追加…",
@@ -1508,7 +1508,7 @@ export const ja = {
   "businessViewPicker.hiddenEmptyCount": "参照 KB なしの業務ビュー {count} 件を非表示中",
   "businessViewPicker.primary": "代表方針",
   "knowledgeBases.subtitle": "文書の所属先を管理し、検索スコープごとに整理します。",
-  "knowledgeBases.create.title": "知識ベースを作成",
+  "knowledgeBases.create.title": "ナレッジベースを作成",
   "knowledgeBases.field.name": "名前",
   "knowledgeBases.field.description": "説明",
   "knowledgeBases.actions.create": "作成",
@@ -1518,7 +1518,7 @@ export const ja = {
   "knowledgeBases.actions.cancel": "キャンセル",
   "knowledgeBases.actions.assign": "追加",
   "knowledgeBases.actions.remove": "外す",
-  "knowledgeBases.filter.aria": "知識ベース状態フィルター",
+  "knowledgeBases.filter.aria": "ナレッジベース状態フィルター",
   "knowledgeBases.filter.all": "すべて",
   "knowledgeBases.status.ACTIVE": "有効",
   "knowledgeBases.status.ARCHIVED": "アーカイブ済み",
@@ -1532,11 +1532,11 @@ export const ja = {
   "knowledgeBases.metric.documents": "文書",
   "knowledgeBases.metric.indexed": "索引済み",
   "knowledgeBases.metric.errors": "エラー",
-  "knowledgeBases.detail.title": "選択中の知識ベース",
-  "knowledgeBases.detail.empty.title": "知識ベースを選択してください。",
+  "knowledgeBases.detail.title": "選択中のナレッジベース",
+  "knowledgeBases.detail.empty.title": "ナレッジベースを選択してください。",
   "knowledgeBases.detail.empty.hint": "一覧から名前を選ぶと、所属文書を確認できます。",
   "knowledgeBases.detail.archivedHint":
-    "アーカイブ済みの知識ベースは文書の追加・解除を行えません。",
+    "アーカイブ済みのナレッジベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
   "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
   "knowledgeBases.assignment.search": "追加する文書を検索",
@@ -1574,52 +1574,52 @@ export const ja = {
   "knowledgeBases.variant.reingestFailed":
     "再取込の開始に失敗しました。文書の状態を確認して再試行してください。",
   "knowledgeBases.variant.addHint":
-    "別の構築設定を使う場合は、この文書を別の知識ベースにも追加できます。",
-  "knowledgeBases.variant.addAction": "別の知識ベースに追加",
-  "knowledgeBases.empty.title": "知識ベースがありません。",
-  "knowledgeBases.empty.hint": "名前を入力して、最初の知識ベースを作成してください。",
+    "別の構築設定を使う場合は、この文書を別のナレッジベースにも追加できます。",
+  "knowledgeBases.variant.addAction": "別のナレッジベースに追加",
+  "knowledgeBases.empty.title": "ナレッジベースがありません。",
+  "knowledgeBases.empty.hint": "名前を入力して、最初のナレッジベースを作成してください。",
   "knowledgeBases.empty.restrictedHint":
-    "利用できる知識ベースがありません。必要な場合は管理者に利用権限を依頼してください。",
+    "利用できるナレッジベースがありません。必要な場合は管理者に利用権限を依頼してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",
   "knowledgeBases.validation.nameReserved": "DEFAULT は予約名のため使用できません。",
   "knowledgeBases.default.archiveDisabled": "DEFAULT はアーカイブできません",
-  "knowledgeBases.confirm.archive.title": "知識ベースをアーカイブしますか？",
+  "knowledgeBases.confirm.archive.title": "ナレッジベースをアーカイブしますか？",
   "knowledgeBases.confirm.archive.description":
     "「{name}」は検索対象の選択肢から外れ、参照している業務ビューでも検索されなくなります（業務ビューの画面に警告が出ます）。文書とチャンクは削除されません。",
   "knowledgeBases.confirm.remove.title": "所属から外しますか？",
   "knowledgeBases.confirm.remove.description":
     "「{fileName}」を「{name}」から外します。文書自体は削除されません。ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。",
-  "knowledgeBases.toast.created": "知識ベースを作成しました。",
-  "knowledgeBases.toast.archived": "知識ベースをアーカイブしました。",
-  "knowledgeBases.toast.updated": "知識ベースを更新しました。",
-  "knowledgeBases.toast.assigned": "文書を知識ベースに追加しました。",
-  "knowledgeBases.toast.removed": "文書を知識ベースから外しました。",
+  "knowledgeBases.toast.created": "ナレッジベースを作成しました。",
+  "knowledgeBases.toast.archived": "ナレッジベースをアーカイブしました。",
+  "knowledgeBases.toast.updated": "ナレッジベースを更新しました。",
+  "knowledgeBases.toast.assigned": "文書をナレッジベースに追加しました。",
+  "knowledgeBases.toast.removed": "文書をナレッジベースから外しました。",
   "knowledgeBases.error.load":
-    "知識ベース一覧の取得に失敗しました。接続状態を確認して再試行してください。",
+    "ナレッジベース一覧の取得に失敗しました。接続状態を確認して再試行してください。",
   "knowledgeBases.error.create":
-    "知識ベースの作成に失敗しました。名前を確認して再試行してください。",
+    "ナレッジベースの作成に失敗しました。名前を確認して再試行してください。",
   "knowledgeBases.error.archive":
-    "知識ベースのアーカイブに失敗しました。状態を確認して再試行してください。",
+    "ナレッジベースのアーカイブに失敗しました。状態を確認して再試行してください。",
   "knowledgeBases.error.update":
-    "知識ベースの更新に失敗しました。名前を確認して再試行してください。",
+    "ナレッジベースの更新に失敗しました。名前を確認して再試行してください。",
   "knowledgeBases.edit.title": "名前と説明を編集",
   "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
-    "文書の追加に失敗しました。文書と知識ベースの状態を確認してください。",
+    "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
   "knowledgeBases.error.remove":
-    "文書の所属解除に失敗しました。知識ベースの状態を確認してください。",
+    "文書の所属解除に失敗しました。ナレッジベースの状態を確認してください。",
   "knowledgeBases.error.documents":
     "文書一覧の取得に失敗しました。接続状態を確認して再試行してください。",
 
   "knowledgeBases.searchTest.title": "このナレッジで検索テスト",
   "knowledgeBases.searchTest.description":
-    "業務ビューを作らずに、この知識ベース単体で検索の手応えをその場で確認できます。",
-  "knowledgeBases.searchTest.placeholder": "この知識ベースに質問してみる…",
+    "業務ビューを作らずに、このナレッジベース単体で検索の手応えをその場で確認できます。",
+  "knowledgeBases.searchTest.placeholder": "このナレッジベースに質問してみる…",
   "knowledgeBases.searchTest.button": "検索テスト",
   "knowledgeBases.searchTest.searching": "検索中…",
   "knowledgeBases.searchTest.cancel": "停止",
   "knowledgeBases.searchTest.initialHint":
-    "質問を入力すると、この知識ベースから上位の根拠チャンクを取得します。",
+    "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
   "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
   "knowledgeBases.searchTest.needsIndexedHint":
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
@@ -1630,7 +1630,7 @@ export const ja = {
   "knowledgeBases.graph.title": "関係情報グラフ",
   "knowledgeBases.graph.loading": "グラフを読み込んでいます",
   "knowledgeBases.graph.hint":
-    "この知識ベースの関係情報(GraphRAG)を、エンティティ(ノード)と関係(エッジ)で俯瞰します。",
+    "このナレッジベースの関係情報(GraphRAG)を、エンティティ(ノード)と関係(エッジ)で俯瞰します。",
   "knowledgeBases.graph.empty": "関係情報がまだありません。",
   "knowledgeBases.graph.emptyHint":
     "関係情報の構築(GraphRAG)を有効にして再取込すると、ここにグラフが表示されます。",
@@ -1639,7 +1639,7 @@ export const ja = {
 
   "knowledgeBases.adapter.title": "構築設定",
   "knowledgeBases.adapter.subtitle":
-    "この知識ベースで文書をどう準備・解析・分割・索引するかを設定します。検索・回答設定は業務ビューで管理します。",
+    "このナレッジベースで文書をどう準備・解析・分割・索引するかを設定します。検索・回答設定は業務ビューで管理します。",
   "knowledgeBases.adapter.section.ingestion": "ナレッジ構築設定",
   "knowledgeBases.adapter.section.ingestionHint":
     "文書解析・分割は取込の瞬間に確定します。変更後は対象文書を再取込しないと既存チャンクには反映されません。",
@@ -1680,7 +1680,7 @@ export const ja = {
   "knowledgeBases.adapter.error.save":
     "構築設定の保存に失敗しました。値を確認して再試行してください。",
   "knowledgeBases.adapter.archivedHint":
-    "アーカイブ済みの知識ベースは構築設定を変更できません。",
+    "アーカイブ済みのナレッジベースは構築設定を変更できません。",
   "knowledgeBases.detail.back": "ナレッジベース一覧へ戻る",
   "knowledgeBases.detail.loading": "ナレッジベース詳細を読み込んでいます",
   "knowledgeBases.loading": "ナレッジベースを読み込んでいます",
@@ -1694,19 +1694,19 @@ export const ja = {
   "ingestionDrift.action": "現在の設定で再取込",
   "ingestionDrift.toast.queued": "再取込を開始しました。",
   "ingestionDrift.error": "再取込の開始に失敗しました。状態を確認して再試行してください。",
-  "knowledgeBaseScope.label": "知識ベース",
-  "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべての知識ベースを対象にします。",
+  "knowledgeBaseScope.label": "ナレッジベース",
+  "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべてのナレッジベースを対象にします。",
   "knowledgeBaseScope.clear": "クリア",
-  "knowledgeBaseScope.loading": "知識ベースを読み込んでいます。",
-  "knowledgeBaseScope.loadWarning": "知識ベース一覧を取得できませんでした。",
+  "knowledgeBaseScope.loading": "ナレッジベースを読み込んでいます。",
+  "knowledgeBaseScope.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "knowledgeBaseScope.loadWarningHint":
-    "未選択のまま実行すると、利用できるすべての知識ベースを対象にします。",
+    "未選択のまま実行すると、利用できるすべてのナレッジベースを対象にします。",
   "knowledgeBaseScope.documentCount": "{count} 文書",
   "knowledgeBaseScope.selected": "{count} 件選択中",
-  "knowledgeBaseScope.all": "利用できるすべての知識ベースを対象にします。",
-  "knowledgeBaseScope.empty": "有効な知識ベースがありません。",
-  "knowledgeBasePicker.filterPlaceholder": "知識ベース名で絞り込み",
-  "knowledgeBasePicker.filterAria": "知識ベースを名前で絞り込む",
+  "knowledgeBaseScope.all": "利用できるすべてのナレッジベースを対象にします。",
+  "knowledgeBaseScope.empty": "有効なナレッジベースがありません。",
+  "knowledgeBasePicker.filterPlaceholder": "ナレッジベース名で絞り込み",
+  "knowledgeBasePicker.filterAria": "ナレッジベースを名前で絞り込む",
   "knowledgeBasePicker.filterClear": "絞り込みを解除",
   "knowledgeBasePicker.selectAll": "全選択",
   "knowledgeBasePicker.selectAllVisible": "表示中をすべて選択",
@@ -1714,20 +1714,20 @@ export const ja = {
   "knowledgeBasePicker.done": "完了",
   "knowledgeBasePicker.count": "{shown} / {total} 件",
   "knowledgeBasePicker.documentCount": "{count} 文書",
-  "knowledgeBasePicker.noMatch": "「{query}」に一致する知識ベースがありません。",
-  "knowledgeBasePicker.addPlaceholder": "知識ベースを検索して追加…",
-  "knowledgeBasePicker.toggleListAria": "知識ベースの一覧を開閉",
+  "knowledgeBasePicker.noMatch": "「{query}」に一致するナレッジベースがありません。",
+  "knowledgeBasePicker.addPlaceholder": "ナレッジベースを検索して追加…",
+  "knowledgeBasePicker.toggleListAria": "ナレッジベースの一覧を開閉",
   "knowledgeBasePicker.removeChip": "{name} を選択から外す",
   "knowledgeBasePicker.hideEmpty": "空のKBを隠す",
-  "knowledgeBasePicker.hiddenEmptyCount": "空の知識ベース {count} 件を非表示中",
+  "knowledgeBasePicker.hiddenEmptyCount": "空のナレッジベース {count} 件を非表示中",
   "knowledgeBasePicker.mostDocs": "最多",
   "knowledgeBasePicker.selectedCount": "{count} 件選択中",
-  "knowledgeBasePicker.emptyList": "知識ベースがありません。",
+  "knowledgeBasePicker.emptyList": "ナレッジベースがありません。",
   "knowledgeBasePicker.loadMore": "さらに表示",
-  "knowledgeBasePicker.searching": "知識ベースを検索しています…",
+  "knowledgeBasePicker.searching": "ナレッジベースを検索しています…",
   "knowledgeBasePicker.archivedBadge": "アーカイブ済み",
   "knowledgeBasePicker.missingBadge": "見つかりません",
-  "knowledgeBasePicker.missingName": "不明な知識ベース（{id}）",
+  "knowledgeBasePicker.missingName": "不明なナレッジベース（{id}）",
 
   "upload.subtitle": "検索対象にするドキュメントをアップロードします。",
   "upload.dropzone":
@@ -1789,25 +1789,25 @@ export const ja = {
   "upload.storageNotice.title": "現在の保存先",
   "upload.storageNotice.settings": "保存先設定",
   "upload.storageNotice.unset": "未設定",
-  "upload.knowledgeBases.title": "所属させる知識ベース",
-  "upload.knowledgeBases.aria": "アップロード先の知識ベース",
-  "upload.knowledgeBases.loading": "知識ベースを読み込んでいます。",
-  "upload.knowledgeBases.loadWarning": "知識ベース一覧を取得できませんでした。",
+  "upload.knowledgeBases.title": "所属させるナレッジベース",
+  "upload.knowledgeBases.aria": "アップロード先のナレッジベース",
+  "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます。",
+  "upload.knowledgeBases.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "upload.knowledgeBases.loadWarningHint":
     "未選択のままアップロードすると、DEFAULT へ登録されます。",
   "upload.knowledgeBases.documentCount": "{count} 文書",
   "upload.knowledgeBases.emptyHint":
-    "まだ知識ベースがありません。未選択のままアップロードすると DEFAULT へ登録されます。",
-  "upload.knowledgeBases.manage": "知識ベース管理",
-  "upload.knowledgeBases.selected": "{count} 件の知識ベースへ登録します。",
+    "まだナレッジベースがありません。未選択のままアップロードすると DEFAULT へ登録されます。",
+  "upload.knowledgeBases.manage": "ナレッジベース管理",
+  "upload.knowledgeBases.selected": "{count} 件のナレッジベースへ登録します。",
   "upload.knowledgeBases.defaultHint": "未選択の場合は DEFAULT へ登録します。",
-  "upload.knowledgeBases.requiredHint": "登録先の知識ベースを 1 件以上選択してください。",
+  "upload.knowledgeBases.requiredHint": "登録先のナレッジベースを 1 件以上選択してください。",
   "upload.knowledgeBases.requiredError":
-    "アップロードする前に、登録先の知識ベースを 1 件以上選択してください。",
+    "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。",
   "upload.knowledgeBases.emptyRestrictedHint":
-    "登録先にできる知識ベースがありません。管理者に知識ベースの利用権限を依頼してください。",
+    "登録先にできるナレッジベースがありません。管理者にナレッジベースの利用権限を依頼してください。",
   "upload.knowledgeBases.loadWarningRequiredHint":
-    "登録先の知識ベースを選択できないため、アップロードできません。再読み込みしてください。",
+    "登録先のナレッジベースを選択できないため、アップロードできません。再読み込みしてください。",
   "upload.knowledgeBases.reload": "再読み込み",
 
   "sourceProfile.title": "原本の処理情報",
@@ -2311,18 +2311,18 @@ export const ja = {
 
   "workspace.notFound": "ドキュメントが見つかりません。",
   "workspace.back": "一覧へ戻る",
-  "documents.knowledgeBases.title": "所属知識ベース",
+  "documents.knowledgeBases.title": "所属ナレッジベース",
   "documents.knowledgeBases.description":
-    "この文書をどの知識ベースの検索対象に含めるかを管理します。",
+    "この文書をどのナレッジベースの検索対象に含めるかを管理します。",
   "documents.knowledgeBases.pickerLabel": "所属先",
   "documents.knowledgeBases.helper":
-    "文書は 1 件以上の有効な知識ベースに所属させてください。",
+    "文書は 1 件以上の有効なナレッジベースに所属させてください。",
   "documents.knowledgeBases.noneSelected": "所属先が未選択です。",
-  "documents.knowledgeBases.required": "1 件以上の知識ベースを選択してください。",
+  "documents.knowledgeBases.required": "1 件以上のナレッジベースを選択してください。",
   "documents.knowledgeBases.save": "所属先を保存",
-  "documents.knowledgeBases.saved": "所属知識ベースを保存しました。",
+  "documents.knowledgeBases.saved": "所属ナレッジベースを保存しました。",
   "documents.knowledgeBases.saveError":
-    "所属知識ベースの保存に失敗しました。状態を確認して再試行してください。",
+    "所属ナレッジベースの保存に失敗しました。状態を確認して再試行してください。",
   "documents.classification.title": "文書の分類と有効期間",
   "documents.classification.description":
     "RAG 検索の「文書の分類」で絞り込むときに使います。有効期間外の文書は、基準日（未指定なら今日）の検索に出ません。",
@@ -2335,7 +2335,7 @@ export const ja = {
   "documents.classification.save": "分類を保存",
   "documents.classification.saved": "分類と有効期間を保存しました。",
   "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
-  "documents.knowledgeBases.loadWarning": "現在の所属知識ベースを取得できませんでした。",
+  "documents.knowledgeBases.loadWarning": "現在の所属ナレッジベースを取得できませんでした。",
   "documents.knowledgeBases.loadWarningHint":
     "文書詳細に含まれる所属情報を表示しています。保存前に接続状態を確認してください。",
 
@@ -2450,7 +2450,7 @@ export const ja = {
   "search.filters.appliedContentKind": "内容種別: {value}",
   "search.filters.appliedSectionTitle": "見出し名: {value}",
   "search.filters.appliedSectionPath": "見出しの階層: {value}",
-  "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象を知識ベース単位で絞り込みます。",
+  "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象をナレッジベース単位で絞り込みます。",
   "search.filters.clear": "クリア",
   "search.tuning.topK": "候補取得数",
   "search.tuning.topKHelp": "大きいほど見つけやすく、遅くなります。",
@@ -2794,7 +2794,7 @@ export const ja = {
   "search.initialHint": "質問を入力すると、根拠付きで回答します。",
   "search.businessViewRequired.title": "業務ビューを作成してください",
   "search.businessViewRequired.hint":
-    "RAG 検索は業務ビュー単位で行います。知識ベースを束ねた業務ビューを作成すると検索できます。",
+    "RAG 検索は業務ビュー単位で行います。ナレッジベースを束ねた業務ビューを作成すると検索できます。",
   "search.businessViewRequired.cta": "業務ビューを作成",
   "search.businessViewError": "業務ビューを読み込めませんでした。",
   "search.businessViewLoading": "業務ビューを読み込んでいます。",
@@ -2938,7 +2938,7 @@ export const ja = {
   "evaluation.compare.title": "設定比較",
   "evaluation.compare.description": "同じ cases を複数の検索設定で比較します。",
   "evaluation.knowledgeBaseScope.helper":
-    "選択した知識ベースを評価実行と比較実行の検索対象にします。未選択の場合は JSON の指定を使います。",
+    "選択したナレッジベースを評価実行と比較実行の検索対象にします。未選択の場合は JSON の指定を使います。",
   "evaluation.compare.experiments": "Experiments JSON",
   "evaluation.compare.placeholder":
     "[{\"id\":\"hybrid-structure\",\"top_k\":20,\"rerank_top_n\":8,\"mode\":\"hybrid\",\"filters\":{\"status\":\"INDEXED\"},\"rag_overrides\":{\"rrf_k\":30,\"context_diversity_lambda\":0.4,\"context_adaptive_expansion_enabled\":true,\"context_adaptive_neighbor_window\":1,\"context_adaptive_min_overlap\":0.08,\"context_dependency_promotion_enabled\":true,\"context_dependency_max_chunks\":2,\"context_group_expansion_enabled\":true,\"context_group_max_chunks\":2}},{\"id\":\"keyword-k10\",\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"keyword\",\"filters\":{\"status\":\"INDEXED\"}}]",

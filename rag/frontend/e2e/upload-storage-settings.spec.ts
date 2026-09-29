@@ -108,7 +108,7 @@ test("アップロード画面から現在の保存先と設定導線を確認�
   await page.goto("/upload");
 
   await expect(page.getByText("現在の保存先")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "所属させる知識ベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "所属させるナレッジベース" })).toBeVisible();
   await expect(page.getByText("PDF・画像・テキスト・HTML・メール・Office")).toBeVisible();
   await expect(page.getByText("最大 200 MB")).toBeVisible();
   await expect(page.getByText("音声は保存のみで取込はスキップされます。")).toBeVisible();
@@ -124,7 +124,7 @@ test("アップロード画面から現在の保存先と設定導線を確認�
   await expect(page).toHaveURL(/\/settings\/upload-storage$/);
 });
 
-test("アップロード時に選択した知識ベースへ所属できる", async ({ page }) => {
+test("アップロード時に選択したナレッジベースへ所属できる", async ({ page }) => {
   let uploadBody = "";
   await mockUploadStorageSettings(page, () => localStorageSettings);
   await mockKnowledgeBases(page);
@@ -135,11 +135,11 @@ test("アップロード時に選択した知識ベースへ所属できる", as
 
   await page.goto("/upload");
 
-  const kbCombo = page.getByRole("combobox", { name: "アップロード先の知識ベース" });
+  const kbCombo = page.getByRole("combobox", { name: "アップロード先のナレッジベース" });
   await kbCombo.click();
   await page.getByRole("option", { name: /社内規程/ }).click();
   await kbCombo.press("Escape");
-  await expect(page.getByText("1 件の知識ベースへ登録します。")).toBeVisible();
+  await expect(page.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({
     name: "upload.txt",
     mimeType: "text/plain",

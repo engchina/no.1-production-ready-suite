@@ -19,7 +19,7 @@ export type KnowledgeBasePickerItem = Pick<
 > & { missing?: boolean };
 
 /**
- * 知識ベースの複数選択コンボボックス。
+ * ナレッジベースの複数選択コンボボックス。
  *
  * 選択済みチップ + 検索付きリストの共通 UI を使い、アップロード/検索/評価/業務ビュー
  * で同じ操作感に揃える。

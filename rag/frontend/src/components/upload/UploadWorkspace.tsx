@@ -633,7 +633,7 @@ function UploadKnowledgeBasePicker({
   required: boolean;
   /** 必須なのに未選択のままファイルを選んだ。 */
   missing: boolean;
-  /** 知識ベース管理の画面を開けるか（開けない利用者には導線を出さない）。 */
+  /** ナレッジベース管理の画面を開けるか（開けない利用者には導線を出さない）。 */
   canManageKnowledgeBases: boolean;
 }) {
   // 先頭のページだけだと 51 件目以降の KB を選べないため、ACTIVE をすべて取得する（#280）。

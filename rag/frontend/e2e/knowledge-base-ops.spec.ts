@@ -32,7 +32,7 @@ test("業務ビューの一覧は、参照 KB にアーカイブ済み・見つ�
   await page.goto("/business-views");
 
   await expect(
-    page.getByText("参照する知識ベースにアーカイブ済み・見つからないものがある業務ビューがあります")
+    page.getByText("参照するナレッジベースにアーカイブ済み・見つからないものがある業務ビューがあります")
   ).toBeVisible();
   const issueRow = page.getByTestId("business-view-row-bv-1");
   await expect(issueRow.getByText("要確認")).toBeVisible();
@@ -57,18 +57,18 @@ test("業務ビューの編集画面は、検索されない参照 KB を名前�
   await page.goto("/business-views?id=bv-1");
 
   const banner = page.getByTestId("business-view-kb-issues");
-  await expect(page.getByText("参照する知識ベースの一部が検索対象になっていません")).toBeVisible();
+  await expect(page.getByText("参照するナレッジベースの一部が検索対象になっていません")).toBeVisible();
   await expect(banner.getByText("アーカイブ済み（1 件）: 旧規程")).toBeVisible();
   await expect(banner.getByText(/見つからない（1 件。.*）: kb-gone/)).toBeVisible();
   // チップにも状態を文字で添える（色だけに頼らない）。
   const archivedChip = page.getByLabel("旧規程 を選択から外す").locator("..");
   await expect(archivedChip).toContainText("アーカイブ済み");
-  const missingChip = page.getByLabel("不明な知識ベース（kb-gone） を選択から外す").locator("..");
+  const missingChip = page.getByLabel("不明なナレッジベース（kb-gone） を選択から外す").locator("..");
   await expect(missingChip).toContainText("見つかりません");
   await expectNoPageOverflow(page);
 
   await page.getByLabel("旧規程 を選択から外す").click();
-  await page.getByLabel("不明な知識ベース（kb-gone） を選択から外す").click();
+  await page.getByLabel("不明なナレッジベース（kb-gone） を選択から外す").click();
   await expect(page.getByTestId("business-view-kb-issues")).toHaveCount(0);
 
   await page.getByRole("button", { name: "保存する" }).click();
@@ -85,12 +85,12 @@ test("参照 KB がすべて検索されない業務ビューは、結果が 0 �
 
   await expect(
     page.getByText(
-      "参照するすべての知識ベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。"
+      "参照するすべてのナレッジベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。"
     )
   ).toBeVisible();
 });
 
-test("知識ベースの詳細から名前と説明を編集でき、同名は名前の欄に理由を出す", async ({ page }) => {
+test("ナレッジベースの詳細から名前と説明を編集でき、同名は名前の欄に理由を出す", async ({ page }) => {
   const knowledgeBases = defaultKnowledgeBases();
   const patches: Record<string, unknown>[] = [];
   await mockKnowledgeBases(page, knowledgeBases, patches);
@@ -120,7 +120,7 @@ test("知識ベースの詳細から名前と説明を編集でき、同名は�
   await form.getByLabel("説明").fill("人事・経費の規程");
   await form.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("知識ベースを更新しました。")).toBeVisible();
+  await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
   await expect(page.getByRole("heading", { name: "就業規則", level: 1 })).toBeVisible();
   await expect(page.getByText("人事・経費の規程")).toBeVisible();
   expect(patches.at(-1)).toEqual({ name: "就業規則", description: "人事・経費の規程" });
@@ -142,11 +142,11 @@ test("DEFAULT は名前を変えられず、説明だけを保存する", async 
   await form.getByLabel("説明").fill("未分類の文書");
   await form.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("知識ベースを更新しました。")).toBeVisible();
+  await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
   expect(patches.at(-1)).toEqual({ description: "未分類の文書" });
 });
 
-test("アーカイブ済みの知識ベースには編集を出さない", async ({ page }) => {
+test("アーカイブ済みのナレッジベースには編集を出さない", async ({ page }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   await mockDocuments(page);
 

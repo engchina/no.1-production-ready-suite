@@ -45,7 +45,7 @@ test("文書インデックスは DB 停止時も空状態 + 縮退バナーで�
   await expect(settingsLink).toHaveAttribute("href", "/settings/database#adb-management");
 });
 
-test("知識ベース管理は DB 停止時も作成フォーム + 縮退バナーで開ける", async ({ page }) => {
+test("ナレッジベース管理は DB 停止時も作成フォーム + 縮退バナーで開ける", async ({ page }) => {
   await routeDegraded(page);
   await page.goto("/knowledge-bases");
 

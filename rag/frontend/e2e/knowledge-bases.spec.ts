@@ -39,14 +39,14 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("知識ベース管理で作成、文書追加、文書解除、アーカイブができる", async ({ page }) => {
+test("ナレッジベース管理で作成、文書追加、文書解除、アーカイブができる", async ({ page }) => {
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
 
   await page.goto("/knowledge-bases");
 
   // 一覧は list 専用(行は詳細ページへのリンク)。文書管理は詳細ページへ移設済み。
-  await expect(page.getByRole("heading", { name: "ナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "社内規程" })).toBeVisible();
   await expectNoPageOverflow(page);
 
@@ -65,7 +65,7 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
   await page.getByRole("option", { name: "guide.txt" }).click();
   await page.getByRole("button", { name: "追加" }).click();
 
-  await expect(page.getByText("文書を知識ベースに追加しました。").first()).toBeVisible();
+  await expect(page.getByText("文書をナレッジベースに追加しました。").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
 
   // 詳細ページで文書を外す。
@@ -76,7 +76,7 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
   await expect(removeDialog).toBeVisible();
   await removeDialog.getByRole("button", { name: "外す" }).click();
 
-  await expect(page.getByText("文書を知識ベースから外しました。").first()).toBeVisible();
+  await expect(page.getByText("文書をナレッジベースから外しました。").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "guide.txt" })).toHaveCount(0);
 
   // 一覧へ戻ってアーカイブする。
@@ -84,11 +84,11 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
   const createdRow = page.locator("tr").filter({ hasText: "設計資料" });
   await createdRow.getByRole("button", { name: "設計資料 の操作" }).click();
   await page.getByRole("menuitem", { name: "アーカイブ" }).click();
-  const archiveDialog = page.getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" });
+  const archiveDialog = page.getByRole("alertdialog", { name: "ナレッジベースをアーカイブしますか？" });
   await expect(archiveDialog).toBeVisible();
   await archiveDialog.getByRole("button", { name: "アーカイブ" }).click();
 
-  await expect(page.getByText("知識ベースをアーカイブしました。").first()).toBeVisible();
+  await expect(page.getByText("ナレッジベースをアーカイブしました。").first()).toBeVisible();
   // 既定 ACTIVE フィルタなので、アーカイブ済みは一覧から消える。
   await expect(page.getByRole("link", { name: "設計資料" })).toHaveCount(0);
   await expectNoPageOverflow(page);
@@ -122,7 +122,7 @@ for (const viewport of [
 
     await more.click();
     await page.getByRole("menuitem", { name: "アーカイブ" }).click();
-    const dialog = page.getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" });
+    const dialog = page.getByRole("alertdialog", { name: "ナレッジベースをアーカイブしますか？" });
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "キャンセル" }).click();
     expect(state.knowledgeBases[0].status).toBe("ACTIVE");
@@ -130,7 +130,7 @@ for (const viewport of [
     await more.click();
     await page.getByRole("menuitem", { name: "アーカイブ" }).click();
     await dialog.getByRole("button", { name: "アーカイブ" }).click();
-    await expect(page.getByText("知識ベースをアーカイブしました。").first()).toBeVisible();
+    await expect(page.getByText("ナレッジベースをアーカイブしました。").first()).toBeVisible();
     expect(state.knowledgeBases[0].status).toBe("ARCHIVED");
     // アーカイブ済みには出せる操作がないため、操作のバーごと消える。
     await expect(bar).toHaveCount(0);
@@ -145,7 +145,7 @@ test("狭い画面幅(375px)でもページ全体が横スクロール(崩れ)�
   await page.setViewportSize({ width: 375, height: 800 });
   await page.goto("/knowledge-bases");
 
-  await expect(page.getByRole("heading", { name: "ナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "社内規程" })).toBeVisible();
   // documentElement と main の双方で横はみ出し(崩れ)が無いこと。
   // テーブルの min-width はテーブル内の overflow-x-auto に閉じ込める前提。
@@ -522,12 +522,12 @@ test("最後のページの KB をアーカイブすると、空の案内では�
   await lastRow.getByRole("button", { name: `${name} の操作` }).click();
   await page.getByRole("menuitem", { name: "アーカイブ" }).click();
   await page
-    .getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" })
+    .getByRole("alertdialog", { name: "ナレッジベースをアーカイブしますか？" })
     .getByRole("button", { name: "アーカイブ" })
     .click();
 
   await expect(page.locator("tbody tr")).toHaveCount(10);
-  await expect(page.getByText("知識ベースがありません。")).toHaveCount(0);
+  await expect(page.getByText("ナレッジベースがありません。")).toHaveCount(0);
   await expect(pagination).toContainText("11 - 20 / 20 件");
 });
 

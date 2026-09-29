@@ -11,13 +11,13 @@ import {
 // 文書アップロードのレビューで直した点（#280）。
 // - 一括アップロードは 1 リクエストの合計を 1 ファイルの上限以内に分けて送り、上限超過は送らない
 // - 送信中は経過時間付きで示し、KB 一覧の読み込み中は Skeleton で領域を確保する
-// - 設定・知識ベース管理を開けない利用者には導線を出さない
+// - 設定・ナレッジベース管理を開けない利用者には導線を出さない
 // - 先頭ページ（50 件）を超える KB も選べる
 
 function knowledgeBase(index: number) {
   return {
     id: `kb-${index}`,
-    name: `知識ベース ${String(index).padStart(3, "0")}`,
+    name: `ナレッジベース ${String(index).padStart(3, "0")}`,
     description: null,
     status: "ACTIVE",
     default_search_mode: "hybrid",
@@ -255,11 +255,11 @@ test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleto
   await page.goto("/upload");
   const loading = page.getByTestId("upload-knowledge-base-loading");
   await expect(loading).toBeVisible();
-  await expect(loading.getByText("知識ベースを読み込んでいます。").first()).toBeVisible();
+  await expect(loading.getByText("ナレッジベースを読み込んでいます。").first()).toBeVisible();
   await expect(loading.getByRole("timer")).toBeVisible();
   releaseKnowledgeBases();
   await expect(loading).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "アップロード先の知識ベース" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "アップロード先のナレッジベース" })).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   const processing = page.getByTestId("upload-processing");
@@ -293,47 +293,47 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   await page.goto("/upload");
   const picker = page.getByTestId("upload-knowledge-base-picker");
   // TanStack Query の既定の再試行（3 回）を終えてから失敗を表示する。
-  await expect(picker.getByText("知識ベース一覧を取得できませんでした。")).toBeVisible({ timeout: 15_000 });
+  await expect(picker.getByText("ナレッジベース一覧を取得できませんでした。")).toBeVisible({ timeout: 15_000 });
   // 必須の利用者がファイルを選んでも黙って何も起きないのではなく、案内を出す。
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   await expect(
-    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先の知識ベースを 1 件以上選択してください。" })
+    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
   failing = false;
   await picker.getByRole("button", { name: "再読み込み" }).click();
-  await expect(page.getByRole("combobox", { name: "アップロード先の知識ベース" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "アップロード先のナレッジベース" })).toBeVisible();
 });
 
-test("アップロードだけを許可された利用者には、設定と知識ベース管理への導線を出さない", async ({ page }) => {
+test("アップロードだけを許可された利用者には、設定とナレッジベース管理への導線を出さない", async ({ page }) => {
   await mockAuthUser(page, { permissions: ["menu.upload"], allowed_knowledge_base_ids: null });
   await mockUploadPage(page, { knowledgeBaseCount: 0 });
 
   await page.goto("/upload");
   await expect(page.getByText("現在の保存先")).toBeVisible();
-  await expect(page.getByText("まだ知識ベースがありません。", { exact: false })).toBeVisible();
+  await expect(page.getByText("まだナレッジベースがありません。", { exact: false })).toBeVisible();
   await expect(page.getByRole("link", { name: "保存先設定" })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "知識ベース管理" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "ナレッジベース管理" })).toHaveCount(0);
 });
 
-test("管理者には保存先設定と知識ベース管理への導線を出す", async ({ page }) => {
+test("管理者には保存先設定とナレッジベース管理への導線を出す", async ({ page }) => {
   await mockLocalAuth(page);
   await mockUploadPage(page, { knowledgeBaseCount: 0 });
 
   await page.goto("/upload");
   await expect(page.getByRole("link", { name: "保存先設定" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "知識ベース管理" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "ナレッジベース管理" })).toBeVisible();
 });
 
-test("先頭ページ（50 件）を超える知識ベースも選べる", async ({ page }) => {
+test("先頭ページ（50 件）を超えるナレッジベースも選べる", async ({ page }) => {
   await mockLocalAuth(page);
   await mockUploadPage(page, { knowledgeBaseCount: 230 });
 
   await page.goto("/upload");
-  const combobox = page.getByRole("combobox", { name: "アップロード先の知識ベース" });
+  const combobox = page.getByRole("combobox", { name: "アップロード先のナレッジベース" });
   await combobox.click();
-  await combobox.fill("知識ベース 230");
+  await combobox.fill("ナレッジベース 230");
   await expect(
-    page.getByRole("listbox", { name: "アップロード先の知識ベース" }).getByRole("option", { name: /知識ベース 230/ })
+    page.getByRole("listbox", { name: "アップロード先のナレッジベース" }).getByRole("option", { name: /ナレッジベース 230/ })
   ).toBeVisible();
 });
 

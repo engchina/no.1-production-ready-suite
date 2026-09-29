@@ -84,21 +84,21 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await page.goto("/upload");
   const picker = page.getByTestId("upload-knowledge-base-picker");
   await expect(picker.getByText("必須")).toBeVisible();
-  await expect(picker.getByText("登録先の知識ベースを 1 件以上選択してください。")).toBeVisible();
+  await expect(picker.getByText("登録先のナレッジベースを 1 件以上選択してください。")).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(uploadFile());
   await expect(
-    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先の知識ベースを 1 件以上選択してください。" })
+    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
   expect(uploads).toHaveLength(0);
   await expectNoPageOverflow(page);
 
   // KB を選ぶと案内が消え、選んだ KB を付けて送る。
-  await page.getByRole("combobox", { name: "アップロード先の知識ベース" }).click();
-  await page.getByRole("listbox", { name: "アップロード先の知識ベース" }).getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "アップロード先のナレッジベース" }).click();
+  await page.getByRole("listbox", { name: "アップロード先のナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
   await page.keyboard.press("Escape");
   await expect(picker.getByRole("alert")).toHaveCount(0);
-  await expect(picker.getByText("1 件の知識ベースへ登録します。")).toBeVisible();
+  await expect(picker.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(uploadFile());
   await expect.poll(() => uploads.length).toBe(1);
