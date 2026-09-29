@@ -700,28 +700,6 @@ class OracleClient:
             retrieval_config=dict(retrieval_config or {}),
         )
 
-    async def ensure_default_knowledge_base(
-        self,
-        *,
-        name: str = DEFAULT_KNOWLEDGE_BASE_NAME,
-    ) -> KnowledgeBaseDetail:
-        """tenant ごとの DEFAULT ナレッジベースを取得または作成する。
-
-        利用者の KB 範囲で探すと範囲外の DEFAULT を重複作成するため、範囲を外して探す（#214）。
-        """
-        with unrestricted_access_scope():
-            existing = await self._find_knowledge_base_by_name_with_oracle(name)
-            if existing is not None:
-                return existing
-            try:
-                return await self.create_knowledge_base(name=name)
-            except KnowledgeBaseNameConflictError:
-                # 同時に作成された DEFAULT を使う。
-                existing = await self._find_knowledge_base_by_name_with_oracle(name)
-                if existing is None:
-                    raise
-                return existing
-
     async def list_knowledge_bases(
         self,
         *,
@@ -1332,113 +1310,6 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def upsert_document_extraction(
-        self,
-        *,
-        extraction_id: str,
-        document_id: str,
-        extraction: StructuredExtraction,
-        recipe_subset: Mapping[str, object] | None = None,
-        quality: Mapping[str, object] | None = None,
-        status: str = "EXTRACTED",
-    ) -> None:
-        """旧 API 互換: extraction_id を extraction_recipe_id として保存する。"""
-        tenant = current_audit_request_context().tenant_id_hash
-        normalized_status = _legacy_extraction_status(status)
-        binds = {
-            "extraction_recipe_id": extraction_id,
-            "document_id": document_id,
-            "tenant_id_hash": tenant,
-            "recipe_subset": _json_bind(recipe_subset),
-            "extraction_json": _json_bind(extraction.to_document_payload()),
-            "metrics_json": _json_bind(quality),
-            "status": normalized_status,
-        }
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                MERGE INTO rag_document_extractions t
-                USING (
-                    SELECT :document_id AS document_id,
-                           :extraction_recipe_id AS extraction_recipe_id
-                    FROM dual
-                ) s
-                ON (t.document_id = s.document_id
-                    AND t.extraction_recipe_id = s.extraction_recipe_id)
-                WHEN MATCHED THEN UPDATE SET
-                    t.extraction_json = :extraction_json,
-                    t.recipe_subset = :recipe_subset,
-                    t.metrics_json = :metrics_json,
-                    t.status = :status,
-                    t.updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN INSERT
-                    (document_id, extraction_recipe_id, tenant_id_hash, recipe_subset,
-                     extraction_json, metrics_json, status)
-                    VALUES (:document_id, :extraction_recipe_id, :tenant_id_hash, :recipe_subset,
-                            :extraction_json, :metrics_json, :status)
-                """,
-                binds,
-                input_sizes=_json_input_sizes(
-                    "recipe_subset",
-                    "extraction_json",
-                    "metrics_json",
-                ),
-            )
-
-        await self._run_transaction(operation)
-
-    async def get_document_extraction(self, extraction_id: str) -> dict[str, object] | None:
-        """抽出 1 件(status / recipe_subset / extraction payload)を返す。無ければ None。"""
-        row = await self._fetch_one(
-            """
-            SELECT extraction_recipe_id AS extraction_id,
-                   document_id,
-                   status,
-                   recipe_subset,
-                   extraction_json
-            FROM rag_document_extractions
-            WHERE extraction_recipe_id = :extraction_id
-            """,
-            {"extraction_id": extraction_id},
-        )
-        if row is None:
-            return None
-        return {str(key).lower(): value for key, value in row.items()}
-
-    async def list_document_extraction_ids(self, document_id: str) -> list[str]:
-        """文書が持つ extraction_id 一覧(diff/GC 入力)。"""
-        rows = await self._fetch_all(
-            """
-            SELECT extraction_recipe_id
-            FROM rag_document_extractions
-            WHERE document_id = :document_id
-            """,
-            {"document_id": document_id},
-        )
-        return [str(next(iter(row.values()))) for row in rows]
-
-    async def mark_document_extraction(self, *, extraction_id: str, status: str) -> None:
-        """抽出の status(EXTRACTING/EXTRACTED/ERROR)を更新する。"""
-        binds = {
-            "extraction_id": extraction_id,
-            "status": _legacy_extraction_status(status),
-        }
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                UPDATE rag_document_extractions
-                SET status = :status, updated_at = SYSTIMESTAMP
-                WHERE extraction_recipe_id = :extraction_id
-                """,
-                binds,
-            )
-
-        await self._run_transaction(operation)
-
     async def delete_document_extractions_except(
         self, *, document_id: str, keep_extraction_ids: Sequence[str]
     ) -> list[str]:
@@ -1846,14 +1717,6 @@ class OracleClient:
             )
             for row in rows
         ]
-
-    async def list_document_chunk_set_ids(self, document_id: str) -> list[str]:
-        """文書が持つ chunk_set id 一覧(planner の既存状態 = diff_plan 入力)。"""
-        rows = await self._fetch_all(
-            "SELECT chunk_set_id FROM rag_chunk_sets WHERE document_id = :document_id",
-            {"document_id": document_id},
-        )
-        return [str(next(iter(row.values()))) for row in rows]
 
     async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
         """文書の配信中(is_serving=1)chunk_set id を返す。無ければ None。
@@ -3484,28 +3347,6 @@ class OracleClient:
             limit=limit, exclude_job_ids=exclude_job_ids
         )
 
-    async def update_ingestion_job(
-        self,
-        job_id: str,
-        *,
-        status: IngestionJobStatus | None = None,
-        error_message: str | None = None,
-        attempt_count: int | None = None,
-        max_attempts: int | None = None,
-        started_at: datetime | None = None,
-        finished_at: datetime | None = None,
-    ) -> IngestionJob | None:
-        """取込 job の状態を更新する。"""
-        return await self._update_ingestion_job_with_oracle(
-            job_id,
-            status=status,
-            error_message=error_message,
-            attempt_count=attempt_count,
-            max_attempts=max_attempts,
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-
     async def transition_ingestion_job(
         self,
         job_id: str,
@@ -3848,19 +3689,6 @@ class OracleClient:
     ) -> DocumentDetail:
         """VLM/LLM の抽出本文を保存する。"""
         return await self._save_extraction_with_oracle(document_id, extraction)
-
-    async def save_chunks(
-        self,
-        document_id: str,
-        chunks: list[Chunk],
-        embeddings: list[list[float]],
-    ) -> list[RetrievedChunk]:
-        """チャンクとベクトルを保存する。"""
-        if len(chunks) != len(embeddings):
-            raise ValueError("chunks と embeddings の件数が一致しません。")
-        for index, embedding in enumerate(embeddings):
-            self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
-        return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
 
     async def save_index(
         self,
@@ -5567,45 +5395,6 @@ class OracleClient:
             return _to_knowledge_base_detail(knowledge_base)
 
         return await self._run_transaction(operation)
-
-    async def _find_knowledge_base_by_name_with_oracle(
-        self,
-        name: str,
-    ) -> KnowledgeBaseDetail | None:
-        """tenant 内のナレッジベースを名前で探す。"""
-        where_sql, binds = _oracle_knowledge_base_where(query=None)
-        binds["knowledge_base_name"] = name.casefold()
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT
-                kb.knowledge_base_id,
-                kb.tenant_id_hash,
-                kb.name,
-                kb.description,
-                kb.status,
-                kb.default_search_mode,
-                kb.retrieval_config,
-                kb.created_at,
-                kb.updated_at,
-                kb.archived_at,
-                0 AS document_count,
-                0 AS indexed_document_count,
-                0 AS error_document_count,
-                0 AS searchable_chunk_count
-            FROM rag_knowledge_bases kb
-            WHERE {where_sql}
-              AND LOWER(kb.name) = :knowledge_base_name
-            ORDER BY kb.created_at ASC
-            FETCH FIRST 1 ROWS ONLY
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        if not rows:
-            return None
-        return _to_knowledge_base_detail(_stored_knowledge_base_from_row(rows[0]))
 
     async def _list_knowledge_bases_with_oracle(
         self,
@@ -7553,119 +7342,6 @@ class OracleClient:
         )
         return [_ingestion_job_from_row(row) for row in rows]
 
-    async def _update_ingestion_job_with_oracle(
-        self,
-        job_id: str,
-        *,
-        status: IngestionJobStatus | None,
-        error_message: str | None,
-        attempt_count: int | None,
-        max_attempts: int | None,
-        started_at: datetime | None,
-        finished_at: datetime | None,
-    ) -> IngestionJob | None:
-        """Oracle ingestion job table の状態を更新する。"""
-        updates: dict[str, object] = {}
-        if status is not None:
-            updates["status"] = status.value
-        if error_message is not None:
-            updates["error_message"] = error_message
-        if attempt_count is not None:
-            updates["attempt_count"] = attempt_count
-        if max_attempts is not None:
-            updates["max_attempts"] = max_attempts
-        if started_at is not None:
-            updates["started_at"] = started_at
-        if finished_at is not None:
-            updates["finished_at"] = finished_at
-        if not updates:
-            return await self.get_ingestion_job(job_id)
-        set_sql = ", ".join(f"{column} = :{column}" for column in updates)
-        binds = {"job_id": job_id, **updates}
-
-        def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
-            update_sql = _render_sql(
-                """
-            UPDATE rag_ingestion_jobs
-            SET {set_sql}
-            WHERE job_id = :job_id
-              AND EXISTS (
-                  SELECT 1
-                  FROM rag_documents d
-                  WHERE d.document_id = rag_ingestion_jobs.document_id
-                    AND {document_access_sql}
-              )
-            """,
-                set_sql=set_sql,
-                document_access_sql=_oracle_access_predicate_sql(alias="d"),
-            )
-            try:
-                _execute(connection, update_sql, _with_tenant_bind(binds))
-            except Exception as exc:
-                is_missing_max_attempts = _is_missing_ingestion_job_max_attempts_error(exc)
-                if "max_attempts" not in updates or not is_missing_max_attempts:
-                    raise
-                legacy_updates = {
-                    column: value for column, value in updates.items() if column != "max_attempts"
-                }
-                if legacy_updates:
-                    legacy_set_sql = ", ".join(f"{column} = :{column}" for column in legacy_updates)
-                    legacy_binds = {"job_id": job_id, **legacy_updates}
-                    _execute(
-                        connection,
-                        _render_sql(
-                            """
-                        UPDATE rag_ingestion_jobs
-                        SET {set_sql}
-                        WHERE job_id = :job_id
-                          AND EXISTS (
-                              SELECT 1
-                              FROM rag_documents d
-                              WHERE d.document_id = rag_ingestion_jobs.document_id
-                                AND {document_access_sql}
-                          )
-                        """,
-                            set_sql=legacy_set_sql,
-                            document_access_sql=_oracle_access_predicate_sql(alias="d"),
-                        ),
-                        _with_tenant_bind(legacy_binds),
-                    )
-            rows = _fetch_ingestion_job_rows(
-                connection,
-                _render_sql(
-                    """
-                SELECT
-                    j.job_id,
-                    j.document_id,
-                    j.recipe_id,
-                    j.recipe_revision,
-                    j.status,
-                    j.phase,
-                    j.parser_profile,
-                    j.quality_warnings,
-                    j.settings_overrides,
-                    j.skip_reason,
-                    j.error_message,
-                    j.attempt_count,
-                    j.max_attempts,
-                    j.queued_at,
-                    j.started_at,
-                    j.finished_at
-                FROM rag_ingestion_jobs j
-                JOIN rag_documents d
-                  ON d.document_id = j.document_id
-                WHERE j.job_id = :job_id
-                  AND {document_access_sql}
-                """,
-                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"job_id": job_id}),
-                default_max_attempts=self._settings.ingestion_job_max_attempts,
-            )
-            return None if not rows else _ingestion_job_from_row(rows[0])
-
-        return await self._run_transaction(operation)
-
     async def _transition_ingestion_job_with_oracle(
         self,
         job_id: str,
@@ -8732,57 +8408,6 @@ class OracleClient:
             )
             for row in rows
         ]
-
-    async def _save_chunks_with_oracle(
-        self,
-        document_id: str,
-        chunks: list[Chunk],
-        embeddings: list[list[float]],
-    ) -> list[RetrievedChunk]:
-        """Oracle chunk/vector table へ chunk と embedding を保存する。"""
-
-        def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
-            document = _select_document_state(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunks
-                WHERE document_id = :document_id
-                """,
-                {"document_id": document_id},
-            )
-            rows = self._chunk_insert_rows(document_id, document, chunks, embeddings)
-            if rows:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_chunks (
-                        chunk_id,
-                        document_id,
-                        tenant_id_hash,
-                        chunk_index,
-                        chunk_text,
-                        search_text,
-                        metadata_json,
-                        embedding
-                    ) VALUES (
-                        :chunk_id,
-                        :document_id,
-                        :tenant_id_hash,
-                        :chunk_index,
-                        :chunk_text,
-                        :search_text,
-                        :metadata_json,
-                        :embedding
-                    )
-                    """,
-                    rows,
-                )
-            return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
-
-        return await self._run_transaction(operation)
 
     async def _save_index_with_oracle(
         self,
@@ -12385,25 +12010,6 @@ def _json_input_sizes(*names: str) -> dict[str, object]:
     return {name: oracledb.DB_TYPE_JSON for name in names}
 
 
-def _legacy_extraction_status(status: str) -> str:
-    mapping = {
-        "EXTRACTING": "planned_only",
-        "EXTRACTED": "materialized",
-        "ERROR": "error",
-        "extracting": "planned_only",
-        "extracted": "materialized",
-    }
-    normalized = mapping.get(status, status)
-    allowed = {
-        "not_requested",
-        "planned_only",
-        "materialized",
-        "needs_reingest",
-        "error",
-    }
-    return normalized if normalized in allowed else "planned_only"
-
-
 def _json_loads(value: object) -> dict[str, object]:
     if value is None:
         return {}
@@ -13722,16 +13328,6 @@ CREATE INDEX {table_name}_parser_created_idx
 CREATE INDEX {table_name}_source_sha256_idx
     ON {table_name} (source_sha256);
 """.strip()
-
-
-def oracle_audit_schema_sql() -> str:
-    """検索・取込監査 table の DDL 例をまとめて返す。"""
-    return "\n\n".join(
-        [
-            oracle_search_audit_schema_sql(),
-            oracle_ingestion_audit_schema_sql(),
-        ]
-    )
 
 
 def oracle_knowledge_graph_schema_sql() -> str:

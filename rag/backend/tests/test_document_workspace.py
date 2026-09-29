@@ -458,20 +458,6 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs[job_id] = claimed
         return claimed
 
-    async def update_ingestion_job(
-        self,
-        job_id: str,
-        **updates: object,
-    ) -> IngestionJob | None:
-        job = self.ingestion_jobs.get(job_id)
-        if job is None:
-            return None
-        updated = job.model_copy(
-            update={key: value for key, value in updates.items() if value is not None}
-        )
-        self.ingestion_jobs[job_id] = updated
-        return updated
-
     async def transition_ingestion_job(
         self,
         job_id: str,

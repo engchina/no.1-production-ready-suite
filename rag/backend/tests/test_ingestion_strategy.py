@@ -87,15 +87,6 @@ class FakeOracle:
         _ = document_id
         self.saved_extraction = extraction
 
-    async def save_chunks(
-        self,
-        document_id: str,
-        chunks: list[Any],
-        vectors: list[list[float]],
-    ) -> None:
-        _ = document_id, vectors
-        self.saved_chunk_count = len(chunks)
-
     async def save_index(
         self,
         document_id: str,

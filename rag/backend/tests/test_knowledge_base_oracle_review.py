@@ -7,7 +7,6 @@
 
 import pytest
 
-import app.clients.oracle as oracle_module
 from app.clients.oracle import (
     KnowledgeBaseNameConflictError,
     OracleClient,
@@ -83,35 +82,6 @@ def test_unique_constraint_violation_is_converted_to_name_conflict() -> None:
 
     with pytest.raises(RuntimeError, match="ORA-12541"), _knowledge_base_name_conflict_guard():
         raise RuntimeError("ORA-12541: TNS:no listener")
-
-
-async def test_ensure_default_knowledge_base_reuses_concurrently_created_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """DEFAULT の同時作成で名前が競合したら、作成済みの DEFAULT を返す。"""
-    client = OracleClient(
-        settings=_oci_settings(), pool=FakeOraclePool(), db_call_runner=_run_inline
-    )
-    default_row = _knowledge_base_row("kb-default", "DEFAULT")
-    lookups: list[object] = [
-        None,
-        oracle_module._to_knowledge_base_detail(
-            oracle_module._stored_knowledge_base_from_row(default_row)
-        ),
-    ]
-
-    async def fake_find(name: str) -> object:
-        return lookups.pop(0)
-
-    async def fake_create(**_kwargs: object) -> object:
-        raise KnowledgeBaseNameConflictError()
-
-    monkeypatch.setattr(client, "_find_knowledge_base_by_name_with_oracle", fake_find)
-    monkeypatch.setattr(client, "create_knowledge_base", fake_create)
-
-    detail = await client.ensure_default_knowledge_base()
-
-    assert detail.id == "kb-default"
 
 
 def test_document_list_by_knowledge_base_keeps_archived_membership() -> None:

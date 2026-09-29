@@ -22,7 +22,6 @@ from app.clients.oracle import (
     _datetime_value,
     _test_oracle_connection_sync,
     oracle_agent_memory_schema_sql,
-    oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_details_schema_sql,
@@ -980,34 +979,6 @@ async def test_oracle_client_ingestion_job_without_document_file_name_is_none() 
     jobs = await client.list_ingestion_jobs(limit=5, offset=0)
 
     assert jobs[0].document_file_name is None
-
-
-async def test_oracle_client_updates_ingestion_job_status() -> None:
-    """取込 job 状態更新後に最新行を返す。"""
-    started_at = datetime(2026, 1, 2, 0, 1, tzinfo=UTC)
-    pool = FakeOraclePool(
-        execute_results=[
-            [_oracle_ingestion_job_row(status="RUNNING", started_at=started_at)],
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    updated = await client.update_ingestion_job(
-        "job-1",
-        status=IngestionJobStatus.RUNNING,
-        attempt_count=1,
-        started_at=started_at,
-    )
-
-    assert updated is not None
-    assert updated.status == IngestionJobStatus.RUNNING
-    assert updated.started_at == started_at
-    update_call = pool.connection.calls[0]
-    assert "UPDATE rag_ingestion_jobs" in update_call.statement
-    assert "EXISTS (" in update_call.statement
-    assert update_call.parameters["status"] == "RUNNING"
-    assert update_call.parameters["attempt_count"] == 1
-    assert update_call.parameters["started_at"] == started_at
 
 
 async def test_oracle_client_transition_ingestion_job_uses_status_condition(
@@ -2188,13 +2159,14 @@ async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:
     assert "query_text" not in str(call.parameters)
 
 
-async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> None:
-    """OCI mode の chunk 保存は既存 chunk を消して VECTOR bind を挿入する。"""
+async def test_oci_save_index_replaces_existing_chunks_and_binds_vectors() -> None:
+    """OCI mode の索引保存は既存 chunk を消し、metadata・検索用テキスト・VECTOR を挿入する。"""
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
-    saved = await client.save_chunks(
+    saved = await client.save_index(
         "doc-1",
+        StructuredExtraction(raw_text="社内規程", confidence=0.9),
         [
             Chunk(
                 index=0,
@@ -3059,15 +3031,6 @@ async def test_oci_ingestion_audit_persists_file_processing_metrics() -> None:
     assert "raw_text" not in call.parameters
     assert "ocr_text" not in call.parameters
     assert pool.connection.commits == 1
-
-
-def test_oracle_audit_schema_bundle_includes_search_and_ingestion_tables() -> None:
-    """監査 DDL bundle は検索・取込の両テーブルを含む。"""
-    ddl = oracle_audit_schema_sql()
-
-    assert "CREATE TABLE rag_search_audit" in ddl
-    assert "CREATE TABLE rag_ingestion_audit" in ddl
-    assert ddl.count("CREATE TABLE") == 2
 
 
 def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> None:
