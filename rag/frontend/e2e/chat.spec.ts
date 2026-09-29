@@ -702,6 +702,31 @@ test("DocRAG 回答ではチャットにも根拠パネルと会話から補っ�
   await expect(panel.getByText("信頼度: high")).toBeVisible();
 });
 
+test("IME の変換を確定する Enter では送信しない（#459）", async ({ page }) => {
+  await mockChat(page);
+  let calls = 0;
+  await page.route("**/api/chat/conversations/*/messages/stream", () => {
+    calls += 1;
+    return new Promise<void>(() => undefined);
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("combobox", { name: "業務ビュー" }).click();
+  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await page.getByRole("button", { name: "新しい会話" }).click();
+
+  const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
+  await composer.fill("けいひのじょうげん");
+  // 変換中の keydown（isComposing=true）は送信しない。
+  await composer.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, bubbles: true });
+  await expect(composer).toHaveValue("けいひのじょうげん");
+  expect(calls).toBe(0);
+
+  // 変換を確定した後の Enter は送信する。
+  await composer.press("Enter");
+  await expect.poll(() => calls).toBe(1);
+});
+
 test("送信と停止は同じボタンで、生成中の Enter では停止しない（#413）", async ({ page }) => {
   await mockChat(page);
   let calls = 0;

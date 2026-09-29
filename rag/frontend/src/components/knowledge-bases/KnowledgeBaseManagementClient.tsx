@@ -36,6 +36,7 @@ import {
   type KnowledgeBaseStatus,
   type KnowledgeBaseSummary,
 } from "@/lib/api";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -160,7 +161,7 @@ export function KnowledgeBaseManagementClient() {
             value={search}
             onValueChange={setSearch}
             onKeyDown={(event) => {
-              if (event.key === "Enter") applySearch();
+              if (isSubmitEnter(event)) applySearch();
             }}
             onBlur={applySearch}
             onClear={clearSearch}
