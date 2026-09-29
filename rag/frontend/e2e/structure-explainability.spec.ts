@@ -282,11 +282,16 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
     .poll(() => citationList.evaluate((element) => element.scrollHeight > element.clientHeight))
     .toBe(true);
   await expectMainScrollEndsAtContent(page);
-  const previewLink = citation.getByRole("link", { name: "policy.txt の引用位置を開く" });
+  // 文書の詳細への deep link は、引用箇所のダイアログの中から別タブで開く（#442）。
+  await citation.getByRole("button", { name: "policy.txt の引用箇所を表示" }).click();
+  const previewLink = page.getByRole("dialog").getByRole("link", { name: "文書の詳細を別タブで開く" });
+  await expect(previewLink).toHaveAttribute("target", "_blank");
   await expect(previewLink).toHaveAttribute(
     "href",
     /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
+  const previewHref = await previewLink.getAttribute("href");
+  await page.getByRole("dialog").getByRole("button", { name: "閉じる" }).click();
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
   await expect.poll(() => feedbackPayload).toMatchObject({
     trace_id: "trace-1",
@@ -303,7 +308,8 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   expect((feedbackPayload?.content_snapshot as { question: string }).question).toBe("料金表を確認");
   expect((feedbackPayload?.content_snapshot as { answer: string }).answer).toBe("料金表を確認しました。");
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
-  await previewLink.click();
+  // 別タブで開く先（同じ URL）を、このタブで開いて deep link の挙動を確かめる。
+  await page.goto(previewHref!);
   await expect(page).toHaveURL(
     /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
