@@ -150,7 +150,11 @@ export {
 } from "./database-gate/types";
 
 // システムテーブルの管理（状態・作成 / 更新・確認語付きの全再作成・台帳。RAG / NL2SQL から共通化。#325）
-export { SystemTablesCard, type SystemTablesCardProps } from "./system-tables/SystemTablesCard";
+export {
+  SystemTablesCard,
+  type SystemTablesCardProps,
+  type SystemTablesConfirmRequest,
+} from "./system-tables/SystemTablesCard";
 export {
   SYSTEM_TABLES_MESSAGES,
   systemObjectTypeMessageKey,
@@ -164,6 +168,7 @@ export {
   systemTableControlsBusy,
   systemTableDetailCounts,
   systemTableObjects,
+  useDeleteSystemTableOrphanedRows,
   useInitializeSystemTables,
   useSystemTablesStatus,
   type UseInitializeSystemTablesOptions,
@@ -178,10 +183,13 @@ export {
   type SystemTableOperationResult,
   type SystemTableOperationState,
   type SystemTableOperationStatus,
+  type SystemTableOrphanOperationResult,
   type SystemTableSchemaStatus,
   type SystemTablesApi,
+  type SystemTablesDeleteOrphansRequest,
   type SystemTablesInitializeRequest,
   type SystemTablesOperationData,
+  type SystemTablesOrphanDeletionData,
   type SystemTablesStatusData,
 } from "./system-tables/types";
 

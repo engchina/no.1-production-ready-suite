@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
-import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
+import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -9,6 +9,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  cn,
   DataTable,
   Disclosure,
   ExecutionConfirmationField,
@@ -36,6 +37,7 @@ import {
   systemTableControlsBusy,
   systemTableDetailCounts,
   systemTableObjects,
+  useDeleteSystemTableOrphanedRows,
   useInitializeSystemTables,
   useSystemTablesStatus,
 } from "./systemTables";
@@ -79,6 +81,13 @@ function formatSchemaHead(head: string | number): string {
   return typeof head === "number" ? `v${head}` : head;
 }
 
+/** 確認ダイアログに渡す文言（製品が `useConfirm` などで、danger のトーンで開く）。 */
+export interface SystemTablesConfirmRequest {
+  title: string;
+  description: string;
+  confirmLabel: string;
+}
+
 export interface SystemTablesCardProps {
   api: SystemTablesApi;
   /** 作成・更新と全再作成ができるか（状態の確認と再取得は誰でもできる）。 */
@@ -98,6 +107,11 @@ export interface SystemTablesCardProps {
   confirmRecreate?: () => Promise<boolean>;
   /** 詳細の表の object 名（NL2SQL は所有者付きの識別子の表示）。既定は所有者付きの名前を等幅で出す。 */
   renderObjectName?: (object: SystemObjectMetadata) => ReactNode;
+  /**
+   * 参照先のない行の削除の前に出す確認ダイアログ（#511。表・外部キー・件数を示す）。
+   * 破壊的な操作のため、これと API（`deleteSystemTableOrphanedRows`）の両方があるときだけ削除の操作を出す。
+   */
+  confirmDeleteOrphans?: (request: SystemTablesConfirmRequest) => Promise<boolean>;
 }
 
 /**
@@ -115,12 +129,15 @@ export function SystemTablesCard({
   describeOperationError,
   confirmRecreate,
   renderObjectName,
+  confirmDeleteOrphans,
 }: SystemTablesCardProps) {
   const m: SystemTablesMessages = { ...SYSTEM_TABLES_MESSAGES, ...messages };
   const text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) =>
     formatMessage(m[key], params);
   const statusQuery = useSystemTablesStatus(api);
   const operation = useInitializeSystemTables(api, { invalidateQueryKeys });
+  const orphanDeletion = useDeleteSystemTableOrphanedRows(api, { invalidateQueryKeys });
+  const mutationPending = operation.isPending || orphanDeletion.isPending;
   const [operationError, setOperationError] = useState("");
   const operationErrorRef = useRef<HTMLDivElement>(null);
   const [recreateInput, setRecreateInput] = useState("");
@@ -133,11 +150,17 @@ export function SystemTablesCard({
   // 外部キーの差分（#505。RAG だけが返す。無ければ出さない）。
   const missingForeignKeys = data?.missing_foreign_keys ?? [];
   const orphanedForeignKeys = data?.orphaned_foreign_keys ?? [];
+  // 削除規則の違い・無効化（#511。RAG だけが返す）。
+  const mismatchedForeignKeys = data?.mismatched_foreign_keys ?? [];
+  const disabledForeignKeys = data?.disabled_foreign_keys ?? [];
+  // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
+  const canDeleteOrphans =
+    canManage && Boolean(api.deleteSystemTableOrphanedRows) && Boolean(confirmDeleteOrphans);
   const busy =
     statusQuery.isFetching ||
     statusUnavailable ||
     !data ||
-    systemTableControlsBusy(operation.isPending, data.operation_state.status);
+    systemTableControlsBusy(mutationPending, data.operation_state.status);
 
   useEffect(() => {
     if (operationError) operationErrorRef.current?.focus();
@@ -150,6 +173,10 @@ export function SystemTablesCard({
     if (statusQuery.isFetching) setRecreateInput("");
   }
 
+  const describeError = (cause: unknown) =>
+    describeOperationError?.(cause) ??
+    `${text("settings.database.systemTables.error.operation")} ${text("settings.database.systemTables.error.recovery")}`;
+
   const execute = (recreate: boolean) => {
     if (busy || !canManage || (recreate && !recreateConfirmed)) return;
     setRecreateInput("");
@@ -160,12 +187,44 @@ export function SystemTablesCard({
         onSuccess: (result) => {
           toast.success(text(`settings.database.systemTables.operation.${result.operation}`));
         },
-        onError: (cause) => {
-          setOperationError(
-            describeOperationError?.(cause) ??
-              `${text("settings.database.systemTables.error.operation")} ${text("settings.database.systemTables.error.recovery")}`,
+        onError: (cause) => setOperationError(describeError(cause)),
+      },
+    );
+  };
+
+  const requestDeleteOrphans = async (foreignKey: SystemTableForeignKey) => {
+    const count = foreignKey.orphan_rows;
+    if (busy || !canDeleteOrphans || !confirmDeleteOrphans || count == null) return;
+    const params = {
+      table: foreignKey.table_name,
+      name: foreignKey.name,
+      columns: foreignKey.columns.join(", "),
+      referenced: foreignKey.referenced_table_name,
+      count: formatNumber(count),
+    };
+    const confirmed = await confirmDeleteOrphans({
+      title: text("settings.database.systemTables.deleteOrphans.confirmTitle", params),
+      description: text("settings.database.systemTables.deleteOrphans.confirmDescription", params),
+      confirmLabel: text("settings.database.systemTables.action.deleteOrphans"),
+    });
+    if (!confirmed) return;
+    setRecreateInput("");
+    setOperationError("");
+    orphanDeletion.mutate(
+      // 確認した件数を送る（backend は数え直し、増えていたら削除しない）。
+      { constraint_name: foreignKey.name, expected_orphan_rows: count },
+      {
+        onSuccess: (result) => {
+          toast.success(
+            result.operation === "no_op"
+              ? text("settings.database.systemTables.deleteOrphans.noOp", { name: foreignKey.name })
+              : text("settings.database.systemTables.deleteOrphans.done", {
+                  ...params,
+                  count: formatNumber(result.deleted_row_count),
+                }),
           );
         },
+        onError: (cause) => setOperationError(describeError(cause)),
       },
     );
   };
@@ -270,6 +329,26 @@ export function SystemTablesCard({
                     <ForeignKeyList foreignKeys={missingForeignKeys} text={text} />
                   </div>
                 ) : null}
+                {mismatchedForeignKeys.length > 0 ? (
+                  <div className="mt-2" data-testid="system-tables-mismatched-foreign-keys">
+                    <p>
+                      {text("settings.database.systemTables.foreignKeys.mismatched", {
+                        count: mismatchedForeignKeys.length,
+                      })}
+                    </p>
+                    <ForeignKeyList foreignKeys={mismatchedForeignKeys} text={text} showDeleteRule />
+                  </div>
+                ) : null}
+                {disabledForeignKeys.length > 0 ? (
+                  <div className="mt-2" data-testid="system-tables-disabled-foreign-keys">
+                    <p>
+                      {text("settings.database.systemTables.foreignKeys.disabled", {
+                        count: disabledForeignKeys.length,
+                      })}
+                    </p>
+                    <ForeignKeyList foreignKeys={disabledForeignKeys} text={text} />
+                  </div>
+                ) : null}
               </Banner>
             ) : null}
 
@@ -280,7 +359,39 @@ export function SystemTablesCard({
               >
                 <div data-testid="system-tables-orphaned-foreign-keys">
                   <p>{text("settings.database.systemTables.foreignKeys.orphaned")}</p>
-                  <ForeignKeyList foreignKeys={orphanedForeignKeys} text={text} />
+                  {canDeleteOrphans ? (
+                    <p className="mt-1">{text("settings.database.systemTables.foreignKeys.orphanedDeleteHint")}</p>
+                  ) : null}
+                  <ForeignKeyList
+                    foreignKeys={orphanedForeignKeys}
+                    text={text}
+                    renderAction={
+                      canDeleteOrphans
+                        ? (foreignKey) =>
+                            foreignKey.orphan_rows ? (
+                              // 確認ダイアログを開く起点なので赤塗りにしない（secondary + 赤文字。buttons.md §3）。
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                tone="danger"
+                                icon={Trash2}
+                                onClick={() => void requestDeleteOrphans(foreignKey)}
+                                loading={
+                                  orphanDeletion.isPending &&
+                                  orphanDeletion.variables?.constraint_name === foreignKey.name
+                                }
+                                disabled={busy}
+                                aria-label={text("settings.database.systemTables.action.deleteOrphansLabel", {
+                                  name: foreignKey.name,
+                                })}
+                              >
+                                {text("settings.database.systemTables.action.deleteOrphans")}
+                              </Button>
+                            ) : null
+                        : undefined
+                    }
+                  />
                 </div>
               </Banner>
             ) : null}
@@ -327,7 +438,7 @@ export function SystemTablesCard({
                 variant="secondary"
                 onClick={() => void refreshStatus()}
                 loading={statusQuery.isFetching}
-                disabled={operation.isPending}
+                disabled={mutationPending}
                 icon={RefreshCw}
               >
                 {text("settings.database.systemTables.action.refresh")}
@@ -394,28 +505,64 @@ export function SystemTablesCard({
 
 type Text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) => string;
 
-/** 外部キーの一覧（子の表と列 → 参照先の表。参照先のない行があれば件数を添える）。 */
-function ForeignKeyList({ foreignKeys, text }: { foreignKeys: SystemTableForeignKey[]; text: Text }) {
+/**
+ * 外部キーの一覧（子の表と列 → 参照先の表。参照先のない行があれば件数を添える）。
+ * 削除規則の違い（#511）は「削除規則 現在 → 正本」を添え、行ごとの操作（参照先のない行の削除）は右に置く
+ * （狭い幅では折り返して下に出す）。
+ * 件数・削除規則は Banner の地の上に置くため、文字色は Banner の本文色を継ぎ、太さで区別する
+ * （`text-fg-muted` はライトの warning の地で 4.34:1 になり、4.5:1 に届かない。#511）。
+ */
+function ForeignKeyList({
+  foreignKeys,
+  text,
+  showDeleteRule = false,
+  renderAction,
+}: {
+  foreignKeys: SystemTableForeignKey[];
+  text: Text;
+  showDeleteRule?: boolean;
+  renderAction?: (foreignKey: SystemTableForeignKey) => ReactNode;
+}) {
   return (
-    <ul className="mt-1.5 space-y-1">
-      {foreignKeys.map((foreignKey) => (
-        <li key={foreignKey.name} className="min-w-0">
-          <span className="font-mono text-xs [overflow-wrap:anywhere]">
-            {text("settings.database.systemTables.foreignKeys.item", {
-              table: foreignKey.table_name,
-              columns: foreignKey.columns.join(", "),
-              referenced: foreignKey.referenced_table_name,
-            })}
-          </span>
-          {foreignKey.orphan_rows ? (
-            <span className="ml-2 text-xs text-fg-muted">
-              {text("settings.database.systemTables.foreignKeys.orphanRows", {
-                count: formatNumber(foreignKey.orphan_rows),
-              })}
+    <ul className={cn("mt-1.5", renderAction ? "space-y-2" : "space-y-1")}>
+      {foreignKeys.map((foreignKey) => {
+        const action = renderAction?.(foreignKey);
+        return (
+          <li
+            key={foreignKey.name}
+            className={cn(
+              "min-w-0",
+              action ? "flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5" : undefined,
+            )}
+          >
+            <span className="min-w-0">
+              <span className="font-mono text-xs [overflow-wrap:anywhere]">
+                {text("settings.database.systemTables.foreignKeys.item", {
+                  table: foreignKey.table_name,
+                  columns: foreignKey.columns.join(", "),
+                  referenced: foreignKey.referenced_table_name,
+                })}
+              </span>
+              {showDeleteRule && foreignKey.current_delete_rule ? (
+                <span className="ml-2 text-xs font-medium">
+                  {text("settings.database.systemTables.foreignKeys.deleteRule", {
+                    current: foreignKey.current_delete_rule,
+                    expected: foreignKey.delete_rule,
+                  })}
+                </span>
+              ) : null}
+              {foreignKey.orphan_rows ? (
+                <span className="ml-2 text-xs font-medium">
+                  {text("settings.database.systemTables.foreignKeys.orphanRows", {
+                    count: formatNumber(foreignKey.orphan_rows),
+                  })}
+                </span>
+              ) : null}
             </span>
-          ) : null}
-        </li>
-      ))}
+            {action}
+          </li>
+        );
+      })}
     </ul>
   );
 }

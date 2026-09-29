@@ -164,8 +164,10 @@ from app.schemas.settings import (
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
+    SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
+    SystemTablesOrphanDeletionData,
     SystemTablesStatusData,
     VectorIndexProfileStatusData,
     VectorIndexSettingsData,
@@ -309,18 +311,49 @@ async def initialize_system_tables(
             confirmation=payload.confirmation,
         )
     except SystemSchemaError as exc:
-        return JSONResponse(
-            status_code=exc.status_code,
-            headers=exc.retry_headers,
-            content={
-                "data": None,
-                "error_messages": [exc.public_message],
-                "warning_messages": [],
-                "error_code": exc.code,
-            },
-        )
+        return _system_schema_error_response(exc)
     system_schema_runtime.invalidate()
     return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+
+
+@router.post(
+    "/database/system-tables/orphaned-rows/delete",
+    response_model=ApiResponse[SystemTablesOrphanDeletionData],
+)
+async def delete_system_table_orphaned_rows(
+    payload: SystemTablesDeleteOrphansRequest,
+) -> ApiResponse[SystemTablesOrphanDeletionData] | JSONResponse:
+    """管理者の明示操作として、外部キーの参照先のない行を削除して検査済みにする（#511）。
+
+    利用者が確認した件数（`expected_orphan_rows`）より増えていたら削除しない。
+    """
+
+    # 権限は作成・更新と同じ rag.system_tables.manage（API の権限 manifest で確認する）。
+    try:
+        data = await asyncio.to_thread(
+            system_schema_manager.delete_orphaned_rows,
+            constraint_name=payload.constraint_name,
+            expected_orphan_rows=payload.expected_orphan_rows,
+        )
+    except SystemSchemaError as exc:
+        return _system_schema_error_response(exc)
+    system_schema_runtime.invalidate()
+    return ApiResponse(data=SystemTablesOrphanDeletionData.model_validate(data))
+
+
+def _system_schema_error_response(exc: SystemSchemaError) -> JSONResponse:
+    """システムテーブル操作の業務エラー（公開してよい文言と ORA コードだけ）。"""
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers=exc.retry_headers,
+        content={
+            "data": None,
+            "error_messages": [exc.public_message],
+            "warning_messages": [],
+            "error_code": exc.code,
+        },
+    )
 
 
 @router.get("/huggingface", response_model=ApiResponse[HuggingFaceSettingsData])

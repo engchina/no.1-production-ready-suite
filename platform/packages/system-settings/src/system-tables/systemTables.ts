@@ -6,6 +6,7 @@ import {
   type SystemObjectMetadata,
   type SystemTableOperationStatus,
   type SystemTablesApi,
+  type SystemTablesDeleteOrphansRequest,
   type SystemTablesInitializeRequest,
   type SystemTablesStatusData,
 } from "./types";
@@ -44,6 +45,8 @@ export function isSystemTablesStatusData(value: unknown): value is SystemTablesS
     (data.retired_objects === undefined || Array.isArray(data.retired_objects)) &&
     (data.missing_foreign_keys === undefined || Array.isArray(data.missing_foreign_keys)) &&
     (data.orphaned_foreign_keys === undefined || Array.isArray(data.orphaned_foreign_keys)) &&
+    (data.mismatched_foreign_keys === undefined || Array.isArray(data.mismatched_foreign_keys)) &&
+    (data.disabled_foreign_keys === undefined || Array.isArray(data.disabled_foreign_keys)) &&
     Array.isArray(data.tables)
   );
 }
@@ -90,6 +93,34 @@ export function useInitializeSystemTables(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: SystemTablesInitializeRequest) => api.initializeSystemTables(payload),
+    onMutate: () => qc.cancelQueries({ queryKey: SYSTEM_TABLES_QUERY_KEY }),
+    onSuccess: (data) => {
+      qc.setQueryData(SYSTEM_TABLES_QUERY_KEY, data);
+      void qc.invalidateQueries({ queryKey: DATABASE_STATUS_QUERY_KEY });
+      for (const queryKey of invalidateQueryKeys) void qc.invalidateQueries({ queryKey });
+    },
+    onError: () => {
+      void qc.invalidateQueries({ queryKey: SYSTEM_TABLES_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * 参照先のない行の削除（#511。API を持つ製品だけ）。成功したら結果で状態を置き換える。
+ * 失敗（件数が増えた・前提が変わった等）のときは状態を取り直し、最新の件数で確認し直させる。
+ */
+export function useDeleteSystemTableOrphanedRows(
+  api: SystemTablesApi,
+  { invalidateQueryKeys = [] }: UseInitializeSystemTablesOptions = {},
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: SystemTablesDeleteOrphansRequest) => {
+      if (!api.deleteSystemTableOrphanedRows) {
+        return Promise.reject(new Error("参照先のない行の削除はこの製品では使えません。"));
+      }
+      return api.deleteSystemTableOrphanedRows(payload);
+    },
     onMutate: () => qc.cancelQueries({ queryKey: SYSTEM_TABLES_QUERY_KEY }),
     onSuccess: (data) => {
       qc.setQueryData(SYSTEM_TABLES_QUERY_KEY, data);

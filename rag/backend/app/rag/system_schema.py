@@ -368,8 +368,9 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
         dropped_count += self._drop_retired_objects(connection)
         self._apply_missing_indexes(connection)
-        # 古い版で作った表に、後から正本に足した FK を補う（孤立した行は消さない。#505）。
-        added_foreign_keys = self._apply_missing_foreign_keys(connection, owner)
+        # 古い版で作った表に、後から正本に足した FK を補い（#505）、削除規則が違う FK を作り直し、
+        # 無効化された FK を有効にする（#511）。孤立した行は消さない。
+        foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
         if interim["status"] != "ready":
@@ -386,9 +387,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             after,
             dropped_object_count=dropped_count,
             applied_migrations=applied_names,
-            added_foreign_keys=[item["name"] for item in added_foreign_keys],
+            added_foreign_keys=[item["name"] for item in foreign_keys["added"]],
+            recreated_foreign_keys=[item["name"] for item in foreign_keys["recreated"]],
+            enabled_foreign_keys=[item["name"] for item in foreign_keys["enabled"]],
             novalidate_foreign_keys=[
-                item["name"] for item in added_foreign_keys if not item["validated"]
+                item["name"]
+                for items in foreign_keys.values()
+                for item in items
+                if not item["validated"]
             ],
         )
         return {
@@ -425,7 +431,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             "status": classify_system_schema_status(
                 set(objects),
                 applied,
-                foreign_keys_current=not foreign_keys.missing,
+                foreign_keys_current=foreign_keys.current,
             ),
             "schema_version": SCHEMA_VERSION,
             "schema_head": MIGRATIONS[-1].name if MIGRATIONS else SCHEMA_VERSION,
@@ -448,6 +454,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 if (name, object_type) in objects
             ],
             # 既存の表に無い FK（更新で足す）と、既存の行を検査していない FK の孤立した行（#505）。
+            # 削除規則が正本と違う FK と、無効化された FK（更新で直す。#511）。
             **foreign_keys.status_fields(),
             "tables": self._load_table_metadata(connection, objects),
             "operation_state": self._operation_payload(connection, objects),

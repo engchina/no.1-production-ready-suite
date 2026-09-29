@@ -11,7 +11,8 @@ RAG と NL2SQL が別々に持っていた schema manager の共通部分を置�
 - 操作の失敗の安全化（公開するのは ORA コードだけ。SQL・資格情報は返さない）と、ORA-00054 の 409
 - API の型（操作の状態・初期化の request）と、状態を取得できないときの 503
 - 外部キーの差分（正本の `CREATE TABLE` にあるが既存の表に無い FK の検出・追加と、参照先の無い
-  既存の行の件数。#505）
+  既存の行の件数。#505。削除規則の違い・無効化（DISABLED）の検出と修正、利用者の明示操作による
+  参照先の無い行の削除と VALIDATE。#511）
 
 製品に残すもの（ここには置かない）:
 
@@ -42,6 +43,8 @@ SystemSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
 SystemSchemaOperation = Literal["no_op", "initialized", "migrated", "recreated"]
 SystemSchemaOperationStatus = Literal["idle", "running", "failed"]
 SystemSchemaOperationKind = Literal["initialize", "recreate"]
+# 参照先の無い行の削除（#511）の結果（削除も検査も要らなかったときは `no_op`）。
+SystemSchemaOrphanOperation = Literal["no_op", "orphans_deleted"]
 
 # 制御テーブルの行のキー（製品ごとに 1 行）。
 CONTROL_KEY = "system_schema"
@@ -72,6 +75,16 @@ IGNORED_DROP_CODES = frozenset({"ORA-00942", "ORA-01418"})
 ORA_FOREIGN_KEY_EXISTS = "ORA-02275"
 # 検査付きの外部キーの追加が、参照先の無い既存の行で失敗した（parent keys not found）。
 ORA_ORPHAN_ROWS = "ORA-02298"
+# 削除しようとした行を、別の表の NO ACTION の外部キーが参照している（child record found）。
+ORA_CHILD_RECORD_FOUND = "ORA-02292"
+# 外部キーの削除で読み飛ばすエラー（既に無い。別の操作が先に削除した）。
+ORA_CONSTRAINT_NOT_FOUND = "ORA-02443"
+
+FOREIGN_KEY_NOT_FOUND = "SCHEMA_FOREIGN_KEY_NOT_FOUND"
+FOREIGN_KEY_OUTDATED = "SCHEMA_FOREIGN_KEY_OUTDATED"
+ORPHAN_ROWS_CHANGED = "SCHEMA_ORPHAN_ROWS_CHANGED"
+# 失敗のログの `operation`（参照先の無い行の削除。#511）。
+ORPHAN_DELETION_OPERATION = "delete_orphaned_rows"
 
 _ORA_CODE_PATTERN = re.compile(r"ORA-\d{5}", flags=re.IGNORECASE)
 
@@ -114,6 +127,10 @@ class SystemSchemaActiveJobsError(SystemSchemaError):
         super().__init__("SCHEMA_JOBS_RUNNING", public_message, status_code=409)
 
 
+class SystemSchemaPreconditionError(SystemSchemaError):
+    """操作の前提の確認で止めた（DB を変えていない）。lease は返し、失敗として記録しない。"""
+
+
 class SystemTableOperationState(BaseModel):
     """複数 replica が共有する schema operation lease の状態と直近の操作。"""
 
@@ -136,6 +153,9 @@ class SystemTableForeignKeyData(BaseModel):
     delete_rule: str
     # 参照先の無い既存の行の件数（数えられなかったときは null）。
     orphan_rows: int | None = None
+    # 削除規則が正本と違う FK（#511）の、既存の FK の名前と削除規則（それ以外は null）。
+    current_name: str | None = None
+    current_delete_rule: str | None = None
 
 
 class SystemTablesInitializeRequest(BaseModel):
@@ -143,6 +163,17 @@ class SystemTablesInitializeRequest(BaseModel):
 
     recreate: bool = False
     confirmation: str | None = Field(default=None, max_length=128)
+
+
+class SystemTablesDeleteOrphansRequest(BaseModel):
+    """参照先の無い行の削除（#511）の request。
+
+    `expected_orphan_rows` は利用者が確認した件数。削除の直前に数え直し、これより増えていたら
+    削除せずに 409 を返す（確認していない行を消さない）。
+    """
+
+    constraint_name: str = Field(min_length=1, max_length=128)
+    expected_orphan_rows: int = Field(ge=0)
 
 
 def oracle_error_code(exc: BaseException) -> str:
@@ -251,6 +282,11 @@ def system_tables_status_error(exc: BaseException) -> HTTPException:
 # 参照先の無い既存の行（孤立した行）があると、検査付きの追加は ORA-02298 で失敗する。利用者の
 # 操作なしに既存の行は消さないため、そのときは `ENABLE NOVALIDATE`（新しい行と更新から強制し、
 # 既存の行は検査しない）で追加し、孤立した行の件数を状態に出す。
+#
+# 同じ定義の FK があっても、削除規則が正本と違う・無効化（DISABLED）されているものは差分にする
+# （#511）。更新では、削除規則の違いは DROP と正本の ADD、無効化は ENABLE で直す（孤立した行の
+# 扱いは追加と同じ）。孤立した行は、利用者が件数を確認して明示したときだけ削除し、その後に FK を
+# VALIDATE する。
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Z0-9_$#]*$")
 _IDENTIFIER = r"[A-Za-z][A-Za-z0-9_$#]*"
@@ -364,19 +400,47 @@ def add_foreign_key_sql(spec: ForeignKeySpec, *, validate: bool) -> str:
     )
 
 
-def orphan_rows_sql(spec: ForeignKeySpec) -> str:
-    """参照先の無い既存の行を数える SQL（FK の列のどれかが NULL の行は Oracle も検査しない）。"""
+def drop_foreign_key_sql(spec: ForeignKeySpec) -> str:
+    """既存の FK を削除する DDL（表の行は消えない。削除規則を正本に直す前に使う）。"""
 
+    return f"ALTER TABLE {spec.table_name} DROP CONSTRAINT {spec.name}"
+
+
+def enable_foreign_key_sql(spec: ForeignKeySpec, *, validate: bool) -> str:
+    """無効化された FK を有効にする DDL（`validate=False` は既存の行を検査しない）。"""
+
+    state = "ENABLE VALIDATE" if validate else "ENABLE NOVALIDATE"
+    return f"ALTER TABLE {spec.table_name} MODIFY CONSTRAINT {spec.name} {state}"
+
+
+def validate_foreign_key_sql(spec: ForeignKeySpec) -> str:
+    """有効な FK で既存の行も検査する（検査済み・VALIDATED にする）DDL。"""
+
+    return f"ALTER TABLE {spec.table_name} MODIFY CONSTRAINT {spec.name} VALIDATE"
+
+
+def _orphan_predicate(spec: ForeignKeySpec) -> str:
     not_null = " AND ".join(f"child.{column} IS NOT NULL" for column in spec.columns)
     join = " AND ".join(
         f"parent.{referenced} = child.{column}"
         for column, referenced in zip(spec.columns, spec.referenced_columns, strict=True)
     )
     return (
-        f"SELECT COUNT(*) FROM {spec.table_name} child "  # nosec B608 - 検証済みの識別子
         f"WHERE {not_null} AND NOT EXISTS "
-        f"(SELECT 1 FROM {spec.referenced_table_name} parent WHERE {join})"
+        f"(SELECT 1 FROM {spec.referenced_table_name} parent WHERE {join})"  # nosec B608 - 検証済みの識別子
     )
+
+
+def orphan_rows_sql(spec: ForeignKeySpec) -> str:
+    """参照先の無い既存の行を数える SQL（FK の列のどれかが NULL の行は Oracle も検査しない）。"""
+
+    return f"SELECT COUNT(*) FROM {spec.table_name} child {_orphan_predicate(spec)}"  # nosec B608 - 検証済みの識別子
+
+
+def delete_orphan_rows_sql(spec: ForeignKeySpec) -> str:
+    """参照先の無い既存の行を削除する SQL（数える SQL と同じ条件。#511）。"""
+
+    return f"DELETE FROM {spec.table_name} child {_orphan_predicate(spec)}"  # nosec B608 - 検証済みの識別子
 
 
 def count_orphan_rows(connection: Any, spec: ForeignKeySpec) -> int:
@@ -475,23 +539,54 @@ def load_foreign_keys(connection: Any, table_names: Iterable[str]) -> list[Exist
 
 
 @dataclass(frozen=True, slots=True)
+class ForeignKeyMismatch:
+    """同じ定義（表・列・参照先）の FK があるが、削除規則が正本と違う（#511）。"""
+
+    expected: ForeignKeySpec
+    current: ForeignKeySpec
+    orphan_rows: int | None
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            **self.expected.payload(orphan_rows=self.orphan_rows),
+            "current_name": self.current.name,
+            "current_delete_rule": self.current.delete_rule,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ForeignKeyDrift:
     """正本の FK と既存の表の差分。
 
     - `missing`: 子・参照先の表はあるのに、同じ定義の FK が無い（更新で追加する）。孤立した行の
       件数付き（数えられなかったときは None）
+    - `mismatched`: 同じ定義の FK があるが、削除規則が正本と違う（更新で DROP と ADD。#511）
+    - `disabled`: 同じ定義・削除規則の FK があるが、無効化されている（更新で ENABLE。#511）
     - `orphaned`: 既存の FK が既存の行を検査しておらず（NOVALIDATE）、孤立した行が残っている
     """
 
     missing: list[tuple[ForeignKeySpec, int | None]] = field(default_factory=list)
     orphaned: list[tuple[ForeignKeySpec, int]] = field(default_factory=list)
+    mismatched: list[ForeignKeyMismatch] = field(default_factory=list)
+    disabled: list[tuple[ForeignKeySpec, int | None]] = field(default_factory=list)
+
+    @property
+    def current(self) -> bool:
+        """更新で直す差分が無い（孤立した行の警告は状態を変えない）。"""
+
+        return not (self.missing or self.mismatched or self.disabled)
 
     def status_fields(self) -> dict[str, list[dict[str, Any]]]:
-        """状態の `missing_foreign_keys` / `orphaned_foreign_keys`。"""
+        """状態の `missing_foreign_keys` / `mismatched_foreign_keys` / `disabled_foreign_keys` /
+        `orphaned_foreign_keys`。"""
 
         return {
             "missing_foreign_keys": [
                 spec.payload(orphan_rows=orphans) for spec, orphans in self.missing
+            ],
+            "mismatched_foreign_keys": [item.payload() for item in self.mismatched],
+            "disabled_foreign_keys": [
+                spec.payload(orphan_rows=orphans) for spec, orphans in self.disabled
             ],
             "orphaned_foreign_keys": [
                 spec.payload(orphan_rows=orphans) for spec, orphans in self.orphaned
@@ -508,15 +603,13 @@ def _count_orphan_rows_or_none(connection: Any, spec: ForeignKeySpec) -> int | N
         return None
 
 
-def inspect_foreign_keys(connection: Any, expected: Sequence[ForeignKeySpec]) -> ForeignKeyDrift:
-    """正本の FK と USER_CONSTRAINTS を比べる（DDL は実行しない）。
-
-    子か参照先の表が無い FK は比べない（表の作成で FK ごと作られる）。孤立した行は、不足している
-    FK と、既存の行を検査していない FK だけで数える（検査済みの FK では 0 件のため）。
-    """
+def _comparable_foreign_keys(
+    connection: Any, expected: Sequence[ForeignKeySpec]
+) -> tuple[list[ForeignKeySpec], dict[tuple[Any, ...], ExistingForeignKey]]:
+    """子と参照先の表がある正本の FK と、既存の FK（定義 → FK）。"""
 
     if not expected:
-        return ForeignKeyDrift()
+        return [], {}
     tables = load_existing_tables(
         connection,
         (name for spec in expected for name in (spec.table_name, spec.referenced_table_name)),
@@ -527,21 +620,41 @@ def inspect_foreign_keys(connection: Any, expected: Sequence[ForeignKeySpec]) ->
         if spec.table_name in tables and spec.referenced_table_name in tables
     ]
     if not comparable:
-        return ForeignKeyDrift()
+        return [], {}
     existing = load_foreign_keys(connection, (spec.table_name for spec in comparable))
-    by_signature = {item.spec.signature: item for item in existing}
-    missing: list[tuple[ForeignKeySpec, int | None]] = []
-    orphaned: list[tuple[ForeignKeySpec, int]] = []
+    return comparable, {item.spec.signature: item for item in existing}
+
+
+def inspect_foreign_keys(connection: Any, expected: Sequence[ForeignKeySpec]) -> ForeignKeyDrift:
+    """正本の FK と USER_CONSTRAINTS を比べる（DDL は実行しない）。
+
+    子か参照先の表が無い FK は比べない（表の作成で FK ごと作られる）。孤立した行は、不足している
+    FK、削除規則が違う・無効化されている FK と、既存の行を検査していない FK だけで数える（検査済みの
+    FK では 0 件のため）。削除規則の違いと無効化が重なるときは、削除規則の違いとして扱う（DROP と
+    ADD で両方が直る）。
+    """
+
+    comparable, by_signature = _comparable_foreign_keys(connection, expected)
+    drift = ForeignKeyDrift()
     for spec in comparable:
         current = by_signature.get(spec.signature)
         if current is None:
-            missing.append((spec, _count_orphan_rows_or_none(connection, spec)))
+            drift.missing.append((spec, _count_orphan_rows_or_none(connection, spec)))
+            continue
+        if current.spec.delete_rule != spec.delete_rule:
+            orphans = _count_orphan_rows_or_none(connection, spec)
+            drift.mismatched.append(ForeignKeyMismatch(spec, current.spec, orphans))
+            continue
+        if not current.enabled:
+            drift.disabled.append(
+                (current.spec, _count_orphan_rows_or_none(connection, current.spec))
+            )
             continue
         if not current.validated:
             orphans = _count_orphan_rows_or_none(connection, current.spec)
             if orphans:
-                orphaned.append((current.spec, orphans))
-    return ForeignKeyDrift(missing=missing, orphaned=orphaned)
+                drift.orphaned.append((current.spec, orphans))
+    return drift
 
 
 class SystemSchemaManagerBase(ABC):
@@ -979,7 +1092,12 @@ class SystemSchemaManagerBase(ABC):
 
         return inspect_foreign_keys(connection, self.managed_foreign_keys)
 
-    def _apply_missing_foreign_keys(self, connection: Any, owner: str) -> list[dict[str, Any]]:
+    def _apply_missing_foreign_keys(
+        self,
+        connection: Any,
+        owner: str,
+        drift: ForeignKeyDrift | None = None,
+    ) -> list[dict[str, Any]]:
         """不足している FK を足す。既存の行は削除しない。
 
         孤立した行が無ければ既存の行も検査して足す。孤立した行があれば（または検査付きの追加が
@@ -988,13 +1106,43 @@ class SystemSchemaManagerBase(ABC):
         """
 
         added: list[dict[str, Any]] = []
-        for spec, orphans in self._foreign_key_drift(connection).missing:
+        current = drift if drift is not None else self._foreign_key_drift(connection)
+        for spec, orphans in current.missing:
             self._heartbeat(connection, owner)
             validated = self._add_foreign_key(connection, spec, validate=not orphans)
             if validated is None:
                 continue
             added.append({**spec.payload(orphan_rows=orphans), "validated": validated})
         return added
+
+    def _repair_foreign_keys(self, connection: Any, owner: str) -> dict[str, list[dict[str, Any]]]:
+        """外部キーの差分を直す（#505 / #511）。既存の行は削除しない。
+
+        - 不足: 追加する（`_apply_missing_foreign_keys`）
+        - 削除規則の違い: 既存の FK を DROP して、正本の定義で ADD する
+        - 無効化: ENABLE する
+        いずれも孤立した行があれば既存の行を検査しない（NOVALIDATE）。戻り値は直した FK の一覧
+        （`added` / `recreated` / `enabled`。各項目に `validated`）。
+        """
+
+        drift = self._foreign_key_drift(connection)
+        added = self._apply_missing_foreign_keys(connection, owner, drift)
+        recreated: list[dict[str, Any]] = []
+        for mismatch in drift.mismatched:
+            self._heartbeat(connection, owner)
+            self._drop_foreign_key(connection, mismatch.current)
+            validated = self._add_foreign_key(
+                connection, mismatch.expected, validate=not mismatch.orphan_rows
+            )
+            if validated is None:
+                continue
+            recreated.append({**mismatch.payload(), "validated": validated})
+        enabled: list[dict[str, Any]] = []
+        for spec, orphans in drift.disabled:
+            self._heartbeat(connection, owner)
+            validated = self._enable_foreign_key(connection, spec, validate=not orphans)
+            enabled.append({**spec.payload(orphan_rows=orphans), "validated": validated})
+        return {"added": added, "recreated": recreated, "enabled": enabled}
 
     @staticmethod
     def _add_foreign_key(connection: Any, spec: ForeignKeySpec, *, validate: bool) -> bool | None:
@@ -1015,6 +1163,208 @@ class SystemSchemaManagerBase(ABC):
             connection.commit()
         return validate
 
+    @staticmethod
+    def _drop_foreign_key(connection: Any, spec: ForeignKeySpec) -> None:
+        """既存の FK を削除する（既に無いときは何もしない）。表の行は消えない。"""
+
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute(drop_foreign_key_sql(spec))
+            except Exception as exc:
+                if oracle_error_code(exc) != ORA_CONSTRAINT_NOT_FOUND:
+                    raise
+            connection.commit()
+
+    @staticmethod
+    def _enable_foreign_key(connection: Any, spec: ForeignKeySpec, *, validate: bool) -> bool:
+        """無効化された FK を有効にする。検査できたら True、NOVALIDATE なら False。"""
+
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute(enable_foreign_key_sql(spec, validate=validate))
+            except Exception as exc:
+                if not (validate and oracle_error_code(exc) == ORA_ORPHAN_ROWS):
+                    raise
+                # 数えた後に孤立した行が増えた。既存の行は検査せずに有効にする。
+                cursor.execute(enable_foreign_key_sql(spec, validate=False))
+                validate = False
+            connection.commit()
+        return validate
+
+    # ---- 参照先の無い行の削除（#511） ----------------------------------------
+
+    def delete_orphaned_rows(
+        self,
+        *,
+        constraint_name: str,
+        expected_orphan_rows: int,
+    ) -> dict[str, Any]:
+        """管理対象の FK の、参照先の無い行を削除して FK を VALIDATE する（利用者の明示操作）。
+
+        作成・更新と同じ lease を取る（制御テーブルの OPERATION_KIND の CHECK 制約に合わせ、
+        種類は作成・更新と同じにする）。削除の直前に件数を数え直し、`expected_orphan_rows`
+        （利用者が確認した件数）より多ければ削除しない。FK が無い・無効・削除規則が違うときは、
+        先に作成・更新で直すよう 409 を返す。
+        """
+
+        try:
+            target_name = _identifier(constraint_name)
+        except ValueError:
+            raise self._foreign_key_not_found(constraint_name) from None
+        owner = uuid.uuid4().hex
+        self._ensure_control_schema()
+        self._claim_lease(owner, self._operation_kind(False))
+        try:
+            with self._connection_factory() as connection:
+                return self._delete_orphaned_rows_on(
+                    connection,
+                    owner,
+                    target_name,
+                    expected_orphan_rows=max(0, int(expected_orphan_rows)),
+                )
+        except SystemSchemaPreconditionError:
+            # 前提の確認で止めた（DB は変えていない）。lease は返してあり、失敗として記録しない。
+            raise
+        except SystemSchemaError as exc:
+            self._record_failure(owner, exc.code)
+            self._log_operation_failed(ORPHAN_DELETION_OPERATION, exc.code, exc)
+            raise
+        except Exception as exc:
+            code = oracle_error_code(exc)
+            self._record_failure(owner, code)
+            self._log_operation_failed(ORPHAN_DELETION_OPERATION, code, exc)
+            if code == ORA_CHILD_RECORD_FOUND:
+                raise SystemSchemaError(
+                    code,
+                    "参照先のない行を、別の表の行が参照しているため削除できません "
+                    f"({code})。参照している表の外部キーの、参照先のない行を先に削除してから、"
+                    "状態を再取得して再試行してください。",
+                    status_code=409,
+                ) from exc
+            raise self._operation_error(code) from exc
+
+    def _delete_orphaned_rows_on(
+        self,
+        connection: Any,
+        owner: str,
+        constraint_name: str,
+        *,
+        expected_orphan_rows: int,
+    ) -> dict[str, Any]:
+        self._configure_ddl_lock_timeout(connection)
+        try:
+            target = self._orphan_deletion_target(connection, constraint_name)
+            orphans = count_orphan_rows(connection, target.spec)
+            if orphans > expected_orphan_rows:
+                raise SystemSchemaPreconditionError(
+                    ORPHAN_ROWS_CHANGED,
+                    "参照先のない行の件数が確認したときより増えています"
+                    f"（確認時 {expected_orphan_rows} 件、現在 {orphans} 件）。"
+                    "状態を再取得し、件数を確認してから再実行してください。",
+                    status_code=409,
+                )
+        except SystemSchemaPreconditionError:
+            self._finish_operation(connection, owner, increment_epoch=False)
+            raise
+        if orphans == 0 and target.validated:
+            self._finish_operation(connection, owner, increment_epoch=False)
+            return self._orphan_deletion_result(
+                connection, target.spec, operation="no_op", deleted=0
+            )
+
+        deleted = self._delete_orphans_and_validate(connection, owner, target.spec)
+        self._finish_operation(connection, owner, increment_epoch=True)
+        result = self._orphan_deletion_result(
+            connection, target.spec, operation="orphans_deleted", deleted=deleted
+        )
+        # 監査のため、対象（表・FK）と、確認した件数・削除した件数を残す。
+        self.logger.info(
+            f"{self.log_prefix}_system_schema_operation_succeeded",
+            extra={
+                "operation": "orphans_deleted",
+                "schema_epoch": result["operation_state"]["schema_epoch"],
+                "constraint_name": target.spec.name,
+                "table_name": target.spec.table_name,
+                "referenced_table_name": target.spec.referenced_table_name,
+                "expected_orphan_rows": expected_orphan_rows,
+                "deleted_row_count": deleted,
+            },
+        )
+        return result
+
+    def _orphan_deletion_target(self, connection: Any, constraint_name: str) -> ExistingForeignKey:
+        """名前で指定された、管理対象（正本と同じ定義）の既存の FK。"""
+
+        comparable, by_signature = _comparable_foreign_keys(connection, self.managed_foreign_keys)
+        for spec in comparable:
+            current = by_signature.get(spec.signature)
+            if current is None or current.spec.name != constraint_name:
+                continue
+            if not current.enabled or current.spec.delete_rule != spec.delete_rule:
+                raise SystemSchemaPreconditionError(
+                    FOREIGN_KEY_OUTDATED,
+                    f"外部キー {constraint_name} は無効化されているか、削除規則が正本と"
+                    "異なります。先に「作成・更新」を実行してから、状態を再取得してください。",
+                    status_code=409,
+                )
+            return current
+        raise self._foreign_key_not_found(constraint_name)
+
+    @staticmethod
+    def _foreign_key_not_found(constraint_name: str) -> SystemSchemaPreconditionError:
+        # 識別子の形でない入力は、文言にそのまま出さない。
+        name = constraint_name.strip().upper()
+        shown = name if len(name) <= 128 and _IDENTIFIER_PATTERN.match(name) else "-"
+        return SystemSchemaPreconditionError(
+            FOREIGN_KEY_NOT_FOUND,
+            f"管理対象の外部キー {shown} が見つかりません。状態を再取得してください。",
+            status_code=404,
+        )
+
+    def _delete_orphans_and_validate(
+        self, connection: Any, owner: str, spec: ForeignKeySpec
+    ) -> int:
+        """孤立した行を削除して commit し、FK を VALIDATE する。削除した行数を返す。
+
+        VALIDATE が ORA-02298 になったとき（数えた後に孤立した行ができた）は、削除と VALIDATE を
+        1 回だけやり直す。
+        """
+
+        deleted = 0
+        attempts = 2
+        for attempt in range(attempts):
+            self._heartbeat(connection, owner)
+            with connection.cursor() as cursor:
+                cursor.execute(delete_orphan_rows_sql(spec))
+                deleted += int(cursor.rowcount or 0)
+                connection.commit()
+            self._heartbeat(connection, owner)
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(validate_foreign_key_sql(spec))
+                except Exception as exc:
+                    if attempt + 1 < attempts and oracle_error_code(exc) == ORA_ORPHAN_ROWS:
+                        continue
+                    raise
+                connection.commit()
+            break
+        return deleted
+
+    def _orphan_deletion_result(
+        self,
+        connection: Any,
+        spec: ForeignKeySpec,
+        *,
+        operation: SystemSchemaOrphanOperation,
+        deleted: int,
+    ) -> dict[str, Any]:
+        return {
+            **self._status_on(connection),
+            "operation": operation,
+            "deleted_row_count": deleted,
+            "foreign_key": spec.payload(orphan_rows=0),
+        }
+
     def _execute_drop(self, connection: Any, statement: str) -> int:
         """manifest にある object を 1 つ削除する（既に無いときは 0）。"""
 
@@ -1033,20 +1383,27 @@ __all__ = [
     "CONTROL_KEY",
     "DEFAULT_LEASE_SECONDS",
     "FOREIGN_KEY_DELETE_RULES",
+    "FOREIGN_KEY_NOT_FOUND",
+    "FOREIGN_KEY_OUTDATED",
     "IGNORED_APPLY_CODES",
     "IGNORED_DROP_CODES",
     "LOCK_RETRY_AFTER_SECONDS",
     "MAX_DDL_LOCK_TIMEOUT_SECONDS",
     "MIN_LEASE_SECONDS",
+    "ORA_CHILD_RECORD_FOUND",
+    "ORA_CONSTRAINT_NOT_FOUND",
     "ORA_FOREIGN_KEY_EXISTS",
     "ORA_ORPHAN_ROWS",
     "ORA_RESOURCE_BUSY",
+    "ORPHAN_DELETION_OPERATION",
+    "ORPHAN_ROWS_CHANGED",
     "RECREATE_CONFIRMATION_REQUIRED",
     "SCHEMA_OPERATION_FAILED",
     "SCHEMA_STATUS_UNAVAILABLE",
     "ConnectionFactory",
     "ExistingForeignKey",
     "ForeignKeyDrift",
+    "ForeignKeyMismatch",
     "ForeignKeySpec",
     "SystemSchemaActiveJobsError",
     "SystemSchemaBusyError",
@@ -1055,15 +1412,21 @@ __all__ = [
     "SystemSchemaOperation",
     "SystemSchemaOperationKind",
     "SystemSchemaOperationStatus",
+    "SystemSchemaOrphanOperation",
+    "SystemSchemaPreconditionError",
     "SystemSchemaStatus",
     "SystemTableForeignKeyData",
     "SystemTableOperationState",
+    "SystemTablesDeleteOrphansRequest",
     "SystemTablesInitializeRequest",
     "add_foreign_key_sql",
     "bind_list",
     "clamp_ddl_lock_timeout",
     "classify_system_schema_status",
     "count_orphan_rows",
+    "delete_orphan_rows_sql",
+    "drop_foreign_key_sql",
+    "enable_foreign_key_sql",
     "foreign_keys_from_create_table",
     "idle_operation_state",
     "inspect_foreign_keys",
@@ -1074,4 +1437,5 @@ __all__ = [
     "orphan_rows_sql",
     "require_recreate_confirmation",
     "system_tables_status_error",
+    "validate_foreign_key_sql",
 ]

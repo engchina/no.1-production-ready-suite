@@ -44,9 +44,16 @@ from pr_system_settings.oci import OciObjectStorageSettingsUpdate as OciObjectSt
 from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploadData
 from pr_system_settings.oci import OciSettingsData as OciSettingsData
 from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
-from pr_system_settings.system_schema import SystemSchemaOperation, SystemSchemaStatus
+from pr_system_settings.system_schema import (
+    SystemSchemaOperation,
+    SystemSchemaOrphanOperation,
+    SystemSchemaStatus,
+)
 from pr_system_settings.system_schema import SystemTableForeignKeyData as SystemTableForeignKeyData
 from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
+from pr_system_settings.system_schema import (
+    SystemTablesDeleteOrphansRequest as SystemTablesDeleteOrphansRequest,
+)
 from pr_system_settings.system_schema import (
     SystemTablesInitializeRequest as SystemTablesInitializeRequest,
 )
@@ -177,6 +184,9 @@ class SystemTablesStatusData(BaseModel):
     # 参照先の無い行（#505）。
     missing_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     orphaned_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
+    # 削除規則が正本と違う外部キーと、無効化された外部キー（更新で直す。#511）。
+    mismatched_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
+    disabled_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     tables: list[SystemTableMetadata]
     operation_state: SystemTableOperationState
 
@@ -187,6 +197,14 @@ class SystemTablesOperationData(SystemTablesStatusData):
     operation: SystemTableOperationResult
     dropped_object_count: int
     created_object_count: int
+
+
+class SystemTablesOrphanDeletionData(SystemTablesStatusData):
+    """参照先のない行の削除（#511）の後の状態と、削除した行数・対象の外部キー。"""
+
+    operation: SystemSchemaOrphanOperation
+    deleted_row_count: int
+    foreign_key: SystemTableForeignKeyData
 
 
 class HuggingFaceSettingsData(BaseModel):
