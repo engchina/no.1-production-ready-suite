@@ -106,6 +106,9 @@ describe("判定の helper", () => {
     expect(isSystemTablesStatusData(statusData("ready"))).toBe(true);
     expect(isSystemTablesStatusData({ ...statusData("ready"), retired_objects: [] })).toBe(true);
     expect(isSystemTablesStatusData({ ...statusData("ready"), retired_objects: null })).toBe(false);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), missing_foreign_keys: [] })).toBe(true);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), missing_foreign_keys: {} })).toBe(false);
+    expect(isSystemTablesStatusData({ ...statusData("ready"), orphaned_foreign_keys: "x" })).toBe(false);
     expect(isSystemTablesStatusData({ ...statusData("ready"), tables: null })).toBe(false);
     expect(isSystemTablesStatusData({ status: "ready" })).toBe(false);
     expect(isSystemTablesStatusData(null)).toBe(false);
@@ -163,6 +166,53 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).toContain(`placeholder="${PHRASE}"`);
     // 確認語が未入力の間は全再作成を押せない。
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?すべて再作成/s);
+  });
+
+  it("不足している外部キーを更新必要の案内に並べ、参照先のない行の件数を添える（#505）", () => {
+    const foreignKey = {
+      name: "DEMO_ITEMS_PARENT_FK",
+      table_name: "DEMO_ITEMS",
+      columns: ["PARENT_ID"],
+      referenced_table_name: "DEMO_PARENTS",
+      referenced_columns: ["PARENT_ID"],
+      delete_rule: "CASCADE",
+      orphan_rows: 1240,
+    };
+    const html = renderCard(
+      clientWith(statusData("outdated", { pending_versions: [], missing_foreign_keys: [foreignKey] })),
+    );
+    expect(html).toContain("更新必要");
+    expect(html).toContain('data-testid="system-tables-missing-foreign-keys"');
+    expect(html).toContain("既存のテーブルに外部キーが 1 件ありません");
+    expect(html).toContain("DEMO_ITEMS (PARENT_ID) → DEMO_PARENTS");
+    expect(html).toContain("参照先のない行 1,240 件");
+    expect(html).not.toContain('data-testid="system-tables-orphaned-foreign-keys"');
+  });
+
+  it("参照先のない既存の行が残る外部キーは ready でも警告を出す（#505）", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("ready", {
+          orphaned_foreign_keys: [
+            {
+              name: "DEMO_ITEMS_PARENT_FK",
+              table_name: "DEMO_ITEMS",
+              columns: ["PARENT_ID"],
+              referenced_table_name: "DEMO_PARENTS",
+              referenced_columns: ["PARENT_ID"],
+              delete_rule: "CASCADE",
+              orphan_rows: 3,
+            },
+          ],
+        }),
+      ),
+    );
+    expect(html).toContain("初期化済み");
+    expect(html).toContain('data-testid="system-tables-orphaned-foreign-keys"');
+    expect(html).toContain("参照先のない既存の行があります");
+    expect(html).toContain("既存の行は自動では削除しません");
+    expect(html).toContain("参照先のない行 3 件");
+    expect(html).not.toContain('data-testid="system-tables-missing-foreign-keys"');
   });
 
   it("名前の head はそのまま出し、製品の文言で上書きできる", () => {

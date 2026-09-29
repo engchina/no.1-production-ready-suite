@@ -12,18 +12,24 @@ import pytest
 
 from pr_system_settings.system_schema import (
     RECREATE_CONFIRMATION_REQUIRED,
+    ForeignKeySpec,
     SystemSchemaActiveJobsError,
     SystemSchemaBusyError,
     SystemSchemaError,
     SystemSchemaManagerBase,
+    SystemTableForeignKeyData,
     SystemTableOperationState,
     SystemTablesInitializeRequest,
+    add_foreign_key_sql,
     bind_list,
     clamp_ddl_lock_timeout,
     classify_system_schema_status,
+    foreign_keys_from_create_table,
     idle_operation_state,
+    inspect_foreign_keys,
     iso_timestamp,
     oracle_error_code,
+    orphan_rows_sql,
     require_recreate_confirmation,
     system_tables_status_error,
 )
@@ -405,3 +411,328 @@ def test_status_reports_table_metadata_and_idle_state_without_control_table() ->
     assert tables["DEMO_ITEMS"]["exists"] is True
     assert tables["DEMO_ITEMS"]["estimated_rows"] == 12
     assert tables["DEMO_ITEMS"]["qualified_name"] == "DEMO.DEMO_ITEMS"
+
+
+# ---- 外部キーの差分（#505） ---------------------------------------------------
+
+_CANONICAL_ITEMS = """CREATE TABLE demo_items (
+    item_id   VARCHAR2(36) PRIMARY KEY,
+    parent_id VARCHAR2(36),
+    tenant_id VARCHAR2(36),
+    owner_id  VARCHAR2(36),
+    CONSTRAINT demo_items_parent_fk
+        FOREIGN KEY (parent_id) REFERENCES demo_parents (parent_id) ON DELETE CASCADE,
+    CONSTRAINT demo_items_owner_fk
+        FOREIGN KEY (tenant_id, owner_id)
+        REFERENCES demo_owners (tenant_id, owner_id)
+        ON DELETE SET NULL,
+    CONSTRAINT demo_items_self_fk FOREIGN KEY (item_id) REFERENCES demo_items (item_id)
+)"""
+
+
+def test_foreign_keys_are_parsed_from_create_table_only() -> None:
+    specs = {spec.name: spec for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS)}
+
+    assert specs["DEMO_ITEMS_PARENT_FK"] == ForeignKeySpec(
+        name="DEMO_ITEMS_PARENT_FK",
+        table_name="DEMO_ITEMS",
+        columns=("PARENT_ID",),
+        referenced_table_name="DEMO_PARENTS",
+        referenced_columns=("PARENT_ID",),
+        delete_rule="CASCADE",
+    )
+    assert specs["DEMO_ITEMS_OWNER_FK"].columns == ("TENANT_ID", "OWNER_ID")
+    assert specs["DEMO_ITEMS_OWNER_FK"].delete_rule == "SET NULL"
+    assert specs["DEMO_ITEMS_SELF_FK"].delete_rule == "NO ACTION"
+    assert (
+        foreign_keys_from_create_table(
+            "ALTER TABLE demo_items ADD CONSTRAINT x_fk FOREIGN KEY (a) REFERENCES b (a)"
+        )
+        == []
+    )
+    assert foreign_keys_from_create_table("CREATE TABLE demo_plain (id NUMBER PRIMARY KEY)") == []
+
+
+def test_foreign_key_spec_rejects_unsafe_identifiers_and_shapes() -> None:
+    base = {
+        "name": "DEMO_FK",
+        "table_name": "DEMO_ITEMS",
+        "columns": ("PARENT_ID",),
+        "referenced_table_name": "DEMO_PARENTS",
+        "referenced_columns": ("PARENT_ID",),
+    }
+    for override in (
+        {"table_name": "DEMO_ITEMS; DROP TABLE X"},
+        {"columns": ('"quoted"',)},
+        {"columns": ("A", "B")},
+        {"columns": ()},
+        {"delete_rule": "RESTRICT"},
+    ):
+        with pytest.raises(ValueError):
+            ForeignKeySpec(**{**base, **override})  # type: ignore[arg-type]
+
+
+def test_foreign_key_ddl_and_orphan_sql() -> None:
+    specs = {spec.name: spec for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS)}
+    parent = specs["DEMO_ITEMS_PARENT_FK"]
+    owner = specs["DEMO_ITEMS_OWNER_FK"]
+
+    assert add_foreign_key_sql(parent, validate=True) == (
+        "ALTER TABLE DEMO_ITEMS ADD CONSTRAINT DEMO_ITEMS_PARENT_FK FOREIGN KEY (PARENT_ID) "
+        "REFERENCES DEMO_PARENTS (PARENT_ID) ON DELETE CASCADE"
+    )
+    assert add_foreign_key_sql(owner, validate=False) == (
+        "ALTER TABLE DEMO_ITEMS ADD CONSTRAINT DEMO_ITEMS_OWNER_FK "
+        "FOREIGN KEY (TENANT_ID, OWNER_ID) REFERENCES DEMO_OWNERS (TENANT_ID, OWNER_ID) "
+        "ON DELETE SET NULL ENABLE NOVALIDATE"
+    )
+    assert add_foreign_key_sql(specs["DEMO_ITEMS_SELF_FK"], validate=True).endswith(
+        "REFERENCES DEMO_ITEMS (ITEM_ID)"
+    )
+    # 列のどれかが NULL の行は Oracle も検査しないので数えない。
+    assert orphan_rows_sql(owner) == (
+        "SELECT COUNT(*) FROM DEMO_ITEMS child "
+        "WHERE child.TENANT_ID IS NOT NULL AND child.OWNER_ID IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM DEMO_OWNERS parent "
+        "WHERE parent.TENANT_ID = child.TENANT_ID AND parent.OWNER_ID = child.OWNER_ID)"
+    )
+
+
+def test_classify_treats_missing_foreign_keys_as_outdated() -> None:
+    assert (
+        classify_system_schema_status(
+            set(MANAGED),
+            domain_tables=DOMAIN,
+            managed_objects=MANAGED,
+            migrations_current=True,
+            foreign_keys_current=False,
+        )
+        == "outdated"
+    )
+    # 表が足りないときは partial が優先（FK は表の作成で作られる）。
+    assert (
+        classify_system_schema_status(
+            {("DEMO_ITEMS", "TABLE")},
+            domain_tables=DOMAIN,
+            managed_objects=MANAGED,
+            migrations_current=True,
+            foreign_keys_current=False,
+        )
+        == "partial"
+    )
+
+
+class _ForeignKeyDatabase:
+    """USER_TABLES・USER_CONSTRAINTS・孤立した行の件数と、FK の DDL だけを扱う fake。"""
+
+    def __init__(self, tables: set[str]) -> None:
+        self.tables = set(tables)
+        # 制約名 → (定義, 既存の行を検査済みか)
+        self.foreign_keys: dict[str, tuple[ForeignKeySpec, bool]] = {}
+        self.orphans: dict[str, int] = {}
+        # 数えた後に孤立した行が増えた（検査付きの追加だけが ORA-02298 で失敗する）。
+        self.orphans_after_count: dict[str, int] = {}
+        self.fail_orphan_count = False
+        self.statements: list[str] = []
+
+    @contextmanager
+    def connection(self) -> Iterator[_ForeignKeyConnection]:
+        yield _ForeignKeyConnection(self)
+
+
+class _ForeignKeyConnection:
+    def __init__(self, database: _ForeignKeyDatabase) -> None:
+        self.database = database
+
+    def cursor(self) -> _ForeignKeyCursor:
+        return _ForeignKeyCursor(self.database)
+
+    def commit(self) -> None:
+        return None
+
+
+class _ForeignKeyCursor:
+    def __init__(self, database: _ForeignKeyDatabase) -> None:
+        self.database = database
+        self.rows: list[tuple[Any, ...]] = []
+        self.rowcount = 0
+
+    def __enter__(self) -> _ForeignKeyCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self.rows[0] if self.rows else None
+
+    def execute(self, statement: str, params: dict[str, Any] | None = None) -> None:
+        sql = re.sub(r"\s+", " ", statement).strip()
+        upper = sql.upper()
+        params = params or {}
+        self.database.statements.append(sql)
+        self.rows = []
+        self.rowcount = 0
+        if upper.startswith("SELECT TABLE_NAME FROM USER_TABLES"):
+            self.rows = [(name,) for name in params.values() if name in self.database.tables]
+        elif upper.startswith("SELECT CHILD.CONSTRAINT_NAME"):
+            names = set(params.values())
+            self.rows = [
+                (
+                    spec.name,
+                    spec.table_name,
+                    spec.referenced_table_name,
+                    spec.delete_rule,
+                    "ENABLED",
+                    "VALIDATED" if validated else "NOT VALIDATED",
+                    column,
+                    referenced,
+                )
+                for spec, validated in self.database.foreign_keys.values()
+                if spec.table_name in names
+                for column, referenced in zip(spec.columns, spec.referenced_columns, strict=True)
+            ]
+        elif upper.startswith("SELECT COUNT(*) FROM"):
+            if self.database.fail_orphan_count:
+                raise RuntimeError("ORA-00904: invalid identifier")
+            table = upper.split()[3]
+            self.rows = [(self.database.orphans.get(table, 0),)]
+        elif upper.startswith("ALTER TABLE"):
+            match = re.match(r"ALTER TABLE (\S+) ADD CONSTRAINT (\S+) ", upper)
+            assert match is not None
+            table, name = match.groups()
+            spec = next(
+                spec
+                for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS)
+                if spec.name == name
+            )
+            if any(
+                existing.signature == spec.signature
+                for existing, _ in self.database.foreign_keys.values()
+            ):
+                raise RuntimeError("ORA-02275: such a referential constraint already exists")
+            novalidate = upper.endswith("ENABLE NOVALIDATE")
+            orphans = self.database.orphans.get(table, 0) + self.database.orphans_after_count.get(
+                table, 0
+            )
+            if not novalidate and orphans:
+                raise RuntimeError("ORA-02298: cannot validate - parent keys not found")
+            self.database.foreign_keys[name] = (spec, not novalidate)
+        elif upper.startswith("UPDATE DEMO_SCHEMA_OPERATIONS"):
+            self.rowcount = 1  # heartbeat
+
+
+class _ForeignKeyManager(_DemoManager):
+    managed_foreign_keys = tuple(foreign_keys_from_create_table(_CANONICAL_ITEMS))
+
+    def __init__(self, database: _ForeignKeyDatabase) -> None:
+        SystemSchemaManagerBase.__init__(
+            self, database.connection, lease_seconds=1, ddl_lock_timeout_seconds=7
+        )
+
+
+def test_inspect_compares_definitions_and_counts_orphans() -> None:
+    specs = {spec.name: spec for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS)}
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    database.orphans["DEMO_ITEMS"] = 3
+    with database.connection() as connection:
+        drift = inspect_foreign_keys(connection, list(specs.values()))
+    # 参照先の表（DEMO_OWNERS）が無い FK は比べない。
+    assert [(spec.name, orphans) for spec, orphans in drift.missing] == [
+        ("DEMO_ITEMS_PARENT_FK", 3),
+        ("DEMO_ITEMS_SELF_FK", 3),
+    ]
+    assert drift.orphaned == []
+
+    # 別名でも同じ定義の FK があれば不足にしない。検査していない FK の孤立した行は警告に出す。
+    renamed = ForeignKeySpec(
+        name="LEGACY_PARENT_FK",
+        table_name="DEMO_ITEMS",
+        columns=("PARENT_ID",),
+        referenced_table_name="DEMO_PARENTS",
+        referenced_columns=("PARENT_ID",),
+        delete_rule="CASCADE",
+    )
+    database.foreign_keys[renamed.name] = (renamed, False)
+    with database.connection() as connection:
+        drift = inspect_foreign_keys(connection, list(specs.values()))
+    assert [spec.name for spec, _ in drift.missing] == ["DEMO_ITEMS_SELF_FK"]
+    assert drift.status_fields()["orphaned_foreign_keys"] == [
+        {
+            "name": "LEGACY_PARENT_FK",
+            "table_name": "DEMO_ITEMS",
+            "columns": ["PARENT_ID"],
+            "referenced_table_name": "DEMO_PARENTS",
+            "referenced_columns": ["PARENT_ID"],
+            "delete_rule": "CASCADE",
+            "orphan_rows": 3,
+        }
+    ]
+    SystemTableForeignKeyData.model_validate(drift.status_fields()["orphaned_foreign_keys"][0])
+
+    # 数えられない（列がまだ無い等）ときも状態の取得は失敗させない。
+    database.fail_orphan_count = True
+    with database.connection() as connection:
+        drift = inspect_foreign_keys(connection, list(specs.values()))
+    assert [(spec.name, orphans) for spec, orphans in drift.missing] == [
+        ("DEMO_ITEMS_SELF_FK", None)
+    ]
+    assert drift.orphaned == []
+
+
+def test_apply_adds_validated_or_novalidate_foreign_keys_without_deleting_rows() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS", "DEMO_OWNERS"})
+    database.orphans["DEMO_ITEMS"] = 0
+    manager = _ForeignKeyManager(database)
+
+    with database.connection() as connection:
+        added = manager._apply_missing_foreign_keys(connection, "owner")
+        again = manager._apply_missing_foreign_keys(connection, "owner")
+
+    assert [(item["name"], item["validated"]) for item in added] == [
+        ("DEMO_ITEMS_PARENT_FK", True),
+        ("DEMO_ITEMS_OWNER_FK", True),
+        ("DEMO_ITEMS_SELF_FK", True),
+    ]
+    assert again == []
+    assert not any("NOVALIDATE" in statement for statement in database.statements)
+
+    orphaned = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    orphaned.orphans["DEMO_ITEMS"] = 2
+    with orphaned.connection() as connection:
+        added = _ForeignKeyManager(orphaned)._apply_missing_foreign_keys(connection, "owner")
+    assert [(item["name"], item["validated"], item["orphan_rows"]) for item in added] == [
+        ("DEMO_ITEMS_PARENT_FK", False, 2),
+        ("DEMO_ITEMS_SELF_FK", False, 2),
+    ]
+    # 孤立した行があると分かっているときは、検査付きの追加を試さない。既存の行は消さない。
+    assert all(
+        statement.endswith("ENABLE NOVALIDATE")
+        for statement in orphaned.statements
+        if statement.startswith("ALTER TABLE")
+    )
+    assert not any(statement.upper().startswith("DELETE") for statement in orphaned.statements)
+
+
+def test_apply_falls_back_to_novalidate_when_orphans_appear_after_count() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    database.orphans_after_count["DEMO_ITEMS"] = 1
+    manager = _ForeignKeyManager(database)
+
+    with database.connection() as connection:
+        added = manager._apply_missing_foreign_keys(connection, "owner")
+
+    assert [(item["name"], item["validated"]) for item in added] == [
+        ("DEMO_ITEMS_PARENT_FK", False),
+        ("DEMO_ITEMS_SELF_FK", False),
+    ]
+    alters = [statement for statement in database.statements if statement.startswith("ALTER")]
+    assert [statement.endswith("ENABLE NOVALIDATE") for statement in alters] == [
+        False,
+        True,
+        False,
+        True,
+    ]

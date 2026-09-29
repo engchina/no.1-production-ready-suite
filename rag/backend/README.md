@@ -168,6 +168,8 @@ uv run python -m app.rag.oracle_schema --migration \
 
 アプリからの適用（状態の確認・作成 / 更新・全再作成）は `app.rag.system_schema`（CLI は `app.rag.system_schema_cli`、画面は「システム設定 > データベース > RAG システムテーブル」）が行います。lease・migration の台帳・状態の分類・確認語の検証は 3 製品共通の `pr_system_settings.system_schema` の骨格を使い（#325）、RAG は manifest（`MANAGED_TABLES` / `MANAGED_INDEXES` / Oracle Text の object / 廃止した object）、`oracle_schema` の DDL の正本、共通認証の `PLATFORM_*` の先行作成、取込ジョブの実行中の確認、確認語 `RECREATE_RAG_SYSTEM_TABLES` を持ちます。
 
+外部キー（#505）: 表の作成は「無ければ作る」なので、古い版で作った表には後から正本に足した FK が無いまま残ります。状態の確認は、DDL 正本の `CREATE TABLE` の FK（`MANAGED_FOREIGN_KEYS`）と `USER_CONSTRAINTS` を、名前ではなく定義（表・列・参照先）で比べ、足りない FK を `missing_foreign_keys` に出して状態を `outdated` にします。「作成・更新」（CLI は `initialize`）が FK を追加します。参照先のない既存の行（孤立した行）がある FK は `ENABLE NOVALIDATE`（新しい行と更新から強制し、既存の行は検査しない）で追加し、残った件数を `orphaned_foreign_keys` に警告として出します。既存の行は自動では削除しません。片付けるときは件数を確認したうえで利用者が削除し、必要なら `ALTER TABLE <表> MODIFY CONSTRAINT <FK> VALIDATE` で検査済みにします。
+
 監査 table は query 本文や OCR 原文を保存せず、`query_hash`、`source_sha256`、件数、guardrail code、trace id、error type などの運用メタデータだけを永続化する設計です。
 
 ## アップロード制限

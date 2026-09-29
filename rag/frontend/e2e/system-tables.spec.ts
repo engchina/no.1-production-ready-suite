@@ -63,12 +63,24 @@ function systemTables(status: SchemaStatus) {
   };
 }
 
+const chunkSetsDocumentForeignKey = {
+  name: "RAG_CHUNK_SETS_DOCUMENT_FK",
+  table_name: "RAG_CHUNK_SETS",
+  columns: ["DOCUMENT_ID"],
+  referenced_table_name: "RAG_DOCUMENTS",
+  referenced_columns: ["DOCUMENT_ID"],
+  delete_rule: "CASCADE",
+  orphan_rows: 0,
+};
+
 async function mockSettings(
   page: Page,
   options: {
     initialStatus?: SchemaStatus;
     initializeFails?: boolean;
     statusDelayMs?: number;
+    /** 古い版の表に外部キーが無い（#505）。更新後は参照先のない行が残る警告を返す。 */
+    foreignKeyDrift?: boolean;
   } = {}
 ) {
   let status = options.initialStatus ?? "missing";
@@ -99,6 +111,9 @@ async function mockSettings(
         json: {
           data: {
             ...systemTables("ready"),
+            orphaned_foreign_keys: options.foreignKeyDrift
+              ? [{ ...chunkSetsDocumentForeignKey, orphan_rows: 240 }]
+              : [],
             operation: recreatePayload.recreate ? "recreated" : "initialized",
             dropped_object_count: recreatePayload.recreate ? 96 : 0,
             created_object_count: 96,
@@ -115,7 +130,22 @@ async function mockSettings(
       }
       await route.fulfill({
         json: {
-          data: systemTables(status),
+          data:
+            options.foreignKeyDrift && status === "outdated"
+              ? {
+                  ...systemTables(status),
+                  pending_versions: [],
+                  missing_foreign_keys: [
+                    { ...chunkSetsDocumentForeignKey, orphan_rows: 240 },
+                    {
+                      ...chunkSetsDocumentForeignKey,
+                      name: "RAG_DOC_EXT_DOCUMENT_FK",
+                      table_name: "RAG_DOCUMENT_EXTRACTIONS",
+                      orphan_rows: 0,
+                    },
+                  ],
+                }
+              : systemTables(status),
           error_messages: [],
           warning_messages: [],
         },
@@ -263,4 +293,31 @@ test("操作失敗後にエラーへフォーカスし、375px でページ横�
   await card.getByText("テーブルと migration の詳細").click();
   await card.getByTestId("system-tables-scroll-region").focus();
   await expect(card.getByTestId("system-tables-scroll-region")).toBeFocused();
+});
+
+test("不足している外部キーを更新必要として並べ、更新後は参照先のない行を警告する（#505）", async ({
+  page,
+}) => {
+  const mock = await mockSettings(page, { initialStatus: "outdated", foreignKeyDrift: true });
+  await page.goto("/settings/database#system-tables");
+  const card = page.locator("#system-tables");
+  await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
+  const missing = card.getByTestId("system-tables-missing-foreign-keys");
+  await expect(missing).toContainText("既存のテーブルに外部キーが 2 件ありません");
+  await expect(missing).toContainText("RAG_CHUNK_SETS (DOCUMENT_ID) → RAG_DOCUMENTS");
+  await expect(missing).toContainText("参照先のない行 240 件");
+  await expect(missing).toContainText("RAG_DOCUMENT_EXTRACTIONS (DOCUMENT_ID) → RAG_DOCUMENTS");
+
+  await card.getByRole("button", { name: "作成・更新" }).click();
+  await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
+  expect(mock.initializeCalls()).toBe(1);
+  await expect(missing).toHaveCount(0);
+  const orphaned = card.getByTestId("system-tables-orphaned-foreign-keys");
+  await expect(orphaned).toContainText("既存の行は自動では削除しません");
+  await expect(orphaned).toContainText("参照先のない行 240 件");
+
+  const pageOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(pageOverflow).toBeLessThanOrEqual(1);
 });
