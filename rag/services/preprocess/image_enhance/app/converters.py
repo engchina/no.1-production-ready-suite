@@ -113,7 +113,10 @@ def _downscale(image: object, cv2: object) -> object:
 def _deskew(gray: object, cv2: object, np: object) -> object:
     """テキスト画素の最小外接矩形から傾きを推定し、小角度だけ補正する。"""
     threshold = cv2.threshold(  # type: ignore[attr-defined]
-        gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU  # type: ignore[attr-defined]
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,  # type: ignore[attr-defined]
     )[1]
     coords = np.column_stack(np.where(threshold > 0))  # type: ignore[attr-defined]
     if coords.size == 0:  # type: ignore[attr-defined]
