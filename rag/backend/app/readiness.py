@@ -8,6 +8,7 @@ from pr_system_settings.database import database_readiness
 from app.config import (
     DEFAULT_LOCAL_STORAGE_DIR,
     Settings,
+    enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     enterprise_ai_vision_model_id,
@@ -118,19 +119,30 @@ def _genai_check(settings: Settings) -> str:
 
 
 def _enterprise_ai_check(settings: Settings) -> str:
-    """OCI Enterprise AI の endpoint / model catalog を確認する。"""
+    """OCI Enterprise AI の endpoint / model catalog を確認する。
+
+    接続は既定のテキストモデルと既定の Vision モデルそれぞれの接続を確かめる(#533)。
+    """
     api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
-    required_status = _required_values_check(
-        settings.oci_enterprise_ai_endpoint,
-        settings.oci_enterprise_ai_project_ocid,
-        api_path,
-    )
-    if required_status != READINESS_OK:
-        return required_status
-    if not _is_present(settings.oci_enterprise_ai_api_key):
+    default_model = enterprise_ai_default_model_id(settings)
+    connections = {
+        connection.connection_id: connection
+        for connection in (
+            enterprise_ai_connection_for_model(settings, default_model),
+            enterprise_ai_connection_for_model(settings, enterprise_ai_vision_model_id(settings)),
+        )
+    }
+    for connection in connections.values():
+        required_status = _required_values_check(
+            connection.endpoint,
+            connection.project_ocid,
+            api_path,
+        )
+        if required_status != READINESS_OK:
+            return required_status
+    if not all(_is_present(connection.api_key) for connection in connections.values()):
         return READINESS_MISSING_CREDENTIALS
     model_ids = {model.model_id for model in enterprise_ai_model_catalog(settings)}
-    default_model = enterprise_ai_default_model_id(settings)
     if not model_ids or not _is_present(default_model):
         return READINESS_MISSING
     if default_model not in model_ids:

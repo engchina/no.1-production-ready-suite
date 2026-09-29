@@ -8,8 +8,6 @@ parser マイクロサービス(oci_genai_vision)は共有 core を env 由来 c
 
 from __future__ import annotations
 
-import dataclasses
-
 from rag_parser_core.oci_enterprise_ai import (
     DEFAULT_MIME_TYPE,
     EnterpriseAiHttpTransport,
@@ -28,6 +26,7 @@ from rag_parser_core.oci_enterprise_ai import (
 
 from app.config import (
     Settings,
+    enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_vision_model_id,
     get_settings,
@@ -49,18 +48,31 @@ __all__ = [
 ]
 
 
-def config_from_settings(settings: Settings) -> OciEnterpriseAiConfig:
+def config_from_settings(
+    settings: Settings, *, model_id: str | None = None
+) -> OciEnterpriseAiConfig:
     """backend Settings から共有 core 用の config を組み立てる。
 
     vision/default model ID は model catalog 解決(config.py)で従来同等に決める。
+    `model_id` を渡すと、テキストの呼び出しをそのモデルに差し替える(マルチモデル比較)。
+    接続はモデルごとに引く(#533): テキストはテキストのモデルの接続、Vision は既定の
+    Vision モデルの接続(テキストと違うときだけ `vision_oci_enterprise_ai_*` に入れる)。
     """
+    text_model_id = model_id or enterprise_ai_default_model_id(settings)
+    vision_model_id = enterprise_ai_vision_model_id(settings)
+    text = enterprise_ai_connection_for_model(settings, text_model_id)
+    vision = enterprise_ai_connection_for_model(settings, vision_model_id)
+    separate_vision = vision.connection_id != text.connection_id
     return OciEnterpriseAiConfig(
-        oci_enterprise_ai_endpoint=settings.oci_enterprise_ai_endpoint,
-        oci_enterprise_ai_api_key=settings.oci_enterprise_ai_api_key,
-        oci_enterprise_ai_project_ocid=settings.oci_enterprise_ai_project_ocid,
+        oci_enterprise_ai_endpoint=text.endpoint,
+        oci_enterprise_ai_api_key=text.api_key,
+        oci_enterprise_ai_project_ocid=text.project_ocid,
+        vision_oci_enterprise_ai_endpoint=vision.endpoint if separate_vision else None,
+        vision_oci_enterprise_ai_api_key=vision.api_key if separate_vision else None,
+        vision_oci_enterprise_ai_project_ocid=vision.project_ocid if separate_vision else None,
         oci_compartment_id=settings.oci_compartment_id,
-        vision_model_id=enterprise_ai_vision_model_id(settings),
-        default_model_id=enterprise_ai_default_model_id(settings),
+        vision_model_id=vision_model_id,
+        default_model_id=text_model_id,
         oci_enterprise_ai_llm_path=settings.oci_enterprise_ai_llm_path,
         oci_enterprise_ai_vlm_path=settings.oci_enterprise_ai_vlm_path,
         oci_enterprise_ai_llm_response_path=settings.oci_enterprise_ai_llm_response_path,
@@ -91,9 +103,8 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
         *,
         model_id: str | None = None,
     ) -> None:
-        config = config_from_settings(settings or get_settings())
         # マルチモデル比較では生成モデルだけを差し替える。共有 core は frozen config の
-        # default_model_id をペイロードへ焼き込むため、ここで置換した config で駆動する。
-        if model_id:
-            config = dataclasses.replace(config, default_model_id=model_id)
+        # default_model_id をペイロードへ焼き込むため、差し替えたモデル(とその接続。#533)の
+        # config で駆動する。
+        config = config_from_settings(settings or get_settings(), model_id=model_id or None)
         super().__init__(config, http_transport=http_transport)

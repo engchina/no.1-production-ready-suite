@@ -162,3 +162,32 @@ import { AppShell, Sidebar } from "@engchina/production-ready-ui";
 
 4. 3 製品の backend と worker を起動する。RAG は、解析サービス（parser）に渡す実行用の env（`RAG_SERVICE_RUNTIME_ENV_FILE`）を
    backend が書き直すので、RAG の「サービス管理」画面から OCI の parser を再起動する（`systemctl restart` だけでは古い env のまま）。
+
+## OCI Enterprise AI の接続を 2 件にする（#533）
+
+「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を最大 2 件持ち、登録モデルごとに
+使う接続を選ぶ（未指定のモデルは接続 1）。上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（2）。
+
+- **既存環境の更新は要らない。** 接続 1 は今までの属性・変数名（`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_PROJECT_OCID` / `_API_KEY`）の
+  ままで、保存済みの `model-settings.json`（接続 1 組の形）は、読み込むときに接続 1 として扱う。画面で保存し直すと、
+  `enterprise_ai.connections`（secret なし）と、登録モデルの `connection_id` を書く。
+- 接続 2 の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけ接続 2 が有効になる。
+
+  | 変数 | 内容 |
+  |---|---|
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` | 接続 2 の Endpoint URL |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_PROJECT_OCID` | 接続 2 の Project OCID |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY` | 接続 2 の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_CONNECTION_NAME` | 接続 2 の表示名（任意。空なら「接続 2」） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_CONNECTION_NAME` | 接続 1 の表示名（任意。空なら「接続 1」） |
+
+- `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"` を書く。
+- 実行時は、モデルを呼ぶたびに `enterprise_ai_connection_for_model(settings, model_id)` でそのモデルの接続を引く（3 製品の呼び出し・
+  接続テスト・RAG の readiness / NL2SQL の診断）。接続を持たない ID（登録モデルにない ID、消えた接続を指すモデル）は接続 1 を使う。
+- env だけを受け取る部品は、使うモデルの接続を渡す。
+  - RAG の OCI の parser（`service_runtime_env`）: VLM 抽出だけなので **既定の Vision モデルの接続** を `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`
+    / `_API_KEY` / `_PROJECT_OCID` に書く（接続を変えたら「サービス管理」から parser を再起動する）。
+  - RAG の DocRAG の回答（`build_docrag_settings`）: 回答は **既定のテキストモデルの接続**（`OCI_ENTERPRISE_AI_*`）、根拠画像の読み取りは
+    **既定の Vision モデルの接続**（`OCI_ENTERPRISE_AI_VLM_ENDPOINT` / `_VLM_API_KEY` / `_VLM_PROJECT_OCID`）。
+  - RAG の共有 client（`rag_parser_core.OciEnterpriseAiConfig`）: テキストはテキストのモデルの接続、Vision の呼び出し（VLM 抽出・
+    図の読み取り・Files API）は `vision_oci_enterprise_ai_*`（`for_vision()`）で既定の Vision モデルの接続を使う。

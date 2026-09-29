@@ -15,6 +15,7 @@ from pydantic import Field
 from pr_system_settings import model as shared_model
 from pr_system_settings.model import (
     ENTERPRISE_AI_API_KEY_ENV,
+    ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
     EnterpriseAiConfiguredModel,
     ModelSecretStateMixin,
     ModelSettingsSection,
@@ -32,6 +33,11 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
+    oci_enterprise_ai_connection_name: str = ""
+    oci_enterprise_ai_secondary_connection_name: str = ""
+    oci_enterprise_ai_secondary_endpoint: str = ""
+    oci_enterprise_ai_secondary_project_ocid: str = ""
+    oci_enterprise_ai_secondary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""
@@ -89,6 +95,7 @@ PARSER_SECTION = ModelSettingsSection(
 @pytest.fixture(autouse=True)
 def _no_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, raising=False)
     monkeypatch.delenv(PARSER_KEY_ENV, raising=False)
 
 
@@ -129,8 +136,8 @@ def test_patch_saves_key_only_in_env_and_keeps_product_section(tmp_path: Path) -
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["settings"]["enterprise_ai"]["api_key"] == ""
-    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert data["settings"]["enterprise_ai"]["connections"][0]["api_key"] == ""
+    assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert data["secret_source"] == "environment"
     document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
     assert document["version"] == 3
@@ -158,7 +165,7 @@ def test_blank_key_keeps_current_and_clear_removes_it(tmp_path: Path) -> None:
 
     clear = {**PAYLOAD, "enterprise_ai": {**keep["enterprise_ai"], "clear_api_key": True}}
     data = client.patch("/api/settings/model", json=clear).json()["data"]
-    assert data["settings"]["enterprise_ai"]["has_api_key"] is False
+    assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is False
     assert data["secret_source"] == "missing"
     assert ENTERPRISE_AI_API_KEY_ENV not in dotenv_values(tmp_path / ".env")
 
@@ -235,7 +242,9 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
         .get("/api/settings/model")
         .json()["data"]["settings"]["enterprise_ai"]["models"]
     )
-    assert models == [{"model_id": "", "display_name": "", "vision_enabled": False}]
+    assert models == [
+        {"model_id": "", "display_name": "", "vision_enabled": False, "connection_id": "primary"}
+    ]
 
 
 def test_model_test_uses_unsaved_payload_and_masks_secret(tmp_path: Path) -> None:
@@ -287,11 +296,11 @@ def test_saved_key_overrides_process_environment_key(
     client.patch("/api/settings/model", json=PAYLOAD)
     data = client.get("/api/settings/model").json()["data"]
     assert settings.oci_enterprise_ai_api_key == "sk-new"
-    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
 
     clear = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "clear_api_key": True}}
     cleared = client.patch("/api/settings/model", json=clear).json()["data"]
-    assert cleared["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert cleared["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
 
@@ -437,7 +446,7 @@ def test_saving_other_sections_is_not_blocked_by_saved_invalid_defaults(tmp_path
     current = client.get("/api/settings/model").json()["data"]["settings"]
     assert current["enterprise_ai"]["default_vision_model_id"] == ""
 
-    current["enterprise_ai"]["endpoint"] = "https://changed.invalid/openai/v1"
+    current["enterprise_ai"]["connections"][0]["endpoint"] = "https://changed.invalid/openai/v1"
     response = client.patch("/api/settings/model", json=current)
 
     assert response.status_code == 200

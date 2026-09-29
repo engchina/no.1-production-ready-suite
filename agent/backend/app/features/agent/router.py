@@ -46,10 +46,12 @@ from pr_system_settings.database_status import (
     build_database_status_router,
 )
 from pr_system_settings.model import (
+    EnterpriseAiConnection,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
     ModelSettingsTestRequest,
     build_model_router,
+    enterprise_ai_connection_for_model,
     model_payload,
 )
 from pr_system_settings.oci import build_oci_router
@@ -602,12 +604,6 @@ def _is_present(value: str) -> bool:
     return bool(value.strip())
 
 
-def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
-    if settings.clear_api_key:
-        return False
-    return _is_present(settings.api_key) or settings.has_api_key
-
-
 def _json_pointer_or_empty(value: str) -> str:
     normalized = value.strip()
     return normalized if not normalized or normalized.startswith("/") else ""
@@ -620,16 +616,16 @@ async def _run_model_settings_test(
     """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。
 
     `settings` は保存前の入力値と対象モデルを反映した一時 Settings（#103）。
+    Enterprise AI はテストするモデルの接続（Endpoint・Project・API key）で呼ぶ（#533）。
     """
     payload = model_payload(settings)
-    enterprise_ai = payload.enterprise_ai.model_copy(
-        update={"api_key": settings.oci_enterprise_ai_api_key}
-    )
+    enterprise_ai = payload.enterprise_ai
+    connection = enterprise_ai_connection_for_model(settings, request.model_id)
     if request.target_type == "enterprise_text":
-        text = await _run_enterprise_text_model_test(enterprise_ai)
+        text = await _run_enterprise_text_model_test(enterprise_ai, connection)
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
-        text = await _run_enterprise_vision_model_test(enterprise_ai)
+        text = await _run_enterprise_vision_model_test(enterprise_ai, connection)
         return {"response_chars": len(text), "surface": "vision"}
     if request.target_type == "embedding":
         vector_dim = await _run_oci_embedding_model_test(settings, payload.generative_ai)
@@ -638,22 +634,28 @@ async def _run_model_settings_test(
     return {"ranked_count": ranked_count, "top_score": top_score}
 
 
-async def _run_enterprise_text_model_test(settings: EnterpriseAiModelSettings) -> str:
+async def _run_enterprise_text_model_test(
+    settings: EnterpriseAiModelSettings, connection: EnterpriseAiConnection
+) -> str:
     payload = _enterprise_text_payload(
         settings,
         prompt="モデル接続テストです。短く応答してください。",
         context="これは Production Ready RAG のモデル接続テスト用コンテキストです。",
+        project_ocid=connection.project_ocid,
     )
-    response = await _post_enterprise_ai(settings, settings.api_path, payload)
+    response = await _post_enterprise_ai(settings, connection, settings.api_path, payload)
     return _parse_enterprise_text_response(response, settings.text_response_path)
 
 
-async def _run_enterprise_vision_model_test(settings: EnterpriseAiModelSettings) -> str:
+async def _run_enterprise_vision_model_test(
+    settings: EnterpriseAiModelSettings, connection: EnterpriseAiConnection
+) -> str:
     payload = _enterprise_vision_payload(
         settings,
         prompt="白い背景にある大きな図形の色を日本語で1語だけ返してください。",
+        project_ocid=connection.project_ocid,
     )
-    response = await _post_enterprise_ai(settings, settings.api_path, payload)
+    response = await _post_enterprise_ai(settings, connection, settings.api_path, payload)
     return _parse_enterprise_text_response(response, settings.vision_response_path)
 
 
@@ -667,13 +669,14 @@ def _enterprise_text_payload(
     *,
     prompt: str,
     context: str,
+    project_ocid: str = "",
 ) -> dict[str, object]:
     system_prompt = "根拠に基づいて日本語で簡潔に回答してください。"
     user_message = f"{context}\n\n質問: {prompt}" if context else prompt
     values = {
         "model": _enterprise_text_model_id(settings),
-        "project": settings.project_ocid,
-        "project_ocid": settings.project_ocid,
+        "project": project_ocid,
+        "project_ocid": project_ocid,
         "prompt": prompt,
         "context": context,
         "system_prompt": system_prompt,
@@ -702,6 +705,7 @@ def _enterprise_vision_payload(
     settings: EnterpriseAiModelSettings,
     *,
     prompt: str,
+    project_ocid: str = "",
 ) -> dict[str, object]:
     image_data = base64.b64encode(MODEL_TEST_IMAGE_BYTES).decode("ascii")
     content = [
@@ -710,8 +714,8 @@ def _enterprise_vision_payload(
     ]
     values = {
         "model": settings.default_vision_model_id,
-        "project": settings.project_ocid,
-        "project_ocid": settings.project_ocid,
+        "project": project_ocid,
+        "project_ocid": project_ocid,
         "prompt": prompt,
         "input": [{"role": "user", "content": content}],
         "messages": [{"role": "user", "content": content}],
@@ -745,23 +749,24 @@ def _render_model_payload_template(
 
 async def _post_enterprise_ai(
     settings: EnterpriseAiModelSettings,
+    connection: EnterpriseAiConnection,
     api_path: str,
     payload: Mapping[str, object],
 ) -> Mapping[str, object]:
-    endpoint = settings.endpoint.rstrip("/")
+    endpoint = connection.endpoint.rstrip("/")
     url = (
         api_path
         if api_path.startswith(("http://", "https://"))
         else endpoint + "/" + api_path.lstrip("/")
     )
-    api_key = _require_non_empty(settings.api_key, "OCI Enterprise AI API key")
+    api_key = _require_non_empty(connection.api_key, "OCI Enterprise AI API key")
     headers = {
         "accept": "application/json",
         "content-type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    if settings.project_ocid:
-        headers["OpenAI-Project"] = settings.project_ocid
+    if connection.project_ocid:
+        headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
         response = await client.post(url, headers=headers, json=dict(payload))
     response.raise_for_status()

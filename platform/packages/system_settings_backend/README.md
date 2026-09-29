@@ -16,7 +16,8 @@
 
 各製品は router を include し、製品ごとの差（Settings の取得、共通 `.env` の場所、書込み権限・操作権限の依存関係）を引数で渡す。
 システム設定の保存先は3製品共通の `platform/.env`（`PLATFORM_*`。#211）で、製品は `platform_env_file(BACKEND_DIR)` の値を `env_file` に渡す。
-モデル設定の `model-settings.json` と API key（`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`）も共有し、製品固有の節の secret は `section_env_file`（製品の `backend/.env`）へ保存する。
+モデル設定の `model-settings.json` と API key（`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、接続 2 は `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`）も共有し、製品固有の節の secret は `section_env_file`（製品の `backend/.env`）へ保存する。
+OCI Enterprise AI の接続は最大 2 件で、モデルを呼ぶ製品は `enterprise_ai_connection_for_model(settings, model_id)` でモデルの接続（Endpoint・Project・API key）を引く（#533。[platform/README.md](../../README.md) の「OCI Enterprise AI の接続を 2 件にする」）。
 OCI 認証の `action_dependencies` は、config 読込・接続テスト・namespace 取得に付ける依存関係（Agent は `require_admin`）。
 
 ```python

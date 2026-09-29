@@ -18,11 +18,15 @@ from pr_backend_core.config import (
     product_settings_config,
 )
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
+from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
 from pr_system_settings.model import (
     ModelSecretStateMixin,
     ModelSettingsSection,
     ModelSettingsStore,
     SectionSecret,
+)
+from pr_system_settings.model import (
+    enterprise_ai_connection_for_model as enterprise_ai_connection_for_model,
 )
 from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
@@ -345,6 +349,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_endpoint: str = Field(default="")
     oci_enterprise_ai_project_ocid: str = Field(default="")
     oci_enterprise_ai_api_key: str = Field(default="")
+    # 接続 1 の表示名と接続 2（#533）。モデルを呼ぶ接続は
+    # enterprise_ai_connection_for_model で引く。
+    oci_enterprise_ai_connection_name: str = Field(default="")
+    oci_enterprise_ai_secondary_connection_name: str = Field(default="")
+    oci_enterprise_ai_secondary_endpoint: str = Field(default="")
+    oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
+    oci_enterprise_ai_secondary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     # 既定のテキストモデル（任意）と既定の Vision モデル（#499）。呼び出しに使う ID は
     # enterprise_ai_default_model_id / enterprise_ai_vision_model_id で解決する。
