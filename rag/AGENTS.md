@@ -100,9 +100,9 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 文書は中身に加えて **1〜3 件の独立した処理レシピ(preprocess / parser / chunking)** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
 - ファイル準備(preprocess)。
-- 文書解析(parser / OCR engine)。global の既定エンジンは Docling(#286。PDF と画像だけ)。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない(判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない)。
+- 文書解析(parser / OCR engine)と、図・画像の読み取り(Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ。#497)。global の既定エンジンは Docling(#286。PDF と画像だけ)。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない(判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない)。
 - 文書分割(chunking strategy、chunk size、overlap、parent-child)。
-- 索引構築(vector index build、GraphRAG、navigation summary、asset summary、field extraction)。
+- 索引構築(vector index build、GraphRAG、navigation summary、field extraction)。
 - 品質 gate(解析品質、chunk 品質、公開前チェック)。
 
 レシピの既定値は **global(「検索・回答設定」配下の ファイル準備 / 文書解析 / 文書分割 など)** から解決し、各レシピが選んだ値で上書きする。**KB からは解決しない**。embedding / HNSW は単一固定。同じ文書のジョブは直列実行し、異なる文書のジョブは並行実行できる。
@@ -144,7 +144,7 @@ GraphRAG の構築深度は文書レシピ、検索時の利用は Business View
 
 レシピ追加・削除は親文書行をロックして **最少1件・最大3件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。
 
-GraphRAG、navigation summary、asset summary、field extraction が planning のみで実 materialize 未完の場合は、UI/API diagnostics にその状態を表示する。
+GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI/API diagnostics にその状態を表示する。
 
 ## ディレクトリ構成
 
