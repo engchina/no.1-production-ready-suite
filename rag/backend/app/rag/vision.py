@@ -48,6 +48,7 @@ from docrag.parsing.rendering import (
     prepare_source_for_analysis,
 )
 from pydantic import ValidationError
+from rag_pipeline_core.chunking import table_vision_supplement
 
 from app.schemas.extraction import (
     DocumentElement,
@@ -828,8 +829,13 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
                     metadata["vision_source_text"] = element.text
                 text = record.text
                 raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
-            elif record.category == "Table" and record.raw.get("table_vision_text"):
-                supplement = f"表内画像の補足:\n{record.raw['table_vision_text']}"
+            elif record.category == "Table" and (
+                supplement := table_vision_supplement(
+                    str(record.raw.get("table_vision_text") or "")
+                )
+            ):
+                # 分割(rag_pipeline_core.chunking)と同じ書式。分割は本文に説明文がある表へ
+                # 補足を二重に足さない(#513)。
                 text = f"{element.text}\n{supplement}"
                 raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
             elements[target.element_index] = element.model_copy(
