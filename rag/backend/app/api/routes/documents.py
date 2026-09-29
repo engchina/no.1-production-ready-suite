@@ -40,7 +40,6 @@ from app.config import (
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     Settings,
     get_settings,
-    normalize_parser_adapter_backend_value,
 )
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -1476,87 +1475,63 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
     return ApiResponse(data=chunk_sets)
 
 
-def _experiment_candidate_settings(base: Settings, overrides: dict[str, object]) -> Settings:
-    """global 設定に実験ジョブの候補レシピ上書きを重ねた Settings を返す(既知キーのみ)。"""
-    allowed = {"rag_preprocess_profile", "rag_parser_adapter_backend"}
-    filtered = {key: value for key, value in overrides.items() if key in allowed}
-    if "rag_parser_adapter_backend" in filtered:
-        # model_copy は validator を通さないため、削除済みエンジン(#270)が残る旧ジョブの
-        # snapshot もここで既定エンジンへ寄せる。
-        filtered["rag_parser_adapter_backend"] = normalize_parser_adapter_backend_value(
-            filtered["rag_parser_adapter_backend"]
-        )
-    return base.model_copy(update=filtered)
-
-
 async def _materialize_experiment_candidate(
     oracle: OracleClient,
     job: IngestionJob,
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
 ) -> IngestionJobPhase | None:
-    """設定 snapshot から新しい chunk_set を隔離構築する。
+    """文書レシピの job で、設定 snapshot から新しい chunk_set を隔離構築する。
 
-    ``recipe_id`` 付き job は正式な文書レシピ実行であり、既存 active 出力を構築中に
-    変更しない。成功時だけ active を原子的に差し替える。recipe_id が無い呼び出しは
-    旧実験 API の互換経路として従来の serving を維持する。
+    既存 active 出力を構築中に変更しない。成功時だけ active を原子的に差し替える。
+    ``recipe_id`` の無い job（移行前の旧実験 API の job）は実行せず、
+    利用者向けのエラーで止める（#486）。
 
     戻り値は「現在ジョブ完了後に自動投入すべき次フェーズ」。自動進行不要なら ``None``。
     現在ジョブが RUNNING のまま新ジョブを作るとレシピ行ロックのガードで弾かれるため、
     投入自体は呼び出し側(``_run_ingestion_job``)が現在ジョブ SUCCEEDED 後に行う。
     """
+    recipe_id = job.recipe_id
+    if recipe_id is None:
+        raise IngestionUserError(
+            "旧いレシピ実験の job は実行できません。文書の処理レシピから再実行してください。"
+        )
     detail = await oracle.get_document(job.document_id)
     if detail is None:
         raise IngestionUserError("ドキュメントが見つかりません。")
     if not detail.content_sha256:
         raise IngestionUserError("文書のソースハッシュが未確定です。")
-    serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(job.document_id)
-    if job.recipe_id is None:
-        if detail.status != FileStatus.INDEXED:
-            raise IngestionUserError("索引済み文書のみレシピ実験できます。")
-        if serving_chunk_set_id is None:
-            raise IngestionUserError("配信中の chunk_set がありません。")
-    base_settings, current_config = await _resolve_ingestion_settings(oracle, job.document_id)
     raw_config = (job.settings_overrides or {}).get("processing_config")
     if isinstance(raw_config, Mapping):
         candidate_config = DocumentProcessingConfig.model_validate(raw_config)
-        candidate_settings, effective_candidate_config = _merge_document_processing_config(
-            candidate_config
-        )
     else:
-        candidate_config = current_config
-        candidate_settings = _experiment_candidate_settings(
-            base_settings, job.settings_overrides or {}
+        _base_settings, candidate_config = await _resolve_ingestion_settings(
+            oracle, job.document_id
         )
-        _, effective_candidate_config = _merge_document_processing_config(candidate_config)
-    base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
-    candidate_chunk_set_id = (
-        hashlib.sha256(
-            f"{base_chunk_set_id}:{job.recipe_id}:{job.recipe_revision}:{job.id}".encode()
-        ).hexdigest()
-        if job.recipe_id is not None
-        else base_chunk_set_id
+    candidate_settings, effective_candidate_config = _merge_document_processing_config(
+        candidate_config
     )
-    if job.recipe_id is None and candidate_chunk_set_id == serving_chunk_set_id:
-        raise IngestionUserError("現在配信中のレシピと同じ設定です。")
-    if job.recipe_id is not None:
-        await _raise_if_job_cancelled(cancel_checker)
-        await oracle.update_document_recipe_status(
-            recipe_id=job.recipe_id,
-            status=_PHASE_TO_RUNNING_STATUS[job.phase],
-        )
+    base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
+    candidate_chunk_set_id = hashlib.sha256(
+        f"{base_chunk_set_id}:{recipe_id}:{job.recipe_revision}:{job.id}".encode()
+    ).hexdigest()
+    await _raise_if_job_cancelled(cancel_checker)
+    await oracle.update_document_recipe_status(
+        recipe_id=recipe_id,
+        status=_PHASE_TO_RUNNING_STATUS[job.phase],
+    )
     pipeline = IngestionPipeline(
         oracle=oracle,
         settings=candidate_settings,
-        recipe_id=job.recipe_id,
+        recipe_id=recipe_id,
         recipe_revision=job.recipe_revision,
     )
     extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
-    if job.recipe_id is not None and job.phase in {
+    if job.phase in {
         IngestionJobPhase.CHUNK,
         IngestionJobPhase.INDEX,
     }:
-        recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+        recipe_row = await oracle.get_document_recipe(job.document_id, recipe_id)
         active_extraction_recipe_id = (
             recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
         )
@@ -1564,9 +1539,9 @@ async def _materialize_experiment_candidate(
             raise IngestionUserError("索引対象の抽出結果が見つかりません。")
         extraction_recipe_id = str(active_extraction_recipe_id)
 
-    if job.recipe_id is not None and job.phase == IngestionJobPhase.INDEX:
+    if job.phase == IngestionJobPhase.INDEX:
         pending = await oracle.get_latest_recipe_chunk_set(
-            job.recipe_id,
+            recipe_id,
             status="CHUNKED",
             active=False,
         )
@@ -1581,7 +1556,7 @@ async def _materialize_experiment_candidate(
             record_outcome=False,
             cancel_checker=cancel_checker,
         )
-    elif job.recipe_id is not None and job.phase == IngestionJobPhase.CHUNK:
+    elif job.phase == IngestionJobPhase.CHUNK:
         await pipeline.chunk_reviewed(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -1592,7 +1567,7 @@ async def _materialize_experiment_candidate(
         await oracle.upsert_chunk_set(
             chunk_set_id=candidate_chunk_set_id,
             document_id=job.document_id,
-            recipe_id=job.recipe_id,
+            recipe_id=recipe_id,
             extraction_recipe_id=extraction_recipe_id,
             recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
             status="CHUNKED",
@@ -1611,8 +1586,8 @@ async def _materialize_experiment_candidate(
         )
     else:
         prepared_artifact: DocumentPreprocessArtifact | None = None
-        if job.recipe_id is not None and job.phase == IngestionJobPhase.EXTRACT:
-            recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+        if job.phase == IngestionJobPhase.EXTRACT:
+            recipe_row = await oracle.get_document_recipe(job.document_id, recipe_id)
             if recipe_row is None or not recipe_row.get("preprocess_artifact"):
                 raise IngestionUserError(
                     "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
@@ -1648,57 +1623,50 @@ async def _materialize_experiment_candidate(
             manage_document_state=False,
             cancel_checker=cancel_checker,
         )
-        if job.recipe_id is not None:
-            recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
-            recipe_status = (
-                FileStatus(str(recipe_row.get("status")))
-                if recipe_row is not None
-                else FileStatus.ERROR
-            )
-            if (
-                recipe_status == FileStatus.REVIEW
-                and candidate_settings.rag_auto_chunk_after_extract_enabled
-            ):
-                # 現在の EXTRACT ジョブがまだ RUNNING のため、ここで CHUNK ジョブを作ると
-                # レシピ行ロックのガード(同一レシピの QUEUED/RUNNING 拒否)で弾かれる。
-                # 投入は呼び出し側が現在ジョブ SUCCEEDED 後に行うので、決定だけ返す。
-                return IngestionJobPhase.CHUNK
-            if recipe_status in {FileStatus.PREPROCESSED, FileStatus.REVIEW}:
-                return None
-            active_extraction_recipe_id = (
-                recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
-            )
-            if active_extraction_recipe_id is None:
-                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-            extraction_recipe_id = str(active_extraction_recipe_id)
+        recipe_row = await oracle.get_document_recipe(job.document_id, recipe_id)
+        recipe_status = (
+            FileStatus(str(recipe_row.get("status")))
+            if recipe_row is not None
+            else FileStatus.ERROR
+        )
+        if (
+            recipe_status == FileStatus.REVIEW
+            and candidate_settings.rag_auto_chunk_after_extract_enabled
+        ):
+            # 現在の EXTRACT ジョブがまだ RUNNING のため、ここで CHUNK ジョブを作ると
+            # レシピ行ロックのガード(同一レシピの QUEUED/RUNNING 拒否)で弾かれる。
+            # 投入は呼び出し側が現在ジョブ SUCCEEDED 後に行うので、決定だけ返す。
+            return IngestionJobPhase.CHUNK
+        if recipe_status in {FileStatus.PREPROCESSED, FileStatus.REVIEW}:
+            return None
+        active_extraction_recipe_id = (
+            recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
+        )
+        if active_extraction_recipe_id is None:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        extraction_recipe_id = str(active_extraction_recipe_id)
 
     chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
     await oracle.upsert_chunk_set(
         chunk_set_id=candidate_chunk_set_id,
         document_id=job.document_id,
-        recipe_id=job.recipe_id,
+        recipe_id=recipe_id,
         extraction_recipe_id=extraction_recipe_id,
         recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
     )
     await oracle.mark_chunk_set_indexed(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
     )
-    if job.recipe_id is not None:
-        # active の切り替えは検索対象を変えるため、取り消された job では行わない(#305)。
-        await _raise_if_job_cancelled(cancel_checker)
-        await oracle.activate_recipe_chunk_set(
-            recipe_id=job.recipe_id,
-            chunk_set_id=candidate_chunk_set_id,
-            extraction_recipe_id=extraction_recipe_id,
-            materialized_revision=job.recipe_revision,
-        )
-        # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
-        await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
-    elif serving_chunk_set_id is not None:
-        # 旧実験 API は互換期間中だけ候補を serving に載せない。
-        await oracle.set_document_serving_chunk_set(
-            document_id=job.document_id, chunk_set_id=serving_chunk_set_id
-        )
+    # active の切り替えは検索対象を変えるため、取り消された job では行わない(#305)。
+    await _raise_if_job_cancelled(cancel_checker)
+    await oracle.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=candidate_chunk_set_id,
+        extraction_recipe_id=extraction_recipe_id,
+        materialized_revision=job.recipe_revision,
+    )
+    # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
+    await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
     # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
     return None
 
@@ -4230,7 +4198,8 @@ async def _run_ingestion_job(
                 status=_PHASE_TO_RUNNING_STATUS[job.phase],
             )
         if job.recipe_id is not None or job.settings_overrides is not None:
-            # 正式レシピは旧 active を維持した隔離 materialize。recipe_id 無しは旧実験互換。
+            # 正式レシピは旧 active を維持した隔離 materialize。recipe_id の無い旧実験の job は
+            # 利用者向けのエラーで止める（#486）。
             next_recipe_phase = await _materialize_experiment_candidate(
                 oracle, job, cancel_checker=is_cancelled
             )
