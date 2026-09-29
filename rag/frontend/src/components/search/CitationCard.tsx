@@ -1,6 +1,7 @@
 import { ExternalLink, FileText, Layers, LocateFixed, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { Button } from "@engchina/production-ready-ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
@@ -155,15 +156,15 @@ export function CitationCard({
       <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 sm:flex-row sm:items-center sm:justify-between">
         {/* 引用箇所は画面を移動せずダイアログで見せる。文書の詳細はダイアログの中から別タブで開く（#442）。 */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            icon={LocateFixed}
             onClick={openPreview}
             aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
-            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
           >
-            <LocateFixed size={16} aria-hidden />
             {t("search.citation.previewOpen")}
-          </button>
+          </Button>
         </div>
         {traceId && businessViewId ? (
           <FeedbackControls
@@ -210,14 +211,14 @@ export function CitationCard({
                     <ExternalLink size={14} aria-hidden />
                   </Link>
                 ) : null}
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  iconOnly
+                  icon={X}
                   onClick={closePreview}
                   aria-label={t("search.citation.previewClose")}
-                  className="inline-flex size-8 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <X size={16} aria-hidden />
-                </button>
+                />
               </div>
             </div>
             <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-4">

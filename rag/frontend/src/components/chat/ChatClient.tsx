@@ -8,6 +8,7 @@ import {
   CardContent,
   SelectField,
   type SelectFieldOption,
+  TextField,
   ToggleChip,
   TimedLoadingState,
   Skeleton,
@@ -860,27 +861,22 @@ export function ChatClient() {
                 >
                   {conversations.map((conversation) => {
                     const title = conversation.title ?? t("chat.sessions.untitled");
-                    const errorId = `conversation-title-${conversation.id}-error`;
                     return (
                       <li key={conversation.id} className="group">
                         {editingId === conversation.id ? (
-                          <div className="space-y-1 rounded-md bg-accent-subtle p-2">
-                            <div className="flex items-center gap-1">
-                              <label
-                                htmlFor={`conversation-title-${conversation.id}`}
-                                className="sr-only"
-                              >
-                                {t("chat.sessions.renameLabel")}
-                              </label>
-                              <input
+                          <div className="rounded-md bg-accent-subtle p-2">
+                            <div className="flex items-start gap-1">
+                              <TextField
                                 ref={titleInputRef}
                                 id={`conversation-title-${conversation.id}`}
+                                label={t("chat.sessions.renameLabel")}
+                                labelHidden
+                                className="min-w-0 flex-1"
                                 value={titleDraft}
                                 maxLength={80}
                                 disabled={updateConversation.isPending}
-                                aria-invalid={titleError ? true : undefined}
-                                aria-describedby={titleError ? errorId : undefined}
-                                onChange={(event) => setTitleDraft(event.target.value)}
+                                error={titleError || undefined}
+                                onValueChange={setTitleDraft}
                                 onKeyDown={(event) => {
                                   if (event.key === "Enter") {
                                     event.preventDefault();
@@ -890,13 +886,12 @@ export function ChatClient() {
                                     cancelRename();
                                   }
                                 }}
-                                className="h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface-sunken px-2 text-sm text-fg disabled:opacity-60 sm:h-9 sm:text-sm"
                               />
                               <Button
                                 type="button"
                                 variant="ghost"
                                 size="md"
-                                className="h-11 w-11 px-0 sm:h-9 sm:w-9"
+                                iconOnly
                                 disabled={updateConversation.isPending}
                                 aria-label={t("chat.sessions.renameSave")}
                                 onClick={() => void saveRename()} icon={Check}>
@@ -905,17 +900,12 @@ export function ChatClient() {
                                 type="button"
                                 variant="ghost"
                                 size="md"
-                                className="h-11 w-11 px-0 sm:h-9 sm:w-9"
+                                iconOnly
                                 disabled={updateConversation.isPending}
                                 aria-label={t("chat.sessions.renameCancel")}
                                 onClick={cancelRename} icon={X}>
                                 </Button>
                             </div>
-                            {titleError ? (
-                              <p id={errorId} className="px-1 text-xs text-danger-fg" role="alert">
-                                {titleError}
-                              </p>
-                            ) : null}
                           </div>
                         ) : (
                           <div
@@ -947,8 +937,9 @@ export function ChatClient() {
                               type="button"
                               variant="ghost"
                               size="md"
+                              iconOnly
                               className={cn(
-                                "mr-1 h-11 w-11 self-center px-0 transition-opacity sm:h-9 sm:w-9 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                                "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
                                 conversation.id === activeId && "sm:opacity-100"
                               )}
                               aria-label={t("chat.sessions.rename", { title })}
@@ -959,8 +950,9 @@ export function ChatClient() {
                               variant="ghost"
                               size="md"
                               tone="danger"
+                              iconOnly
                               className={cn(
-                                "mr-1 h-11 w-11 self-center px-0 transition-opacity sm:h-9 sm:w-9 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                                "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
                                 conversation.id === activeId && "sm:opacity-100"
                               )}
                               disabled={deleteConversation.isPending}
