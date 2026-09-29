@@ -10,6 +10,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from fastapi import HTTPException
+from pydantic import ValidationError
+
 logger = logging.getLogger(__name__)
 
 # 既定の縮退メッセージ。{timeout:g} で待機秒数を埋め込む。
@@ -28,6 +31,19 @@ class DegradedRead:
 
     message: str
     status: str  # "timeout" | "error"
+
+
+# 縮退させずにそのまま投げる例外。意図した HTTP 応答と、DB の障害ではなく
+# プログラムの誤りを示すもの。
+# Oracle client は未設定などの DB 側の問題を RuntimeError でも投げるため、DB の例外だけに絞らない。
+_NOT_DEGRADED_ERRORS: tuple[type[BaseException], ...] = (
+    HTTPException,
+    ValidationError,
+    TypeError,
+    AttributeError,
+    NameError,
+    AssertionError,
+)
 
 
 async def load_or_degrade[T](
@@ -54,6 +70,9 @@ async def load_or_degrade[T](
     except TimeoutError:
         logger.warning("%s_timeout", log_label, extra={"timeout_seconds": timeout_seconds})
         return fallback, DegradedRead(timeout_message.format(timeout=timeout_seconds), "timeout")
+    except _NOT_DEGRADED_ERRORS:
+        # 404 などの意図した応答と、プログラムの誤りは「DB に接続できない」にしない（#476）。
+        raise
     except Exception as exc:  # noqa: BLE001 - DB 不通を縮退に正規化する境界
         logger.exception(
             "%s_failed",

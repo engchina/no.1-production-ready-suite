@@ -102,3 +102,42 @@ def test_knowledge_base_list_degrades_on_db_error(monkeypatch: pytest.MonkeyPatc
     body = response.json()
     assert body["data"]["items"] == []
     assert len(body["warning_messages"]) == 1
+
+
+@pytest.mark.parametrize("error", [TypeError("bug"), AttributeError("bug")])
+async def test_load_or_degrade_does_not_hide_programming_errors(error: Exception) -> None:
+    """プログラムの誤りは「DB に接続できない」に変えず、そのまま投げる（#476）。"""
+    from app.db_degradation import load_or_degrade
+
+    async def loader() -> object:
+        raise error
+
+    with pytest.raises(type(error)):
+        await load_or_degrade(loader, timeout_seconds=1, fallback=None, log_label="test")
+
+
+async def test_load_or_degrade_keeps_http_exceptions() -> None:
+    """404 などの意図した応答は、縮退せずにそのまま返す（#476）。"""
+    from fastapi import HTTPException
+
+    from app.db_degradation import load_or_degrade
+
+    async def loader() -> object:
+        raise HTTPException(status_code=404, detail="not found")
+
+    with pytest.raises(HTTPException):
+        await load_or_degrade(loader, timeout_seconds=1, fallback=None, log_label="test")
+
+
+async def test_load_or_degrade_degrades_db_side_errors() -> None:
+    """DB 側の問題（RuntimeError なども含む）は、従来どおり fallback と warning にする。"""
+    from app.db_degradation import load_or_degrade
+
+    async def loader() -> str:
+        raise RuntimeError("database is down")
+
+    value, degraded = await load_or_degrade(
+        loader, timeout_seconds=1, fallback="fallback", log_label="test"
+    )
+    assert value == "fallback"
+    assert degraded is not None and degraded.status == "error"

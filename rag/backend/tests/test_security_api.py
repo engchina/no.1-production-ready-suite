@@ -34,6 +34,7 @@ from app.security.domain import Principal
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
+    OPEN_API_OPERATIONS,
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
     ROUTE_PERMISSIONS,
@@ -181,13 +182,15 @@ def test_every_api_route_is_classified_by_manifest() -> None:
         and UNCLASSIFIED_PERMISSION in permissions
     ]
     assert unclassified == []
-    open_routes = {
-        path for method, path in operations if permission_for_route(method, path) is None
+    open_operations = {
+        (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
     # MCP（#232）は認証済みなら通し、権限はツールごとに判定する。
-    assert open_routes == (
+    assert {path for _method, path in open_operations} == (
         set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION) | set(SERVICE_TOKEN_API_PATHS)
     )
+    # 権限なしで通す path に method を足したら、ここで気づく（method 単位で照合する。#476）。
+    assert open_operations == set(OPEN_API_OPERATIONS)
 
 
 @_OPENAPI_GROUP

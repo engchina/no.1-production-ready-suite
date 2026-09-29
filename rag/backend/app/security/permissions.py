@@ -219,6 +219,21 @@ AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth
 # サービストークン（Agent から利用者として呼ぶ。#230 / #232）で認証する path。認証済みなら通し、
 # 権限は MCP のツールごとに判定する（`app.mcp.tools`）。
 SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
+# 上の 3 つ（権限なしで通す path）の method × path。実行時の判定（platform の共通認証）は
+# path 単位のため、同じ path に method を足したときに黙って公開されないよう、
+# 完全性テストでこの一覧と照合する（#476）。
+OPEN_API_OPERATIONS = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/ready"),
+        ("GET", "/ready/database"),
+        ("POST", "/auth/login"),
+        ("GET", "/auth/me"),
+        ("POST", "/auth/logout"),
+        ("POST", "/auth/password/change"),
+        ("POST", "/mcp"),
+    }
+)
 SERVICE_TOKEN_AUDIENCE = "rag"  # nosec B105 - token の audience（呼び先の製品名）で秘密ではない
 
 
@@ -465,6 +480,24 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
     ("GET", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
     ("PATCH", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
+    # ---- ユーザーとロール（platform の共通 router。NL2SQL と同じ割り当て）----
+    # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#476）。
+    ("GET", "/security/users"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users"): _any(MENU_SECURITY_USERS),
+    ("GET", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("PATCH", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("DELETE", "/security/users/{user_uuid}"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/disable"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/enable"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/reset-password"): _any(MENU_SECURITY_USERS),
+    ("POST", "/security/users/{user_uuid}/unlock"): _any(MENU_SECURITY_USERS),
+    ("GET", "/security/roles"): _SECURITY_ROLE_READ,
+    ("GET", "/security/roles/{role_id}"): _SECURITY_ROLE_READ,
+    ("POST", "/security/roles"): _any(MENU_SECURITY_ROLES),
+    ("PATCH", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
+    ("DELETE", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
+    ("POST", "/security/roles/{role_id}/archive"): _any(MENU_SECURITY_ROLES),
+    ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
     # ---- RAG セキュリティ: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets"): _any(MENU_SECURITY_PERMISSIONS),
@@ -486,11 +519,4 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:
         return exact
-    # ユーザー管理・ロール管理（platform の共通 router）は NL2SQL と同じ割り当て。
-    if route_path == "/security/users" or route_path.startswith("/security/users/"):
-        return _any(MENU_SECURITY_USERS)
-    if route_path == "/security/roles" or route_path.startswith("/security/roles/"):
-        if method == "GET":
-            return _SECURITY_ROLE_READ
-        return _any(MENU_SECURITY_ROLES)
     return _any(UNCLASSIFIED_PERMISSION)
