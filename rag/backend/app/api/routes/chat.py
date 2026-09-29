@@ -236,9 +236,15 @@ async def stream_message(
     settings = get_settings()
     _require_chat_enabled(settings)
     enforce_rate_limit("search", http_request)
-    conversation = await _load_sendable_conversation(OracleClient(), conversation_id)
+    oracle = OracleClient()
+    conversation = await _load_sendable_conversation(oracle, conversation_id)
+    # 業務ビューの解決・発話の検査・USER の保存は、応答を始める前に行う。応答を始めた後の
+    # HTTPException（409 / 404）や DB の例外は、利用者に理由を返せず stream が途切れるため（#463）。
+    turn = await _prepare_chat_turn(
+        oracle, conversation_id, conversation.business_view_id, request, settings
+    )
     return StreamingResponse(
-        _stream_chat_events(conversation_id, conversation.business_view_id, request, settings),
+        _stream_chat_events(turn, request),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -500,14 +506,12 @@ async def send_chat_message(
 
 
 async def _stream_chat_events(
-    conversation_id: str,
-    business_view_id: str,
+    turn: PreparedChatTurn,
     request: ChatMessageRequest,
-    settings: Settings,
 ) -> AsyncIterator[str]:
-    """USER 永続化 → 各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す。"""
+    """各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す（USER は保存済み）。"""
     oracle = OracleClient()
-    turn = await _prepare_chat_turn(oracle, conversation_id, business_view_id, request, settings)
+    conversation_id = turn.conversation_id
     user_message = turn.user_message
     columns = _resolve_compare_models(request, turn.settings)
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
