@@ -1568,15 +1568,16 @@ async def _materialize_experiment_candidate(
                 "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
             )
         candidate_chunk_set_id = str(pending["chunk_set_id"])
-        # 索引まで終える工程だけが成功の監査・metric を記録する(1 job 1 回。#493)。
+        # 成功の監査・metric は工程の中では記録せず、active への切り替えの後に 1 回だけ記録する
+        # (#493 / #504)。
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
-            record_outcome=True,
+            record_outcome=False,
             cancel_checker=cancel_checker,
         )
     elif job.phase == IngestionJobPhase.CHUNK:
-        # Chunk 作成は途中の工程のため、成功の監査を出さない(索引の完了で 1 回だけ出す)。
+        # Chunk 作成は途中の工程のため、成功の監査を出さない。
         await pipeline.chunk_reviewed(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -1601,7 +1602,7 @@ async def _materialize_experiment_candidate(
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
-            record_outcome=True,
+            record_outcome=False,
             cancel_checker=cancel_checker,
         )
     else:
@@ -1625,7 +1626,10 @@ async def _materialize_experiment_candidate(
                 raise IngestionUserError("処理後ファイルを読み込めませんでした。") from exc
             source_profile = _source_profile_for_detail(detail)
         else:
-            data, source_profile = await _load_source_bytes(oracle, job.document_id, detail)
+            # レシピの job の失敗はレシピの行だけを ERROR にする(文書の status は変えない。#504)。
+            data, source_profile = await _load_source_bytes(
+                oracle, job.document_id, detail, mark_document_error=False
+            )
         await pipeline.ingest(
             document_id=job.document_id,
             image_bytes=data,
@@ -1637,12 +1641,16 @@ async def _materialize_experiment_candidate(
             ),
             source_profile=source_profile,
             chunk_set_id=candidate_chunk_set_id,
-            # 成功の監査は索引まで進んだときだけ出る(REVIEW / PREPROCESSED で止まる場合は出ない)。
-            record_outcome=True,
+            # 成功の監査は active への切り替えの後に記録する(REVIEW / PREPROCESSED で止まる場合は
+            # 索引まで進まないため、記録するものが無い)。
+            record_outcome=False,
             original_object_storage_path=detail.object_storage_path,
             prepared_artifact=prepared_artifact,
             manage_document_state=False,
             cancel_checker=cancel_checker,
+            # 処理後ファイルを読む工程でも、監査には文書に記録済みの原本の hash とサイズを使う。
+            source_sha256=detail.content_sha256,
+            source_size=detail.file_size_bytes,
         )
         recipe_row = await oracle.get_document_recipe(job.document_id, recipe_id)
         recipe_status = (
@@ -1694,6 +1702,11 @@ async def _materialize_experiment_candidate(
         extraction_recipe_id=extraction_recipe_id,
         materialized_revision=job.recipe_revision,
     )
+    # 成功の監査・metric は、active への切り替え(検索対象になった時点)の後に job ごとに 1 回だけ
+    # 記録する。切り替えの前に取り消された・切り替えが失敗した job は成功を残さない(#504)。
+    success_outcome = pipeline.deferred_success_outcome
+    if success_outcome is not None:
+        success_outcome.record()
     # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
     await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
     # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
@@ -2596,27 +2609,36 @@ def _apply_table_cell_edits(
 
 
 async def _load_source_bytes(
-    oracle: OracleClient, document_id: str, detail: DocumentDetail
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    *,
+    mark_document_error: bool = True,
 ) -> tuple[bytes, SourceProfile]:
     """保存済み原本を取得し、整合性検証して source_profile を組む(失敗は HTTPException)。
 
     取込(extract)経路と、案 A の承認後 非 owning parser 再抽出で共有する。
+    ``mark_document_error=False``(レシピの job)では、失敗しても文書の status を変えない。
+    失敗は呼び出し側の job の失敗の処理がレシピの行だけに記録する(#504)。
     """
     if detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+
+    async def mark_error(message: str) -> None:
+        if mark_document_error:
+            await oracle.update_document_status(document_id, FileStatus.ERROR, message)
+
     try:
         data = await ObjectStorageClient().get(detail.object_storage_path)
     except FileNotFoundError as exc:
-        await oracle.update_document_status(
-            document_id, FileStatus.ERROR, "原本ファイルが見つかりません。"
-        )
+        await mark_error("原本ファイルが見つかりません。")
         raise HTTPException(status_code=409, detail="原本ファイルが見つかりません。") from exc
     except ValueError as exc:
-        await oracle.update_document_status(document_id, FileStatus.ERROR, str(exc))
+        await mark_error(str(exc))
         raise HTTPException(status_code=400, detail="原本ファイルの参照パスが不正です。") from exc
 
     if integrity_error := _source_integrity_error(data, detail):
-        await oracle.update_document_status(document_id, FileStatus.ERROR, integrity_error)
+        await mark_error(integrity_error)
         raise HTTPException(status_code=409, detail=integrity_error)
 
     source_profile = build_source_profile(

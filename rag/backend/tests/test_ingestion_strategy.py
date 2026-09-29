@@ -1558,3 +1558,141 @@ async def test_recipe_index_chunked_records_single_success_audit_with_document_s
     assert events[0]["vector_count"] == 1
     assert "本文です。" not in json.dumps(events[0], ensure_ascii=False)
     assert metrics == [("success", 1)]
+
+
+def _spy_ingestion_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[dict[str, Any]], list[tuple[str, int]]]:
+    """取込の監査イベントと metric を記録する spy を差し込む。"""
+    events: list[dict[str, Any]] = []
+    metrics: list[tuple[str, int]] = []
+
+    def spy_audit(**kwargs: Any) -> object:
+        event = record_rag_ingestion_audit(**kwargs)
+        events.append(event.model_dump(mode="json"))
+        return event
+
+    monkeypatch.setattr(ingestion_module, "record_rag_ingestion_audit", spy_audit)
+    monkeypatch.setattr(
+        ingestion_module,
+        "record_ingestion",
+        lambda outcome, chunk_count: metrics.append((outcome, chunk_count)),
+    )
+    return events, metrics
+
+
+def _resume_pipeline(
+    oracle: _ResumeOracle, pipeline_class: type[_ResumePipeline] = _ResumePipeline
+) -> _ResumePipeline:
+    return pipeline_class(
+        vlm=cast(Any, object()),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(rag_graph_profile="off"),
+        recipe_id="recipe-1",
+        recipe_revision=1,
+    )
+
+
+async def test_index_chunked_defers_success_outcome_until_caller_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``record_outcome=False`` の索引は成功を記録せず、内容を呼び出し側へ残す(#504)。
+
+    レシピの job は active への切り替えの後にこれを 1 回だけ記録する。
+    """
+    events, metrics = _spy_ingestion_outcomes(monkeypatch)
+    pipeline = _resume_pipeline(_ResumeOracle())
+
+    await pipeline.index_chunked("doc-1", chunk_set_id="chunk-set-1", record_outcome=False)
+
+    assert events == []
+    assert metrics == []
+    outcome = pipeline.deferred_success_outcome
+    assert outcome is not None
+
+    outcome.record()
+
+    assert [event["outcome"] for event in events] == ["success"]
+    assert events[0]["source_sha256"] == "a" * 64
+    assert events[0]["source_bytes"] == 2048
+    assert events[0]["chunk_count"] == 1
+    assert events[0]["vector_count"] == 1
+    assert "本文です。" not in json.dumps(events[0], ensure_ascii=False)
+    assert metrics == [("success", 1)]
+
+
+async def test_index_chunked_failure_audit_uses_document_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保存済み Chunk の索引の失敗の監査も、文書に記録済みの原本の hash とサイズを使う(#504)。"""
+
+    class EmptyChunkOracle(_ResumeOracle):
+        async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
+            _ = chunk_set_id
+            return []
+
+    events, metrics = _spy_ingestion_outcomes(monkeypatch)
+    pipeline = _resume_pipeline(EmptyChunkOracle())
+
+    with pytest.raises(IngestionUserError, match="索引対象のチャンク"):
+        await pipeline.index_chunked("doc-1", chunk_set_id="chunk-set-1", record_outcome=False)
+
+    assert [event["outcome"] for event in events] == ["error"]
+    assert events[0]["source_sha256"] == "a" * 64
+    assert events[0]["source_bytes"] == 2048
+    assert metrics == [("error", 0)]
+    assert pipeline.deferred_success_outcome is None
+
+
+async def test_chunk_reviewed_failure_audit_uses_document_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chunk 作成の失敗の監査も、空 bytes ではなく文書の原本の hash とサイズを使う(#504)。"""
+
+    class FailingChunkPipeline(_ResumePipeline):
+        async def _build_chunks_for_extraction(self, **kwargs: Any) -> list[Chunk]:
+            _ = kwargs
+            raise IngestionUserError("分割に失敗しました。")
+
+    events, metrics = _spy_ingestion_outcomes(monkeypatch)
+    pipeline = _resume_pipeline(_ResumeOracle(), FailingChunkPipeline)
+
+    with pytest.raises(IngestionUserError, match="分割に失敗"):
+        await pipeline.chunk_reviewed("doc-1", chunk_set_id="chunk-set-1", record_outcome=False)
+
+    assert [event["outcome"] for event in events] == ["error"]
+    assert events[0]["source_sha256"] == "a" * 64
+    assert events[0]["source_bytes"] == 2048
+    assert metrics == [("error", 0)]
+
+
+async def test_ingest_audit_uses_given_document_source_instead_of_input_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レシピの job が渡した原本の hash とサイズを、ingest の監査が使う(#504)。
+
+    処理後ファイル(原本と別の bytes)を読む工程でも、監査は文書の原本を指す。
+    """
+    events, _metrics = _spy_ingestion_outcomes(monkeypatch)
+    pipeline = _resume_pipeline(_ResumeOracle())
+
+    async def cancelled() -> bool:
+        return True
+
+    with pytest.raises(IngestionCancelledError):
+        await pipeline.ingest(
+            "doc-1",
+            b"prepared bytes",
+            "prompt",
+            record_outcome=False,
+            manage_document_state=False,
+            cancel_checker=cancelled,
+            source_sha256="b" * 64,
+            source_size=4096,
+        )
+
+    assert [event["outcome"] for event in events] == ["error"]
+    assert events[0]["source_sha256"] == "b" * 64
+    assert events[0]["source_bytes"] == 4096
