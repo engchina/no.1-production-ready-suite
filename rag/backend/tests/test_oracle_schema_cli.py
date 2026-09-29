@@ -7,6 +7,8 @@ from pathlib import Path
 from pytest import CaptureFixture
 
 from app.rag import oracle_schema
+from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION
+from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
 
 
 def test_oracle_schema_sql_contains_required_rag_tables() -> None:
@@ -316,8 +318,16 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "index_name = 'RAG_EVALUATION_JOBS_STATUS_IDX'" in jobs_migration
     assert "ON rag_evaluation_jobs (status, heartbeat_at)" in jobs_migration
     assert "index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX'" in jobs_migration
-    assert "query" not in jobs_migration.lower()
-    assert len(statements) == 68
+    assert "query" not in jobs_migration.split("-- migration: ", 1)[0].lower()
+    # 説明が空の DEFAULT の KB・業務ビューに既定の説明を補う（#521）。利用者の説明は上書きしない。
+    descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[1]
+    assert "UPDATE rag_knowledge_bases" in descriptions_migration
+    assert "UPDATE rag_business_views" in descriptions_migration
+    assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
+    assert f"'{DEFAULT_BUSINESS_VIEW_DESCRIPTION}'" in descriptions_migration
+    assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
+    assert "name =" not in descriptions_migration
+    assert len(statements) == 71
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -381,6 +391,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_003_default_document_recipes",
         "20260928_004_ingestion_jobs_lease",
         "20260928_005_evaluation_jobs",
+        "20260930_001_default_descriptions",
     ]
 
 

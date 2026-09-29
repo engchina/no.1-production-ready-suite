@@ -389,7 +389,7 @@ def _default_business_view_row(knowledge_base_id: str) -> dict[str, object]:
         "business_view_id": "bv-default",
         "tenant_id_hash": None,
         "name": "DEFAULT",
-        "description": None,
+        "description": "既定の業務ビュー",
         "status": "ACTIVE",
         "view_config": dump_business_view_config(
             BusinessViewConfig(knowledge_base_ids=[knowledge_base_id])

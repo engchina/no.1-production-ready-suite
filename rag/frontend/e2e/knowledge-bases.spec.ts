@@ -481,12 +481,42 @@ test("追加候補は文書名で検索して選べる", async ({ page }) => {
   await expectNoPageOverflow(page);
 });
 
+test("ナレッジベースの名前と説明は必須で、空・空白だけでは作成せず最初の不正な欄へフォーカスする", async ({
+  page,
+}) => {
+  const state = createKnowledgeBaseState();
+  await mockKnowledgeBaseApi(page, state);
+  const before = state.knowledgeBases.length;
+
+  await page.goto("/knowledge-bases");
+  const name = page.getByRole("textbox", { name: "名前", exact: true });
+  const description = page.getByRole("textbox", { name: "説明", exact: true });
+  await expect(name).toHaveAttribute("aria-required", "true");
+  await expect(description).toHaveAttribute("aria-required", "true");
+  await expect(description).toHaveAttribute("maxlength", "2000");
+
+  await page.getByRole("button", { name: "作成" }).click();
+  await expect(page.getByText("名前を入力してください。")).toBeVisible();
+  await expect(page.getByText("説明を入力してください。")).toBeVisible();
+  await expect(name).toBeFocused();
+
+  await name.fill("設計資料");
+  await description.fill(" \u3000 ");
+  await page.getByRole("button", { name: "作成" }).click();
+  await expect(page.getByText("説明を入力してください。")).toBeVisible();
+  await expect(description).toBeFocused();
+  expect(state.knowledgeBases).toHaveLength(before);
+  await expect(page).toHaveURL(/\/knowledge-bases$/);
+  await expectNoPageOverflow(page);
+});
+
 test("同じ名前で作成すると理由を表示し、詳細へ移らない", async ({ page }) => {
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
 
   await page.goto("/knowledge-bases");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("社内規程");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("就業規則");
   await page.getByRole("button", { name: "作成" }).click();
 
   await expect(page.getByText(DUPLICATE_NAME_MESSAGE).first()).toBeVisible();
