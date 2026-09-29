@@ -4,7 +4,10 @@
 読み込む（#211）。シークレットはコードにハードコードしない。
 """
 
+import logging
+import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -26,7 +29,7 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
@@ -1915,12 +1918,15 @@ def _settings_singleton() -> Settings:
     """環境変数/.env と永続化ファイルから初期 Settings を作る。"""
     settings = Settings()
     load_persisted_model_settings(settings)
+    # 以後の .env の変更を差分で取り込むため、今の .env の内容を基準として覚える。
+    reload_env_settings_if_changed(settings)
     return settings
 
 
 def get_settings() -> Settings:
-    """設定のシングルトンを返す。永続化ファイルの更新があれば再読込する。"""
+    """設定のシングルトンを返す。.env・永続化ファイルの更新があれば再読込する。"""
     settings = _settings_singleton()
+    reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     return settings
 
@@ -1929,6 +1935,72 @@ def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
+    _ENV_RELOAD_STATE.key = None
+    _ENV_RELOAD_STATE.snapshot = None
+
+
+@dataclass
+class _EnvReloadState:
+    """前回読んだ .env の (パス, 更新時刻) と、その内容から作った Settings。"""
+
+    key: tuple[tuple[str, int | None], ...] | None = None
+    snapshot: Settings | None = None
+
+
+_ENV_RELOAD_STATE = _EnvReloadState()
+_ENV_RELOAD_LOCK = threading.Lock()
+
+
+def _env_file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def reload_env_settings_if_changed(settings: Settings) -> None:
+    """別プロセス（もう一方の worker・取込 worker）が画面から保存した `.env` を取り込む（#465）。
+
+    設定画面の保存は `.env` に書き、保存を受けたプロセスの Settings だけを書き換える。
+    ほかのプロセスは、`.env` の更新時刻が変わったら読み直し、前回読んだ内容から
+    **変わった項目だけ** を反映する（プロセスの中で変えた値や、`.env` にない値を既定値へ戻さない）。
+    反映後は model-settings.json の値をかけ直す。`.env` のパスが変わったとき（テストの tmp など）は
+    基準を取り直すだけにする。
+    """
+    files = (PLATFORM_ENV_FILE, BACKEND_ENV_FILE)
+    key = tuple((str(path), _env_file_mtime_ns(path)) for path in files)
+    state = _ENV_RELOAD_STATE
+    if key == state.key:
+        return
+    with _ENV_RELOAD_LOCK:
+        if key == state.key:
+            return
+        previous, previous_key = state.snapshot, state.key
+        try:
+            snapshot = Settings(_env_file=files)
+        except (ValidationError, OSError) as exc:
+            # 読み直しに失敗しても（手で書いた不正な値など）リクエストは止めず、今の値のまま動く。
+            # 同じ内容で何度も読み直さないよう時刻は覚え、基準は最後に読めた内容のままにする。
+            state.key = key
+            logging.getLogger(__name__).warning(
+                "rag_env_settings_reload_failed", extra={"error_type": type(exc).__name__}
+            )
+            return
+        state.key, state.snapshot = key, snapshot
+        same_files = previous_key is not None and [path for path, _ in previous_key] == [
+            path for path, _ in key
+        ]
+        if previous is None or not same_files:
+            return
+        changed = [
+            name
+            for name in Settings.model_fields
+            if getattr(snapshot, name) != getattr(previous, name)
+        ]
+        for name in changed:
+            setattr(settings, name, getattr(snapshot, name))
+        if changed:
+            load_persisted_model_settings(settings)
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
