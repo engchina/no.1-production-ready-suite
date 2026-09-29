@@ -567,22 +567,53 @@ def _allowed(*codes: str) -> frozenset[str]:
     return frozenset(codes)
 
 
+_SECURITY_USERS = _allowed("menu.security_users")
+_SECURITY_ROLES = _allowed("menu.security_roles")
+_SECURITY_ROLE_READ = _allowed(
+    "menu.security_users", "menu.security_roles", "menu.security_permissions"
+)
+_SECURITY_PERMISSIONS = _allowed("menu.security_permissions")
+
+# ユーザー管理・ロール管理（platform の共通 router）とロールへの権限付与の API。
+# 前方一致で割り当てず、(METHOD, route template) ごとに登録する（`/api` は付けない）。
+# `/security/users`・`/security/roles` 配下に登録のない route は拒否する（#503。RAG は #476）。
+SECURITY_USER_ROLE_ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
+    ("GET", "/security/users"): _SECURITY_USERS,
+    ("POST", "/security/users"): _SECURITY_USERS,
+    ("GET", "/security/users/{user_uuid}"): _SECURITY_USERS,
+    ("PATCH", "/security/users/{user_uuid}"): _SECURITY_USERS,
+    ("DELETE", "/security/users/{user_uuid}"): _SECURITY_USERS,
+    ("POST", "/security/users/{user_uuid}/disable"): _SECURITY_USERS,
+    ("POST", "/security/users/{user_uuid}/enable"): _SECURITY_USERS,
+    ("POST", "/security/users/{user_uuid}/reset-password"): _SECURITY_USERS,
+    ("POST", "/security/users/{user_uuid}/unlock"): _SECURITY_USERS,
+    # ロールの一覧・詳細は、ユーザー管理（ロールの割り当て）と権限管理の画面も読む。
+    ("GET", "/security/roles"): _SECURITY_ROLE_READ,
+    ("GET", "/security/roles/{role_id}"): _SECURITY_ROLE_READ,
+    ("POST", "/security/roles"): _SECURITY_ROLES,
+    ("PATCH", "/security/roles/{role_id}"): _SECURITY_ROLES,
+    ("DELETE", "/security/roles/{role_id}"): _SECURITY_ROLES,
+    ("POST", "/security/roles/{role_id}/archive"): _SECURITY_ROLES,
+    ("POST", "/security/roles/{role_id}/restore"): _SECURITY_ROLES,
+    # 権限の付与はロール管理から分けた権限管理だけが行う（NL2SQL の router。#206）。
+    ("PUT", "/security/roles/{role_id}/permissions"): _SECURITY_PERMISSIONS,
+}
+_SECURITY_USER_ROLE_PREFIXES = ("/security/users", "/security/roles")
+
+
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     """FastAPI の method + route template を許可 permission set へ写像する。"""
 
     method = method.upper()
     if (method, route_path) in OPEN_API_OPERATIONS:
         return None
-    if route_path.startswith("/security/users"):
-        return _allowed("menu.security_users")
+    exact = SECURITY_USER_ROLE_ROUTE_PERMISSIONS.get((method, route_path))
+    if exact is not None:
+        return exact
+    if route_path.startswith(_SECURITY_USER_ROLE_PREFIXES):
+        return _allowed(UNCLASSIFIED_PERMISSION)
     if route_path.startswith("/security/profile-access") or route_path == "/security/permissions":
         return _allowed("menu.security_permissions")
-    if route_path == "/security/roles/{role_id}/permissions":
-        return _allowed("menu.security_permissions")
-    if route_path.startswith("/security/roles") and method == "GET":
-        return _allowed("menu.security_users", "menu.security_roles", "menu.security_permissions")
-    if route_path.startswith("/security/roles"):
-        return _allowed("menu.security_roles")
     if route_path.startswith("/security/deepsec"):
         return _allowed("menu.security_deepsec")
     if route_path.startswith("/settings/oci/object-storage"):
