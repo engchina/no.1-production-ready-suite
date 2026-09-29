@@ -22,12 +22,12 @@ test("候補はサーバー側で検索し、「さらに表示」で次のペ�
   await page.goto("/evaluation");
 
   // 既定はトリガーのみで、リストは畳まれている(ページを押し下げない)。
-  const combobox = page.getByRole("combobox", { name: "知識ベース" });
+  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
   await expect(combobox).toBeVisible();
-  await expect(page.getByRole("listbox", { name: "知識ベース" })).toHaveCount(0);
+  await expect(page.getByRole("listbox", { name: "ナレッジベース" })).toHaveCount(0);
 
   await combobox.click();
-  const listbox = page.getByRole("listbox", { name: "知識ベース" });
+  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
   await expect(listbox).toBeVisible();
   await expect(listbox.getByRole("option").first()).toContainText("DEFAULT");
   await expect(listbox.getByRole("option")).toHaveCount(PAGE_SIZE);
@@ -35,7 +35,7 @@ test("候補はサーバー側で検索し、「さらに表示」で次のペ�
 
   // リストは高さ固定でスクロール可能。
   const scrollable = await page.evaluate(() => {
-    const list = document.querySelector('[role="listbox"][aria-label="知識ベース"]');
+    const list = document.querySelector('[role="listbox"][aria-label="ナレッジベース"]');
     if (!list) return false;
     return list.scrollHeight > list.clientHeight + 1;
   });
@@ -58,7 +58,7 @@ test("候補はサーバー側で検索し、「さらに表示」で次のペ�
 
   // 一致しない検索語は一覧内で伝える。
   await combobox.fill("存在しない名前");
-  await expect(page.getByText("「存在しない名前」に一致する知識ベースがありません。")).toBeVisible();
+  await expect(page.getByText("「存在しない名前」に一致するナレッジベースがありません。")).toBeVisible();
 
   await expectNoPageOverflow(page);
 });
@@ -69,7 +69,7 @@ test("検索で選んだ KB は、検索語を消して候補のページに無�
   await mockManyKnowledgeBases(page);
   await page.goto("/evaluation");
 
-  const combobox = page.getByRole("combobox", { name: "知識ベース" });
+  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
   await combobox.click();
   await combobox.fill("-118");
   await page.getByRole("option", { name: /ナレッジベース-118/ }).click();
@@ -80,7 +80,7 @@ test("検索で選んだ KB は、検索語を消して候補のページに無�
   await expect(page.getByText("1 件選択中").first()).toBeVisible();
 
   // 表示中をすべて選択・クリアは読み込んだ候補に対して働く（検索語を消した結果を待つ）。
-  await expect(page.getByRole("listbox", { name: "知識ベース" }).getByRole("option")).toHaveCount(
+  await expect(page.getByRole("listbox", { name: "ナレッジベース" }).getByRole("option")).toHaveCount(
     PAGE_SIZE
   );
   await page.getByRole("button", { name: "表示中をすべて選択" }).click();
@@ -88,7 +88,7 @@ test("検索で選んだ KB は、検索語を消して候補のページに無�
   await page.getByLabel("ナレッジベース-07 を選択から外す").click();
   await expect(page.getByText(`${PAGE_SIZE} 件選択中`).first()).toBeVisible();
   await page.getByRole("button", { name: "クリア" }).click();
-  await expect(page.getByText("利用できるすべての知識ベースを対象にします。")).toBeVisible();
+  await expect(page.getByText("利用できるすべてのナレッジベースを対象にします。")).toBeVisible();
 });
 
 test("選んでも一覧は開いたままで、「完了」で閉じて入力欄にフォーカスが戻る（#316）", async ({
@@ -97,8 +97,8 @@ test("選んでも一覧は開いたままで、「完了」で閉じて入力�
   await mockManyKnowledgeBases(page);
   await page.goto("/evaluation");
 
-  const combobox = page.getByRole("combobox", { name: "知識ベース" });
-  const listbox = page.getByRole("listbox", { name: "知識ベース" });
+  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
   await combobox.click();
   await expect(listbox).toBeVisible();
 
@@ -119,7 +119,7 @@ test("選んでも一覧は開いたままで、「完了」で閉じて入力�
   await expect(page.getByText("2 件選択中")).toBeVisible();
 
   // 入力欄の右の開閉ボタン（chevron）でも今までどおり開閉できる。
-  const toggle = page.getByRole("button", { name: "知識ベースの一覧を開閉" });
+  const toggle = page.getByRole("button", { name: "ナレッジベースの一覧を開閉" });
   await toggle.click();
   await expect(listbox).toBeVisible();
   await toggle.click();
@@ -134,8 +134,8 @@ test("キーボードで選び、Esc で閉じて入力欄に戻り、Tab で外
   await mockManyKnowledgeBases(page);
   await page.goto("/evaluation");
 
-  const combobox = page.getByRole("combobox", { name: "知識ベース" });
-  const listbox = page.getByRole("listbox", { name: "知識ベース" });
+  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
   const doneButton = page.getByRole("button", { name: "完了" });
 
   // 矢印と Enter で選ぶ。選んでも開いたまま。
@@ -184,7 +184,7 @@ test("キーボードで選び、Esc で閉じて入力欄に戻り、Tab で外
 
 /** 一覧を開いたまま Tab を押し、対象にフォーカスが来るまで進める（途中で閉じないことも確かめる）。 */
 async function tabUntilFocused(page: Page, target: Locator) {
-  const listbox = page.getByRole("listbox", { name: "知識ベース" });
+  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
   for (let step = 0; step < 12; step += 1) {
     const focused = await target
       .evaluate((node) => node === document.activeElement, undefined, { timeout: 1_000 })

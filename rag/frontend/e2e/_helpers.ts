@@ -195,7 +195,7 @@ export const SYSTEM_TABLES_STATUS_OK = {
  * `documentElement` だけでなく **`main`(`overflow-y-auto` で overflow-x も auto になる
  * スクロール領域)の内部はみ出し**も検査する。広いテーブルの `min-w-[…]` がグリッド子の
  * `min-w-0` 欠落でカラム幅を押し広げると、`main` が横スクロールを内部吸収してしまい
- * `documentElement` 基準のチェックだけでは見逃すため(知識ベース管理ページの崩れの実例)。
+ * `documentElement` 基準のチェックだけでは見逃すため(ナレッジベース管理ページの崩れの実例)。
  * テーブル等の意図的な横スクロールは各自の `overflow-x-auto` の箱に閉じ込める前提。
  *
  * `expect.poll` で短時間リトライし、サイドバー折りたたみ等の **UI 遷移中の一過性のはみ出し**は

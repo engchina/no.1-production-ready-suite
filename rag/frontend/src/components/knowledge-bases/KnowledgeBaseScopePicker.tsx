@@ -49,7 +49,7 @@ export function useKnowledgeBaseSelectionHealth(
 }
 
 /**
- * 検索・評価・業務ビュー・文書詳細で使う知識ベースの複数選択スコープ。
+ * 検索・評価・業務ビュー・文書詳細で使うナレッジベースの複数選択スコープ。
  * 候補はサーバー側で名前・説明を検索し、「さらに表示」で次のページを取る（件数の上限なし。#302）。
  */
 export function KnowledgeBaseScopePicker({
@@ -88,7 +88,7 @@ export function KnowledgeBaseScopePicker({
     knownMissingIds,
   });
   const searching = filter.trim() !== q || (search.isPlaceholderData && search.isFetching);
-  // 検索語なしで 1 件も無いときだけ「有効な知識ベースがありません」（検索の 0 件は一覧内で示す）。
+  // 検索語なしで 1 件も無いときだけ「有効なナレッジベースがありません」（検索の 0 件は一覧内で示す）。
   const noKnowledgeBases = search.isSuccess && !q && !filter.trim() && total === 0;
 
   return (

@@ -1,7 +1,7 @@
 import type { CurrentUser } from "./api";
 
 /**
- * アップロード先の知識ベース（#214）。
+ * アップロード先のナレッジベース（#214）。
  * 利用できる KB が制限された利用者（`allowed_knowledge_base_ids` が null でない）は、KB を指定しない
  * アップロードが backend で 400 になる（DEFAULT へ黙って登録しない）。画面は送信前に KB の選択を求める。
  */
