@@ -63,23 +63,24 @@ class OciEnterpriseAiConfig:
         """環境変数(backend と同じ共通設定の PLATFORM_OCI_ENTERPRISE_AI_* キー。#211)から構築する。
 
         microservice は VLM 抽出のみを行うため、vision_model_id は
-        `PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL`、default_model_id は
-        `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL`(無ければ
-        `PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL`)で解決する。
+        `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL`、default_model_id は
+        `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL`(無ければ既定の Vision モデル)で
+        解決する(#499。backend と同じ規則)。
         """
         src = os.environ if env is None else env
 
         def _get(name: str, default: str = "") -> str:
             return str(src.get(name, default) or default)
 
+        vision_model_id = _get("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL")
         return cls(
             oci_enterprise_ai_endpoint=_get("PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"),
             oci_enterprise_ai_api_key=_get("PLATFORM_OCI_ENTERPRISE_AI_API_KEY"),
             oci_enterprise_ai_project_ocid=_get("PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"),
             oci_compartment_id=_get("PLATFORM_OCI_COMPARTMENT_ID"),
-            vision_model_id=_get("PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"),
-            default_model_id=_get("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL")
-            or _get("PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"),
+            vision_model_id=vision_model_id,
+            default_model_id=_get("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL")
+            or vision_model_id,
             oci_enterprise_ai_llm_path=_get("PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH", "/responses"),
             oci_enterprise_ai_vlm_path=_get("PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH", "/responses"),
             oci_enterprise_ai_llm_response_path=_get(

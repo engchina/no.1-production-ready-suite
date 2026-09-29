@@ -242,8 +242,19 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
     await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
-      enterprise_ai: { api_key: "test-api-key" },
+      // 接続情報の節の保存は、既定のモデル 2 つを保存済みの値のまま送る（#499）。
+      enterprise_ai: {
+        api_key: "test-api-key",
+        default_text_model_id: "",
+        default_vision_model_id: "enterprise-llm",
+      },
     });
+    await expect(page.getByRole("combobox", { name: "既定の Vision モデル" })).toContainText(
+      "業務 RAG 標準"
+    );
+    await expect(page.getByRole("combobox", { name: "既定のテキストモデル" })).toContainText(
+      "既定の Vision モデルを使う"
+    );
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/database");

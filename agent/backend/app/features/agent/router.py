@@ -657,6 +657,11 @@ async def _run_enterprise_vision_model_test(settings: EnterpriseAiModelSettings)
     return _parse_enterprise_text_response(response, settings.vision_response_path)
 
 
+def _enterprise_text_model_id(settings: EnterpriseAiModelSettings) -> str:
+    """画像を扱わない呼び出しのモデル（既定のテキストモデル、未設定なら既定の Vision モデル）。"""
+    return settings.default_text_model_id or settings.default_vision_model_id
+
+
 def _enterprise_text_payload(
     settings: EnterpriseAiModelSettings,
     *,
@@ -666,7 +671,7 @@ def _enterprise_text_payload(
     system_prompt = "根拠に基づいて日本語で簡潔に回答してください。"
     user_message = f"{context}\n\n質問: {prompt}" if context else prompt
     values = {
-        "model": settings.default_model_id,
+        "model": _enterprise_text_model_id(settings),
         "project": settings.project_ocid,
         "project_ocid": settings.project_ocid,
         "prompt": prompt,
@@ -685,7 +690,7 @@ def _enterprise_text_payload(
     if settings.text_payload_template.strip():
         return _render_model_payload_template(settings.text_payload_template, values)
     return {
-        "model": settings.default_model_id,
+        "model": _enterprise_text_model_id(settings),
         "instructions": system_prompt,
         "input": [{"role": "user", "content": user_message}],
         "temperature": 0,
@@ -704,7 +709,7 @@ def _enterprise_vision_payload(
         {"type": "input_image", "image_url": f"data:image/png;base64,{image_data}"},
     ]
     values = {
-        "model": settings.default_model_id,
+        "model": settings.default_vision_model_id,
         "project": settings.project_ocid,
         "project_ocid": settings.project_ocid,
         "prompt": prompt,
@@ -715,7 +720,7 @@ def _enterprise_vision_payload(
     if settings.vision_payload_template.strip():
         return _render_model_payload_template(settings.vision_payload_template, values)
     return {
-        "model": settings.default_model_id,
+        "model": settings.default_vision_model_id,
         "input": [{"role": "user", "content": content}],
         "max_output_tokens": settings.vlm_max_output_tokens,
     }

@@ -72,11 +72,8 @@ class OciEnterpriseAiDirectClient:
         )
 
     def model_id(self) -> str:
-        return (
-            enterprise_ai_default_model_id(self.settings)
-            or self.settings.oci_enterprise_ai_default_model.strip()
-            or self.settings.oci_enterprise_ai_llm_model.strip()
-        )
+        """画像を扱わない呼び出しのモデル（既定のテキストモデル、なければ Vision）。"""
+        return enterprise_ai_default_model_id(self.settings)
 
     def generate(
         self,

@@ -74,7 +74,8 @@ function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
             vision_enabled: true,
           },
         ],
-        default_model_id: "enterprise-nl2sql-llm",
+        default_text_model_id: "enterprise-nl2sql-llm",
+        default_vision_model_id: "enterprise-nl2sql-vlm",
         api_path: "/responses",
         vlm_input_mode: "auto",
         text_payload_template: "",
@@ -2924,7 +2925,7 @@ test("レビュー補完: OCI config 反映・namespace 取得・保存の actio
   await expect(page.getByText("Object Storage 設定を保存しました。", { exact: true })).toBeVisible();
 });
 
-test("レビュー補完: モデル追加・既定・Vision・削除確認を保存 payload まで確認する", async ({ page }) => {
+test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・削除確認を保存 payload まで確認する", async ({ page }) => {
   let persisted = modelSettingsFixture();
   const writes: Array<Record<string, any>> = [];
   await page.route("**/api/settings/model", async (route) => {
@@ -2939,11 +2940,18 @@ test("レビュー補完: モデル追加・既定・Vision・削除確認を保
   await page.getByRole("button", { name: "追加", exact: true }).click();
   await page.getByRole("textbox", { name: "モデル ID 3", exact: true }).fill("review-model");
   await page.getByRole("textbox", { name: "表示名 3", exact: true }).fill("レビュー用");
-  await page.getByRole("radio", { name: "既定 3", exact: true }).check();
-  await page.getByRole("switch", { name: "Vision 3", exact: true }).click();
+  await page.getByRole("switch", { name: "画像入力（Vision）に対応 3", exact: true }).click();
+  // 既定の Vision モデル（Vision 対応のモデルだけ）と既定のテキストモデルを別々に選ぶ（#499）。
+  const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+  const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
+  await visionDefault.click();
+  await page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option", { name: /レビュー用/ }).click();
+  await textDefault.click();
+  await page.getByRole("listbox", { name: "既定のテキストモデル" }).getByRole("option", { name: /レビュー用/ }).click();
   await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
   await expect.poll(() => writes.length).toBe(1);
-  expect(writes[0].enterprise_ai.default_model_id).toBe("review-model");
+  expect(writes[0].enterprise_ai.default_vision_model_id).toBe("review-model");
+  expect(writes[0].enterprise_ai.default_text_model_id).toBe("review-model");
   expect(writes[0].enterprise_ai.models[2]).toEqual({ model_id: "review-model", display_name: "レビュー用", vision_enabled: true });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();
@@ -2953,11 +2961,23 @@ test("レビュー補完: モデル追加・既定・Vision・削除確認を保
   await remove.click();
   await page.getByRole("alertdialog").getByRole("button", { name: "削除", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "モデル ID 3", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: "既定 1", exact: true })).toBeChecked();
+  // 既定に選んでいたモデルを削除すると、保存前に両方の欄でエラーを出し、保存は送らない。
+  await expect(visionDefault).toHaveAttribute("aria-invalid", "true");
+  await expect(textDefault).toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
+  await expect(visionDefault).toBeFocused();
   expect(writes).toHaveLength(1);
+  await visionDefault.click();
+  await page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option", { name: /OCR \/ Vision/ }).click();
+  await textDefault.click();
+  await page.getByRole("listbox", { name: "既定のテキストモデル" }).getByRole("option", { name: "既定の Vision モデルを使う" }).click();
+  await expect(visionDefault).toHaveAttribute("aria-invalid", "false");
+  await expect(textDefault).toHaveAttribute("aria-invalid", "false");
   await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].enterprise_ai.models).toHaveLength(2);
+  expect(writes[1].enterprise_ai.default_vision_model_id).toBe("enterprise-nl2sql-vlm");
+  expect(writes[1].enterprise_ai.default_text_model_id).toBe("");
 });
 
 test("レビュー補完: 保存先の失敗再試行と OCI への離脱確認を確認する", async ({ page }) => {

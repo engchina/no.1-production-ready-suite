@@ -19,7 +19,10 @@ export interface EnterpriseAiModelSettings {
   has_api_key: boolean;
   clear_api_key: boolean;
   models: EnterpriseAiConfiguredModel[];
-  default_model_id: string;
+  /** 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。 */
+  default_text_model_id: string;
+  /** 画像を読む処理の既定。モデルを登録したら必須で、Vision 対応のモデルに限る（#499）。 */
+  default_vision_model_id: string;
   api_path: string;
   vlm_input_mode: EnterpriseAiVlmInputMode;
   text_payload_template: string;

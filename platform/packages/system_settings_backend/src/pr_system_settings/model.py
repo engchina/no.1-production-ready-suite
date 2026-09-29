@@ -6,6 +6,8 @@
 - それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
+- 既定のモデルは 2 つ（#499）。画像を読む呼び出しは「既定の Vision モデル」（必須）、
+  それ以外は「既定のテキストモデル」（任意。未設定なら既定の Vision モデル）を使う
 """
 
 from __future__ import annotations
@@ -74,7 +76,10 @@ class EnterpriseAiModelSettings(BaseModel):
     has_api_key: bool = False
     clear_api_key: bool = False
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
-    default_model_id: str = Field(default="", max_length=256)
+    # 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。
+    default_text_model_id: str = Field(default="", max_length=256)
+    # 画像を読む処理の既定。モデルを 1 つ以上登録したら必須で、Vision 対応のモデルに限る。
+    default_vision_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
     vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = Field(default="", max_length=20000)
@@ -90,7 +95,8 @@ class EnterpriseAiModelSettings(BaseModel):
         "endpoint",
         "project_ocid",
         "api_key",
-        "default_model_id",
+        "default_text_model_id",
+        "default_vision_model_id",
         "api_path",
         "text_payload_template",
         "vision_payload_template",
@@ -273,7 +279,7 @@ def _coerce_model(value: object) -> EnterpriseAiConfiguredModel:
 
 
 def enterprise_ai_model_catalog(settings: Any) -> list[EnterpriseAiConfiguredModel]:
-    """Enterprise AI の登録モデル一覧を返す。旧 LLM/VLM 設定からも補完する。"""
+    """Enterprise AI の登録モデル一覧を返す。一覧がなければ既定のモデルの設定から補う。"""
     configured = [
         model
         for model in (
@@ -283,45 +289,62 @@ def enterprise_ai_model_catalog(settings: Any) -> list[EnterpriseAiConfiguredMod
     ]
     if configured:
         return configured
-    llm_model = str(getattr(settings, "oci_enterprise_ai_llm_model", "")).strip()
-    vlm_model = str(getattr(settings, "oci_enterprise_ai_vlm_model", "")).strip()
+    text_model = _setting_text(settings, "oci_enterprise_ai_default_text_model")
+    vision_model = _setting_text(settings, "oci_enterprise_ai_default_vision_model")
     models: list[EnterpriseAiConfiguredModel] = []
-    if llm_model:
+    if text_model:
         models.append(
             EnterpriseAiConfiguredModel(
-                model_id=llm_model,
-                display_name=llm_model,
-                vision_enabled=bool(vlm_model and vlm_model == llm_model),
+                model_id=text_model,
+                display_name=text_model,
+                vision_enabled=bool(vision_model and vision_model == text_model),
             )
         )
-    if vlm_model and vlm_model != llm_model:
+    if vision_model and vision_model != text_model:
         models.append(
             EnterpriseAiConfiguredModel(
-                model_id=vlm_model, display_name=vlm_model, vision_enabled=True
+                model_id=vision_model, display_name=vision_model, vision_enabled=True
             )
         )
     return models
 
 
+def _setting_text(settings: Any, name: str) -> str:
+    return str(getattr(settings, name, "") or "").strip()
+
+
+def enterprise_ai_vision_model_id(settings: Any) -> str:
+    """画像を読む呼び出し（Vision/OCR）で使うモデル ID（既定の Vision モデル）を返す。
+
+    明示の設定がない環境（`.env` で登録モデルだけを書いた場合など）では、登録モデルのうち
+    Vision 対応のもの（既定のテキストモデルが Vision 対応ならそれ）を使う。
+    """
+    explicit = _setting_text(settings, "oci_enterprise_ai_default_vision_model")
+    if explicit:
+        return explicit
+    return _vision_model_id(
+        enterprise_ai_model_catalog(settings),
+        _setting_text(settings, "oci_enterprise_ai_default_text_model"),
+    )
+
+
 def enterprise_ai_default_model_id(settings: Any) -> str:
-    """通常の LLM 呼び出しで使う既定モデル ID を返す。"""
-    for name in ("oci_enterprise_ai_default_model", "oci_enterprise_ai_llm_model"):
-        value = str(getattr(settings, name, "")).strip()
-        if value:
-            return value
+    """画像を扱わない呼び出しで使うモデル ID を返す。
+
+    既定のテキストモデル → 既定の Vision モデル → 登録モデルの先頭 の順に決める（#499）。
+    """
+    text_model = _setting_text(settings, "oci_enterprise_ai_default_text_model")
+    if text_model:
+        return text_model
+    vision_model = enterprise_ai_vision_model_id(settings)
+    if vision_model:
+        return vision_model
     catalog = enterprise_ai_model_catalog(settings)
     return catalog[0].model_id if catalog else ""
 
 
-def enterprise_ai_vision_model_id(settings: Any) -> str:
-    """Vision/OCR 呼び出しで使うモデル ID を返す。"""
-    catalog = enterprise_ai_model_catalog(settings)
-    selected = _vision_model_id(catalog, enterprise_ai_default_model_id(settings))
-    return selected or str(getattr(settings, "oci_enterprise_ai_vlm_model", "")).strip()
-
-
 def _vision_model_id(models: Sequence[EnterpriseAiConfiguredModel], default_model: str) -> str:
-    """Vision/OCR 用 model を default 優先で選ぶ。"""
+    """Vision/OCR 用 model を default 優先で選ぶ（明示の指定がない環境・旧 JSON の補完）。"""
     for model in models:
         if model.model_id == default_model and model.vision_enabled:
             return model.model_id
@@ -329,6 +352,65 @@ def _vision_model_id(models: Sequence[EnterpriseAiConfiguredModel], default_mode
         if model.model_id and model.vision_enabled:
             return model.model_id
     return ""
+
+
+@dataclass(frozen=True)
+class ModelFieldError:
+    """保存前の検証で見つかった入力欄ごとのエラー（`field` は payload の key）。"""
+
+    field: Literal["default_text_model_id", "default_vision_model_id"]
+    message: str
+
+
+def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
+    """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
+
+    - モデルを 1 つ以上登録したら、既定の Vision モデルは必須で、Vision 対応のモデルに限る
+    - 既定のテキストモデルは任意。選ぶなら登録したモデルのどれか（Vision 対応でもよい）
+    """
+    models = [model for model in enterprise.models if model.model_id]
+    registered = {model.model_id for model in models}
+    vision_capable = {model.model_id for model in models if model.vision_enabled}
+    errors: list[ModelFieldError] = []
+    vision = enterprise.default_vision_model_id
+    if models and not vision_capable:
+        errors.append(
+            ModelFieldError(
+                "default_vision_model_id",
+                "画像入力（Vision）に対応したモデルがありません。"
+                "登録モデルの 1 つ以上で「画像入力（Vision）に対応」をオンにしてください。",
+            )
+        )
+    elif models and not vision:
+        errors.append(
+            ModelFieldError("default_vision_model_id", "既定の Vision モデルを選んでください。")
+        )
+    elif vision and vision not in registered:
+        errors.append(
+            ModelFieldError(
+                "default_vision_model_id",
+                f"既定の Vision モデル「{vision}」は登録モデルにありません。"
+                "登録モデルから選び直してください。",
+            )
+        )
+    elif vision and vision not in vision_capable:
+        errors.append(
+            ModelFieldError(
+                "default_vision_model_id",
+                f"「{vision}」は画像入力（Vision）に対応していません。"
+                "対応をオンにするか、別のモデルを選んでください。",
+            )
+        )
+    text = enterprise.default_text_model_id
+    if text and text not in registered:
+        errors.append(
+            ModelFieldError(
+                "default_text_model_id",
+                f"既定のテキストモデル「{text}」は登録モデルにありません。"
+                "登録モデルから選び直すか、「既定の Vision モデルを使う」にしてください。",
+            )
+        )
+    return errors
 
 
 # --------------------------------------------------------------------------- payload <-> Settings
@@ -347,7 +429,8 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             api_key="",
             has_api_key=bool(_api_key_of(settings).strip()),
             models=models,
-            default_model_id=enterprise_ai_default_model_id(settings),
+            default_text_model_id=_setting_text(settings, "oci_enterprise_ai_default_text_model"),
+            default_vision_model_id=enterprise_ai_vision_model_id(settings),
             api_path=api_path or "/responses",
             vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
             text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
@@ -372,13 +455,11 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     enterprise = payload.enterprise_ai
     generative = payload.generative_ai
     models = [model.model_copy() for model in enterprise.models if model.model_id]
-    default_model = enterprise.default_model_id
     settings.oci_enterprise_ai_endpoint = enterprise.endpoint
     settings.oci_enterprise_ai_project_ocid = enterprise.project_ocid
     settings.oci_enterprise_ai_models = models
-    settings.oci_enterprise_ai_default_model = default_model
-    settings.oci_enterprise_ai_llm_model = default_model
-    settings.oci_enterprise_ai_vlm_model = _vision_model_id(models, default_model) or default_model
+    settings.oci_enterprise_ai_default_text_model = enterprise.default_text_model_id
+    settings.oci_enterprise_ai_default_vision_model = enterprise.default_vision_model_id
     settings.oci_enterprise_ai_llm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_input_mode = enterprise.vlm_input_mode
@@ -442,7 +523,10 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     # v1 / v2（RAG・Agent）の読込互換専用。v3 の writer は secret を JSON へ出力しない。
     api_key: str | None = None
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    default_model_id: str = ""
+    default_text_model_id: str | None = None
+    default_vision_model_id: str | None = None
+    # #499 より前の JSON の key（既定モデルが 1 つ）。読み込むときに上の 2 つへ移す。
+    default_model_id: str | None = None
     api_path: str = "/responses"
     vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = ""
@@ -458,6 +542,32 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     @classmethod
     def normalize_vlm_input_mode(cls, value: object) -> object:
         return str(value).strip().casefold() or "auto"
+
+    @field_validator(
+        "default_text_model_id", "default_vision_model_id", "default_model_id", mode="before"
+    )
+    @classmethod
+    def strip_model_id(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    def default_models(self, models: Sequence[EnterpriseAiConfiguredModel]) -> tuple[str, str]:
+        """(既定のテキストモデル, 既定の Vision モデル) を返す。読み込みは失敗させない。
+
+        - #499 より前の JSON（`default_model_id` だけ）は、従来と同じモデルが使われるように、
+          `default_model_id`（空なら先頭の登録モデル）をテキストに、従来の導出の結果を Vision にする
+        - Vision に Vision 対応の登録モデル以外が書かれていたら（手で編集した場合など）、
+          従来の導出の結果に置き換える
+        """
+        if self.default_vision_model_id is None:
+            legacy = self.default_text_model_id or self.default_model_id or ""
+            if not legacy and models:
+                legacy = models[0].model_id
+            return legacy, _vision_model_id(models, legacy)
+        text = self.default_text_model_id or ""
+        vision = self.default_vision_model_id
+        if not any(model.model_id == vision and model.vision_enabled for model in models):
+            vision = _vision_model_id(models, text)
+        return text, vision
 
 
 class _PersistedModelSettings(BaseModel):
@@ -705,20 +815,27 @@ class ModelSettingsStore:
     def _apply(settings: Any, persisted: _PersistedModelSettings) -> None:
         enterprise = persisted.enterprise_ai
         models = [model for model in enterprise.models if model.model_id]
-        default_model = enterprise.default_model_id or (models[0].model_id if models else "")
+        text_model, vision_model = enterprise.default_models(models)
         apply_model_settings(
             settings,
             ModelSettingsPayload.model_construct(
                 enterprise_ai=EnterpriseAiModelSettings.model_construct(
-                    **enterprise.model_dump(exclude={"api_key", "models", "default_model_id"}),
+                    **enterprise.model_dump(
+                        exclude={
+                            "api_key",
+                            "models",
+                            "default_model_id",
+                            "default_text_model_id",
+                            "default_vision_model_id",
+                        }
+                    ),
                     models=models,
-                    default_model_id=default_model,
+                    default_text_model_id=text_model,
+                    default_vision_model_id=vision_model,
                 ),
                 generative_ai=persisted.generative_ai,
             ),
         )
-        # 保存済み JSON では Vision モデルがなければ空にする（default へ fallback しない）。
-        settings.oci_enterprise_ai_vlm_model = _vision_model_id(models, default_model)
         legacy_secret = (enterprise.api_key or "").strip()
         settings.apply_legacy_enterprise_ai_api_key(
             legacy_secret if persisted.version < MODEL_SETTINGS_DOCUMENT_VERSION else "",
@@ -739,7 +856,8 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
                 for model in enterprise.models
                 if model.model_id
             ],
-            "default_model_id": enterprise.default_model_id,
+            "default_text_model_id": enterprise.default_text_model_id,
+            "default_vision_model_id": enterprise.default_vision_model_id,
             "api_path": enterprise.api_path,
             "vlm_input_mode": enterprise.vlm_input_mode,
             "text_payload_template": enterprise.text_payload_template,
@@ -795,10 +913,9 @@ def model_test_candidate(settings: Any, request: ModelSettingsTestRequest) -> An
     candidate.oci_enterprise_ai_api_key = resolve_api_key(settings, request.settings)
     model_id = request.model_id
     if request.target_type in {"enterprise_text", "enterprise_vision"}:
-        candidate.oci_enterprise_ai_default_model = model_id
-        candidate.oci_enterprise_ai_llm_model = model_id
+        candidate.oci_enterprise_ai_default_text_model = model_id
     if request.target_type == "enterprise_vision":
-        candidate.oci_enterprise_ai_vlm_model = model_id
+        candidate.oci_enterprise_ai_default_vision_model = model_id
         candidate.oci_enterprise_ai_models = [
             model.model_copy(
                 update={"vision_enabled": model.model_id == model_id or model.vision_enabled}
@@ -955,7 +1072,16 @@ RunModelTest = Callable[[Any, ModelSettingsTestRequest], Awaitable[ModelTestDeta
 def save_model_settings(
     settings: Any, store: ModelSettingsStore, payload: ModelSettingsPayload
 ) -> None:
-    """保存が成功してから runtime へ反映する。失敗時は HTTPException(500)。"""
+    """保存が成功してから runtime へ反映する。
+
+    登録モデルか既定のモデルを変える保存では既定のモデルを検証する（不正なら HTTPException(422)）。
+    変えない保存（接続情報・Generative AI の節だけの保存）は、保存済みの状態が不正でも止めない。
+    永続化の失敗は HTTPException(500)。
+    """
+    if _default_models_changed(settings, payload.enterprise_ai):
+        errors = validate_default_models(payload.enterprise_ai)
+        if errors:
+            raise HTTPException(status_code=422, detail=" ".join(error.message for error in errors))
     try:
         with store.lock(settings):
             store.reload_if_changed(settings)
@@ -968,6 +1094,19 @@ def save_model_settings(
     # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
     # API key を削除した場合は、プロセスの環境変数の key に戻る（再読込時と同じ規則）。
     store.load(settings, refresh_secret=True)
+
+
+def _default_models_changed(settings: Any, enterprise: EnterpriseAiModelSettings) -> bool:
+    """登録モデル（ID と Vision 対応）か既定のモデルが、現在の設定から変わるか。"""
+
+    def key(value: EnterpriseAiModelSettings) -> tuple[object, ...]:
+        return (
+            [(model.model_id, model.vision_enabled) for model in value.models if model.model_id],
+            value.default_text_model_id,
+            value.default_vision_model_id,
+        )
+
+    return key(model_payload(settings).enterprise_ai) != key(enterprise)
 
 
 def build_model_router(

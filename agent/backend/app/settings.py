@@ -73,9 +73,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    oci_enterprise_ai_default_model: str = ""
-    oci_enterprise_ai_llm_model: str = ""
-    oci_enterprise_ai_vlm_model: str = ""
+    oci_enterprise_ai_default_text_model: str = ""
+    oci_enterprise_ai_default_vision_model: str = ""
     oci_enterprise_ai_llm_path: str = "/responses"
     oci_enterprise_ai_vlm_path: str = "/responses"
     oci_enterprise_ai_vlm_input_mode: str = "auto"

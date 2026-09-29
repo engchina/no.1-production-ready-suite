@@ -1691,7 +1691,8 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
                         "vision_enabled": True,
                     },
                 ],
-                "default_model_id": "cohere.command-r-plus",
+                "default_text_model_id": "cohere.command-r-plus",
+                "default_vision_model_id": "mistral.vision-model",
                 "api_path": "/responses",
                 "vlm_input_mode": "auto",
                 "text_payload_template": "",
@@ -1721,6 +1722,8 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     assert document["version"] == 3
     assert "api_key" not in document["enterprise_ai"]
     assert document["enterprise_ai"]["models"][1]["model_id"] == "mistral.vision-model"
+    assert document["enterprise_ai"]["default_text_model_id"] == "cohere.command-r-plus"
+    assert document["enterprise_ai"]["default_vision_model_id"] == "mistral.vision-model"
     assert document["generative_ai"]["embedding_dim"] == 1536
     assert (
         env_file.read_text(encoding="utf-8") == "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=saved-secret\n"
@@ -1808,8 +1811,8 @@ def test_load_persisted_model_settings_applies_runtime_fields(tmp_path: Path) ->
     assert settings.oci_enterprise_ai_api_key == "persisted-secret"
     assert settings.model_secret_source == "legacy_json"
     assert settings.legacy_model_secret_detected is True
-    assert settings.oci_enterprise_ai_default_model == "cohere.command-r-plus"
-    assert settings.oci_enterprise_ai_vlm_model == "mistral.vision-model"
+    assert settings.oci_enterprise_ai_default_text_model == "cohere.command-r-plus"
+    assert settings.oci_enterprise_ai_default_vision_model == "mistral.vision-model"
     assert [model.model_id for model in settings.oci_enterprise_ai_models] == [
         "cohere.command-r-plus",
         "mistral.vision-model",
@@ -1966,7 +1969,7 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
             captured["prompt"] = prompt
             captured["context"] = context
             captured["endpoint"] = self.settings.oci_enterprise_ai_endpoint
-            captured["model_id"] = self.settings.oci_enterprise_ai_llm_model
+            captured["model_id"] = self.settings.oci_enterprise_ai_default_text_model
             captured["api_key"] = self.settings.oci_enterprise_ai_api_key
             return "テスト応答"
 
@@ -1989,7 +1992,7 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
                             "vision_enabled": False,
                         }
                     ],
-                    "default_model_id": "cohere.command-r-plus",
+                    "default_text_model_id": "cohere.command-r-plus",
                     "api_path": "/responses",
                     "vlm_input_mode": "auto",
                     "timeout_seconds": 10,
@@ -2072,7 +2075,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
                             "vision_enabled": True,
                         },
                     ],
-                    "default_model_id": "cohere.command-r-plus",
+                    "default_text_model_id": "cohere.command-r-plus",
                     "api_path": "/responses",
                     "vlm_input_mode": "auto",
                     "timeout_seconds": 10,
@@ -2092,7 +2095,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
     assert data["status"] == "success"
     assert data["details"]["surface"] == "vision"
     assert data["details"]["response_chars"] == len("画像を確認しました。")
-    assert observed[0][0].oci_enterprise_ai_vlm_model == "google.gemini-2.5-flash"
+    assert observed[0][0].oci_enterprise_ai_default_vision_model == "google.gemini-2.5-flash"
     assert observed[0][1] == settings_router.MODEL_TEST_IMAGE_BYTES
     assert observed[0][2]
     assert observed[0][3] == "image/jpeg"

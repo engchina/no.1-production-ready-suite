@@ -209,8 +209,8 @@ def test_service_runtime_env_injects_oci_enterprise_ai_settings() -> None:
             "oci_enterprise_ai_project_ocid": "ocid1.generativeaiproject.oc1..x",
             # catalog が空でも resolver は legacy VLM/LLM へフォールバックする。
             "oci_enterprise_ai_models": [],
-            "oci_enterprise_ai_vlm_model": "xai.grok-4.3",
-            "oci_enterprise_ai_llm_model": "xai.grok-4.3",
+            "oci_enterprise_ai_default_vision_model": "xai.grok-4.3",
+            "oci_enterprise_ai_default_text_model": "xai.grok-4.3",
             "oci_enterprise_ai_vlm_input_mode": "files_api",
         }
     )
@@ -218,8 +218,8 @@ def test_service_runtime_env_injects_oci_enterprise_ai_settings() -> None:
     assert env["PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_API_KEY"] == "sk-secret"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID"] == "ocid1.generativeaiproject.oc1..x"
-    assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
-    assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"] == "xai.grok-4.3"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL"] == "xai.grok-4.3"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
     # docling サービスは Vision を呼ばない(#497)。docrag の接頭辞なしの名前は渡さない。
     assert "OCI_ENTERPRISE_AI_ENDPOINT" not in env
@@ -231,11 +231,11 @@ def test_service_runtime_env_oci_vlm_model_empty_when_unconfigured() -> None:
     settings = get_settings().model_copy(
         update={
             "oci_enterprise_ai_models": [],
-            "oci_enterprise_ai_vlm_model": "",
-            "oci_enterprise_ai_llm_model": "",
+            "oci_enterprise_ai_default_vision_model": "",
+            "oci_enterprise_ai_default_text_model": "",
         }
     )
-    assert service_runtime_env(settings)["PLATFORM_OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
+    assert service_runtime_env(settings)["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL"] == ""
 
 
 def test_render_service_runtime_env_escapes_for_systemd() -> None:

@@ -33,9 +33,8 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    oci_enterprise_ai_default_model: str = ""
-    oci_enterprise_ai_llm_model: str = ""
-    oci_enterprise_ai_vlm_model: str = ""
+    oci_enterprise_ai_default_text_model: str = ""
+    oci_enterprise_ai_default_vision_model: str = ""
     oci_enterprise_ai_llm_path: str = "/responses"
     oci_enterprise_ai_vlm_path: str = "/responses"
     oci_enterprise_ai_vlm_input_mode: str = "auto"
@@ -63,7 +62,8 @@ PAYLOAD: dict[str, Any] = {
             {"model_id": "llm-a", "display_name": "A", "vision_enabled": False},
             {"model_id": "vlm-b", "display_name": "B", "vision_enabled": True},
         ],
-        "default_model_id": "llm-a",
+        "default_text_model_id": "llm-a",
+        "default_vision_model_id": "vlm-b",
     },
     "generative_ai": {"embedding_model": "cohere.embed-v4.0", "rerank_model": "rr"},
 }
@@ -140,7 +140,10 @@ def test_patch_saves_key_only_in_env_and_keeps_product_section(tmp_path: Path) -
     assert stat.S_IMODE((tmp_path / "model-settings.json").stat().st_mode) == 0o600
     assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_API_KEY_ENV] == "sk-new"
     assert settings.oci_enterprise_ai_api_key == "sk-new"
-    assert settings.oci_enterprise_ai_vlm_model == "vlm-b"
+    assert settings.oci_enterprise_ai_default_vision_model == "vlm-b"
+    assert document["enterprise_ai"]["default_text_model_id"] == "llm-a"
+    assert document["enterprise_ai"]["default_vision_model_id"] == "vlm-b"
+    assert "default_model_id" not in document["enterprise_ai"]
 
 
 def test_blank_key_keeps_current_and_clear_removes_it(tmp_path: Path) -> None:
@@ -219,7 +222,8 @@ def test_other_worker_picks_up_saved_key_and_settings(tmp_path: Path) -> None:
     data = make_client(worker_b, store_b).get("/api/settings/model").json()["data"]
 
     assert worker_b.oci_enterprise_ai_api_key == "sk-new"
-    assert data["settings"]["enterprise_ai"]["default_model_id"] == "llm-a"
+    assert data["settings"]["enterprise_ai"]["default_text_model_id"] == "llm-a"
+    assert data["settings"]["enterprise_ai"]["default_vision_model_id"] == "vlm-b"
 
 
 def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
@@ -245,7 +249,8 @@ def test_model_test_uses_unsaved_payload_and_masks_secret(tmp_path: Path) -> Non
     assert ok["details"] == {"key": "sk-new", "model": "llm-a"}
 
     async def fail(candidate: Any, _request: ModelSettingsTestRequest) -> dict[str, Any]:
-        assert candidate.oci_enterprise_ai_vlm_model == "llm-a"
+        assert candidate.oci_enterprise_ai_default_vision_model == "llm-a"
+        assert shared_model.enterprise_ai_vision_model_id(candidate) == "llm-a"
         raise RuntimeError(f"401 Unauthorized for {candidate.oci_enterprise_ai_api_key}")
 
     failed = (
@@ -297,14 +302,254 @@ def test_broken_json_is_reported(tmp_path: Path) -> None:
         make_store(tmp_path).load(FakeSettings())
 
 
-def test_catalog_falls_back_to_legacy_llm_and_vlm_ids() -> None:
-    settings = FakeSettings(oci_enterprise_ai_llm_model="llm", oci_enterprise_ai_vlm_model="vlm")
-    assert [m.model_id for m in shared_model.enterprise_ai_model_catalog(settings)] == [
-        "llm",
-        "vlm",
-    ]
+def test_catalog_falls_back_to_default_text_and_vision_ids() -> None:
+    settings = FakeSettings(
+        oci_enterprise_ai_default_text_model="llm", oci_enterprise_ai_default_vision_model="vlm"
+    )
+    assert [
+        (m.model_id, m.vision_enabled) for m in shared_model.enterprise_ai_model_catalog(settings)
+    ] == [("llm", False), ("vlm", True)]
     assert shared_model.enterprise_ai_default_model_id(settings) == "llm"
     assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm"
+
+
+# --------------------------------------------------------------------------- #499 既定のモデル 2 つ
+
+MODELS = [
+    EnterpriseAiConfiguredModel(model_id="llm-a", display_name="A", vision_enabled=False),
+    EnterpriseAiConfiguredModel(model_id="vlm-b", display_name="B", vision_enabled=True),
+]
+
+
+def test_resolution_uses_text_model_and_falls_back_to_vision_model() -> None:
+    settings = FakeSettings(
+        oci_enterprise_ai_models=MODELS,
+        oci_enterprise_ai_default_text_model="llm-a",
+        oci_enterprise_ai_default_vision_model="vlm-b",
+    )
+    assert shared_model.enterprise_ai_default_model_id(settings) == "llm-a"
+    assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
+
+    settings.oci_enterprise_ai_default_text_model = ""
+    # 既定のテキストモデルが未設定なら、画像を扱わない呼び出しも既定の Vision モデルを使う。
+    assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
+    assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
+
+
+def test_vision_model_is_derived_when_not_set_explicitly() -> None:
+    """`.env` で登録モデルだけを書いた環境は、従来どおり Vision 対応のモデルを使う。"""
+    settings = FakeSettings(oci_enterprise_ai_models=MODELS)
+    assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
+    assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
+
+
+@pytest.mark.parametrize(
+    ("update", "field", "message"),
+    [
+        (
+            {"models": [{"model_id": "llm-a", "vision_enabled": False}]},
+            "default_vision_model_id",
+            "画像入力（Vision）に対応したモデルがありません",
+        ),
+        ({"default_vision_model_id": ""}, "default_vision_model_id", "選んでください"),
+        ({"default_vision_model_id": "gone"}, "default_vision_model_id", "登録モデルにありません"),
+        (
+            {"default_vision_model_id": "llm-a"},
+            "default_vision_model_id",
+            "画像入力（Vision）に対応していません",
+        ),
+        ({"default_text_model_id": "gone"}, "default_text_model_id", "登録モデルにありません"),
+    ],
+    ids=["no-vision-model", "vision-empty", "vision-removed", "vision-not-capable", "text-removed"],
+)
+def test_patch_rejects_invalid_default_models(
+    tmp_path: Path, update: dict[str, Any], field: str, message: str
+) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    enterprise = {**PAYLOAD["enterprise_ai"], **update}
+    errors = shared_model.validate_default_models(
+        shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
+    )
+    assert [error.field for error in errors] == [field]
+
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json={**PAYLOAD, "enterprise_ai": enterprise}
+    )
+
+    assert response.status_code == 422
+    assert message in response.json()["detail"]
+    assert not (tmp_path / "model-settings.json").exists()
+
+
+def test_patch_accepts_empty_text_model_and_vision_capable_text_model(tmp_path: Path) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+
+    empty_text = {**PAYLOAD["enterprise_ai"], "default_text_model_id": ""}
+    response = client.patch("/api/settings/model", json={**PAYLOAD, "enterprise_ai": empty_text})
+    assert response.status_code == 200
+    assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
+
+    vision_text = {**PAYLOAD["enterprise_ai"], "default_text_model_id": "vlm-b"}
+    response = client.patch("/api/settings/model", json={**PAYLOAD, "enterprise_ai": vision_text})
+    assert response.status_code == 200
+    assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
+
+
+def test_patch_without_models_needs_no_vision_model(tmp_path: Path) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    enterprise = {
+        **PAYLOAD["enterprise_ai"],
+        "models": [],
+        "default_text_model_id": "",
+        "default_vision_model_id": "",
+    }
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json={**PAYLOAD, "enterprise_ai": enterprise}
+    )
+    assert response.status_code == 200
+
+
+def test_saving_other_sections_is_not_blocked_by_saved_invalid_defaults(tmp_path: Path) -> None:
+    """保存済みの状態に Vision 対応のモデルがなくても、接続情報だけの保存は止めない。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "enterprise_ai": {
+                    "models": [{"model_id": "llm-a", "vision_enabled": False}],
+                    "default_model_id": "llm-a",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    current = client.get("/api/settings/model").json()["data"]["settings"]
+    assert current["enterprise_ai"]["default_vision_model_id"] == ""
+
+    current["enterprise_ai"]["endpoint"] = "https://changed.invalid/openai/v1"
+    response = client.patch("/api/settings/model", json=current)
+
+    assert response.status_code == 200
+    assert settings.oci_enterprise_ai_endpoint == "https://changed.invalid/openai/v1"
+
+
+@pytest.mark.parametrize(
+    ("enterprise", "expected"),
+    [
+        # 既定モデルが Vision 対応ならそれを Vision にも使う（従来の導出）。
+        (
+            {
+                "models": [
+                    {"model_id": "llm-a", "vision_enabled": False},
+                    {"model_id": "vlm-b", "vision_enabled": True},
+                    {"model_id": "vlm-c", "vision_enabled": True},
+                ],
+                "default_model_id": "vlm-c",
+            },
+            ("vlm-c", "vlm-c"),
+        ),
+        # 既定モデルが Vision 非対応なら、一覧で最初の Vision 対応モデル。
+        (
+            {
+                "models": [
+                    {"model_id": "llm-a", "vision_enabled": False},
+                    {"model_id": "vlm-b", "vision_enabled": True},
+                ],
+                "default_model_id": "llm-a",
+            },
+            ("llm-a", "vlm-b"),
+        ),
+        # 既定モデルが空なら先頭の登録モデル。Vision 対応がなければ Vision は空（失敗させない）。
+        (
+            {"models": [{"model_id": "llm-a", "vision_enabled": False}], "default_model_id": ""},
+            ("llm-a", ""),
+        ),
+    ],
+    ids=["default-is-vision", "first-vision", "no-vision"],
+)
+def test_legacy_json_default_model_id_is_backfilled(
+    tmp_path: Path, enterprise: dict[str, Any], expected: tuple[str, str]
+) -> None:
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps({"version": 3, "enterprise_ai": enterprise}), encoding="utf-8"
+    )
+    settings = FakeSettings()
+    make_store(tmp_path).load(settings)
+
+    assert (
+        settings.oci_enterprise_ai_default_text_model,
+        settings.oci_enterprise_ai_default_vision_model,
+    ) == expected
+    assert shared_model.enterprise_ai_default_model_id(settings) == expected[0]
+    assert shared_model.enterprise_ai_vision_model_id(settings) == expected[1]
+
+
+def test_saving_legacy_json_writes_new_keys(tmp_path: Path) -> None:
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "enterprise_ai": {
+                    "models": [
+                        {"model_id": "llm-a", "vision_enabled": False},
+                        {"model_id": "vlm-b", "vision_enabled": True},
+                    ],
+                    "default_model_id": "llm-a",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    current = client.get("/api/settings/model").json()["data"]["settings"]
+
+    assert client.patch("/api/settings/model", json=current).status_code == 200
+
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert document["enterprise_ai"]["default_text_model_id"] == "llm-a"
+    assert document["enterprise_ai"]["default_vision_model_id"] == "vlm-b"
+    assert "default_model_id" not in document["enterprise_ai"]
+
+
+def test_saved_vision_model_that_is_not_vision_capable_is_replaced_on_load(
+    tmp_path: Path,
+) -> None:
+    """手で編集した JSON の不整合でも読み込みは失敗させず、Vision 対応のモデルへ置き換える。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "enterprise_ai": {
+                    "models": [
+                        {"model_id": "llm-a", "vision_enabled": False},
+                        {"model_id": "vlm-b", "vision_enabled": True},
+                    ],
+                    "default_text_model_id": "",
+                    "default_vision_model_id": "llm-a",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    make_store(tmp_path).load(settings)
+
+    assert settings.oci_enterprise_ai_default_text_model == ""
+    assert settings.oci_enterprise_ai_default_vision_model == "vlm-b"
 
 
 def test_key_saved_in_env_file_is_used_on_startup(tmp_path: Path) -> None:

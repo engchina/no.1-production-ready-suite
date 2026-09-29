@@ -1764,10 +1764,9 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
         "ocid1.generativeaiproject.oc1..example",
     )
     monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "sk-runtime-secret")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "enterprise-llm")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "enterprise-vlm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "enterprise-llm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_vision_model", "enterprise-vlm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
-    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_path", "/responses")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_path", "/responses")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
@@ -1801,7 +1800,8 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "vision_enabled": True,
         },
     ]
-    assert body["settings"]["enterprise_ai"]["default_model_id"] == "enterprise-llm"
+    assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
+    assert body["settings"]["enterprise_ai"]["default_vision_model_id"] == "enterprise-vlm"
     assert body["settings"]["enterprise_ai"]["api_path"] == "/responses"
     assert body["settings"]["enterprise_ai"]["vlm_input_mode"] == "files_api"
     assert body["settings"]["enterprise_ai"]["text_payload_template"] == LLM_TEMPLATE
@@ -1826,13 +1826,12 @@ def test_update_model_settings_mutates_runtime_settings() -> None:
     assert settings.oci_enterprise_ai_endpoint == "https://enterprise-ai.example"
     assert settings.oci_enterprise_ai_project_ocid == "ocid1.generativeaiproject.oc1..example"
     assert settings.oci_enterprise_ai_api_key == "sk-update-secret"
-    assert settings.oci_enterprise_ai_llm_model == "enterprise-llm"
-    assert settings.oci_enterprise_ai_vlm_model == "enterprise-vlm"
+    assert settings.oci_enterprise_ai_default_text_model == "enterprise-llm"
+    assert settings.oci_enterprise_ai_default_vision_model == "enterprise-vlm"
     assert [model.model_id for model in settings.oci_enterprise_ai_models] == [
         "enterprise-llm",
         "enterprise-vlm",
     ]
-    assert settings.oci_enterprise_ai_default_model == "enterprise-llm"
     assert settings.oci_enterprise_ai_llm_path == "/responses"
     assert settings.oci_enterprise_ai_vlm_path == "/responses"
     assert settings.oci_enterprise_ai_vlm_input_mode == "files_api"
@@ -1877,7 +1876,9 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "vision_enabled": True,
         },
     ]
-    assert persisted["enterprise_ai"]["default_model_id"] == "enterprise-llm"
+    assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
+    assert persisted["enterprise_ai"]["default_vision_model_id"] == "enterprise-vlm"
+    assert "default_model_id" not in persisted["enterprise_ai"]
     assert persisted["enterprise_ai"]["vlm_input_mode"] == "files_api"
     assert persisted["enterprise_ai"]["llm_max_output_tokens"] == 1600
     assert persisted["enterprise_ai"]["vlm_max_output_tokens"] == 64000
@@ -1945,9 +1946,9 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(
         "persisted-text",
         "persisted-vision",
     ]
-    assert settings.oci_enterprise_ai_default_model == "persisted-text"
-    assert settings.oci_enterprise_ai_llm_model == "persisted-text"
-    assert settings.oci_enterprise_ai_vlm_model == "persisted-vision"
+    # #499 より前の JSON（default_model_id だけ）は、従来と同じモデルになるよう補う。
+    assert settings.oci_enterprise_ai_default_text_model == "persisted-text"
+    assert settings.oci_enterprise_ai_default_vision_model == "persisted-vision"
     assert settings.oci_enterprise_ai_vlm_input_mode == "inline_image"
     assert settings.oci_enterprise_ai_llm_response_path == "/payload/text"
     assert settings.oci_enterprise_ai_vlm_response_path == "/payload/document"
@@ -2008,7 +2009,7 @@ def test_model_settings_test_enterprise_text_uses_candidate_without_mutating_run
     assert body["status"] == "success"
     assert body["target_type"] == "enterprise_text"
     assert body["details"]["surface"] == "llm"
-    assert observed_settings[0].oci_enterprise_ai_llm_model == "enterprise-llm"
+    assert observed_settings[0].oci_enterprise_ai_default_text_model == "enterprise-llm"
     assert observed_settings[0].oci_enterprise_ai_api_key == "sk-update-secret"
     assert settings.oci_enterprise_ai_endpoint == "https://runtime.example"
     assert "sk-update-secret" not in resp.text
@@ -2051,7 +2052,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
     assert body["status"] == "success"
     assert body["details"]["surface"] == "vision"
     assert body["details"]["response_chars"] == len("画像を確認しました。")
-    assert observed[0][0].oci_enterprise_ai_vlm_model == "google.gemini-2.5-flash"
+    assert observed[0][0].oci_enterprise_ai_default_vision_model == "google.gemini-2.5-flash"
     assert observed[0][1] == settings_routes.MODEL_TEST_IMAGE_BYTES
     assert observed[0][2]
     assert observed[0][3] == "image/jpeg"
@@ -3775,7 +3776,8 @@ def _payload() -> dict[str, Any]:
                     "vision_enabled": True,
                 },
             ],
-            "default_model_id": "enterprise-llm",
+            "default_text_model_id": "enterprise-llm",
+            "default_vision_model_id": "enterprise-vlm",
             "api_path": "/responses",
             "vlm_input_mode": "files_api",
             "text_payload_template": LLM_TEMPLATE,

@@ -144,6 +144,14 @@ compose の project 名（`production-ready-agent-control-plane`）は変えて�
 4. backend を `uv run`（開発）または systemd の `production-ready-agent-backend`（Resource Manager の stack）で起動し、
    初回は `cd backend && uv run python -m app.cli.agent_security_migrate` でテーブルを作ります。
 
+## 既存環境の更新手順（#499 既定のモデルの変数名）
+
+#499 で既定のモデルを「既定の Vision モデル」（必須）と「既定のテキストモデル」（任意。未設定なら既定の Vision モデル）の 2 つに分け、
+共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL` / `_LLM_MODEL` / `_VLM_MODEL` を
+`PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL` / `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL` に改名しました（旧名は読みません）。
+`platform/.env` に既定のモデルを書いている環境は、backend を止めてから `platform/scripts/migrate_model_env_names.py`（確認 → `--apply`）で
+書き換え、起動し直します。詳細は [platform/README.md の「既存環境の更新手順（#499）」](../platform/README.md#既存環境の更新手順499-既定のモデルの変数名)を参照してください。
+
 ## 既存環境の更新手順（#211）
 
 #211 で設定を共通 `.env`（`platform/.env`、`PLATFORM_*`）と Agent の `backend/.env`（`AGENT_*`）に分けました。

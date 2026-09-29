@@ -13356,12 +13356,13 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL",
+                name="PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL",
                 status="ok" if self._enterprise_ai_client.model_id() else "warning",
                 message=(
-                    f"OCI Enterprise AI LLM model は {self._enterprise_ai_client.model_id()} です。"
+                    "OCI Enterprise AI のテキストモデルは "
+                    f"{self._enterprise_ai_client.model_id()} です。"
                     if self._enterprise_ai_client.model_id()
-                    else "OCI Enterprise AI LLM model が未設定です。"
+                    else "OCI Enterprise AI のテキストモデルが未設定です。"
                 ),
             ),
             DiagnosticCheck(
@@ -13738,11 +13739,7 @@ class Nl2SqlService:
                 else fallback
             )
 
-        enterprise_model_name = (
-            "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL"
-            if settings.oci_enterprise_ai_default_model.strip()
-            else "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"
-        )
+        enterprise_model_name = "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL"
 
         return [
             DiagnosticConfigGuide(
@@ -13760,11 +13757,11 @@ class Nl2SqlService:
                 required_env_vars=[
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT"),
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_API_KEY"),
-                    env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL"),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL"),
                 ],
                 optional_env_vars=[
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID", required=False),
-                    env_var("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL", required=False),
+                    env_var("PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL", required=False),
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH", required=False),
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE", required=False),
                     env_var("PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH", required=False),
@@ -14053,13 +14050,13 @@ class Nl2SqlService:
                     else (
                         "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT / "
                         "PLATFORM_OCI_ENTERPRISE_AI_API_KEY / "
-                        "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL を設定してください。"
+                        "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL を設定してください。"
                     )
                 ),
                 related_checks=[
                     "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
                     "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
-                    "PLATFORM_OCI_ENTERPRISE_AI_LLM_MODEL",
+                    "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL",
                 ],
             ),
             DiagnosticReadiness(

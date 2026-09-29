@@ -212,7 +212,7 @@ async def test_oci_vlm_inline_image_mode_rejects_pdf() -> None:
 async def test_oci_vlm_omits_json_schema_for_gemini_provider() -> None:
     """Gemini provider には Responses JSON Schema ではなく prompt 契約で JSON 出力させる。"""
     settings = _oci_settings()
-    settings.oci_enterprise_ai_vlm_model = "google.gemini-2.5-flash"
+    settings.oci_enterprise_ai_default_vision_model = "google.gemini-2.5-flash"
     transport = FakeEnterpriseAiTransport(
         {
             "output": (
@@ -546,7 +546,7 @@ async def test_oci_vlm_uses_configured_response_path() -> None:
 async def test_oci_vlm_uses_configured_payload_template() -> None:
     """VLM endpoint 固有の request shape は JSON template で差し替えられる。"""
     settings = _oci_settings()
-    settings.oci_enterprise_ai_vlm_model = ""
+    settings.oci_enterprise_ai_default_vision_model = ""
     settings.oci_enterprise_ai_vlm_payload_template = (
         '{"servingMode":"custom","inputs":[{"mimeType":"${mime_type}",'
         '"bytes":"${data_base64}"}],"schema":"${structured_extraction_schema}",'
@@ -635,7 +635,7 @@ async def test_oci_generate_uses_configured_default_model() -> None:
             vision_enabled=True,
         ),
     ]
-    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    settings.oci_enterprise_ai_default_text_model = "enterprise-default"
     transport = FakeEnterpriseAiTransport({"answer": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
@@ -645,7 +645,7 @@ async def test_oci_generate_uses_configured_default_model() -> None:
 
 
 async def test_oci_vlm_uses_default_model_when_it_supports_vision() -> None:
-    """既定モデルが Vision 対応なら OCR でも既定モデルを使う。"""
+    """既定の Vision モデルを明示しない環境では、既定モデルが Vision 対応なら OCR でも使う。"""
     settings = _oci_settings()
     settings.oci_enterprise_ai_models = [
         EnterpriseAiConfiguredModel(model_id="enterprise-text", display_name="Text"),
@@ -655,7 +655,8 @@ async def test_oci_vlm_uses_default_model_when_it_supports_vision() -> None:
             vision_enabled=True,
         ),
     ]
-    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    settings.oci_enterprise_ai_default_text_model = "enterprise-default"
+    settings.oci_enterprise_ai_default_vision_model = ""
     transport = FakeEnterpriseAiTransport(
         {
             "data": {
@@ -674,7 +675,7 @@ async def test_oci_vlm_uses_default_model_when_it_supports_vision() -> None:
 
 
 async def test_oci_vlm_uses_first_vision_model_when_default_is_text_only() -> None:
-    """既定モデルが text-only の場合は Vision 対応モデルへ切り替える。"""
+    """既定の Vision モデルを明示せず既定モデルが text-only なら、Vision 対応モデルを使う。"""
     settings = _oci_settings()
     settings.oci_enterprise_ai_models = [
         EnterpriseAiConfiguredModel(model_id="enterprise-default", display_name="Default"),
@@ -684,7 +685,8 @@ async def test_oci_vlm_uses_first_vision_model_when_default_is_text_only() -> No
             vision_enabled=True,
         ),
     ]
-    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    settings.oci_enterprise_ai_default_text_model = "enterprise-default"
+    settings.oci_enterprise_ai_default_vision_model = ""
     transport = FakeEnterpriseAiTransport(
         {
             "data": {
@@ -926,7 +928,7 @@ async def test_oci_generate_uses_configured_response_path() -> None:
 async def test_oci_generate_uses_configured_payload_template() -> None:
     """LLM endpoint 固有の request shape は JSON template で差し替えられる。"""
     settings = _oci_settings()
-    settings.oci_enterprise_ai_llm_model = ""
+    settings.oci_enterprise_ai_default_text_model = ""
     settings.oci_enterprise_ai_llm_payload_template = (
         '{"input":{"messages":"${messages}","params":"${parameters}"},'
         '"metadata":{"task":"${task}","language":"${language}"}}'
@@ -1178,8 +1180,8 @@ def _oci_settings() -> Settings:
         oci_enterprise_ai_endpoint="https://enterprise-ai.example",
         oci_enterprise_ai_project_ocid="ocid1.generativeaiproject.oc1..example",
         oci_enterprise_ai_api_key="sk-test-secret",
-        oci_enterprise_ai_llm_model="enterprise-llm",
-        oci_enterprise_ai_vlm_model="enterprise-vlm",
+        oci_enterprise_ai_default_text_model="enterprise-llm",
+        oci_enterprise_ai_default_vision_model="enterprise-vlm",
         oci_enterprise_ai_llm_path="/llm/generate",
         oci_enterprise_ai_vlm_path="/vlm/extract",
         oci_enterprise_ai_llm_payload_template="",

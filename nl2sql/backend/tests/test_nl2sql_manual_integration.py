@@ -162,8 +162,9 @@ def test_manual_integration_require_enterprise_ai_stops_when_unconfigured(
     settings = get_settings()
     monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_vision_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "")
 
     exit_code = script.main(
         [

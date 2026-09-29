@@ -12,7 +12,8 @@
         "vision_enabled": false
       }
     ],
-    "default_model_id": "enterprise-nl2sql-llm",
+    "default_text_model_id": "enterprise-nl2sql-llm",
+    "default_vision_model_id": "",
     "api_path": "/responses",
     "vlm_input_mode": "auto",
     "text_payload_template": "",
