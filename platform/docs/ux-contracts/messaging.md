@@ -216,7 +216,7 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
   - lint では検出できないため、Playwright で処理中の画面の `svg.animate-spin:visible` を数える（NL2SQL は `tests/e2e/_helpers/single-spinner.ts` の `expectSingleSpinner`）。
 - 実行中は `経過時間 00:00`、durable job や結果カードの完了後は `処理時間 00:00`。1 時間未満は `mm:ss`、1 時間以上は `h:mm:ss`。数字は `tabular-nums` で幅を固定する。
 - 10 秒を超えたら控えめな slow hint を足す。取り消せる処理は同じ領域に取消の action を置く。ただし、その場で結果を待つ操作（検索・チャットの送信など）は起点のボタンが同じ位置で「停止」になるため、領域に別の停止を置かない（[buttons.md §3.1](./buttons.md)）。進捗が不明なら progress bar を出さず、総量が分かる場合だけ進捗率を並べる。
-- timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとに読み上げない。アニメーションは `prefers-reduced-motion` に従う（スピナーは回転を止め、アークの濃さだけを変える。デザインシステム README §4「Spinner」）。
+- timer は `role="timer"` + `aria-live="off"` とし、1 秒ごとに読み上げない。アニメーションは `prefers-reduced-motion` に従う。ただしスピナーの回転は処理中を伝える本質的な動きなので止めない（デザインシステム README §4「Spinner」、#440）。
 - 回るアイコンは共有の `Spinner` だけを使う（lucide のアイコンに `animate-spin` を付けない。adherence の lint が検出する）。
 - 操作の key が変わったら client 側の開始時刻をリセットする。durable job はサーバーの `started_at` / `finished_at` / `elapsed_ms` を優先する。
 - timeout と取消は別の状態にする。timeout は今の選択を残した `ErrorState` に置き換えて再試行を示し、取消は timeout のエラーとして知らせない。

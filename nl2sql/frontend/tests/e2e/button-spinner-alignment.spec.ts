@@ -10,7 +10,7 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
  * `Spinner`（全周トラック circle + 270° arc、`svg.animate-spin`）を使う。
  * 旧 `StableLoadingIcon` 固有の「180° 対称 active arc の重心」検証は共有 Spinner の
  * 形状に当てはまらないため削除し、16px・中央配置・フレーム間ドリフトなし・
- * reduced motion で停止、を共有 Spinner に対して維持する。
+ * reduced motion でも回転を続ける（#440）、を共有 Spinner に対して維持する。
  */
 
 // 共有 Button の loading は先頭アイコンを共有 Spinner（svg.animate-spin）へ置き換える
@@ -270,13 +270,18 @@ test("回転中もスピナーの中心座標がフレーム間でドリフト�
   });
 });
 
-test("prefers-reduced-motion ではスピナーが回転しない", async ({ page }) => {
+test("prefers-reduced-motion でもスピナーは回転を続ける（#440）", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { spinner } = await startPendingRun(page);
 
   await expect
-    .poll(() => spinner.evaluate((node) => getComputedStyle(node).animationName))
-    .toBe("none");
+    .poll(() =>
+      spinner.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return `${style.animationName} ${style.animationDuration}`;
+      })
+    )
+    .toBe("spin 1s");
 });
 
 test("sm/md/lg と icon-only の loading button でもスピナーは固定寸法で中央に残る", async ({

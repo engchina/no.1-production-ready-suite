@@ -40,8 +40,8 @@ export function spinnerGeometry(size: number) {
  * - トラックの色は `--color-spinner-track`(`currentColor` をライト 30% / ダーク 35% で透かす)。
  *   アークとトラックの境目の 3:1 を保つ上限の濃さ(README §4「Spinner」)。
  * - 回転は `transform` だけ(合成スレッドで回るので、メインスレッドが詰まっても止まらない)。等速(linear)。
- * - `prefers-reduced-motion` では回転を止め、アークの濃さをゆっくり変える(`base.css` の `.pr-spinner-arc`)。
- *   止めたままだと「75% の進捗の円」に見えるため。
+ * - `prefers-reduced-motion` でも回転を止めない(#440。`base.css`)。その場で回るだけの小さな動きで処理中を伝える
+ *   本質的な表示のため(OS 標準の処理中表示も止まらない)。止めると処理が固まったように見える。
  */
 export function Spinner({ size = 16, className, ...props }: SpinnerProps) {
   const { strokeWidth, radius } = spinnerGeometry(size);
@@ -56,7 +56,7 @@ export function Spinner({ size = 16, className, ...props }: SpinnerProps) {
       strokeWidth={strokeWidth}
       aria-hidden="true"
       // flex item の既定 flex-shrink: 1 で長いラベルに押されて縮まないよう shrink-0。
-      className={cn("shrink-0 animate-spin motion-reduce:animate-none", className)}
+      className={cn("shrink-0 animate-spin", className)}
       {...props}
     >
       {/* シルエットを一定に保つトラック(全周) */}
