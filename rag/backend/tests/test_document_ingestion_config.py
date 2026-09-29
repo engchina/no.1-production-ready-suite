@@ -258,17 +258,6 @@ def test_saved_recipe_with_removed_engine_inherits_global_default(removed: str) 
     assert effective.rag_parser_adapter_backend == get_settings().rag_parser_adapter_backend
 
 
-@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
-def test_legacy_experiment_job_with_removed_engine_uses_default_engine(removed: str) -> None:
-    """processing_config を持たない旧実験ジョブの snapshot も既定エンジンへ寄せる(#270)。"""
-    candidate = documents_route._experiment_candidate_settings(
-        get_settings(),
-        {"rag_parser_adapter_backend": removed, "rag_preprocess_profile": "passthrough"},
-    )
-
-    assert candidate.rag_parser_adapter_backend == "docling"
-
-
 @pytest.mark.parametrize("profile", ["marker_adapter", "unlimited_ocr_adapter", "glm_ocr_adapter"])
 def test_documents_parsed_by_removed_engine_report_parser_drift(
     fake_oracle: FakeIngestionConfigOracle,

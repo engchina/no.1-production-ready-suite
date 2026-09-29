@@ -898,3 +898,22 @@ def test_chunk_preview_settings_reject_overlap_not_smaller_than_size() -> None:
     with pytest.raises(HTTPException) as exc:
         _candidate_chunking_settings(get_settings(), request.settings_overrides())
     assert exc.value.status_code == 422
+
+
+async def test_legacy_experiment_job_without_recipe_is_rejected() -> None:
+    """移行前の旧実験 API の job（recipe_id なし）は、利用者向けのエラーで止める（#486）。"""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from app.api.routes import documents as documents_route
+    from app.rag.ingestion import IngestionUserError
+
+    legacy_job = SimpleNamespace(
+        recipe_id=None,
+        document_id="doc-legacy",
+        settings_overrides={"rag_parser_adapter_backend": "docling"},
+    )
+    with pytest.raises(IngestionUserError, match="処理レシピから再実行"):
+        await documents_route._materialize_experiment_candidate(
+            cast(Any, object()), cast(Any, legacy_job)
+        )
