@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils";
 
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
-import { RequiredBadge } from "./required-badge";
+import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 
 export interface SelectFieldOption<T extends string = string> {
   value: T;
@@ -30,7 +30,9 @@ interface SelectFieldProps<T extends string> {
   onValueChange: (value: T) => void;
   helper?: string;
   error?: string;
+  /** 必須であることを aria-required と中立色の RequiredBadge「必須」で伝える（検証はアプリ側）。 */
   required?: boolean;
+  /** 必須バッジの文言。既定「必須」。条件付きの必須だけ上書きする。 */
   requiredLabel?: string;
   placeholder?: string;
   className?: string;
@@ -136,7 +138,7 @@ export function SelectField<T extends string>({
   helper,
   error,
   required,
-  requiredLabel,
+  requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
   className,
   buttonClassName,
@@ -437,7 +439,7 @@ export function SelectField<T extends string>({
           aria-expanded={open}
           aria-haspopup="listbox"
           aria-invalid={Boolean(error)}
-          aria-required={required}
+          aria-required={required || undefined}
           aria-labelledby={labelId}
           aria-describedby={describedBy}
           aria-activedescendant={open && activeIndex >= 0 ? optionId(id, activeIndex) : undefined}

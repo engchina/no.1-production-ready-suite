@@ -14,13 +14,14 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
-  RequiredBadge,
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
   ExecutionConfirmationField,
   ListSkeleton,
   TimedLoadingState,
+  FieldLabel,
+  FieldLegend,
 } from "@engchina/production-ready-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -44,7 +45,6 @@ import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
-import { FieldLabel, FieldLegend } from "@/components/ui/required-field";
 import {
   ManagementPanelHeader,
   ManagementPanelShell,
@@ -491,16 +491,12 @@ function DeepSecTargetObjectPicker({
     object: "\u0000",
   }).split("\u0000");
   return (
-    <div className="grid gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
-      <span id={titleId}>
+    // 対象 object は検索・一覧・選択を束ねた複合入力なので fieldset にし、legend の「必須」を群の名前として読み上げる（#531）。
+    <fieldset className="grid min-w-0 gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
+      <FieldLegend id={titleId} required className="mb-1 text-xs font-medium">
         {t("security.deepsec.entitlements.resource")}
-        <RequiredBadge label={t("common.required")} className="ml-2 align-middle" />
-      </span>
-      <div
-        className="grid gap-2 rounded-md border border-border bg-surface-sunken p-2"
-        role="group"
-        aria-labelledby={titleId}
-      >
+      </FieldLegend>
+      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-2">
         <DbObjectSearchOwnerFields
           searchLabel={t("dbAdmin.search.label")}
           searchPlaceholder={t("dbAdmin.search.placeholder")}
@@ -619,7 +615,7 @@ function DeepSecTargetObjectPicker({
           ) : null}
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -1802,12 +1798,17 @@ export function SecurityDeepSecPage() {
                   </dd>
                 </dl>
                 <div className="space-y-2">
-                  <label htmlFor="deepsec-data-user-password" className="block text-sm font-medium">
-                    {t("security.deepsec.config.password")}
-                  </label>
+                  {/* 未保存のときは DeepSec の適用にパスワードの保存が必要。保存済みなら変更時だけ入力する（#531）。 */}
+                  <FieldLabel
+                    htmlFor="deepsec-data-user-password"
+                    label={t("security.deepsec.config.password")}
+                    required={!hasSavedDataUserPassword}
+                    className="block"
+                  />
                   <input
                     id="deepsec-data-user-password"
                     type="password"
+                    aria-required={!hasSavedDataUserPassword}
                     autoComplete="new-password"
                     className={INPUT_CLASS}
                     value={dataUserPassword}

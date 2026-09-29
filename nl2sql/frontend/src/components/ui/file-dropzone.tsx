@@ -19,8 +19,8 @@ import {
   FieldError,
   Spinner,
   ClearActionButton,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
-import { FieldLabel } from "./required-field";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 

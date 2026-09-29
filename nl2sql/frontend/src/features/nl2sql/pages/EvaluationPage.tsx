@@ -19,6 +19,8 @@ import {
   Pagination,
   TableSkeleton,
   TimedLoadingState,
+  FieldLabel,
+  FieldLegend,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -39,7 +41,6 @@ import { useSearchParams } from "react-router-dom";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
@@ -504,21 +505,19 @@ export function EvaluationPage() {
                 </div>
               </div>
 
+              {/* 区切り線は外側に置く。fieldset に border-t を付けると、見える legend が線の上に重なるため（#531）。 */}
+              <div className="min-w-0 border-t border-border pt-4">
               <fieldset
-                className="grid min-w-0 gap-3 border-t border-border pt-4"
+                className="grid min-w-0 gap-3"
                 disabled={conditionsLocked}
                 aria-describedby="quality-engines-hint quality-engines-error"
                 data-testid="quality-evaluation-engine-fieldset"
               >
-                <legend className="sr-only">{t("qualityEvaluation.engines.label")}</legend>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-fg">
-                    {t("qualityEvaluation.engines.label")}
-                  </div>
-                  <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-fg-muted">
-                    {t("qualityEvaluation.engines.hint")}
-                  </p>
-                </div>
+                {/* 実行エンジンは 1 つ以上の選択が必要（engine_required）。 */}
+                <FieldLegend required>{t("qualityEvaluation.engines.label")}</FieldLegend>
+                <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                  {t("qualityEvaluation.engines.hint")}
+                </p>
                 {availableEngineIds.length > 0 ? (
                   <BulkSelectionActions
                     selectLabel={t("common.selection.selectAll")}
@@ -585,6 +584,7 @@ export function EvaluationPage() {
                 </div>
                 <FieldError id="quality-engines-error" message={formErrors.engines} />
               </fieldset>
+              </div>
 
               <div
                 className="grid min-w-0 gap-3 border-t border-border pt-4 lg:grid-cols-[minmax(13rem,20rem)_minmax(0,1fr)] lg:items-start"

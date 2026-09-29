@@ -8,7 +8,6 @@ export const USERS_ROLES_MESSAGES = {
   "common.action.refresh": "表示を更新",
   "common.action.refreshed": "最新の状態に更新しました。",
   "common.delete": "削除",
-  "common.required": "必須",
   "common.retry": "再試行",
   "nav.securityRoles": "ロール管理",
   "nav.securityUsers": "ユーザー管理",
@@ -51,6 +50,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.code": "ロールコード",
   "security.roles.codeConflict":
     "このロールコードは既に使用されています。別のコードを入力してください。",
+  "security.roles.codeRequired": "ロールコードを入力してください。",
   "security.roles.codeReserved":
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。",
   "security.roles.column.role": "ロール",
@@ -70,6 +70,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.list": "ロール一覧",
   "security.roles.listHint": "検索・並び替え・行アクションから対象ロールを確認できます。",
   "security.roles.name": "ロール名",
+  "security.roles.nameRequired": "ロール名を入力してください。",
   "security.roles.noResultsHint": "検索語を変更してください。",
   "security.roles.noResultsTitle": "条件に一致するロールがありません",
   "security.roles.noSelectionHint": "一覧のロールを選ぶと、状態や基本情報を確認できます。",
@@ -102,6 +103,7 @@ export const USERS_ROLES_MESSAGES = {
     "このユーザーを無効化し、既存セッションを失効させます。続行しますか。",
   "security.users.disableSuccess": "ユーザーを無効化しました。既存セッションは失効しました。",
   "security.users.displayName": "表示名",
+  "security.users.displayNameRequired": "表示名を入力してください。",
   "security.users.editActions": "ユーザー編集操作",
   "security.users.enable": "有効化",
   "security.users.enableSuccess": "ユーザーを有効化しました。次回ログインから利用できます。",
@@ -113,6 +115,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.listHint": "検索・並び替え・行アクションから対象ユーザーを確認できます。",
   "security.users.locked": "ロック中",
   "security.users.loginUserId": "ログインユーザーID",
+  "security.users.loginUserIdRequired": "ログインユーザーIDを入力してください。",
   "security.users.loginUserIdConflict":
     "このログインユーザーIDは既に使用されています。別のIDを入力してください。",
   "security.users.noResultsHint": "検索語を変更してください。",

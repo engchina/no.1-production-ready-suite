@@ -3349,6 +3349,9 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
 
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  // 生成は業務プロファイルの選択が前提なので、選択欄も「必須」のタグと aria-required で示す（#531）。
+  await expect(page.locator('label[for="nl2sql-profile-select"] [aria-hidden="true"]')).toHaveText("必須");
+  await expect(page.locator("#nl2sql-profile-select")).toHaveAttribute("aria-required", "true");
   await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
   const runQueryButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(runQueryButton).toBeDisabled();
@@ -3361,11 +3364,13 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await expect(directExecuteButton).toBeDisabled();
   await directSqlInput(directSql).fill("SELECT 1 FROM DUAL");
+  await expect(directSql.getByLabel("取得件数上限", { exact: true })).toHaveAttribute("aria-required", "true");
   await directSql.getByLabel("取得件数上限").fill("100");
   await expect(directExecuteButton).toBeEnabled();
 
   await page.goto("/sql-to-question");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveAttribute("aria-required", "true");
   await expectRequiredTextarea(page, "sql-to-question-sql-input", "対象 SQL");
   const generateButton = page.getByRole("button", { name: "SQL 分析・質問生成" });
   await expect(generateButton).toBeDisabled();
@@ -12591,7 +12596,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
   await expect(previewRowLimitInput).toHaveValue("100");
   await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
-  await expect(dataPreviewPanel.getByLabel("WHERE 条件(任意)")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByLabel(/WHERE 条件/)).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("統計未取得").filter({ visible: true })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(0);

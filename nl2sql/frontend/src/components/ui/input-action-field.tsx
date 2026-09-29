@@ -6,8 +6,8 @@ import {
   Button,
   type ButtonProps,
   FieldError,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
-import { FieldLabel } from "./required-field";
 
 export interface InputActionFieldAction {
   label: ReactNode;

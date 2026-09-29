@@ -11,6 +11,8 @@ import {
   StatusBadge,
   PageHeader,
   FieldError,
+  FieldLabel,
+  FieldLegend,
   PageBody,
   useConfirm,
   ProcessingIndicator,
@@ -46,7 +48,6 @@ import {
 } from "lucide-react";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
-import { FieldLabel, FieldLegend } from "../oci/required-field";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
@@ -439,10 +440,20 @@ export function UserManagementPage({
     setFormError("");
     setFieldErrors({});
     setActionError("");
+    // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
+    const requiredErrors: UserFieldErrors = {};
+    if (activeView === "create" && !draft.loginUserId.trim()) {
+      requiredErrors.loginUserId = t("security.users.loginUserIdRequired");
+    }
+    if (!draft.displayName.trim()) {
+      requiredErrors.displayName = t("security.users.displayNameRequired");
+    }
     if (!draft.selectedRoleId) {
-      const nextErrors = { selectedRoleId: t("security.users.roleRequired") };
-      setFieldErrors(nextErrors);
-      focusFirstFieldError(nextErrors);
+      requiredErrors.selectedRoleId = t("security.users.roleRequired");
+    }
+    if (Object.keys(requiredErrors).length > 0) {
+      setFieldErrors(requiredErrors);
+      focusFirstFieldError(requiredErrors);
       return;
     }
     const selectedRoleIds = [draft.selectedRoleId];
@@ -889,6 +900,7 @@ export function UserManagementPage({
                 className="grid gap-4"
                 onSubmit={handleSubmit}
                 aria-labelledby="security-users-form-heading"
+                noValidate
               >
                     <div className="grid gap-4 lg:grid-cols-2">
                   <div className="grid gap-1.5 text-sm font-medium">
@@ -1001,7 +1013,10 @@ export function UserManagementPage({
                       ) : null}
                     </div>
                     <fieldset className="grid gap-2" disabled={inputReadOnly}>
-                  <FieldLegend id="security-users-role-legend" required>{t("security.users.roles")}</FieldLegend>
+                  {/* 必須は下の radiogroup の aria-required で伝えるので、legend のタグは読み上げない。 */}
+                  <FieldLegend id="security-users-role-legend" required requiredAnnouncedByControl>
+                    {t("security.users.roles")}
+                  </FieldLegend>
                   {roles.length === 0 ? (
                     <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
                   ) : (

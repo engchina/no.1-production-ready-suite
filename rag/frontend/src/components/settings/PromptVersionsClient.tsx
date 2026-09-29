@@ -8,8 +8,8 @@ import {
   CardHeader,
   CardTitle,
   Button,
+  FieldLabel,
   FormStatus,
-  RequiredBadge,
   RowActionMenu,
   type EntityAction,
   Switch,
@@ -162,10 +162,16 @@ export function PromptVersionsClient() {
             onValueChange={setName}
             placeholder={t("settings.prompts.form.namePlaceholder")}
             required
-            requiredLabel={t("common.required")}
           />
-          <Field label={t("settings.prompts.form.systemPrompt")} required>
+          <div className="space-y-1.5">
+            <FieldLabel
+              htmlFor="prompt-version-system-prompt"
+              label={t("settings.prompts.form.systemPrompt")}
+              required
+              className="block"
+            />
             <textarea
+              id="prompt-version-system-prompt"
               aria-required="true"
               value={systemPrompt}
               maxLength={PROMPT_MAX}
@@ -174,7 +180,7 @@ export function PromptVersionsClient() {
               rows={6}
               className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
-          </Field>
+          </div>
           <TextField
             id="prompt-version-note"
             label={t("settings.prompts.form.note")}
@@ -224,27 +230,6 @@ export function PromptVersionsClient() {
       </Card>
       <DocragPromptCard promptKey="vlm_answer" showStages />
     </PageBody>
-  );
-}
-
-function Field({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="flex items-center gap-2 text-sm font-medium text-fg">
-        {label}
-        {/* 入力側の aria-required が必須を伝えるので、バッジは読み上げから外す */}
-        {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
-      </span>
-      {children}
-    </label>
   );
 }
 

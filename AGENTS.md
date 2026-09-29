@@ -187,6 +187,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
 - `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。`loading` を渡す `Button` は必ず `icon` を持つ。
 - フォーカスの表示を `focus:ring-*` / `focus-visible:ring-*` で作る、`focus(-visible):outline-none` で消す。フォーカスの表示はグローバルの `:focus-visible`（outline）1 つに任せ、形の調整は `focus-visible:outline-*` / `-outline-offset-*` で行う（#355）。
+- 必須の欄の印を手書きする（`*`・独自の「必須」バッジ・`RequiredBadge` の直接の並べ置き）、任意の欄のラベル・placeholder に「(任意)」を書く。必須の欄だけに `TextField` / `SelectField` / `SecretField` の `required`、それ以外の入力は `FieldLabel` / `FieldLegend` / `Fieldset` の `required` で「必須」を出す（design-system README §4「必須の表示」、UX 契約 `messaging.md` §3.2.1。#531）。
 - 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
 - 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
 - `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。

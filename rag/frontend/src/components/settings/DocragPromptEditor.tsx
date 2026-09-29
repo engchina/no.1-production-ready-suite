@@ -6,6 +6,7 @@ import {
   CardHeader,
   CardTitle,
   Disclosure,
+  FieldLabel,
   FormStatus,
   Skeleton,
   StatusBadge,
@@ -97,9 +98,12 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={inputId} className="text-sm font-medium text-fg">
-          {t(`settings.docragPrompts.${prompt.key}.field`)}
-        </label>
+        {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
+        <FieldLabel
+          htmlFor={inputId}
+          label={t(`settings.docragPrompts.${prompt.key}.field`)}
+          required
+        />
         <StatusBadge
           variant={prompt.customized ? "info" : "neutral"}
           label={
@@ -117,6 +121,7 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
         maxLength={PROMPT_MAX}
         rows={16}
         spellCheck={false}
+        aria-required="true"
         disabled={save.isPending}
         aria-describedby={helperId}
         onChange={(event) => setContent(event.target.value)}

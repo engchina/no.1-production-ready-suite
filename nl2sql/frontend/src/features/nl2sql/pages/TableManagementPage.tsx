@@ -13,11 +13,11 @@ import {
   ClearActionButton,
   ProcessingIndicator,
   ExecutionConfirmationField,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";

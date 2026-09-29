@@ -10,6 +10,7 @@ import {
   toast,
   StatusBadge,
   FormStatus,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 
 import { apiPost } from "@/lib/api";
@@ -133,9 +134,17 @@ export function SelectAiFeedbackAddPanel({
             placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
           />
         </label>
-        <label className="grid gap-1 text-sm font-medium text-fg">
-          <span>{t("nl2sql.selectAiFeedbackAdd.content")}</span>
+        <div className="grid gap-1">
+          {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
+          <FieldLabel
+            htmlFor="nl2sql-select-ai-feedback-content"
+            label={t("nl2sql.selectAiFeedbackAdd.content")}
+            required
+            requiredLabel={t("nl2sql.selectAiFeedbackAdd.contentRequiredWhenBad")}
+            requiredAnnouncedByControl={false}
+          />
           <textarea
+            id="nl2sql-select-ai-feedback-content"
             disabled={savingRating !== null}
             value={feedbackContent}
             onChange={(event) => setFeedbackContent(event.currentTarget.value)}
@@ -143,7 +152,7 @@ export function SelectAiFeedbackAddPanel({
             className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
-        </label>
+        </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
           <FormStatus
             tone="danger"

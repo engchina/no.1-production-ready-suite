@@ -61,12 +61,11 @@ export const MODEL_MESSAGES = {
     "OCI Enterprise AI 接続設定を保存しました。",
   "settings.model.enterprise.title": "OCI Enterprise AI",
   "settings.model.enterprise.vision": "画像入力（Vision）に対応",
-  "settings.model.fixed": "固定",
   "settings.model.genai.description":
     "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp":
-    "Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
+    "固定値です。Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
   "settings.model.genai.embeddingModel": "埋め込みモデル ID",
   "settings.model.genai.rerankModel": "リランクモデル ID",
   "settings.model.genai.saved": "OCI Generative AI 設定を保存しました。",
@@ -86,7 +85,6 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.project":
     "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
-  "settings.model.required": "必須",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.save": "保存",
   "settings.model.saveError":

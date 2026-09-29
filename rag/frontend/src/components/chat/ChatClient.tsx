@@ -778,6 +778,7 @@ export function ChatClient() {
                   value={businessViewId ?? ""}
                   options={businessViewOptions}
                   onValueChange={(value) => setBusinessViewId(value || null)}
+                  required
                 />
                 {businessViewWithoutKnowledgeBases && businessViewId ? (
                   <Banner
@@ -875,6 +876,7 @@ export function ChatClient() {
                                 className="min-w-0 flex-1"
                                 value={titleDraft}
                                 maxLength={80}
+                                required
                                 disabled={updateConversation.isPending}
                                 error={titleError || undefined}
                                 onValueChange={setTitleDraft}

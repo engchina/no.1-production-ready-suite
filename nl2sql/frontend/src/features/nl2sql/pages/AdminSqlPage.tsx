@@ -10,8 +10,8 @@ import {
   PageBody,
   ActionResultRegion,
   ExecutionConfirmationField,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
-import { FieldLabel } from "@/components/ui/required-field";
 
 import {
   ExecutionActivityPanel,

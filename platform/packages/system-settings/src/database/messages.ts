@@ -3,7 +3,6 @@
  * key は NL2SQL の i18n key と同じにして、移設したコードをそのまま使えるようにしている。
  */
 export const DATABASE_MESSAGES = {
-  "common.required": "必須",
   "settings.adb.action.refresh": "情報を再取得",
   "settings.adb.action.start": "起動",
   "settings.adb.action.stop": "停止",
@@ -96,7 +95,6 @@ export const DATABASE_MESSAGES = {
   "settings.database.placeholder.secret": "更新する場合のみ入力",
   "settings.database.placeholder.serviceDsn": "DSN を選択してください",
   "settings.database.placeholder.serviceDsnManual": "ragdb_high",
-  "settings.database.requiredMark": "必須",
   "settings.database.saveError":
     "データベース設定の保存に失敗しました。入力値と platform/.env の書き込み権限を確認してください。",
   "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",
@@ -122,7 +120,10 @@ export const DATABASE_MESSAGES = {
     "ZIP 形式の Wallet ファイルを選択してください。",
   "settings.database.validation.passwordRequired":
     "DB設定を保存するにはデータベースパスワードを入力してください。",
-  "settings.database.validation.required": "値を入力してください。",
+  "settings.database.validation.directDsnRequired": "接続 DSN を入力してください。",
+  "settings.database.validation.serviceDsnRequired": "サービス名 / DSN を入力してください。",
+  "settings.database.validation.serviceDsnSelectRequired": "サービス名 / DSN を選択してください。",
+  "settings.database.validation.userRequired": "データベースユーザーを入力してください。",
   "settings.database.wallet.autoDownload.error":
     "OCI から Wallet を取得できませんでした。OCI 認証、ADB OCID、IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。",
   "settings.database.wallet.autoDownload.missingOcid":

@@ -8,6 +8,7 @@ import {
   StatusBadge,
   FieldError,
   ProcessingIndicator,
+  FieldLegend,
 } from "@engchina/production-ready-ui";
 
 import { isAbortError } from "@/lib/api";
@@ -564,9 +565,10 @@ export function GuidedClarificationPanel({
             const value = manualAnswers[question.id] ?? { optionIds: [], freeText: "" };
             return (
               <fieldset key={question.id} className="grid gap-2 rounded-md border border-border bg-surface p-3">
-                <legend className="px-1 text-sm font-medium leading-6 text-fg">
+                {/* 残りの質問はすべて回答が必要（manualAnswersReady）なので、群の見出しに「必須」を出す（#531）。 */}
+                <FieldLegend required className="px-1 text-sm font-medium leading-6">
                   {question.prompt_ja}
-                </legend>
+                </FieldLegend>
                 {question.reason_ja ? (
                   <p className="text-xs leading-5 text-fg-muted">{question.reason_ja}</p>
                 ) : null}

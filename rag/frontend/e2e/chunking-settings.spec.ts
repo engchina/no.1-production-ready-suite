@@ -46,7 +46,7 @@ for (const viewport of [
     // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
     await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(7);
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
-    await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
+    await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
     await expect(
       page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })
@@ -64,11 +64,11 @@ for (const viewport of [
     ]);
     await expectStrategyParams(page, /DocRAG 親子階層/, DOCRAG_LABELS);
     await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toHaveCount(0);
-    await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("1000");
-    await expect(page.getByLabel("表の子チャンク目標文字数", { exact: true })).toHaveValue("3000");
-    await expect(page.getByLabel("親チャンク目標文字数", { exact: true })).toHaveValue("6000");
-    await expect(page.getByLabel("親チャンク最大ページ数", { exact: true })).toHaveValue("3");
-    await expect(page.getByLabel("親チャンク最大 child 数", { exact: true })).toHaveValue("12");
+    await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
+    await expect(page.getByRole("spinbutton", { name: "表の子チャンク目標文字数", exact: true })).toHaveValue("3000");
+    await expect(page.getByRole("spinbutton", { name: "親チャンク目標文字数", exact: true })).toHaveValue("6000");
+    await expect(page.getByRole("spinbutton", { name: "親チャンク最大ページ数", exact: true })).toHaveValue("3");
+    await expect(page.getByRole("spinbutton", { name: "親チャンク最大 child 数", exact: true })).toHaveValue("12");
     // 「有効パラメータ」に DocRAG の 5 項目が出る(空にならない)。
     const activeParams = page.locator("dl > div").filter({ hasText: "有効パラメータ" });
     await expect(activeParams).toContainText("子チャンク目標文字数: 1,000");
@@ -90,15 +90,15 @@ for (const viewport of [
     await expectStrategyParams(page, /^固定長 /, ["chunk サイズ(文字)", "overlap(文字)"]);
 
     await page.getByRole("radio", { name: /^構造認識/ }).click();
-    await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
+    await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
 
     await page.getByRole("radio", { name: /固定分割符/ }).click();
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     await expect(page.getByLabel("固定分割符文字列")).toHaveValue("\\n\\n");
-    await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("overlap(文字)")).toHaveCount(0);
-    await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("最小 chunk 文字数")).toHaveCount(0);
 
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
@@ -152,13 +152,13 @@ test("文書分割設定は DocRAG 親子階層のパラメータを保存でき
   await docrag.click();
   await expect(docrag).toBeChecked();
 
-  const childTarget = page.getByLabel("子チャンク目標文字数", { exact: true });
+  const childTarget = page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true });
   await childTarget.fill("2000");
   await expect(page.getByText("子チャンク目標文字数: 300〜1,600").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
 
   await childTarget.fill("600");
-  await page.getByLabel("親チャンク最大ページ数", { exact: true }).fill("2");
+  await page.getByRole("spinbutton", { name: "親チャンク最大ページ数", exact: true }).fill("2");
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
   await expect(page.locator("dl > div").filter({ hasText: "有効パラメータ" })).toContainText(
     "子チャンク目標文字数: 600"
@@ -180,7 +180,7 @@ test("文書分割設定は DocRAG 親子階層のパラメータを保存でき
     docrag_parent_max_pages: 2,
     docrag_parent_max_children: 12,
   });
-  await expect(page.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("600");
+  await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("600");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -213,7 +213,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 
   const minChars = page.getByLabel("最小 chunk 文字数");
   await minChars.fill("40");
-  const chunkSize = page.getByLabel("chunk サイズ(文字)", { exact: true });
+  const chunkSize = page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true });
   await chunkSize.fill("1000");
   await page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
@@ -357,7 +357,11 @@ async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels
   ];
   await page.getByRole("radio", { name: radioName }).click();
   for (const label of allLabels) {
-    const locator = page.getByLabel(label, { exact: true });
+    // 必須の欄はラベルに「必須」のタグ（aria-hidden）を持ち、getByLabel の exact はタグの文字も含めて
+    // 比べるため、タグを除いた accessible name で探す（#531）。
+    const locator = page
+      .getByRole("spinbutton", { name: label, exact: true })
+      .or(page.getByRole("textbox", { name: label, exact: true }));
     await expect(locator).toHaveCount(visibleLabels.includes(label) ? 1 : 0);
   }
 }
@@ -375,7 +379,7 @@ async function expectSemanticStrategyParams(
   });
   await expect(details).not.toHaveAttribute("open", "");
   await details.getByText("長大な単位の再分割(詳細設定)").click();
-  await expect(details.getByLabel(splitLimitLabel, { exact: true })).toHaveValue("32000");
+  await expect(details.getByRole("spinbutton", { name: splitLimitLabel, exact: true })).toHaveValue("32000");
   await expect(details.getByLabel("再分割時の重複文字数")).toHaveValue("0");
   await expect(details.getByLabel("最小 chunk 文字数")).toHaveValue("120");
 }

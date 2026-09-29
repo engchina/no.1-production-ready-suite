@@ -223,6 +223,7 @@ export function AgenticSettingsClient() {
               step={1}
               label={t("settings.agentic.maxSubqueries")}
               helper={t("settings.agentic.maxSubqueriesHelper")}
+              required
               error={maxSubqueriesError ? t("settings.agentic.maxSubqueriesError") : undefined}
               value={Number.isFinite(form.max_subqueries) ? String(form.max_subqueries) : ""}
               disabled={save.isPending}

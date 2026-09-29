@@ -3,6 +3,7 @@ import { useId } from "react";
 import {
   FieldError,
   StatusBadge,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
@@ -39,11 +40,13 @@ export function RowLimitField({
   const describedBy = error ? `${helperId} ${errorId}` : helperId;
 
   return (
-    <label className={`grid w-full min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
-      <span>{t("queryResults.rowLimit.label")}</span>
+    // 空や範囲外では実行できない（parseSqlRowLimit が null → 実行ボタン無効）ので必須として示す（#531）。
+    <div className={`grid w-full min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
+      <FieldLabel htmlFor={id} label={t("queryResults.rowLimit.label")} required />
       <input
         id={id}
         type="number"
+        aria-required="true"
         min={1}
         max={MAX_SQL_ROW_LIMIT}
         step={1}
@@ -59,7 +62,7 @@ export function RowLimitField({
         {helper}
       </p>
       <FieldError id={errorId} message={error} />
-    </label>
+    </div>
   );
 }
 

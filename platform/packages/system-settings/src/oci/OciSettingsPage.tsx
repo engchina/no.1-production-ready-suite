@@ -81,6 +81,34 @@ const OBJECT_STORAGE_FIELDS = [
   "objectStorageNamespace",
 ] as const satisfies readonly OciSettingsField[];
 
+/** 欄の id を画面の上から順に並べる。保存時は最初のエラーの欄へフォーカスする（#531）。 */
+const OCI_FIELD_IDS_IN_ORDER = [
+  ["configFile", "oci-config-file"],
+  ["configProfile", "oci-config-profile"],
+  ["userOcid", "oci-user-ocid"],
+  ["tenancyOcid", "oci-tenancy-ocid"],
+  ["fingerprint", "oci-fingerprint"],
+  ["region", "oci-region"],
+  // 秘密鍵は FileDropzone を囲む要素の id。中のファイル入力へフォーカスする。
+  ["keyFile", "oci-key-file"],
+  ["objectStorageNamespace", "oci-object-storage-namespace"],
+  ["objectStorageRegion", "oci-object-storage-region"],
+] as const satisfies readonly (readonly [OciSettingsField, string])[];
+
+function focusFirstOciError(errors: OciValidationResult) {
+  const first = OCI_FIELD_IDS_IN_ORDER.find(([field]) => errors[field]);
+  if (!first) return;
+  // エラーの表示（aria-describedby）が描画された後に移す。
+  window.setTimeout(() => {
+    const element = document.getElementById(first[1]);
+    const target =
+      element && !element.matches("input, button, select, textarea")
+        ? element.querySelector<HTMLElement>("input, button")
+        : element;
+    target?.focus();
+  }, 0);
+}
+
 export interface OciSettingsPageProps {
   /** 製品の API 関数（GET / PATCH /api/settings/oci など）。 */
   api: OciSettingsApi;
@@ -178,6 +206,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
       }));
       setAuthSaveState("error");
       setConfigTestState({ phase: "idle" });
+      focusFirstOciError(validationErrors);
       return;
     }
 
@@ -232,6 +261,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         ...validationErrors,
       }));
       setStorageSaveState("error");
+      focusFirstOciError(validationErrors);
       return;
     }
 
@@ -411,7 +441,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 helper={t("settings.oci.helper.configProfile")}
                 placeholder="DEFAULT"
                 readOnly
-                required requiredLabel={t("common.required")}
+                required
               />
               <TextField
                 id="oci-user-ocid"
@@ -421,7 +451,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.userOcid)}
                 helper={t("settings.oci.helper.userOcid")}
                 placeholder="ocid1.user.oc1.."
-                required requiredLabel={t("common.required")}
+                required
               />
               <TextField
                 id="oci-tenancy-ocid"
@@ -431,7 +461,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.tenancyOcid)}
                 helper={t("settings.oci.helper.tenancyOcid")}
                 placeholder="ocid1.tenancy.oc1.."
-                required requiredLabel={t("common.required")}
+                required
               />
               <TextField
                 id="oci-fingerprint"
@@ -441,7 +471,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.fingerprint)}
                 helper={t("settings.oci.helper.fingerprint")}
                 placeholder="12:34:56:78:90:ab:cd:ef"
-                required requiredLabel={t("common.required")}
+                required
               />
               <SelectField
                 id="oci-region"
@@ -453,7 +483,6 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 helper={t("settings.oci.helper.region")}
                 placeholder={t("settings.oci.placeholder.region")}
                 required
-                requiredLabel={t("settings.oci.required")}
               />
             </div>
 
@@ -516,7 +545,6 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 helper={t("settings.oci.helper.objectStorageRegion")}
                 placeholder={t("settings.oci.placeholder.region")}
                 required
-                requiredLabel={t("settings.oci.required")}
               />
             </div>
 
@@ -809,7 +837,6 @@ function ConfigFileField({
       }
       readOnly={readOnly}
       required={required}
-      requiredLabel={t("settings.oci.required")}
       action={{
         label: configImportButtonLabel(importState),
         icon: RefreshCw,
@@ -860,7 +887,6 @@ function NamespaceField({
       }
       readOnly
       required={required}
-      requiredLabel={t("settings.oci.required")}
       inputClassName="text-fg"
       action={{
         label: buttonLabel,

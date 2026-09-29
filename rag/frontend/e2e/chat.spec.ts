@@ -451,7 +451,7 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
   const notHelpful = page.getByRole("button", { name: "この回答は役に立たなかった" });
   await notHelpful.click();
   await page.getByRole("button", { name: /ナレッジ不足/ }).click();
-  await page.getByLabel("修正した回答（任意）").fill("  窓口へ問い合わせてください。  ");
+  await page.getByLabel("修正した回答", { exact: true }).fill("  窓口へ問い合わせてください。  ");
   await page.getByRole("button", { name: "フィードバックを保存" }).click();
 
   await expect.poll(() => feedbackPayload).toEqual({

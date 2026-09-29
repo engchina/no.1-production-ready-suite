@@ -443,6 +443,7 @@ function ParamsCard({
               value={form.delimiter}
               disabled={saving}
               helper={t("settings.chunking.params.delimiterHint")}
+              required
               onValueChange={(value) => onChange({ delimiter: value })}
             />
           ) : null}
@@ -500,11 +501,13 @@ function NumberField({
   onChange: (value: number) => void;
 }) {
   const id = useId();
+  // 数値の欄は空では保存できない（validateForm が止める）ので、すべて必須（#531）。
   return (
     <TextField
       id={id}
       label={label}
       helper={helper}
+      required
       type="number"
       inputMode="numeric"
       value={Number.isFinite(value) ? value : ""}

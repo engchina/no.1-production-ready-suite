@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import {
   Button,
+  FieldLegend,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import {
@@ -182,9 +183,11 @@ export function FeedbackControls({
 
       {showReasons ? (
         <fieldset className="mt-3 rounded-md border border-border bg-surface-sunken p-3">
-          <legend className="px-1 text-xs font-medium text-fg">
+          {/* 役に立たなかった理由は必須（未選択では保存できず、backend も reason を必須にする）。
+              コメントと修正した回答は任意なので何も付けない（#531）。 */}
+          <FieldLegend required className="px-1 text-xs font-medium">
             {t("feedback.controls.reasonLegend")}
-          </legend>
+          </FieldLegend>
           <div className="flex flex-wrap gap-1" role="group" aria-label={t("feedback.controls.reasonLegend")}>
             {reasons.map((reason) => (
               <ToggleChip

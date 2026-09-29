@@ -40,6 +40,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   RowTitleButton,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -1146,9 +1147,12 @@ export function FeedbackManagementPage() {
                   </label>
                   <div className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                      <label htmlFor="app-feedback-admin-content">
-                        {t("feedbackManagement.appFeedback.adminFeedbackContent")}
-                      </label>
+                      {/* 管理者評価が「違う」のときだけ必須（saveAppFeedback のガード）。 */}
+                      <FieldLabel
+                        htmlFor="app-feedback-admin-content"
+                        label={t("feedbackManagement.appFeedback.adminFeedbackContent")}
+                        required={adminFeedbackContentRequired}
+                      />
                       <Button
                         type="button"
                         variant="secondary"
@@ -1181,17 +1185,23 @@ export function FeedbackManagementPage() {
                     <span>{t("feedbackManagement.appFeedback.registerSelectAi")}</span>
                   </label>
                   {registerSelectAiFeedback && (
-                    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                      <span>{t("feedbackManagement.appFeedback.selectAiResponse")}</span>
+                    <div className="grid min-w-0 gap-1">
+                      {/* Select AI feedback に登録するときは response SQL が必須（saveAppFeedback のガード）。 */}
+                      <FieldLabel
+                        htmlFor="app-feedback-select-ai-response"
+                        label={t("feedbackManagement.appFeedback.selectAiResponse")}
+                        required
+                      />
                       <textarea data-surface="code"
-                        aria-label={t("feedbackManagement.appFeedback.selectAiResponse")}
+                        id="app-feedback-select-ai-response"
+                        aria-required="true"
                         value={selectAiResponse}
                         onChange={(event) => setSelectAiResponse(event.currentTarget.value)}
                         rows={5}
                         className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring"
                         placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
                       />
-                    </label>
+                    </div>
                   )}
                   <FormActionBar
                     ariaLabel={t("feedbackManagement.appFeedback.actions")}
