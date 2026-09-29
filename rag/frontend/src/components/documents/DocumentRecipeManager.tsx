@@ -54,6 +54,7 @@ import {
   type IngestionJobPhase,
   type SearchResponse,
 } from "@/lib/api";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -692,7 +693,9 @@ function RecipeComparison({
     searchable.find((recipe) => recipe.recipe_id === rightId) ?? searchable[1] ?? searchable[0];
 
   const run = async () => {
-    if (!left?.active_chunk_set_id || !right?.active_chunk_set_id || !query.trim()) return;
+    if (pending || !left?.active_chunk_set_id || !right?.active_chunk_set_id || !query.trim()) {
+      return;
+    }
     setPending(true);
     setError("");
     setResults(null);
@@ -759,7 +762,7 @@ function RecipeComparison({
                 placeholder={t("documents.experiment.compare.placeholder")}
                 className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm"
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") void run();
+                  if (isSubmitEnter(event)) void run();
                 }}
               />
             </label>

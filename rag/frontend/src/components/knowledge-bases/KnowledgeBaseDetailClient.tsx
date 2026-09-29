@@ -33,6 +33,7 @@ import {
   type DocumentSummary,
   type KnowledgeBaseDetail,
 } from "@/lib/api";
+import { isSubmitEnter } from "@/lib/keyboard";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -356,7 +357,7 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           value={candidateSearch}
           onValueChange={setCandidateSearch}
           onKeyDown={(event) => {
-            if (event.key === "Enter") applyCandidateSearch();
+            if (isSubmitEnter(event)) applyCandidateSearch();
           }}
           onBlur={applyCandidateSearch}
           onClear={() => {

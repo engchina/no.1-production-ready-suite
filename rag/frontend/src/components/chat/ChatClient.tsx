@@ -42,6 +42,7 @@ import { SavedDocragAnswer } from "@/components/search/SavedDocragAnswer";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
+import { isSubmitEnter } from "@/lib/keyboard";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { AnswerStageEvent } from "@/lib/answer-progress";
@@ -878,7 +879,7 @@ export function ChatClient() {
                                 error={titleError || undefined}
                                 onValueChange={setTitleDraft}
                                 onKeyDown={(event) => {
-                                  if (event.key === "Enter") {
+                                  if (isSubmitEnter(event)) {
                                     event.preventDefault();
                                     void saveRename();
                                   } else if (event.key === "Escape") {
@@ -1082,7 +1083,8 @@ export function ChatClient() {
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    // IME の変換を確定する Enter では送信しない（#459）。
+                    if (isSubmitEnter(event) && !event.shiftKey) {
                       event.preventDefault();
                       void send();
                     }
