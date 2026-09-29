@@ -186,16 +186,6 @@ svg.animate-spin {
   stroke: var(--color-spinner-track);
 }
 
-/* 回転を止めたときのアークの濃さの変化（opacity だけ。位置は動かさない）。 */
-@keyframes pr-spinner-breathe {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0.5;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -205,12 +195,12 @@ svg.animate-spin {
   }
 
   /*
-   * 回転は止める（Spinner の motion-reduce:animate-none）。止めたままのアークは「75% の進捗の円」に見えるため、
-   * アークの濃さだけをゆっくり変えて処理中を伝える（Apple HIG の「視差効果を減らす」は動きをディゾルブに置き換える）。
-   * 上の一括無効化（* の 0.01ms）より詳細度を高くして上書きする。
+   * Spinner の回転は止めない（#440）。その場で回るだけの小さな動きで処理中を伝える本質的な表示で、
+   * 止めると処理が固まったように見える（OS 標準の処理中表示も Reduce Motion で止まらない）。
+   * 上の一括無効化（* の 0.01ms）より詳細度を高くして、animate-spin の 1s に戻す。
    */
-  svg.animate-spin .pr-spinner-arc {
-    animation: pr-spinner-breathe 1.2s ease-in-out infinite alternate !important;
+  svg.animate-spin {
+    animation-duration: 1s !important;
   }
 
   .sidebar-reveal {

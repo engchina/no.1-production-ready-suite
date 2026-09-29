@@ -1361,11 +1361,11 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
   await expect(timer).toContainText("経過時間");
   await expect(timer).toHaveAttribute("role", "timer");
   await expect(timer).toHaveAttribute("aria-live", "off");
-  // 共有 Spinner(svg.animate-spin, motion-reduce:animate-none)。reduced motion では回転しない。
+  // 共有 Spinner(svg.animate-spin)。reduced motion でも回転を止めない(#440)。
   const spinner = progress.locator("svg.animate-spin");
   await expect(spinner).toHaveCount(1);
   await expect(spinner).toHaveCSS("width", "16px");
-  await expect(spinner).toHaveCSS("animation-name", "none");
+  await expect(spinner).toHaveCSS("animation-name", "spin");
 
   await expect(timer).toContainText(/00:0[1-9]/);
   await expect(visibleProgressLabel).toHaveText("利用する業務プロファイルを確定しています");

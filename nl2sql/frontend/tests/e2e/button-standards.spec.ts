@@ -94,7 +94,9 @@ for (const theme of ["light", "dark"]) {
     for (const contrast of contrasts) expect(contrast.ratio, contrast.label ?? "icon").toBeGreaterThanOrEqual(4.5);
     await expect(page.getByRole("link", { name: "結果へ移動" })).toHaveCSS("height", mobile ? "44px" : "32px");
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await expect(page.getByTestId("sm-loading").locator("svg:visible")).toHaveCSS("animation-name", "none");
+    // スピナーは reduced motion でも回転を止めない（#440）。
+    await expect(page.getByTestId("sm-loading").locator("svg:visible")).toHaveCSS("animation-name", "spin");
+    await expect(page.getByTestId("sm-loading").locator("svg:visible")).toHaveCSS("animation-duration", "1s");
     const primary = page.getByTestId("sm-primary");
     if (!mobile) {
       const initial = await primary.evaluate(el => getComputedStyle(el).backgroundColor);

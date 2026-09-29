@@ -54,13 +54,13 @@ describe("Spinner", () => {
     expect(html).toContain(`a${radius} ${radius} 0 1 0-${radius} ${radius}`);
   });
 
-  it("既定 16px・animate-spin・motion-reduce で回転を止める", () => {
+  it("既定 16px・animate-spin・motion-reduce でも回転を止めない（#440）", () => {
     const html = renderToStaticMarkup(<Spinner />);
     expect(html).toContain('width="16"');
     expect(html).toContain('height="16"');
     const classes = classesOf(html, "<svg");
     expect(classes).toContain("animate-spin");
-    expect(classes).toContain("motion-reduce:animate-none");
+    expect(classes).not.toContain("motion-reduce:animate-none");
     // flex 内で長いラベルに押されて縮まない
     expect(classes).toContain("shrink-0");
     expect(html).toContain('aria-hidden="true"');
@@ -86,15 +86,10 @@ describe("Spinner の CSS（トークン・reduced-motion）", () => {
     expect(a11yCss).toMatch(/@media \(forced-colors: active\)[\s\S]*--color-spinner-track: GrayText;/);
   });
 
-  it("reduced-motion では回転を止め、アークの濃さだけを変える（一括無効化より強い詳細度）", () => {
+  it("reduced-motion でも回転を続ける（一括無効化より強い詳細度で 1s に戻す。#440）", () => {
     const reduced = baseCss.slice(baseCss.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduced).toMatch(
-      /svg\.animate-spin \.pr-spinner-arc\s*\{\s*animation: pr-spinner-breathe 1\.2s ease-in-out infinite alternate !important;/
-    );
-    const keyframes = baseCss.slice(baseCss.indexOf("@keyframes pr-spinner-breathe"));
-    // 位置は動かさない（opacity だけ）。薄くしすぎない（0.5 まで）
-    expect(keyframes.slice(0, keyframes.indexOf("\n}\n"))).not.toMatch(/transform/);
-    expect(keyframes).toMatch(/to\s*\{\s*opacity: 0\.5;/);
+    expect(reduced).toMatch(/svg\.animate-spin\s*\{\s*animation-duration: 1s !important;/);
+    expect(baseCss).not.toContain("pr-spinner-breathe");
   });
 
   it("base.css が回転原点を図形中心へ固定し合成レイヤーで回す", () => {

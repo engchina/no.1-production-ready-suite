@@ -5372,7 +5372,8 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     // job の間のスピナーは実行中の工程の 1 つだけ。「SQL を生成して実行」は無効にするだけで回さない（#416）。
     await expectSingleSpinner(page, generate);
     await expect(page.getByRole("button", { name: "SQL を生成して実行" })).not.toHaveAttribute("aria-busy", "true");
-    expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
+    // スピナーは reduced motion でも回転を止めない（#440）。
+    expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("spin");
     await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
     expect(jobPayload).toMatchObject({
       // 用語・同義語を ON にしたため、job runner 側で一度だけ辞書適用する。
@@ -11460,7 +11461,8 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   await expect(processing).toHaveAttribute("data-processing-placement", "job");
   await expect(timer).toHaveAttribute("aria-live", "off");
   await expect(workspace.locator("svg.animate-spin")).toHaveCount(1);
-  await expect(processing.locator("svg.animate-spin")).toHaveCSS("animation-name", "none");
+  // スピナーは reduced motion でも回転を止めない（#440）。
+  await expect(processing.locator("svg.animate-spin")).toHaveCSS("animation-name", "spin");
   const elapsedSeconds = async () => {
     const text = (await timer.textContent()) ?? "";
     const [, minutes, seconds] = text.match(/(\d+):(\d+)/) ?? [];

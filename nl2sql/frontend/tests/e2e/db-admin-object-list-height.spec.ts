@@ -2400,7 +2400,8 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toHaveAttribute("data-processing-placement", "panel");
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:00");
-  await expect(skeleton.locator("svg.animate-spin")).toHaveCSS("animation-name", "none");
+  // スピナーは reduced motion でも回転を止めない（#440）。
+  await expect(skeleton.locator("svg.animate-spin")).toHaveCSS("animation-name", "spin");
 
   await page.clock.fastForward(11_000);
   await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:11");

@@ -65,10 +65,10 @@ test("operation timer resets on operation changes and recovers from background t
   assert.match(processingSource, /setNowMs\(Date\.now\(\)\)/u);
 });
 
-test("processing state avoids noisy announcements and respects reduced motion", () => {
+test("processing state avoids noisy announcements and uses the shared spinner", () => {
   assert.match(processingSource, /role="timer"/u);
   assert.match(processingSource, /aria-live="off"/u);
-  // reduced motion 対応は共有 Spinner（motion-reduce:animate-none + 共有 tokens）が担う
+  // スピナーは共有 Spinner（reduced motion でも回転を止めない。#440）
   assert.match(processingSource, /<Spinner size=\{16\}/u);
   assert.doesNotMatch(processingSource, /Loader2/u);
   assert.match(processingSource, /tabular-nums/u);
