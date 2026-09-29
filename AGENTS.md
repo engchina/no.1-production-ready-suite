@@ -33,7 +33,16 @@
 - Issue には対象の label（`product:rag` / `product:nl2sql` / `product:agent` / `platform`）を付ける。複数にまたがる場合はすべて付ける。
 - 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。`platform/` と製品にまたがる変更は、1つの PR にまとめて同時に検証してよい。
 - **変更・必要な検証・PR 本文の更新が完了し、PR の最新 commit に対する CI/checks（必須 check `CI OK`）が成功したら、追加のユーザ確認を求めず自動で `main` へ merge する。** PR 作成や CI 成功の報告だけで作業を終了しない。merge は **Create a merge commit** で行う（main の ruleset が削除・force push を禁止し、`CI OK` を必須にしている）。
-  - **CI の完了はエージェント自身が待つ（#438）。** PR の作成・push・`gh pr update-branch` の後に CI が実行中でも、「pass したら声をかけてください」と報告して止まらず、ユーザーに merge の指示を求めない。待ち方は `gh pr checks <PR 番号> --watch --required --fail-fast`（終わるまで待つ 1 回のコマンド。exit code 0 なら `CI OK` が pass）か、実行環境が提供する PR / CI の監視機能を使う。待っている間に別の独立した作業（次の Issue の調査など）を進めてよい。
+  - **CI の完了はエージェント自身が待つ（#438）。** PR の作成・push・`gh pr update-branch` の後に CI が実行中でも、「pass したら声をかけてください」と報告して止まらず、ユーザーに merge の指示を求めない。待ち方は、PR の最新 commit の CI の run を `gh run watch` で待ち（下の例）、終わったら `gh pr checks <PR 番号>` で `CI OK` が pass であることを確かめる。実行環境が提供する PR / CI の監視機能を使ってもよい。待っている間に別の独立した作業（次の Issue の調査など）を進めてよい。
+    - `gh pr checks --watch --required` は使わない（#446）。`CI OK` は最後の job で、他の job が終わるまで check として存在しないため、CI の開始直後は対象が 0 件になり、待たずに終わる。
+
+    ```bash
+    sleep 20   # push の直後は run がまだ作られていないことがある
+    run_id=$(gh run list --workflow CI --branch <作業ブランチ> --limit 1 --json databaseId -q '.[0].databaseId')
+    gh run watch "$run_id" --exit-status   # exit code 0 なら run が成功
+    gh pr checks <PR 番号> | grep "CI OK"
+    ```
+
   - 複数の PR を続けて merge するときは、先の PR の merge で main が進むので、後の PR は下の「main の取り込み」の判定をやり直し、必要なら取り込んだ後の CI をもう一度待ってから merge する。
 - CI/checks の失敗や merge conflict がある場合は、原因を修正・解消し、最新 commit を再検証してから merge する。branch protection / ruleset を迂回した強制 merge は行わない。解消できない場合は原因と未完了の操作を明示する。
 - **main の取り込みは必要なときだけ行う（#339）。** main の ruleset は、PR の branch が main の最新を含むこと（up-to-date、strict）を求めない。strict のときは main が進むたびに「main の取り込み → CI の再実行」が直列に起き、1 週間で merge 133 件に対して取り込みが 126 回あり、PR が main に入るまでの待ちの大半を占めていたためやめた（`allow_update_branch` は有効）。
