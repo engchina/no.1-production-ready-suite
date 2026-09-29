@@ -24,6 +24,7 @@ from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipelin
 from app.rag.navigation import build_navigation_tree
 from app.schemas.document import FileStatus, SourceModality, SourceProfile
 from app.schemas.extraction import StructuredExtraction
+from tests._ingestion_jobs import run_ingestion_job_and_queued_followups
 from tests.support import AsgiTestClient
 from tests.support import test_audit_request_context as audit_request_context
 
@@ -69,7 +70,9 @@ def _ingest_document(
 ) -> Any:
     job = _enqueue_ingestion(document_id, force=force, headers=headers)
     if job["status"] == "QUEUED":
-        _run_ingestion_job(cast(str, job["id"]))
+        run_ingestion_job_and_queued_followups(
+            client, cast(str, job["id"]), document_id, headers=headers
+        )
     return client.get(f"/api/documents/{document_id}", headers=headers)
 
 
@@ -81,7 +84,9 @@ def _run_ingestion_and_get_job(
 ) -> dict[str, Any]:
     job = _enqueue_ingestion(document_id, force=force, headers=headers)
     if job["status"] == "QUEUED":
-        _run_ingestion_job(cast(str, job["id"]))
+        run_ingestion_job_and_queued_followups(
+            client, cast(str, job["id"]), document_id, headers=headers
+        )
     job_response = client.get(f"/api/documents/ingestion-jobs/{job['id']}", headers=headers)
     assert job_response.status_code == 200
     return cast(dict[str, Any], job_response.json()["data"])
@@ -391,6 +396,7 @@ async def test_ingestion_indexes_documents_with_many_chunks() -> None:
             content_sha256=hashlib.sha256(b"test").hexdigest(),
         )
         settings = Settings.model_construct(
+            rag_parser_adapter_backend="unstructured",
             rag_chunk_size=200,
             rag_chunk_overlap=20,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -474,6 +480,7 @@ async def test_candidate_mode_isolates_document_state_and_serving() -> None:
         )
         # review ゲート OFF・自動 parse ON で通常取込を INDEXED まで通す。
         settings = Settings.model_construct(
+            rag_parser_adapter_backend="unstructured",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
         )
