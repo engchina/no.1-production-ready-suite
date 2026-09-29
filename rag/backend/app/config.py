@@ -4,6 +4,7 @@
 読み込む（#211）。シークレットはコードにハードコードしない。
 """
 
+import logging
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
@@ -1974,8 +1975,17 @@ def reload_env_settings_if_changed(settings: Settings) -> None:
     with _ENV_RELOAD_LOCK:
         if key == state.key:
             return
-        snapshot = Settings(_env_file=files)
         previous, previous_key = state.snapshot, state.key
+        try:
+            snapshot = Settings(_env_file=files)
+        except (ValidationError, OSError) as exc:
+            # 読み直しに失敗しても（手で書いた不正な値など）リクエストは止めず、今の値のまま動く。
+            # 同じ内容で何度も読み直さないよう時刻は覚え、基準は最後に読めた内容のままにする。
+            state.key = key
+            logging.getLogger(__name__).warning(
+                "rag_env_settings_reload_failed", extra={"error_type": type(exc).__name__}
+            )
+            return
         state.key, state.snapshot = key, snapshot
         same_files = previous_key is not None and [path for path, _ in previous_key] == [
             path for path, _ in key

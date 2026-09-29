@@ -930,3 +930,20 @@ def test_get_settings_picks_up_env_changes_saved_by_another_process() -> None:
     assert reloaded is settings
     assert reloaded.rag_answer_record_retention_days == 45
     assert reloaded.rag_docrag_rerank_enabled is False
+
+
+def test_get_settings_keeps_running_when_the_reloaded_env_is_invalid() -> None:
+    """読み直した .env が不正でも例外にせず、今の値のまま動く（#465）。"""
+    import os
+
+    from app import config as app_config
+
+    env_file = app_config.BACKEND_ENV_FILE
+    env_file.write_text("RAG_ANSWER_RECORD_RETENTION_DAYS=30\n", encoding="utf-8")
+    assert app_config.get_settings().rag_answer_record_retention_days == 30
+
+    env_file.write_text("RAG_ANSWER_RECORD_RETENTION_DAYS=not-a-number\n", encoding="utf-8")
+    stat = env_file.stat()
+    os.utime(env_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert app_config.get_settings().rag_answer_record_retention_days == 30
