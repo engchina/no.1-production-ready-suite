@@ -17,13 +17,18 @@ from pr_system_settings.system_schema import (
     SystemSchemaBusyError,
     SystemSchemaError,
     SystemSchemaManagerBase,
+    SystemSchemaPreconditionError,
     SystemTableForeignKeyData,
     SystemTableOperationState,
+    SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     add_foreign_key_sql,
     bind_list,
     clamp_ddl_lock_timeout,
     classify_system_schema_status,
+    delete_orphan_rows_sql,
+    drop_foreign_key_sql,
+    enable_foreign_key_sql,
     foreign_keys_from_create_table,
     idle_operation_state,
     inspect_foreign_keys,
@@ -32,6 +37,7 @@ from pr_system_settings.system_schema import (
     orphan_rows_sql,
     require_recreate_confirmation,
     system_tables_status_error,
+    validate_foreign_key_sql,
 )
 
 DOMAIN = ("DEMO_ITEMS", "DEMO_LOGS")
@@ -533,6 +539,14 @@ class _ForeignKeyDatabase:
         # 数えた後に孤立した行が増えた（検査付きの追加だけが ORA-02298 で失敗する）。
         self.orphans_after_count: dict[str, int] = {}
         self.fail_orphan_count = False
+        # 無効化されている FK の名前（#511）。
+        self.disabled: set[str] = set()
+        # 行の削除で起こす Oracle のエラー（ORA-02292 など）。
+        self.fail_delete_with: str | None = None
+        # 数えた後に孤立した行が増え、最初の VALIDATE だけが ORA-02298 になる（#511）。
+        self.orphans_after_delete: dict[str, int] = {}
+        # 制御テーブルの更新（lease の取得・延長・終了・失敗の記録）。
+        self.operation_updates: list[str] = []
         self.statements: list[str] = []
 
     @contextmanager
@@ -586,7 +600,7 @@ class _ForeignKeyCursor:
                     spec.table_name,
                     spec.referenced_table_name,
                     spec.delete_rule,
-                    "ENABLED",
+                    "DISABLED" if spec.name in self.database.disabled else "ENABLED",
                     "VALIDATED" if validated else "NOT VALIDATED",
                     column,
                     referenced,
@@ -600,6 +614,28 @@ class _ForeignKeyCursor:
                 raise RuntimeError("ORA-00904: invalid identifier")
             table = upper.split()[3]
             self.rows = [(self.database.orphans.get(table, 0),)]
+        elif upper.startswith("DELETE FROM"):
+            table = upper.split()[2]
+            if self.database.fail_delete_with:
+                raise RuntimeError(self.database.fail_delete_with)
+            self.rowcount = self.database.orphans.get(table, 0)
+            self.database.orphans[table] = self.database.orphans_after_delete.pop(table, 0)
+        elif upper.startswith("ALTER TABLE") and " DROP CONSTRAINT " in upper:
+            name = upper.split()[-1]
+            if name not in self.database.foreign_keys:
+                raise RuntimeError("ORA-02443: Cannot drop constraint - nonexistent constraint")
+            self.database.foreign_keys.pop(name)
+            self.database.disabled.discard(name)
+        elif upper.startswith("ALTER TABLE") and " MODIFY CONSTRAINT " in upper:
+            match = re.match(r"ALTER TABLE (\S+) MODIFY CONSTRAINT (\S+) (.+)$", upper)
+            assert match is not None
+            table, name, state = match.groups()
+            spec, validated = self.database.foreign_keys[name]
+            validate = state in {"ENABLE VALIDATE", "VALIDATE"}
+            if validate and self.database.orphans.get(table, 0):
+                raise RuntimeError("ORA-02298: cannot validate - parent keys not found")
+            self.database.disabled.discard(name)
+            self.database.foreign_keys[name] = (spec, validate)
         elif upper.startswith("ALTER TABLE"):
             match = re.match(r"ALTER TABLE (\S+) ADD CONSTRAINT (\S+) ", upper)
             assert match is not None
@@ -622,7 +658,16 @@ class _ForeignKeyCursor:
                 raise RuntimeError("ORA-02298: cannot validate - parent keys not found")
             self.database.foreign_keys[name] = (spec, not novalidate)
         elif upper.startswith("UPDATE DEMO_SCHEMA_OPERATIONS"):
-            self.rowcount = 1  # heartbeat
+            # lease は常に取れる（取得・延長・終了・失敗の記録を順に残す）。
+            if "SET STATUS = 'RUNNING'" in upper:
+                self.database.operation_updates.append("running")
+            elif "SCHEMA_EPOCH = SCHEMA_EPOCH + 1" in upper:
+                self.database.operation_updates.append("idle+epoch")
+            elif "SET STATUS = 'IDLE'" in upper:
+                self.database.operation_updates.append("idle")
+            elif "SET STATUS = 'FAILED'" in upper:
+                self.database.operation_updates.append(f"failed:{params['error_code']}")
+            self.rowcount = 1
 
 
 class _ForeignKeyManager(_DemoManager):
@@ -632,6 +677,17 @@ class _ForeignKeyManager(_DemoManager):
         SystemSchemaManagerBase.__init__(
             self, database.connection, lease_seconds=1, ddl_lock_timeout_seconds=7
         )
+
+    def _ensure_control_schema(self) -> None:
+        return None
+
+    def _status_on(self, connection: Any) -> dict[str, Any]:
+        drift = self._foreign_key_drift(connection)
+        return {
+            "status": "ready" if drift.current else "outdated",
+            **drift.status_fields(),
+            "operation_state": {"schema_epoch": 0},
+        }
 
 
 def test_inspect_compares_definitions_and_counts_orphans() -> None:
@@ -736,3 +792,328 @@ def test_apply_falls_back_to_novalidate_when_orphans_appear_after_count() -> Non
         False,
         True,
     ]
+
+
+# ---- 削除規則の違い・無効化・参照先の無い行の削除（#511） -------------------------
+
+
+def _canonical(name: str) -> ForeignKeySpec:
+    return next(
+        spec for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS) if spec.name == name
+    )
+
+
+def _with_rule(
+    spec: ForeignKeySpec, delete_rule: str, *, name: str | None = None
+) -> ForeignKeySpec:
+    return ForeignKeySpec(
+        name=name or spec.name,
+        table_name=spec.table_name,
+        columns=spec.columns,
+        referenced_table_name=spec.referenced_table_name,
+        referenced_columns=spec.referenced_columns,
+        delete_rule=delete_rule,
+    )
+
+
+def _all_present(database: _ForeignKeyDatabase) -> None:
+    for spec in foreign_keys_from_create_table(_CANONICAL_ITEMS):
+        database.foreign_keys[spec.name] = (spec, True)
+
+
+def test_foreign_key_repair_and_orphan_ddl() -> None:
+    parent = _canonical("DEMO_ITEMS_PARENT_FK")
+    assert (
+        drop_foreign_key_sql(parent)
+        == "ALTER TABLE DEMO_ITEMS DROP CONSTRAINT DEMO_ITEMS_PARENT_FK"
+    )
+    assert enable_foreign_key_sql(parent, validate=True) == (
+        "ALTER TABLE DEMO_ITEMS MODIFY CONSTRAINT DEMO_ITEMS_PARENT_FK ENABLE VALIDATE"
+    )
+    assert enable_foreign_key_sql(parent, validate=False).endswith(" ENABLE NOVALIDATE")
+    assert validate_foreign_key_sql(parent) == (
+        "ALTER TABLE DEMO_ITEMS MODIFY CONSTRAINT DEMO_ITEMS_PARENT_FK VALIDATE"
+    )
+    # 数える SQL と同じ条件で消す（FK の列のどれかが NULL の行は消さない）。
+    assert delete_orphan_rows_sql(parent) == (
+        "DELETE FROM DEMO_ITEMS child WHERE child.PARENT_ID IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM DEMO_PARENTS parent WHERE parent.PARENT_ID = child.PARENT_ID)"
+    )
+    assert orphan_rows_sql(parent).removeprefix("SELECT COUNT(*) FROM ") == (
+        delete_orphan_rows_sql(parent).removeprefix("DELETE FROM ")
+    )
+    request = SystemTablesDeleteOrphansRequest(constraint_name="X_FK", expected_orphan_rows=0)
+    assert request.model_dump() == {"constraint_name": "X_FK", "expected_orphan_rows": 0}
+    with pytest.raises(ValueError):
+        SystemTablesDeleteOrphansRequest(constraint_name="X_FK", expected_orphan_rows=-1)
+
+
+def test_inspect_reports_delete_rule_mismatch_and_disabled_foreign_keys() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS", "DEMO_OWNERS"})
+    _all_present(database)
+    # 旧版が別名・NO ACTION で作った FK（正本は CASCADE）と、無効化された FK。
+    database.foreign_keys.pop("DEMO_ITEMS_PARENT_FK")
+    legacy = _with_rule(_canonical("DEMO_ITEMS_PARENT_FK"), "NO ACTION", name="LEGACY_PARENT_FK")
+    database.foreign_keys[legacy.name] = (legacy, True)
+    database.disabled.add("DEMO_ITEMS_OWNER_FK")
+    database.foreign_keys["DEMO_ITEMS_OWNER_FK"] = (_canonical("DEMO_ITEMS_OWNER_FK"), False)
+    database.orphans["DEMO_ITEMS"] = 4
+
+    with database.connection() as connection:
+        drift = inspect_foreign_keys(connection, list(_ForeignKeyManager.managed_foreign_keys))
+
+    assert drift.current is False
+    assert drift.missing == []
+    fields = drift.status_fields()
+    assert fields["mismatched_foreign_keys"] == [
+        {
+            "name": "DEMO_ITEMS_PARENT_FK",
+            "table_name": "DEMO_ITEMS",
+            "columns": ["PARENT_ID"],
+            "referenced_table_name": "DEMO_PARENTS",
+            "referenced_columns": ["PARENT_ID"],
+            "delete_rule": "CASCADE",
+            "orphan_rows": 4,
+            "current_name": "LEGACY_PARENT_FK",
+            "current_delete_rule": "NO ACTION",
+        }
+    ]
+    assert [(item["name"], item["orphan_rows"]) for item in fields["disabled_foreign_keys"]] == [
+        ("DEMO_ITEMS_OWNER_FK", 4)
+    ]
+    # 無効化された FK は、孤立した行の警告ではなく更新の差分として出す。
+    assert fields["orphaned_foreign_keys"] == []
+    for item in (*fields["mismatched_foreign_keys"], *fields["disabled_foreign_keys"]):
+        SystemTableForeignKeyData.model_validate(item)
+
+    # 削除規則の違いと無効化が重なるときは、削除規則の違いとして扱う（DROP と ADD で両方直る）。
+    database.disabled.add("LEGACY_PARENT_FK")
+    with database.connection() as connection:
+        drift = inspect_foreign_keys(connection, list(_ForeignKeyManager.managed_foreign_keys))
+    assert [item.current.name for item in drift.mismatched] == ["LEGACY_PARENT_FK"]
+    assert [spec.name for spec, _ in drift.disabled] == ["DEMO_ITEMS_OWNER_FK"]
+
+
+def test_repair_recreates_mismatched_and_enables_disabled_without_deleting_rows() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS", "DEMO_OWNERS"})
+    _all_present(database)
+    database.foreign_keys.pop("DEMO_ITEMS_PARENT_FK")
+    legacy = _with_rule(_canonical("DEMO_ITEMS_PARENT_FK"), "SET NULL", name="LEGACY_PARENT_FK")
+    database.foreign_keys[legacy.name] = (legacy, True)
+    database.disabled.add("DEMO_ITEMS_SELF_FK")
+    database.foreign_keys["DEMO_ITEMS_SELF_FK"] = (_canonical("DEMO_ITEMS_SELF_FK"), False)
+    manager = _ForeignKeyManager(database)
+
+    with database.connection() as connection:
+        repaired = manager._repair_foreign_keys(connection, "owner")
+        again = manager._repair_foreign_keys(connection, "owner")
+
+    assert repaired["added"] == []
+    assert [
+        (item["name"], item["current_name"], item["current_delete_rule"], item["validated"])
+        for item in repaired["recreated"]
+    ] == [("DEMO_ITEMS_PARENT_FK", "LEGACY_PARENT_FK", "SET NULL", True)]
+    assert [(item["name"], item["validated"]) for item in repaired["enabled"]] == [
+        ("DEMO_ITEMS_SELF_FK", True)
+    ]
+    assert again == {"added": [], "recreated": [], "enabled": []}
+    assert "LEGACY_PARENT_FK" not in database.foreign_keys
+    assert database.foreign_keys["DEMO_ITEMS_PARENT_FK"] == (
+        _canonical("DEMO_ITEMS_PARENT_FK"),
+        True,
+    )
+    assert database.disabled == set()
+    alters = [statement for statement in database.statements if statement.startswith("ALTER")]
+    assert alters == [
+        "ALTER TABLE DEMO_ITEMS DROP CONSTRAINT LEGACY_PARENT_FK",
+        "ALTER TABLE DEMO_ITEMS ADD CONSTRAINT DEMO_ITEMS_PARENT_FK FOREIGN KEY (PARENT_ID) "
+        "REFERENCES DEMO_PARENTS (PARENT_ID) ON DELETE CASCADE",
+        "ALTER TABLE DEMO_ITEMS MODIFY CONSTRAINT DEMO_ITEMS_SELF_FK ENABLE VALIDATE",
+    ]
+    assert not any(statement.upper().startswith("DELETE") for statement in database.statements)
+
+
+def test_repair_uses_novalidate_when_orphan_rows_exist() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    _all_present(database)
+    database.foreign_keys.pop("DEMO_ITEMS_OWNER_FK")  # 参照先の表が無いので比べない
+    database.foreign_keys.pop("DEMO_ITEMS_PARENT_FK")
+    legacy = _with_rule(_canonical("DEMO_ITEMS_PARENT_FK"), "NO ACTION")
+    database.foreign_keys[legacy.name] = (legacy, False)
+    database.disabled.add("DEMO_ITEMS_SELF_FK")
+    database.foreign_keys["DEMO_ITEMS_SELF_FK"] = (_canonical("DEMO_ITEMS_SELF_FK"), False)
+    database.orphans["DEMO_ITEMS"] = 2
+    manager = _ForeignKeyManager(database)
+
+    with database.connection() as connection:
+        repaired = manager._repair_foreign_keys(connection, "owner")
+
+    assert [(item["name"], item["validated"]) for item in repaired["recreated"]] == [
+        ("DEMO_ITEMS_PARENT_FK", False)
+    ]
+    assert [(item["name"], item["validated"]) for item in repaired["enabled"]] == [
+        ("DEMO_ITEMS_SELF_FK", False)
+    ]
+    # 孤立した行があると分かっているときは、検査付きの DDL を試さない。既存の行は消さない。
+    alters = [statement for statement in database.statements if statement.startswith("ALTER")]
+    assert alters[1].endswith(" ON DELETE CASCADE ENABLE NOVALIDATE")
+    assert alters[2].endswith(" ENABLE NOVALIDATE")
+    assert not any(statement.upper().startswith("DELETE") for statement in database.statements)
+
+
+def test_enable_falls_back_to_novalidate_when_orphans_appear_after_count() -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    spec = _canonical("DEMO_ITEMS_SELF_FK")
+    database.foreign_keys[spec.name] = (spec, False)
+    database.disabled.add(spec.name)
+    database.orphans["DEMO_ITEMS"] = 1
+
+    with database.connection() as connection:
+        validated = SystemSchemaManagerBase._enable_foreign_key(connection, spec, validate=True)
+
+    assert validated is False
+    assert [statement.rsplit(" ", 1)[-1] for statement in database.statements] == [
+        "VALIDATE",
+        "NOVALIDATE",
+    ]
+    # 既に無い FK の削除は読み飛ばす（別の操作が先に削除した）。
+    with database.connection() as connection:
+        SystemSchemaManagerBase._drop_foreign_key(connection, _canonical("DEMO_ITEMS_PARENT_FK"))
+
+
+def _orphaned_database(orphans: int = 3) -> _ForeignKeyDatabase:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    _all_present(database)
+    database.foreign_keys.pop("DEMO_ITEMS_OWNER_FK")
+    spec = _canonical("DEMO_ITEMS_PARENT_FK")
+    database.foreign_keys[spec.name] = (spec, False)  # NOVALIDATE で追加した
+    database.orphans["DEMO_ITEMS"] = orphans
+    return database
+
+
+def test_delete_orphaned_rows_deletes_confirmed_rows_and_validates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = _orphaned_database(3)
+    manager = _ForeignKeyManager(database)
+    assert [item["name"] for item in manager.status()["orphaned_foreign_keys"]] == [
+        "DEMO_ITEMS_PARENT_FK"
+    ]
+
+    with caplog.at_level("INFO"):
+        result = manager.delete_orphaned_rows(
+            constraint_name="demo_items_parent_fk", expected_orphan_rows=3
+        )
+
+    assert result["operation"] == "orphans_deleted"
+    assert result["deleted_row_count"] == 3
+    assert result["foreign_key"]["name"] == "DEMO_ITEMS_PARENT_FK"
+    assert result["orphaned_foreign_keys"] == []
+    assert database.foreign_keys["DEMO_ITEMS_PARENT_FK"][1] is True
+    assert database.operation_updates == ["running", "idle+epoch"]
+    deletes = [statement for statement in database.statements if statement.startswith("DELETE")]
+    assert deletes == [delete_orphan_rows_sql(_canonical("DEMO_ITEMS_PARENT_FK"))]
+    assert "ALTER TABLE DEMO_ITEMS MODIFY CONSTRAINT DEMO_ITEMS_PARENT_FK VALIDATE" in (
+        database.statements
+    )
+    record = next(
+        item for item in caplog.records if item.msg == "demo_system_schema_operation_succeeded"
+    )
+    assert (record.operation, record.constraint_name, record.table_name) == (
+        "orphans_deleted",
+        "DEMO_ITEMS_PARENT_FK",
+        "DEMO_ITEMS",
+    )
+    assert (record.expected_orphan_rows, record.deleted_row_count) == (3, 3)
+
+    # もう消す行も検査も無いときは、DB を変えずに no_op。
+    database.operation_updates.clear()
+    again = manager.delete_orphaned_rows(
+        constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=0
+    )
+    assert (again["operation"], again["deleted_row_count"]) == ("no_op", 0)
+    assert database.operation_updates == ["running", "idle"]
+
+
+def test_delete_orphaned_rows_validates_even_when_no_rows_remain() -> None:
+    database = _orphaned_database(0)
+    result = _ForeignKeyManager(database).delete_orphaned_rows(
+        constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=0
+    )
+    assert (result["operation"], result["deleted_row_count"]) == ("orphans_deleted", 0)
+    assert database.foreign_keys["DEMO_ITEMS_PARENT_FK"][1] is True
+
+
+def test_delete_orphaned_rows_refuses_more_rows_than_confirmed() -> None:
+    database = _orphaned_database(5)
+    manager = _ForeignKeyManager(database)
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.delete_orphaned_rows(constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=3)
+
+    assert isinstance(error.value, SystemSchemaPreconditionError)
+    assert (error.value.code, error.value.status_code) == ("SCHEMA_ORPHAN_ROWS_CHANGED", 409)
+    assert "確認時 3 件、現在 5 件" in error.value.public_message
+    assert not any(statement.startswith("DELETE") for statement in database.statements)
+    # 前提の確認で止めたときは lease を返し、失敗として記録しない。
+    assert database.operation_updates == ["running", "idle"]
+
+
+@pytest.mark.parametrize(
+    ("constraint_name", "expected_code", "expected_status"),
+    [
+        ("DEMO_UNKNOWN_FK", "SCHEMA_FOREIGN_KEY_NOT_FOUND", 404),
+        ("demo_items; select 1", "SCHEMA_FOREIGN_KEY_NOT_FOUND", 404),
+        ("DEMO_ITEMS_SELF_FK_DISABLED", "SCHEMA_FOREIGN_KEY_OUTDATED", 409),
+        ("DEMO_ITEMS_PARENT_LEGACY", "SCHEMA_FOREIGN_KEY_OUTDATED", 409),
+    ],
+    ids=["unknown", "unsafe", "disabled", "mismatched"],
+)
+def test_delete_orphaned_rows_requires_a_current_managed_foreign_key(
+    constraint_name: str, expected_code: str, expected_status: int
+) -> None:
+    database = _ForeignKeyDatabase({"DEMO_ITEMS", "DEMO_PARENTS"})
+    self_fk = _with_rule(
+        _canonical("DEMO_ITEMS_SELF_FK"), "NO ACTION", name="DEMO_ITEMS_SELF_FK_DISABLED"
+    )
+    database.foreign_keys[self_fk.name] = (self_fk, False)
+    database.disabled.add(self_fk.name)
+    legacy = _with_rule(
+        _canonical("DEMO_ITEMS_PARENT_FK"), "NO ACTION", name="DEMO_ITEMS_PARENT_LEGACY"
+    )
+    database.foreign_keys[legacy.name] = (legacy, False)
+    database.orphans["DEMO_ITEMS"] = 1
+
+    with pytest.raises(SystemSchemaPreconditionError) as error:
+        _ForeignKeyManager(database).delete_orphaned_rows(
+            constraint_name=constraint_name, expected_orphan_rows=1
+        )
+
+    assert (error.value.code, error.value.status_code) == (expected_code, expected_status)
+    # 識別子の形でない入力は文言にそのまま出さない。
+    assert "select 1" not in error.value.public_message.lower()
+    assert not any(
+        statement.startswith(("DELETE", "ALTER TABLE")) for statement in database.statements
+    )
+
+
+def test_delete_orphaned_rows_retries_validate_once_and_reports_child_rows() -> None:
+    database = _orphaned_database(2)
+    database.orphans_after_delete["DEMO_ITEMS"] = 1
+    result = _ForeignKeyManager(database).delete_orphaned_rows(
+        constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=2
+    )
+    assert result["deleted_row_count"] == 3
+    assert sum(statement.startswith("DELETE") for statement in database.statements) == 2
+
+    # 消す行を別の表の NO ACTION の FK が参照している（ORA-02292）。失敗として記録する。
+    blocked = _orphaned_database(2)
+    blocked.fail_delete_with = "ORA-02292: integrity constraint violated - child record found"
+    with pytest.raises(SystemSchemaError) as error:
+        _ForeignKeyManager(blocked).delete_orphaned_rows(
+            constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=2
+        )
+    assert (error.value.code, error.value.status_code) == ("ORA-02292", 409)
+    assert "別の表の行が参照" in error.value.public_message
+    assert blocked.operation_updates[-1] == "failed:ORA-02292"
+    assert blocked.foreign_keys["DEMO_ITEMS_PARENT_FK"][1] is False

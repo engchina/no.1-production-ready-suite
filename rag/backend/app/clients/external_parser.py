@@ -524,6 +524,12 @@ def _image_size(data: bytes) -> tuple[int, int]:
 # dots_ocr/utils/layout_utils.py・image_utils.py・consts.py。commit 36d7248、2026-03-24 時点)。
 # backend は OpenAI 互換 API を直接呼ぶので、同じ換算をここで行い、bbox を送った画像(PDF は
 # 描いたページ画像、画像ファイルは元の画像)の px にそろえる。
+# ai-foundations-lab(engchina/ai-foundations-lab、commit 572e9fa の 20260819/。#512)の検証とも
+# 合う: 後継の dots.mocr も同じ preprocessor_config.json(HF rednote-hilab/dots.mocr、revision
+# e539fbb)で、lab の README は 300 dpi の A4 の画像パッチを約 44,000(= 2492x3500 / 14^2。
+# smart_resize で縮小されず 28 の倍数へ丸めるだけ)と記録し、prompt_grounding_ocr の bbox は
+# 「processor 側の resize と合わない」としている。lab は bbox をページ画像の px としてそのまま
+# 使うが、それは 300 dpi の A4 では丸めの差(0.5% 未満)しかないためで、ここの換算がその差も消す。
 _DOTS_IMAGE_FACTOR = 28
 _DOTS_MIN_PIXELS = 3136
 _DOTS_MAX_PIXELS = 11289600

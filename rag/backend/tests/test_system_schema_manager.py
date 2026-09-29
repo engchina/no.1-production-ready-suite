@@ -111,7 +111,7 @@ class _FakeCursor:
                     fk.table_name,
                     fk.referenced_table_name,
                     fk.delete_rule,
-                    "ENABLED",
+                    "DISABLED" if fk.name in self.database.disabled_foreign_keys else "ENABLED",
                     "VALIDATED" if validated else "NOT VALIDATED",
                     column,
                     referenced,
@@ -130,6 +130,31 @@ class _FakeCursor:
         if upper.startswith("ALTER TABLE") and " FOREIGN KEY " in upper:
             self.database.foreign_key_ddl.append(sql)
             self._add_foreign_key(upper)
+            return
+        if upper.startswith("ALTER TABLE") and " DROP CONSTRAINT " in upper:
+            self.database.foreign_key_ddl.append(sql)
+            name = upper.split()[-1]
+            if name not in self.database.foreign_keys:
+                raise RuntimeError("ORA-02443: Cannot drop constraint - nonexistent constraint")
+            self.database.foreign_keys.pop(name)
+            self.database.disabled_foreign_keys.discard(name)
+            return
+        modify_match = re.match(r"ALTER TABLE (\S+) MODIFY CONSTRAINT (\S+) (.+)$", upper)
+        if modify_match is not None:
+            self.database.foreign_key_ddl.append(sql)
+            table, name, state = modify_match.groups()
+            spec, _validated = self.database.foreign_keys[name]
+            validate = state in {"ENABLE VALIDATE", "VALIDATE"}
+            if validate and self.database.orphans.get(table, 0):
+                raise RuntimeError("ORA-02298: cannot validate - parent keys not found")
+            self.database.disabled_foreign_keys.discard(name)
+            self.database.foreign_keys[name] = (spec, validate)
+            return
+        delete_match = re.match(r"DELETE FROM ([A-Z0-9_$#]+) CHILD WHERE", upper)
+        if delete_match is not None:
+            table = delete_match.group(1)
+            self.rowcount = self.database.orphans.get(table, 0)
+            self.database.orphans[table] = 0
             return
 
         if upper.startswith("ALTER SESSION SET DDL_LOCK_TIMEOUT"):
@@ -242,6 +267,7 @@ class _FakeCursor:
                     "updated_at": now,
                 }
             )
+            self.database.claimed_operation_kinds.append(str(params["operation_kind"]))
             self.rowcount = 1
             return
         if operation.get("lease_owner") != owner:
@@ -307,6 +333,10 @@ class _FakeDatabase:
         self.foreign_keys: dict[str, tuple[ForeignKeySpec, bool]] = {}
         # 子の表 → 参照先の無い行の件数。
         self.orphans: dict[str, int] = {}
+        # 無効化されている FK の名前（#511）。
+        self.disabled_foreign_keys: set[str] = set()
+        # lease を取った操作の種類（OPERATION_KIND の CHECK 制約に合う値か）。
+        self.claimed_operation_kinds: list[str] = []
         self.foreign_key_ddl: list[str] = []
         self.executed: list[str] = []
 
@@ -633,3 +663,130 @@ def test_missing_table_is_reported_as_partial_not_as_missing_foreign_key() -> No
 
     assert status["status"] == "partial"
     assert status["missing_foreign_keys"] == []
+
+
+def _replace_delete_rule(database: _FakeDatabase, name: str, delete_rule: str) -> None:
+    spec, validated = database.foreign_keys[name]
+    database.foreign_keys[name] = (
+        ForeignKeySpec(
+            name=spec.name,
+            table_name=spec.table_name,
+            columns=spec.columns,
+            referenced_table_name=spec.referenced_table_name,
+            referenced_columns=spec.referenced_columns,
+            delete_rule=delete_rule,
+        ),
+        validated,
+    )
+
+
+def test_delete_rule_mismatch_and_disabled_foreign_keys_are_outdated_and_repaired() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    # 旧版で CASCADE なしで作られた FK と、無効化された FK（#511）。
+    _replace_delete_rule(database, "RAG_CHUNK_SETS_DOCUMENT_FK", "NO ACTION")
+    database.disabled_foreign_keys.add("RAG_DOC_EXT_DOCUMENT_FK")
+    database.foreign_keys["RAG_DOC_EXT_DOCUMENT_FK"] = (
+        database.foreign_keys["RAG_DOC_EXT_DOCUMENT_FK"][0],
+        False,
+    )
+    database.orphans["RAG_DOCUMENT_EXTRACTIONS"] = 7
+
+    status = manager.status()
+
+    assert status["status"] == "outdated"
+    assert status["missing_foreign_keys"] == []
+    assert [
+        (item["name"], item["delete_rule"], item["current_delete_rule"])
+        for item in status["mismatched_foreign_keys"]
+    ] == [("RAG_CHUNK_SETS_DOCUMENT_FK", "CASCADE", "NO ACTION")]
+    assert [(item["name"], item["orphan_rows"]) for item in status["disabled_foreign_keys"]] == [
+        ("RAG_DOC_EXT_DOCUMENT_FK", 7)
+    ]
+    assert manager.is_ready() is False
+
+    result = manager.initialize()
+
+    assert result["operation"] == "migrated"
+    assert result["status"] == "ready"
+    assert result["mismatched_foreign_keys"] == []
+    assert result["disabled_foreign_keys"] == []
+    assert database.foreign_keys["RAG_CHUNK_SETS_DOCUMENT_FK"][0].delete_rule == "CASCADE"
+    assert database.foreign_keys["RAG_CHUNK_SETS_DOCUMENT_FK"][1] is True
+    # 参照先のない行がある無効化された FK は、既存の行を検査せずに有効にし、警告に出す。
+    assert "RAG_DOC_EXT_DOCUMENT_FK" not in database.disabled_foreign_keys
+    assert [(item["name"], item["orphan_rows"]) for item in result["orphaned_foreign_keys"]] == [
+        ("RAG_DOC_EXT_DOCUMENT_FK", 7)
+    ]
+    assert database.foreign_key_ddl == [
+        "ALTER TABLE RAG_CHUNK_SETS DROP CONSTRAINT RAG_CHUNK_SETS_DOCUMENT_FK",
+        "ALTER TABLE RAG_CHUNK_SETS ADD CONSTRAINT RAG_CHUNK_SETS_DOCUMENT_FK "
+        "FOREIGN KEY (DOCUMENT_ID) REFERENCES RAG_DOCUMENTS (DOCUMENT_ID) ON DELETE CASCADE",
+        "ALTER TABLE RAG_DOCUMENT_EXTRACTIONS MODIFY CONSTRAINT RAG_DOC_EXT_DOCUMENT_FK "
+        "ENABLE NOVALIDATE",
+    ]
+    # 既存の行は利用者の操作なしに消さない。
+    assert not any(statement.startswith(("DELETE", "TRUNCATE")) for statement in database.executed)
+    assert manager.initialize()["operation"] == "no_op"
+
+
+def test_delete_orphaned_rows_after_confirmation_validates_foreign_key() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    _drop_foreign_keys(database, "RAG_CHUNK_SETS_DOCUMENT_FK")
+    database.orphans["RAG_CHUNK_SETS"] = 240
+    manager.initialize()
+    assert [item["name"] for item in manager.status()["orphaned_foreign_keys"]] == [
+        "RAG_CHUNK_SETS_DOCUMENT_FK"
+    ]
+    epoch = manager.status()["operation_state"]["schema_epoch"]
+
+    # 確認した件数より多いときは削除しない（lease は返し、失敗として記録しない）。
+    with pytest.raises(SystemSchemaError) as error:
+        manager.delete_orphaned_rows(
+            constraint_name="RAG_CHUNK_SETS_DOCUMENT_FK", expected_orphan_rows=10
+        )
+    assert (error.value.code, error.value.status_code) == ("SCHEMA_ORPHAN_ROWS_CHANGED", 409)
+    assert database.orphans["RAG_CHUNK_SETS"] == 240
+    assert manager.status()["operation_state"]["status"] == "idle"
+
+    result = manager.delete_orphaned_rows(
+        constraint_name="RAG_CHUNK_SETS_DOCUMENT_FK", expected_orphan_rows=240
+    )
+
+    assert result["operation"] == "orphans_deleted"
+    assert result["deleted_row_count"] == 240
+    assert result["foreign_key"]["table_name"] == "RAG_CHUNK_SETS"
+    assert result["orphaned_foreign_keys"] == []
+    assert result["status"] == "ready"
+    assert result["operation_state"]["schema_epoch"] == epoch + 1
+    assert database.foreign_keys["RAG_CHUNK_SETS_DOCUMENT_FK"][1] is True
+    assert database.foreign_key_ddl[-1] == (
+        "ALTER TABLE RAG_CHUNK_SETS MODIFY CONSTRAINT RAG_CHUNK_SETS_DOCUMENT_FK VALIDATE"
+    )
+    # lease の種類は作成・更新と同じ（RAG_SCHEMA_OPERATIONS の CHECK 制約に合わせる）。
+    assert database.claimed_operation_kinds[-1] == "INITIALIZE"
+
+
+def test_delete_orphaned_rows_rejects_unknown_and_busy() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.delete_orphaned_rows(constraint_name="RAG_UNKNOWN_FK", expected_orphan_rows=0)
+    assert (error.value.code, error.value.status_code) == ("SCHEMA_FOREIGN_KEY_NOT_FOUND", 404)
+    assert manager.status()["operation_state"]["status"] == "idle"
+
+    assert database.operation is not None
+    database.operation.update(
+        status="RUNNING",
+        lease_owner="another",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    with pytest.raises(SystemSchemaBusyError):
+        manager.delete_orphaned_rows(
+            constraint_name="RAG_CHUNK_SETS_DOCUMENT_FK", expected_orphan_rows=0
+        )

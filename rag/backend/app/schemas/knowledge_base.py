@@ -10,6 +10,11 @@ from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.search import SearchMode
 
 DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT"
+# DEFAULT は改名できないため、説明は既定の文言を補う（作成・読み込み時と migration。#521）。
+DEFAULT_KNOWLEDGE_BASE_DESCRIPTION = (
+    "ナレッジベースを指定せずにアップロードした文書が入る、既定のナレッジベースです。"
+)
+DESCRIPTION_REQUIRED_MESSAGE = "説明を入力してください。"
 
 
 class KnowledgeBaseStatus(StrEnum):
@@ -73,7 +78,7 @@ class KnowledgeBaseCreateRequest(BaseModel):
     """ナレッジベース作成 request。"""
 
     name: str = Field(..., min_length=1, max_length=256)
-    description: str | None = Field(default=None, max_length=2000)
+    description: str = Field(..., max_length=2000)
     default_search_mode: SearchMode = SearchMode.HYBRID
     retrieval_config: dict[str, object] = Field(default_factory=dict)
     adapter_config: object | None = Field(
@@ -93,9 +98,9 @@ class KnowledgeBaseCreateRequest(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def normalize_description(cls, value: str | None) -> str | None:
-        """空説明は未指定として扱う。"""
-        return _optional_clean_text(value)
+    def normalize_description(cls, value: str) -> str:
+        """前後空白を取り、空の説明を拒否する（#521）。"""
+        return _required_clean_text(value, DESCRIPTION_REQUIRED_MESSAGE)
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
@@ -124,9 +129,9 @@ class KnowledgeBaseUpdateRequest(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def normalize_description(cls, value: str | None) -> str | None:
-        """空説明は未指定として扱う。"""
-        return _optional_clean_text(value)
+    def normalize_description(cls, value: str | None) -> str:
+        """指定したときは空・空白だけ・null を拒否する。省略すれば変更しない（#521）。"""
+        return _required_clean_text(value or "", DESCRIPTION_REQUIRED_MESSAGE)
 
 
 class KnowledgeBaseDocumentAssignmentRequest(BaseModel):
@@ -165,13 +170,6 @@ def _knowledge_base_name(value: str) -> str:
     if cleaned.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold():
         raise ValueError("DEFAULT は予約名のため使用できません。")
     return cleaned
-
-
-def _optional_clean_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = value.strip()
-    return cleaned or None
 
 
 def _unique_clean_ids(values: list[str]) -> list[str]:

@@ -27,7 +27,7 @@ for (const viewport of [
       "/business-views"
     );
     await expect(breadcrumbs.getByText("業務ビューを作成")).toHaveAttribute("aria-current", "page");
-    await expect(page.getByLabel("名前", { exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "名前", exact: true })).toBeVisible();
     await expect(page.getByText("参照するナレッジベース", { exact: false }).first()).toBeVisible();
     // ナレッジベースはコンボボックスを開くと候補として現れる。
     await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
@@ -95,7 +95,8 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-  await page.getByLabel("名前", { exact: true }).fill("経理ビュー");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("経理ビュー");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("経理規程の問い合わせに回答します");
   const retrievalSetting = page.getByRole("heading", { name: "検索方法", level: 3 }).locator("..");
   const override = retrievalSetting.getByRole("button", { name: "業務ビューで上書き" });
   await override.click();
@@ -109,6 +110,7 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
     .poll(() => (createBody?.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids)
     .toEqual(["kb-1"]);
   expect(createBody?.name).toBe("経理ビュー");
+  expect(createBody?.description).toBe("経理規程の問い合わせに回答します");
   expect((createBody?.config as { system_prompt?: string })?.system_prompt).toContain(
     "経理規程"
   );
@@ -141,7 +143,8 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-  await page.getByLabel("名前", { exact: true }).fill("DocRAG ビュー");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("DocRAG ビュー");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("DocRAG で回答する業務ビュー");
 
   const engine = page.getByRole("heading", { name: "回答エンジン", level: 3 }).locator("..");
   await engine.getByRole("button", { name: "業務ビューで上書き" }).click();
@@ -221,13 +224,22 @@ for (const viewport of [
     await expect(page.getByRole("menuitem", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
     await page.keyboard.press("Escape");
 
-    await expect(page.getByLabel("名前", { exact: true })).toHaveAttribute("readonly", "");
+    await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "参照するナレッジベース" })).toBeDisabled();
     await expect(page.getByText(/DEFAULT ナレッジベースだけを参照します/)).toBeVisible();
 
-    await page.getByLabel("説明", { exact: true }).fill("全社共通の検索設定");
+    // 説明は必須（#521）。説明が空の既存の業務ビューは、保存するときに入力を求めて送らない。
+    const description = page.getByRole("textbox", { name: "説明", exact: true });
+    await expect(description).toHaveAttribute("aria-required", "true");
     await page.getByLabel("回答の役割・口調").fill("全社共通の回答担当です。");
+    await page.getByRole("button", { name: "保存する" }).click();
+    await expect(page.getByText("説明を入力してください。")).toBeVisible();
+    await expect(description).toHaveAttribute("aria-invalid", "true");
+    await expect(description).toBeFocused();
+    expect(updateBody).toBeNull();
+
+    await description.fill("全社共通の検索設定");
     await page.getByRole("button", { name: "保存する" }).click();
 
     await expect.poll(() => updateBody?.name).toBeUndefined();
@@ -240,12 +252,44 @@ for (const viewport of [
   });
 }
 
+test("業務ビューの名前と説明は必須で、空・空白だけでは作成せず最初の不正な欄へフォーカスする", async ({
+  page,
+}) => {
+  let createBody: Record<string, unknown> | null = null;
+  await mockBusinessViews(page, [], (body) => {
+    createBody = body;
+  });
+  await page.goto("/business-views?id=new");
+
+  const name = page.getByRole("textbox", { name: "名前", exact: true });
+  const description = page.getByRole("textbox", { name: "説明", exact: true });
+  await expect(name).toHaveAttribute("aria-required", "true");
+  await expect(description).toHaveAttribute("aria-required", "true");
+  // placeholder に「任意」を出さない。
+  await expect(description).toHaveAttribute("placeholder", "例: 経理規程の問い合わせに回答します");
+
+  await page.getByRole("button", { name: "作成する" }).click();
+  await expect(page.getByText("名前を入力してください。")).toBeVisible();
+  await expect(page.getByText("説明を入力してください。")).toBeVisible();
+  await expect(name).toBeFocused();
+
+  await name.fill("経理ビュー");
+  await description.fill("   ");
+  await page.getByRole("button", { name: "作成する" }).click();
+  await expect(page.getByText("名前を入力してください。")).toHaveCount(0);
+  await expect(page.getByText("説明を入力してください。")).toBeVisible();
+  await expect(description).toBeFocused();
+  expect(createBody).toBeNull();
+  await expect(page).toHaveURL(/\/business-views\?id=new$/);
+  await expectNoPageOverflow(page);
+});
+
 test("業務ビュー作成では DEFAULT を予約名として拒否する", async ({ page }) => {
   await mockBusinessViews(page, []);
   await page.goto("/business-views?id=new");
 
-  await page.getByLabel("名前", { exact: true }).fill(" default ");
-  await page.getByLabel("名前", { exact: true }).blur();
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill(" default ");
+  await page.getByRole("textbox", { name: "名前", exact: true }).blur();
 
   await expect(page.getByText("DEFAULT は予約名のため使用できません。")).toBeVisible();
 });
@@ -441,19 +485,19 @@ test("業務ビューは行のクリックで ?id= の全画面エディタを�
   await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
   const breadcrumbs = page.getByRole("navigation", { name: "パンくず" });
   await expect(breadcrumbs.getByText("経理ビュー")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("経理ビュー");
   await expect(page.getByRole("heading", { name: "業務ビューの知識" })).toBeVisible();
   await expectNoPageOverflow(page);
 
   await page.reload();
-  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("経理ビュー");
 
   await page.goBack();
   await expect(page).toHaveURL(/\/business-views$/);
   await expect(page.getByTestId("business-view-row-bv-1")).toBeVisible();
   await page.goForward();
   await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
-  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("経理ビュー");
 
   // 一覧へ戻るボタンは履歴に積んで一覧へ移る。
   await clickBackToList(page);
@@ -465,7 +509,7 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
 }) => {
   await mockBusinessViews(page, [accountingView]);
   await page.goto("/business-views?id=bv-1");
-  await page.getByLabel("説明", { exact: true }).fill("経費と出張の相談");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
 
   await page
     .getByRole("navigation", { name: "パンくず" })
@@ -485,12 +529,12 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
 
   // 同じ対象を開き直すと下書きを復元する。新規（?id=new）には持ち込まない。
   await page.getByRole("button", { name: "経理ビュー を編集" }).click();
-  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("経費と出張の相談");
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
   await page.getByRole("button", { name: "変更を元に戻す" }).click();
-  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("経費精算の相談");
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費精算の相談");
   await page.goto("/business-views?id=new");
-  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("");
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("");
 });
 
 test("URL の業務ビューが存在しないときは別の対象へ置き換えず、一覧へ戻る導線を出す", async ({ page }) => {
@@ -499,7 +543,7 @@ test("URL の業務ビューが存在しないときは別の対象へ置き換�
 
   await expect(page.getByText("対象が見つかりません")).toBeVisible();
   await expect(page.getByText("「bv-missing」は削除されたか、存在しません。")).toBeVisible();
-  await expect(page.getByLabel("名前", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(/\?id=bv-missing$/);
   await expectNoPageOverflow(page);
 

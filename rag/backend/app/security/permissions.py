@@ -401,6 +401,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
     ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/system-tables/initialize"): _any(SYSTEM_TABLES_MANAGE),
+    # 参照先のない行の削除（#511）は、作成・更新と同じ権限にする。
+    ("POST", "/settings/database/system-tables/orphaned-rows/delete"): _any(SYSTEM_TABLES_MANAGE),
     # ---- 運用設定 ----
     ("GET", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),
     ("PATCH", "/settings/huggingface"): _any(MENU_SETTINGS_HUGGINGFACE),

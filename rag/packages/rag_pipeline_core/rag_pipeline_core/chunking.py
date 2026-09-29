@@ -107,11 +107,21 @@ BBOX_COORDINATE_MODE_KEYS = (
     "coordinate_mode",
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
+# 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
+# 後ろに足す補足の見出し。docrag_core の DocRAG 親子階層(chunking/records.py)と同じ書式にする。
+TABLE_VISION_TEXT_KEY = "table_vision_text"
+TABLE_VISION_SUPPLEMENT_LABEL = "表内画像の補足:"
 
 # 設定/API が受け付ける製品上の文字数範囲。低レベル関数は小さい値を使う単体テストも許容する。
 CHUNK_SIZE_MIN_CHARS = 200
 CHUNK_SIZE_MAX_CHARS = 32_000
 CHUNK_OVERLAP_MAX_CHARS = 8_000
+
+
+def table_vision_supplement(text: str) -> str:
+    """表の中の画像の説明文を、表の本文の後ろに足す区切り付きの補足にする。空なら空文字。"""
+    body = text.strip()
+    return f"{TABLE_VISION_SUPPLEMENT_LABEL}\n{body}" if body else ""
 
 
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chunk]:
@@ -179,7 +189,9 @@ def chunk_extraction(
         if span.kind not in NON_INDEXED_ELEMENT_KINDS
     ]
     if not spans:
-        return chunk_text(extraction.raw_text, chunk_size=chunk_size, overlap=overlap)
+        return chunk_text(
+            _raw_text_with_table_vision(extraction), chunk_size=chunk_size, overlap=overlap
+        )
 
     chunks: list[Chunk] = []
     buffer: list[_ElementSpan] = []
@@ -308,7 +320,9 @@ def _chunk_recursive_character(
     overlap: int,
 ) -> list[Chunk]:
     """LangChain RecursiveCharacterTextSplitter 風に raw_text を固定長で分割する。"""
-    return chunk_text(extraction.raw_text, chunk_size=chunk_size, overlap=overlap)
+    return chunk_text(
+        _raw_text_with_table_vision(extraction), chunk_size=chunk_size, overlap=overlap
+    )
 
 
 def _chunk_fixed_size(
@@ -324,7 +338,7 @@ def _chunk_fixed_size(
     chunk_size / overlap を固定したい運用(機械的に揃った chunk 長が欲しい場合)向け。
     トークン化ライブラリに依存しないため CI でも安定する。
     """
-    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"\s+", " ", source).strip()
     if not normalized:
         return []
@@ -363,7 +377,7 @@ def _chunk_fixed_delimiter(
     delimiter: str,
 ) -> list[Chunk]:
     """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。"""
-    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
     resolved_delimiter = (
         decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
         .replace("\r\n", "\n")
@@ -402,7 +416,7 @@ def _chunk_markdown_heading(
     overlap: int,
 ) -> list[Chunk]:
     """章節(見出し)単位で 1 chunk にまとめ、超過時のみ size 分割する。"""
-    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
     if not source.strip():
         return []
     chunks: list[Chunk] = []
@@ -672,6 +686,10 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
         if end_offset < start_offset:
             end_offset = start_offset + len(text)
         cursor = max(cursor + len(text) + 1, end_offset + 1)
+        # 表の中の画像の説明文は、元の表の本文の後ろに区切って足す(#513)。位置(offset)は元の
+        # 本文のまま変えない。
+        if supplement := _pending_table_vision_supplement(element):
+            text = f"{text}\n{supplement}"
         section_path = tuple(element.section_path)
         section_level = _metadata_int(
             element.metadata.get("section_level"),
@@ -752,6 +770,51 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
             )
         )
     return spans
+
+
+def _pending_table_vision_supplement(element: DocumentElement) -> str:
+    """表の要素の本文にまだ入っていない、表の中の画像の説明文の補足(#513)。
+
+    Docling は説明文を表の要素の metadata(``table_vision_text``)と docrag_layout の record に
+    だけ持ち、表の本文(HTML)は変えない。Docling 以外は Vision の段が表の本文へ補足を足して
+    いるので、本文に説明文がある表は足さない(二重にしない)。
+    """
+    value = element.metadata.get(TABLE_VISION_TEXT_KEY)
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    if _element_content_kind(element) != "table" or value.strip() in element.text:
+        return ""
+    return table_vision_supplement(value)
+
+
+def _raw_text_with_table_vision(extraction: StructuredExtraction) -> str:
+    """raw_text を分割する方法のために、表の中の画像の説明文を表の位置へ入れた raw_text(#513)。
+
+    Docling の raw_text は表を含まない(docling サービスの ``layout_to_extraction``)ので、表の
+    要素の直前の要素の後ろに補足だけを入れる。Docling 以外は Vision の段が表の本文と raw_text へ
+    補足を足しているので、raw_text に説明文がある表は入れない。保存する抽出結果は変えない。
+    """
+    raw_text = extraction.raw_text
+    if not any(_pending_table_vision_supplement(element) for element in extraction.elements):
+        return raw_text
+    cursor = 0
+    for element in extraction.elements:
+        text = element.text.strip()
+        found = raw_text.find(text, cursor) if text else -1
+        if found >= 0:
+            cursor = found + len(text)
+        supplement = _pending_table_vision_supplement(element)
+        value = str(element.metadata.get(TABLE_VISION_TEXT_KEY) or "").strip()
+        if not supplement or value in raw_text:
+            continue
+        if cursor:
+            inserted = f"\n\n{supplement}"
+            raw_text = f"{raw_text[:cursor]}{inserted}{raw_text[cursor:]}"
+            cursor += len(inserted)
+        else:
+            raw_text = f"{supplement}\n\n{raw_text}" if raw_text else supplement
+            cursor = len(supplement)
+    return raw_text
 
 
 def _element_content_kind(element: DocumentElement) -> str:
