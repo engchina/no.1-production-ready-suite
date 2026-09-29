@@ -71,7 +71,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
 
   const office = page.getByRole("radio", { name: /Office を PDF へ変換/ });
   await office.click();
-  await expect(office).toHaveAttribute("aria-checked", "true");
+  await expect(office).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
@@ -79,6 +79,31 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
   await expect(page.getByText("前処理設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({ profile: "office_to_pdf" });
   await expectNoHorizontalOverflow(page);
+});
+
+test("ファイル準備方式のカードは矢印キーで選択が移り、Tab ではグループで 1 回だけ止まる（#469）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.route("**/api/settings/preprocess", (route) =>
+    route.fulfill({ json: preprocessEnvelope() })
+  );
+  await page.goto("/settings/preprocess");
+
+  const passthrough = page.getByRole("radio", { name: /原本をそのまま解析/ });
+  const office = page.getByRole("radio", { name: /Office を PDF へ変換/ });
+  await expect(passthrough).toBeChecked();
+  await passthrough.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(office).toBeChecked();
+  await expect(office).toBeFocused();
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+
+  // Tab はグループの次の操作へ進む（カードを 1 枚ずつ通らない）。
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.type))
+    .not.toBe("radio");
 });
 
 type PreprocessOverrides = { profile?: string; service_enabled?: boolean };

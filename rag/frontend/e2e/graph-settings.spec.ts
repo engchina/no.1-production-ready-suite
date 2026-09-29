@@ -43,7 +43,7 @@ test("関係情報の構築設定は full を選んで保存できる", async ({
 
   const full = page.getByRole("radio", { name: /フル/ });
   await full.click();
-  await expect(full).toHaveAttribute("aria-checked", "true");
+  await expect(full).toBeChecked();
 
   await page.getByRole("button", { name: "保存" }).click();
 
@@ -76,7 +76,7 @@ test("関係情報の構築設定の保存に失敗しても未保存の選択�
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("関係情報設定を backend/.env へ保存できませんでした。")).toBeVisible();
-  await expect(full).toHaveAttribute("aria-checked", "true");
+  await expect(full).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
 });

@@ -335,7 +335,7 @@ export function RuntimeKnowledgeManager({
                 value={form[field]}
                 onChange={(event) => update({ [field]: event.target.value })}
                 rows={field === "labels" ? 3 : 4}
-                className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring"
+                className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring"
               />
             </div>
           ))}

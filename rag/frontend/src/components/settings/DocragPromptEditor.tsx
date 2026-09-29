@@ -120,7 +120,7 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
         disabled={save.isPending}
         aria-describedby={helperId}
         onChange={(event) => setContent(event.target.value)}
-        className="w-full resize-y rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full resize-y rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-relaxed text-fg focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
       <p id={helperId} className="text-xs leading-relaxed text-fg-muted">
         {t("settings.docragPrompts.placeholders", {

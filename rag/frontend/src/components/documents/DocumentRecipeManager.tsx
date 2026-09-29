@@ -41,6 +41,7 @@ import {
   Skeleton,
   Spinner,
   TimedLoadingState,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -375,14 +376,20 @@ export function DocumentRecipeManager({
         <div className="p-5">
           <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
           <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
-          <div className="mt-4 grid gap-2">
+          <div
+            role="radiogroup"
+            aria-label={t("documents.recipes.addTitle")}
+            className="mt-4 grid gap-2"
+          >
             <AddModeOption
+              value="clone"
               selected={addMode === "clone"}
               icon={<Copy size={16} aria-hidden />}
               label={t("documents.recipes.clone")}
               onSelect={() => setAddMode("clone")}
             />
             <AddModeOption
+              value="defaults"
               selected={addMode === "defaults"}
               icon={<Settings2 size={16} aria-hidden />}
               label={t("documents.recipes.defaults")}
@@ -754,18 +761,17 @@ function RecipeComparison({
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <label className="min-w-0 flex-1 text-sm font-medium text-fg">
-              {t("documents.experiment.compare.queryLabel")}
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t("documents.experiment.compare.placeholder")}
-                className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm"
-                onKeyDown={(event) => {
-                  if (isSubmitEnter(event)) void run();
-                }}
-              />
-            </label>
+            <TextField
+              id="recipe-compare-query"
+              className="min-w-0 flex-1"
+              label={t("documents.experiment.compare.queryLabel")}
+              value={query}
+              onValueChange={setQuery}
+              placeholder={t("documents.experiment.compare.placeholder")}
+              onKeyDown={(event) => {
+                if (isSubmitEnter(event)) void run();
+              }}
+            />
             <Button
               type="button"
               icon={Play}
@@ -823,32 +829,44 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
 }
 
 function AddModeOption({
+  value,
   selected,
   icon,
   label,
   onSelect,
 }: {
+  value: string;
   selected: boolean;
   icon: ReactNode;
   label: string;
   onSelect: () => void;
 }) {
+  const id = `recipe-add-mode-${value}`;
+  // 本物のラジオにして、矢印キーの移動と Tab の 1 回の停止をブラウザに任せる（#469）。
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={cn(
-        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium",
-        selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
-      )}
-    >
-      <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
-        {icon}
-      </span>
-      <span className="flex-1">{label}</span>
-      {selected ? <CheckCircle2 size={16} className="text-accent-fg" aria-hidden /> : null}
-    </button>
+    <div className="relative min-w-0">
+      <input
+        id={id}
+        className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        type="radio"
+        name="recipe-add-mode"
+        value={value}
+        checked={selected}
+        onChange={onSelect}
+      />
+      <label
+        htmlFor={id}
+        className={cn(
+          "flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring",
+          selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
+        )}
+      >
+        <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
+          {icon}
+        </span>
+        <span className="flex-1">{label}</span>
+        {selected ? <CheckCircle2 size={16} className="text-accent-fg" aria-hidden /> : null}
+      </label>
+    </div>
   );
 }

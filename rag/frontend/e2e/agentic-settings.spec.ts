@@ -49,7 +49,7 @@ test("高度な検索設定は off 以外で LLM 追加呼び出し警告を出�
 
   const decompose = page.getByRole("radio", { name: /RRF 融合へ注入/ });
   await decompose.click();
-  await expect(decompose).toHaveAttribute("aria-checked", "true");
+  await expect(decompose).toBeChecked();
   await expect(page.getByText(/追加の LLM 呼び出し/).first()).toBeVisible();
 
   // max_subqueries も編集して保存 payload に含める。
@@ -89,7 +89,7 @@ test("高度な検索設定の保存に失敗しても未保存の選択と入�
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("高度な検索設定を backend/.env へ保存できませんでした。")).toBeVisible();
-  await expect(decompose).toHaveAttribute("aria-checked", "true");
+  await expect(decompose).toBeChecked();
   await expect(page.getByLabel("最大 sub-question 数")).toHaveValue("5");
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();

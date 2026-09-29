@@ -149,31 +149,38 @@ export function EvaluationSettingsClient() {
               {suites.map((item) => {
                 const selected = suite === item.name;
                 return (
-                  <button
-                    key={item.name}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={save.isPending}
-                    onClick={() => selectSuite(item.name)}
-                    className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                      selected
-                        ? "border-accent-emphasis bg-accent-subtle text-fg"
-                        : "border-border bg-surface text-fg hover:bg-surface-hover"
-                    )}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">{suiteLabel(item.name)}</span>
-                      {selected ? (
-                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                      ) : null}
-                    </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                      {suiteDescription(item.name)}
-                    </span>
-                    <SuiteChips suite={item} />
-                  </button>
+                  <div key={item.name} className="relative min-w-0">
+                    <input
+                      id={`settings-evaluation-suite-${item.name}`}
+                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                      type="radio"
+                      name="settings-evaluation-suite"
+                      value={item.name}
+                      checked={selected}
+                      disabled={save.isPending}
+                      onChange={() => selectSuite(item.name)}
+                    />
+                    <label
+                      htmlFor={`settings-evaluation-suite-${item.name}`}
+                      className={cn(
+                        "block h-full cursor-pointer min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        selected
+                          ? "border-accent-emphasis bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
+                      )}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold">{suiteLabel(item.name)}</span>
+                        {selected ? (
+                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
+                        ) : null}
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
+                        {suiteDescription(item.name)}
+                      </span>
+                      <SuiteChips suite={item} />
+                    </label>
+                  </div>
                 );
               })}
             </div>

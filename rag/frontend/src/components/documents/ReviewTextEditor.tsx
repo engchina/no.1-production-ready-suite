@@ -10,7 +10,7 @@ function cellKey(tableId: string, row: number, col: number): string {
 
 const TEXTAREA_CLASS =
   "min-h-20 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm " +
-  "leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted " +
+  "leading-relaxed text-fg transition-colors placeholder:text-fg-muted " +
   "focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 " +
   "focus-visible:outline-focus-ring";
 

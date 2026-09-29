@@ -558,7 +558,7 @@ export function PreviewViewer({
         data-rotation={rotation}
         data-page={pageNumber}
         className={cn(
-          "relative min-h-0 flex-1 overflow-auto bg-surface-sunken outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
+          "relative min-h-0 flex-1 overflow-auto bg-surface-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
           overflow && (dragging ? "cursor-grabbing select-none" : "cursor-grab")
         )}
         onKeyDown={onKeyDown}

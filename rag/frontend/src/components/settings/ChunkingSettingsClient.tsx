@@ -15,7 +15,7 @@ import {
   TimedLoadingState,
   FormSkeleton,
 } from "@engchina/production-ready-ui";
-import { useState } from "react";
+import { useState, useId } from "react";
 import {
   CheckCircle2,
   RotateCcw,
@@ -244,43 +244,50 @@ function OverviewCard({
             {strategies.map((strategy) => {
               const selected = form.strategy === strategy.name;
               return (
-                <button
-                  key={strategy.name}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={saving}
-                  onClick={() => onStrategyChange(strategy.name)}
-                  className={cn(
-                    "min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                    selected
-                      ? "border-accent-emphasis bg-accent-subtle text-fg"
-                      : "border-border bg-surface text-fg hover:bg-surface-hover"
-                  )}
-                >
-                  <span className="flex items-start gap-3">
-                    <ChunkStrategyDiagram strategy={strategy.name} selected={selected} />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">
-                          {strategyLabel(strategy.name)}
+                <div key={strategy.name} className="relative min-w-0">
+                  <input
+                    id={`settings-chunking-strategy-${strategy.name}`}
+                    className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                    type="radio"
+                    name="settings-chunking-strategy"
+                    value={strategy.name}
+                    checked={selected}
+                    disabled={saving}
+                    onChange={() => onStrategyChange(strategy.name)}
+                  />
+                  <label
+                    htmlFor={`settings-chunking-strategy-${strategy.name}`}
+                    className={cn(
+                      "block h-full cursor-pointer min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                      selected
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
+                    )}
+                  >
+                    <span className="flex items-start gap-3">
+                      <ChunkStrategyDiagram strategy={strategy.name} selected={selected} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold">
+                            {strategyLabel(strategy.name)}
+                          </span>
+                          {selected ? (
+                            <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
+                          ) : null}
                         </span>
-                        {selected ? (
-                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
+                        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
+                          {strategyDescription(strategy.name)}
+                        </span>
+                        {strategy.recommended_for.length ? (
+                          <span className="mt-2 block text-xs text-fg-muted">
+                            {t("settings.chunking.recommendedFor")}:{" "}
+                            {strategy.recommended_for.join(", ")}
+                          </span>
                         ) : null}
                       </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {strategyDescription(strategy.name)}
-                      </span>
-                      {strategy.recommended_for.length ? (
-                        <span className="mt-2 block text-xs text-fg-muted">
-                          {t("settings.chunking.recommendedFor")}:{" "}
-                          {strategy.recommended_for.join(", ")}
-                        </span>
-                      ) : null}
                     </span>
-                  </span>
-                </button>
+                  </label>
+                </div>
               );
             })}
           </div>
@@ -492,23 +499,21 @@ function NumberField({
   helper?: string;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
   return (
-    <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-fg">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        value={Number.isFinite(value) ? value : ""}
-        min={min}
-        max={max}
-        step={step}
-        aria-label={label}
-        disabled={disabled}
-        onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      {helper ? <span className="block text-xs text-fg-muted">{helper}</span> : null}
-    </label>
+    <TextField
+      id={id}
+      label={label}
+      helper={helper}
+      type="number"
+      inputMode="numeric"
+      value={Number.isFinite(value) ? value : ""}
+      min={min}
+      max={max}
+      step={step}
+      disabled={disabled}
+      onValueChange={(next) => onChange(Number.parseInt(next, 10))}
+    />
   );
 }
 
