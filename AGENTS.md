@@ -37,8 +37,10 @@
     - `gh pr checks --watch --required` は使わない（#446）。`CI OK` は最後の job で、他の job が終わるまで check として存在しないため、CI の開始直後は対象が 0 件になり、待たずに終わる。
 
     ```bash
-    sleep 20   # push の直後は run がまだ作られていないことがある
-    run_id=$(gh run list --workflow CI --branch <作業ブランチ> --limit 1 --json databaseId -q '.[0].databaseId')
+    # push した commit の run を待つ（push の直後は run がまだ無く、ブランチの最新の run が前の run のことがある。#480）
+    sha=$(git rev-parse origin/<作業ブランチ>)
+    until run_id=$(gh run list --workflow CI --branch <作業ブランチ> --limit 5 --json databaseId,headSha \
+        -q ".[] | select(.headSha==\"$sha\") | .databaseId" | head -1) && [ -n "$run_id" ]; do sleep 10; done
     gh run watch "$run_id" --exit-status   # exit code 0 なら run が成功
     gh pr checks <PR 番号> | grep "CI OK"
     ```
