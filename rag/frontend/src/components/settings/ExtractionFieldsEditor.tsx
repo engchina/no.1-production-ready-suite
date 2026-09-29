@@ -132,6 +132,7 @@ function ExtractionFieldsForm({ saved }: { saved: ExtractionFieldDefinition[] })
                 <TextField
                   id={`${row.key}-name`}
                   label={t("settings.extractionFields.name")}
+                  required
                   value={row.name}
                   maxLength={EXTRACTION_FIELD_NAME_MAX}
                   autoComplete="off"

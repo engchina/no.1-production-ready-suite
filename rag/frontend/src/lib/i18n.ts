@@ -223,7 +223,6 @@ export const ja = {
   "settings.parserAdapters.connection.apiKey": "API key",
   "settings.parserAdapters.connection.nativeModel": "接続先の MinerU 設定を使用",
   "settings.parserAdapters.connection.apiKeyRetained": "設定済み（空欄なら保持）",
-  "settings.parserAdapters.connection.apiKeyOptional": "任意",
   "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
   "settings.parserAdapters.connection.configured": "設定済み",
   "settings.parserAdapters.connection.test": "接続を確認",
@@ -274,7 +273,7 @@ export const ja = {
   "settings.extractionFields.description":
     "項目抽出で取り出す項目です。項目名はモデルへの指示と抽出結果の名前に使います。全体で 1 つの定義で、次の取込から使います。",
   "settings.extractionFields.name": "項目名",
-  "settings.extractionFields.fieldDescription": "説明（任意）",
+  "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
   "settings.extractionFields.valueType.string": "文字列",
   "settings.extractionFields.valueType.number": "数値",
