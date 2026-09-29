@@ -41,6 +41,7 @@ from app.security.permissions import (
     FEEDBACK_MANAGE_PERMISSION,
     FEEDBACK_WRITE_PERMISSION,
     LEARNING_MATERIAL_MANAGE_PERMISSION,
+    OPEN_API_OPERATIONS,
     PERMISSION_CATALOG,
     PERSISTENCE_RECOVER_PERMISSION,
     PROFILE_MANAGE_PERMISSION,
@@ -1938,6 +1939,18 @@ def test_every_api_route_is_classified_by_manifest() -> None:
                 assert not (permission and UNCLASSIFIED_PERMISSION in permission), (
                     f"unclassified route: {method.upper()} {path}"
                 )
+
+    # 権限なしで通す操作は method 単位で OPEN_API_OPERATIONS と一致する（#490）。
+    open_operations = {
+        (method.upper(), path.removeprefix("/api"))
+        for path, operations in app.openapi()["paths"].items()
+        if path.startswith("/api")
+        for method in operations
+        if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        and permission_for_route(method, path.removeprefix("/api")) is None
+    }
+    assert open_operations == set(OPEN_API_OPERATIONS)
+    assert permission_for_route("DELETE", "/auth/me") is not None
 
     assert permission_for_route("POST", "/nl2sql/execute") == frozenset({SQL_EXECUTE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})

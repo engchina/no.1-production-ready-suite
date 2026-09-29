@@ -39,6 +39,7 @@ from .domain import LOCAL_DEBUG_USER_UUID, SYSTEM_ADMIN_ROLE_CODE, Principal, as
 from .permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
+    OPEN_API_OPERATIONS,
     PUBLIC_API_PATHS,
     UNCLASSIFIED_PERMISSION,
     WEBSOCKET_PERMISSIONS,
@@ -178,6 +179,7 @@ async def authorize_api_request(connection: HTTPConnection) -> AsyncIterator[Non
         enter_actor=_enter_actor,
         exit_actor=_exit_actor,
         unclassified_permission=UNCLASSIFIED_PERMISSION,
+        open_operations=OPEN_API_OPERATIONS,
     ):
         yield
 

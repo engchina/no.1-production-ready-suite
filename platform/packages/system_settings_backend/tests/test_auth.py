@@ -354,6 +354,8 @@ def _authorize_app(
     *,
     permissions: frozenset[str] | None,
     service_token_paths: tuple[str, ...] = (),
+    public_paths: tuple[str, ...] = (),
+    open_operations: frozenset[tuple[str, str]] | None = None,
 ) -> Any:
     settings = SimpleNamespace(
         local_debug_enabled=False,
@@ -372,7 +374,7 @@ def _authorize_app(
             service=service,
             run_sync=run_sync,
             permission_for_route=lambda method, path: permissions,
-            public_paths=(),
+            public_paths=public_paths,
             authenticated_without_permission=(),
             local_debug_principal=lambda: None,  # type: ignore[arg-type,return-value]
             enter_actor=lambda principal: nullcontext(),
@@ -380,6 +382,7 @@ def _authorize_app(
             unclassified_permission="__unclassified__",
             service_token_paths=service_token_paths,
             service_token_audience="rag",
+            open_operations=open_operations,
         ):
             yield
 
@@ -529,3 +532,29 @@ def test_authorize_request_accepts_service_token_only_on_service_paths() -> None
     # サービス用の path でなければ token は使えない（Cookie が必要）。
     cookie_only = _authorize_app(service, permissions=None)
     assert cookie_only.post("/probe", headers=headers).status_code == 401
+
+
+def test_authorize_request_opens_only_listed_operations_on_public_paths() -> None:
+    """公開 path でも、open_operations にない method は認証を求める（#490）。"""
+    service, _ = _service()
+    client = _authorize_app(
+        service,
+        permissions=None,
+        public_paths=("/probe",),
+        open_operations=frozenset({("GET", "/probe")}),
+    )
+
+    assert client.get("/probe").status_code == 200
+    # 同じ path の POST は公開しない（Cookie がないので認証で止まる）。
+    assert client.post("/probe").status_code in {401, 403}
+
+
+def test_authorize_request_keeps_path_based_public_paths_without_open_operations() -> None:
+    """open_operations を渡さないときは、従来どおり path 単位で公開する（後方互換）。"""
+    service, _ = _service()
+    client = _authorize_app(service, permissions=None, public_paths=("/probe",))
+
+    assert client.get("/probe").status_code == 200
+    # POST も認証を飛ばして route まで届く（route が principal を読むので AttributeError になる）。
+    with pytest.raises(AttributeError):
+        client.post("/probe")

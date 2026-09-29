@@ -494,9 +494,7 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
     """
     method = method.upper()
-    if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
-        return None
-    if route_path in SERVICE_TOKEN_API_PATHS:
+    if (method, route_path) in OPEN_API_OPERATIONS:
         return None
     exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:

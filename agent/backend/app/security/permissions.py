@@ -274,6 +274,20 @@ PUBLIC_API_PATHS = frozenset(
     {"/health", "/ready", "/ready/database", "/auth/login", "/mcp/{binding_id}"}
 )
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
+# 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
+# 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
+OPEN_API_OPERATIONS = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/ready"),
+        ("GET", "/ready/database"),
+        ("POST", "/auth/login"),
+        ("GET", "/auth/me"),
+        ("POST", "/auth/logout"),
+        ("POST", "/auth/password/change"),
+        ("POST", "/mcp/{binding_id}"),
+    }
+)
 
 
 def _any(*codes: str) -> frozenset[str]:
@@ -437,7 +451,7 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     None は公開 API・ログインだけで使える API。登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
     """
     method = method.upper()
-    if route_path in PUBLIC_API_PATHS or route_path in AUTHENTICATED_WITHOUT_PERMISSION:
+    if (method, route_path) in OPEN_API_OPERATIONS:
         return None
     exact = ROUTE_PERMISSIONS.get((method, route_path))
     if exact is not None:
