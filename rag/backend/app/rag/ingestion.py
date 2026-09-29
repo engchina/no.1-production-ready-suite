@@ -1011,6 +1011,9 @@ class IngestionPipeline:
                 manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
                 reuse_saved_chunks=True,
+                # 原本 bytes は読まないため、文書に記録済みの原本の hash とサイズを監査に使う。
+                source_sha256=detail.content_sha256,
+                source_size=detail.file_size_bytes,
             )
         except IngestionCancelledError as exc:
             record_ingestion("cancelled", 0)
@@ -1233,8 +1236,14 @@ class IngestionPipeline:
         manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         reuse_saved_chunks: bool,
+        source_sha256: str | None = None,
+        source_size: int | None = None,
     ) -> DocumentDetail:
-        """chunk を embedding し、Oracle index として検索可能にする。"""
+        """chunk を embedding し、Oracle index として検索可能にする。
+
+        ``source_sha256`` / ``source_size`` は、``source_bytes`` を持たない工程が成功の監査に
+        原本の hash とサイズを残すために渡す。
+        """
         await _raise_if_cancelled(cancel_checker)
         embed_inputs = self._chunk_embedding_inputs(chunks)
         vectors = await _observe_ingestion_stage(
@@ -1311,6 +1320,8 @@ class IngestionPipeline:
                 chunk_count=len(chunks),
                 vector_count=len(vectors),
                 elapsed_ms=elapsed_ms(started_at),
+                source_sha256=source_sha256,
+                source_size=source_size,
             )
         return detail
 

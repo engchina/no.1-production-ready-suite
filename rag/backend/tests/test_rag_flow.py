@@ -182,13 +182,6 @@ def test_document_ingestion_jobs_endpoint_lists_jobs_for_document() -> None:
     assert jobs[0]["status"] == "QUEUED"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "製品の不具合: 取込 job はすべてレシピの job(_materialize_experiment_candidate)で"
-        "実行され、各段階を record_outcome=False で呼ぶため、成功の取込監査を出さない"
-    ),
-)
 def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture) -> None:
     """取込成功時は OCR 原文を出さず、取込監査イベントを出す。"""
     sample = (
@@ -216,11 +209,20 @@ def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture
     assert audit_event["outcome"] == "success"
     assert audit_event["source_sha256"] == hashlib.sha256(sample).hexdigest()
     assert audit_event["source_bytes"] == len(sample)
-    assert audit_event["document_type"] == "other"
+    # 決定論スタブは「規程」を含む本文を「社内規程」に分類する(監査は既知の分類名だけを残す)。
+    assert audit_event["document_type"] == "社内規程"
     assert audit_event["chunk_count"] >= 1
     assert audit_event["vector_count"] == audit_event["chunk_count"]
     assert "秘密の承認フロー" not in str(audit_event)
     assert "監査ログに出してはいけない原文" not in str(audit_event)
+    # 成功の監査は索引を終えた工程の 1 回だけ(途中の工程では出さない。#493)。
+    success_events = [
+        cast(Any, record).audit_event
+        for record in caplog.records
+        if record.message == "rag_ingestion_audit"
+        and cast(Any, record).audit_event["outcome"] == "success"
+    ]
+    assert len(success_events) == 1
 
 
 _SECRET_SOURCE_TEXT = "秘密の規程本文です。部門長が承認します。"

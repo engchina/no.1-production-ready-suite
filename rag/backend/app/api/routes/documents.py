@@ -82,6 +82,9 @@ from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
+    compute_graph_layer_id,
+    compute_metadata_layer_id,
+    compute_nav_layer_id,
     extraction_recipe_subset,
 )
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
@@ -1449,6 +1452,12 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
     persisted_layers = await oracle.list_artifact_layers_for_chunk_sets(
         [str(row.get("chunk_set_id")) for row in rows if row.get("chunk_set_id") is not None]
     )
+    # レシピの chunk_set はレシピの設定でレイヤーを判定する(#494)。
+    recipe_settings = (
+        await _recipe_settings_by_id(oracle, document_id)
+        if any(row.get("recipe_id") is not None for row in rows)
+        else {}
+    )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -1464,7 +1473,16 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 chunk_set.extraction_reason = (
                     str(extraction["reason"]) if extraction.get("reason") is not None else None
                 )
-        if plan is not None:
+        settings_for_recipe = (
+            recipe_settings.get(str(row["recipe_id"])) if row.get("recipe_id") is not None else None
+        )
+        if settings_for_recipe is not None:
+            chunk_set.layer_statuses = _recipe_layer_statuses_for_chunk_set(
+                chunk_set.chunk_set_id,
+                settings_for_recipe,
+                persisted_layers,
+            )
+        elif plan is not None:
             chunk_set.layer_statuses = _layer_statuses_for_chunk_set(
                 chunk_set.chunk_set_id,
                 plan,
@@ -1550,13 +1568,15 @@ async def _materialize_experiment_candidate(
                 "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
             )
         candidate_chunk_set_id = str(pending["chunk_set_id"])
+        # 索引まで終える工程だけが成功の監査・metric を記録する(1 job 1 回。#493)。
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
-            record_outcome=False,
+            record_outcome=True,
             cancel_checker=cancel_checker,
         )
     elif job.phase == IngestionJobPhase.CHUNK:
+        # Chunk 作成は途中の工程のため、成功の監査を出さない(索引の完了で 1 回だけ出す)。
         await pipeline.chunk_reviewed(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -1581,7 +1601,7 @@ async def _materialize_experiment_candidate(
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
-            record_outcome=False,
+            record_outcome=True,
             cancel_checker=cancel_checker,
         )
     else:
@@ -1617,7 +1637,8 @@ async def _materialize_experiment_candidate(
             ),
             source_profile=source_profile,
             chunk_set_id=candidate_chunk_set_id,
-            record_outcome=False,
+            # 成功の監査は索引まで進んだときだけ出る(REVIEW / PREPROCESSED で止まる場合は出ない)。
+            record_outcome=True,
             original_object_storage_path=detail.object_storage_path,
             prepared_artifact=prepared_artifact,
             manage_document_state=False,
@@ -1659,6 +1680,14 @@ async def _materialize_experiment_candidate(
     )
     # active の切り替えは検索対象を変えるため、取り消された job では行わない(#305)。
     await _raise_if_job_cancelled(cancel_checker)
+    # 派生情報レイヤーの実体化状態を、active にする chunk_set について記録する(#494)。
+    await _record_recipe_artifact_layers(
+        oracle,
+        document_id=job.document_id,
+        chunk_set_id=candidate_chunk_set_id,
+        extraction_recipe_id=extraction_recipe_id,
+        settings=candidate_settings,
+    )
     await oracle.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=candidate_chunk_set_id,
@@ -1750,11 +1779,7 @@ def _layer_status_for_chunk_set(
         layer=layer,
     )
     if not requested_ids:
-        return DocumentMaterializationLayerStatus(
-            requested=False,
-            status=DocumentLayerStatusName.NOT_REQUESTED,
-            reason=f"現在の構築設定では{user_label}を使用しません。",
-        )
+        return _not_requested_layer_status(user_label)
     if len(requested_ids) > 1:
         return DocumentMaterializationLayerStatus(
             requested=True,
@@ -1764,10 +1789,28 @@ def _layer_status_for_chunk_set(
                 "現時点では計画だけを表示しています。"
             ),
         )
-    persisted = persisted_layers.get(requested_ids[0])
+    return _requested_layer_status(requested_ids[0], persisted_layers, user_label=user_label)
+
+
+def _not_requested_layer_status(user_label: str) -> DocumentMaterializationLayerStatus:
+    return DocumentMaterializationLayerStatus(
+        requested=False,
+        status=DocumentLayerStatusName.NOT_REQUESTED,
+        reason=f"現在の構築設定では{user_label}を使用しません。",
+    )
+
+
+def _requested_layer_status(
+    layer_id: str,
+    persisted_layers: Mapping[str, Mapping[str, object]],
+    *,
+    user_label: str,
+) -> DocumentMaterializationLayerStatus:
+    """要求された派生層の状態。実体化の記録があればそれを、無ければ計画だけとして返す。"""
+    persisted = persisted_layers.get(layer_id)
     if persisted is not None:
         return DocumentMaterializationLayerStatus(
-            layer_id=requested_ids[0],
+            layer_id=layer_id,
             requested=bool(persisted.get("requested", True)),
             status=DocumentLayerStatusName(
                 str(persisted.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
@@ -1775,11 +1818,112 @@ def _layer_status_for_chunk_set(
             reason=str(persisted["reason"]) if persisted.get("reason") is not None else None,
         )
     return DocumentMaterializationLayerStatus(
-        layer_id=requested_ids[0],
+        layer_id=layer_id,
         requested=True,
         status=DocumentLayerStatusName.PLANNED_ONLY,
         reason=f"{user_label}は構築計画に含まれていますが、まだ実体化していません。",
     )
+
+
+# 派生情報レイヤー(chunk_set に重なる層)と利用者向けの名前。
+_ARTIFACT_LAYER_LABELS: tuple[tuple[str, str], ...] = (
+    ("metadata", "項目抽出"),
+    ("graph", "関係情報"),
+    ("navigation", "ナビゲーション"),
+)
+
+
+def _recipe_layer_id(chunk_set_id: str, settings: Settings, layer: str) -> str:
+    """レシピの chunk_set に重なる派生層の ID(planner と同じ規則で chunk_set_id から作る)。"""
+    if layer == "metadata":
+        return compute_metadata_layer_id(chunk_set_id, settings)
+    if layer == "graph":
+        return compute_graph_layer_id(chunk_set_id, settings)
+    return compute_nav_layer_id(chunk_set_id, settings)
+
+
+def _recipe_layer_statuses_for_chunk_set(
+    chunk_set_id: str,
+    settings: Settings,
+    persisted_layers: Mapping[str, Mapping[str, object]],
+) -> DocumentChunkSetLayerStatuses:
+    """レシピの chunk_set の派生情報レイヤーの状態を、そのレシピの構築設定から作る(#494)。
+
+    レシピの job の chunk_set ID は recipe / revision / job ごとの hash で、planner の
+    chunk_set ID(content hash + 設定)とは一致しない。そのため plan ではなく、レシピの
+    設定と chunk_set ID から層 ID を作り、job の完了時に記録した実体化の状態を引く。
+    """
+    statuses = {
+        layer: (
+            _requested_layer_status(
+                _recipe_layer_id(chunk_set_id, settings, layer),
+                persisted_layers,
+                user_label=user_label,
+            )
+            if _layer_requested(layer, settings)
+            else _not_requested_layer_status(user_label)
+        )
+        for layer, user_label in _ARTIFACT_LAYER_LABELS
+    }
+    return DocumentChunkSetLayerStatuses(
+        metadata=statuses["metadata"],
+        graph=statuses["graph"],
+        navigation=statuses["navigation"],
+    )
+
+
+async def _recipe_settings_by_id(oracle: OracleClient, document_id: str) -> dict[str, Settings]:
+    """文書のレシピごとの有効な構築設定(global 既定にレシピの上書きを重ねたもの)。"""
+    result: dict[str, Settings] = {}
+    for row in await oracle.list_document_recipes(document_id):
+        config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+        result[str(row["recipe_id"])], _effective = _merge_document_processing_config(config)
+    return result
+
+
+async def _record_recipe_artifact_layers(
+    oracle: OracleClient,
+    *,
+    document_id: str,
+    chunk_set_id: str,
+    extraction_recipe_id: str,
+    settings: Settings,
+) -> None:
+    """レシピの job が索引を終えた chunk_set に、要求された派生層の実体化状態を記録する(#494)。
+
+    判定はレシピの抽出結果(extraction 層)で行う。レシピの job は文書の legacy の抽出列を
+    更新しないため、文書の抽出列では判定しない。
+    """
+    requested = [
+        (layer, user_label)
+        for layer, user_label in _ARTIFACT_LAYER_LABELS
+        if _layer_requested(layer, settings)
+    ]
+    if not requested:
+        return
+    artifact = await oracle.get_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=extraction_recipe_id,
+    )
+    raw_extraction = artifact.get("extraction_json") if artifact is not None else None
+    extraction = raw_extraction if isinstance(raw_extraction, Mapping) else None
+    for layer, user_label in requested:
+        status, reason = _materialized_layer_state(
+            layer=layer,
+            user_label=user_label,
+            extraction=extraction,
+            settings=settings,
+        )
+        await oracle.upsert_artifact_layer(
+            layer_id=_recipe_layer_id(chunk_set_id, settings, layer),
+            layer_kind=layer,
+            parent_chunk_set_id=chunk_set_id,
+            document_id=document_id,
+            requested=True,
+            status=status.value,
+            reason=reason,
+            metrics=_layer_metrics(layer, extraction),
+        )
 
 
 def _requested_layer_ids_for_chunk_set(
@@ -2874,11 +3018,7 @@ async def _reconcile_plan_artifact_layers(
     configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
     effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
     for chunk_set_id in plan.chunk_sets:
-        for layer, user_label in (
-            ("metadata", "項目抽出"),
-            ("graph", "関係情報"),
-            ("navigation", "ナビゲーション"),
-        ):
+        for layer, user_label in _ARTIFACT_LAYER_LABELS:
             requested_ids = _requested_layer_ids_for_chunk_set(
                 chunk_set_id,
                 plan,
@@ -2889,7 +3029,7 @@ async def _reconcile_plan_artifact_layers(
                 status, reason = _materialized_layer_state(
                     layer=layer,
                     user_label=user_label,
-                    detail=detail,
+                    extraction=detail.extraction,
                     settings=effective_settings,
                 )
                 await oracle.upsert_artifact_layer(
@@ -2908,10 +3048,10 @@ def _materialized_layer_state(
     *,
     layer: str,
     user_label: str,
-    detail: DocumentDetail,
+    extraction: Mapping[str, object] | None,
     settings: Settings,
 ) -> tuple[DocumentLayerStatusName, str]:
-    if not detail.extraction:
+    if not extraction:
         return (
             DocumentLayerStatusName.NEEDS_REINGEST,
             (
@@ -2920,9 +3060,9 @@ def _materialized_layer_state(
             ),
         )
     if layer == "metadata":
-        return _metadata_layer_state(user_label, detail.extraction, settings)
+        return _metadata_layer_state(user_label, extraction, settings)
     if layer == "navigation":
-        node_count = _navigation_node_count(detail.extraction)
+        node_count = _navigation_node_count(extraction)
         if node_count > 0:
             return (
                 DocumentLayerStatusName.MATERIALIZED,

@@ -444,13 +444,6 @@ def test_gate_disabled_keeps_single_pass_indexing(monkeypatch: MonkeyPatch) -> N
     assert any(citation["document_id"] == document_id for citation in search["citations"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "製品の不具合: 取込 job はすべてレシピの job(_materialize_experiment_candidate)で"
-        "実行され、各段階を record_outcome=False で呼ぶため、成功の取込監査を出さない"
-    ),
-)
 def test_indexing_records_single_success_audit(monkeypatch: MonkeyPatch) -> None:
     """取込は文書につき成功 audit を 1 回だけ記録する(1 文書 1 論理取込に集約)。"""
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
@@ -500,15 +493,6 @@ def test_document_chunk_sets_endpoint_lists_single_variant(monkeypatch: MonkeyPa
     assert len(chunk_set["knowledge_base_ids"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "製品の不具合: /chunk-sets の派生情報レイヤーの状態は planner の chunk_set ID"
-        "(content hash + 設定)で引くが、レシピの job の chunk_set ID は recipe / revision /"
-        " job ごとの hash のため一致せず、有効にしたレイヤーも常に「使用しません」になる。"
-        "レイヤーの実体化の記録(_reconcile_plan_artifact_layers)もレシピの job では行わない"
-    ),
-)
 def test_document_chunk_sets_endpoint_reports_layer_statuses(monkeypatch: MonkeyPatch) -> None:
     """/chunk-sets は global で有効にしたレイヤー(graph / field / navigation)の状態を返す。"""
     settings = get_settings()
