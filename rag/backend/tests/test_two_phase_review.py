@@ -1,4 +1,9 @@
-"""段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の API テスト。"""
+"""段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の API テスト。
+
+文書の既定レシピを、取込 job の API(``POST /api/documents/{id}/ingestion-jobs``)の
+``phase`` 指定で 1 工程ずつ進める。レシピ単位の承認・レビュー修正の API 契約は
+``tests/test_document_workspace.py`` が fake の Oracle で確かめる。
+"""
 
 import asyncio
 from typing import Any, cast
@@ -45,9 +50,18 @@ def _run_job(job_id: str) -> None:
 
 
 def _enqueue_extract(document_id: str) -> dict[str, Any]:
-    response = client.post(f"/api/documents/{document_id}/ingest")
+    response = client.post(f"/api/documents/{document_id}/ingestion-jobs")
     assert response.status_code == 200
     return cast(dict[str, Any], response.json()["data"])
+
+
+def _enqueue_phase(document_id: str, phase: str) -> Any:
+    """確認待ちの文書の次の工程(CHUNK / INDEX)を投入する。"""
+    return client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"phase": phase})
+
+
+def _document_chunks(document_id: str) -> list[Any]:
+    return asyncio.run(OracleClient().list_document_chunks(document_id))
 
 
 def _extract_to_review(document_id: str) -> None:
@@ -57,12 +71,9 @@ def _extract_to_review(document_id: str) -> None:
     _run_job(cast(str, job["id"]))
 
 
-def _approve_to_chunked(document_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def _approve_to_chunked(document_id: str) -> dict[str, Any]:
     """抽出レビューを承認し、CHUNK フェーズだけ実行して CHUNKED で停止させる。"""
-    kwargs: dict[str, Any] = {}
-    if payload is not None:
-        kwargs["json"] = payload
-    approve_resp = client.post(f"/api/documents/{document_id}/approve", **kwargs)
+    approve_resp = _enqueue_phase(document_id, "CHUNK")
     assert approve_resp.status_code == 200
     chunk_job = cast(dict[str, Any], approve_resp.json()["data"])
     assert chunk_job["phase"] == "CHUNK"
@@ -73,7 +84,7 @@ def _approve_to_chunked(document_id: str, payload: dict[str, Any] | None = None)
 
 def _approve_chunks_to_indexed(document_id: str) -> dict[str, Any]:
     """chunk レビューを承認し、INDEX フェーズを実行して INDEXED にする。"""
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    approve_resp = _enqueue_phase(document_id, "INDEX")
     assert approve_resp.status_code == 200
     index_job = cast(dict[str, Any], approve_resp.json()["data"])
     assert index_job["phase"] == "INDEX"
@@ -82,9 +93,9 @@ def _approve_chunks_to_indexed(document_id: str) -> dict[str, Any]:
     return index_job
 
 
-def _approve_all(document_id: str, payload: dict[str, Any] | None = None) -> None:
+def _approve_all(document_id: str) -> None:
     """REVIEW から CHUNKED を経て INDEXED まで進める。"""
-    _approve_to_chunked(document_id, payload=payload)
+    _approve_to_chunked(document_id)
     _approve_chunks_to_indexed(document_id)
 
 
@@ -121,9 +132,7 @@ def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: Monke
     # 抽出本文はプレビュー用に保持される。
     assert detail["extraction"]["raw_text"]
     # まだ索引していないので chunk は無い。
-    chunks_resp = client.get(f"/api/documents/{document_id}/chunks")
-    assert chunks_resp.status_code == 200
-    assert chunks_resp.json()["data"] == []
+    assert _document_chunks(document_id) == []
     # REVIEW 文書は検索対象に入らない。
     search = _search("経費申請の承認者は？")
     assert all(citation["document_id"] != document_id for citation in search["citations"])
@@ -216,53 +225,6 @@ def test_chunk_preview_rejects_recipe_without_review_artifact(
     assert response.status_code == 409
 
 
-def test_review_edits_save_without_chunking_and_feed_later_chunks(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """下書き保存は REVIEW を維持し、後続の Chunk は保存済み要素を使う。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-    _extract_to_review(document_id)
-
-    detail = _get_document(document_id)
-    target = next(
-        element for element in detail["extraction"]["elements"] if element.get("element_id")
-    )
-    edited_text = "保存済みレビュー修正 ZZZ 部門長が承認します。"
-    save_resp = client.patch(
-        f"/api/documents/{document_id}/review-edits",
-        json={
-            "element_edits": [{"element_id": target["element_id"], "text": edited_text}],
-        },
-    )
-
-    assert save_resp.status_code == 200
-    saved = save_resp.json()["data"]
-    assert saved["status"] == "REVIEW"
-    assert edited_text in saved["extraction"]["raw_text"]
-    chunks_before = client.get(f"/api/documents/{document_id}/chunks")
-    assert chunks_before.status_code == 200
-    assert chunks_before.json()["data"] == []
-
-    _approve_to_chunked(document_id)
-    chunks_after = client.get(f"/api/documents/{document_id}/chunks")
-    assert chunks_after.status_code == 200
-    assert any(edited_text in chunk["text"] for chunk in chunks_after.json()["data"])
-
-
-def test_review_edits_save_requires_review_status(monkeypatch: MonkeyPatch) -> None:
-    """REVIEW 以外の文書へ下書き保存しない。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-
-    response = client.patch(
-        f"/api/documents/{document_id}/review-edits",
-        json={"element_edits": []},
-    )
-
-    assert response.status_code == 409
-
-
 def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -271,7 +233,7 @@ def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    approve_resp = _enqueue_phase(document_id, "CHUNK")
     assert approve_resp.status_code == 200
     chunk_job = approve_resp.json()["data"]
     assert chunk_job["phase"] == "CHUNK"
@@ -281,8 +243,7 @@ def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
 
     detail = _get_document(document_id)
     assert detail["status"] == "CHUNKED"
-    chunks_resp = client.get(f"/api/documents/{document_id}/chunks")
-    assert chunks_resp.json()["data"]
+    assert _document_chunks(document_id)
     search = _search("経費申請の承認者は？")
     assert all(citation["document_id"] != document_id for citation in search["citations"])
 
@@ -327,7 +288,7 @@ def test_publish_serving_failure_marks_document_error(monkeypatch: MonkeyPatch) 
     monkeypatch.setattr(OracleClient, "set_document_serving_chunk_set", _fail_serving)
 
     _approve_to_chunked(document_id)
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    approve_resp = _enqueue_phase(document_id, "INDEX")
     assert approve_resp.status_code == 200
     index_job = approve_resp.json()["data"]
     assert index_job["phase"] == "INDEX"
@@ -478,94 +439,14 @@ def test_approve_succeeds_with_divergent_kb_config(
     assert chunk_set is not None and int(str(chunk_set["is_serving"])) == 1
 
 
-def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
-    """却下すると UPLOADED へ戻り、検索対象に入らない。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-    _extract_to_review(document_id)
-
-    reject_resp = client.post(f"/api/documents/{document_id}/reject")
-    assert reject_resp.status_code == 200
-    assert reject_resp.json()["data"]["status"] == "UPLOADED"
-
-    search = _search("経費申請の承認者は？")
-    assert all(citation["document_id"] != document_id for citation in search["citations"])
-
-
-def test_approve_requires_review_status(monkeypatch: MonkeyPatch) -> None:
-    """REVIEW でない文書の承認は 409。"""
+def test_chunk_phase_requires_review_status(monkeypatch: MonkeyPatch) -> None:
+    """抽出を確認していない(REVIEW でない)文書の CHUNK 工程は 409。"""
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
 
     # まだ UPLOADED。
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    approve_resp = _enqueue_phase(document_id, "CHUNK")
     assert approve_resp.status_code == 409
-
-
-def test_reject_requires_review_status(monkeypatch: MonkeyPatch) -> None:
-    """REVIEW でない文書の却下は 409。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-
-    reject_resp = client.post(f"/api/documents/{document_id}/reject")
-    assert reject_resp.status_code == 409
-
-
-def test_double_approve_after_index_conflicts(monkeypatch: MonkeyPatch) -> None:
-    """INDEXED 済み文書の再承認は 409。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-    _extract_to_review(document_id)
-
-    _approve_all(document_id)
-    assert _get_document(document_id)["status"] == "INDEXED"
-
-    second = client.post(f"/api/documents/{document_id}/approve")
-    assert second.status_code == 409
-
-
-def test_approve_with_text_edits_indexes_edited_content(monkeypatch: MonkeyPatch) -> None:
-    """承認時の人手テキスト修正が抽出へ反映され、検索対象になる。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-    _extract_to_review(document_id)
-
-    detail = _get_document(document_id)
-    elements = detail["extraction"]["elements"]
-    target = next(el for el in elements if el.get("element_id"))
-    edited_text = "編集後マーカー ZZZ 経費の最終承認は役員会です。"
-
-    _approve_all(
-        document_id,
-        payload={
-            "element_edits": [{"element_id": target["element_id"], "text": edited_text}],
-        },
-    )
-
-    indexed = _get_document(document_id)
-    assert indexed["status"] == "INDEXED"
-    edited_element = next(
-        el
-        for el in indexed["extraction"]["elements"]
-        if el.get("element_id") == target["element_id"]
-    )
-    assert edited_element["text"] == edited_text
-
-    search = _search("役員会 ZZZ")
-    assert any(citation["document_id"] == document_id for citation in search["citations"])
-
-
-def test_approve_with_unknown_element_id_is_rejected(monkeypatch: MonkeyPatch) -> None:
-    """存在しない要素 ID の修正は 400。"""
-    _enable_review_gate(monkeypatch)
-    document_id = _upload_sample()
-    _extract_to_review(document_id)
-
-    approve_resp = client.post(
-        f"/api/documents/{document_id}/approve",
-        json={"element_edits": [{"element_id": "does-not-exist", "text": "x"}]},
-    )
-    assert approve_resp.status_code == 400
 
 
 def test_gate_disabled_keeps_single_pass_indexing(monkeypatch: MonkeyPatch) -> None:

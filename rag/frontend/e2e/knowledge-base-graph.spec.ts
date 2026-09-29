@@ -68,9 +68,6 @@ async function mockKb(page: Page, graph: unknown): Promise<void> {
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({ json: ok({ items: [kbDetail], total: 1, limit: 20, offset: 0, has_next: false }) })
   );
-  await page.route("**/api/knowledge-bases/kb-1/documents**", (route) =>
-    route.fulfill({ json: ok({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
-  );
   await page.route("**/api/knowledge-bases/kb-1/graph**", (route) =>
     route.fulfill({ json: ok(graph) })
   );

@@ -25,8 +25,6 @@ import {
   type BatchUploadFailedItem,
   type BatchUploadResult,
   type KnowledgeBaseSummary,
-  type ChunkSetExperimentRequest,
-  type ParserExtractionExperimentRequest,
   type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
   type DocumentChunkPreviewRequest,
@@ -67,7 +65,6 @@ import {
   type ServiceAction,
   type ServiceCatalogData,
   type ServiceControlResultData,
-  type ServiceListData,
   type ServiceLogsData,
   type ServiceStatusData,
   type RetrievalSettingsData,
@@ -115,7 +112,6 @@ export const queryKeys = {
     offset?: number;
   }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
-  documentChunks: (id: string) => ["documents", id, "chunks"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
@@ -135,19 +131,12 @@ export const queryKeys = {
       "extraction-export",
       format,
     ] as const,
-  documentExtractionExport: (
-    id: string,
-    format: DocumentExtractionExportFormat,
-  ) => ["documents", id, "extraction-export", format] as const,
   documentIngestionJobs: (id: string) =>
     ["documents", id, "ingestion-jobs"] as const,
   documentIngestionSegments: (id: string) =>
     ["documents", id, "ingestion-segments"] as const,
-  documentIngestionConfig: (id: string) =>
-    ["documents", id, "ingestion-config"] as const,
   documentKnowledgeBases: (id: string) =>
     ["documents", id, "knowledge-bases"] as const,
-  documentStats: ["documents", "stats"] as const,
   ingestionJobs: (params: {
     status?: IngestionJobStatus;
     limit?: number;
@@ -213,13 +202,6 @@ export const queryKeys = {
     ["services", "logs", serviceId, lines] as const,
 };
 
-const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
-  "markdown",
-  "html",
-  "json",
-  "chunks",
-];
-
 function clearDocumentProcessingCache(
   qc: QueryClient,
   documentId: string,
@@ -241,14 +223,8 @@ function clearDocumentProcessingCache(
           }
         : current,
   );
-  qc.setQueryData(queryKeys.documentChunks(documentId), []);
   qc.setQueryData(queryKeys.documentIngestionSegments(documentId), []);
   qc.removeQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
-  for (const format of DOCUMENT_EXTRACTION_EXPORT_FORMATS) {
-    qc.removeQueries({
-      queryKey: queryKeys.documentExtractionExport(documentId, format),
-    });
-  }
 }
 
 function invalidateDocumentProcessingQueries(
@@ -257,11 +233,7 @@ function invalidateDocumentProcessingQueries(
 ) {
   qc.invalidateQueries({ queryKey: ["documents"] });
   qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
-  qc.invalidateQueries({ queryKey: queryKeys.documentChunks(documentId) });
   qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
-  qc.invalidateQueries({
-    queryKey: ["documents", documentId, "extraction-export"],
-  });
   qc.invalidateQueries({
     queryKey: queryKeys.documentIngestionJobs(documentId),
   });
@@ -282,19 +254,6 @@ function invalidateDocumentProcessingQueries(
 export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> =
   new Set<FileStatus>(["PREPROCESSING", "INGESTING", "CHUNKING", "INDEXING"]);
 
-/** ADB が起動/停止などの遷移中で lifecycle を再取得すべき状態。 */
-export const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set<string>([
-  "STARTING",
-  "STOPPING",
-  "PROVISIONING",
-  "TERMINATING",
-  "UPDATING",
-  "RESTORING",
-  "BACKUP_IN_PROGRESS",
-  "MAINTENANCE_IN_PROGRESS",
-  "ROLE_CHANGE_IN_PROGRESS",
-]);
-
 /** ポーリング間隔(ms)。 */
 export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
@@ -307,27 +266,11 @@ export function documentsHaveActiveWork(
   );
 }
 
-/** ADB lifecycle が遷移中か。 */
-export function adbIsTransitioning(state: string | null | undefined): boolean {
-  return state != null && ADB_TRANSITIONAL_STATES.has(state);
-}
-
 /** 取込 job がまだキュー待ち/実行中か。 */
 export function ingestionJobIsActive(
   status: IngestionJobStatus | null | undefined,
 ): boolean {
   return status === "QUEUED" || status === "RUNNING";
-}
-
-/** 取込 segment がまだキュー待ち/実行中か。 */
-export function ingestionSegmentHasActiveWork(
-  segments: ReadonlyArray<{ status: string }> | undefined,
-): boolean {
-  return Boolean(
-    segments?.some(
-      (segment) => segment.status === "QUEUED" || segment.status === "RUNNING",
-    ),
-  );
 }
 
 export function documentWorkspaceShouldRefresh({
@@ -429,81 +372,12 @@ export function useDocument(
   });
 }
 
-/** 文書 chunk/citation 可視化。 */
-export function useDocumentChunks(id: string | null) {
-  return useQuery({
-    queryKey: queryKeys.documentChunks(id ?? ""),
-    queryFn: () => api.listDocumentChunks(id as string),
-    enabled: id != null,
-    retry: retryUnlessNotFound,
-  });
-}
-
 /** 文書の chunk_set(variant)一覧。展開時のみ lazy 取得する。 */
 export function useDocumentChunkSets(id: string | null, enabled = true) {
   return useQuery({
     queryKey: queryKeys.documentChunkSets(id ?? ""),
     queryFn: () => api.listDocumentChunkSets(id as string),
     enabled: id != null && enabled,
-    retry: retryUnlessNotFound,
-  });
-}
-
-/** 別 chunking レシピで候補 chunk_set を materialize する(配信は切り替えない)。 */
-export function useCreateChunkSetExperiment() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      body,
-    }: {
-      id: string;
-      body: ChunkSetExperimentRequest;
-    }) => api.createChunkSetExperiment(id, body),
-    onSuccess: (_chunkSet, { id }) => {
-      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(id) });
-    },
-  });
-}
-
-/**
- * parser/前処理 を変えた候補を再抽出する非同期ジョブを投入する。
- * 候補 chunk_set はジョブ完了後に現れるため、ここでは無効化せず
- * 呼び出し側で {@link useIngestionJob} の完了を待って chunk-sets を再取得する。
- */
-export function useCreateParserExtractionExperiment() {
-  return useMutation({
-    mutationFn: ({
-      id,
-      body,
-    }: {
-      id: string;
-      body: ParserExtractionExperimentRequest;
-    }) => api.createParserExtractionExperiment(id, body),
-  });
-}
-
-/** 候補 chunk_set を配信(serving)に昇格し、敗者を GC する。 */
-export function usePromoteChunkSetExperiment() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, chunkSetId }: { id: string; chunkSetId: string }) =>
-      api.promoteChunkSetExperiment(id, chunkSetId),
-    onSuccess: (_chunkSet, { id }) => {
-      invalidateDocumentProcessingQueries(qc, id);
-    },
-  });
-}
-
-/** 文書 extraction の監査用 export view。 */
-export function useDocumentExtractionExport(
-  id: string | null,
-  format: DocumentExtractionExportFormat,
-) {
-  return useQuery({
-    queryKey: queryKeys.documentExtractionExport(id ?? "", format),
-    queryFn: () => api.exportDocumentExtraction(id as string, format),
-    enabled: id != null,
     retry: retryUnlessNotFound,
   });
 }
@@ -559,18 +433,6 @@ export function useDocumentKnowledgeBases(id: string | null) {
     queryKey: queryKeys.documentKnowledgeBases(id ?? ""),
     queryFn: () => api.listDocumentKnowledgeBases(id as string),
     enabled: id != null,
-  });
-}
-
-/** 文書の処理レシピ上書き・有効値・配信中レシピとの差分。 */
-export function useDocumentIngestionConfig(id: string | null) {
-  return useQuery({
-    queryKey: queryKeys.documentIngestionConfig(id ?? ""),
-    queryFn: () => api.getDocumentIngestionConfig(id as string),
-    enabled: id != null,
-    // 404(削除済み/未登録の文書)はリトライしても無意味。それ以外(backend の一時停止による
-    // 時間切れなど)は再試行する。兄弟の文書スコープのクエリと挙動を揃える(#311)。
-    retry: retryUnlessNotFound,
   });
 }
 
@@ -768,7 +630,6 @@ export function useSaveDocumentRecipeReviewEdits() {
 
 /** 文書単位の処理レシピ上書きを保存する。既存 chunk_set は変更しない。 */
 export function useUpdateDocumentIngestionConfig() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
       id,
@@ -777,9 +638,6 @@ export function useUpdateDocumentIngestionConfig() {
       id: string;
       config: DocumentProcessingConfig;
     }) => api.updateDocumentIngestionConfig(id, config),
-    onSuccess: (data, variables) => {
-      qc.setQueryData(queryKeys.documentIngestionConfig(variables.id), data);
-    },
   });
 }
 
@@ -811,9 +669,6 @@ export function useReplaceDocumentKnowledgeBases() {
       });
       qc.invalidateQueries({ queryKey: queryKeys.document(variables.id) });
       qc.invalidateQueries({
-        queryKey: queryKeys.documentIngestionConfig(variables.id),
-      });
-      qc.invalidateQueries({
         queryKey: queryKeys.documentChunkSets(variables.id),
       });
       qc.invalidateQueries({ queryKey: ["documents"] });
@@ -832,7 +687,6 @@ export function useDeleteDocument() {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
-      qc.invalidateQueries({ queryKey: queryKeys.documentStats });
     },
   });
 }
@@ -1545,33 +1399,6 @@ export function useRemoveDocumentFromKnowledgeBase() {
   });
 }
 
-/** 取込（OCR/本文抽出→チャンク→埋め込み→索引）。 */
-export function useIngestDocument() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      force,
-      phase,
-    }: {
-      id: string;
-      force?: boolean;
-      phase?: IngestionJobPhase;
-    }) => api.enqueueDocumentIngestionJob(id, force, phase),
-    onSuccess: (job) => {
-      if (
-        (job.phase === "PREPROCESS" || job.phase === "EXTRACT") &&
-        job.status === "QUEUED"
-      ) {
-        clearDocumentProcessingCache(qc, job.document_id, {
-          clearPreprocessArtifact: job.phase === "PREPROCESS",
-        });
-      }
-      invalidateDocumentProcessingQueries(qc, job.document_id);
-    },
-  });
-}
-
 /** 文書を取込 job へ投入する。 */
 export function useEnqueueDocumentIngestionJob() {
   const qc = useQueryClient();
@@ -1595,66 +1422,6 @@ export function useEnqueueDocumentIngestionJob() {
         });
       }
       invalidateDocumentProcessingQueries(qc, job.document_id);
-    },
-  });
-}
-
-/** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
-export function useApproveDocument() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      payload,
-    }: {
-      id: string;
-      payload?: DocumentApproveRequest;
-    }) => api.approveDocument(id, payload),
-    onSuccess: (job) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentChunkSets(job.document_id),
-      });
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentIngestionJobs(job.document_id),
-      });
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentIngestionSegments(job.document_id),
-      });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-    },
-  });
-}
-
-/** REVIEW 中の構造化要素修正を保存し、確認待ち状態を維持する。 */
-export function useSaveDocumentReviewEdits() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      payload,
-    }: {
-      id: string;
-      payload: DocumentReviewEditsRequest;
-    }) => api.saveDocumentReviewEdits(id, payload),
-    onSuccess: (detail) => {
-      qc.setQueryData(queryKeys.document(detail.id), detail);
-      qc.invalidateQueries({
-        queryKey: ["documents", detail.id, "extraction-export"],
-      });
-    },
-  });
-}
-
-/** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
-export function useRejectDocument() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id }: { id: string }) => api.rejectDocument(id),
-    onSuccess: (detail) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(detail.id) });
     },
   });
 }
@@ -2083,18 +1850,6 @@ export function useServiceLogs(serviceId: string | null, lines = 200) {
     queryFn: () => api.getServiceLogs(serviceId ?? "", lines),
     enabled: Boolean(serviceId),
     retry: false,
-  });
-}
-
-/** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */
-export function useServices(
-  options: { refetchInterval?: number | false } = {},
-) {
-  return useQuery<ServiceListData>({
-    queryKey: queryKeys.services,
-    queryFn: api.getServices,
-    retry: false,
-    refetchInterval: options.refetchInterval ?? 5000,
   });
 }
 

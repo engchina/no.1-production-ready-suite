@@ -191,7 +191,7 @@ Phase 1 では必須にしない。
 
 - 名前は tenant 内で一意（大文字小文字を区別せず、アーカイブ済みを含む）。作成・改名で重複すると 409 と理由を返す（#282）。
 - 変更系（`PATCH` / `archive` / 文書の追加・外す）の応答は、文書数・索引済み数などの集計列を取り直した詳細を返す（#282）。
-- アーカイブ済みの KB でも所属文書の一覧（`GET /api/knowledge-bases/{id}/documents`、`GET /api/documents?knowledge_base_id=`）は所属を返す。検索対象から外すのは検索の SQL だけ（#282）。
+- アーカイブ済みの KB でも所属文書の一覧（`GET /api/documents?knowledge_base_id=`）は所属を返す。検索対象から外すのは検索の SQL だけ（#282）。
 - **API の互換の変更（#302）**：`POST` / `PATCH` の `adapter_config` は受け付けない。指定すると（`null` や `{}` でも）422
   「adapter_config は指定できません。…」を返し、何も保存しない。以前は `retrieval_config` カラムへ正規化して保存していたが、
   3 層モデルでは取込・検索のどちらでも使わない（`rag/AGENTS.md`「KB の legacy adapter/query config は読み取りのみ許容」）。
@@ -240,7 +240,7 @@ KB が持つのは所属（スコープ）と名前・説明だけとする。�
 
 | Method | Path | 用途 |
 |---|---|---|
-| `GET` | `/api/knowledge-bases/{knowledge_base_id}/documents?status=&q=&limit=&offset=` | 対象ナレッジベースの文書一覧。 |
+| `GET` | `/api/documents?knowledge_base_id={knowledge_base_id}&status=&q=&limit=&offset=` | 対象ナレッジベースの文書一覧（文書一覧 API の絞り込み）。 |
 | `POST` | `/api/knowledge-bases/{knowledge_base_id}/documents` | 既存文書を一括追加。 |
 | `DELETE` | `/api/knowledge-bases/{knowledge_base_id}/documents/{document_id}` | 文書をナレッジベースから外す。文書自体は削除しない。 |
 | `GET` | `/api/documents/{document_id}/knowledge-bases` | 文書の所属ナレッジベース一覧。 |

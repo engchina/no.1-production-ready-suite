@@ -48,7 +48,6 @@ def _set_timeout(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
     ("path", "fake"),
     [
         ("/api/documents", _RaisingOracle),
-        ("/api/documents/stats", _RaisingOracle),
         ("/api/documents/ingestion-jobs", _RaisingOracle),
     ],
 )
@@ -80,16 +79,6 @@ def test_document_list_degrades_on_timeout(monkeypatch: pytest.MonkeyPatch) -> N
     assert body["data"]["items"] == []
     assert body["data"]["total"] == 0
     assert "0.01 秒以内に応答しませんでした" in body["warning_messages"][0]
-
-
-def test_document_stats_degrades_to_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """統計は DB 不通時にゼロ集計へ縮退する。"""
-    monkeypatch.setattr(documents_route, "OracleClient", lambda: _RaisingOracle())
-
-    response = client.get("/api/documents/stats")
-
-    body = response.json()
-    assert body["data"] == {"total": 0, "by_status": {}}
 
 
 def test_knowledge_base_list_degrades_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:

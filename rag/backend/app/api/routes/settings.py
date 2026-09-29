@@ -68,9 +68,7 @@ from app.rag.evaluation_adapter import (
     normalize_evaluation_suite,
 )
 from app.rag.extraction_field_adapter import (
-    FieldDefinition,
     load_field_schema,
-    save_field_schema,
 )
 from app.rag.generation_adapter import (
     generation_adapter_runtime_settings,
@@ -133,7 +131,6 @@ from app.schemas.settings import (
     ExternalParserConnectionData,
     ExternalParserConnectionStatusData,
     ExtractionFieldsSettingsData,
-    ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
     GenerationProfileStatusData,
     GenerationSettingsData,
@@ -739,22 +736,6 @@ def _extraction_fields_data() -> ExtractionFieldsSettingsData:
 @router.get("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
 async def get_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSettingsData]:
     """field 抽出 schema 定義(抽出対象 field の一覧)を返す。"""
-    return ApiResponse(data=_extraction_fields_data())
-
-
-@router.patch("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
-async def update_extraction_fields_settings(
-    payload: ExtractionFieldsSettingsUpdate,
-) -> ApiResponse[ExtractionFieldsSettingsData]:
-    """field 抽出 schema 定義を保存する(name 重複は 422)。"""
-    definitions = [
-        FieldDefinition(name=field.name, description=field.description, value_type=field.value_type)
-        for field in payload.fields
-    ]
-    try:
-        save_field_schema(definitions)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=_extraction_fields_data())
 
 

@@ -17,7 +17,6 @@ from app.schemas.service_management import (
     ServiceCatalogData,
     ServiceCatalogItemData,
     ServiceControlResultData,
-    ServiceListData,
     ServiceLogsData,
     ServiceModelCacheData,
     ServiceStatusData,
@@ -37,7 +36,7 @@ from app.services.control import (
     ServiceLogsError,
     read_service_logs,
 )
-from app.services.status import probe_service_status, probe_service_statuses
+from app.services.status import probe_service_status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -86,27 +85,6 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
 
 def _deployment_mode(settings: Settings) -> DeploymentMode:
     return "dev" if is_dev_mode(settings) else "prod"
-
-
-@router.get("", response_model=ApiResponse[ServiceListData])
-async def list_services() -> ApiResponse[ServiceListData]:
-    """全マイクロサービスの稼働状態と制御可否・配備モードを返す。"""
-    settings = get_settings()
-    statuses = await probe_service_statuses(settings)
-    services = [
-        ServiceStatusData(
-            **_catalog_item(settings, entry).model_dump(),
-            status=statuses[entry.service_id],
-        )
-        for entry in SERVICE_CATALOG
-    ]
-    return ApiResponse(
-        data=ServiceListData(
-            control_enabled=_control_enabled(settings),
-            deployment_mode=_deployment_mode(settings),
-            services=services,
-        )
-    )
 
 
 @router.get("/catalog", response_model=ApiResponse[ServiceCatalogData])

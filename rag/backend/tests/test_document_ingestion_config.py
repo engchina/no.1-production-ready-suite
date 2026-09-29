@@ -1,13 +1,18 @@
-"""文書の取込設定スナップショット / ドリフト endpoint のテスト。
+"""文書の取込設定スナップショット / ドリフトのテスト。
+
+ドリフトは ``PUT /api/documents/{id}/ingestion-config`` の応答が返す
+(``_document_ingestion_config_data``)。保存を伴わない判定は helper を直接呼んで確かめる。
 
 3 層モデル: effective レシピは global 既定(「検索・回答設定」)から解決する。
 owning KB overlay や per-KB build config グルーピングは持たない(文書単位の単一レシピ)。
 ドリフトは「取込時に刻まれた観測値 vs 現在の global 既定」で判定する。
 """
 
+import asyncio
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -96,6 +101,17 @@ class FakeIngestionConfigOracle:
         return [object()] if getattr(status, "value", status) in self.active_job_statuses else []
 
 
+def _config_data(fake: FakeIngestionConfigOracle, document_id: str) -> dict[str, Any]:
+    """取込設定の応答(有効値・観測値・ドリフト)を、保存せずに組み立てる。"""
+    data = asyncio.run(
+        documents_route._document_ingestion_config_data(
+            fake,  # type: ignore[arg-type]
+            fake.documents[document_id],
+        )
+    )
+    return data.model_dump(mode="json")
+
+
 @pytest.fixture
 def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeIngestionConfigOracle:
     fake = FakeIngestionConfigOracle()
@@ -125,10 +141,8 @@ def test_ingestion_config_uses_global_recipe(
     """effective は global 既定。取込済みが既定と一致すればドリフトしない。"""
     fake_oracle.add_document("doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware")
 
-    resp = client.get("/api/documents/doc-1/ingestion-config")
+    data = _config_data(fake_oracle, "doc-1")
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
     assert "owning_knowledge_base" not in data
     assert "build_configurations" not in data
     assert data["effective_chunking_strategy"] == "structure_aware"
@@ -146,7 +160,7 @@ def test_ingestion_config_reports_no_drift_when_matching(
         "doc-1", status=FileStatus.INDEXED, chunk_strategy="page_level", source_parser="docling"
     )
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["effective_chunking_strategy"] == "page_level"
     assert data["observed_chunking_strategy"] == "page_level"
@@ -178,7 +192,7 @@ def test_ingestion_config_treats_external_adapter_profiles_as_matching(
         source_parser=profile,
     )
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["observed_parser_backend"] == profile
     assert data["parser_drift"] is False
@@ -192,7 +206,7 @@ def test_ingestion_config_detects_drift(
     # global 既定 = structure_aware。観測値を page_level にしてずらす。
     fake_oracle.add_document("doc-1", status=FileStatus.INDEXED, chunk_strategy="page_level")
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["effective_chunking_strategy"] == "structure_aware"
     assert data["observed_chunking_strategy"] == "page_level"
@@ -214,7 +228,7 @@ def test_ingestion_config_detects_parser_drift(
         source_parser="enterprise_ai_pdf_layout",
     )
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["effective_parser_adapter_backend"] == "mineru"
     assert data["observed_parser_backend"] == "enterprise_ai_pdf_layout"
@@ -270,7 +284,7 @@ def test_documents_parsed_by_removed_engine_report_parser_drift(
         source_parser=profile,
     )
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["observed_parser_backend"] == profile
     assert data["parser_drift"] is True
@@ -282,7 +296,7 @@ def test_ingestion_config_no_drift_when_not_indexed(
     """未取込(UPLOADED)では観測値が無く、ドリフト判定もしない。effective は global 既定。"""
     fake_oracle.add_document("doc-1", status=FileStatus.UPLOADED)
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["is_indexed"] is False
     assert data["observed_chunking_strategy"] is None
@@ -293,7 +307,7 @@ def test_ingestion_config_no_drift_when_not_indexed(
 def test_ingestion_config_returns_404_for_missing_document(
     fake_oracle: FakeIngestionConfigOracle,
 ) -> None:
-    resp = client.get("/api/documents/missing/ingestion-config")
+    resp = client.put("/api/documents/missing/ingestion-config", json={})
     assert resp.status_code == 404
 
 
@@ -385,7 +399,7 @@ def test_ingestion_config_detects_derived_setting_drift_from_serving_snapshot(
     }
     fake_oracle.processing_configs["doc-1"] = DocumentProcessingConfig(graph_profile="entities")
 
-    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+    data = _config_data(fake_oracle, "doc-1")
 
     assert data["drift_fields"] == ["graph_profile"]
     assert data["config_drift"] is True

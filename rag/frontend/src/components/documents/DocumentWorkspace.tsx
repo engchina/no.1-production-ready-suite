@@ -557,11 +557,6 @@ export function DocumentWorkspace({
   const saveReviewErrorText = saveReviewEdits.isError
     ? errorMessage(saveReviewEdits.error, t("flow.review.edit.saveError"))
     : "";
-  const approveNeedsReingest =
-    approveErrorText.includes("再取込") || approveErrorText.includes("再取り込み");
-  // 承認の失敗の案内に「再取込」が出ている間は、再取込のスピナーを案内のボタンの 1 つだけにする
-  // （下の操作行の同じ投入のボタンは回さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-  const bannerReingestShown = approveDocument.isError && approveNeedsReingest && Boolean(selectedRecipeId);
   const parsedExtraction = useMemo(
     () =>
       parseStructuredExtraction(
@@ -1580,39 +1575,7 @@ export function DocumentWorkspace({
         </Disclosure>
 
         {approveDocument.isError ? (
-          <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="min-w-0 flex-1">{approveErrorText}</span>
-              {approveNeedsReingest && selectedRecipeId ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={RotateCcw}
-                  onClick={() =>
-                    enqueueIngestion.mutate(
-                      {
-                        id: documentId,
-                        recipeId: selectedRecipeId,
-                        phase: "PREPROCESS",
-                      },
-                      {
-                        onSuccess: (job) => {
-                          setLocalWatchProcessing(
-                            job.status === "QUEUED" || job.status === "RUNNING"
-                          );
-                          toast.success(t(phaseStartedMessageKey(job.phase)));
-                        },
-                      }
-                    )
-                  }
-                  loading={enqueueIngestion.isPending}
-                >
-                  {t("flow.reingest")}
-                </Button>
-              ) : null}
-            </div>
-          </Banner>
+          <Banner severity="danger">{approveErrorText}</Banner>
         ) : null}
         {status === "REVIEW" && hasReviewEdits ? (
           <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
@@ -1665,7 +1628,7 @@ export function DocumentWorkspace({
                       }
                     )
                   }
-                  loading={enqueueIngestion.isPending && !bannerReingestShown} icon={Send}>
+                  loading={enqueueIngestion.isPending} icon={Send}>
                   {doc.duplicate_of_document_id ? t("action.enqueueDuplicateIngestion") : t("action.enqueueIngestion")}
                 </Button>
               ) : null}
@@ -1674,8 +1637,7 @@ export function DocumentWorkspace({
                   onClick={() => void handlePhaseRestart(retryPhase, "retry")}
                   loading={
                     enqueueIngestion.isPending &&
-                    enqueueIngestion.variables?.phase === retryPhase &&
-                    !bannerReingestShown
+                    enqueueIngestion.variables?.phase === retryPhase
                   } icon={RotateCcw}>
                   {t(phaseRetryLabelKey(retryPhase))}
                 </Button>
@@ -1688,8 +1650,7 @@ export function DocumentWorkspace({
                   onClick={() => void handlePhaseRestart(phase, "reprocess")}
                   loading={
                     enqueueIngestion.isPending &&
-                    enqueueIngestion.variables?.phase === phase &&
-                    !bannerReingestShown
+                    enqueueIngestion.variables?.phase === phase
                   }
                   disabled={
                     approveDocument.isPending ||

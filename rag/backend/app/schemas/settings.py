@@ -914,12 +914,6 @@ class ExtractionFieldsSettingsData(BaseModel):
     config_source: Literal["runtime"] = "runtime"
 
 
-class ExtractionFieldsSettingsUpdate(BaseModel):
-    """field 抽出 schema 定義の更新 payload。"""
-
-    fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
-
-
 class GuardrailPolicyStatusData(BaseModel):
     """安全の 1 ポリシーの選択状態と groundedness 厳格度。"""
 

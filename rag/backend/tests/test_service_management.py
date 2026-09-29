@@ -43,7 +43,7 @@ from app.services.control import (
     service_runtime_env,
     write_service_runtime_env,
 )
-from app.services.status import probe_service_status, probe_service_statuses
+from app.services.status import probe_service_status
 from app.services.systemd import (
     JOURNAL_FETCH_LINES,
     CommandOutput,
@@ -761,13 +761,29 @@ def _url(service_id: str) -> str:
     return service_health_url(get_settings(), entry)
 
 
+def _probe_statuses(settings: Any, service_ids: list[str]) -> dict[str, str]:
+    """指定サービスの稼働状態を 1 件ずつ問い合わせる(画面は 1 件ずつ status を取得する)。"""
+
+    async def probe_all() -> dict[str, str]:
+        statuses: dict[str, str] = {}
+        for service_id in service_ids:
+            entry = get_catalog_entry(service_id)
+            assert entry is not None
+            statuses[service_id] = await probe_service_status(settings, entry)
+        return statuses
+
+    return asyncio.run(probe_all())
+
+
 def test_probe_without_systemd_uses_health_only(fake_http: type[_FakeAsyncClient]) -> None:
     fake_http.routes = {
         _url("parser-docling"): _FakeResponse({"status": "ok"}),
         _url("parser-asr"): _FakeResponse({"status": "degraded"}),
     }
     fake_http.raise_on_connect = {_url("parser-unstructured")}
-    statuses = asyncio.run(probe_service_statuses(get_settings()))
+    statuses = _probe_statuses(
+        get_settings(), ["parser-docling", "parser-asr", "parser-unstructured"]
+    )
     assert statuses["parser-docling"] == "running"
     assert statuses["parser-asr"] == "degraded"
     assert statuses["parser-unstructured"] == "stopped"
@@ -815,7 +831,7 @@ def test_probe_unconfigured_when_url_blank(
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "")
-    statuses = asyncio.run(probe_service_statuses(settings))
+    statuses = _probe_statuses(settings, ["parser-docling"])
     assert statuses["parser-docling"] == "unconfigured"
 
 
@@ -835,16 +851,11 @@ def test_probe_non_deployable_returns_in_process_without_probe(
 # --- API ----------------------------------------------------------------------
 
 
-async def _all_stopped(_settings: Any) -> dict[str, str]:
-    return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
-
-
-def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
+def test_list_service_catalog_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
-    resp = client.get("/api/services")
+    resp = client.get("/api/services/catalog")
     assert resp.status_code == 200
     data = resp.json()["data"]
     # prod + flag OFF は可視化のみ。
@@ -859,9 +870,8 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert chunking["systemd_unit"] is None
 
 
-def test_list_services_exposes_model_cache_path(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
-    data = client.get("/api/services").json()["data"]
+def test_list_service_catalog_exposes_model_cache_path() -> None:
+    data = client.get("/api/services/catalog").json()["data"]
     asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
     assert asr["model_cache"] == {
         "path": str(Path("~/.cache").expanduser()),
@@ -871,12 +881,11 @@ def test_list_services_exposes_model_cache_path(monkeypatch: MonkeyPatch) -> Non
     assert chunking["model_cache"] is None
 
 
-def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
+def test_list_service_catalog_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", _all_stopped)
-    data = client.get("/api/services").json()["data"]
+    data = client.get("/api/services/catalog").json()["data"]
     # dev は flag OFF でも制御を自動有効化。
     assert data["control_enabled"] is True
     assert data["deployment_mode"] == "dev"
@@ -887,10 +896,10 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
 
-    async def fail_probe(_settings: Any) -> dict[str, str]:
+    async def fail_probe(_settings: Any, _entry: ServiceCatalogEntry) -> str:
         raise AssertionError("catalog endpoint must not probe service health")
 
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fail_probe)
+    monkeypatch.setattr("app.api.routes.services.probe_service_status", fail_probe)
     resp = client.get("/api/services/catalog")
     assert resp.status_code == 200
     data = resp.json()["data"]

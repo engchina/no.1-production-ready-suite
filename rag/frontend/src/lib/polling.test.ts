@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ADB_TRANSITIONAL_STATES,
   DOCUMENT_ACTIVE_STATUSES,
-  adbIsTransitioning,
   documentWorkspaceShouldRefresh,
   documentsHaveActiveWork,
   ingestionJobIsActive,
-  ingestionSegmentHasActiveWork,
 } from "./queries";
 import type { DocumentSummary, FileStatus } from "./api";
 
@@ -50,29 +47,6 @@ describe("documentsHaveActiveWork", () => {
   });
 });
 
-describe("adbIsTransitioning", () => {
-  it("null/undefined/空 は false", () => {
-    expect(adbIsTransitioning(null)).toBe(false);
-    expect(adbIsTransitioning(undefined)).toBe(false);
-    expect(adbIsTransitioning("")).toBe(false);
-  });
-
-  it("起動/停止などの遷移状態は true", () => {
-    for (const state of ADB_TRANSITIONAL_STATES) {
-      expect(adbIsTransitioning(state)).toBe(true);
-    }
-    expect(adbIsTransitioning("STARTING")).toBe(true);
-    expect(adbIsTransitioning("STOPPING")).toBe(true);
-  });
-
-  it("安定状態は false", () => {
-    expect(adbIsTransitioning("AVAILABLE")).toBe(false);
-    expect(adbIsTransitioning("STOPPED")).toBe(false);
-    expect(adbIsTransitioning("FAILED")).toBe(false);
-    expect(adbIsTransitioning("TERMINATED")).toBe(false);
-  });
-});
-
 describe("ingestionJobIsActive", () => {
   it("QUEUED/RUNNING のみ true", () => {
     expect(ingestionJobIsActive("QUEUED")).toBe(true);
@@ -80,14 +54,6 @@ describe("ingestionJobIsActive", () => {
     expect(ingestionJobIsActive("SUCCEEDED")).toBe(false);
     expect(ingestionJobIsActive("FAILED")).toBe(false);
     expect(ingestionJobIsActive(undefined)).toBe(false);
-  });
-});
-
-describe("ingestionSegmentHasActiveWork", () => {
-  it("QUEUED/RUNNING segment があれば true", () => {
-    expect(ingestionSegmentHasActiveWork([{ status: "SUCCEEDED" }])).toBe(false);
-    expect(ingestionSegmentHasActiveWork([{ status: "QUEUED" }])).toBe(true);
-    expect(ingestionSegmentHasActiveWork([{ status: "RUNNING" }])).toBe(true);
   });
 });
 

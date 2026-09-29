@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Literal
 
@@ -15,7 +14,6 @@ import httpx
 
 from app.config import Settings
 from app.services.catalog import (
-    SERVICE_CATALOG,
     ServiceCatalogEntry,
     service_health_url,
 )
@@ -98,13 +96,3 @@ async def probe_service_status(
     if unit_state.active_state == "failed":
         return "failed"
     return "stopped"
-
-
-async def probe_service_statuses(settings: Settings) -> dict[str, ServiceRuntimeStatus]:
-    """全カタログサービスの稼働状態を問い合わせて返す。"""
-    results = await asyncio.gather(
-        *(probe_service_status(settings, entry) for entry in SERVICE_CATALOG)
-    )
-    return {
-        entry.service_id: status for entry, status in zip(SERVICE_CATALOG, results, strict=True)
-    }

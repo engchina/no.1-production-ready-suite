@@ -420,7 +420,8 @@ def test_assign_and_list_knowledge_base_documents(fake_oracle: FakeKnowledgeBase
     assert assign_resp.status_code == 200
     assert assign_resp.json()["data"]["document_count"] == 1
 
-    docs_resp = client.get(f"/api/knowledge-bases/{detail['id']}/documents")
+    # KB 詳細の文書一覧は、文書一覧 API を KB で絞り込んで取得する。
+    docs_resp = client.get("/api/documents", params={"knowledge_base_id": detail["id"]})
     assert docs_resp.status_code == 200
     docs_page = docs_resp.json()["data"]
     assert docs_page["total"] == 1
