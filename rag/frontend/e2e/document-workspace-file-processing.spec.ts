@@ -1374,27 +1374,6 @@ async function mockDocumentWorkspace(
   };
   const segmentFailureMessage =
     "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。失敗項目: confidence: less_than_equal。";
-  await page.route("**/api/documents/doc-1/ingestion-config", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          document_id: "doc-1",
-          is_indexed: (options.documentStatus ?? "INDEXED") === "INDEXED",
-          owning_knowledge_base: null,
-          effective_preprocess_profile: options.preprocessProfile ?? "text_normalize",
-          effective_chunking_strategy: "recursive",
-          effective_parser_adapter_backend: "local",
-          observed_chunking_strategy: "recursive",
-          observed_parser_backend: "local_partition",
-          chunking_drift: false,
-          parser_drift: false,
-          config_drift: false,
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
   await page.route("**/api/documents/doc-1", async (route) => {
     await route.fulfill({
       json: {

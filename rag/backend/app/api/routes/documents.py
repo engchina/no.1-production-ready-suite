@@ -103,7 +103,6 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentExtractionExport,
     DocumentExtractionExportFormat,
-    DocumentIngestionConfigData,
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
     DocumentPreprocessArtifact,
@@ -179,9 +178,6 @@ SCRIPTABLE_CONTENT_TYPES = frozenset(
         "text/xml",
         "application/xml",
     }
-)
-DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
-    {FileStatus.UPLOADED, FileStatus.INDEXED, FileStatus.ERROR}
 )
 # DocRAG 親子階層の分割パラメータ(文書レシピの項目名)。分割方式が docrag_small_to_big の
 # ときだけ分割結果に効くので、差分(drift)の判定もそのときだけ比べる。
@@ -1855,29 +1851,6 @@ def _layer_requested(layer: str, settings: Settings) -> bool:
     return False
 
 
-def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> bool:
-    """取込済み parser と現在の明示 parser 設定がずれているか判定する。
-
-    ``local`` は外部 parser 未選択を表す umbrella で、PDF などは source profile の
-    ``enterprise_ai_*`` 方針名を持つ。そのため local は parser drift の比較対象にしない。
-    """
-    effective = effective_backend.strip().casefold()
-    if not effective or effective == "local":
-        return False
-    observed = observed_parser.strip().casefold()
-    if not observed:
-        return False
-    aliases = {
-        "docling": {"docling", "docling_adapter"},
-        "unstructured": {"unstructured", "unstructured_adapter"},
-        "mineru": {"mineru", "mineru_adapter"},
-        "dots_ocr": {"dots_ocr", "dots_ocr_adapter"},
-        "oci_genai_vision": {"oci_genai_vision", "enterprise_ai_vlm"},
-        "enterprise_ai_vlm": {"oci_genai_vision", "enterprise_ai_vlm"},
-    }
-    return observed not in aliases.get(effective, {effective})
-
-
 def _merge_document_processing_config(
     config: DocumentProcessingConfig,
     global_settings: Settings | None = None,
@@ -1952,120 +1925,6 @@ def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -
         isinstance(strategy, str)
         and strategy.strip().casefold() in LEGACY_CHUNKING_STRATEGY_ALIASES
     )
-
-
-def _processing_snapshot_config(
-    row: Mapping[str, object] | None,
-) -> DocumentProcessingConfig | None:
-    if not row:
-        return None
-    raw = row.get("recipe_subset")
-    if not isinstance(raw, Mapping):
-        return None
-    effective = raw.get("effective_processing_config")
-    if not isinstance(effective, Mapping):
-        return None
-    try:
-        return DocumentProcessingConfig.model_validate(dict(effective))
-    except Exception:  # noqa: BLE001 - 旧/破損 snapshot は既存観測値へ縮退する
-        return None
-
-
-async def _document_ingestion_config_data(
-    oracle: OracleClient,
-    detail: DocumentDetail,
-) -> DocumentIngestionConfigData:
-    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, detail.id)
-    _, effective_config = _merge_document_processing_config(processing_config)
-    is_indexed = detail.status == FileStatus.INDEXED
-
-    observed_strategy: str | None = None
-    observed_parser: str | None = None
-    if is_indexed:
-        chunks = await oracle.list_document_chunks(detail.id)
-        if chunks:
-            first = chunks[0]
-            strategy_value = first.metadata.get("chunk_strategy")
-            observed_strategy = str(strategy_value) if strategy_value is not None else None
-            observed_parser = first.source_parser or (
-                str(first.metadata["parser_backend"])
-                if "parser_backend" in first.metadata
-                else None
-            )
-
-    drift_fields: list[str] = []
-    serving_id = await oracle.get_document_serving_chunk_set_id(detail.id) if is_indexed else None
-    serving = await oracle.get_chunk_set(serving_id) if serving_id is not None else None
-    observed_config = _processing_snapshot_config(serving)
-    if observed_config is not None:
-        observed_values = observed_config.model_dump(mode="json")
-        effective_values = effective_config.model_dump(mode="json")
-        drift_fields = _processing_config_drift_groups(observed_values, effective_values)
-        if "chunking_strategy" not in drift_fields and _snapshot_used_removed_chunking_strategy(
-            serving
-        ):
-            # 読み込み時に後継へ読み替えるが、配信中の chunk は削除した方式で作られている。
-            drift_fields.append("chunking_strategy")
-    elif is_indexed:
-        if (
-            detail.preprocess_artifact is not None
-            and detail.preprocess_artifact.profile != effective_settings.rag_preprocess_profile
-        ):
-            drift_fields.append("preprocess_profile")
-        if observed_parser and _parser_backend_drifted(
-            observed_parser, effective_settings.rag_parser_adapter_backend
-        ):
-            drift_fields.append("parser_adapter_backend")
-        if observed_strategy and observed_strategy != effective_settings.rag_chunking_strategy:
-            drift_fields.append("chunking_strategy")
-
-    return DocumentIngestionConfigData(
-        document_id=detail.id,
-        is_indexed=is_indexed,
-        processing_config=processing_config,
-        effective_processing_config=effective_config,
-        effective_preprocess_profile=effective_settings.rag_preprocess_profile,
-        effective_chunking_strategy=effective_settings.rag_chunking_strategy,
-        effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
-        observed_chunking_strategy=observed_strategy,
-        observed_parser_backend=observed_parser,
-        chunking_drift="chunking_strategy" in drift_fields,
-        parser_drift="parser_adapter_backend" in drift_fields,
-        config_drift=bool(drift_fields),
-        drift_fields=drift_fields,
-    )
-
-
-@router.put(
-    "/{document_id}/ingestion-config",
-    response_model=ApiResponse[DocumentIngestionConfigData],
-)
-async def update_document_ingestion_config(
-    document_id: str,
-    request: DocumentProcessingConfig,
-) -> ApiResponse[DocumentIngestionConfigData]:
-    """文書単位の処理レシピ上書きを保存する。既存成果物は変更しない。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status not in DOCUMENT_PROCESSING_EDITABLE_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail="処理途中のドキュメントは設定を変更できません。処理を完了するか最初から再処理してください。",
-        )
-    for status in (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING):
-        if await oracle.list_document_ingestion_jobs(document_id, status=status):
-            raise HTTPException(
-                status_code=409,
-                detail="取込ジョブの実行中は設定を変更できません。完了後に再試行してください。",
-            )
-    try:
-        _merge_document_processing_config(request)
-    except KbAdapterConfigError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await oracle.update_document_processing_config(document_id, request)
-    return ApiResponse(data=await _document_ingestion_config_data(oracle, detail))
 
 
 @router.get(

@@ -297,7 +297,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
     ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/chunk-sets"): _DOCUMENT_WORKSPACE,
-    ("PUT", f"{_D}/ingestion-config"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),

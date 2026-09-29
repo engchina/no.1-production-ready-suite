@@ -479,28 +479,6 @@ class DocumentRecipeDeleteResult(BaseModel):
     removed_chunk_set_count: int = Field(default=0, ge=0)
 
 
-class DocumentIngestionConfigData(BaseModel):
-    """文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)。"""
-
-    document_id: str
-    is_indexed: bool = False
-    processing_config: DocumentProcessingConfig = Field(default_factory=DocumentProcessingConfig)
-    effective_processing_config: DocumentProcessingConfig = Field(
-        default_factory=DocumentProcessingConfig
-    )
-    # global 既定(「検索・回答設定」)から解決した「これから取り込むなら」の有効レシピ。
-    effective_preprocess_profile: str
-    effective_chunking_strategy: str
-    effective_parser_adapter_backend: str
-    # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。
-    observed_chunking_strategy: str | None = None
-    observed_parser_backend: str | None = None
-    chunking_drift: bool = False
-    parser_drift: bool = False
-    config_drift: bool = False
-    drift_fields: list[str] = Field(default_factory=list)
-
-
 class DocumentExtractionExportFormat(StrEnum):
     """構造化抽出の監査用 export 形式。"""
 

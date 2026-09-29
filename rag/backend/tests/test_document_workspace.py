@@ -881,21 +881,15 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
 
 
 def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
-    """文書上書きは KB を介さず実取込 pipeline の Settings へ渡る。"""
-    document_id = _upload("custom-recipe.txt", b"recipe", "text/plain")
-    update = client.put(
-        f"/api/documents/{document_id}/ingestion-config",
-        json={"parser_adapter_backend": "mineru", "chunking_strategy": "page_level"},
+    """レシピの上書きは KB を介さず、取込の Settings へ渡る（#488。レシピの job と同じ合成）。"""
+    settings, effective = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(parser_adapter_backend="mineru", chunking_strategy="page_level")
     )
-    assert update.status_code == 200
-    job = client.post(f"/api/documents/{document_id}/ingestion-jobs").json()["data"]
 
-    anyio.run(documents_route._run_ingestion_job, job["id"])
-
-    settings = FakeWorkspaceIngestionPipeline.last_settings
-    assert settings is not None
     assert settings.rag_parser_adapter_backend == "mineru"
     assert settings.rag_chunking_strategy == "page_level"
+    assert effective.parser_adapter_backend == "mineru"
+    assert effective.chunking_strategy == "page_level"
 
 
 def test_document_upload_has_no_ingestion_mode_and_never_enqueues() -> None:
@@ -1475,25 +1469,22 @@ def test_recipe_approve_returns_404_for_unknown_recipe() -> None:
     assert resp.status_code == 404
 
 
-def test_document_ingestion_config_returns_effective_preprocess_profile(
+def test_document_processing_config_resolves_preprocess_profile_and_auto_advance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """取込設定の保存 API の応答はファイル準備方式も返す。"""
+    """レシピの有効な設定は、ファイル準備方式と自動進行を global 既定から解決する（#488）。"""
     monkeypatch.setattr(
         documents_route,
         "get_settings",
         lambda: Settings(rag_preprocess_profile="passthrough"),
     )
-    document_id = _upload("config-policy.txt", b"config text", "text/plain")
 
-    resp = client.put(f"/api/documents/{document_id}/ingestion-config", json={})
+    _, effective = documents_route._merge_document_processing_config(DocumentProcessingConfig())
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["effective_preprocess_profile"] == "passthrough"
-    assert data["effective_processing_config"]["auto_parse_after_preprocess_enabled"] is True
-    assert data["effective_processing_config"]["auto_chunk_after_extract_enabled"] is True
-    assert data["effective_processing_config"]["auto_index_after_chunk_enabled"] is True
+    assert effective.preprocess_profile == "passthrough"
+    assert effective.auto_parse_after_preprocess_enabled is True
+    assert effective.auto_chunk_after_extract_enabled is True
+    assert effective.auto_index_after_chunk_enabled is True
 
 
 def test_preprocess_auto_advance_waits_for_manual_review_when_disabled(

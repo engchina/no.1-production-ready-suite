@@ -48,7 +48,7 @@ import {
   ApiError,
   api,
   type DocumentChunkSet,
-  type DocumentIngestionConfigData,
+  type DocumentProcessingConfigData,
   type DocumentLayerStatusName,
   type DocumentRecipeStep,
   type DocumentRecipeView,
@@ -654,22 +654,10 @@ function processButtonLabel(recipe: DocumentRecipeView) {
   return t("documents.recipes.run");
 }
 
-function recipeConfigData(recipe: DocumentRecipeView): DocumentIngestionConfigData {
-  const effective = recipe.effective_processing_config;
+function recipeConfigData(recipe: DocumentRecipeView): DocumentProcessingConfigData {
   return {
-    document_id: recipe.document_id,
-    is_indexed: recipe.searchable,
     processing_config: recipe.processing_config,
-    effective_processing_config: effective,
-    effective_preprocess_profile: effective.preprocess_profile ?? "passthrough",
-    effective_chunking_strategy: effective.chunking_strategy ?? "structure_aware",
-    effective_parser_adapter_backend: effective.parser_adapter_backend ?? "docling",
-    observed_chunking_strategy: null,
-    observed_parser_backend: null,
-    chunking_drift: recipe.needs_reprocessing,
-    parser_drift: recipe.needs_reprocessing,
-    config_drift: recipe.needs_reprocessing,
-    drift_fields: [],
+    effective_processing_config: recipe.effective_processing_config,
   };
 }
 

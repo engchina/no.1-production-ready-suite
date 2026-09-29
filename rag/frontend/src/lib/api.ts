@@ -914,20 +914,10 @@ export interface BusinessViewUpdateRequest {
 }
 
 /** 文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)と global 既定とのドリフト状況。 */
-export interface DocumentIngestionConfigData {
-  document_id: string;
-  is_indexed: boolean;
+/** 処理設定パネルに渡すレシピの設定（保存した上書きと、global 既定を重ねた有効値）。 */
+export interface DocumentProcessingConfigData {
   processing_config: DocumentProcessingConfig;
   effective_processing_config: DocumentProcessingConfig;
-  effective_preprocess_profile: PreprocessProfileName;
-  effective_chunking_strategy: string;
-  effective_parser_adapter_backend: string;
-  observed_chunking_strategy: string | null;
-  observed_parser_backend: string | null;
-  chunking_drift: boolean;
-  parser_drift: boolean;
-  config_drift: boolean;
-  drift_fields: string[];
 }
 
 export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
@@ -2638,11 +2628,6 @@ export const api = {
       )}/extraction-export?${search.toString()}`,
     );
   },
-  updateDocumentIngestionConfig: (id: string, body: DocumentProcessingConfig) =>
-    request<DocumentIngestionConfigData>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
-      { ...jsonBody(body), method: "PUT" },
-    ),
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs`,
