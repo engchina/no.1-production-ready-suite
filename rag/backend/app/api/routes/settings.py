@@ -87,10 +87,6 @@ from app.rag.guardrail_adapter import (
     normalize_guardrail_policy,
 )
 from app.rag.oracle_schema import vector_index_reindex_sql
-from app.rag.parser_adapter_contract import (
-    parser_adapter_contract_artifact_payload,
-    run_parser_adapter_compatibility_matrix,
-)
 from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
 from app.rag.parser_adapter_scorecard import (
     ParserAdapterSourceRoute,
@@ -149,9 +145,6 @@ from app.schemas.settings import (
     ModelSettingsTestRequest,
     OciConfigField,
     ParserAdapterBackendSourceMatrixData,
-    ParserAdapterContractCaseData,
-    ParserAdapterContractData,
-    ParserAdapterContractSummaryData,
     ParserAdapterScorecardData,
     ParserAdapterScorecardEntryData,
     ParserAdapterSettingsData,
@@ -352,15 +345,6 @@ async def update_huggingface_settings(
 async def get_parser_adapter_settings() -> ApiResponse[ParserAdapterSettingsData]:
     """任意 parser adapter の feature flag と package readiness を返す。"""
     return ApiResponse(data=_parser_adapter_settings_data(get_settings()))
-
-
-@router.get(
-    "/parser-adapters/contract",
-    response_model=ApiResponse[ParserAdapterContractData],
-)
-async def get_parser_adapter_contract() -> ApiResponse[ParserAdapterContractData]:
-    """任意 parser adapter の schema remap compatibility matrix を返す。"""
-    return ApiResponse(data=_parser_adapter_contract_data(get_settings()))
 
 
 @router.get(
@@ -1051,75 +1035,6 @@ def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
         for backend, capability in ADAPTER_CAPABILITIES.items()
         if backend != "enterprise_ai_vlm"
     ]
-
-
-def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractData:
-    """Settings から parser adapter compatibility matrix の表示用データを作る。"""
-    matrix = run_parser_adapter_compatibility_matrix(settings)
-    payload = parser_adapter_contract_artifact_payload(matrix)
-    raw_summary = payload.get("summary")
-    summary = raw_summary if isinstance(raw_summary, dict) else {}
-    raw_cases = payload.get("cases")
-    artifact_cases = (
-        [case for case in raw_cases if isinstance(case, dict)]
-        if isinstance(raw_cases, list | tuple)
-        else []
-    )
-    return ParserAdapterContractData(
-        passed=matrix.passed,
-        fixture_root=str(payload["fixture_root"]),
-        source_kinds=list(matrix.source_kinds),
-        backends=list(matrix.backends),
-        case_count=matrix.case_count,
-        blocking_failure_count=matrix.blocking_failure_count,
-        cases=[
-            ParserAdapterContractCaseData(
-                backend=case["backend"],
-                source_kind=str(case["source_kind"]),
-                fixture_name=str(case["fixture_name"]),
-                content_type=str(case["content_type"]),
-                status=case["status"],
-                blocking=bool(case["blocking"]),
-                parser_backend=(str(case["parser_backend"]) if "parser_backend" in case else None),
-                parser_version=(str(case["parser_version"]) if "parser_version" in case else None),
-                adapter_import_name=(
-                    str(case["adapter_import_name"]) if "adapter_import_name" in case else None
-                ),
-                adapter_distribution_name=(
-                    str(case["adapter_distribution_name"])
-                    if "adapter_distribution_name" in case
-                    else None
-                ),
-                adapter_package_version=(
-                    str(case["adapter_package_version"])
-                    if "adapter_package_version" in case
-                    else None
-                ),
-                template=str(case["template"]) if "template" in case else None,
-                element_count=_int_value(case.get("element_count")),
-                page_count=_int_value(case.get("page_count")),
-                table_count=_int_value(case.get("table_count")),
-                table_cell_count=_int_value(case.get("table_cell_count")),
-                asset_count=_int_value(case.get("asset_count")),
-                bbox_count=_int_value(case.get("bbox_count")),
-                warning_codes=_string_list(case.get("warning_codes")),
-                reason_codes=_string_list(case.get("reason_codes")),
-            )
-            for case in artifact_cases
-        ],
-        summary=ParserAdapterContractSummaryData.model_validate(summary),
-        config_source="runtime",
-    )
-
-
-def _int_value(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list | tuple | set | frozenset):
-        return []
-    return [item for item in value if isinstance(item, str)]
 
 
 def _parser_adapter_source_route_data(

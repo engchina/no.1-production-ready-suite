@@ -55,7 +55,6 @@ import {
   type BusinessViewUpdateRequest,
   type ConversationCreateBody,
   type ConversationUpdateBody,
-  type ParserAdapterContractData,
   type ParserAdapterSettingsUpdate,
   type ParserAdapterSettingsData,
   type ChunkingSettingsData,
@@ -178,7 +177,6 @@ export const queryKeys = {
   huggingfaceSettings: ["settings", "huggingface"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
-  parserAdapterContract: ["settings", "parser-adapters", "contract"] as const,
   externalParserStatuses: ["settings", "parser-adapters", "status"] as const,
   externalParserStatus: (backend: ExternalParserBackendName) =>
     ["settings", "parser-adapters", "status", backend] as const,
@@ -1559,17 +1557,6 @@ export function useParserAdapterSettings(enabled = true) {
   });
 }
 
-/** 任意 parser adapter の schema remap compatibility matrix。 */
-export function useParserAdapterContract() {
-  return useQuery<ParserAdapterContractData>({
-    queryKey: queryKeys.parserAdapterContract,
-    queryFn: api.getParserAdapterContract,
-    enabled: false,
-    retry: false,
-  });
-}
-
-/** 保存済みの外部 GPU parser 接続を確認する。 */
 export function useExternalParserStatus(
   backend: ExternalParserBackendName,
   enabled = false,
@@ -1897,7 +1884,6 @@ export function useUpdateParserAdapterSettings() {
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.parserAdapterSettings, data);
       void qc.resetQueries({ queryKey: queryKeys.externalParserStatuses });
-      qc.invalidateQueries({ queryKey: queryKeys.parserAdapterContract });
     },
   });
 }
