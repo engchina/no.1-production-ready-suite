@@ -64,8 +64,9 @@ DOCLING_ENGINE = "docling"
 # Docling 以外のページ画像の解像度。Docling サービスの既定(DOCRAG_RENDER_DPI=300)にそろえる。
 VISION_RENDER_DPI = 300
 # 図として読み取る asset の種類(source_image は画像ファイル全体を 1 枚の図として扱う)。
+# picture は Dots.OCR の Picture(本文のない図は asset だけになる。#502)。
 VISION_ASSET_KINDS = frozenset(
-    {"figure", "image", "chart", "diagram", "graph", "plot", "source_image"}
+    {"figure", "image", "picture", "chart", "diagram", "graph", "plot", "source_image"}
 )
 # 読み取り済み(再開時に読み直さない)とみなす状態。failed は読み直す。
 _FINAL_VISION_STATUSES = frozenset({"succeeded", "skipped"})
@@ -738,13 +739,19 @@ def _bbox_scale(
     page: PageImage,
     source_is_image: bool,
 ) -> tuple[float, float] | None:
-    """bbox の座標系の寸法(幅, 高さ)。解析エンジンごとの単位の表(#497)。
+    """bbox の座標系の寸法(幅, 高さ)。解析エンジンごとの単位の表(#497・#502)。
 
     - 値が全て 1 以下: ページに対する割合(0-1。VLM・画像全体の source_image)。
     - Unstructured: coordinates の座標系の寸法(layout_width / height。registry が
-      ``page_width`` / ``page_height`` に写す)。無ければ不明。
+      ``page_width`` / ``page_height`` に写す)。無ければ不明。hi_res の PDF は PixelSpace
+      (350 dpi 相当のページ画像の px)、画像ファイルは元画像の px(実サービスで確認。#502)。
     - Dots.OCR: 描いたページ画像の px。寸法は ``pages``(PDF)。画像ファイルは元画像の px。
-    - MinerU: 0-1000 に正規化した座標(MinerU 2.x の content_list)。1000 を超えれば不明。
+      モデルの出力は入力画像を smart_resize した寸法の px なので、``external_parser`` が
+      受け取ったときに送った画像の px へ戻している(#502)。
+    - MinerU: ページに対して 0-1000 に正規化した座標(content_list)。MinerU 2.5.4 の
+      ``make_blocks_to_content_list``(``x * 1000 / page_width``)と、4.0.10 の
+      ``normalize_bbox``(MiddleJson の 0-1 を ``int(v * 1000)``)で確認(#502)。1000 を
+      超えれば不明。
     - OCI Enterprise AI の VLM 解析: 0-1 か 0-100(prompt の指定)。それを超えれば不明。
     - それ以外(OCI Document Understanding など): 不明。
     """

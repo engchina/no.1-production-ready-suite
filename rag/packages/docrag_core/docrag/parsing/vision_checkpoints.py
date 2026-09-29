@@ -4,12 +4,15 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 
 from docrag.parsing.checkpoints import atomic_json, digest_json, file_digest
 
 # prompt以外の後処理・画像入力契約を変更した場合も版を上げて再利用を無効化する。
 VISION_CHECKPOINT_VERSION = 1
+
+_LOG = logging.getLogger(__name__)
 
 
 class VisionCheckpoints:
@@ -47,9 +50,10 @@ class VisionCheckpoints:
             'current': self.current, 'items': self.entries,
             'updated_at': datetime.now(timezone.utc).isoformat(),
         })
-        print(f'[vision-progress] phase={self.phase} current={self.current} '
-              f'succeeded={counts["succeeded"]} failed={counts["failed"]} '
-              f'known={len(self.entries)} total_final={self.discovery_complete}', flush=True)
+        # 進捗は logging へ出す(backend の Vision の段の stdout へ print しない。#502)。
+        _LOG.info('[vision-progress] phase=%s current=%s succeeded=%s failed=%s known=%s total_final=%s',
+                  self.phase, self.current, counts["succeeded"], counts["failed"],
+                  len(self.entries), self.discovery_complete)
 
     def key(self, *, crop: Path, context: Path, prompt: str, system_prompt: str,
             provider, max_tokens: int, kind: str, api_mode: str) -> str:

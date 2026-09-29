@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
+import math
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import batched
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 from rag_parser_core.extraction import ExtractionMetadataValue, ExtractionPage
@@ -288,7 +290,7 @@ class ExternalParserClient:
                 extra={"top_p": 0.9},
                 text_after_images=True,
             )
-            return _dots_elements(text, page.number)
+            return _dots_bboxes_to_page_px(_dots_elements(text, page.number), page)
 
         elements: list[dict[str, object]] = []
         pages: list[ExtractionPage] = []
@@ -318,7 +320,8 @@ class ExternalParserClient:
             mime_type = content_type.split(";", 1)[0].strip().casefold()
             if not mime_type.startswith("image/"):
                 mime_type = "image/png"
-            yield _RenderedPage(1, source_bytes, 0, 0, mime_type)
+            width, height = _image_size(source_bytes)
+            yield _RenderedPage(1, source_bytes, width, height, mime_type)
             return
         try:
             import fitz  # type: ignore[import-untyped]
@@ -501,6 +504,72 @@ def _message_text(value: object) -> str:
             str(item.get("text") or "") for item in value if isinstance(item, dict)
         ).strip()
     raise ValueError("openai content is invalid")
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    """画像ファイルの寸法(px)。読めなければ (0, 0)(bbox の換算とページの寸法を持たない)。"""
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            return int(image.width), int(image.height)
+    except Exception:
+        return 0, 0
+
+
+# dots.ocr の bbox の座標系(#502)。モデルへ入れた画像は、画像処理(HF の preprocessor_config.json
+# の Qwen2VLImageProcessor: patch_size 14 x merge_size 2 = 28、min_pixels 3136、max_pixels
+# 11289600)で smart_resize した寸法になり、出力の bbox はその寸法の px になる。公式の parser は
+# post_process_cells で元の画像の px へ戻している(rednote-hilab/dots.ocr の
+# dots_ocr/utils/layout_utils.py・image_utils.py・consts.py。commit 36d7248、2026-03-24 時点)。
+# backend は OpenAI 互換 API を直接呼ぶので、同じ換算をここで行い、bbox を送った画像(PDF は
+# 描いたページ画像、画像ファイルは元の画像)の px にそろえる。
+_DOTS_IMAGE_FACTOR = 28
+_DOTS_MIN_PIXELS = 3136
+_DOTS_MAX_PIXELS = 11289600
+
+
+def _dots_model_input_size(width: int, height: int) -> tuple[int, int]:
+    """dots.ocr の smart_resize と同じ規則で、モデルへ入る画像の寸法(幅, 高さ)を返す。"""
+    factor = _DOTS_IMAGE_FACTOR
+    h_bar = max(factor, round(height / factor) * factor)
+    w_bar = max(factor, round(width / factor) * factor)
+    if h_bar * w_bar > _DOTS_MAX_PIXELS:
+        beta = math.sqrt((height * width) / _DOTS_MAX_PIXELS)
+        h_bar = max(factor, math.floor(height / beta / factor) * factor)
+        w_bar = max(factor, math.floor(width / beta / factor) * factor)
+    elif h_bar * w_bar < _DOTS_MIN_PIXELS:
+        beta = math.sqrt(_DOTS_MIN_PIXELS / (height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+        if h_bar * w_bar > _DOTS_MAX_PIXELS:
+            beta = math.sqrt((h_bar * w_bar) / _DOTS_MAX_PIXELS)
+            h_bar = max(factor, math.floor(h_bar / beta / factor) * factor)
+            w_bar = max(factor, math.floor(w_bar / beta / factor) * factor)
+    return w_bar, h_bar
+
+
+def _dots_bboxes_to_page_px(
+    elements: list[dict[str, object]], page: _RenderedPage
+) -> list[dict[str, object]]:
+    """dots.ocr の bbox(モデルの入力画像の px)を、送った画像の px(``page`` の寸法)へ戻す。
+
+    寸法が分からない画像(読めない画像ファイル)は換算しない。
+    """
+    if page.width <= 0 or page.height <= 0:
+        return elements
+    input_width, input_height = _dots_model_input_size(page.width, page.height)
+    sx = page.width / input_width
+    sy = page.height / input_height
+    for element in elements:
+        x0, y0, x1, y1 = (float(value) for value in cast(list[float], element["bbox"]))
+        element["bbox"] = [
+            round(min(max(x0 * sx, 0.0), page.width), 2),
+            round(min(max(y0 * sy, 0.0), page.height), 2),
+            round(min(max(x1 * sx, 0.0), page.width), 2),
+            round(min(max(y1 * sy, 0.0), page.height), 2),
+        ]
+    return elements
 
 
 def _strip_fences(value: str) -> str:
