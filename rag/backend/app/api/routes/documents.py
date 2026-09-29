@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from pathlib import PurePath
@@ -62,6 +63,7 @@ from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
+    IngestionSuccessOutcome,
     IngestionTimeoutError,
     IngestionUserError,
     document_artifact_prefixes,
@@ -1493,21 +1495,36 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
     return ApiResponse(data=chunk_sets)
 
 
+@dataclass(frozen=True)
+class _RecipeJobResult:
+    """レシピの job の工程の結果。どちらも呼び出し側が job を SUCCEEDED にできた後に使う。
+
+    ``next_phase`` は現在ジョブ完了後に自動投入すべき次フェーズ(不要なら ``None``)。
+    ``success_outcome`` は active への切り替えまで終えた job の、まだ記録していない成功の
+    監査・metric(索引まで進まなかった job は ``None``。#504 / #514)。
+    """
+
+    next_phase: IngestionJobPhase | None = None
+    success_outcome: IngestionSuccessOutcome | None = None
+
+
 async def _materialize_experiment_candidate(
     oracle: OracleClient,
     job: IngestionJob,
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> IngestionJobPhase | None:
+) -> _RecipeJobResult:
     """文書レシピの job で、設定 snapshot から新しい chunk_set を隔離構築する。
 
     既存 active 出力を構築中に変更しない。成功時だけ active を原子的に差し替える。
     ``recipe_id`` の無い job（移行前の旧実験 API の job）は実行せず、
     利用者向けのエラーで止める（#486）。
 
-    戻り値は「現在ジョブ完了後に自動投入すべき次フェーズ」。自動進行不要なら ``None``。
+    戻り値の ``next_phase`` は「現在ジョブ完了後に自動投入すべき次フェーズ」。
     現在ジョブが RUNNING のまま新ジョブを作るとレシピ行ロックのガードで弾かれるため、
     投入自体は呼び出し側(``_run_ingestion_job``)が現在ジョブ SUCCEEDED 後に行う。
+    成功の監査・metric(``success_outcome``)もここでは記録せず、呼び出し側が job を
+    SUCCEEDED にできた後に 1 回だけ記録する(#514)。
     """
     recipe_id = job.recipe_id
     if recipe_id is None:
@@ -1598,7 +1615,7 @@ async def _materialize_experiment_candidate(
             chunk_count=chunk_count,
         )
         if not candidate_settings.rag_auto_index_after_chunk_enabled:
-            return None
+            return _RecipeJobResult()
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -1665,9 +1682,9 @@ async def _materialize_experiment_candidate(
             # 現在の EXTRACT ジョブがまだ RUNNING のため、ここで CHUNK ジョブを作ると
             # レシピ行ロックのガード(同一レシピの QUEUED/RUNNING 拒否)で弾かれる。
             # 投入は呼び出し側が現在ジョブ SUCCEEDED 後に行うので、決定だけ返す。
-            return IngestionJobPhase.CHUNK
+            return _RecipeJobResult(next_phase=IngestionJobPhase.CHUNK)
         if recipe_status in {FileStatus.PREPROCESSED, FileStatus.REVIEW}:
-            return None
+            return _RecipeJobResult()
         active_extraction_recipe_id = (
             recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
         )
@@ -1702,15 +1719,13 @@ async def _materialize_experiment_candidate(
         extraction_recipe_id=extraction_recipe_id,
         materialized_revision=job.recipe_revision,
     )
-    # 成功の監査・metric は、active への切り替え(検索対象になった時点)の後に job ごとに 1 回だけ
-    # 記録する。切り替えの前に取り消された・切り替えが失敗した job は成功を残さない(#504)。
-    success_outcome = pipeline.deferred_success_outcome
-    if success_outcome is not None:
-        success_outcome.record()
     # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
     await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
     # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
-    return None
+    # 成功の監査・metric はここでは記録せず、呼び出し側が job を SUCCEEDED にできた後に記録する。
+    # この後の status の更新の失敗や SUCCEEDED を書く直前の取り消しで、成功しなかった job の
+    # 成功の監査が残らないようにする(#504 / #514)。
+    return _RecipeJobResult(success_outcome=pipeline.deferred_success_outcome)
 
 
 async def _materialization_plan_for_document(
@@ -4337,6 +4352,8 @@ async def _run_ingestion_job(
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
+    # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
+    recipe_success_outcome: IngestionSuccessOutcome | None = None
     # 文書単位の job の実行結果。自動進行(次工程の投入)は SUCCEEDED を書けた後に判定する。
     finished_detail: DocumentDetail | None = None
     try:
@@ -4349,9 +4366,11 @@ async def _run_ingestion_job(
         if job.recipe_id is not None or job.settings_overrides is not None:
             # 正式レシピは旧 active を維持した隔離 materialize。recipe_id の無い旧実験の job は
             # 利用者向けのエラーで止める（#486）。
-            next_recipe_phase = await _materialize_experiment_candidate(
+            recipe_result = await _materialize_experiment_candidate(
                 oracle, job, cancel_checker=is_cancelled
             )
+            next_recipe_phase = recipe_result.next_phase
+            recipe_success_outcome = recipe_result.success_outcome
         elif job.phase == IngestionJobPhase.CHUNK:
             finished_detail = await _chunk_reviewed_document(
                 job.document_id,
@@ -4472,6 +4491,8 @@ async def _run_ingestion_job(
                 discarded_status=IngestionJobStatus.SUCCEEDED,
             )
             return
+        if recipe_success_outcome is not None:
+            _record_recipe_success_outcome(job, recipe_success_outcome)
         if finished_detail is not None:
             await _enqueue_auto_advance_job(job, finished_detail)
         if next_recipe_phase is not None and job.recipe_id is not None:
@@ -4492,6 +4513,25 @@ async def _run_ingestion_job(
                     },
                     exc_info=True,
                 )
+
+
+def _record_recipe_success_outcome(job: IngestionJob, outcome: IngestionSuccessOutcome) -> None:
+    """SUCCEEDED にできたレシピの job の成功の監査・metric を 1 回だけ記録する(#514)。
+
+    job は既に成功しているため、記録に失敗しても job の状態は戻さず、ログに残すだけにする。
+    """
+    try:
+        outcome.record()
+    except Exception:
+        logger.warning(
+            "recipe_ingestion_success_outcome_record_failed",
+            extra={
+                "job_id": job.id,
+                "document_id": job.document_id,
+                "recipe_id": job.recipe_id,
+            },
+            exc_info=True,
+        )
 
 
 async def _requeue_ingestion_job_after_transient_error(
