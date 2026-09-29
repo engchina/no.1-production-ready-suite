@@ -352,6 +352,28 @@ def test_dots_bbox_is_mapped_from_model_input_to_rendered_page_pixels() -> None:
     assert [round(value) for value in bbox] == [556, 1112, 2556, 2445]
 
 
+def test_dots_300dpi_a4_matches_ai_foundations_lab_observation() -> None:
+    """ai-foundations-lab の dots.mocr の検証(300 dpi の A4)と、この換算が合うこと(#512)。
+
+    lab(engchina/ai-foundations-lab、commit 572e9fa の 20260819/README.md)は、300 dpi の A4 の
+    画像パッチを約 44,000 と記録している。smart_resize は縮小せず 28 の倍数へ丸めるだけなので、
+    lab のように bbox をそのままページ画像の px として使っても 0.5% 未満の差で重なって見える。
+    その丸めの差(右下の角で 12px / 9px)も、ここの換算で戻す。
+    """
+    width, height = 2480, 3509  # pymupdf で A4(595x842 pt)を 300 dpi で描いた寸法
+    input_width, input_height = _dots_model_input_size(width, height)
+    assert (input_width, input_height) == (2492, 3500)
+    assert input_width * input_height // (14 * 14) == 44_500
+
+    elements: list[dict[str, object]] = [
+        {"bbox": [0, 0, input_width, input_height], "category": "Picture"}
+    ]
+    bbox = _dots_bboxes_to_page_px(elements, _RenderedPage(1, b"", width, height))[0]["bbox"]
+    assert bbox == [0.0, 0.0, float(width), float(height)]
+    # lab の扱い(そのまま使い、ページ内へ収める)との差は丸めの分だけ。
+    assert abs(input_width - width) <= 14 and abs(input_height - height) <= 14
+
+
 def test_dots_bbox_is_not_mapped_without_page_size() -> None:
     elements: list[dict[str, object]] = [{"bbox": [1, 2, 30, 20], "category": "Text"}]
 
