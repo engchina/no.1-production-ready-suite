@@ -1228,9 +1228,7 @@ def test_force_ingest_retries_already_indexed_document() -> None:
 
         assert job["status"] == "FAILED"
         assert job["error_message"] == "原本ファイルが見つかりません。"
-        stored = asyncio.run(OracleClient().get_document(detail.id))
-        assert stored is not None
-        assert stored.status == FileStatus.ERROR
+        _assert_recipe_failed_without_document_error(detail.id, "原本ファイルが見つかりません。")
 
 
 def test_indexed_document_is_idempotent_without_force() -> None:
@@ -1371,8 +1369,23 @@ def test_ingest_fails_job_when_vlm_parser_service_fails(
     assert audit_event["error_type"] == "IngestionUserError"
 
 
-def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
-    """原本ファイルが消えている場合は説明可能な 409 と ERROR 状態にする。"""
+def _assert_recipe_failed_without_document_error(document_id: str, error_message: str) -> None:
+    """レシピの job の失敗は、レシピの行だけを ERROR にし、文書の status は変えない(#504)。
+
+    文書単位の投入は工程の前に文書を UPLOADED へ戻すため、失敗後も UPLOADED のまま。
+    """
+    recipe = _default_recipe(document_id, headers=NO_TENANT_HEADERS)
+    assert recipe["status"] == "ERROR"
+    assert recipe["failed_phase"] == "PREPROCESS"
+    assert recipe["error_message"] == error_message
+    stored = asyncio.run(OracleClient().get_document(document_id))
+    assert stored is not None
+    assert stored.status == FileStatus.UPLOADED
+    assert stored.error_message in {None, ""}
+
+
+def test_ingest_fails_recipe_without_document_error_when_source_object_is_missing() -> None:
+    """原本ファイルが消えている場合は説明可能なエラーでレシピだけを ERROR にする(#504)。"""
     with audit_request_context():
         detail = _create_document_with_source_metadata("missing.txt", "local://missing/missing.txt")
 
@@ -1380,10 +1393,7 @@ def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
 
         assert job["status"] == "FAILED"
         assert job["error_message"] == "原本ファイルが見つかりません。"
-        stored = asyncio.run(OracleClient().get_document(detail.id))
-        assert stored is not None
-        assert stored.status == FileStatus.ERROR
-        assert stored.error_message == "原本ファイルが見つかりません。"
+        _assert_recipe_failed_without_document_error(detail.id, "原本ファイルが見つかりません。")
 
 
 def test_ingest_rejects_source_size_mismatch() -> None:
@@ -1407,10 +1417,9 @@ def test_ingest_rejects_source_size_mismatch() -> None:
 
         assert job["status"] == "FAILED"
         assert job["error_message"] == "原本ファイルのサイズがアップロード時と一致しません。"
-        stored = asyncio.run(OracleClient().get_document(detail.id))
-        assert stored is not None
-        assert stored.status == FileStatus.ERROR
-        assert stored.error_message == "原本ファイルのサイズがアップロード時と一致しません。"
+        _assert_recipe_failed_without_document_error(
+            detail.id, "原本ファイルのサイズがアップロード時と一致しません。"
+        )
 
 
 def test_ingest_rejects_source_hash_mismatch() -> None:
@@ -1434,10 +1443,9 @@ def test_ingest_rejects_source_hash_mismatch() -> None:
 
         assert job["status"] == "FAILED"
         assert job["error_message"] == "原本ファイルの SHA-256 がアップロード時と一致しません。"
-        stored = asyncio.run(OracleClient().get_document(detail.id))
-        assert stored is not None
-        assert stored.status == FileStatus.ERROR
-        assert stored.error_message == "原本ファイルの SHA-256 がアップロード時と一致しません。"
+        _assert_recipe_failed_without_document_error(
+            detail.id, "原本ファイルの SHA-256 がアップロード時と一致しません。"
+        )
 
 
 def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
@@ -1451,7 +1459,6 @@ def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
 
         assert job["status"] == "FAILED"
         assert job["error_message"] == "原本ファイルの参照パスが不正です。"
-        stored = asyncio.run(OracleClient().get_document(detail.id))
-        assert stored is not None
-        assert stored.status == FileStatus.ERROR
-        assert stored.error_message == "ローカルモードでは local:// URI のみ取得できます。"
+        _assert_recipe_failed_without_document_error(
+            detail.id, "原本ファイルの参照パスが不正です。"
+        )
