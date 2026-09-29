@@ -44,7 +44,7 @@ test("検索インデックス設定は accurate 選択で索引再作成警告�
 
   const accurate = page.getByRole("radio", { name: /高精度/ });
   await accurate.click();
-  await expect(accurate).toHaveAttribute("aria-checked", "true");
+  await expect(accurate).toBeChecked();
   // 非 balanced 選択時のみ出る再作成警告(reprovision)を固有文言で検証する。
   await expect(page.getByText("推奨ビルドパラメータを適用するには", { exact: false })).toBeVisible();
 
@@ -77,13 +77,13 @@ test("検索インデックス設定は未保存選択を裏の再取得で失�
 
   const fast = page.getByRole("radio", { name: /高速/ });
   await fast.click();
-  await expect(fast).toHaveAttribute("aria-checked", "true");
+  await expect(fast).toBeChecked();
 
   // window focus を起点に TanStack Query の再取得を誘発しても未保存選択は維持される。
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await page.waitForTimeout(200);
 
-  await expect(fast).toHaveAttribute("aria-checked", "true");
+  await expect(fast).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 });
 

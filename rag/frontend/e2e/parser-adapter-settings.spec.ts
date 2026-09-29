@@ -43,9 +43,14 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
     ).toBeVisible();
-    const engineNames = (await page.getByRole("radio").allTextContents()).map((text) =>
-      text.replace(/\s+/g, " ").trim()
-    );
+    // エンジン名は本物のラジオのラベル（カード）の文字（#469）。
+    const engineNames = (
+      await page
+        .getByRole("radio")
+        .evaluateAll((elements) =>
+          elements.map((element) => (element as HTMLInputElement).labels?.[0]?.textContent ?? "")
+        )
+    ).map((text) => text.replace(/\s+/g, " ").trim());
     expect(engineNames).toHaveLength(6);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
@@ -332,8 +337,9 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
   await mineruBackend.focus();
   await expect(mineruBackend).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(mineruBackend).toHaveAttribute("aria-checked", "true");
+  // 本物のラジオは Space（または矢印キー）で選ぶ（#469）。
+  await page.keyboard.press("Space");
+  await expect(mineruBackend).toBeChecked();
 
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
@@ -421,7 +427,9 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await page.goto("/settings/parser-adapters");
   const endpoint = page.locator("#external-parser-dots_ocr-endpoint");
   const model = page.locator("#external-parser-dots_ocr-model");
-  const card = endpoint.locator("xpath=../../..");
+  const card = endpoint.locator(
+    "xpath=ancestor::*[.//button[normalize-space()='接続を確認']][1]"
+  );
 
   await card.getByRole("button", { name: "接続を確認" }).click();
   await expect(card.getByText("接続できました。")).toBeVisible();

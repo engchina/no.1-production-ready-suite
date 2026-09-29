@@ -540,33 +540,21 @@ export function SearchClient() {
                             {t("search.filters.sectionHelper")}
                           </p>
                           <div className="grid gap-3 md:grid-cols-2">
-                            <div className="space-y-1.5">
-                              <label htmlFor="search-section-title" className="text-xs font-medium text-fg">
-                                {t("search.filters.sectionTitle")}
-                              </label>
-                              <input
-                                id="search-section-title"
-                                type="text"
-                                value={sectionTitle}
-                                onChange={(event) => setSectionTitle(event.target.value)}
-                                placeholder={t("search.filters.sectionTitlePlaceholder")}
-                                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
-                              />
-                            </div>
+                            <TextField
+                              id="search-section-title"
+                              label={t("search.filters.sectionTitle")}
+                              value={sectionTitle}
+                              onValueChange={setSectionTitle}
+                              placeholder={t("search.filters.sectionTitlePlaceholder")}
+                            />
 
-                            <div className="space-y-1.5">
-                              <label htmlFor="search-section-path" className="text-xs font-medium text-fg">
-                                {t("search.filters.sectionPath")}
-                              </label>
-                              <input
-                                id="search-section-path"
-                                type="text"
-                                value={sectionPath}
-                                onChange={(event) => setSectionPath(event.target.value)}
-                                placeholder={t("search.filters.sectionPathPlaceholder")}
-                                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
-                              />
-                            </div>
+                            <TextField
+                              id="search-section-path"
+                              label={t("search.filters.sectionPath")}
+                              value={sectionPath}
+                              onValueChange={setSectionPath}
+                              placeholder={t("search.filters.sectionPathPlaceholder")}
+                            />
                           </div>
                         </div>
                       ) : null}

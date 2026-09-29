@@ -9,13 +9,13 @@ import {
   CardHeader,
   CardTitle,
   Button,
-  FieldError,
   FormStatus,
   ProcessingIndicator,
   Skeleton,
   Switch,
   TimedLoadingState,
   FormSkeleton,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useMemo, useState, type ReactNode } from "react";
 import {
@@ -416,66 +416,73 @@ function OverviewCard({
                   const supportedFormats = formatSupportedFormats(capability);
                   const supportedExtensions = formatSupportedExtensions(capability);
                   return (
-                    <button
-                      key={backend}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      disabled={saving}
-                      onClick={() => onBackendChange(backend)}
-                      className={cn(
-                        "min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                        selected
-                          ? "border-accent-emphasis bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg hover:bg-surface-hover"
-                      )}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-sm font-semibold">{backendLabel(backend)}</span>
-                        {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {t(backendDescriptionKey(backend))}
-                      </span>
-                      {supportedFormats ? (
-                        <span className="mt-1 block text-xs text-fg-muted">
-                          {t("settings.parserAdapters.capabilities")}: {supportedFormats}
+                    <div key={backend} className="relative min-w-0">
+                      <input
+                        id={`settings-parser-backend-${backend}`}
+                        className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                        type="radio"
+                        name="settings-parser-backend"
+                        value={backend}
+                        checked={selected}
+                        disabled={saving}
+                        onChange={() => onBackendChange(backend)}
+                      />
+                      <label
+                        htmlFor={`settings-parser-backend-${backend}`}
+                        className={cn(
+                          "block h-full cursor-pointer min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                          selected
+                            ? "border-accent-emphasis bg-accent-subtle text-fg"
+                            : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
+                        )}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-sm font-semibold">{backendLabel(backend)}</span>
+                          {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
                         </span>
-                      ) : null}
-                      {supportedExtensions ? (
-                        <span className="mt-0.5 block break-words text-xs leading-4 text-fg-muted">
-                          {supportedExtensions}
+                        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
+                          {t(backendDescriptionKey(backend))}
                         </span>
-                      ) : null}
-                      <span className="mt-2 flex flex-wrap items-center gap-1.5">
-                        {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
-                        {service && !service.configured ? (
-                          <span className="inline-flex items-center gap-1 rounded-sm bg-warning-subtle px-1.5 py-0.5 text-xs font-medium text-warning-fg whitespace-nowrap">
-                            <AlertTriangle size={14} aria-hidden />
-                            {t("settings.parserAdapters.serviceBackend.unconfigured")}
+                        {supportedFormats ? (
+                          <span className="mt-1 block text-xs text-fg-muted">
+                            {t("settings.parserAdapters.capabilities")}: {supportedFormats}
                           </span>
                         ) : null}
-                        {externalConnection ? (
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
-                              externalConnection.configured
-                                ? "bg-success-subtle text-success-fg"
-                                : "bg-warning-subtle text-warning-fg"
-                            )}
-                          >
-                            {externalConnection.configured ? (
-                              <CheckCircle2 size={14} aria-hidden />
-                            ) : (
+                        {supportedExtensions ? (
+                          <span className="mt-0.5 block break-words text-xs leading-4 text-fg-muted">
+                            {supportedExtensions}
+                          </span>
+                        ) : null}
+                        <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
+                          {service && !service.configured ? (
+                            <span className="inline-flex items-center gap-1 rounded-sm bg-warning-subtle px-1.5 py-0.5 text-xs font-medium text-warning-fg whitespace-nowrap">
                               <AlertTriangle size={14} aria-hidden />
-                            )}
-                            {externalConnection.configured
-                              ? t("settings.parserAdapters.connection.configured")
-                              : t("settings.parserAdapters.serviceBackend.unconfigured")}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
+                              {t("settings.parserAdapters.serviceBackend.unconfigured")}
+                            </span>
+                          ) : null}
+                          {externalConnection ? (
+                            <span
+                              className={cn(
+                                "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
+                                externalConnection.configured
+                                  ? "bg-success-subtle text-success-fg"
+                                  : "bg-warning-subtle text-warning-fg"
+                              )}
+                            >
+                              {externalConnection.configured ? (
+                                <CheckCircle2 size={14} aria-hidden />
+                              ) : (
+                                <AlertTriangle size={14} aria-hidden />
+                              )}
+                              {externalConnection.configured
+                                ? t("settings.parserAdapters.connection.configured")
+                                : t("settings.parserAdapters.serviceBackend.unconfigured")}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    </div>
                   );
                 })}
               </div>
@@ -743,29 +750,20 @@ function ConnectionTextField({
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  const errorId = `${id}-error`;
   return (
-    <div className="min-w-0 space-y-1.5">
-      <label htmlFor={id} className="text-xs font-medium text-fg">
-        {label}
-      </label>
-      <input
-        id={id}
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        autoComplete="off"
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn(
-          "min-h-[44px] w-full min-w-0 rounded-md border bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
-          error ? "border-danger-fg" : "border-border-control"
-        )}
-      />
-      <FieldError id={errorId} message={error} />
-    </div>
+    <TextField
+      id={id}
+      className="min-w-0"
+      label={label}
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      disabled={disabled}
+      autoComplete="off"
+      error={error}
+      onValueChange={onChange}
+      touchTarget
+    />
   );
 }
 

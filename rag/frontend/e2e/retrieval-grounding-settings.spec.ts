@@ -34,7 +34,7 @@ for (const viewport of [
     await expect(page.getByRole("switch", { name: "業務適合加重" })).toBeVisible();
     await expect(page.getByRole("switch", { name: "補正検索" })).toBeVisible();
     // 推奨用途チップは英語生トークンではなく日本語 i18n ラベルで表示する。
-    await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toContainText("一般");
+    await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toHaveAccessibleName(/一般/);
     // 回答エンジンが DocRAG の業務ビューでは使われない欄に説明を出す。入力は残す(#300)。
     await expect(page.getByRole("radiogroup", { name: "検索モード" })).toHaveAccessibleDescription(
       /回答エンジンが DocRAG の業務ビューでは使われません/
@@ -62,10 +62,10 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "根拠確認", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /カスタム/ })).toContainText("高度な設定");
-    await expect(page.getByRole("radio", { name: /リーン/ })).toContainText("低遅延");
-    await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toContainText("補正(CRAG)");
-    await expect(page.getByRole("radio", { name: /リーン/ })).not.toContainText("low_latency");
+    await expect(page.getByRole("radio", { name: /カスタム/ })).toHaveAccessibleName(/高度な設定/);
+    await expect(page.getByRole("radio", { name: /リーン/ })).toHaveAccessibleName(/低遅延/);
+    await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toHaveAccessibleName(/補正\(CRAG\)/);
+    await expect(page.getByRole("radio", { name: /リーン/ })).not.toHaveAccessibleName(/low_latency/);
     // この画面の設定は回答エンジンが DocRAG の業務ビューでは使われない(#300)。
     await expect(page.getByRole("radiogroup", { name: "処理方式" })).toHaveAccessibleDescription(
       /回答エンジンが DocRAG の業務ビューでは使われません/
@@ -95,7 +95,7 @@ test("検索方法設定はモードとトグルを保存できる", async ({ pa
 
   const keyword = page.getByRole("radio", { name: /キーワード/ });
   await keyword.click();
-  await expect(keyword).toHaveAttribute("aria-checked", "true");
+  await expect(keyword).toBeChecked();
   await page.getByRole("switch", { name: "補正検索" }).click();
   await page.getByRole("combobox", { name: "全文検索の分割方式" }).click();
   await page.getByRole("option", { name: "Sudachi（形態素解析・DocRAG）" }).click();
@@ -165,7 +165,7 @@ test("根拠確認設定は処理方式を保存できる", async ({ page }) => 
 
   const full = page.getByRole("radio", { name: /フルガバナンス/ });
   await full.click();
-  await expect(full).toHaveAttribute("aria-checked", "true");
+  await expect(full).toBeChecked();
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("根拠確認設定を保存しました。")).toBeVisible();
@@ -228,7 +228,7 @@ test("検索方法設定の保存に失敗しても未保存の編集を残す (
   await expect(page.getByText("検索方法設定を backend/.env へ保存できませんでした。")).toBeVisible();
   expect(patchCount).toBe(1);
   // 失敗後も利用者の選択を server 値へ戻さず、そのまま再試行できる。
-  await expect(keyword).toHaveAttribute("aria-checked", "true");
+  await expect(keyword).toBeChecked();
   await expect(page.getByRole("switch", { name: "補正検索" })).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();

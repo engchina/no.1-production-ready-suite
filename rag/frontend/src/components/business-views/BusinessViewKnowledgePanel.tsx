@@ -144,7 +144,7 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
           rows={12}
           placeholder={t("businessViews.domainKeywords.placeholder")}
           disabled={save.isPending}
-          className="w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button
