@@ -1046,7 +1046,7 @@ function JsonField({
         rows={rows}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+        className="min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
       />
     </div>
   );

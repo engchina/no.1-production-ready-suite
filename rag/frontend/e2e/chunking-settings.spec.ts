@@ -40,7 +40,7 @@ for (const viewport of [
       "固定長",
       "固定分割符",
     ].entries()) {
-      await expect(radios.nth(index)).toContainText(name);
+      await expect(radios.nth(index)).toHaveAccessibleName(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
     await expect(page.getByRole("radio", { name: /親子分割|AutoMerging/ })).toHaveCount(0);
     // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
@@ -150,7 +150,7 @@ test("文書分割設定は DocRAG 親子階層のパラメータを保存でき
 
   const docrag = page.getByRole("radio", { name: /DocRAG 親子階層/ });
   await docrag.click();
-  await expect(docrag).toHaveAttribute("aria-checked", "true");
+  await expect(docrag).toBeChecked();
 
   const childTarget = page.getByLabel("子チャンク目標文字数", { exact: true });
   await childTarget.fill("2000");
@@ -209,7 +209,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 
   const recursive = page.getByRole("radio", { name: /再帰文字分割/ });
   await recursive.click();
-  await expect(recursive).toHaveAttribute("aria-checked", "true");
+  await expect(recursive).toBeChecked();
 
   const minChars = page.getByLabel("最小 chunk 文字数");
   await minChars.fill("40");

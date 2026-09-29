@@ -70,7 +70,7 @@ export function SettingsPreviewCard({
           value={value}
           aria-label={ariaLabel ?? title}
           className={cn(
-            "w-full resize-none rounded-md border border-border-control bg-surface-sunken p-3 font-mono text-xs leading-relaxed text-fg outline-none focus-visible:border-focus-ring",
+            "w-full resize-none rounded-md border border-border-control bg-surface-sunken p-3 font-mono text-xs leading-relaxed text-fg focus-visible:border-focus-ring",
             previewHeightClassName
           )}
         />

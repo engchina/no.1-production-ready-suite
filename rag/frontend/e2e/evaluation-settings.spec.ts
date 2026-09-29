@@ -49,7 +49,7 @@ test("品質評価設定は strict_ci を選んで閾値表示し保存できる
 
   const strict = page.getByRole("radio", { name: /厳格 CI/ });
   await strict.click();
-  await expect(strict).toHaveAttribute("aria-checked", "true");
+  await expect(strict).toBeChecked();
   await expect(page.getByText("groundedness_pass_rate", { exact: false }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();

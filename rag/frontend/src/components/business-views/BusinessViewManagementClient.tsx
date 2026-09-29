@@ -29,6 +29,7 @@ import {
   offsetForPage,
   offsetPagination,
   RowTitleButton,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -152,8 +153,6 @@ function draftSignature(draft: BusinessViewDraft) {
   });
 }
 const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
-const NAME_ERROR_ID = "business-view-name-error";
-const NAME_HELPER_ID = "business-view-name-helper";
 const SCOPE_ERROR_ID = "business-view-scope-error";
 
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalModeName>[] = [
@@ -460,12 +459,14 @@ function BusinessViewList({
               setQ(search.trim());
             }}
           >
-            <input
+            <TextField
+              id="business-view-search"
+              label={t("businessViews.search.placeholder")}
+              labelHidden
+              className="w-full min-w-0 sm:w-56"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onValueChange={setSearch}
               placeholder={t("businessViews.search.placeholder")}
-              aria-label={t("businessViews.search.placeholder")}
-              className="h-9 w-full min-w-0 rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring sm:w-56"
             />
             <Button size="sm" variant="secondary" type="submit" className="shrink-0">
               {t("businessViews.search.placeholder")}
@@ -903,51 +904,26 @@ function BusinessViewEditor({
                 <FormStatus tone="info" message={t("businessViews.draftRestored")} />
               ) : null}
               <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-                <div>
-                  <label htmlFor="business-view-name" className="text-sm font-medium text-fg">
-                    {t("businessViews.field.name")}
-                  </label>
-                  <input
-                    id="business-view-name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    onBlur={() => setTouched(true)}
-                    readOnly={isDefault}
-                    aria-readonly={isDefault || undefined}
-                    placeholder={t("businessViews.field.namePlaceholder")}
-                    aria-invalid={Boolean(nameError)}
-                    aria-describedby={
-                      [isDefault ? NAME_HELPER_ID : "", nameError ? NAME_ERROR_ID : ""]
-                        .filter(Boolean)
-                        .join(" ") || undefined
-                    }
-                    className={cn(
-                      "mt-1 h-9 w-full rounded-md border border-border-control px-3 text-sm outline-none focus-visible:border-focus-ring",
-                      isDefault ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface-sunken"
-                    )}
-                  />
-                  {isDefault ? (
-                    <p id={NAME_HELPER_ID} className="mt-1 text-xs text-fg-muted">
-                      {t("businessViews.default.nameFixed")}
-                    </p>
-                  ) : null}
-                  <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
-                </div>
-                <div>
-                  <label
-                    htmlFor="business-view-description"
-                    className="text-sm font-medium text-fg"
-                  >
-                    {t("businessViews.field.description")}
-                  </label>
-                  <input
-                    id="business-view-description"
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    placeholder={t("businessViews.field.descriptionPlaceholder")}
-                    className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
-                  />
-                </div>
+                <TextField
+                  id="business-view-name"
+                  label={t("businessViews.field.name")}
+                  value={name}
+                  onValueChange={setName}
+                  onBlur={() => setTouched(true)}
+                  readOnly={isDefault}
+                  aria-readonly={isDefault || undefined}
+                  placeholder={t("businessViews.field.namePlaceholder")}
+                  helper={isDefault ? t("businessViews.default.nameFixed") : undefined}
+                  error={nameError || undefined}
+                  inputClassName={isDefault ? "cursor-default text-fg-muted" : undefined}
+                />
+                <TextField
+                  id="business-view-description"
+                  label={t("businessViews.field.description")}
+                  value={description}
+                  onValueChange={setDescription}
+                  placeholder={t("businessViews.field.descriptionPlaceholder")}
+                />
               </div>
 
               <div>
@@ -1147,37 +1123,29 @@ function BusinessViewEditor({
                           }
                           rows={3}
                           disabled={pending}
-                          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <p className="mt-1 text-xs text-fg-muted">
                           {t("businessViews.field.systemPromptHelper")}
                         </p>
                       </div>
                       <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                        <div>
-                          <label
-                            htmlFor="business-view-language"
-                            className="text-sm font-medium text-fg"
-                          >
-                            {t("businessViews.field.defaultLanguage")}
-                          </label>
-                          <input
-                            id="business-view-language"
-                            value={config.default_language ?? ""}
-                            onChange={(event) =>
-                              setConfig((current) => ({
-                                ...current,
-                                default_language: event.target.value || null,
-                              }))
-                            }
-                            placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
-                            aria-describedby={
-                              docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
-                            }
-                            disabled={pending}
-                            className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-                          />
-                        </div>
+                        <TextField
+                          id="business-view-language"
+                          label={t("businessViews.field.defaultLanguage")}
+                          value={config.default_language ?? ""}
+                          onValueChange={(value) =>
+                            setConfig((current) => ({
+                              ...current,
+                              default_language: value || null,
+                            }))
+                          }
+                          placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+                          aria-describedby={
+                            docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
+                          }
+                          disabled={pending}
+                        />
                       </div>
                     </div>
                   </div>

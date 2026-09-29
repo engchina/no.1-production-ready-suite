@@ -19,7 +19,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useId } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
@@ -2505,19 +2505,15 @@ function ChunkPreviewControls({
           />
         </div>
         {fixedDelimiter ? (
-          <label className="space-y-1.5 sm:col-span-2">
-            <span className="block text-sm font-medium text-fg">
-              {t("settings.chunking.params.delimiter")}
-            </span>
-            <input
-              type="text"
-              value={form.chunk_delimiter}
-              maxLength={256}
-              disabled={pending}
-              onChange={(event) => onChange({ chunk_delimiter: event.target.value })}
-              className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-            />
-          </label>
+          <TextField
+            id="chunk-preview-delimiter"
+            className="sm:col-span-2"
+            label={t("settings.chunking.params.delimiter")}
+            value={form.chunk_delimiter}
+            maxLength={256}
+            disabled={pending}
+            onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
+          />
         ) : form.chunking_strategy === "docrag_small_to_big" ? (
           // DocRAG 親子階層は chunk サイズ等を使わず、rag_poc と同じ 5 項目で分割する。
           DOCRAG_CHUNKING_PARAMS.map((spec) => (
@@ -2627,21 +2623,20 @@ function PreviewNumberField({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
   return (
-    <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-fg">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        value={Number.isFinite(value) ? value : ""}
-        min={min}
-        max={max}
-        step={step}
-        disabled={disabled}
-        onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-      />
-    </label>
+    <TextField
+      id={id}
+      label={label}
+      type="number"
+      inputMode="numeric"
+      value={Number.isFinite(value) ? value : ""}
+      min={min}
+      max={max}
+      step={step}
+      disabled={disabled}
+      onValueChange={(next) => onChange(Number.parseInt(next, 10))}
+    />
   );
 }
 

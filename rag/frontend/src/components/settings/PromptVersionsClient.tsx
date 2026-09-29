@@ -171,7 +171,7 @@ export function PromptVersionsClient() {
               onChange={(event) => setSystemPrompt(event.target.value)}
               placeholder={t("settings.prompts.form.systemPromptPlaceholder")}
               rows={6}
-              className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+              className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
           </Field>
           <TextField

@@ -12,8 +12,9 @@ import {
   Switch,
   TimedLoadingState,
   FormSkeleton,
+  TextField,
 } from "@engchina/production-ready-ui";
-import { useState } from "react";
+import { useState, useId } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -185,31 +186,38 @@ export function GroundingSettingsClient() {
               {pipelines.map((item) => {
                 const selected = form.pipeline === item.name;
                 return (
-                  <button
-                    key={item.name}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={save.isPending}
-                    onClick={() => updateForm({ pipeline: item.name })}
-                    className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                      selected
-                        ? "border-accent-emphasis bg-accent-subtle text-fg"
-                        : "border-border bg-surface text-fg hover:bg-surface-hover"
-                    )}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">{pipelineLabel(item.name)}</span>
-                      {selected ? (
-                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                      ) : null}
-                    </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                      {pipelineDescription(item.name)}
-                    </span>
-                    <StageChips pipeline={item} />
-                  </button>
+                  <div key={item.name} className="relative min-w-0">
+                    <input
+                      id={`settings-grounding-pipeline-${item.name}`}
+                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                      type="radio"
+                      name="settings-grounding-pipeline"
+                      value={item.name}
+                      checked={selected}
+                      disabled={save.isPending}
+                      onChange={() => updateForm({ pipeline: item.name })}
+                    />
+                    <label
+                      htmlFor={`settings-grounding-pipeline-${item.name}`}
+                      className={cn(
+                        "block h-full cursor-pointer min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        selected
+                          ? "border-accent-emphasis bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
+                      )}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold">{pipelineLabel(item.name)}</span>
+                        {selected ? (
+                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
+                        ) : null}
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
+                        {pipelineDescription(item.name)}
+                      </span>
+                      <StageChips pipeline={item} />
+                    </label>
+                  </div>
                 );
               })}
             </div>
@@ -356,25 +364,23 @@ function NumberField({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
   return (
-    <label className="block space-y-1">
-      <span className="text-sm font-medium text-fg">{label}</span>
-      <input
-        type="number"
-        inputMode="decimal"
-        value={Number.isFinite(value) ? value : ""}
-        min={min}
-        max={max}
-        step={step}
-        aria-label={label}
-        disabled={disabled}
-        // 空欄を Number("") の 0 として扱うと、低しきい値では「CRAG を無効化」という別の設定が黙って
-        // 入り、途中入力(「0.」など)も 0 に書き戻される。空欄は NaN にして未入力(保存不可)とする(#275)。
-        onChange={(event) => onChange(parseNumberInput(event.target.value))}
-        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      <span className="block text-xs text-fg-muted">{helper}</span>
-    </label>
+    <TextField
+      id={id}
+      label={label}
+      helper={helper}
+      type="number"
+      inputMode="decimal"
+      value={Number.isFinite(value) ? value : ""}
+      min={min}
+      max={max}
+      step={step}
+      disabled={disabled}
+      // 空欄を Number("") の 0 として扱うと、低しきい値では「CRAG を無効化」という別の設定が黙って
+      // 入り、途中入力(「0.」など)も 0 に書き戻される。空欄は NaN にして未入力(保存不可)とする(#275)。
+      onValueChange={(next) => onChange(parseNumberInput(next))}
+    />
   );
 }
 
