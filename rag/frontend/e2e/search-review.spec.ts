@@ -283,6 +283,34 @@ test("業務ビューの読み込み中は読み込み中の状態として読�
   await expect(page.getByRole("combobox", { name: /対象の業務ビュー/ })).toBeVisible();
 });
 
+test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", async ({ page }) => {
+  await page.goto("/search");
+  await selectViews(page, [/経理ビュー/]);
+  const advanced = page.getByRole("button", { name: /詳細条件/ });
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("combobox", { name: "内容種別" }).click();
+  await page.getByRole("option", { name: "表", exact: true }).click();
+
+  // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("combobox", { name: "内容種別" })).toHaveCount(0);
+  await expect(advanced).toContainText("設定中");
+
+  // キーボード（Space / Enter）でも開閉できる。
+  await advanced.focus();
+  await page.keyboard.press("Space");
+  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("combobox", { name: "内容種別" })).toContainText("表");
+  await expect(advanced).not.toContainText("設定中");
+  await page.keyboard.press("Enter");
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await expectNoPageOverflow(page);
+});
+
 test("検索のボタンは詳細条件の下にあり、実行中は同じ位置・同じ要素のまま「停止」になる（#413）", async ({ page }) => {
   let calls = 0;
   let aborted = 0;

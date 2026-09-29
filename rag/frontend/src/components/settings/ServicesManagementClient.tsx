@@ -408,15 +408,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
         type="button"
         aria-expanded={open}
         aria-controls="service-commands"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          setOpen((value) => !value);
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          setOpen((value) => !value);
-        }}
+        onClick={() => setOpen((value) => !value)}
         className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
