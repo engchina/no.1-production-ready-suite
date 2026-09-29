@@ -72,6 +72,7 @@ async def authorize_request(
     unclassified_permission: str = UNCLASSIFIED_PERMISSION,
     service_token_paths: Collection[str] = (),
     service_token_audience: str = "",
+    open_operations: Collection[tuple[str, str]] | None = None,
 ) -> AsyncIterator[None]:
     """1 リクエストの認可。`async with` の中で route を実行する。
 
@@ -83,6 +84,9 @@ async def authorize_request(
     - `service_token_paths`（例: MCP の `/mcp`）: Cookie の代わりに
       `Authorization: Bearer <サービストークン>` の `sub` の利用者として認証する（#230）。
       Cookie を使わないので CSRF は照合しない。claims は `request.state.service_token_claims`。
+    - `open_operations`（method × path）を渡すと、公開 path でも集合にある操作だけ認証を飛ばす。
+      同じ path に method を足しても黙って公開されない（集合にない操作は通常の認証と権限の判定）。
+      渡さないときは path 単位（従来どおり。#490）。
     """
     if settings.local_debug_enabled:
         principal = local_debug_principal()
@@ -97,7 +101,9 @@ async def authorize_request(
         yield
         return
     route_path = permission_route_path(request)
-    if route_path in public_paths:
+    if route_path in public_paths and (
+        open_operations is None or (request.method.upper(), route_path) in open_operations
+    ):
         yield
         return
     try:

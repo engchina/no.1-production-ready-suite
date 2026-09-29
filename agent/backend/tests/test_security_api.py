@@ -42,6 +42,7 @@ from app.security.permissions import (
     AUTHENTICATED_WITHOUT_PERMISSION,
     CAPABILITY_ROLES,
     EXTERNAL_ROLE_READ_MENUS,
+    OPEN_API_OPERATIONS,
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
     RETIRED_PERMISSION_CODES,
@@ -107,10 +108,14 @@ def test_every_api_route_is_classified_by_manifest() -> None:
         and UNCLASSIFIED_PERMISSION in permissions
     ]
     assert unclassified == []
-    open_routes = {
-        path for method, path in operations if permission_for_route(method, path) is None
+    open_operations = {
+        (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
-    assert open_routes == set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION)
+    assert {path for _method, path in open_operations} == set(PUBLIC_API_PATHS) | set(
+        AUTHENTICATED_WITHOUT_PERMISSION
+    )
+    # 権限なしで通す path に method を足したら、ここで気づく（method 単位で照合する。#490）。
+    assert open_operations == set(OPEN_API_OPERATIONS)
 
 
 def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:

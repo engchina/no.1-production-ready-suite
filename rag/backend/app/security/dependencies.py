@@ -37,6 +37,7 @@ from .permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
     FEEDBACK_MANAGE,
+    OPEN_API_OPERATIONS,
     PUBLIC_API_PATHS,
     SERVICE_TOKEN_API_PATHS,
     SERVICE_TOKEN_AUDIENCE,
@@ -130,6 +131,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         unclassified_permission=UNCLASSIFIED_PERMISSION,
         service_token_paths=SERVICE_TOKEN_API_PATHS,
         service_token_audience=SERVICE_TOKEN_AUDIENCE,
+        open_operations=OPEN_API_OPERATIONS,
     ):
         yield
 
