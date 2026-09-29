@@ -4392,6 +4392,8 @@ class OracleClient:
         # メッセージ・会話・監査は、フィードバックを送った本人のものだけを結び付ける
         # （他人の trace を指定しても他人の会話を出さない。#457）。
         # SQL の中に `--` のコメントを書かない（実行前に改行をつぶすため、後ろがコメントになる）。
+        # メッセージは全件に順位を付けてから結合せず、フィードバックごとに最新の 1 件だけを引く
+        # （OUTER APPLY。#471）。
         order_sql = (
             "f.created_at ASC, f.feedback_id ASC"
             if sort_order == "oldest"
@@ -4399,22 +4401,7 @@ class OracleClient:
         )
         rows = await self._fetch_all(
             f"""
-            {cte},
-            assistant_messages AS (
-                SELECT
-                    m.message_id,
-                    m.conversation_id,
-                    m.trace_id,
-                    m.model,
-                    m.tenant_id_hash,
-                    m.user_id_hash,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY m.trace_id
-                        ORDER BY m.created_at DESC, m.message_id DESC
-                    ) AS message_rank
-                FROM rag_messages m
-                WHERE m.role = 'ASSISTANT'
-            )
+            {cte}
             SELECT
                 f.feedback_id,
                 f.trace_id,
@@ -4440,17 +4427,19 @@ class OracleClient:
             LEFT JOIN rag_business_views bv
               ON bv.business_view_id = f.business_view_id
              AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-            LEFT JOIN assistant_messages m
-              ON (
-                    (fd.message_id IS NOT NULL AND m.message_id = fd.message_id)
-                    OR (
-                        fd.message_id IS NULL
-                        AND m.trace_id = f.trace_id
-                        AND m.message_rank = 1
-                    )
-                 )
-             AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-             AND NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+            OUTER APPLY (
+                SELECT am.message_id, am.conversation_id, am.model, am.elapsed_ms
+                FROM rag_messages am
+                WHERE am.role = 'ASSISTANT'
+                  AND NVL(am.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                  AND NVL(am.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+                  AND (
+                        (fd.message_id IS NOT NULL AND am.message_id = fd.message_id)
+                        OR (fd.message_id IS NULL AND am.trace_id = f.trace_id)
+                      )
+                ORDER BY am.created_at DESC, am.message_id DESC
+                FETCH FIRST 1 ROWS ONLY
+            ) m
             LEFT JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
              AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
@@ -4531,32 +4520,11 @@ class OracleClient:
         """
         owner_predicates, owner_binds = _feedback_owner_scope("f.user_id_hash")
         # メッセージ・会話・監査は、フィードバックを送った本人のものだけを結び付ける（#457）。
+        # 全件に順位を付けてから結合せず、フィードバックごとに最新の 1 件だけを引く
+        # （OUTER APPLY。#471）。
         row = await self._fetch_one(
             _render_sql(
                 """
-                WITH assistant_messages AS (
-                    SELECT
-                        m.*,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY m.trace_id
-                            ORDER BY m.created_at DESC, m.message_id DESC
-                        ) AS message_rank
-                    FROM rag_messages m
-                    WHERE m.role = 'ASSISTANT'
-                ),
-                latest_audit AS (
-                    SELECT * FROM (
-                        SELECT
-                            a.*,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY a.trace_id
-                                ORDER BY a.created_at DESC, a.audit_id DESC
-                            ) AS audit_rank
-                        FROM rag_search_audit a
-                        WHERE {audit_tenant_sql}
-                    )
-                    WHERE audit_rank = 1
-                )
                 SELECT
                     f.feedback_id,
                     f.trace_id,
@@ -4596,31 +4564,38 @@ class OracleClient:
                 LEFT JOIN rag_business_views bv
                   ON bv.business_view_id = f.business_view_id
                  AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-                LEFT JOIN assistant_messages m
-                  ON (
-                        (fd.message_id IS NOT NULL AND m.message_id = fd.message_id)
-                        OR (
-                            fd.message_id IS NULL
-                            AND m.trace_id = f.trace_id
-                            AND m.message_rank = 1
-                        )
-                     )
-                 AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-                     AND NVL(m.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+                OUTER APPLY (
+                    SELECT am.message_id, am.conversation_id, am.model, am.elapsed_ms
+                    FROM rag_messages am
+                    WHERE am.role = 'ASSISTANT'
+                      AND NVL(am.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                      AND NVL(am.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+                      AND (
+                            (fd.message_id IS NOT NULL AND am.message_id = fd.message_id)
+                            OR (fd.message_id IS NULL AND am.trace_id = f.trace_id)
+                          )
+                    ORDER BY am.created_at DESC, am.message_id DESC
+                    FETCH FIRST 1 ROWS ONLY
+                ) m
                 LEFT JOIN rag_conversations c
                   ON c.conversation_id = m.conversation_id
                  AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
                 LEFT JOIN rag_documents d
                   ON d.document_id = f.document_id
                  AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
-                LEFT JOIN latest_audit a
-                  ON a.trace_id = f.trace_id
-                 AND NVL(a.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+                OUTER APPLY (
+                    SELECT sa.*
+                    FROM rag_search_audit sa
+                    WHERE sa.trace_id = f.trace_id
+                      AND NVL(sa.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                      AND NVL(sa.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')
+                    ORDER BY sa.created_at DESC, sa.audit_id DESC
+                    FETCH FIRST 1 ROWS ONLY
+                ) a
                 WHERE f.feedback_id = :feedback_id
                   AND {feedback_tenant_sql}
                   AND {feedback_scope_sql}
                 """,
-                audit_tenant_sql=_oracle_tenant_predicate(alias="a"),
                 feedback_tenant_sql=_oracle_tenant_predicate(alias="f"),
                 feedback_scope_sql=" AND ".join(
                     [*_business_view_scope_predicates("f.business_view_id"), *owner_predicates]
