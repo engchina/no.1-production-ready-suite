@@ -343,7 +343,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/chat/conversations"): _any(MENU_CHAT),
     ("GET", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("PATCH", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
-    ("POST", "/chat/conversations/{conversation_id}/archive"): _any(MENU_CHAT),
     ("DELETE", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("POST", "/chat/conversations/{conversation_id}/messages/stream"): _any(MENU_CHAT),
     # ---- 業務ビュー: 検索と回答履歴 ----
