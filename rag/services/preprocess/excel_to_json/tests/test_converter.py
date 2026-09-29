@@ -42,9 +42,7 @@ def test_xlsx_single_sheet_records() -> None:
 
 
 def test_xlsx_multiple_sheets_preserved_in_order() -> None:
-    payload = _payload(
-        _xlsx_bytes({"A": [["x"], ["1"]], "B": [["y"], ["2"]]})
-    )
+    payload = _payload(_xlsx_bytes({"A": [["x"], ["1"]], "B": [["y"], ["2"]]}))
     assert [sheet["name"] for sheet in payload["sheets"]] == ["A", "B"]
 
 
