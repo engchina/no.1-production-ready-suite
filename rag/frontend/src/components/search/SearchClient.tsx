@@ -314,7 +314,7 @@ export function SearchClient() {
     } catch (error) {
       if (controller.signal.aborted) return;
       setErrorText(
-        error instanceof ApiError ? error.message : "検索に失敗しました。再度お試しください。"
+        error instanceof ApiError ? error.message : t("search.error.failed")
       );
       finishRun();
       setPhase("error");

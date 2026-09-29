@@ -14,10 +14,10 @@ const NODE_STYLE = {
   background: "var(--color-surface)",
   color: "var(--color-fg)",
   border: "1px solid var(--color-border)",
-  borderRadius: 8,
+  borderRadius: "var(--radius-lg)",
   fontSize: 12,
   width: 168,
-  padding: 8,
+  padding: "var(--space-2)",
   textAlign: "left" as const,
 };
 
@@ -161,7 +161,7 @@ export function KnowledgeBasePipelineCanvas({ config }: { config: KnowledgeBaseA
           <p className="text-xs text-fg-muted">{t("settings.pipelineCanvas.hint")}</p>
           <div
             role="region"
-            className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
+            className="h-[25.71rem] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
             aria-label={t("settings.pipelineCanvas.title")}
           >
             <ReactFlow

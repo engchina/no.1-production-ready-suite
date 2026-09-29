@@ -173,7 +173,7 @@ export function AgenticSettingsClient() {
                     <label
                       htmlFor={`settings-agentic-profile-${item.name}`}
                       className={cn(
-                        "block h-full cursor-pointer min-h-[112px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "block h-full cursor-pointer min-h-[8rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
                           ? "border-accent-emphasis bg-accent-subtle text-fg"
                           : "border-border bg-surface text-fg peer-hover:bg-surface-hover"

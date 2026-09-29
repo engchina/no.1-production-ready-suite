@@ -226,7 +226,7 @@ export function GuardrailSettingsClient() {
                     <label
                       htmlFor={`guardrail-policy-${item.name}`}
                       className={cn(
-                        "block min-h-[104px] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "block min-h-[7.43rem] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
                           ? "border-accent-emphasis bg-accent-subtle text-fg"
                           : "border-border bg-surface text-fg hover:bg-surface-hover"

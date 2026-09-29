@@ -191,7 +191,7 @@ export function GenerationSettingsClient() {
                     key={item.name}
                     htmlFor={`generation-profile-${item.name}`}
                     className={cn(
-                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors",
+                      "min-h-[8.43rem] rounded-md border px-3 py-2 text-left transition-colors",
                       disabled && "cursor-not-allowed opacity-50",
                       selected
                         ? "border-accent-emphasis bg-accent-subtle text-fg"

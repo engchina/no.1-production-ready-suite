@@ -10,6 +10,7 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
+  "common.apiError": "APIエラー ({status})",
   "common.clearSearch": "検索語をクリア",
   "common.degraded.title": "データベースに接続できません",
   "common.degraded.fallback":
@@ -1105,6 +1106,7 @@ export const ja = {
 
   "settings.model.subtitle":
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
+  "settings.model.displayNamePlaceholder": "業務 RAG 標準",
 
 
 
@@ -1838,6 +1840,7 @@ export const ja = {
   "sourceProfile.preview.email": "メール",
   "sourceProfile.preview.office": "Office",
   "sourceProfile.preview.unsupported": "未対応",
+  "sourceProfile.backend.local": "ローカル解析",
   "sourceProfile.parser.pdf": "PDF レイアウト解析",
   "sourceProfile.parser.image": "画像 OCR",
   "sourceProfile.parser.text": "テキスト構造化",
@@ -2399,10 +2402,12 @@ export const ja = {
   "chat.citations.title": "根拠（引用）",
   "chat.citations.summary": "根拠（引用） {count} 件",
   "chat.error.send": "メッセージの送信に失敗しました。",
+  "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
   "chat.disabled.title": "チャットは無効です",
   "chat.disabled.hint": "管理者がチャット機能を有効にすると利用できます。",
 
+  "search.error.failed": "検索に失敗しました。再度お試しください。",
   "search.placeholder": "例：社内規程の申請フローは？",
   "search.button": "検索",
   "search.searching": "検索中…",

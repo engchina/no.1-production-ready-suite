@@ -430,7 +430,7 @@ function OverviewCard({
                       <label
                         htmlFor={`settings-parser-backend-${backend}`}
                         className={cn(
-                          "block h-full cursor-pointer min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                          "block h-full cursor-pointer min-h-[5.43rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                           selected
                             ? "border-accent-emphasis bg-accent-subtle text-fg"
                             : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
@@ -671,7 +671,7 @@ function ExternalConnectionCard({
         />
         <label
           htmlFor={clearApiKeyId}
-          className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md text-xs text-fg"
+          className="flex min-h-[var(--control-height-touch)] cursor-pointer items-center gap-2 rounded-md text-xs text-fg"
         >
           <input
             id={clearApiKeyId}
@@ -691,7 +691,7 @@ function ExternalConnectionCard({
         <Button
           type="button"
           variant="secondary"
-          className="min-h-[44px] w-full sm:w-auto"
+          className="min-h-[var(--control-height-touch)] w-full sm:w-auto"
           loading={statusQuery.isFetching}
           disabled={saving || dirty || !connection?.configured}
           onClick={() => void statusQuery.refetch()} icon={Plug}>
