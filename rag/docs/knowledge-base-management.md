@@ -662,13 +662,14 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 
 ## 10. Frontend 実装方針
 
-追加予定:
+実装（`frontend/src/components/knowledge-bases/`）:
 
-- `frontend/src/components/knowledge-bases/KnowledgeBaseListClient.tsx`
-- `frontend/src/components/knowledge-bases/KnowledgeBaseDetailClient.tsx`
-- `frontend/src/components/knowledge-bases/KnowledgeBaseFormDialog.tsx`
-- `frontend/src/components/knowledge-bases/KnowledgeBasePicker.tsx`
-- `frontend/src/components/knowledge-bases/KnowledgeBaseBadges.tsx`
+- `KnowledgeBaseManagementClient.tsx`: 一覧（検索・状態の絞り込み・ページング）と作成フォーム
+- `KnowledgeBaseDetailClient.tsx`: 詳細（所属文書の追加・解除、アーカイブ、検索テスト、関係情報）
+- `KnowledgeBaseScopePicker.tsx` / `KnowledgeBasePickerGrid.tsx`: 検索・評価・業務ビュー・アップロード・文書詳細で使う複数選択（サーバー側の検索と「さらに表示」。#302）
+- `KnowledgeBaseStatusPill.tsx`: 状態のバッジ（一覧・詳細で共有）
+- `KnowledgeBaseSearchTestPanel.tsx`: 詳細の検索テスト
+- `KnowledgeBaseGraphView.tsx` / `KnowledgeBasePipelineCanvas.tsx`: 関係情報と取込パイプラインの読み取り専用の図（高度な診断）
 
 既存変更:
 
