@@ -608,3 +608,74 @@ test("システムテーブル管理の権限が無い利用者には参照先�
   await expect(orphaned.getByRole("button")).toHaveCount(0);
   await expect(orphaned).not.toContainText("「参照先のない行を削除」で削除できます");
 });
+
+const destructiveMigration = {
+  name: "20260930_005_retire_standard_engine_objects",
+  description:
+    "旧い標準の回答フローのテーブル rag_agent_memories・rag_prompt_versions・rag_generation_settings を削除し（PURGE のため復元できません）、ロールに付いた廃止済みのメニュー権限の行を削除します。残す行は先に app.rag.legacy_export で書き出してください。",
+};
+
+for (const theme of ["light", "dark"] as const) {
+  test(`データを削除する未適用の migration は警告し、確認ダイアログで承認したときだけ適用する（#619・${theme}）`, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    const mock = await mockSettings(page, {
+      initialStatus: "outdated",
+      statusExtra: {
+        pending_versions: [destructiveMigration.name],
+        pending_destructive_migrations: [destructiveMigration],
+      },
+    });
+    await page.goto("/settings/database#system-tables");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    const card = page.locator("#system-tables");
+
+    const warning = card.getByTestId("system-tables-destructive-migrations");
+    await expect(warning).toContainText("削除したデータは元に戻せません");
+    await expect(warning).toContainText(destructiveMigration.name);
+    await expect(warning).toContainText("rag_agent_memories");
+    await expect(warning).toContainText("「作成・更新」を押すと、削除の確認を求めます。");
+    await expect(card).not.toContainText("無損失で更新できます");
+
+    const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+
+    // 目視用の画像（環境変数を指定したときだけ。CI では撮らない）。
+    const width = testInfo.project.name === "mobile" ? 375 : 1280;
+    if (screenshotDir) {
+      await warning.screenshot({
+        path: `${screenshotDir}/system-tables-destructive-${theme}-${width}.png`,
+        animations: "disabled",
+      });
+    }
+
+    // 取り消したときは送らない。
+    await card.getByRole("button", { name: "作成・更新" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("データを削除する更新を実行しますか？");
+    await expect(dialog).toContainText(destructiveMigration.name);
+    await expect(dialog).toContainText("元に戻せません");
+    if (screenshotDir) {
+      await dialog.screenshot({
+        path: `${screenshotDir}/system-tables-destructive-dialog-${theme}-${width}.png`,
+        animations: "disabled",
+      });
+    }
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(mock.initializeCalls()).toBe(0);
+
+    await card.getByRole("button", { name: "作成・更新" }).click();
+    await dialog.getByRole("button", { name: "削除して更新" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => mock.initializeCalls()).toBe(1);
+    expect(mock.recreatePayload()).toEqual({ recreate: false, allow_destructive: true });
+  });
+}

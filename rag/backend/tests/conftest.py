@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import fcntl
 import gc
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -113,7 +114,12 @@ def _oracle_db_session(_hermetic_settings: None, tmp_path_factory: pytest.TempPa
     lock_path = tmp_path_factory.getbasetemp().parent / "rag-oracle-schema.lock"
     with lock_path.open("w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        _oracle_test_db.ensure_schema()
+        skip_reason = _oracle_test_db.ensure_schema()
+    if skip_reason is not None:
+        # データを消す未適用の migration は当てない。実 Oracle のテストは `oracle_db` で
+        # skip する（#619）。
+        warnings.warn(skip_reason, stacklevel=1)
+        return
     _oracle_test_db.capture_baseline()
 
 
@@ -174,6 +180,9 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     if not _oracle_test_db.db_available():
         pytest.skip("実 Oracle AI Database に未到達のため統合テストをスキップします。")
+    skip_reason = _oracle_test_db.schema_skip_reason()
+    if skip_reason is not None:
+        pytest.skip(skip_reason)
     settings = get_settings()
     # 実 Oracle の接続の項目だけを入れる。手元の model-settings.json（文書解析の既定など）は読まない
     # （テストの既定値を上書きして CI と違う経路を通るため。AI は決定論スタブに差し替える。#483）。

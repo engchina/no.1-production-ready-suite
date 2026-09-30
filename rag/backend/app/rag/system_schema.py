@@ -17,6 +17,7 @@ from typing import Any
 from pr_system_settings.auth.migrations import apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     ForeignKeySpec,
     SystemSchemaBusyError,
     SystemSchemaError,
@@ -70,14 +71,25 @@ class MigrationArtifact:
     name: str
     table_name: str
     sql: str
+    # データを消す migration の説明（空なら破壊的でない。checksum には含めない。#619）。
+    destructive_note: str = ""
 
     @property
     def checksum(self) -> str:
         return hashlib.sha256(self.sql.encode("utf-8")).hexdigest()
 
+    @property
+    def destructive(self) -> bool:
+        return bool(self.destructive_note)
+
 
 MIGRATIONS: tuple[MigrationArtifact, ...] = tuple(
-    MigrationArtifact(section.name, section.table_name.upper(), section.sql)
+    MigrationArtifact(
+        section.name,
+        section.table_name.upper(),
+        section.sql,
+        destructive_note=section.destructive_note,
+    )
     for section in oracle_schema_migration_sections()
 )
 
@@ -295,6 +307,26 @@ def classify_system_schema_status(
     )
 
 
+def pending_destructive_migrations(
+    status: str,
+    pending_versions: Sequence[str],
+) -> list[dict[str, str]]:
+    """未適用の、データを消す migration（#619）。
+
+    未初期化（`missing`）の DB は migration を実行せずに記録だけするので、消えるデータは無い。
+    それ以外で未適用・checksum 不一致のものを、作成・更新の前に承認させる。
+    """
+
+    if status == "missing":
+        return []
+    pending = set(pending_versions)
+    return [
+        {"name": migration.name, "description": migration.destructive_note}
+        for migration in MIGRATIONS
+        if migration.destructive and migration.name in pending
+    ]
+
+
 class SystemSchemaManager(SystemSchemaManagerBase):
     """RAG の manifest・DDL 正本・Oracle Text object を、platform の骨格（lease・台帳）に渡す。"""
 
@@ -303,6 +335,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_key_column = "MIGRATION_NAME"
     managed_tables = MANAGED_TABLES
     managed_foreign_keys = MANAGED_FOREIGN_KEYS
+    # データを消す未適用の migration は、承認が無ければ作成・更新で当てない（#619）。
+    guards_destructive_migrations = True
     recreate_confirmation = RECREATE_CONFIRMATION
     log_prefix = "rag"
     lock_timeout_guidance = "取込処理を停止してから、"
@@ -425,16 +459,18 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             if applied.get(migration.name) != migration.checksum
         ]
         foreign_keys = self._foreign_key_drift(connection)
+        status = classify_system_schema_status(
+            set(objects),
+            applied,
+            foreign_keys_current=foreign_keys.current,
+        )
         return {
-            "status": classify_system_schema_status(
-                set(objects),
-                applied,
-                foreign_keys_current=foreign_keys.current,
-            ),
+            "status": status,
             "schema_version": SCHEMA_VERSION,
             "schema_head": MIGRATIONS[-1].name if MIGRATIONS else SCHEMA_VERSION,
             "applied_versions": matching,
             "pending_versions": pending,
+            "pending_destructive_migrations": pending_destructive_migrations(status, pending),
             "expected_object_count": len(expected),
             "existing_object_count": len(existing),
             "expected_table_count": len(MANAGED_TABLES),
@@ -625,6 +661,7 @@ system_schema_manager = SystemSchemaManager()
 
 __all__ = [
     "CONTROL_TABLE",
+    "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "DOMAIN_TABLES",
     "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
@@ -645,5 +682,6 @@ __all__ = [
     "managed_foreign_keys_from_schema",
     "managed_manifest_from_schema",
     "oracle_error_code",
+    "pending_destructive_migrations",
     "system_schema_manager",
 ]

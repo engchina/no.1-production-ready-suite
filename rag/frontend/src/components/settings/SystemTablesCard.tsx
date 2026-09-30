@@ -51,6 +51,11 @@ export function SystemTablesCard() {
       confirmDeleteOrphans={(request) =>
         confirm({ ...request, tone: "danger", dismissOnOverlay: false })
       }
+      // データを消す未適用の migration（#619）は、削除される内容を示す確認ダイアログで承認させてから
+      // 作成・更新する（承認したときだけ allow_destructive を送る）。
+      confirmDestructiveMigrations={(request) =>
+        confirm({ ...request, tone: "danger", dismissOnOverlay: false })
+      }
     />
   );
 }

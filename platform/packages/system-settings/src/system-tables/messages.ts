@@ -17,6 +17,17 @@ export const SYSTEM_TABLES_MESSAGES = {
     "必須オブジェクトが {count} 件不足しています。「作成・更新」で既存データを保持したまま補完できます。",
   "settings.database.systemTables.statusHint.outdated":
     "テーブルは存在しますが migration version または checksum が古くなっています。無損失で更新できます。",
+  "settings.database.systemTables.statusHint.outdatedDestructive":
+    "テーブルは存在しますが migration version または checksum が古くなっています。未適用の migration に、データを削除するものがあります。",
+  "settings.database.systemTables.destructive.title": "データを削除する更新があります",
+  "settings.database.systemTables.destructive.description":
+    "次の migration は「作成・更新」でテーブルや行を削除します。削除したデータは元に戻せません。残すデータを書き出し、データベースのバックアップを確認してから実行してください。",
+  "settings.database.systemTables.destructive.approvalHint":
+    "「作成・更新」を押すと、削除の確認を求めます。",
+  "settings.database.systemTables.destructive.confirmTitle": "データを削除する更新を実行しますか？",
+  "settings.database.systemTables.destructive.confirmDescription":
+    "データを削除する migration {count} 件（{names}）を適用します。削除したテーブルと行は元に戻せません。残すデータを書き出してから実行してください。",
+  "settings.database.systemTables.destructive.confirmLabel": "削除して更新",
   "settings.database.systemTables.foreignKeys.missing":
     "既存のテーブルに外部キーが {count} 件ありません。「作成・更新」で追加します。参照先のない既存の行がある外部キーは、既存の行を検査せずに追加し（新しい行から適用）、既存の行は削除しません。",
   "settings.database.systemTables.foreignKeys.orphanedTitle": "参照先のない既存の行があります",

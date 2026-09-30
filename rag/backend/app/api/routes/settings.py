@@ -286,6 +286,8 @@ async def initialize_system_tables(
             system_schema_manager.initialize,
             recreate=payload.recreate,
             confirmation=payload.confirmation,
+            # データを消す未適用の migration の承認（画面の確認ダイアログ。無ければ 409。#619）。
+            allow_destructive=payload.allow_destructive,
         )
     except SystemSchemaError as exc:
         return _system_schema_error_response(exc)
