@@ -16,11 +16,11 @@ from typing import Any
 
 import fitz  # type: ignore[import-untyped]
 import pytest
-from docrag.models.layout import PageImage
 from PIL import Image
+from rag_engine.models.layout import PageImage
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 
-from app.rag.docrag_chunking import build_docrag_chunks
+from app.rag.chunking_small_to_big import build_parent_child_chunks
 from app.rag.vision import (
     WARNING_BBOX_UNIT_UNKNOWN,
     WARNING_PARTIAL_FAILURE,
@@ -72,7 +72,7 @@ def _px(points: Sequence[float], dpi: float) -> list[float]:
 
 
 class FakeDescriber:
-    """docrag の PictureDescriber の決定論スタブ(切り出しの寸法と呼び出しを記録する)。"""
+    """rag_engine の PictureDescriber の決定論スタブ(切り出しの寸法と呼び出しを記録する)。"""
 
     api_mode = "test"
     max_tokens = 1
@@ -139,7 +139,7 @@ def _read(
 
 
 def _expected_crop_width(points: Sequence[float]) -> float:
-    # docrag の crop は bbox の外側に 8px の余白を付ける。
+    # rag_engine の crop は bbox の外側に 8px の余白を付ける。
     return (points[2] - points[0]) * RENDER_DPI / 72 + 16
 
 
@@ -634,14 +634,14 @@ def _docling_extraction(*, decorative: bool = False) -> StructuredExtraction:
                 text="受注入力の手順",
                 element_id="docling-p1-1",
                 page_number=1,
-                source_parser="docling_docrag",
+                source_parser="docling_layout",
             ),
             DocumentElement(
                 kind="text",
                 text="登録後に確認します。",
                 element_id="docling-p1-3",
                 page_number=1,
-                source_parser="docling_docrag",
+                source_parser="docling_layout",
             ),
         ],
         assets=[
@@ -656,7 +656,7 @@ def _docling_extraction(*, decorative: bool = False) -> StructuredExtraction:
         pages=[ExtractionPage(page_number=1, width=width, height=height)],
         parser_artifacts={
             "external_adapter": "docling",
-            "docrag_layout": {
+            "layout_records": {
                 "version": 1,
                 "pages": [
                     {
@@ -674,12 +674,12 @@ def _docling_extraction(*, decorative: bool = False) -> StructuredExtraction:
 
 
 def test_docling_vision_updates_layout_records_elements_and_assets() -> None:
-    """Docling は docrag_layout の record を入力にし、結果を record と要素・asset へ書き戻す。"""
+    """Docling は layout_records の record を入力にし、結果を record と要素・asset へ書き戻す。"""
     result, describer = _read(_docling_extraction(), _pdf(), backend="docling")
 
     assert len(describer.calls) == 1
     assert abs(describer.calls[0]["size"][0] - _expected_crop_width(FIGURE_PT)) <= 4
-    layout = _artifact(result, "docrag_layout")
+    layout = _artifact(result, "layout_records")
     assert isinstance(layout, dict)
     picture = layout["records"][1]
     assert picture["raw"]["vision_status"] == "succeeded"
@@ -698,8 +698,8 @@ def test_docling_vision_updates_layout_records_elements_and_assets() -> None:
     assert result.assets[0].summary == "受注画面の登録ボタン1"
     assert result.assets[0].metadata["vision_status"] == "succeeded"
     assert _artifact(result, "vision")["engine"] == "docling"
-    # DocRAG 親子階層の分割は docrag_layout の record を読むので、説明文が chunk に入る。
-    chunks = build_docrag_chunks(result, source_name="manual.pdf")
+    # 親子階層（small-to-big）の分割は layout_records の record を読むので、説明文が chunk に入る。
+    chunks = build_parent_child_chunks(result, source_name="manual.pdf")
     assert any("受注画面の登録ボタン1" in chunk.text for chunk in chunks)
 
 
@@ -708,7 +708,7 @@ def test_docling_decorative_picture_is_skipped() -> None:
     result, describer = _read(_docling_extraction(decorative=True), _pdf(), backend="docling")
 
     assert describer.calls == []
-    layout = _artifact(result, "docrag_layout")
+    layout = _artifact(result, "layout_records")
     assert isinstance(layout, dict)
     assert layout["records"][1]["raw"]["vision_status"] == "skipped"
     assert [element.element_id for element in result.elements] == [
@@ -813,7 +813,7 @@ class PromptOracle:
     def __init__(self, overrides: dict[str, str]) -> None:
         self.overrides = overrides
 
-    async def docrag_prompt_overrides(self) -> dict[str, str]:
+    async def answer_prompt_overrides(self) -> dict[str, str]:
         return self.overrides
 
 
@@ -852,7 +852,7 @@ async def test_ingestion_vision_disabled_keeps_extraction() -> None:
 
 async def test_ingestion_vision_uses_saved_image_retrieval_prompt() -> None:
     """文書解析の画面で編集した画像の読み取りの指示(image_retrieval)を全ての解析エンジンで使う。"""
-    from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+    from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 
     reader = FakeReader()
     pipeline = _pipeline(enabled=True, reader=reader)

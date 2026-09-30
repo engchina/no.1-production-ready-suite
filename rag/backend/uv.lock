@@ -808,54 +808,6 @@ standard = [
 ]
 
 [[package]]
-name = "docrag-core"
-version = "0.2.0"
-source = { editable = "../packages/docrag_core" }
-dependencies = [
-    { name = "openai" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-excel = [
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "xlrd" },
-]
-japanese = [
-    { name = "pystemmer" },
-    { name = "sudachidict-full" },
-    { name = "sudachipy" },
-]
-pdf = [
-    { name = "pillow" },
-    { name = "pypdfium2" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "docling", marker = "extra == 'docling'", specifier = ">=2.0" },
-    { name = "oci", marker = "extra == 'oracle'", specifier = ">=2.185.0" },
-    { name = "openai", specifier = ">=1.99,<2" },
-    { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
-    { name = "oracledb", marker = "extra == 'oracle'", specifier = ">=2.5.0" },
-    { name = "pandas", marker = "extra == 'excel'", specifier = ">=2.0" },
-    { name = "pillow", marker = "extra == 'docling'", specifier = ">=10.0" },
-    { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pypdfium2", marker = "extra == 'docling'", specifier = ">=5.0,<6.0" },
-    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0,<6.0" },
-    { name = "pystemmer", marker = "extra == 'japanese'", specifier = "==3.1.0" },
-    { name = "sudachidict-full", marker = "extra == 'japanese'", specifier = "==20260723" },
-    { name = "sudachipy", marker = "extra == 'japanese'", specifier = "==0.6.11" },
-    { name = "xlrd", marker = "extra == 'excel'", specifier = ">=2.0" },
-]
-provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
-
-[[package]]
 name = "emoji"
 version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2359,7 +2311,6 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "charset-normalizer" },
-    { name = "docrag-core", extra = ["excel", "japanese", "pdf"] },
     { name = "fastapi" },
     { name = "gunicorn" },
     { name = "httpx" },
@@ -2375,6 +2326,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-json-logger" },
     { name = "python-multipart" },
+    { name = "rag-engine", extra = ["excel", "japanese", "pdf"] },
     { name = "rag-parser-core" },
     { name = "rag-pipeline-core" },
     { name = "starlette" },
@@ -2406,7 +2358,6 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "charset-normalizer", specifier = ">=3.4,<4" },
     { name = "docling", marker = "extra == 'docling'", specifier = "==2.129.0" },
-    { name = "docrag-core", extras = ["japanese", "excel", "pdf"], editable = "../packages/docrag_core" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
     { name = "gunicorn", specifier = ">=26,<27" },
     { name = "httpx", specifier = "==0.28.1" },
@@ -2422,6 +2373,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.1" },
     { name = "python-json-logger", specifier = ">=4.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
+    { name = "rag-engine", extras = ["japanese", "excel", "pdf"], editable = "../packages/rag_engine" },
     { name = "rag-parser-core", editable = "../packages/rag_parser_core" },
     { name = "rag-pipeline-core", editable = "../packages/rag_pipeline_core" },
     { name = "starlette", specifier = ">=1.0.1,<2.0" },
@@ -3012,6 +2964,54 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/86/bf/899e81e4cce32febab4fb42bb97dcdf66bc135272882d1987881a4b519e9/pyyaml-6.0.3-cp312-cp312-win_amd64.whl", hash = "sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b", size = 154003, upload-time = "2025-09-25T21:32:21.167Z" },
     { url = "https://files.pythonhosted.org/packages/1a/08/67bd04656199bbb51dbed1439b7f27601dfb576fb864099c7ef0c3e55531/pyyaml-6.0.3-cp312-cp312-win_arm64.whl", hash = "sha256:64386e5e707d03a7e172c0701abfb7e10f0fb753ee1d773128192742712a98fd", size = 140344, upload-time = "2025-09-25T21:32:22.617Z" },
 ]
+
+[[package]]
+name = "rag-engine"
+version = "0.2.0"
+source = { editable = "../packages/rag_engine" }
+dependencies = [
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+excel = [
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "xlrd" },
+]
+japanese = [
+    { name = "pystemmer" },
+    { name = "sudachidict-full" },
+    { name = "sudachipy" },
+]
+pdf = [
+    { name = "pillow" },
+    { name = "pypdfium2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docling", marker = "extra == 'docling'", specifier = ">=2.0" },
+    { name = "oci", marker = "extra == 'oracle'", specifier = ">=2.185.0" },
+    { name = "openai", specifier = ">=1.99,<2" },
+    { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
+    { name = "oracledb", marker = "extra == 'oracle'", specifier = ">=2.5.0" },
+    { name = "pandas", marker = "extra == 'excel'", specifier = ">=2.0" },
+    { name = "pillow", marker = "extra == 'docling'", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pypdfium2", marker = "extra == 'docling'", specifier = ">=5.0,<6.0" },
+    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0,<6.0" },
+    { name = "pystemmer", marker = "extra == 'japanese'", specifier = "==3.1.0" },
+    { name = "sudachidict-full", marker = "extra == 'japanese'", specifier = "==20260723" },
+    { name = "sudachipy", marker = "extra == 'japanese'", specifier = "==0.6.11" },
+    { name = "xlrd", marker = "extra == 'excel'", specifier = ">=2.0" },
+]
+provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "rag-parser-core"

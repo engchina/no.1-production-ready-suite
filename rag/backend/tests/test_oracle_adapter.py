@@ -148,7 +148,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
         view_config=dump_business_view_config(
             BusinessViewConfig(
                 knowledge_base_ids=["kb-old"],
-                query={"docrag_query_strategy": "rag_fusion"},
+                query={"query_strategy": "rag_fusion"},
             )
         ),
         archived_at=now,
@@ -174,7 +174,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     assert detail.status == BusinessViewStatus.ACTIVE
     assert detail.archived_at is None
     assert detail.config.knowledge_base_ids == ["kb-default"]
-    assert detail.config.query.docrag_query_strategy == "rag_fusion"
+    assert detail.config.query.query_strategy == "rag_fusion"
     # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
     assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
     assert len(connection.calls) == 1
@@ -2079,7 +2079,7 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
     chunk set の行は chunk の保存の後に upsert_chunk_set が作るため、無ければ MERGE で作る。
     chunk set の無い保存(未タグ)では書かない。
     """
-    from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY
+    from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY
 
     first_page = {
         "page": 1,
@@ -2096,9 +2096,9 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
             start_offset=0,
             end_offset=3,
             metadata={
-                "docrag_search_text": f"Child text: 本文{index}",
+                "engine_search_text": f"Child text: 本文{index}",
                 **(
-                    {DOCRAG_FIRST_PAGE_CONTEXT_KEY: json.dumps(first_page, ensure_ascii=False)}
+                    {FIRST_PAGE_CONTEXT_KEY: json.dumps(first_page, ensure_ascii=False)}
                     if index == 0
                     else {}
                 ),
@@ -2120,7 +2120,7 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
         )
 
         rows = pool.connection.many_calls[0].rows
-        assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
+        assert all(FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
         assert all("受注管理規程" not in str(row["search_text"]) for row in rows)
         merges = [
             call for call in pool.connection.calls if "MERGE INTO rag_chunk_sets" in call.statement

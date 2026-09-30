@@ -42,7 +42,7 @@ def test_normalize_category_value_unifies_width_and_whitespace() -> None:
     assert normalize_category_value(None) is None
 
 
-def test_category_label_strips_code_prefix_like_docrag_core() -> None:
+def test_category_label_strips_code_prefix_like_rag_engine() -> None:
     assert category_label("10_業務A") == "業務A"
     assert category_label("１０＿業務A") == "業務A"  # 全角の数字・下線も NFKC で接頭辞になる
     assert category_label("業務A") == "業務A"
@@ -94,7 +94,7 @@ def _sql_label(value: str | None) -> str | None:
         ("10_業務A", "業務A", True),
         ("業務A", "10_業務A", True),
         ("１０_業務Ａ", "業務A", True),
-        ("20_業務A", "10_業務A", True),  # 名前で比べる(docrag_core の業務の判定と同じ)
+        ("20_業務A", "10_業務A", True),  # 名前で比べる(rag_engine の業務の判定と同じ)
         (" 業務 A ", "業務　A", True),
         ("10_", "10_", True),
         ("業務A", "業務B", False),
@@ -219,7 +219,7 @@ def test_retrieval_where_filters_classification_by_label_and_effective_period() 
     assert "small_category" not in sql
     assert "'$.effective_from'), :filter_as_of) <= :filter_as_of" in sql
     assert "'$.effective_to'), '9999-12-31') > :filter_as_of" in sql
-    # 番号の接頭辞を外した名前で比べる(docrag_core の _category_label と同じ)。
+    # 番号の接頭辞を外した名前で比べる(rag_engine の _category_label と同じ)。
     assert binds["filter_large_category"] == "経理"
     assert binds["filter_middle_category"] == "精算"
     assert binds["filter_as_of"] == "2026-04-01"

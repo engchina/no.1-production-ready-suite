@@ -243,8 +243,11 @@ def test_chunk_preview_reuses_review_extraction_without_state_change(
     )
 
 
-def test_chunk_preview_docrag_falls_back_without_docling_layout(monkeypatch: MonkeyPatch) -> None:
-    """Docling 以外の解析結果で DocRAG 親子階層をプレビューすると、構造認識で分割する(#300)。
+def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Docling 以外の解析結果で親子階層（small-to-big）をプレビューすると、構造認識で分割する
+    (#300)。
 
     以前は理由付きの 422 だった。縮退したことは chunk の metadata で示し、範囲外の値は 422 のまま。
     """
@@ -257,11 +260,11 @@ def test_chunk_preview_docrag_falls_back_without_docling_layout(monkeypatch: Mon
 
     out_of_range = client.post(
         f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
-        json={"chunking_strategy": "docrag_small_to_big", "docrag_child_target_chars": 2000},
+        json={"chunking_strategy": "small_to_big", "chunk_child_target_chars": 2000},
     )
     response = client.post(
         f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
-        json={"chunking_strategy": "docrag_small_to_big", "docrag_child_target_chars": 600},
+        json={"chunking_strategy": "small_to_big", "chunk_child_target_chars": 600},
     )
 
     assert out_of_range.status_code == 422
@@ -270,8 +273,8 @@ def test_chunk_preview_docrag_falls_back_without_docling_layout(monkeypatch: Mon
     assert chunks
     for chunk in chunks:
         assert chunk["metadata"]["chunk_strategy"] == "structure_aware"
-        assert chunk["metadata"]["chunk_strategy_requested"] == "docrag_small_to_big"
-        assert chunk["metadata"]["chunk_strategy_fallback_reason"] == "docrag_layout_missing"
+        assert chunk["metadata"]["chunk_strategy_requested"] == "small_to_big"
+        assert chunk["metadata"]["chunk_strategy_fallback_reason"] == "layout_missing"
 
 
 def test_chunk_preview_rejects_recipe_without_review_artifact(

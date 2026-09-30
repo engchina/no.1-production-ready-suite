@@ -32,9 +32,9 @@ from app.clients.oracle import (
     OracleWalletPasswordRequiredError,
 )
 from app.config import (
-    DOCRAG_CHUNKING_SETTING_FIELDS,
     MODEL_SETTINGS_STORE,
     PARSER_ADAPTERS_SECTION,
+    SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
     get_settings,
     load_persisted_model_settings,
@@ -685,7 +685,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch.setattr(settings, "rag_chunk_size", 900)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
-    monkeypatch.setattr(settings, "rag_docrag_child_target_chars", 800)
+    monkeypatch.setattr(settings, "rag_chunk_child_target_chars", 800)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
     monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", False)
 
@@ -698,20 +698,20 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["overlap"] == 150
     assert "child_size" not in body
     assert body["min_chars"] == 50
-    assert body["docrag_child_target_chars"] == 800
-    assert body["docrag_table_child_target_chars"] == 3000
-    assert body["docrag_parent_target_chars"] == 6000
-    assert body["docrag_parent_max_pages"] == 3
-    assert body["docrag_parent_max_children"] == 12
+    assert body["chunk_child_target_chars"] == 800
+    assert body["chunk_table_child_target_chars"] == 3000
+    assert body["chunk_parent_target_chars"] == 6000
+    assert body["chunk_parent_max_pages"] == 3
+    assert body["chunk_parent_max_children"] == 12
     assert body["delimiter"] == "\\n---\\n"
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
-    # DocRAG 親子階層は、削除した親子階層の位置(3 番目)に並ぶ(#271)。
+    # 親子階層（small-to-big）は、削除した親子階層の位置(3 番目)に並ぶ(#271)。
     assert names == [
         "structure_aware",
         "recursive_character",
-        "docrag_small_to_big",
+        "small_to_big",
         "markdown_heading",
         "page_level",
         "fixed_size",
@@ -732,7 +732,7 @@ def _keep_chunking_settings(monkeypatch: MonkeyPatch) -> Any:
         "rag_chunk_min_chars",
         "rag_chunk_delimiter",
         "rag_chunk_context_header_enabled",
-        *DOCRAG_CHUNKING_SETTING_FIELDS,
+        *SMALL_TO_BIG_SETTING_FIELDS,
     ):
         monkeypatch.setattr(settings, field, getattr(settings, field))
     return settings
@@ -777,11 +777,11 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED=false" in persisted
 
 
-def test_update_chunking_settings_saves_docrag_params(
+def test_update_chunking_settings_saves_small_to_big_params(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """DocRAG 親子階層の 5 項目を保存し、削除した親子階層の旧変数は .env から消す。"""
+    """親子階層（small-to-big）の 5 項目を保存し、削除した親子階層の旧変数は .env から消す。"""
     settings = _keep_chunking_settings(monkeypatch)
     env_file = _settings_env_file(
         monkeypatch,
@@ -792,38 +792,38 @@ def test_update_chunking_settings_saves_docrag_params(
     resp = client.patch(
         "/api/settings/chunking",
         json={
-            "strategy": "docrag_small_to_big",
+            "strategy": "small_to_big",
             "chunk_size": 800,
             "overlap": 120,
             "min_chars": 120,
             "delimiter": "\\n\\n",
             "context_header_enabled": True,
-            "docrag_child_target_chars": 600,
-            "docrag_table_child_target_chars": 1500,
-            "docrag_parent_target_chars": 4000,
-            "docrag_parent_max_pages": 2,
-            "docrag_parent_max_children": 8,
+            "chunk_child_target_chars": 600,
+            "chunk_table_child_target_chars": 1500,
+            "chunk_parent_target_chars": 4000,
+            "chunk_parent_max_pages": 2,
+            "chunk_parent_max_children": 8,
         },
     )
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["strategy"] == "docrag_small_to_big"
-    assert body["docrag_child_target_chars"] == 600
-    assert body["docrag_parent_max_children"] == 8
-    assert settings.rag_chunking_strategy == "docrag_small_to_big"
-    assert settings.rag_docrag_child_target_chars == 600
-    assert settings.rag_docrag_table_child_target_chars == 1500
-    assert settings.rag_docrag_parent_target_chars == 4000
-    assert settings.rag_docrag_parent_max_pages == 2
-    assert settings.rag_docrag_parent_max_children == 8
+    assert body["strategy"] == "small_to_big"
+    assert body["chunk_child_target_chars"] == 600
+    assert body["chunk_parent_max_children"] == 8
+    assert settings.rag_chunking_strategy == "small_to_big"
+    assert settings.rag_chunk_child_target_chars == 600
+    assert settings.rag_chunk_table_child_target_chars == 1500
+    assert settings.rag_chunk_parent_target_chars == 4000
+    assert settings.rag_chunk_parent_max_pages == 2
+    assert settings.rag_chunk_parent_max_children == 8
     persisted = env_file.read_text(encoding="utf-8")
-    assert "RAG_CHUNKING_STRATEGY=docrag_small_to_big" in persisted
-    assert "RAG_DOCRAG_CHILD_TARGET_CHARS=600" in persisted
-    assert "RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS=1500" in persisted
-    assert "RAG_DOCRAG_PARENT_TARGET_CHARS=4000" in persisted
-    assert "RAG_DOCRAG_PARENT_MAX_PAGES=2" in persisted
-    assert "RAG_DOCRAG_PARENT_MAX_CHILDREN=8" in persisted
+    assert "RAG_CHUNKING_STRATEGY=small_to_big" in persisted
+    assert "RAG_CHUNK_CHILD_TARGET_CHARS=600" in persisted
+    assert "RAG_CHUNK_TABLE_CHILD_TARGET_CHARS=1500" in persisted
+    assert "RAG_CHUNK_PARENT_TARGET_CHARS=4000" in persisted
+    assert "RAG_CHUNK_PARENT_MAX_PAGES=2" in persisted
+    assert "RAG_CHUNK_PARENT_MAX_CHILDREN=8" in persisted
     assert "RAG_CHUNK_CHILD_SIZE" not in persisted
     assert "hierarchical_parent_child" not in persisted
 
@@ -831,20 +831,20 @@ def test_update_chunking_settings_saves_docrag_params(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("docrag_child_target_chars", 299),
-        ("docrag_child_target_chars", 1601),
-        ("docrag_table_child_target_chars", 8001),
-        ("docrag_parent_target_chars", 1199),
-        ("docrag_parent_max_pages", 6),
-        ("docrag_parent_max_children", 2),
+        ("chunk_child_target_chars", 299),
+        ("chunk_child_target_chars", 1601),
+        ("chunk_table_child_target_chars", 8001),
+        ("chunk_parent_target_chars", 1199),
+        ("chunk_parent_max_pages", 6),
+        ("chunk_parent_max_children", 2),
     ],
 )
-def test_update_chunking_settings_rejects_docrag_params_out_of_range(
+def test_update_chunking_settings_rejects_small_to_big_params_out_of_range(
     field: str,
     value: int,
 ) -> None:
     payload: dict[str, object] = {
-        "strategy": "docrag_small_to_big",
+        "strategy": "small_to_big",
         "chunk_size": 800,
         "overlap": 120,
         "min_chars": 120,
@@ -855,7 +855,7 @@ def test_update_chunking_settings_rejects_docrag_params_out_of_range(
 
 
 def test_update_chunking_settings_rejects_removed_parent_child_strategy() -> None:
-    """削除した親子階層は新しく保存できない(保存済みの値は読み込み時に DocRAG へ読み替える)。"""
+    """削除した親子階層は新しく保存できない(保存済みの値は読み込み時に回答フローへ読み替える)。"""
     resp = client.patch(
         "/api/settings/chunking",
         json={"strategy": "hierarchical_parent_child", "chunk_size": 800, "overlap": 120},
@@ -3462,7 +3462,7 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """DocRAG 回答記録の保持日数を .env へ保存し、期限切れの記録を削除する(0 は削除しない)。"""
+    """回答記録の保持日数を .env へ保存し、期限切れの記録を削除する(0 は削除しない)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_answer_record_retention_days", 90)
     env_file = _settings_env_file(monkeypatch, tmp_path)
@@ -3528,11 +3528,11 @@ def test_legacy_parser_api_key_in_json_moves_to_env_on_parser_save() -> None:
 def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_docrag_query_strategy", "auto_routing")
-    monkeypatch.setattr(settings, "rag_docrag_answer_flow", "crag")
-    monkeypatch.setattr(settings, "rag_docrag_neighbor_child_count", 3)
-    monkeypatch.setattr(settings, "rag_docrag_rerank_enabled", True)
-    monkeypatch.setattr(settings, "rag_docrag_screen_linking_enabled", False)
+    monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
+    monkeypatch.setattr(settings, "rag_answer_flow", "crag")
+    monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
+    monkeypatch.setattr(settings, "rag_rerank_enabled", True)
+    monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     assert client.get("/api/settings/answering").json()["data"] == {
@@ -3554,15 +3554,15 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert data["answer_flow"] == "crag"
     assert data["neighbor_child_count"] == 5
     assert data["rerank_enabled"] is False
-    assert settings.rag_docrag_query_strategy == "rag_fusion"
-    assert settings.rag_docrag_neighbor_child_count == 5
-    assert settings.rag_docrag_rerank_enabled is False
+    assert settings.rag_query_strategy == "rag_fusion"
+    assert settings.rag_neighbor_child_count == 5
+    assert settings.rag_rerank_enabled is False
     env_text = env_file.read_text(encoding="utf-8")
-    assert "RAG_DOCRAG_QUERY_STRATEGY=rag_fusion" in env_text
-    assert "RAG_DOCRAG_ANSWER_FLOW=crag" in env_text
-    assert "RAG_DOCRAG_NEIGHBOR_CHILD_COUNT=5" in env_text
-    assert "RAG_DOCRAG_RERANK_ENABLED=false" in env_text
-    assert "RAG_DOCRAG_SCREEN_LINKING_ENABLED=false" in env_text
+    assert "RAG_QUERY_STRATEGY=rag_fusion" in env_text
+    assert "RAG_ANSWER_FLOW=crag" in env_text
+    assert "RAG_NEIGHBOR_CHILD_COUNT=5" in env_text
+    assert "RAG_RERANK_ENABLED=false" in env_text
+    assert "RAG_SCREEN_LINKING_ENABLED=false" in env_text
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

@@ -57,8 +57,8 @@ _IMAGE_ONLY = ParserBackendCapability(
 # PDF/PNG/JPEG(TIFF はアップロード時に unsupported_tiff_image で遮断済み)。
 # いずれも実質 PDF+画像として宣言する。
 ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
-    # Docling の parser サービス(services/parsers/docling。DocRAG のレイアウト解析)は PDF と画像だけを
-    # 解析する(docrag.parsing.rendering.SUPPORTED_SOURCE_FILE_TYPES)。Office / HTML / テキスト / メール は
+    # Docling の parser サービス(services/parsers/docling。Docling のレイアウト解析)は PDF と画像だけを
+    # 解析する(rag_engine.parsing.rendering.SUPPORTED_SOURCE_FILE_TYPES)。Office / HTML / テキスト / メール は
     # 受けないため、ファイル準備で PDF に変換する(office_to_pdf)か、文書解析で Unstructured を選ぶ(#286)。
     "docling": ParserBackendCapability(
         modalities=frozenset({SourceModality.PDF, SourceModality.IMAGE}),

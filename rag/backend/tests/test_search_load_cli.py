@@ -39,7 +39,7 @@ def test_search_load_cli_passes_and_writes_redacted_artifacts(
                 "citations": [],
                 "guardrail_warnings": [],
                 "diagnostics": {
-                    "docrag": {
+                    "answer": {
                         "execution_steps": [
                             {"name": "質問の理解", "elapsed_seconds": 0.012},
                             {"name": "文書検索", "elapsed_seconds": 0.024},
@@ -129,7 +129,7 @@ def test_search_load_cli_returns_one_when_threshold_fails(
                 "trace_id": "trace-slow",
                 "elapsed_ms": 200.0,
                 "diagnostics": {
-                    "docrag": {"execution_steps": [{"name": "文書検索", "elapsed_seconds": 0.08}]}
+                    "answer": {"execution_steps": [{"name": "文書検索", "elapsed_seconds": 0.08}]}
                 },
             }
         }

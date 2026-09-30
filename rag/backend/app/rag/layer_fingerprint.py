@@ -4,8 +4,8 @@
 保存し、画面の表示のたびに今の設定と比べる。設計の判断:
 
 - **入れる入力は結果を変えるものだけ**: 項目の定義(``field_schema_hash``。文書が属する KB の
-  定義か全体の既定。#548)、DocRAG の chunk
-  metadata の契約(``docrag_chunk_contract``。``CHUNK_METADATA_SCHEMA_VERSION`` /
+  定義か全体の既定。#548)、親子階層の chunk
+  metadata の契約(``chunk_metadata_contract``。``CHUNK_METADATA_SCHEMA_VERSION`` /
   ``SEARCH_TEXT_SCHEMA_VERSION`` / ``INQUIRY_CHUNK_METADATA_SCHEMA_VERSION`` /
   ``inquiry_profile_contract_hash``。rag_poc の ``schema_version`` による古い chunk の検出に
   当たる)、
@@ -33,7 +33,7 @@ from collections.abc import Mapping, Sequence
 from functools import lru_cache
 
 from app.config import Settings
-from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY
+from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     load_field_schema,
@@ -42,7 +42,7 @@ from app.rag.extraction_field_adapter import (
 
 # 指紋の入力の名前(API の ``rebuild_inputs`` にもそのまま返し、画面が i18n で表示名にする)。
 FIELD_SCHEMA_INPUT = "field_schema_hash"
-DOCRAG_CHUNK_CONTRACT_INPUT = "docrag_chunk_contract"
+CHUNK_METADATA_CONTRACT_INPUT = "chunk_metadata_contract"
 NAVIGATION_SUMMARY_MAX_NODES_INPUT = "navigation_summary_max_nodes"
 
 # 抽出の工程で抽出結果の parser_artifacts に刻む key(作ったときに実際に使った値)。
@@ -72,13 +72,13 @@ def field_schema_hash(fields: Sequence[FieldDefinition]) -> str:
 
 
 @lru_cache(maxsize=1)
-def docrag_chunk_contract_hash() -> str:
-    """DocRAG の chunk metadata の契約の hash(docrag_core の chunk run の契約と同じ入力)。"""
-    from docrag.chunking.constants import (
+def chunk_metadata_contract_hash() -> str:
+    """親子階層の chunk metadata の契約の hash(rag_engine の chunk run の契約と同じ入力)。"""
+    from rag_engine.chunking.constants import (
         CHUNK_METADATA_SCHEMA_VERSION,
         SEARCH_TEXT_SCHEMA_VERSION,
     )
-    from docrag.retrieval.inquiry_conditions import (
+    from rag_engine.retrieval.inquiry_conditions import (
         INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
         inquiry_profile_contract_hash,
     )
@@ -107,9 +107,9 @@ def recorded_layer_fingerprint(
         if isinstance(schema_hash, str) and schema_hash:
             fingerprint[FIELD_SCHEMA_INPUT] = schema_hash
         # chunk の metadata は分割の工程で作り、索引まで同じ job の中で進むため、記録の時点の
-        # コードの契約を使う。DocRAG 以外の分割方式は docrag の metadata を持たない。
-        if settings.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY:
-            fingerprint[DOCRAG_CHUNK_CONTRACT_INPUT] = docrag_chunk_contract_hash()
+        # コードの契約を使う。親子階層以外の分割方式は rag_engine の metadata を持たない。
+        if settings.rag_chunking_strategy == SMALL_TO_BIG_STRATEGY:
+            fingerprint[CHUNK_METADATA_CONTRACT_INPUT] = chunk_metadata_contract_hash()
     elif layer == "navigation":
         max_nodes = artifacts.get(NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY)
         if isinstance(max_nodes, int) and not isinstance(max_nodes, bool):
@@ -128,7 +128,7 @@ def current_layer_inputs(
     """
     return {
         FIELD_SCHEMA_INPUT: field_schema_hash(field_definitions),
-        DOCRAG_CHUNK_CONTRACT_INPUT: docrag_chunk_contract_hash(),
+        CHUNK_METADATA_CONTRACT_INPUT: chunk_metadata_contract_hash(),
         NAVIGATION_SUMMARY_MAX_NODES_INPUT: settings.rag_navigation_summary_max_nodes,
     }
 

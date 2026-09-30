@@ -198,14 +198,14 @@ def test_parser_service_env_uses_vision_model_connection() -> None:
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL"] == "vision-b"
 
 
-def test_docrag_settings_use_answer_and_vision_connections(tmp_path: Path) -> None:
-    from docrag.config import ENTERPRISE_AI_LLM_PROVIDER, ENTERPRISE_AI_VISION_LLM_PROVIDER
+def test_engine_settings_use_answer_and_vision_connections(tmp_path: Path) -> None:
+    from rag_engine.config import ENTERPRISE_AI_LLM_PROVIDER, ENTERPRISE_AI_VISION_LLM_PROVIDER
 
-    from app.rag.docrag_answer import build_docrag_settings
+    from app.rag.answer_engine import build_engine_settings
 
-    docrag_settings = build_docrag_settings(_settings(), output_dir=tmp_path)
-    answer = docrag_settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER]
-    vision = docrag_settings.llm_providers[ENTERPRISE_AI_VISION_LLM_PROVIDER]
+    engine_settings = build_engine_settings(_settings(), output_dir=tmp_path)
+    answer = engine_settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER]
+    vision = engine_settings.llm_providers[ENTERPRISE_AI_VISION_LLM_PROVIDER]
     assert (answer.endpoint, answer.api_key, answer.project_id, answer.model) == (
         PRIMARY,
         "sk-primary",

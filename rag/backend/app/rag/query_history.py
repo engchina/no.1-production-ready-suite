@@ -1,4 +1,4 @@
-"""質問履歴の記録と、よく聞かれる質問の候補(rag_poc の docrag.knowledge.query_history)。
+"""質問履歴の記録と、よく聞かれる質問の候補(rag_poc の rag_engine.knowledge.query_history)。
 
 rag_poc は JSONL へ追記したが、rag では業務ビュー単位で `rag_query_history` に保存する。
 候補の規則(保持期間・最小回数・類似度・分類条件・除外リスト)は rag_poc の関数をそのまま使う。
@@ -12,20 +12,20 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Protocol
 
-from docrag.knowledge.query_history import (
+from rag_engine.knowledge.query_history import (
     QueryHistoryRecord,
     QueryHistorySuggestion,
     suggest_query_history_questions,
 )
 
 # ponytail: 正規化・除外の判定は rag_poc の非公開関数を使う(同じ規則で記録と候補を揃えるため)。
-from docrag.knowledge.query_history import (
+from rag_engine.knowledge.query_history import (
     _clean_question as clean_question,
 )
-from docrag.knowledge.query_history import (
+from rag_engine.knowledge.query_history import (
     _matches_blocklist as matches_blocklist,
 )
-from docrag.knowledge.query_history import (
+from rag_engine.knowledge.query_history import (
     _normalize_key as normalize_question,
 )
 

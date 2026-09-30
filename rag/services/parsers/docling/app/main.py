@@ -1,7 +1,7 @@
-"""Docling parser マイクロサービス(DocRAG 解析実装)。
+"""Docling parser マイクロサービス(Docling の解析実装)。
 
-rag_poc(DocRAG)の Docling 解析(読み順・段組補正、表セル補修、図内 OCR 集約)を実行し、
-`StructuredExtraction` を返す。LayoutRecord 全体は parser_artifacts["docrag_layout"] に保持する。
+rag_poc の Docling 解析(読み順・段組補正、表セル補修、図内 OCR 集約)を実行し、
+`StructuredExtraction` を返す。LayoutRecord 全体は parser_artifacts["layout_records"] に保持する。
 図・画像の Vision は backend の解析後の共通の段が行う(#497)。このサービスは LLM を呼ばず、
 parser_options は受け取っても使わない(旧 backend の vision_enabled などは無視する)。
 """
@@ -73,6 +73,6 @@ async def parse(
         extraction=extraction,
         parser_backend=_BACKEND,
         parser_version=version or _BACKEND,
-        template="docling_docrag",
+        template="docling_layout",
         warnings=list(extraction.warnings),
     )

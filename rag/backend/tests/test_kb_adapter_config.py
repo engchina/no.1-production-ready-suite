@@ -35,7 +35,7 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     settings = get_settings()
     config = _config(
         ingestion={"chunking_strategy": "markdown_heading", "chunk_size": 1200},
-        query={"docrag_query_strategy": "rag_fusion"},
+        query={"query_strategy": "rag_fusion"},
     )
 
     effective = resolve_effective_settings(settings, config, scope="ingestion")
@@ -43,7 +43,7 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     assert effective.rag_chunking_strategy == "markdown_heading"
     assert effective.rag_chunk_size == 1200
     # query 系はグローバルのまま。
-    assert effective.rag_docrag_query_strategy == settings.rag_docrag_query_strategy
+    assert effective.rag_query_strategy == settings.rag_query_strategy
 
 
 def test_kb_query_scope_is_legacy_noop() -> None:
@@ -51,7 +51,7 @@ def test_kb_query_scope_is_legacy_noop() -> None:
     settings = get_settings()
     config = _config(
         ingestion={"chunk_size": 1200},
-        query={"docrag_answer_flow": "standard_rag", "guardrail_policy": "strict"},
+        query={"answer_flow": "standard_rag", "guardrail_policy": "strict"},
     )
 
     effective = resolve_effective_settings(settings, config, scope="query")
@@ -214,7 +214,7 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
     assert effective.rag_vision_enabled is True
     assert effective.rag_navigation_summary_enabled is True
     # query 系は不変。
-    assert effective.rag_docrag_query_strategy == settings.rag_docrag_query_strategy
+    assert effective.rag_query_strategy == settings.rag_query_strategy
 
 
 def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
@@ -265,15 +265,15 @@ def test_compose_query_settings_empty_returns_global() -> None:
 def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict", docrag_query_strategy="hyde")
-    view = KnowledgeBaseQueryConfig(docrag_query_strategy="rag_fusion")
+    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict", query_strategy="hyde")
+    view = KnowledgeBaseQueryConfig(query_strategy="rag_fusion")
 
     # 低優先=kb, 高優先=view の順で渡す。
     merged, applied = compose_query_settings(settings, [kb, view])
 
     assert applied is True
     # 同一フィールド(質問拡張戦略)は高優先 view が勝つ。
-    assert merged.rag_docrag_query_strategy == "rag_fusion"
+    assert merged.rag_query_strategy == "rag_fusion"
     # view が触れていない guardrail は下位 overlay の値が残る(per-field merge の肝)。
     assert merged.rag_guardrail_policy == "strict"
 
@@ -291,13 +291,11 @@ def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:
 def test_invalid_literal_value_is_rejected_at_validation() -> None:
     """存在しない戦略名は pydantic バリデーションで弾く。"""
     with pytest.raises(ValueError):
-        KnowledgeBaseAdapterConfig.model_validate(
-            {"query": {"docrag_query_strategy": "does_not_exist"}}
-        )
+        KnowledgeBaseAdapterConfig.model_validate({"query": {"query_strategy": "does_not_exist"}})
 
 
-def test_removed_parent_child_strategy_is_read_as_docrag() -> None:
-    """保存済みの親子階層は DocRAG 親子階層として読み、専用の子サイズは捨てる(#271)。"""
+def test_removed_parent_child_strategy_is_read_as_small_to_big() -> None:
+    """保存済みの親子階層は親子階層（small-to-big）として読み、専用の子サイズは捨てる(#271)。"""
     from app.schemas.document import DocumentProcessingConfig
 
     config = parse_adapter_config(
@@ -309,33 +307,33 @@ def test_removed_parent_child_strategy_is_read_as_docrag() -> None:
             },
         }
     )
-    assert config.ingestion.chunking_strategy == "docrag_small_to_big"
+    assert config.ingestion.chunking_strategy == "small_to_big"
     assert "chunk_child_size" not in config.ingestion.model_dump()
     dumped_ingestion = dump_adapter_config(config)["ingestion"]
     assert isinstance(dumped_ingestion, dict)
-    assert dumped_ingestion["chunking_strategy"] == "docrag_small_to_big"
+    assert dumped_ingestion["chunking_strategy"] == "small_to_big"
 
     # 文書レシピは extra="forbid" だが、削除した項目があっても読み込める。
     recipe = DocumentProcessingConfig.model_validate(
         {"chunking_strategy": "hierarchical_parent_child", "chunk_child_size": 800}
     )
-    assert recipe.chunking_strategy == "docrag_small_to_big"
+    assert recipe.chunking_strategy == "small_to_big"
     assert "chunk_child_size" not in recipe.model_dump(exclude_none=True)
 
 
-def test_docrag_params_overlay_ingestion_settings() -> None:
-    """DocRAG の 5 項目は文書レシピ(ingestion scope)で上書きできる。"""
+def test_small_to_big_params_overlay_ingestion_settings() -> None:
+    """親子階層の 5 項目は文書レシピ(ingestion scope)で上書きできる。"""
     config = KnowledgeBaseAdapterConfig(
         ingestion=KnowledgeBaseIngestionConfig(
-            chunking_strategy="docrag_small_to_big",
-            docrag_child_target_chars=500,
-            docrag_parent_max_pages=1,
+            chunking_strategy="small_to_big",
+            chunk_child_target_chars=500,
+            chunk_parent_max_pages=1,
         )
     )
     merged = resolve_effective_settings(get_settings(), config, scope="ingestion")
-    assert merged.rag_chunking_strategy == "docrag_small_to_big"
-    assert merged.rag_docrag_child_target_chars == 500
-    assert merged.rag_docrag_parent_max_pages == 1
-    assert merged.rag_docrag_parent_target_chars == get_settings().rag_docrag_parent_target_chars
+    assert merged.rag_chunking_strategy == "small_to_big"
+    assert merged.rag_chunk_child_target_chars == 500
+    assert merged.rag_chunk_parent_max_pages == 1
+    assert merged.rag_chunk_parent_target_chars == get_settings().rag_chunk_parent_target_chars
     with pytest.raises(ValueError):
-        KnowledgeBaseIngestionConfig(docrag_child_target_chars=2000)
+        KnowledgeBaseIngestionConfig(chunk_child_target_chars=2000)

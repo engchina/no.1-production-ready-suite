@@ -428,7 +428,7 @@ async def _generate_chat_answer(
     trace_id = new_trace_id()
     try:
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
-        # llm は会話履歴による質問の書き換えに使う。回答は DocRAG が自分でモデルを呼ぶので、
+        # llm は会話履歴による質問の書き換えに使う。回答は回答エンジンが自分でモデルを呼ぶので、
         # 列のモデルを別に渡す(#593)。
         pipeline = RagPipeline(
             settings=turn.settings,
@@ -548,8 +548,8 @@ async def _stream_chat_events(
                         "answer": result.answer,
                         "guardrail_warnings": result.guardrail_warnings,
                         "elapsed_ms": result.elapsed_ms,
-                        # DocRAG 回答エンジンの根拠・実行記録(standard では None)。
-                        "docrag": result.diagnostics.docrag,
+                        # 回答エンジンの根拠・実行記録(無いときは None)。
+                        "answer_diagnostics": result.diagnostics.answer,
                         "citations": [
                             citation.model_dump(mode="json") for citation in result.citations
                         ],
@@ -604,7 +604,7 @@ async def _stream_chat_events(
                         "trace_id": payload["trace_id"],
                         "elapsed_ms": payload["elapsed_ms"],
                         "guardrail_warnings": payload["guardrail_warnings"],
-                        "docrag": payload.get("docrag"),
+                        "answer_diagnostics": payload.get("answer_diagnostics"),
                     },
                 )
                 for chunk in _answer_chunks(str(payload["answer"])):

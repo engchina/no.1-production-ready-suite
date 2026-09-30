@@ -38,7 +38,7 @@ def test_import_cv2() -> None:
     [
         # docling の StandardPdfPipeline が表構造モデルの初期化で import する。
         "docling_ibm_models.tableformer.data_management.tf_predictor",
-        # DocRAG 解析の OCR(RapidOCR)も cv2 を import する。
+        # Docling の解析の OCR(RapidOCR)も cv2 を import する。
         "rapidocr",
     ],
 )

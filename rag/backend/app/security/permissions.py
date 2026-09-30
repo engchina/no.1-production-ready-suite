@@ -443,12 +443,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL),
     ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
-    # DocRAG プロンプトは回答プロンプトと文書解析（抽出プロンプト）の両画面で編集する。
-    ("GET", "/settings/docrag-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
-    ("PUT", "/settings/docrag-prompts/{key}"): _any(
+    # 回答生成のプロンプトは回答プロンプトと文書解析（抽出プロンプト）の両画面で編集する。
+    ("GET", "/settings/answer-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
+    ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
     ),
-    ("DELETE", "/settings/docrag-prompts/{key}"): _any(
+    ("DELETE", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
     ),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。

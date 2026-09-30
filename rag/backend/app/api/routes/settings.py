@@ -39,24 +39,24 @@ from app.clients.oracle import (
     test_oracle_connection,
 )
 from app.config import (
-    DOCRAG_CHUNKING_SETTING_FIELDS,
     MODEL_SETTINGS_STORE,
+    SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_vision_model_id,
     get_settings,
 )
+from app.rag.answer_prompts import (
+    EDITABLE_PROMPT_KEYS,
+    readonly_prompt_stages,
+)
+from app.rag.answer_prompts import default_prompt as default_answer_prompt
+from app.rag.answer_prompts import required_placeholders as answer_prompt_required_placeholders
+from app.rag.answer_prompts import validate_prompt as validate_answer_prompt
 from app.rag.chunking_strategy import (
     chunking_runtime_settings,
     normalize_chunking_strategy,
 )
-from app.rag.docrag_prompts import (
-    EDITABLE_PROMPT_KEYS,
-    readonly_prompt_stages,
-)
-from app.rag.docrag_prompts import default_prompt as default_docrag_prompt
-from app.rag.docrag_prompts import required_placeholders as docrag_required_placeholders
-from app.rag.docrag_prompts import validate_prompt as validate_docrag_prompt
 from app.rag.evaluation_adapter import (
     evaluation_adapter_runtime_settings,
     normalize_evaluation_suite,
@@ -99,14 +99,14 @@ from app.schemas.settings import (
     POST_PARSE_SETTING_FIELDS,
     AnsweringSettingsData,
     AnsweringSettingsUpdate,
+    AnswerPromptsData,
+    AnswerPromptUpdate,
+    AnswerPromptView,
     AnswerRecordSettingsData,
     AnswerRecordSettingsUpdate,
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
-    DocragPromptsData,
-    DocragPromptUpdate,
-    DocragPromptView,
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
@@ -494,11 +494,11 @@ async def update_answering_settings(
     updates = {
         field: value
         for field, value in (
-            ("rag_docrag_query_strategy", payload.query_strategy),
-            ("rag_docrag_answer_flow", payload.answer_flow),
-            ("rag_docrag_neighbor_child_count", payload.neighbor_child_count),
-            ("rag_docrag_rerank_enabled", payload.rerank_enabled),
-            ("rag_docrag_screen_linking_enabled", payload.screen_linking_enabled),
+            ("rag_query_strategy", payload.query_strategy),
+            ("rag_answer_flow", payload.answer_flow),
+            ("rag_neighbor_child_count", payload.neighbor_child_count),
+            ("rag_rerank_enabled", payload.rerank_enabled),
+            ("rag_screen_linking_enabled", payload.screen_linking_enabled),
         )
         if value is not None
     }
@@ -507,12 +507,12 @@ async def update_answering_settings(
         _write_env_values(
             BACKEND_ENV_FILE,
             {
-                "RAG_DOCRAG_QUERY_STRATEGY": candidate.rag_docrag_query_strategy,
-                "RAG_DOCRAG_ANSWER_FLOW": candidate.rag_docrag_answer_flow,
-                "RAG_DOCRAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_docrag_neighbor_child_count),
-                "RAG_DOCRAG_RERANK_ENABLED": _format_env_bool(candidate.rag_docrag_rerank_enabled),
-                "RAG_DOCRAG_SCREEN_LINKING_ENABLED": _format_env_bool(
-                    candidate.rag_docrag_screen_linking_enabled
+                "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
+                "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
+                "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
+                "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
+                "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
+                    candidate.rag_screen_linking_enabled
                 ),
             },
             section_comment="# 回答の検索と生成",
@@ -525,11 +525,11 @@ async def update_answering_settings(
 
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
-        query_strategy=settings.rag_docrag_query_strategy,
-        answer_flow=settings.rag_docrag_answer_flow,
-        neighbor_child_count=settings.rag_docrag_neighbor_child_count,
-        rerank_enabled=settings.rag_docrag_rerank_enabled,
-        screen_linking_enabled=settings.rag_docrag_screen_linking_enabled,
+        query_strategy=settings.rag_query_strategy,
+        answer_flow=settings.rag_answer_flow,
+        neighbor_child_count=settings.rag_neighbor_child_count,
+        rerank_enabled=settings.rag_rerank_enabled,
+        screen_linking_enabled=settings.rag_screen_linking_enabled,
     )
 
 
@@ -611,56 +611,56 @@ def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
     )
 
 
-@router.get("/docrag-prompts", response_model=ApiResponse[DocragPromptsData])
-async def get_docrag_prompts() -> ApiResponse[DocragPromptsData]:
+@router.get("/answer-prompts", response_model=ApiResponse[AnswerPromptsData])
+async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
     """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
-    saved = await OracleClient().list_docrag_prompts()
-    return ApiResponse(data=_docrag_prompts_data(saved))
+    saved = await OracleClient().list_answer_prompts()
+    return ApiResponse(data=_answer_prompts_data(saved))
 
 
-@router.put("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
-async def put_docrag_prompt(
-    key: str, payload: DocragPromptUpdate
-) -> ApiResponse[DocragPromptsData]:
+@router.put("/answer-prompts/{key}", response_model=ApiResponse[AnswerPromptsData])
+async def put_answer_prompt(
+    key: str, payload: AnswerPromptUpdate
+) -> ApiResponse[AnswerPromptsData]:
     """編集できるプロンプトを保存する(次の回答・次の解析から使う)。"""
     try:
-        validate_docrag_prompt(key, payload.content)
+        validate_answer_prompt(key, payload.content)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     oracle = OracleClient()
-    await oracle.save_docrag_prompt(key, payload.content)
-    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+    await oracle.save_answer_prompt(key, payload.content)
+    return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
 
-@router.delete("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
-async def reset_docrag_prompt(key: str) -> ApiResponse[DocragPromptsData]:
+@router.delete("/answer-prompts/{key}", response_model=ApiResponse[AnswerPromptsData])
+async def reset_answer_prompt(key: str) -> ApiResponse[AnswerPromptsData]:
     """保存したプロンプトを消して既定値へ戻す。"""
     if key not in EDITABLE_PROMPT_KEYS:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
     oracle = OracleClient()
-    await oracle.delete_docrag_prompt(key)
-    return ApiResponse(data=_docrag_prompts_data(await oracle.list_docrag_prompts()))
+    await oracle.delete_answer_prompt(key)
+    return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
 
-def _docrag_prompts_data(saved: dict[str, dict[str, object]]) -> DocragPromptsData:
+def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsData:
     prompts = []
     for key in EDITABLE_PROMPT_KEYS:
         row = saved.get(key)
         prompts.append(
-            DocragPromptView.model_validate(
+            AnswerPromptView.model_validate(
                 {
                     "key": key,
-                    "content": row["content"] if row else default_docrag_prompt(key),
-                    "default_content": default_docrag_prompt(key),
+                    "content": row["content"] if row else default_answer_prompt(key),
+                    "default_content": default_answer_prompt(key),
                     "customized": row is not None,
-                    "required_placeholders": list(docrag_required_placeholders(key)),
+                    "required_placeholders": list(answer_prompt_required_placeholders(key)),
                     "updated_at": row["updated_at"] if row else None,
                 }
             )
         )
-    return DocragPromptsData.model_validate(
+    return AnswerPromptsData.model_validate(
         {"prompts": prompts, "stages": readonly_prompt_stages()}
     )
 
@@ -1420,11 +1420,11 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
         min_chars=runtime.min_chars,
         delimiter=runtime.delimiter,
         context_header_enabled=settings.rag_chunk_context_header_enabled,
-        docrag_child_target_chars=runtime.docrag.child_target_chars,
-        docrag_table_child_target_chars=runtime.docrag.table_child_target_chars,
-        docrag_parent_target_chars=runtime.docrag.parent_target_chars,
-        docrag_parent_max_pages=runtime.docrag.parent_max_pages,
-        docrag_parent_max_children=runtime.docrag.parent_max_children,
+        chunk_child_target_chars=runtime.small_to_big.child_target_chars,
+        chunk_table_child_target_chars=runtime.small_to_big.table_child_target_chars,
+        chunk_parent_target_chars=runtime.small_to_big.parent_target_chars,
+        chunk_parent_max_pages=runtime.small_to_big.parent_max_pages,
+        chunk_parent_max_children=runtime.small_to_big.parent_max_children,
         strategies=[
             ChunkingStrategyStatusData(
                 name=status.name,
@@ -1451,11 +1451,11 @@ def _chunking_settings_candidate(
             "rag_chunk_min_chars": payload.min_chars,
             "rag_chunk_delimiter": payload.delimiter,
             "rag_chunk_context_header_enabled": payload.context_header_enabled,
-            "rag_docrag_child_target_chars": payload.docrag_child_target_chars,
-            "rag_docrag_table_child_target_chars": payload.docrag_table_child_target_chars,
-            "rag_docrag_parent_target_chars": payload.docrag_parent_target_chars,
-            "rag_docrag_parent_max_pages": payload.docrag_parent_max_pages,
-            "rag_docrag_parent_max_children": payload.docrag_parent_max_children,
+            "rag_chunk_child_target_chars": payload.chunk_child_target_chars,
+            "rag_chunk_table_child_target_chars": payload.chunk_table_child_target_chars,
+            "rag_chunk_parent_target_chars": payload.chunk_parent_target_chars,
+            "rag_chunk_parent_max_pages": payload.chunk_parent_max_pages,
+            "rag_chunk_parent_max_children": payload.chunk_parent_max_children,
         }
     )
 
@@ -1468,7 +1468,7 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
     target.rag_chunk_delimiter = source.rag_chunk_delimiter
     target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
-    for name in DOCRAG_CHUNKING_SETTING_FIELDS:
+    for name in SMALL_TO_BIG_SETTING_FIELDS:
         setattr(target, name, getattr(source, name))
 
 
@@ -1485,10 +1485,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
                 settings.rag_chunk_context_header_enabled
             ),
-            **{
-                name.upper(): str(getattr(settings, name))
-                for name in DOCRAG_CHUNKING_SETTING_FIELDS
-            },
+            **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
             # 削除した親子階層(#271)の子 chunk サイズ。読まない値なので保存時に消す。
             "RAG_CHUNK_CHILD_SIZE": None,
         },

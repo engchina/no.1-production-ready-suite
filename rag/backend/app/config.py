@@ -105,7 +105,7 @@ PreprocessProfile = Literal[
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
-    "docrag_small_to_big",
+    "small_to_big",
     "markdown_heading",
     "page_level",
     "fixed_size",
@@ -118,10 +118,10 @@ CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "page_level",
 }
 # 削除した分割方式の保存値を後継の方式へ読み替える(.env / 文書レシピ / KB の保存値)。
-# 親子階層(hierarchical_parent_child)は DocRAG 親子階層へ置き換えた(#271)。
+# 親子階層(hierarchical_parent_child)は親子階層（small-to-big）へ置き換えた(#271)。
 LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, ChunkingStrategy] = {
     "sentence_window": "recursive_character",
-    "hierarchical_parent_child": "docrag_small_to_big",
+    "hierarchical_parent_child": "small_to_big",
 }
 
 
@@ -132,37 +132,38 @@ def normalize_legacy_chunking_strategy_value(value: object) -> object:
     return value
 
 
-# DocRAG 親子階層(docrag_small_to_big)の分割パラメータ。既定値と範囲は rag_poc の
-# docrag.chunking.constants(DEFAULT_* / *_RANGE)と同じ(テストで一致を確認する)。
-# docrag.chunking は import すると分割実装一式を読み込むため、ここでは値を複製して持つ。
+# 親子階層（small-to-big。`small_to_big`）の分割パラメータ。既定値と範囲は rag_poc の
+# rag_engine.chunking.constants(DEFAULT_* / *_RANGE)と同じ(テストで一致を確認する)。
+# rag_engine.chunking は import すると分割実装一式を読み込むため、ここでは値を複製して持つ。
 # OCI Enterprise AI の LLM 1 回の timeout（`oci_enterprise_ai_timeout_seconds`）の上限（秒）。
 # 保存済みの回答の評価の時間の上限もこの値から決める（#304）。
 OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
-DOCRAG_CHILD_TARGET_CHARS_DEFAULT = 1000
-DOCRAG_CHILD_TARGET_CHARS_MIN = 300
-DOCRAG_CHILD_TARGET_CHARS_MAX = 1600
-DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT = 3000
-DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN = 300
-DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX = 8000
-DOCRAG_PARENT_TARGET_CHARS_DEFAULT = 6000
-DOCRAG_PARENT_TARGET_CHARS_MIN = 1200
-DOCRAG_PARENT_TARGET_CHARS_MAX = 10000
-DOCRAG_PARENT_MAX_PAGES_DEFAULT = 3
-DOCRAG_PARENT_MAX_PAGES_MIN = 1
-DOCRAG_PARENT_MAX_PAGES_MAX = 5
-DOCRAG_PARENT_MAX_CHILDREN_DEFAULT = 12
-DOCRAG_PARENT_MAX_CHILDREN_MIN = 3
-DOCRAG_PARENT_MAX_CHILDREN_MAX = 20
-# DocRAG 親子階層の分割パラメータの Settings 属性名(保存・受け渡し・chunk_set の hash で使う)。
-DOCRAG_CHUNKING_SETTING_FIELDS: tuple[str, ...] = (
-    "rag_docrag_child_target_chars",
-    "rag_docrag_table_child_target_chars",
-    "rag_docrag_parent_target_chars",
-    "rag_docrag_parent_max_pages",
-    "rag_docrag_parent_max_children",
+CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
+CHUNK_CHILD_TARGET_CHARS_MIN = 300
+CHUNK_CHILD_TARGET_CHARS_MAX = 1600
+CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT = 3000
+CHUNK_TABLE_CHILD_TARGET_CHARS_MIN = 300
+CHUNK_TABLE_CHILD_TARGET_CHARS_MAX = 8000
+CHUNK_PARENT_TARGET_CHARS_DEFAULT = 6000
+CHUNK_PARENT_TARGET_CHARS_MIN = 1200
+CHUNK_PARENT_TARGET_CHARS_MAX = 10000
+CHUNK_PARENT_MAX_PAGES_DEFAULT = 3
+CHUNK_PARENT_MAX_PAGES_MIN = 1
+CHUNK_PARENT_MAX_PAGES_MAX = 5
+CHUNK_PARENT_MAX_CHILDREN_DEFAULT = 12
+CHUNK_PARENT_MAX_CHILDREN_MIN = 3
+CHUNK_PARENT_MAX_CHILDREN_MAX = 20
+# 親子階層（small-to-big）の分割パラメータの Settings 属性名
+# (保存・受け渡し・chunk_set の hash で使う)。
+SMALL_TO_BIG_SETTING_FIELDS: tuple[str, ...] = (
+    "rag_chunk_child_target_chars",
+    "rag_chunk_table_child_target_chars",
+    "rag_chunk_parent_target_chars",
+    "rag_chunk_parent_max_pages",
+    "rag_chunk_parent_max_children",
 )
-# DocRAG 回答フローの選択肢(docrag.generation.answer_models の ID と一致させる)。
-DocragQueryStrategy = Literal[
+# 回答フローの選択肢(rag_engine.generation.answer_models の ID と一致させる)。
+QueryStrategy = Literal[
     "auto_routing",
     "simple_retrieval",
     "rag_fusion",
@@ -170,7 +171,7 @@ DocragQueryStrategy = Literal[
     "step_back_prompting",
     "hyde",
 ]
-DocragAnswerFlow = Literal["crag", "standard_rag"]
+AnswerFlow = Literal["crag", "standard_rag"]
 # 配信モード(業務ビュー層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
 # single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
 # source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
@@ -581,10 +582,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_chunk_overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     rag_chunking_strategy: ChunkingStrategy = Field(
-        default="docrag_small_to_big",
+        default="small_to_big",
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
-            "docrag_small_to_big(既定)は親子階層(small-to-big。Docling の解析結果を使う。"
+            "small_to_big(既定)は親子階層(small-to-big。Docling の解析結果を使う。"
             "解析結果が Docling でない文書は structure_aware で分割する)、"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "markdown_heading は章節単位、page_level はページ単位、"
@@ -598,42 +599,42 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         max_length=256,
         description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
     )
-    # DocRAG 親子階層(docrag_small_to_big)の分割パラメータ。
+    # 親子階層（small-to-big。`small_to_big`）の分割パラメータ。
     # rag_poc の「チャンキング」tab と同じ 5 項目。
-    rag_docrag_child_target_chars: int = Field(
-        default=DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_CHILD_TARGET_CHARS_MAX,
+    rag_chunk_child_target_chars: int = Field(
+        default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_CHILD_TARGET_CHARS_MAX,
         description=(
             "親子階層(small-to-big)で、検索に使う子 chunk の目標文字数。"
             "超える Text / List-item は文末で複数の子へ分ける。"
         ),
     )
-    rag_docrag_table_child_target_chars: int = Field(
-        default=DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    rag_chunk_table_child_target_chars: int = Field(
+        default=CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
         description=(
             "親子階層(small-to-big)で、表を行グループへ分ける閾値と各グループの目標文字数。"
             "各グループには列見出しと関連見出しを繰り返し付ける。"
         ),
     )
-    rag_docrag_parent_target_chars: int = Field(
-        default=DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_PARENT_TARGET_CHARS_MIN,
-        le=DOCRAG_PARENT_TARGET_CHARS_MAX,
+    rag_chunk_parent_target_chars: int = Field(
+        default=CHUNK_PARENT_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_PARENT_TARGET_CHARS_MIN,
+        le=CHUNK_PARENT_TARGET_CHARS_MAX,
         description="親子階層(small-to-big)で、回答文脈に使う親 chunk の目標文字数。",
     )
-    rag_docrag_parent_max_pages: int = Field(
-        default=DOCRAG_PARENT_MAX_PAGES_DEFAULT,
-        ge=DOCRAG_PARENT_MAX_PAGES_MIN,
-        le=DOCRAG_PARENT_MAX_PAGES_MAX,
+    rag_chunk_parent_max_pages: int = Field(
+        default=CHUNK_PARENT_MAX_PAGES_DEFAULT,
+        ge=CHUNK_PARENT_MAX_PAGES_MIN,
+        le=CHUNK_PARENT_MAX_PAGES_MAX,
         description="親子階層(small-to-big)で、1 つの親 chunk がまたげる最大ページ数。",
     )
-    rag_docrag_parent_max_children: int = Field(
-        default=DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
-        ge=DOCRAG_PARENT_MAX_CHILDREN_MIN,
-        le=DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    rag_chunk_parent_max_children: int = Field(
+        default=CHUNK_PARENT_MAX_CHILDREN_DEFAULT,
+        ge=CHUNK_PARENT_MAX_CHILDREN_MIN,
+        le=CHUNK_PARENT_MAX_CHILDREN_MAX,
         description="親子階層(small-to-big)で、1 つの親 chunk に入れる子 chunk の最大数。",
     )
     rag_chunk_min_chars: int = Field(
@@ -692,44 +693,44 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
         ),
     )
-    # 回答は rag_poc(DocRAG)の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
+    # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
-    rag_docrag_answer_vision_enabled: bool = Field(
+    rag_answer_vision_enabled: bool = Field(
         default=False,
         description=(
             "回答で根拠の図を切り出し、回答モデルへ画像として添付する"
             "(回答モデルが画像入力に対応する場合のみ有効化する)。"
         ),
     )
-    rag_docrag_history_rewrite_enabled: bool = Field(
+    rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
             "チャットで回答するとき、会話履歴から最新の質問を"
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
     )
-    rag_docrag_query_strategy: DocragQueryStrategy = Field(
+    rag_query_strategy: QueryStrategy = Field(
         default="auto_routing",
         description="質問の拡張(query rewriting / expansion)の方式。業務ビューで上書きできる。",
     )
-    rag_docrag_answer_flow: DocragAnswerFlow = Field(
+    rag_answer_flow: AnswerFlow = Field(
         default="crag",
         description=(
             "回答の生成方式。crag(CRAG)は検索結果を評価して必要なら補正検索し、"
             "standard_rag(標準 RAG)は補正しない。"
         ),
     )
-    rag_docrag_neighbor_child_count: int = Field(
+    rag_neighbor_child_count: int = Field(
         default=3,
         ge=0,
         le=20,
         description="回答で、根拠の child の前後から context へ足す近傍 child 数。",
     )
-    rag_docrag_rerank_enabled: bool = Field(
+    rag_rerank_enabled: bool = Field(
         default=True,
         description="回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
     )
-    rag_docrag_screen_linking_enabled: bool = Field(
+    rag_screen_linking_enabled: bool = Field(
         default=False,
         description=(
             "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
@@ -760,12 +761,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=list,
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
     )
-    rag_docrag_profile: Literal["generic", "legacy"] = Field(
+    rag_answer_profile: Literal["generic", "legacy"] = Field(
         default="legacy",
         description=(
-            "回答フローの業務 profile。回答フローは docrag_core の current_profile()"
+            "回答フローの業務 profile。回答フローは rag_engine の current_profile()"
             "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
-            " DOCRAG_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
+            " RAG_ENGINE_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
             "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"
             "受け付けるが、回答フローには反映されない。"
         ),

@@ -23,17 +23,17 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     diagnostics = build_search_diagnostics(
         request,
         settings=settings,
-        retrieval_strategy_adapter="docrag_grounded",
+        retrieval_strategy_adapter="grounded",
         guardrail_degraded=True,
-        docrag={"confidence": "high"},
+        answer={"confidence": "high"},
     )
 
-    assert diagnostics.retrieval_strategy == "docrag"
-    assert diagnostics.retrieval_strategy_adapter == "docrag_grounded"
+    assert diagnostics.retrieval_strategy == "hybrid"
+    assert diagnostics.retrieval_strategy_adapter == "grounded"
     assert diagnostics.guardrail_policy == "strict"
     assert diagnostics.guardrail_backend == "local"
     assert diagnostics.guardrail_degraded is True
-    assert diagnostics.docrag == {"confidence": "high"}
+    assert diagnostics.answer == {"confidence": "high"}
     assert diagnostics.filter_keys == ["file_name", "knowledge_base_id", "status"]
     assert diagnostics.knowledge_base_count == 2
     assert len(diagnostics.config_fingerprint) == 64
@@ -101,11 +101,11 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
 @pytest.mark.parametrize(
     "update",
     [
-        {"rag_docrag_query_strategy": "rag_fusion"},
-        {"rag_docrag_answer_flow": "standard_rag"},
-        {"rag_docrag_neighbor_child_count": 5},
-        {"rag_docrag_rerank_enabled": False},
-        {"rag_docrag_screen_linking_enabled": True},
+        {"rag_query_strategy": "rag_fusion"},
+        {"rag_answer_flow": "standard_rag"},
+        {"rag_neighbor_child_count": 5},
+        {"rag_rerank_enabled": False},
+        {"rag_screen_linking_enabled": True},
     ],
     ids=["query_strategy", "answer_flow", "neighbor", "rerank", "screen_linking"],
 )

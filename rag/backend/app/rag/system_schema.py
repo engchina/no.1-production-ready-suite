@@ -104,7 +104,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
     "RAG_BUSINESS_VIEWS",
     "RAG_ANSWER_RECORDS",
-    "RAG_DOCRAG_PROMPTS",
+    "RAG_ANSWER_PROMPTS",
     "RAG_QUERY_HISTORY",
     "RAG_BUSINESS_VIEW_KNOWLEDGE",
     "RAG_CONVERSATIONS",
@@ -235,6 +235,10 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     ("RAG_PROMPT_VERSIONS", "TABLE"),
     ("RAG_GENERATION_SETTINGS", "TABLE"),
     ("RAG_AGENT_MEMORIES", "TABLE"),
+    # 回答生成のプロンプトの表の旧名（#599）。更新では migration
+    # `20260930_008_answer_prompts_table` が改名するか、行を `RAG_ANSWER_PROMPTS` へ写してから、
+    # ここで消す（行は消えない）。
+    ("RAG_DOCRAG_PROMPTS", "TABLE"),
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}

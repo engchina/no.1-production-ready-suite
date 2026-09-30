@@ -110,7 +110,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "knowledge_bases",
         "business_views",
         "answer_records",
-        "docrag_prompts",
+        "answer_prompts",
         "query_history",
         "business_view_knowledge",
         "conversations",
@@ -348,7 +348,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ALTER TABLE rag_knowledge_bases ADD (extraction_fields JSON)" in fields_migration
     assert "UPDATE" not in fields_migration
     # 旧 standard の回答エンジンの表とメニュー権限を片付ける（#596）。あるときだけ消す（冪等）。
-    retire_migration = sql.split("-- migration: 20260930_005_retire_standard_engine_objects", 1)[1]
+    retire_migration = sql.split("-- migration: 20260930_005_retire_standard_engine_objects", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
     assert "table_name = 'RAG_ROLE_PERMISSIONS'" in retire_migration
     assert "'DELETE FROM rag_role_permissions WHERE permission_code IN ('" in retire_migration
     for code in ("menu.settings_grounding", "menu.settings_generation", "menu.settings_agentic"):
@@ -365,7 +367,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_answer_records" not in retire_migration
     assert "rag_graph_" not in retire_migration
     assert "rag_search_audit" not in retire_migration
-    assert len(statements) == 75
+    assert len(statements) == 77
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -434,6 +436,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_003_chunk_sets_first_page_context",
         "20260930_004_knowledge_base_extraction_fields",
         "20260930_005_retire_standard_engine_objects",
+        "20260930_008_answer_prompts_table",
+        "20260930_009_stored_engine_names",
     ]
 
 

@@ -123,7 +123,7 @@ EnvironmentFile=-${backend_env}
 "
       ;;
     parser-docling)
-      extra_env="Environment=DOCRAG_OUTPUT_DIR=/tmp/production-ready-rag-docrag-runs
+      extra_env="Environment=RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs
 "
       ;;
   esac
