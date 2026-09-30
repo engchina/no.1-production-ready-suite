@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Search } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -318,6 +319,17 @@ describe("SearchableSelectField", () => {
     expect(document.getElementById(valueId)?.className).not.toContain("truncate");
     expect(button.getAttribute("aria-haspopup")).toBe("dialog");
     expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("leadingIcon はボタンの先頭に読み上げない 16px のアイコンを出し、ボタンの名前を変えない（#635）", () => {
+    const button = mountSingle({ leadingIcon: Search, placeholder: "業務ビューを選択…" });
+    const icon = button.querySelector("svg");
+    expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    expect(icon?.getAttribute("width")).toBe("16");
+    // 先頭のアイコンは値の前（最後の svg は開閉の印）。
+    expect(button.querySelectorAll("svg")).toHaveLength(2);
+    const [, valueId] = button.getAttribute("aria-labelledby")!.split(" ");
+    expect(document.getElementById(valueId)?.textContent).toBe("業務ビューを選択…");
   });
 
   it("選択中が候補（検索結果のページ）に無いときは selectedOption の名前を出す", () => {

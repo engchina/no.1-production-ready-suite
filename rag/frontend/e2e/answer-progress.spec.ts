@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 /**
  * 回答生成の進捗（今の工程と経過時間）と時間切れの表示（#375）。
@@ -186,12 +186,7 @@ async function mockSearchPage(page: Page, scenarios: TimedChunk[][]) {
   );
   await mockStreams(page, { search: scenarios, chat: [[]] });
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /経理ビュー/ })
-    .click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /経理ビュー/);
 }
 
 for (const viewport of [
@@ -440,8 +435,7 @@ for (const viewport of [
     await mockChatPage(page);
 
     await page.goto("/chat");
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理ビュー" }).click();
+    await selectBusinessView(page, "経理ビュー");
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();

@@ -197,6 +197,9 @@ class SearchRequest(BaseModel):
     旧 standard の回答エンジンの指定(``mode``・``strategy``・``rerank_top_n``・
     ``generation_profile``)は #595 で削除した。旧クライアントが送っても 422 にせず、
     未定義の項目として読み捨てる(pydantic の既定 ``extra="ignore"``)。
+
+    業務ビューは 1 つだけ(``business_view_id``)を受ける。複数の ``business_view_ids`` は #635 で
+    削除した。読み捨てると業務ビューの範囲を外れて検索してしまうため、送られたら 422 にする。
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -209,16 +212,8 @@ class SearchRequest(BaseModel):
         default=None,
         max_length=128,
         description=(
-            "業務ビュー(Business View)ID。business_view_ids が無い旧クライアント向け互換値。"
-            "指定時は参照 KB 群を検索対象へ展開し、業務ビューの回答の設定を適用する。"
-        ),
-    )
-    business_view_ids: list[str] = Field(
-        default_factory=list,
-        max_length=50,
-        description=(
-            "検索対象にする業務ビュー(Business View)ID。複数指定時は参照 KB 群を union し、"
-            "回答の設定は先頭の業務ビューを代表として適用する。"
+            "検索対象の業務ビュー(Business View)ID(1 つ。#635)。指定時は参照 KB 群を検索対象へ"
+            "展開し、業務ビューの回答の設定を適用する。"
         ),
     )
     retrieval_only: bool = Field(
@@ -229,6 +224,17 @@ class SearchRequest(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_business_view_ids(cls, data: object) -> object:
+        """削除した ``business_view_ids`` を黙って読み捨てない(業務ビューの外を検索しない)。"""
+        if isinstance(data, dict) and "business_view_ids" in data:
+            raise ValueError(
+                "business_view_ids は使えません。"
+                "業務ビューは business_view_id で 1 つ指定してください。"
+            )
+        return data
+
     @field_validator("business_view_id")
     @classmethod
     def validate_business_view_id(cls, value: str | None) -> str | None:
@@ -237,12 +243,6 @@ class SearchRequest(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
-
-    @field_validator("business_view_ids")
-    @classmethod
-    def validate_business_view_ids(cls, values: list[str]) -> list[str]:
-        """業務ビュー ID を重複排除する。"""
-        return normalize_search_id_list(values)
 
     @field_validator("query")
     @classmethod
@@ -281,12 +281,6 @@ class SearchRequest(BaseModel):
                 **self.filters,
                 "knowledge_base_id": format_search_id_filter(resolved_knowledge_base_ids),
             }
-        if self.business_view_id:
-            self.business_view_ids = normalize_search_id_list(
-                [self.business_view_id, *self.business_view_ids]
-            )
-        elif self.business_view_ids:
-            self.business_view_id = self.business_view_ids[0]
         return self
 
 

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -265,7 +265,7 @@ test("業務ビュー作成では DEFAULT を予約名として拒否する", as
   await expect(page.getByText("DEFAULT は予約名のため使用できません。")).toBeVisible();
 });
 
-test("RAG 検索は複数業務ビューを選ぶと business_view_ids を送る", async ({ page }) => {
+test("RAG 検索は業務ビューを 1 つ選び、business_view_id で送る（#635）", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await mockBusinessViews(page, [
     {
@@ -302,15 +302,15 @@ test("RAG 検索は複数業務ビューを選ぶと business_view_ids を送る
 
   await page.goto("/search");
 
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  const businessViewList = page.getByRole("listbox", { name: /対象の業務ビュー/ });
-  await businessViewList.getByRole("option", { name: /経理ビュー/ }).click();
-  await businessViewList.getByRole("option", { name: /人事ビュー/ }).click();
+  // 選び直すと置き換わる（複数を選ばない）。
+  await selectBusinessView(page, /経理ビュー/);
+  await selectBusinessView(page, /人事ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費精算の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
-  await expect.poll(() => searchPayload?.business_view_ids).toEqual(["bv-1", "bv-2"]);
-  await expect.poll(() => searchPayload?.knowledge_base_ids).toBeUndefined();
+  await expect.poll(() => searchPayload?.business_view_id).toBe("bv-2");
+  expect(searchPayload).not.toHaveProperty("business_view_ids");
+  expect(searchPayload).not.toHaveProperty("knowledge_base_ids");
 });
 
 for (const viewport of [
@@ -392,7 +392,7 @@ test("RAG 検索は DEFAULT を候補表示するが自動選択しない", asyn
   ]);
   await page.goto("/search");
 
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
+  await page.getByRole("button", { name: /対象の業務ビュー/ }).click();
   await expect(page.getByRole("option", { name: /DEFAULT/ })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("全社規程");

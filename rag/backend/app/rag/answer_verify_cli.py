@@ -78,9 +78,7 @@ class RagApi:
         self._client.close()
 
     def search(self, question: str, business_view_id: str) -> dict[str, Any]:
-        return self._post(
-            "/api/search", {"query": question, "business_view_ids": [business_view_id]}
-        )
+        return self._post("/api/search", {"query": question, "business_view_id": business_view_id})
 
     def evaluate(self, trace_id: str, standard_answer: str) -> dict[str, Any]:
         return self._post(

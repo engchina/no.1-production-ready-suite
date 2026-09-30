@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 /**
  * RAG 検索・回答の不足の回帰テスト（#304）。
@@ -77,43 +77,44 @@ async function mockAnswerHistory(page: Page, total: number) {
   return offsets;
 }
 
-async function selectView(page: Page, name: RegExp) {
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  // 参照 KB なしの業務ビューは既定で隠れるため、表示に切り替えてから選ぶ。
-  const hideEmpty = page.getByRole("checkbox", { name: "参照 KB なしを隠す" });
-  if (await hideEmpty.isChecked()) await hideEmpty.uncheck();
-  await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name }).click();
-  await page.keyboard.press("Escape");
-}
-
-test("業務ビューの選択も、選んでも開いたままで「完了」・Esc で閉じて入力欄に戻る（#316）", async ({
+test("対象の業務ビューは 1 つを選ぶ欄で、検索・参照 KB の件数・キーボードで選べる（#635）", async ({
   page,
 }) => {
   await mockAnswerHistory(page, 0);
   await page.goto("/search");
 
-  const combobox = page.getByRole("combobox", { name: /対象の業務ビュー/ });
+  const trigger = page.getByRole("button", { name: /対象の業務ビュー/ });
+  await expect(trigger).toContainText("業務ビューを検索して選択…");
+  await expect(trigger).toHaveAttribute("aria-required", "true");
+  await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toBeVisible();
+
+  await trigger.click();
+  const search = page.getByRole("combobox", { name: "対象の業務ビューを検索" });
   const listbox = page.getByRole("listbox", { name: /対象の業務ビュー/ });
-  await combobox.click();
-  await listbox.getByRole("option", { name: /経理ビュー/ }).click();
-  await expect(listbox).toBeVisible();
-  await expect(listbox.getByRole("option", { name: /経理ビュー/ })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  );
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("placeholder", "業務ビューの名前・説明で検索…");
+  // 参照 KB が 0 件の業務ビューも隠さず、件数を出して後ろに並べる。
+  await expect(listbox.getByRole("option")).toHaveText([/経理ビュー.*参照 KB 1 件/, /準備中ビュー.*参照 KB 0 件/]);
+  await expect(page.getByRole("checkbox", { name: "参照 KB なしを隠す" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "完了" }).click();
+  await search.fill("経理");
+  await expect(listbox.getByRole("option")).toHaveCount(1);
+  await search.press("Enter");
   await expect(listbox).toHaveCount(0);
-  await expect(combobox).toBeFocused();
-  await expect(page.getByLabel("経理ビュー を選択から外す")).toBeVisible();
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toContainText("経理ビュー");
+  // 選択済みの chip は出さない（単一選択）。
+  await expect(page.getByLabel("経理ビュー を選択から外す")).toHaveCount(0);
 
-  // 一覧の中のチェックボックスにフォーカスがあっても Esc で閉じて入力欄へ戻る。
-  await combobox.press("ArrowDown");
-  const hideEmpty = page.getByRole("checkbox", { name: "参照 KB なしを隠す" });
-  await hideEmpty.focus();
+  // 別の業務ビューへ置き換える（追加にならない）。Esc で閉じるとボタンへ戻る。
+  await trigger.press("ArrowDown");
+  await expect(search).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(listbox).toHaveCount(0);
-  await expect(combobox).toBeFocused();
+  await expect(trigger).toBeFocused();
+  await selectBusinessView(page, /準備中ビュー/);
+  await expect(trigger).toContainText("準備中ビュー");
+  await expect(trigger).not.toContainText("経理ビュー");
   await expectNoPageOverflow(page);
 });
 
@@ -126,7 +127,7 @@ test("参照 KB が 0 件の業務ビューでは理由を示し、検索を送�
   });
 
   await page.goto("/search");
-  await selectView(page, /準備中ビュー/);
+  await selectBusinessView(page, /準備中ビュー/);
   await expect(page.getByRole("alert").filter({ hasText: NO_KB_MESSAGE })).toBeVisible();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
@@ -137,7 +138,7 @@ test("参照 KB が 0 件の業務ビューでは理由を示し、検索を送�
   await expectNoPageOverflow(page);
 
   // KB のある業務ビューを足せば理由は消える（KB のある業務ビューの KB だけを検索する）。
-  await selectView(page, /経理ビュー/);
+  await selectBusinessView(page, /経理ビュー/);
   await expect(page.getByText(NO_KB_MESSAGE)).toHaveCount(0);
 });
 
@@ -151,7 +152,7 @@ test("backend が参照 KB のない業務ビューを 409 で断ったら、そ
   );
 
   await page.goto("/search");
-  await selectView(page, /経理ビュー/);
+  await selectBusinessView(page, /経理ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.getByText(NO_KB_MESSAGE)).toBeVisible();
@@ -161,7 +162,7 @@ test("RAG 検索画面には回答履歴の一覧を出さない（#444）", asy
   await mockAnswerHistory(page, 4);
 
   await page.goto("/search");
-  await selectView(page, /経理ビュー/);
+  await selectBusinessView(page, /経理ビュー/);
   await expect(page.getByRole("textbox", { name: "RAG 検索" })).toBeVisible();
   await expect(page.getByText("DocRAG の回答履歴")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "回答履歴のページ" })).toHaveCount(0);
@@ -215,8 +216,7 @@ test("チャットは参照 KB が 0 件の業務ビューで理由を示し、�
   );
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "準備中ビュー" }).click();
+  await selectBusinessView(page, "準備中ビュー");
   const banner = page.getByRole("status").filter({ hasText: "参照するナレッジベースがありません" });
   await expect(banner).toBeVisible();
   await expect(banner.getByRole("button", { name: "業務ビューの設定を開く" })).toBeVisible();
@@ -267,8 +267,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   });
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理ビュー" }).click();
+  await selectBusinessView(page, "経理ビュー");
   await page.getByRole("list", { name: "会話" }).getByRole("button").first().click();
   await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
@@ -287,3 +286,44 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   expect(deleted).toBe(true);
   await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toHaveCount(0);
 });
+
+// #635: RAG 検索とチャットの「対象の業務ビュー」は同じ部品・同じ文言・同じ幅（カードの幅いっぱい）。
+for (const viewport of [
+  { name: "1280", width: 1280, height: 800 },
+  { name: "1920", width: 1920, height: 1000 },
+  { name: "375", width: 375, height: 812 },
+]) {
+  test(`RAG 検索とチャットの業務ビューの欄は同じ見た目 (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockAnswerHistory(page, 0);
+    await mockChat(page, "bv-1");
+
+    const measure = async () => {
+      const trigger = page.getByRole("button", { name: /対象の業務ビュー/ });
+      await expect(trigger).toBeVisible();
+      await expect(trigger).toContainText("業務ビューを検索して選択…");
+      await expect(trigger).toHaveAttribute("aria-required", "true");
+      await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toBeVisible();
+      return trigger.evaluate((button) => {
+        // 欄（ラベル・ボタン・説明文）を置いた親の、内側の幅いっぱいに置く。
+        const container = button.parentElement!.parentElement!;
+        const style = getComputedStyle(container);
+        const inner =
+          container.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const rect = button.getBoundingClientRect();
+        return { width: rect.width, inner, height: rect.height };
+      });
+    };
+
+    await page.goto("/search");
+    const search = await measure();
+    await page.goto("/chat");
+    const chat = await measure();
+    for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
+    expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
+
+    await selectBusinessView(page, "経理ビュー");
+    await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
+    await expectNoPageOverflow(page);
+  });
+}

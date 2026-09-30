@@ -10,14 +10,11 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  FieldError,
-  FieldLabel,
   SelectField,
   type SelectFieldOption,
   TextField,
   TimedLoadingState,
   Skeleton,
-  ListSkeleton,
   StatusBadge,
 } from "@engchina/production-ready-ui";
 import {
@@ -31,7 +28,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
+import { BusinessViewSelect, BusinessViewSelectSkeleton } from "@/components/business-views/BusinessViewSelect";
 import { CitationCard } from "./CitationCard";
 import {
   buildFeedbackContentSnapshot,
@@ -42,7 +39,6 @@ import {
   api,
   ApiError,
   type ApprovedFaqSuggestionData,
-  type BusinessViewSummary,
   type RetrievedChunk,
   type SearchDiagnostics,
 } from "@/lib/api";
@@ -53,7 +49,7 @@ import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews, useSearchExtractionFields } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
-import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
+import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -164,12 +160,16 @@ export function SearchClient() {
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
   const [sectionFiltersOpen, setSectionFiltersOpen] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
-  const [businessViewIds, setBusinessViewIds] = useWorkspaceState<string[]>("search.businessViewIds", []);
+  // 対象の業務ビューは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
+  const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
+    "search.businessViewId",
+    null,
+    isNullableString
+  );
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
-  // 表示中の回答を生成したときの代表の業務ビュー（選択の先頭）。回答・引用の評価はこの業務ビューへ送る。
-  // 検索後に選択を変えても、表示中の回答の評価先は変えない。backend の business_view_applied は
-  // 複数選択で "a,b" になるため評価先には使わない（#285）。
+  // 表示中の回答を生成したときの業務ビュー。回答・引用の評価はこの業務ビューへ送る。
+  // 検索後に選択を変えても、表示中の回答の評価先は変えない（#285）。
   const [answerBusinessViewId, setAnswerBusinessViewId] = useState<string | null>(null);
   // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
   const [lastSkipFaq, setLastSkipFaq] = useState(false);
@@ -179,31 +179,26 @@ export function SearchClient() {
   const navigate = useNavigate();
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
-  // 復元した業務ビューのうち、アーカイブ・削除されたものだけ選択から外す（別の対象へ置き換えない）。
-  const staleBusinessViewIds =
-    businessViewsQuery.data && !businessViewsQuery.data.has_next
-      ? businessViewIds.filter((id) => !businessViews.some((view) => view.id === id))
-      : [];
-  const staleBusinessViewKey = staleBusinessViewIds.join(",");
-  // 選んだ業務ビューがどれも参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
+  // 復元した業務ビューがアーカイブ・削除されていたら選択を外す（別の対象へ置き換えない）。
+  const businessViewMissing =
+    Boolean(businessViewId) &&
+    Boolean(businessViewsQuery.data) &&
+    !businessViewsQuery.data?.has_next &&
+    !businessViews.some((view) => view.id === businessViewId);
+  // 選んだ業務ビューが参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
   // backend も 409 で理由を返すが、送信する前にこの場で理由を示す。
-  const selectedBusinessViews = businessViews.filter((view) => businessViewIds.includes(view.id));
-  const selectedWithoutKnowledgeBases =
-    selectedBusinessViews.length > 0 &&
-    selectedBusinessViews.length === businessViewIds.length &&
-    selectedBusinessViews.every((view) => view.knowledge_base_count === 0);
+  const selectedBusinessView = businessViews.find((view) => view.id === businessViewId);
+  const selectedWithoutKnowledgeBases = selectedBusinessView?.knowledge_base_count === 0;
   // 画面を離れたら生成中の検索を止める（backend の pipeline と LLM を無駄に動かし続けない。#285）。
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
-    if (!staleBusinessViewKey) return;
-    const stale = new Set(staleBusinessViewKey.split(","));
-    setBusinessViewIds((current) => current.filter((id) => !stale.has(id)));
-  }, [staleBusinessViewKey, setBusinessViewIds]);
+    if (businessViewMissing) setBusinessViewId(null);
+  }, [businessViewMissing, setBusinessViewId]);
   const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
   const extractionFieldsQuery = useSearchExtractionFields(
-    businessViewIds,
+    businessViewId,
     extractionOpen || hasExtractionFieldFilters
   );
   const fieldFilter = extractionFieldConditions(
@@ -221,7 +216,7 @@ export function SearchClient() {
   const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
-    if (businessViewIds.length === 0) {
+    if (!businessViewId) {
       setScopeError(t("businessViews.scope.required"));
       return;
     }
@@ -242,7 +237,7 @@ export function SearchClient() {
     if (!skipFaq) {
       // 業務ビューの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
       try {
-        const faq = await api.suggestApprovedFaq(businessViewIds[0], trimmed);
+        const faq = await api.suggestApprovedFaq(businessViewId, trimmed);
         if (faq.suggestions.length > 0) {
           setFaqSuggestions(faq.suggestions);
           return;
@@ -262,7 +257,7 @@ export function SearchClient() {
     setCitations([]);
     setMeta(null);
     setErrorText("");
-    setAnswerBusinessViewId(businessViewIds[0] ?? null);
+    setAnswerBusinessViewId(businessViewId);
     setRun({
       startedAtMs,
       startedAtIso: new Date(startedAtMs).toISOString(),
@@ -284,7 +279,7 @@ export function SearchClient() {
         {
           query: trimmed,
           top_k: Number(topK),
-          business_view_ids: businessViewIds,
+          business_view_id: businessViewId,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -395,8 +390,8 @@ export function SearchClient() {
                   framed={false}
                   testId="search-business-views-loading"
                 >
-                  <Skeleton className="h-[var(--button-height-md)] w-full max-w-md" />
-                  <ListSkeleton rows={3} rowClassName="h-10" />
+                  <BusinessViewSelectSkeleton />
+                  <Skeleton className="h-[var(--button-height-md)] w-full" />
                 </TimedLoadingState>
               </CardContent>
             </Card>
@@ -424,12 +419,13 @@ export function SearchClient() {
           {/* 検索条件 */}
           <Card>
             <CardContent className="space-y-4 pt-4">
-              <BusinessViewScopePicker
-                views={businessViews}
-                selectedIds={businessViewIds}
+              <BusinessViewSelect
+                id={BUSINESS_VIEW_SCOPE_INPUT_ID}
+                items={businessViews}
+                value={businessViewId}
                 onChange={(next) => {
-                  setBusinessViewIds(next);
-                  if (next.length > 0) setScopeError("");
+                  setBusinessViewId(next);
+                  setScopeError("");
                 }}
                 disabled={isStreaming}
                 error={
@@ -454,7 +450,7 @@ export function SearchClient() {
               />
 
               <QuerySuggestions
-                businessViewId={businessViewIds[0] ?? null}
+                businessViewId={businessViewId}
                 query={query}
                 filters={classificationSuggestionFilters(classification)}
                 disabled={isStreaming}
@@ -610,7 +606,7 @@ export function SearchClient() {
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.fields.helper")}
                         </p>
-                        {businessViewIds.length === 0 ? (
+                        {!businessViewId ? (
                           <p className="text-sm text-fg-muted">{t("search.filters.fields.chooseScope")}</p>
                         ) : (
                           <ExtractionFieldFilters
@@ -1069,61 +1065,4 @@ function isClassificationFilterValues(value: unknown): value is ClassificationFi
   );
 }
 
-
 const BUSINESS_VIEW_SCOPE_INPUT_ID = "search-business-view-scope";
-const BUSINESS_VIEW_SCOPE_ERROR_ID = "search-business-view-scope-error";
-const BUSINESS_VIEW_SCOPE_LABEL_ID = "search-business-view-scope-label";
-
-/**
- * RAG 検索の対象業務ビュー(Business View)選択。複数選ぶと参照 KB 群を union し、
- * query 方針・persona は選択順の先頭を代表として適用する。
- */
-function BusinessViewScopePicker({
-  views,
-  selectedIds,
-  onChange,
-  disabled = false,
-  error,
-}: {
-  views: BusinessViewSummary[];
-  selectedIds: string[];
-  onChange: (value: string[]) => void;
-  disabled?: boolean;
-  error?: string;
-}) {
-  return (
-    <div className="space-y-1.5 sm:col-span-4">
-      {/* 必須は入力欄（combobox）の aria-required で伝える。タグは FieldLabel が読み上げから外す */}
-      <FieldLabel
-        id={BUSINESS_VIEW_SCOPE_LABEL_ID}
-        htmlFor={BUSINESS_VIEW_SCOPE_INPUT_ID}
-        label={t("businessViews.scope.label")}
-        required
-        className="block text-xs"
-      />
-      <BusinessViewPickerGrid
-        id={BUSINESS_VIEW_SCOPE_INPUT_ID}
-        labelledBy={BUSINESS_VIEW_SCOPE_LABEL_ID}
-        items={views}
-        selectedIds={selectedIds}
-        onChange={(next) => {
-          if (!disabled) onChange(next);
-        }}
-        disabled={disabled}
-        ariaLabel={t("businessViews.scope.label")}
-        required
-        invalid={Boolean(error)}
-        describedBy={error ? BUSINESS_VIEW_SCOPE_ERROR_ID : undefined}
-      />
-      {error ? (
-        <FieldError id={BUSINESS_VIEW_SCOPE_ERROR_ID} message={error} />
-      ) : (
-        <p className="text-xs text-fg-muted">
-          {selectedIds.length > 0
-            ? t("businessViews.scope.applied", { count: selectedIds.length })
-            : t("businessViews.scope.helper")}
-        </p>
-      )}
-    </div>
-  );
-}

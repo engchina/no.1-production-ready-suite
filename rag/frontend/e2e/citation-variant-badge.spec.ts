@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 const businessView = {
   id: "bv-1",
@@ -93,11 +93,7 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   });
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /経理ビュー/ })
-    .click();
+  await selectBusinessView(page, /経理ビュー/);
   // 業務ビューの一覧は選んでも開いたままなので閉じてから操作する（外側を押すと一覧を閉じるだけになる）。
   await page.keyboard.press("Escape");
 

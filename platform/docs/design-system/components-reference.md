@@ -1963,7 +1963,8 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 
 - 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・業務ビュー、desktop / 375px、ライト / ダーク）。
-- 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、業務ビューの参照 KB、品質評価、文書詳細の所属先、RAG 検索の対象の業務ビュー）。RAG 固有の `MultiSelectCombobox` は削除した。
+- 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、業務ビューの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の業務ビュー（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
+- `leadingIcon`（任意。#635）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。検索して選ぶ欄であることを開く前から見せたいときに `leadingIcon={Search}` を渡す（RAG の対象の業務ビュー）。
 
 ---
 

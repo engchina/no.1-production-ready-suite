@@ -12,7 +12,7 @@ import os
 import stat
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import pytest
 from pytest import MonkeyPatch
@@ -25,6 +25,7 @@ from app.services.catalog import (
     SERVICE_CATALOG,
     SYSTEMD_UNIT_PREFIX,
     ServiceCatalogEntry,
+    ServiceCategory,
     get_catalog_entry,
     is_allowed_systemd_unit,
     is_dev_mode,
@@ -121,6 +122,15 @@ def test_catalog_has_no_removed_standard_engine_stages() -> None:
     for stage in ("retrieval", "grounding", "agentic", "generation"):
         assert f"pipeline-{stage}" not in ids
         assert not (RAG_ROOT / "services" / "pipeline" / stage).exists()
+
+
+def test_catalog_is_ordered_by_service_category() -> None:
+    """カタログは工程(ServiceCategory。サイドナビと同じ並び)の順に、工程ごとにまとめて並べる(#638)。"""
+    order = list(get_args(ServiceCategory))
+    categories = [entry.category for entry in SERVICE_CATALOG]
+    assert set(categories) == set(order)
+    positions = [order.index(category) for category in categories]
+    assert positions == sorted(positions)
 
 
 def test_catalog_deployable_marks_future_service_stages() -> None:

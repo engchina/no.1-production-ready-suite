@@ -365,7 +365,7 @@ async def _prepare_chat_turn(
     base_request = SearchRequest(
         query=request.content,
         top_k=request.top_k,
-        business_view_ids=[business_view_id],
+        business_view_id=business_view_id,
     )
     (
         effective_request,

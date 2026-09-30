@@ -987,8 +987,8 @@ export interface SearchRequestBody {
   top_k?: number;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
+  /** 検索対象の業務ビュー（1 つ。#635）。 */
   business_view_id?: string | null;
-  business_view_ids?: string[];
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
 }
@@ -1679,15 +1679,16 @@ export interface PreprocessSettingsUpdate {
   profile: PreprocessProfileName;
 }
 
-// --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+// --- サービス管理（各工程のサービスの稼働可視化・起動/停止）---
+// カテゴリと工程の設定画面の対応は components/settings/service-stages.ts（並びはサイドナビ。#638）。
 export type ServiceCategory =
   | "preprocess"
   | "parser"
   | "chunking"
   | "vector_index"
+  | "graphrag"
   | "guardrail"
-  | "evaluation"
-  | "graphrag";
+  | "evaluation";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
 // systemd の unit の状態 + /health（#286）。starting は unit が動いているが /health にまだ届かない、
 // failed は unit が失敗して止まった、not_installed は unit が登録されていない。
@@ -2597,10 +2598,10 @@ export const api = {
       { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     ),
   // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
-  getSearchExtractionFields: (businessViewIds: string[]) =>
+  getSearchExtractionFields: (businessViewId: string) =>
     request<SearchExtractionFieldsData>(
       `/api/search/extraction-fields?${new URLSearchParams({
-        business_view_ids: businessViewIds.join(","),
+        business_view_id: businessViewId,
       }).toString()}`,
     ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
