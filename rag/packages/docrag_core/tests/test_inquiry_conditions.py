@@ -17,6 +17,28 @@ from docrag.retrieval.inquiry_conditions import (
 
 
 class InquiryConditionsTests(unittest.TestCase):
+    def test_injected_business_domains_replace_domain_profile_patterns(self):
+        """業務名の照合を注入したら、その結果だけを使い、profile の business_patterns は使わない。"""
+        from docrag.dependencies import AnswerDependencies, bind_dependencies
+
+        def unused(*args, **kwargs):
+            raise AssertionError("I/O は呼ばない")
+
+        def bound(matcher):
+            return bind_dependencies(AnswerDependencies(
+                search=unused, check_ready=unused, parse_text=unused, parse_images=unused, rerank=unused,
+                business_domains=matcher,
+            ))
+
+        question = "販管の業務Xで拠点名を変更する方法は？"
+        self.assertEqual(parse_inquiry_conditions(question).business_domains, ("販売管理",))
+        with bound(lambda text: ["10_業務X", "10_業務X"] if "業務X" in text else []):
+            parsed = parse_inquiry_conditions(question)
+        self.assertEqual(parsed.business_domains, ("10_業務X",))
+        self.assertEqual(parsed.metadata_filter.metadata_terms, ("10_業務X",))
+        with bound(lambda text: []):
+            self.assertEqual(parse_inquiry_conditions(question).business_domains, ())
+
     def test_parse_rename_question_expands_business_terms_and_operation_profile(self):
         parsed = parse_inquiry_conditions("倉庫を移転したので、拠点名を変更する方法を教えてほしい。")
 

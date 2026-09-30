@@ -72,6 +72,10 @@ async function mockKb(page: Page, graph: unknown): Promise<void> {
     route.fulfill({ json: ok(graph) })
   );
   await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok(kbDetail) }));
+  // KB の抽出する項目（#548）。上の wildcard の一覧を返さない。
+  await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) =>
+    route.fulfill({ json: ok({ inherits_default: true, fields: [] }) })
+  );
 }
 
 test.beforeEach(async ({ page }) => {

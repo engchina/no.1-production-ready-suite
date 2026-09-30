@@ -51,8 +51,8 @@ for (const viewport of [
     // 品質評価は業務ビューで上書きしない(評価はグローバル設定だけで決まる。#301)。
     await expect(settings.getByRole("heading", { name: "品質評価" })).toHaveCount(0);
     // 継承 chip: セレクト9行(分割方式・回答エンジン・DocRAG 3 行を含む)
-    // + 三値トグル6行(検索オプション5行 + DocRAG の Rerank)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
+    // + 三値トグル7行(検索オプション5行 + DocRAG の Rerank・画面目録)。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
     await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(9);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     // 回答エンジンを継承しているあいだは、DocRAG が読まない欄に条件付きの説明を出す(#300)。
@@ -179,6 +179,14 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
     .getByRole("group", { name: "Rerank で検索候補を並べ替える" })
     .getByRole("button", { name: "OFF" })
     .click();
+  // 画面目録の連携は既定 無効(継承)。LLM の呼び出しが増えることを説明に出す(#554)。
+  const screenLinking = page.getByRole("group", { name: "画面目録で操作画面を探す" });
+  await expect(screenLinking.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  await expect(screenLinking).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
+  await screenLinking.getByRole("button", { name: "ON" }).click();
   await page.getByRole("button", { name: "作成する" }).click();
 
   await expect.poll(() => createBody?.name).toBe("DocRAG ビュー");
@@ -187,6 +195,7 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
   expect(query.docrag_query_strategy).toBe("hyde");
   expect(query.docrag_neighbor_child_count).toBe(3);
   expect(query.docrag_rerank_enabled).toBe(false);
+  expect(query.docrag_screen_linking_enabled).toBe(true);
   expect(query.docrag_answer_flow ?? null).toBeNull();
 });
 

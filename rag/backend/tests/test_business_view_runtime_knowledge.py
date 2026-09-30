@@ -63,6 +63,36 @@ def test_edit_terms_rules_and_preview(fake_oracle: FakeKnowledgeOracle) -> None:
     assert deleted.json()["data"]["terms"] == []
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"kind": "terms", "name": "  "}, "用語を入力してください。"),
+        (
+            {"kind": "rules", "name": "", "title": "t", "content": "c"},
+            "ルール ID を入力してください。",
+        ),
+        (
+            {"kind": "rules", "name": "R1", "title": "", "content": "c"},
+            "ルール名を入力してください。",
+        ),
+        (
+            {"kind": "rules", "name": "R1", "title": "t", "content": " "},
+            "ルール内容を入力してください。",
+        ),
+    ],
+    ids=["term", "rule-id", "rule-title", "rule-content"],
+)
+def test_edit_rejects_empty_required_fields_like_the_screen(
+    fake_oracle: FakeKnowledgeOracle, payload: dict[str, str], message: str
+) -> None:
+    """用語・ルールの必須は backend が正本（#540）。画面と同じ文言の 422 を返し、保存しない。"""
+    response = client.post(f"{BASE}/edit", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error_messages"] == [message]
+    assert client.get(BASE).json()["data"]["terms"] == []
+    assert client.get(BASE).json()["data"]["rules"] == []
+
+
 def test_search_context_carries_business_view_runtime_knowledge(monkeypatch: MonkeyPatch) -> None:
     payload = {"schema_version": 1, "terms": [{"term": "受注", "aliases": ["注文"]}], "rules": []}
 

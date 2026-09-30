@@ -76,6 +76,7 @@ import {
   type PromptVersionCreate,
   type ExtractionFieldDefinition,
   type ExtractionFieldsSettingsData,
+  type KnowledgeBaseExtractionFieldsData,
   type PipelineSettingsData,
   type PipelineSettingsUpdate,
   type GuardrailSettingsData,
@@ -156,6 +157,10 @@ export const queryKeys = {
     ["knowledge-bases", "search", params] as const,
   knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
   knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
+  knowledgeBaseExtractionFields: (id: string) =>
+    ["knowledge-bases", id, "extraction-fields"] as const,
+  searchExtractionFields: (businessViewIds: string[]) =>
+    ["search", "extraction-fields", businessViewIds] as const,
   businessViews: (params: {
     status?: BusinessViewStatus;
     q?: string;
@@ -869,6 +874,52 @@ export function useKnowledgeBase(id: string | null) {
     enabled: id != null,
     // URL の対象が無い（404）ときは再試行せず、すぐ「対象が見つかりません」を出す（業務ビューと同じ。#555）。
     retry: retryUnlessNotFound,
+  });
+}
+
+/** ナレッジベースの項目抽出の定義（#548）。 */
+export function useKnowledgeBaseExtractionFields(id: string) {
+  return useQuery<KnowledgeBaseExtractionFieldsData>({
+    queryKey: queryKeys.knowledgeBaseExtractionFields(id),
+    queryFn: () => api.getKnowledgeBaseExtractionFields(id),
+    retry: false,
+  });
+}
+
+/** ナレッジベースの項目抽出の定義を保存する（#548）。 */
+export function useUpdateKnowledgeBaseExtractionFields(id: string) {
+  const onSuccess = useKnowledgeBaseExtractionFieldsSaved(id);
+  return useMutation({
+    mutationFn: (fields: ExtractionFieldDefinition[]) =>
+      api.updateKnowledgeBaseExtractionFields(id, { fields }),
+    onSuccess,
+  });
+}
+
+/** ナレッジベースの項目抽出の定義を消し、全体の既定に戻す（#548）。 */
+export function useResetKnowledgeBaseExtractionFields(id: string) {
+  const onSuccess = useKnowledgeBaseExtractionFieldsSaved(id);
+  return useMutation({
+    mutationFn: () => api.updateKnowledgeBaseExtractionFields(id, { fields: null }),
+    onSuccess,
+  });
+}
+
+function useKnowledgeBaseExtractionFieldsSaved(id: string) {
+  const qc = useQueryClient();
+  return (data: KnowledgeBaseExtractionFieldsData) => {
+    qc.setQueryData(queryKeys.knowledgeBaseExtractionFields(id), data);
+    void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
+  };
+}
+
+/** 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。 */
+export function useSearchExtractionFields(businessViewIds: string[], enabled = true) {
+  return useQuery<ExtractionFieldsSettingsData>({
+    queryKey: queryKeys.searchExtractionFields(businessViewIds),
+    queryFn: () => api.getSearchExtractionFields(businessViewIds),
+    enabled: enabled && businessViewIds.length > 0,
+    retry: false,
   });
 }
 
@@ -1942,6 +1993,12 @@ export function useUpdateExtractionFieldsSettings() {
       api.updateExtractionFieldsSettings({ fields }),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.extractionFieldsSettings, data);
+      // 全体の既定は、定義を持たない KB と検索の項目の候補にも効く（#548）。
+      void qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "knowledge-bases" && query.queryKey[2] === "extraction-fields",
+      });
+      void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
     },
   });
 }

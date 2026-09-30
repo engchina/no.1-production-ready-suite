@@ -188,14 +188,17 @@ test("根拠確認設定は CRAG しきい値を編集・検証できる", async
   await expect(page.getByText("補正検索(CRAG)のしきい値")).toBeVisible();
   const high = page.getByRole("spinbutton", { name: "高しきい値" });
   await expect(high).toHaveValue("0.7");
-  // 高しきい値 < 低しきい値 は保存できない。
+  // 高しきい値 < 低しきい値 は保存できない。保存を押すと、理由を欄の直下に出してその欄へ移す（#541）。
   await high.fill("0.1");
-  await expect(
-    page.getByText(/高しきい値は低しきい値以上/)
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+  const save = page.getByRole("button", { name: "保存" });
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(high).toHaveAccessibleDescription(/高しきい値は低しきい値以上の数値を入力してください。/);
+  await expect(high).toHaveAttribute("aria-invalid", "true");
+  await expect(high).toBeFocused();
   await high.fill("0.8");
-  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+  await expect(high).not.toHaveAttribute("aria-invalid", "true");
+  await expect(save).toBeEnabled();
   await expect(page.getByRole("switch", { name: "低 grade で回答を保留する" })).toBeVisible();
 });
 
@@ -243,10 +246,11 @@ test("根拠確認のしきい値欄を空にしても 0 を入れず、小数�
   const low = page.getByRole("spinbutton", { name: "低しきい値" });
   await expect(low).toHaveValue("0.35");
   await low.fill("");
-  // 空欄は「CRAG を無効化する 0」として保存させない。
+  // 空欄は「CRAG を無効化する 0」として保存させない。保存を押すと欄の直下に理由を出す（#541）。
   await expect(low).toHaveValue("");
-  await expect(page.getByText(/しきい値は 0〜1/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(low).toHaveAccessibleDescription(/低しきい値を入力してください。/);
+  await expect(low).toBeFocused();
   await low.pressSequentially("0.45");
   await expect(low).toHaveValue("0.45");
   await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();

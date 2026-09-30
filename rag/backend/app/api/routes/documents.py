@@ -75,6 +75,12 @@ from app.rag.kb_adapter_config import (
     resolve_effective_adapter_config,
     resolve_effective_settings,
 )
+from app.rag.layer_fingerprint import (
+    changed_layer_inputs,
+    current_field_definitions,
+    current_layer_inputs,
+    recorded_layer_fingerprint,
+)
 from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source
 from app.rag.rate_limit import enforce_rate_limit
@@ -514,6 +520,7 @@ async def list_documents(
             offset=offset,
             knowledge_base_id=knowledge_base_id,
         )
+        await _mark_layers_rebuild_required(oracle, documents, settings)
         total = await oracle.count_documents(
             status=status,
             query=q,
@@ -540,6 +547,72 @@ async def list_documents(
         data=page,
         warning_messages=[degraded.message] if degraded else [],
     )
+
+
+async def _mark_layers_rebuild_required(
+    oracle: OracleClient,
+    documents: Sequence[DocumentSummary],
+    global_settings: Settings,
+) -> None:
+    """一覧の文書に、検索対象の派生情報レイヤーの作り直しが必要かの印を付ける(#550)。
+
+    判定は文書詳細(``/chunk-sets``)と同じで、レシピの設定で層 ID を作り直し、今も要求されて
+    いる層の指紋だけを今の入力と比べる。表示の補助なので、読めないときは印を付けずに一覧を返す
+    (一覧そのものを縮退させない)。1 回の問い合わせで一覧の全文書を読む。
+    """
+    if not documents:
+        return
+    try:
+        rows = await oracle.list_serving_artifact_layer_fingerprints(
+            [document.id for document in documents]
+        )
+    except Exception:
+        logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
+        return
+    if not rows:
+        return
+    try:
+        # 項目の定義は文書が属する KB で変わるため、層のある文書の定義を 1 回で読む(#548)。
+        field_sets = await oracle.list_documents_extraction_field_sets(
+            list(dict.fromkeys(str(row.get("document_id")) for row in rows))
+        )
+    except Exception:
+        logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
+        return
+    default_fields = load_field_schema().fields
+    inputs_by_document: dict[str, dict[str, object]] = {}
+    flagged: set[str] = set()
+    for row in rows:
+        document_id = str(row.get("document_id"))
+        if document_id in flagged:
+            continue
+        if document_id not in inputs_by_document:
+            inputs_by_document[document_id] = current_layer_inputs(
+                global_settings,
+                current_field_definitions(field_sets.get(document_id, []), default_fields),
+            )
+        current_inputs = inputs_by_document[document_id]
+        raw_config = (
+            row.get("recipe_processing_config")
+            if row.get("recipe_id") is not None
+            else row.get("document_processing_config")
+        )
+        try:
+            settings, _effective = _merge_document_processing_config(
+                DocumentProcessingConfig.model_validate(raw_config or {}), global_settings
+            )
+        except (ValueError, KbAdapterConfigError):
+            continue
+        layer = str(row.get("layer_kind"))
+        chunk_set_id = str(row.get("parent_chunk_set_id"))
+        if not _layer_requested(layer, settings) or row.get("layer_id") != _recipe_layer_id(
+            chunk_set_id, settings, layer
+        ):
+            continue
+        if changed_layer_inputs(row.get("input_fingerprint"), current_inputs):
+            flagged.add(document_id)
+    for document in documents:
+        document.layers_rebuild_required = document.id in flagged
 
 
 DELETE_IMPACT_MAX_DOCUMENTS = 100
@@ -1328,8 +1401,13 @@ async def export_document_recipe_extraction(
     format: Annotated[DocumentExtractionExportFormat, Query()] = (
         DocumentExtractionExportFormat.MARKDOWN
     ),
-) -> ApiResponse[DocumentExtractionExport]:
-    """選択レシピの抽出・active chunks を監査用に返す。"""
+    download: Annotated[bool, Query()] = False,
+) -> ApiResponse[DocumentExtractionExport] | Response:
+    """選択レシピの抽出・active chunks を返す。
+
+    `download=true` のときは、同じ内容をファイルとして返す(`Content-Disposition: attachment`。
+    文書の詳細の「抽出エクスポート」「Chunk / Citation」のダウンロード。#561)。
+    """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     row = await oracle.get_document_recipe(document_id, recipe_id)
@@ -1354,6 +1432,13 @@ async def export_document_recipe_extraction(
         chunks = await oracle.list_chunk_set_chunks(str(chunk_set_id)) if chunk_set_id else []
         payload = {"chunks": [chunk.model_dump(mode="json") for chunk in chunks]}
     content = _document_extraction_export_content(format, extraction, payload)
+    if download:
+        return _document_extraction_export_download_response(
+            format,
+            content,
+            file_name=detail.file_name,
+            slot_no=row.get("slot_no"),
+        )
     return ApiResponse(
         data=DocumentExtractionExport(
             document_id=document_id,
@@ -1474,6 +1559,11 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         if any(row.get("recipe_id") is not None for row in rows)
         else {}
     )
+    # 作り直しの判定に使う今の入力(項目の定義は文書が属する KB の定義か全体の既定。#548 / #550)。
+    current_inputs = current_layer_inputs(
+        effective_settings,
+        current_field_definitions(await oracle.list_document_extraction_field_sets(document_id)),
+    )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -1497,6 +1587,7 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 chunk_set.chunk_set_id,
                 settings_for_recipe,
                 persisted_layers,
+                current_inputs=current_inputs,
             )
         elif plan is not None:
             chunk_set.layer_statuses = _layer_statuses_for_chunk_set(
@@ -1504,6 +1595,7 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 plan,
                 effective_by_kb,
                 persisted_layers,
+                current_inputs=current_inputs,
             )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
@@ -1775,6 +1867,8 @@ def _layer_statuses_for_chunk_set(
     plan: MaterializationPlan,
     effective_by_kb: Mapping[str, Settings],
     persisted_layers: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentChunkSetLayerStatuses:
     """派生情報レイヤーの現在状態を chunk_set 単位で作る。"""
     return DocumentChunkSetLayerStatuses(
@@ -1785,6 +1879,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="metadata",
             user_label="項目抽出",
+            current_inputs=current_inputs,
         ),
         graph=_layer_status_for_chunk_set(
             chunk_set_id,
@@ -1793,6 +1888,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="graph",
             user_label="関係情報",
+            current_inputs=current_inputs,
         ),
         navigation=_layer_status_for_chunk_set(
             chunk_set_id,
@@ -1801,6 +1897,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="navigation",
             user_label="ナビゲーション",
+            current_inputs=current_inputs,
         ),
     )
 
@@ -1813,6 +1910,7 @@ def _layer_status_for_chunk_set(
     *,
     layer: str,
     user_label: str,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentMaterializationLayerStatus:
     requested_ids = _requested_layer_ids_for_chunk_set(
         chunk_set_id,
@@ -1831,7 +1929,12 @@ def _layer_status_for_chunk_set(
                 "現時点では計画だけを表示しています。"
             ),
         )
-    return _requested_layer_status(requested_ids[0], persisted_layers, user_label=user_label)
+    return _requested_layer_status(
+        requested_ids[0],
+        persisted_layers,
+        user_label=user_label,
+        current_inputs=current_inputs,
+    )
 
 
 def _not_requested_layer_status(user_label: str) -> DocumentMaterializationLayerStatus:
@@ -1847,10 +1950,19 @@ def _requested_layer_status(
     persisted_layers: Mapping[str, Mapping[str, object]],
     *,
     user_label: str,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentMaterializationLayerStatus:
-    """要求された派生層の状態。実体化の記録があればそれを、無ければ計画だけとして返す。"""
+    """要求された派生層の状態。実体化の記録があればそれを、無ければ計画だけとして返す。
+
+    ``current_inputs`` を渡すと、記録した指紋と比べて「作り直しが必要」を付ける(#550)。
+    """
     persisted = persisted_layers.get(layer_id)
     if persisted is not None:
+        changed = (
+            changed_layer_inputs(persisted.get("input_fingerprint"), current_inputs)
+            if current_inputs is not None
+            else []
+        )
         return DocumentMaterializationLayerStatus(
             layer_id=layer_id,
             requested=bool(persisted.get("requested", True)),
@@ -1858,6 +1970,8 @@ def _requested_layer_status(
                 str(persisted.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
             ),
             reason=str(persisted["reason"]) if persisted.get("reason") is not None else None,
+            rebuild_required=bool(changed),
+            rebuild_inputs=changed,
         )
     return DocumentMaterializationLayerStatus(
         layer_id=layer_id,
@@ -1888,6 +2002,8 @@ def _recipe_layer_statuses_for_chunk_set(
     chunk_set_id: str,
     settings: Settings,
     persisted_layers: Mapping[str, Mapping[str, object]],
+    *,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentChunkSetLayerStatuses:
     """レシピの chunk_set の派生情報レイヤーの状態を、そのレシピの構築設定から作る(#494)。
 
@@ -1901,6 +2017,7 @@ def _recipe_layer_statuses_for_chunk_set(
                 _recipe_layer_id(chunk_set_id, settings, layer),
                 persisted_layers,
                 user_label=user_label,
+                current_inputs=current_inputs,
             )
             if _layer_requested(layer, settings)
             else _not_requested_layer_status(user_label)
@@ -1949,12 +2066,14 @@ async def _record_recipe_artifact_layers(
     )
     raw_extraction = artifact.get("extraction_json") if artifact is not None else None
     extraction = raw_extraction if isinstance(raw_extraction, Mapping) else None
+    fields_configured = await _document_has_field_definitions(oracle, document_id)
     for layer, user_label in requested:
         status, reason = _materialized_layer_state(
             layer=layer,
             user_label=user_label,
             extraction=extraction,
             settings=settings,
+            field_definitions_configured=fields_configured,
         )
         await oracle.upsert_artifact_layer(
             layer_id=_recipe_layer_id(chunk_set_id, settings, layer),
@@ -1965,6 +2084,7 @@ async def _record_recipe_artifact_layers(
             status=status.value,
             reason=reason,
             metrics=_layer_metrics(layer, extraction),
+            input_fingerprint=recorded_layer_fingerprint(layer, extraction, settings),
         )
 
 
@@ -3078,6 +3198,7 @@ async def _reconcile_plan_artifact_layers(
     """plan に含まれる派生 layer の状態を永続化する。"""
     configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
     effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
+    fields_configured = await _document_has_field_definitions(oracle, document_id)
     for chunk_set_id in plan.chunk_sets:
         for layer, user_label in _ARTIFACT_LAYER_LABELS:
             requested_ids = _requested_layer_ids_for_chunk_set(
@@ -3092,6 +3213,7 @@ async def _reconcile_plan_artifact_layers(
                     user_label=user_label,
                     extraction=detail.extraction,
                     settings=effective_settings,
+                    field_definitions_configured=fields_configured,
                 )
                 await oracle.upsert_artifact_layer(
                     layer_id=layer_id,
@@ -3102,7 +3224,17 @@ async def _reconcile_plan_artifact_layers(
                     status=status.value,
                     reason=reason,
                     metrics=_layer_metrics(layer, detail.extraction),
+                    input_fingerprint=recorded_layer_fingerprint(
+                        layer, detail.extraction, effective_settings
+                    ),
                 )
+
+
+async def _document_has_field_definitions(oracle: OracleClient, document_id: str) -> bool:
+    """文書に効く項目抽出の定義(所属 KB の定義か全体の既定。#548)が 1 件以上あるか。"""
+    return bool(
+        current_field_definitions(await oracle.list_document_extraction_field_sets(document_id))
+    )
 
 
 def _materialized_layer_state(
@@ -3111,6 +3243,7 @@ def _materialized_layer_state(
     user_label: str,
     extraction: Mapping[str, object] | None,
     settings: Settings,
+    field_definitions_configured: bool,
 ) -> tuple[DocumentLayerStatusName, str]:
     if not extraction:
         return (
@@ -3121,7 +3254,7 @@ def _materialized_layer_state(
             ),
         )
     if layer == "metadata":
-        return _metadata_layer_state(user_label, extraction, settings)
+        return _metadata_layer_state(user_label, extraction, settings, field_definitions_configured)
     if layer == "navigation":
         node_count = _navigation_node_count(extraction)
         if node_count > 0:
@@ -3146,15 +3279,20 @@ def _metadata_layer_state(
     user_label: str,
     extraction: Mapping[str, object],
     settings: Settings,
+    field_definitions_configured: bool,
 ) -> tuple[DocumentLayerStatusName, str]:
-    """項目抽出の成果物があれば実体化とする(図の要約は Vision の解析結果に含まれる。#497)。"""
+    """項目抽出の成果物があれば実体化とする(図の要約は Vision の解析結果に含まれる。#497)。
+
+    `field_definitions_configured` は、文書に効く項目の定義(所属 KB の定義か全体の既定)が
+    あるか(#548)。
+    """
     field_enabled = bool(getattr(settings, "rag_field_extraction_enabled", False))
     reasons: list[str] = []
     if field_enabled and not _fields_materialized(extraction):
-        if not load_field_schema().fields:
+        if not field_definitions_configured:
             reasons.append(
                 "項目抽出は有効ですが、抽出する項目定義(スキーマ)が未設定のため実行されません。"
-                "検索・回答設定で項目定義を登録してから再取込してください"
+                "ナレッジベースか文書解析の設定で項目定義を登録してから再取込してください"
             )
         else:
             reasons.append("項目抽出の成果物がまだありません")
@@ -3963,6 +4101,62 @@ def _document_extraction_export_content_type(
     if export_format == DocumentExtractionExportFormat.HTML:
         return "text/html; charset=utf-8"
     return "application/json; charset=utf-8"
+
+
+_EXTRACTION_EXPORT_FILE_SUFFIXES: dict[DocumentExtractionExportFormat, str] = {
+    DocumentExtractionExportFormat.MARKDOWN: ".md",
+    DocumentExtractionExportFormat.HTML: ".html",
+    DocumentExtractionExportFormat.JSON: ".json",
+    DocumentExtractionExportFormat.CHUNKS: "_chunks.json",
+}
+
+
+def _document_extraction_export_file_name(
+    export_format: DocumentExtractionExportFormat,
+    *,
+    file_name: str | None,
+    slot_no: object,
+) -> str:
+    """ダウンロードのファイル名(元の文書名の拡張子を除いた部分 + レシピ + 形式の拡張子)。
+
+    例: `契約書.pdf` のレシピ1の Markdown は `契約書_レシピ1.md`、
+    chunk は `契約書_レシピ1_chunks.json`。
+    """
+    safe_name = _safe_display_filename(file_name)
+    stem = PurePath(safe_name).stem.strip(" .") or "document"
+    slot = slot_no if isinstance(slot_no, int) and slot_no > 0 else 1
+    return _truncate_file_name(
+        f"{stem}_レシピ{slot}{_EXTRACTION_EXPORT_FILE_SUFFIXES[export_format]}"
+    )
+
+
+def _document_extraction_export_download_response(
+    export_format: DocumentExtractionExportFormat,
+    content: str,
+    *,
+    file_name: str | None,
+    slot_no: object,
+) -> Response:
+    """抽出エクスポートをファイルとして返す(原本のダウンロードと同じヘッダーにそろえる)。"""
+    download_name = _document_extraction_export_file_name(
+        export_format, file_name=file_name, slot_no=slot_no
+    )
+    headers = {
+        # 非 ASCII ファイル名は RFC 5987 でエンコードする
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(download_name)}",
+        # MIME sniffing による取り違えを防ぐ
+        "X-Content-Type-Options": "nosniff",
+        # 抽出のやり直しで内容が変わるため、ブラウザに残さない
+        "Cache-Control": "private, no-store",
+    }
+    if export_format == DocumentExtractionExportFormat.HTML:
+        # 同じ origin で開かれてもスクリプトを動かさない(#281 と同じ扱い)。
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=_document_extraction_export_content_type(export_format),
+        headers=headers,
+    )
 
 
 def _extraction_parser_backend(extraction: StructuredExtraction) -> str | None:

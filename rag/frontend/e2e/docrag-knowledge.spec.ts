@@ -359,3 +359,38 @@ async function mockDocragStream(page: Page) {
     })
   );
 }
+
+// #540 / #541: FAQ の追加と用語・ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
+// ルールは backend と同じく「ルール ID」「ルール名」「ルール内容」が必須。
+test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
+  await mockCommon(page);
+  await mockBusinessViewApi(page);
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /approved-faq$|runtime-knowledge\/edit$/.test(request.url())) {
+      writes.push(request.url());
+    }
+  });
+
+  await page.goto("/business-views?id=bv-1");
+  await page.getByRole("tab", { name: "Approved FAQ（類似問）" }).click();
+  const add = page.getByRole("button", { name: "追加", exact: true });
+  await expect(add).toBeEnabled();
+  await add.click();
+  await expect(page.locator("#approved-faq-question")).toHaveAccessibleDescription(/質問を入力してください。/);
+  await expect(page.locator("#approved-faq-answer-error")).toHaveText("回答を入力してください。");
+  await expect(page.locator("#approved-faq-question")).toBeFocused();
+
+  await page.getByRole("tab", { name: "用語・ルール" }).click();
+  await page.locator("#runtime-knowledge-kind").click();
+  await page.getByRole("option", { name: "ルール" }).click();
+  await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
+  await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
+  await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
+  await expect(page.locator("#runtime-knowledge-content-error")).toHaveText("ルール内容を入力してください。");
+  await expect(page.locator("#runtime-knowledge-name")).toBeFocused();
+  expect(writes).toHaveLength(0);
+  await expectNoPageOverflow(page);
+});

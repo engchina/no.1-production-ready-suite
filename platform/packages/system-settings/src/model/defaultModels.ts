@@ -16,13 +16,13 @@ export type DefaultModelErrors = Partial<Record<DefaultModelField, string>>;
 
 /** 画面の入力欄の id（保存前の検証で最初の不正な欄へフォーカスする）。 */
 export const DEFAULT_MODEL_FIELD_IDS: Record<DefaultModelField, string> = {
-  default_vision_model_id: "enterprise-default-vision-model",
   default_text_model_id: "enterprise-default-text-model",
+  default_vision_model_id: "enterprise-default-vision-model",
 };
-/** フォーカスする順（画面の並び順）。 */
+/** フォーカスする順（画面の並び順。テキスト → Vision。#566）。 */
 export const DEFAULT_MODEL_FIELD_ORDER: readonly DefaultModelField[] = [
-  "default_vision_model_id",
   "default_text_model_id",
+  "default_vision_model_id",
 ];
 
 /** モデル ID を入力した行（登録モデル）。前後の空白は backend と同じく除く。 */
@@ -46,6 +46,14 @@ export function validateDefaultModels(
     models.filter((model) => model.vision_enabled).map((model) => model.model_id),
   );
   const errors: DefaultModelErrors = {};
+  const text = enterprise.default_text_model_id.trim();
+  if (models.length > 0 && !text) {
+    errors.default_text_model_id = t("settings.model.defaults.error.textRequired");
+  } else if (text && !registered.has(text)) {
+    errors.default_text_model_id = t("settings.model.defaults.error.textRemoved", {
+      model: text,
+    });
+  }
   const vision = enterprise.default_vision_model_id.trim();
   if (models.length > 0 && visionCapable.size === 0) {
     errors.default_vision_model_id = t("settings.model.defaults.error.noVisionModel");
@@ -58,12 +66,6 @@ export function validateDefaultModels(
   } else if (vision && !visionCapable.has(vision)) {
     errors.default_vision_model_id = t("settings.model.defaults.error.visionNotCapable", {
       model: vision,
-    });
-  }
-  const text = enterprise.default_text_model_id.trim();
-  if (text && !registered.has(text)) {
-    errors.default_text_model_id = t("settings.model.defaults.error.textRemoved", {
-      model: text,
     });
   }
   return errors;
@@ -85,14 +87,11 @@ export function visionModelOptions(
   );
 }
 
-/** 既定のテキストモデルの選択肢（先頭は未選択＝既定の Vision モデルを使う）。 */
+/** 既定のテキストモデルの選択肢（登録モデルすべて。Vision 対応のモデルも選べる）。 */
 export function textModelOptions(
   models: readonly EnterpriseAiConfiguredModel[],
 ): SelectFieldOption[] {
-  return [
-    { value: "", label: t("settings.model.defaults.useVisionModel") },
-    ...uniqueById(registeredModels(models)).map(modelOption),
-  ];
+  return uniqueById(registeredModels(models)).map(modelOption);
 }
 
 function uniqueById(models: EnterpriseAiConfiguredModel[]) {

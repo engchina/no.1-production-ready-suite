@@ -208,6 +208,9 @@ class DocumentSummary(BaseModel):
     indexed_at: datetime | None = None
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     source_profile: SourceProfile | None = None
+    # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
+    # 一覧の API だけが埋める(詳細はレイヤーごとの ``rebuild_required`` を見る)。
+    layers_rebuild_required: bool = False
 
 
 class DuplicateDocumentRef(BaseModel):
@@ -339,6 +342,11 @@ class DocumentMaterializationLayerStatus(BaseModel):
     requested: bool = False
     status: DocumentLayerStatusName = DocumentLayerStatusName.NOT_REQUESTED
     reason: str | None = None
+    # 作ったときの入力(項目の定義など)が今の設定と違い、作り直しが必要か(#550)。status とは
+    # 別の印で、今の設定との比較で決まる(保存しない)。指紋の無い古い行は False(不明)。
+    rebuild_required: bool = False
+    # 変わった入力の名前(``app.rag.layer_fingerprint`` の *_INPUT)。画面が表示名にする。
+    rebuild_inputs: list[str] = Field(default_factory=list)
 
 
 class DocumentChunkSetLayerStatuses(BaseModel):

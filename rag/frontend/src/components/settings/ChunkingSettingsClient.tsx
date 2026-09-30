@@ -15,7 +15,7 @@ import {
   TimedLoadingState,
   FormSkeleton,
 } from "@engchina/production-ready-ui";
-import { useState, useId } from "react";
+import { useState } from "react";
 import {
   CheckCircle2,
   RotateCcw,
@@ -40,11 +40,11 @@ import {
   type DocragChunkingParamField,
   chunkSizeLabelKey,
   chunkingStrategyPreset,
-  invalidDocragChunkingParam,
   isSemanticBoundaryStrategy,
   overlapLabelKey,
 } from "@/lib/chunking";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { focusFirstInvalidField, numberRangeError } from "@/lib/required-fields";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
@@ -90,6 +90,7 @@ export function ChunkingSettingsClient() {
   const save = useUpdateChunkingSettings();
   const [form, setForm] = useState<ChunkingForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<ChunkingFieldErrors>({});
 
   // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
   const serverChanged = useValuesChanged([query.data, save.isPending]);
@@ -133,7 +134,6 @@ export function ChunkingSettingsClient() {
   if (!settings || !form) return null;
 
   const dirty = serializeForm(form) !== serializeForm(formFromSettings(settings));
-  const validationError = validateForm(form);
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.chunking.saveError");
   const strategies = orderedStrategies(settings.strategies);
@@ -142,16 +142,29 @@ export function ChunkingSettingsClient() {
     save.reset();
     setSuccessMessage(null);
     setForm((current) => (current ? { ...current, ...update } : current));
+    // 直した欄のエラーだけを消す。分割方式を変えたときは欄が入れ替わるので全部消す。
+    setFieldErrors((current) =>
+      "strategy" in update
+        ? {}
+        : Object.fromEntries(Object.entries(current).filter(([field]) => !(field in update))),
+    );
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
     setForm(formFromSettings(settings));
+    setFieldErrors({});
   }
 
   function submit() {
-    if (!form || validationError) return;
+    if (!form) return;
+    // 保存を押したときに欄ごとに検証し、欄の直下に出して最初のエラーの欄へ移す（#541）。
+    const errors = validateForm(form);
+    setFieldErrors(errors);
+    if (focusFirstInvalidField(chunkingFieldOrder(form).map((field) => [chunkingFieldId(field), errors[field]] as const))) {
+      return;
+    }
     save.mutate(form, {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
@@ -170,7 +183,7 @@ export function ChunkingSettingsClient() {
         form={form}
         strategies={strategies}
         saving={save.isPending}
-        validationError={validationError}
+        hasFieldErrors={Object.values(fieldErrors).some(Boolean)}
         successMessage={successMessage}
         errorMessage={save.isError ? saveError : null}
         onStrategyChange={(strategy) => {
@@ -187,7 +200,7 @@ export function ChunkingSettingsClient() {
       <ParamsCard
         form={form}
         saving={save.isPending}
-        validationError={validationError}
+        errors={fieldErrors}
         onChange={updateForm}
       />
     </PageBody>
@@ -199,7 +212,7 @@ function OverviewCard({
   form,
   strategies,
   saving,
-  validationError,
+  hasFieldErrors,
   successMessage,
   errorMessage,
   onStrategyChange,
@@ -210,7 +223,8 @@ function OverviewCard({
   form: ChunkingForm;
   strategies: ChunkingStrategyStatusData[];
   saving: boolean;
-  validationError: string | null;
+  /** 欄のエラーがあるか（内容は欄の直下に出す。ここでは未保存の表示を控えるだけ）。 */
+  hasFieldErrors: boolean;
   successMessage: string | null;
   errorMessage: string | null;
   onStrategyChange: (strategy: ChunkingStrategyName) => void;
@@ -308,8 +322,7 @@ function OverviewCard({
         </dl>
         <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
           <div className="min-h-6">
-            {validationError ? <FormStatus tone="danger" message={validationError} /> : null}
-            {!validationError && dirty ? (
+            {!hasFieldErrors && dirty ? (
               <FormStatus tone="warning" message={t("settings.chunking.actions.unsaved")} />
             ) : null}
             {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
@@ -327,7 +340,7 @@ function OverviewCard({
             <Button
               type="button"
               loading={saving}
-              disabled={!dirty || Boolean(validationError)}
+              disabled={!dirty}
               onClick={onSubmit}
               aria-label={t("settings.chunking.actions.save")} icon={Save}>
               {t("settings.chunking.actions.save")}
@@ -342,12 +355,12 @@ function OverviewCard({
 function ParamsCard({
   form,
   saving,
-  validationError,
+  errors,
   onChange,
 }: {
   form: ChunkingForm;
   saving: boolean;
-  validationError: string | null;
+  errors: ChunkingFieldErrors;
   onChange: (update: Partial<ChunkingForm>) => void;
 }) {
   const fields = STRATEGY_PARAM_FIELDS[form.strategy];
@@ -357,6 +370,8 @@ function ParamsCard({
   const docrag = form.strategy === "docrag_small_to_big";
   const chunkSizeField = hasField("chunk_size") ? (
     <NumberField
+      id={chunkingFieldId("chunk_size")}
+      error={errors.chunk_size}
       label={t(chunkSizeLabelKey(form.strategy))}
       value={form.chunk_size}
       min={CHUNK_SIZE_MIN_CHARS}
@@ -367,6 +382,8 @@ function ParamsCard({
   ) : null;
   const overlapField = hasField("overlap") ? (
     <NumberField
+      id={chunkingFieldId("overlap")}
+      error={errors.overlap}
       label={t(overlapLabelKey(form.strategy))}
       value={form.overlap}
       min={0}
@@ -377,6 +394,8 @@ function ParamsCard({
   ) : null;
   const minCharsField = hasField("min_chars") ? (
     <NumberField
+      id={chunkingFieldId("min_chars")}
+      error={errors.min_chars}
       label={t("settings.chunking.params.minChars")}
       value={form.min_chars}
       min={0}
@@ -424,6 +443,8 @@ function ParamsCard({
             ? DOCRAG_CHUNKING_PARAMS.map((spec) => (
                 <NumberField
                   key={spec.field}
+                  id={chunkingFieldId(spec.field)}
+                  error={errors[spec.field]}
                   label={t(spec.labelKey)}
                   value={form[spec.field]}
                   min={spec.min}
@@ -443,6 +464,7 @@ function ParamsCard({
               value={form.delimiter}
               disabled={saving}
               helper={t("settings.chunking.params.delimiterHint")}
+              error={errors.delimiter ?? undefined}
               required
               onValueChange={(value) => onChange({ delimiter: value })}
             />
@@ -471,17 +493,14 @@ function ParamsCard({
           )}
           {!semanticBoundary ? minCharsField : null}
         </div>
-        {validationError ? (
-          <div className="mt-4">
-            <FormStatus tone="danger" message={validationError} />
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );
 }
 
 function NumberField({
+  id,
+  error,
   label,
   value,
   min,
@@ -491,6 +510,9 @@ function NumberField({
   helper,
   onChange,
 }: {
+  id: string;
+  /** 欄の直下に出すエラー（保存を押したときの検証）。 */
+  error?: string | null;
   label: string;
   value: number;
   min: number;
@@ -500,13 +522,13 @@ function NumberField({
   helper?: string;
   onChange: (value: number) => void;
 }) {
-  const id = useId();
-  // 数値の欄は空では保存できない（validateForm が止める）ので、すべて必須（#531）。
+  // 数値の欄は空では保存できない（validateForm が止め、backend も範囲を検証する）ので、すべて必須（#531）。
   return (
     <TextField
       id={id}
       label={label}
       helper={helper}
+      error={error ?? undefined}
       required
       type="number"
       inputMode="numeric"
@@ -731,47 +753,65 @@ function paramSummary(form: ChunkingForm) {
     .join(" / ");
 }
 
-function validateForm(form: ChunkingForm): string | null {
+type ChunkingErrorField = ChunkingParamField | DocragChunkingParamField;
+type ChunkingFieldErrors = Partial<Record<ChunkingErrorField, string | null>>;
+
+/** 欄の id（送信に失敗したら最初のエラーの欄へフォーカスする）。 */
+function chunkingFieldId(field: ChunkingErrorField): string {
+  return field === "delimiter" ? "chunking-delimiter" : `chunking-${field.replaceAll("_", "-")}`;
+}
+
+/** 画面の並び順（DocRAG の欄 → 分割符 → chunk サイズ → overlap → 最小文字数）。 */
+function chunkingFieldOrder(form: ChunkingForm): ChunkingErrorField[] {
+  const docrag = form.strategy === "docrag_small_to_big" ? DOCRAG_CHUNKING_PARAMS.map((spec) => spec.field) : [];
+  return [...docrag, "delimiter", "chunk_size", "overlap", "min_chars"];
+}
+
+/**
+ * 欄ごとの検証（#541）。規則は backend（ChunkingSettingsUpdate）と同じ。空の数値（NaN）を 0 として扱わない。
+ * 文言は「〇〇を入力してください。」「〇〇は N 以上 M 以下の整数を入力してください。」の型。
+ */
+function validateForm(form: ChunkingForm): ChunkingFieldErrors {
   const fields = STRATEGY_PARAM_FIELDS[form.strategy];
   const hasField = (field: ChunkingParamField) => fields.includes(field);
-  if (hasField("delimiter")) {
-    return form.delimiter.trim() ? null : t("settings.chunking.params.delimiter");
+  const errors: ChunkingFieldErrors = {};
+  const chunkSizeLabel = t(chunkSizeLabelKey(form.strategy));
+  const overlapLabel = t(overlapLabelKey(form.strategy));
+  const minCharsLabel = t("settings.chunking.params.minChars");
+  if (hasField("delimiter") && !form.delimiter.trim()) {
+    errors.delimiter = t("validation.required", { field: t("settings.chunking.params.delimiter") });
   }
-  if (
-    hasField("chunk_size") &&
-    (!Number.isFinite(form.chunk_size) ||
-      form.chunk_size < CHUNK_SIZE_MIN_CHARS ||
-      form.chunk_size > CHUNK_SIZE_MAX_CHARS)
-  ) {
-    return t(chunkSizeLabelKey(form.strategy));
+  if (hasField("chunk_size")) {
+    errors.chunk_size = numberRangeError(form.chunk_size, {
+      label: chunkSizeLabel,
+      min: CHUNK_SIZE_MIN_CHARS,
+      max: CHUNK_SIZE_MAX_CHARS,
+    });
   }
-  if (
-    hasField("overlap") &&
-    (!Number.isFinite(form.overlap) ||
-      form.overlap < 0 ||
-      form.overlap > CHUNK_OVERLAP_MAX_CHARS)
-  ) {
-    return t(overlapLabelKey(form.strategy));
-  }
-  if (hasField("overlap") && form.overlap >= form.chunk_size) {
-    return t(overlapLabelKey(form.strategy)) + " < " + t(chunkSizeLabelKey(form.strategy));
+  if (hasField("overlap")) {
+    errors.overlap =
+      numberRangeError(form.overlap, { label: overlapLabel, min: 0, max: CHUNK_OVERLAP_MAX_CHARS }) ??
+      (!errors.chunk_size && hasField("chunk_size") && form.overlap >= form.chunk_size
+        ? t("validation.lessThan", { field: overlapLabel, other: chunkSizeLabel })
+        : null);
   }
   if (form.strategy === "docrag_small_to_big") {
-    const invalid = invalidDocragChunkingParam(form);
-    if (invalid) {
-      return `${t(invalid.labelKey)}: ${invalid.min.toLocaleString("ja-JP")}〜${invalid.max.toLocaleString("ja-JP")}`;
+    for (const spec of DOCRAG_CHUNKING_PARAMS) {
+      errors[spec.field] = numberRangeError(form[spec.field], {
+        label: t(spec.labelKey),
+        min: spec.min,
+        max: spec.max,
+      });
     }
   }
-  if (
-    hasField("min_chars") &&
-    (!Number.isFinite(form.min_chars) || form.min_chars < 0 || form.min_chars > 2000)
-  ) {
-    return t("settings.chunking.params.minChars");
+  if (hasField("min_chars")) {
+    errors.min_chars =
+      numberRangeError(form.min_chars, { label: minCharsLabel, min: 0, max: 2000 }) ??
+      (!errors.chunk_size && hasField("chunk_size") && form.min_chars >= form.chunk_size
+        ? t("validation.lessThan", { field: minCharsLabel, other: chunkSizeLabel })
+        : null);
   }
-  if (hasField("min_chars") && form.min_chars >= form.chunk_size) {
-    return t("settings.chunking.params.minChars") + " < " + t("settings.chunking.params.chunkSize");
-  }
-  return null;
+  return errors;
 }
 
 function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {

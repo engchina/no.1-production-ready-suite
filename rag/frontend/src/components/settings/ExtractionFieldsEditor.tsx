@@ -6,8 +6,9 @@ import {
   type SelectFieldOption,
   TextField,
 } from "@engchina/production-ready-ui";
+import type { UseMutationResult } from "@tanstack/react-query";
 import { Plus, RotateCcw, Save, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type ExtractionFieldDefinition, type ExtractionFieldValueType } from "@/lib/api";
@@ -36,10 +37,11 @@ const VALUE_TYPE_OPTIONS: SelectFieldOption<ExtractionFieldValueType>[] =
 
 /**
  * 項目抽出で取り出す項目の定義（`/api/settings/extraction-fields`）を編集する（#528）。
- * 全体で 1 つの定義。文書解析の「解析後の処理」の項目抽出の中に置く。
+ * 全体の既定の定義（KB に定義が無い文書に使う。#548）。文書解析の「解析後の処理」の項目抽出の中に置く。
  */
 export function ExtractionFieldsEditor() {
   const query = useExtractionFieldsSettings();
+  const save = useUpdateExtractionFieldsSettings();
   if (query.isPending) return <FormSkeleton fields={2} />;
   if (query.isError || !query.data) {
     return (
@@ -51,11 +53,37 @@ export function ExtractionFieldsEditor() {
       />
     );
   }
-  return <ExtractionFieldsForm saved={query.data.fields} />;
+  return (
+    <ExtractionFieldsForm
+      saved={query.data.fields}
+      save={save}
+      description={t("settings.extractionFields.description")}
+    />
+  );
 }
 
-function ExtractionFieldsForm({ saved }: { saved: ExtractionFieldDefinition[] }) {
-  const save = useUpdateExtractionFieldsSettings();
+/** 保存の mutation。保存した定義（`fields`）を返す。全体の既定と KB の定義（#548）で共通。 */
+export type ExtractionFieldsSaveMutation = UseMutationResult<
+  { fields: ExtractionFieldDefinition[] },
+  Error,
+  ExtractionFieldDefinition[]
+>;
+
+/** 項目の定義の編集欄。保存先は `save` が決める（全体の既定か KB の定義）。 */
+export function ExtractionFieldsForm({
+  saved,
+  save,
+  description,
+  extraActions,
+  testId = "extraction-fields-editor",
+}: {
+  saved: ExtractionFieldDefinition[];
+  save: ExtractionFieldsSaveMutation;
+  description: string;
+  /** 保存・破棄の後ろに並べる操作（KB の「全体の既定に戻す」など）。 */
+  extraActions?: ReactNode;
+  testId?: string;
+}) {
   const [rows, setRows] = useState<ExtractionFieldRow[]>(() => rowsFromDefinitions(saved));
   // 編集欄が基にした保存値。保存値が変わったレンダーで、未編集なら編集欄を保存値へそろえる
   // （編集中の内容は背景の再取得で上書きしない。UX 契約 workspace-state）。
@@ -112,8 +140,8 @@ function ExtractionFieldsForm({ saved }: { saved: ExtractionFieldDefinition[] })
   }
 
   return (
-    <div className="space-y-3" data-testid="extraction-fields-editor">
-      <p className="text-xs leading-relaxed text-fg-muted">{t("settings.extractionFields.description")}</p>
+    <div className="space-y-3" data-testid={testId}>
+      <p className="text-xs leading-relaxed text-fg-muted">{description}</p>
       {rows.length === 0 ? (
         <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-fg-muted">
           {t("settings.extractionFields.none")}
@@ -211,6 +239,7 @@ function ExtractionFieldsForm({ saved }: { saved: ExtractionFieldDefinition[] })
         >
           {t("settings.extractionFields.discard")}
         </Button>
+        {extraActions}
         {save.isSuccess && !dirty ? (
           <FormStatus tone="success" message={t("settings.extractionFields.saved")} />
         ) : null}

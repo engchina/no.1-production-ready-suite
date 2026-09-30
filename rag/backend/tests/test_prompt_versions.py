@@ -148,6 +148,33 @@ def test_empty_and_blank_prompt_rejected() -> None:
         prompt_versions.create_prompt_version(name="v1", system_prompt="   ")
 
 
+@pytest.mark.parametrize(
+    ("payload", "field", "message"),
+    [
+        ({"name": "", "system_prompt": "x"}, "name", "版名を入力してください。"),
+        (
+            {"name": "v1", "system_prompt": "  "},
+            "system_prompt",
+            "system prompt を入力してください。",
+        ),
+    ],
+    ids=["name", "system-prompt"],
+)
+def test_prompt_version_create_messages_match_screen(
+    payload: dict[str, str], field: str, message: str
+) -> None:
+    """版の作成の未入力は、画面の欄の下と同じ文言で欄を指す（#541）。"""
+    from pydantic import ValidationError
+
+    from app.schemas.settings import PromptVersionCreate
+
+    with pytest.raises(ValidationError) as exc:
+        PromptVersionCreate.model_validate(payload)
+    (error,) = exc.value.errors()
+    assert error["loc"] == (field,)
+    assert message in error["msg"]
+
+
 def test_no_active_when_store_empty() -> None:
     assert prompt_versions.get_active_prompt_version() is None
     assert prompt_versions.active_custom_system_prompt() is None

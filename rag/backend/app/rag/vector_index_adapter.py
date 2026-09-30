@@ -10,6 +10,7 @@ backend と vector_index マイクロサービスが同一結果を返す。`rag
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from rag_pipeline_core.vector_index import (
     DISTANCE,
@@ -27,6 +28,18 @@ from app.config import Settings, VectorIndexProfile
 VectorIndexProfileName = VectorIndexProfile
 DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = "accurate"
 VECTOR_INDEX_PROFILE_ORDER: tuple[VectorIndexProfileName, ...] = VECTOR_INDEX_PROFILES  # type: ignore[assignment]
+
+# 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
+IndexBuildStatus = Literal["match", "reprovision", "unknown"]
+
+
+def index_build_status(
+    neighbors: int, efconstruction: int, actual: tuple[int, int] | None
+) -> IndexBuildStatus:
+    """推奨ビルドを実際の索引の (NEIGHBORS, EFCONSTRUCTION) と比べる。"""
+    if actual is None:
+        return "unknown"
+    return "match" if actual == (neighbors, efconstruction) else "reprovision"
 
 
 @dataclass(frozen=True)
@@ -53,6 +66,7 @@ class VectorIndexProfileStatus:
     neighbors: int
     efconstruction: int
     distance: str
+    index_status: IndexBuildStatus
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,9 @@ class VectorIndexAdapterRuntimeSettings:
     efconstruction: int
     distance: str
     requires_reprovision: bool
+    index_status: IndexBuildStatus
+    actual_neighbors: int | None
+    actual_efconstruction: int | None
     profiles: tuple[VectorIndexProfileStatus, ...]
 
 
@@ -129,8 +146,14 @@ def _resolve_remote(
 
 def vector_index_adapter_runtime_settings(
     settings: Settings,
+    actual_build: tuple[int, int] | None = None,
 ) -> VectorIndexAdapterRuntimeSettings:
-    """Settings から Vector Index アダプター readiness snapshot を作る。"""
+    """Settings から Vector Index アダプター readiness snapshot を作る。
+
+    ``actual_build`` は実際の索引の (NEIGHBORS, EFCONSTRUCTION)。None は確認できないことを表し、
+    再作成の要否は断定しない(#562)。``params.requires_reprovision`` は初期 DDL の値との差で、
+    実際の索引を見ていないため使わない。
+    """
     params = resolve_vector_index_adapter(settings)
     settings_accuracy = _settings_target_accuracy(settings)
     statuses = tuple(
@@ -143,15 +166,20 @@ def vector_index_adapter_runtime_settings(
             neighbors=spec.neighbors,
             efconstruction=spec.efconstruction,
             distance=DISTANCE,
+            index_status=index_build_status(spec.neighbors, spec.efconstruction, actual_build),
         )
         for spec in (VECTOR_INDEX_SPECS[name] for name in VECTOR_INDEX_PROFILES)
     )
+    index_status = index_build_status(params.neighbors, params.efconstruction, actual_build)
     return VectorIndexAdapterRuntimeSettings(
         profile=params.profile,
         target_accuracy=params.target_accuracy,
         neighbors=params.neighbors,
         efconstruction=params.efconstruction,
         distance=params.distance,
-        requires_reprovision=params.requires_reprovision,
+        requires_reprovision=index_status == "reprovision",
+        index_status=index_status,
+        actual_neighbors=actual_build[0] if actual_build else None,
+        actual_efconstruction=actual_build[1] if actual_build else None,
         profiles=statuses,
     )

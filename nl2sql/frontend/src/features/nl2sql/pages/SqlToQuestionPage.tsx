@@ -13,6 +13,7 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FixedSplitPane,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 
@@ -100,6 +101,8 @@ export function SqlToQuestionPage() {
   const reverseInFlight = useRef(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [sqlError, setSqlError] = useState("");
+  const [structureError, setStructureError] = useState("");
   const [referenceRefreshVersion, setReferenceRefreshVersion] = useState(0);
   const loadSequence = useRef(0);
   const detailSequence = useRef(0);
@@ -214,7 +217,14 @@ export function SqlToQuestionPage() {
 
   const generateQuestion = async () => {
     const trimmedSql = sql.trim();
-    if (!trimmedSql || actionBusy || reverseInFlight.current) return;
+    if (actionBusy || reverseInFlight.current) return;
+    // 未入力は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。backend も sql を必須にする。
+    if (!trimmedSql) {
+      setSqlError(t("sqlToQuestion.sql.error.required"));
+      document.getElementById("sql-to-question-sql-input")?.focus();
+      return;
+    }
+    setSqlError("");
     reverseInFlight.current = true;
     setReverseLoading(true);
     focusStructure.current = activeRef.current;
@@ -255,7 +265,13 @@ export function SqlToQuestionPage() {
   };
 
   const generateSql = async () => {
-    if (!structureText.trim() || actionBusy) return;
+    if (actionBusy) return;
+    if (!structureText.trim()) {
+      setStructureError(t("sqlToQuestion.structure.error.required"));
+      document.getElementById("sql-to-question-structure-input")?.focus();
+      return;
+    }
+    setStructureError("");
     setSqlGenerationLoading(true);
     setSqlGenerationError("");
     try {
@@ -382,12 +398,12 @@ export function SqlToQuestionPage() {
                 description={t("sqlToQuestion.input.hint")}
               />
 
-              {/* 変換・生成は業務プロファイルの選択が前提（!selectedProfile で無効）なので必須として示す（#531）。 */}
+              {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API で省略したときも backend が
+                  既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
               <div className="grid gap-1">
-                <FieldLabel htmlFor="sql-to-question-profile" label={t("sqlToQuestion.profile.label")} required />
+                <FieldLabel htmlFor="sql-to-question-profile" label={t("sqlToQuestion.profile.label")} />
                 <select
                   id="sql-to-question-profile"
-                  aria-required="true"
                   value={selectedProfileId}
                   onChange={(event) => {
                     setSelectedProfileId(event.currentTarget.value);
@@ -422,16 +438,22 @@ export function SqlToQuestionPage() {
                     setRegenerated(null);
                     setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
                     setActionError("");
+                    setSqlError("");
                     setActivePanel("input");
                   }}
                   rows={9}
                   required
                   aria-required="true"
-                  className="min-h-56 min-w-0 resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+                  aria-invalid={sqlError ? "true" : undefined}
+                  aria-describedby={sqlError ? "sql-to-question-sql-input-error" : undefined}
+                  className={`min-h-56 min-w-0 resize-y rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled ${
+                    sqlError ? "border-danger-fg" : "border-border-control"
+                  }`}
                   // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
                   // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
                   disabled={actionBusy || !selectedProfileId}
                 />
+                <FieldError id="sql-to-question-sql-input-error" message={sqlError} />
               </div>
 
               <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
@@ -441,7 +463,7 @@ export function SqlToQuestionPage() {
                   size="lg"
                   className="w-full whitespace-nowrap sm:w-auto"
                   loading={reverseLoading}
-                  disabled={!sql.trim() || actionBusy || loading || !!loadError || !selectedProfile}
+                  disabled={actionBusy || loading || !!loadError || !selectedProfile}
                   onClick={() => void generateQuestion()} icon={ArrowRightLeft}>
                   <span>{t("sqlToQuestion.action.generate")}</span>
                 </Button>
@@ -503,17 +525,22 @@ export function SqlToQuestionPage() {
                 <textarea
                   id="sql-to-question-structure-input"
                   value={structureText}
-                  onChange={(event) => { setEditingStructure(true); setStructureText(event.currentTarget.value); setStructureItems([]); setSqlGenerationError(""); }}
+                  onChange={(event) => { setEditingStructure(true); setStructureText(event.currentTarget.value); setStructureItems([]); setSqlGenerationError(""); setStructureError(""); }}
                   rows={16}
                   required
                   aria-required="true"
+                  aria-invalid={structureError ? "true" : undefined}
+                  aria-describedby={structureError ? "sql-to-question-structure-input-error" : undefined}
                   disabled={actionBusy}
-                  className="min-h-64 min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6"
+                  className={`min-h-64 min-w-0 w-full resize-y rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 ${
+                    structureError ? "border-danger-fg" : "border-border-control"
+                  }`}
                 />
+                <FieldError id="sql-to-question-structure-input-error" message={structureError} />
               </div>
               {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button type="button" size="lg" loading={sqlGenerationLoading} disabled={actionBusy || !structureText.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()} icon={ArrowRightLeft}>
+                <Button type="button" size="lg" loading={sqlGenerationLoading} disabled={actionBusy || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()} icon={ArrowRightLeft}>
                   {t("sqlToQuestion.actions.regenerateSql")}
                 </Button>
               </div>

@@ -1090,6 +1090,16 @@ function BusinessViewEditor({
                             disabled={locked}
                             onChange={(value) => updateQuery({ docrag_rerank_enabled: value })}
                           />
+                          <QueryToggleRow
+                            label={t("businessViews.field.docragScreenLinking")}
+                            description={t("businessViews.field.docragScreenLinkingHelper")}
+                            descriptionId="business-view-docrag-screen-linking-helper"
+                            value={config.query.docrag_screen_linking_enabled ?? null}
+                            disabled={locked}
+                            onChange={(value) =>
+                              updateQuery({ docrag_screen_linking_enabled: value })
+                            }
+                          />
                         </div>
                       </div>
                     </>
@@ -1349,20 +1359,31 @@ function QuerySelectRow<T extends string>({
 /** 検索オプションの三値行(グローバル継承 / ON / OFF)。null は継承。 */
 function QueryToggleRow({
   label,
+  description,
+  descriptionId,
   value,
   disabled,
   onChange,
 }: {
   label: string;
+  /** 行の下に出す説明(費用・向く質問など)。選択肢のグループの説明として読み上げる。 */
+  description?: string;
+  descriptionId?: string;
   value: boolean | null;
   disabled: boolean;
   onChange: (value: boolean | null) => void;
 }) {
+  const describedBy = description ? descriptionId : undefined;
   return (
     // 広い画面でも選択肢を名前のすぐ右に並べる（右端へ離さない。1920px で名前と選択肢の対応が追えるように。#555）。
     <div className="grid items-center gap-2 sm:grid-cols-[minmax(10rem,16rem)_auto] sm:justify-start">
       <span className="text-sm text-fg">{label}</span>
-      <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
+      <div
+        className="flex flex-wrap gap-1"
+        role="group"
+        aria-label={label}
+        aria-describedby={describedBy}
+      >
         <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
           {t("businessViews.inherit")}
         </ToggleChip>
@@ -1373,6 +1394,11 @@ function QueryToggleRow({
           OFF
         </ToggleChip>
       </div>
+      {description ? (
+        <p id={describedBy} className="text-xs text-fg-muted sm:col-span-2">
+          {description}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -23,6 +23,7 @@ export type WorkspaceField =
   | "search.sectionTitle"
   | "search.sectionPath"
   | "search.classification"
+  | "search.extractionFields"
   | "search.topK"
   | "search.rerankTopN"
   | "search.advancedOpen"

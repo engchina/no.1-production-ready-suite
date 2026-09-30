@@ -45,6 +45,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { KnowledgeBaseEditor } from "./KnowledgeBaseEditor";
+import { KnowledgeBaseExtractionFields } from "./KnowledgeBaseExtractionFields";
 import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
@@ -55,7 +56,7 @@ const CANDIDATE_LIMIT = 100;
 /**
  * ナレッジベース詳細ページ（`/knowledge-bases/:id`）。業務ビューのエディタと同じ構成にする（#555）:
  * PageHeader（パンくず・状態・件数・一覧へ戻る・保存する）→ 基本情報（名前・説明）→ 所属文書
- * → 検索テスト → 関係情報 → 構築フロー（文書の追加 → 確認 → 構築設定の順）。
+ * → 検索テスト → 関係情報 → 抽出する項目 → 構築フロー（文書の追加 → 確認 → 構築設定の順）。
  */
 export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const detail = useKnowledgeBase(knowledgeBaseId);
@@ -128,6 +129,10 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 
       {/* 関係情報(GraphRAG)の俯瞰。展開時のみ subgraph を取得。 */}
       <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
+
+      {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。処理の流れ（文書の追加 → 確認 →
+          構築設定）の構築設定として、構築フローの直前に置く(#555)。 */}
+      <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
       {/* 3 層モデル: 文書の処理レシピ(分割/parser)は文書側の責務。KB はスコープのみで、
           構築の既定パイプライン図だけ参考表示する(per-KB 取込上書き UI は撤去)。 */}

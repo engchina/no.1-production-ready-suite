@@ -5,12 +5,14 @@ membership 由来導出、save_index の chunk_set スコープ、抽出 artifac
 未到達なら oracle_db fixture が skip し、作成行は cleanup_to_baseline で後始末する。
 """
 
+import json
 from uuid import uuid4
 
 import pytest
 
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
+from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY
 from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
 from app.schemas.document import DocumentProcessingConfig
 from app.schemas.extraction import StructuredExtraction
@@ -175,6 +177,47 @@ async def test_save_index_chunk_set_scope_keeps_other_chunk_sets() -> None:
         document_id, extraction, _chunks("A", 1), [_EMBEDDING], chunk_set_id=cs_a
     )
     assert await _stored_chunk_count(client, document_id) == 4
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_first_page_context_is_saved_once_per_chunk_set_and_read_back() -> None:
+    """1 ページ目の本文は chunk set に 1 つ保存し、回答のときに chunk set ごとに読める(#557)。
+
+    取込は chunk を保存してから chunk set の行を作るので、保存で行を作り、後の upsert / mark が
+    状態を書く。保存済み chunk を再利用する索引(値なし)で消さない。chunk の行には入れない。
+    """
+    client = OracleClient()
+    document_id = await _new_document(client)
+    extraction = StructuredExtraction(raw_text="本文", confidence=0.9)
+    cs = _unique_id("cs_first_page")
+    first_page = {
+        "page": 1,
+        "status": "available",
+        "text": "受注管理規程 第3版 営業本部",
+        "engine": "docling",
+        "record_ids": ["docling-p1-1"],
+        "truncated": False,
+    }
+    chunks = _chunks("P", 2)
+    chunks[0].metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY] = json.dumps(first_page, ensure_ascii=False)
+
+    await client.save_chunk_preview(document_id, extraction, chunks, chunk_set_id=cs)
+    await client.upsert_chunk_set(chunk_set_id=cs, document_id=document_id, status="CHUNKED")
+    await client.mark_chunk_set_chunked(chunk_set_id=cs, chunk_count=2)
+
+    chunk_set = await client.get_chunk_set(cs)
+    assert chunk_set is not None and chunk_set["status"] == "CHUNKED"
+    assert await client.chunk_set_first_page_contexts([cs, _unique_id("cs_missing")]) == {
+        cs: first_page
+    }
+    views = await client.list_chunk_set_chunks(cs)
+    assert len(views) == 2
+    assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in view.metadata for view in views)
+
+    await client.save_index(
+        document_id, extraction, _chunks("P", 2), [_EMBEDDING] * 2, chunk_set_id=cs
+    )
+    assert await client.chunk_set_first_page_contexts([cs]) == {cs: first_page}
 
 
 @pytest.mark.usefixtures("oracle_db")
