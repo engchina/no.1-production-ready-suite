@@ -6600,6 +6600,36 @@ test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内
   await page.screenshot({ path: testInfo.outputPath("related-object-types.png"), fullPage: true });
 });
 
+test("DeepSec 未選択へ戻す: 任意の選択欄は先頭の「未選択」で空の値に戻せる（#647）", async ({ page }) => {
+  await mockRefreshableRelatedMetadata(page);
+  const related = await openReviewedRelatedCondition(page);
+  // 関連テーブル条件の「列」（ScopeFilterRow の「列を選択」）: マウスで「未選択」を選ぶ。
+  const column = related.getByLabel("列", { exact: true });
+  await expectSelectFieldValue(column, "LOCATION");
+  expect((await selectFieldOptionLabels(column))[0]).toBe("未選択");
+  await chooseSelectFieldOption(column, "");
+  await expect(column).toHaveText("列を選択");
+  // 選び直せる（未選択は一時的な状態）。
+  await chooseSelectFieldOption(column, "LOCATION");
+  await expect(column).toHaveText("LOCATION · VARCHAR2");
+  // 関連テーブルの列: キーボード（↓ で開き Home で先頭の「未選択」、Enter で選ぶ）でも戻せる。
+  const targetKey = related.getByLabel("関連テーブルの列");
+  await expectSelectFieldValue(targetKey, "CODE");
+  await targetKey.focus();
+  await targetKey.press("ArrowDown");
+  await expect(targetKey).toHaveAttribute("aria-expanded", "true");
+  await targetKey.press("Home");
+  await targetKey.press("Enter");
+  await expect(targetKey).toHaveAttribute("aria-expanded", "false");
+  await expectSelectFieldValue(targetKey, "");
+  await expect(targetKey).toHaveText("選択してください");
+  await expect(targetKey).toBeFocused();
+  // 空の値を取らない選択欄（値の種類など）には「未選択」を出さない。
+  const valueSource = page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類");
+  expect(await selectFieldOptionLabels(valueSource)).not.toContain("未選択");
+  await expectNoPageHorizontalScroll(page);
+});
+
 async function openReviewedRelatedCondition(page: Page) {
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();

@@ -22,6 +22,7 @@ const nl2sqlJa = {
   "security.deepsec.entitlements.expression.addKey": "関連キーを追加",
   "security.deepsec.entitlements.expression.removeKey": "関連キーを削除",
   "security.deepsec.entitlements.expression.select": "選択してください",
+  "security.deepsec.entitlements.expression.unselected": "未選択",
   "security.deepsec.entitlements.expression.unavailable": "現在は利用できません",
   "security.deepsec.entitlements.expression.noProfiles": "この対象を含む有効な Profile がありません。",
   "security.deepsec.entitlements.expression.stale": "Profile または対象が変更されました。関連条件を再選択してください。",

@@ -55,6 +55,11 @@ export interface SearchableSelectFieldProps {
   remote?: SearchableSelectRemote;
   helper?: string;
   error?: string;
+  /**
+   * 欄の外にある説明の要素の id（空白区切りで複数可。#647）。`helper`・`error` の id と合わせて
+   * ボタンの `aria-describedby` に渡す（SelectField の `describedBy` と同じ）。
+   */
+  describedBy?: string;
   required?: boolean;
   requiredLabel?: string;
   /** 何も選んでいないときのボタンの文言。 */
@@ -95,6 +100,7 @@ export function SearchableSelectField({
   remote,
   helper,
   error,
+  describedBy: externalDescribedBy,
   required,
   requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
@@ -153,7 +159,8 @@ export function SearchableSelectField({
   const countText = remote
     ? labels.count(options.length, remote.total)
     : labels.count(visible.length, options.length);
-  const describedBy = [helper ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
+  const describedBy =
+    [helper ? hintId : "", error ? errorId : "", externalDescribedBy ?? ""].filter(Boolean).join(" ") || undefined;
 
   useEffect(() => {
     if (!open) return undefined;

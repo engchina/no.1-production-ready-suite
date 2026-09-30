@@ -35,7 +35,21 @@ interface SelectFieldProps<T extends string> {
   required?: boolean;
   /** 必須バッジの文言。既定「必須」。条件付きの必須だけ上書きする。 */
   requiredLabel?: string;
+  /** 未選択（値が空）のときのボタンの文言。 */
   placeholder?: string;
+  /**
+   * 任意の欄で未選択へ戻す選択肢のラベル（翻訳済み。例:「未選択」。#647）。渡すと一覧の先頭に空の値（`""`）の
+   * 選択肢を出し、選ぶと `onValueChange("")` を呼ぶ（ネイティブの select の `<option value="">` と同じ）。
+   * 未選択のあいだ、ボタンは `placeholder`（無ければこのラベル）を出す。`required` の欄では出さない
+   * （必須の欄を未選択へ戻す操作は要らない）。`options` に空の値が既にあるときも足さない。
+   * 値の型 `T` が `""` を含むときだけ渡せる。
+   */
+  emptyOptionLabel?: "" extends T ? string : never;
+  /**
+   * 欄の外にある説明の要素の id（空白区切りで複数可。#647）。`helper`・`error` の id と合わせて
+   * ボタンの `aria-describedby` に渡す（TextField の `aria-describedby` と同じ）。
+   */
+  describedBy?: string;
   /**
    * 無効にする（#631）。ボタンはネイティブの disabled（Tab で止まらない・押せない・typeahead も効かない）で、
    * 地と文字は TextField の disabled と同じ --color-surface-disabled / --color-fg-disabled。開いているときに無効になったら閉じる。
@@ -160,6 +174,8 @@ export function SelectField<T extends string>({
   required,
   requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
+  emptyOptionLabel,
+  describedBy: externalDescribedBy,
   disabled = false,
   labelHidden = false,
   "data-testid": testId,
@@ -194,15 +210,26 @@ export function SelectField<T extends string>({
     triggerRef: buttonRef,
   });
 
-  const selectedIndex = useMemo(
-    () => options.findIndex((option) => option.value === value),
-    [options, value]
+  // 任意の欄の「未選択」の選択肢（#647）。一覧の先頭に置き、キー操作・typeahead も他の選択肢と同じに扱う。
+  const hasEmptyOption =
+    Boolean(emptyOptionLabel) && !required && !options.some((option) => option.value === "");
+  const allOptions = useMemo<readonly SelectFieldOption<T>[]>(
+    () =>
+      hasEmptyOption ? [{ value: "" as T, label: emptyOptionLabel as string }, ...options] : options,
+    [hasEmptyOption, emptyOptionLabel, options]
   );
-  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : null;
+  const selectedIndex = useMemo(
+    () => allOptions.findIndex((option) => option.value === value),
+    [allOptions, value]
+  );
+  // 「未選択」の選択肢を選んでいるときは、ボタンには placeholder を出す（選択肢のラベルではない）。
+  const selectedOption =
+    selectedIndex >= 0 && !(hasEmptyOption && selectedIndex === 0) ? allOptions[selectedIndex] : null;
   const activeIndex = highlightedIndex >= 0 ? highlightedIndex : selectedIndex;
   const describedBy = [
     helper ? hintId : "",
     error ? errorId : "",
+    externalDescribedBy ?? "",
   ].filter(Boolean).join(" ") || undefined;
 
   useEffect(() => {
@@ -250,6 +277,7 @@ export function SelectField<T extends string>({
   }
 
   function openList(nextIndex = selectedIndex >= 0 ? selectedIndex : 0) {
+    // 値の選択肢が無いあいだ（候補の取得中など）は、「未選択」だけの一覧を開かない。
     if (disabled || options.length === 0) return;
     highlight(nextIndex);
     setPortalContainer(selectPortalContainer(buttonRef.current));
@@ -272,7 +300,7 @@ export function SelectField<T extends string>({
     clearTimeout(typeaheadState.timer);
     const query = typeaheadState.query + char;
     const match = findTypeaheadIndex(
-      options.map((option) => option.label),
+      allOptions.map((option) => option.label),
       query,
       typeaheadStartIndex(query, activeIndex)
     );
@@ -294,16 +322,16 @@ export function SelectField<T extends string>({
   }
 
   function moveHighlight(delta: number) {
-    if (options.length === 0) return;
+    if (allOptions.length === 0) return;
     const base = activeIndex >= 0 ? activeIndex : 0;
-    const next = (base + delta + options.length) % options.length;
+    const next = (base + delta + allOptions.length) % allOptions.length;
     highlight(next);
   }
 
   function moveHighlightBy(delta: number) {
-    if (options.length === 0) return;
+    if (allOptions.length === 0) return;
     const base = activeIndex >= 0 ? activeIndex : 0;
-    highlight(Math.min(options.length - 1, Math.max(0, base + delta)));
+    highlight(Math.min(allOptions.length - 1, Math.max(0, base + delta)));
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -321,7 +349,7 @@ export function SelectField<T extends string>({
       case "ArrowUp":
         event.preventDefault();
         if (!open) {
-          openList(selectedIndex >= 0 ? selectedIndex : options.length - 1);
+          openList(selectedIndex >= 0 ? selectedIndex : allOptions.length - 1);
         } else {
           moveHighlight(-1);
         }
@@ -335,7 +363,7 @@ export function SelectField<T extends string>({
       case "End":
         if (open) {
           event.preventDefault();
-          highlight(options.length - 1);
+          highlight(allOptions.length - 1);
         }
         break;
       case "PageUp":
@@ -358,7 +386,7 @@ export function SelectField<T extends string>({
           return;
         }
         if (activeIndex >= 0) {
-          selectOption(options[activeIndex]);
+          selectOption(allOptions[activeIndex]);
         }
         break;
       case "Escape":
@@ -408,9 +436,11 @@ export function SelectField<T extends string>({
             // Portal でも React のイベントは祖先（表の行など）へ伝わるため、選択のクリックはここで止める。
             onClick={(event) => event.stopPropagation()}
           >
-            {options.map((option, index) => {
+            {allOptions.map((option, index) => {
               const selected = option.value === value;
               const highlighted = index === activeIndex;
+              // 「未選択」の選択肢は、値の選択肢と区別できるよう文字を控えめの色にする（選択中・強調中は他と同じ）。
+              const emptyChoice = hasEmptyOption && index === 0;
               return (
                 <li
                   key={option.value}
@@ -429,7 +459,9 @@ export function SelectField<T extends string>({
                     "flex min-h-10 cursor-pointer items-center gap-2 rounded px-2.5 py-2 text-sm transition-colors",
                     selected
                       ? "bg-accent-muted font-medium text-accent-fg-strong"
-                      : "text-fg",
+                      : emptyChoice
+                        ? "text-fg-muted"
+                        : "text-fg",
                     highlighted && "bg-accent-subtle text-fg",
                     selected && highlighted && "bg-accent-muted text-accent-fg-strong"
                   )}
@@ -498,7 +530,7 @@ export function SelectField<T extends string>({
           )}
         >
           <span className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}>
-            {selectedOption?.label ?? (value || placeholder)}
+            {selectedOption?.label ?? (value || placeholder || emptyOptionLabel || "")}
           </span>
           <ChevronDown
             size={16}
