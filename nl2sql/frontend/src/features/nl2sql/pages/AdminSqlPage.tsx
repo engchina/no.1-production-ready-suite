@@ -10,6 +10,7 @@ import {
   PageBody,
   ActionResultRegion,
   ExecutionConfirmationField,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 
@@ -198,6 +199,7 @@ export function AdminSqlPage() {
   const [sqlText, setSqlText] = useWorkspaceState("sqlText", "");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [confirmation, setConfirmation] = useState("");
+  const [sqlError, setSqlError] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", String(DEFAULT_SQL_ROW_LIMIT));
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
@@ -224,11 +226,12 @@ export function AdminSqlPage() {
   const rowLimit = parseSqlRowLimit(rowLimitInput);
   const rowLimitError =
     !requiresConfirmation && rowLimit === null ? t("queryResults.rowLimit.error") : "";
+  // 管理 SQL の未入力は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。
+  // 取得件数上限と確認語は、欄の直下（説明）に理由を出したうえで押せなくする。
   const canExecute =
-    Boolean(trimmedSql) &&
     !loading &&
-    (requiresConfirmation || rowLimit !== null) &&
-    (!requiresConfirmation || confirmed);
+    (!trimmedSql ||
+      ((requiresConfirmation || rowLimit !== null) && (!requiresConfirmation || confirmed)));
   const canClear = Boolean(
     sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || result || executionRun
   );
@@ -325,6 +328,12 @@ export function AdminSqlPage() {
 
   const execute = async () => {
     if (!canExecute) return;
+    if (!trimmedSql) {
+      setSqlError(t("nl2sql.adminSqlRunner.error.required"));
+      document.getElementById("admin-sql-input")?.focus();
+      return;
+    }
+    setSqlError("");
     const executionRowLimit = requiresConfirmation ? DEFAULT_SQL_ROW_LIMIT : rowLimit;
     if (executionRowLimit === null) return;
     const startedAt = Date.now();
@@ -378,6 +387,7 @@ export function AdminSqlPage() {
 
   const clear = () => {
     setSqlText("");
+    setSqlError("");
     setConfirmation("");
     setResult(null);
     setExecutedRowLimit(null);
@@ -449,14 +459,22 @@ export function AdminSqlPage() {
             <textarea
               id="admin-sql-input"
               value={sqlText}
-              onChange={(event) => setSqlText(event.currentTarget.value)}
+              onChange={(event) => {
+                setSqlText(event.currentTarget.value);
+                setSqlError("");
+              }}
               disabled={loading}
               rows={12}
               required
               aria-required="true"
-              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
+              aria-invalid={sqlError ? "true" : undefined}
+              aria-describedby={sqlError ? "admin-sql-input-error" : undefined}
+              className={`min-h-64 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
+                sqlError ? "border-danger-fg" : "border-border-control"
+              }`}
               placeholder={t("nl2sql.adminSqlRunner.placeholder")}
             />
+            <FieldError id="admin-sql-input-error" message={sqlError} />
           </div>
           <SqlFileInput
             resetSignal={sqlFileResetSignal}

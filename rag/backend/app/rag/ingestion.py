@@ -67,6 +67,11 @@ from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.rag.ingestion_strategy import extraction_strategy_for_source
+from app.rag.layer_fingerprint import (
+    FIELD_SCHEMA_HASH_ARTIFACT_KEY,
+    NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
+    field_schema_hash,
+)
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -1704,7 +1709,7 @@ class IngestionPipeline:
             return parse_extraction_fields(raw, field_defs)
 
         try:
-            return await extract_fields_from_extraction(extraction, schema.fields, _extract)
+            extracted = await extract_fields_from_extraction(extraction, schema.fields, _extract)
         except Exception as exc:
             logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
             raise IngestionUserError(
@@ -1712,6 +1717,15 @@ class IngestionPipeline:
                 "項目抽出設定、field schema、Enterprise AI の応答形式を確認してから"
                 "再実行してください。"
             ) from exc
+        # 実際に使った項目の定義を刻む。レイヤーの記録はこれを指紋にする(#550)。
+        return extracted.model_copy(
+            update={
+                "parser_artifacts": {
+                    **extracted.parser_artifacts,
+                    FIELD_SCHEMA_HASH_ARTIFACT_KEY: field_schema_hash(schema.fields),
+                }
+            }
+        )
 
     async def _attach_vision(
         self,
@@ -1787,7 +1801,9 @@ class IngestionPipeline:
         nodes = build_navigation_tree(extraction)
         if not nodes:
             return extraction
+        parser_artifacts = extraction.parser_artifacts
         if getattr(self._settings, "rag_navigation_summary_enabled", False):
+            max_nodes = int(getattr(self._settings, "rag_navigation_summary_max_nodes", 24))
 
             async def _summarize(text: str) -> str:
                 return await self._vlm.generate(
@@ -1801,7 +1817,7 @@ class IngestionPipeline:
                     nodes,
                     extraction,
                     _summarize,
-                    max_nodes=getattr(self._settings, "rag_navigation_summary_max_nodes", 24),
+                    max_nodes=max_nodes,
                 )
             except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
@@ -1810,11 +1826,16 @@ class IngestionPipeline:
                     "ナビゲーション要約設定と Enterprise AI の応答を確認してから"
                     "再実行してください。"
                 ) from exc
+            # 実際に使った要約の上限数を刻む。レイヤーの記録はこれを指紋にする(#550)。
+            parser_artifacts = {
+                **parser_artifacts,
+                NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY: max_nodes,
+            }
         # summary がある node は検索可能な section_summary element にして、
         # Knowhere の Navigate / progressive disclosure を hybrid retrieval へつなぐ。
         next_order = max((element.order for element in extraction.elements), default=0) + 1
         summary_elements = navigation_summary_elements(nodes, start_order=next_order)
-        updates: dict[str, object] = {"navigation": nodes}
+        updates: dict[str, object] = {"navigation": nodes, "parser_artifacts": parser_artifacts}
         if summary_elements:
             updates["elements"] = [*extraction.elements, *summary_elements]
         return extraction.model_copy(update=updates)

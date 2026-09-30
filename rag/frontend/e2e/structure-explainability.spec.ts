@@ -866,3 +866,21 @@ async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
 }
+
+// #541: 所属先を 0 件にして保存を押すと、選択欄の直下に理由を出す（押せないボタンと FormStatus だけにしない）。
+test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ理由を出す", async ({ page }) => {
+  const state = await mockDocumentDetail(page);
+
+  await page.goto("/documents/doc-1");
+  await page.getByLabel("社内規程 を選択から外す").click();
+  const save = page.getByRole("button", { name: "所属先を保存" });
+  await expect(save).toBeEnabled();
+  await save.click();
+
+  await expect(page.locator("#document-knowledge-base-required-error")).toHaveText(
+    "所属先を 1 件以上選択してください。"
+  );
+  await expect(page.getByRole("combobox", { name: "所属先" })).toHaveAttribute("aria-invalid", "true");
+  expect(state.lastReplacePayload).toBeNull();
+  await expectNoHorizontalOverflow(page);
+});

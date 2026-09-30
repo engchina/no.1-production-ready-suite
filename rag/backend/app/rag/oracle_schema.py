@@ -521,6 +521,16 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_business_views",
             sql=_default_descriptions_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260930_002_artifact_layers_input_fingerprint",
+            table_name="rag_artifact_layers",
+            sql=_artifact_layers_input_fingerprint_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260930_003_chunk_sets_first_page_context",
+            table_name="rag_chunk_sets",
+            sql=_chunk_sets_first_page_context_migration_sql(),
+        ),
     ]
 
 
@@ -1089,6 +1099,28 @@ END;
 """.strip()
 
 
+def _artifact_layers_input_fingerprint_migration_sql() -> str:
+    """rag_artifact_layers に、作ったときの入力の指紋の JSON 列を追加する(冪等。#550)。
+
+    既存の行は NULL のまま(どの定義で作ったか分からない「不明」として、作り直しの警告を出さない)。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND column_name = 'INPUT_FINGERPRINT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_artifact_layers ADD (input_fingerprint JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
 def _query_history_migration_sql() -> str:
     """質問履歴の保存表と業務ビュー別の新しい順 index を追加する(冪等)。"""
     return """
@@ -1452,6 +1484,29 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (classification JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _chunk_sets_first_page_context_migration_sql() -> str:
+    """rag_chunk_sets に文書の 1 ページ目の本文の JSON 列を追加する(冪等。#557)。
+
+    回答の「文書の背景」に使う。chunk ごとに複製せず、解析の結果(chunk set)ごとに 1 つ持つ。
+    既存の chunk set は NULL のまま(再索引で作られる)。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS'
+      AND column_name = 'FIRST_PAGE_CONTEXT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (first_page_context JSON)';
     END IF;
 END;
 /

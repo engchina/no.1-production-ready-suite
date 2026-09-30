@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
+  FieldError,
   FieldLabel,
   FormStatus,
   ProcessingIndicator,
@@ -27,6 +28,7 @@ import {
 import { PagedDataTable } from "@/components/PagedDataTable";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
 import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
 
 const IMPORT_MODE_OPTIONS: SelectFieldOption<ApprovedFaqImportMode>[] = [
@@ -64,6 +66,7 @@ export function ApprovedFaqManager({
   );
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [addErrors, setAddErrors] = useState<{ question?: string | null; answer?: string | null }>({});
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState<ApprovedFaqImportMode>("INSERT");
   const [preview, setPreview] = useState<ApprovedFaqImportPreviewData | null>(
@@ -184,8 +187,12 @@ export function ApprovedFaqManager({
             id="approved-faq-question"
             label={t("businessViews.faq.question")}
             value={question}
-            onChange={(event) => setQuestion(event.target.value)}
+            onChange={(event) => {
+              setQuestion(event.target.value);
+              setAddErrors((current) => ({ ...current, question: null }));
+            }}
             maxLength={1000}
+            error={addErrors.question ?? undefined}
             required
           />
           <div>
@@ -197,19 +204,40 @@ export function ApprovedFaqManager({
             <textarea
               id="approved-faq-answer"
               aria-required="true"
+              aria-invalid={addErrors.answer ? true : undefined}
+              aria-describedby={addErrors.answer ? "approved-faq-answer-error" : undefined}
               value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
+              onChange={(event) => {
+                setAnswer(event.target.value);
+                setAddErrors((current) => ({ ...current, answer: null }));
+              }}
               rows={4}
               maxLength={20000}
-              className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring"
+              className={`mt-1 w-full rounded-md border bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring ${
+                addErrors.answer ? "border-danger-fg" : "border-border-control"
+              }`}
             />
+            <FieldError id="approved-faq-answer-error" message={addErrors.answer} className="mt-1" />
           </div>
+          {/* 追加のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出す（#541）。文言は backend と同じ。 */}
           <Button
             size="sm"
             icon={Plus}
             loading={add.isPending}
-            disabled={!question.trim() || !answer.trim()}
-            onClick={() =>
+            onClick={() => {
+              const nextErrors = {
+                question: requiredTextError(question, t("businessViews.faq.error.questionRequired")),
+                answer: requiredTextError(answer, t("businessViews.faq.error.answerRequired")),
+              };
+              setAddErrors(nextErrors);
+              if (
+                focusFirstInvalidField([
+                  ["approved-faq-question", nextErrors.question],
+                  ["approved-faq-answer", nextErrors.answer],
+                ])
+              ) {
+                return;
+              }
               add.mutate(
                 { question: question.trim(), answer: answer.trim() },
                 {
@@ -223,8 +251,8 @@ export function ApprovedFaqManager({
                       errorMessage(error, t("businessViews.faq.saveError")),
                     ),
                 },
-              )
-            }
+              );
+            }}
           >
             {t("businessViews.faq.add")}
           </Button>

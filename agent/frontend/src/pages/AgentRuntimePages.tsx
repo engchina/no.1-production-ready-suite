@@ -109,6 +109,13 @@ import {
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import { useEditorRoute } from "@/lib/editor-route";
+import {
+  focusFirstInvalidField,
+  numberFieldError,
+  parseJsonField,
+  requiredSelectError,
+  requiredTextError,
+} from "@/lib/field-validation";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { securityApi } from "@/lib/security-api";
@@ -979,7 +986,9 @@ function RuntimeCardsSkeleton() {
   );
 }
 
-const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
+const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
+/** 外部 MCP のタイムアウト秒の上限（backend の `_MCP_TIMEOUT_MAX_SECONDS` と同じ）。 */
+const MCP_TIMEOUT_MAX_SECONDS = 600;
 
 export function RunsPage() {
   const queryClient = useQueryClient();
@@ -1029,6 +1038,7 @@ export function RunsPage() {
   const [agentId, setAgentId] = useState("default");
   const [bindingId, setBindingId] = useState("");
   const [bindingError, setBindingError] = useState<string | null>(null);
+  const [goalError, setGoalError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useWorkspaceState(
     "runs",
     "selectedRunId",
@@ -1086,10 +1096,13 @@ export function RunsPage() {
   }
 
   function submitRun() {
-    setBindingError(null);
-    if (!resolvedBindingId) {
-      setBindingError(t("run.bindingRequired"));
-      focusField("run-binding");
+    // ゴールは backend（RunCreateRequest）でも必須（#540）。未入力は欄の下に出し、画面の並び順で最初の欄へ移す。
+    const nextGoalError = goal.trim() ? null : t("run.goalRequired");
+    const nextBindingError = resolvedBindingId ? null : t("run.bindingRequired");
+    setGoalError(nextGoalError);
+    setBindingError(nextBindingError);
+    if (nextGoalError || nextBindingError) {
+      focusField(nextGoalError ? "run-goal" : "run-binding");
       return;
     }
     createRun.mutate({
@@ -1180,7 +1193,7 @@ export function RunsPage() {
                         id="run-agent"
                         value={selectedAgentId}
                         onChange={(event) => onAgentChange(event.target.value)}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         {runnableAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
@@ -1189,12 +1202,18 @@ export function RunsPage() {
                         ))}
                       </select>
                     </Field>
-                    <Field label={t("run.form.goal")} htmlFor="run-goal">
+                    <Field label={t("run.form.goal")} htmlFor="run-goal" required error={goalError}>
                       <textarea
                         id="run-goal"
                         value={goal}
-                        onChange={(event) => setGoal(event.target.value)}
-                        className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        aria-required="true"
+                        aria-invalid={goalError ? true : undefined}
+                        aria-describedby={goalError ? fieldErrorId("run-goal") : undefined}
+                        onChange={(event) => {
+                          setGoal(event.target.value);
+                          setGoalError(null);
+                        }}
+                        className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       />
                     </Field>
                     {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
@@ -1214,7 +1233,7 @@ export function RunsPage() {
                           setBindingId(event.target.value);
                           setBindingError(null);
                         }}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         <option value="">
                           {defaultBinding
@@ -1625,7 +1644,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setFilter("toolName", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1640,7 +1659,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setFilter("stepStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1655,7 +1674,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setFilter("approvalStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1682,7 +1701,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1697,7 +1716,7 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setFilter("limit", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
             </div>
@@ -1987,7 +2006,7 @@ export function MemoryPage() {
   const [kind, setKind] = useState<MemoryKind>("user_preference");
   const [content, setContent] = useState("");
   const [metadataText, setMetadataText] = useState("{}");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const memory = useQuery({
@@ -2002,7 +2021,7 @@ export function MemoryPage() {
       toast.success(t("memory.added"));
       setContent("");
       setMetadataText("{}");
-      setFormError(null);
+      setMetadataError(null);
       void queryClient.invalidateQueries({ queryKey: ["memory"] });
     },
   });
@@ -2010,19 +2029,24 @@ export function MemoryPage() {
   useEditorLeaveGuard(content.trim() !== "" || metadataText.trim() !== "{}", addMemory.isPending);
 
   function submitMemory() {
-    setFormError(null);
-    setContentError(null);
-    if (!content.trim()) {
-      setContentError(t("memory.contentRequired"));
-      focusField("memory-content");
+    const nextContentError = content.trim() ? null : t("memory.contentRequired");
+    // メタデータは任意（空は {}）。形式のエラーは欄の直下に出す（#541）。
+    const metadata = parseJsonField<Record<string, unknown>>(metadataText, t("memory.metadata"), {
+      expect: "object",
+    });
+    const nextMetadataError = metadata.ok ? null : metadata.error;
+    setContentError(nextContentError);
+    setMetadataError(nextMetadataError);
+    if (
+      focusFirstInvalidField([
+        ["memory-content", nextContentError],
+        ["memory-metadata", nextMetadataError],
+      ]) ||
+      !metadata.ok
+    ) {
       return;
     }
-    try {
-      const metadata = JSON.parse(metadataText || "{}") as Record<string, unknown>;
-      addMemory.mutate({ kind, content, metadata });
-    } catch {
-      setFormError(t("memory.metadataInvalid"));
-    }
+    addMemory.mutate({ kind, content, metadata: metadata.value ?? {} });
   }
 
   const entries = memory.data?.entries ?? [];
@@ -2064,7 +2088,7 @@ export function MemoryPage() {
                       id="memory-kind"
                       value={kind}
                       onChange={(event) => setKind(event.target.value as MemoryKind)}
-                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="user_preference">{t("memory.kind.userPreference")}</option>
                       <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -2083,21 +2107,25 @@ export function MemoryPage() {
                         setContent(event.target.value);
                         setContentError(null);
                       }}
-                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     />
                   </Field>
                 </div>
                 <div className="min-w-0 space-y-4">
-                  <Field label={t("memory.metadata")} htmlFor="memory-metadata">
+                  <Field label={t("memory.metadata")} htmlFor="memory-metadata" error={metadataError}>
                     <textarea
                       id="memory-metadata"
                       value={metadataText}
-                      onChange={(event) => setMetadataText(event.target.value)}
-                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      aria-invalid={metadataError ? true : undefined}
+                      aria-describedby={metadataError ? fieldErrorId("memory-metadata") : undefined}
+                      onChange={(event) => {
+                        setMetadataText(event.target.value);
+                        setMetadataError(null);
+                      }}
+                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       spellCheck={false}
                     />
                   </Field>
-                  {formError ? <Banner severity="danger">{formError}</Banner> : null}
                   {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
                   <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
                     {t("memory.create")}
@@ -2206,6 +2234,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const [defaultLimit, setDefaultLimit] = useState("100");
   const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ timeout?: string | null; defaultLimit?: string | null }>({});
 
   // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す。
   const serverChanged = useValuesChanged([settings.data]);
@@ -2232,6 +2261,27 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
 
   function save() {
     const submitted = draft;
+    // 空の数値を 0 として送らない。規則は backend（ProductMcpSettingsPatch）と同じ（#540 / #541）。
+    const nextErrors = {
+      timeout: numberFieldError(timeoutSeconds, {
+        label: t("settings.timeout"),
+        min: 0,
+        exclusiveMin: true,
+        max: MCP_TIMEOUT_MAX_SECONDS,
+      }),
+      defaultLimit: isNl2Sql
+        ? numberFieldError(defaultLimit, { label: t("settings.defaultLimit"), integer: true, min: 1, max: 1000 })
+        : null,
+    };
+    setFieldErrors(nextErrors);
+    if (
+      focusFirstInvalidField([
+        [`${kind}-timeout`, nextErrors.timeout],
+        ["nl2sql-default-limit", nextErrors.defaultLimit],
+      ])
+    ) {
+      return;
+    }
     mutation.mutate(
       {
         mcp_url: mcpUrl.trim(),
@@ -2274,20 +2324,30 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                     {t("settings.productMcp.urlHint")}
                   </p>
                 </Field>
-                {/* 空欄は 0 として送られ、backend（ProductMcpSettingsPatch の gt=0）が拒否するため必須。 */}
-                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`} required>
+                {/* 空欄を 0 として送らない。backend（ProductMcpSettingsPatch）も 0 以下を拒否する（#540）。 */}
+                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`} required error={fieldErrors.timeout}>
                   <input
                     id={`${kind}-timeout`}
                     type="number"
                     min="1"
                     aria-required="true"
+                    aria-invalid={fieldErrors.timeout ? true : undefined}
+                    aria-describedby={fieldErrors.timeout ? fieldErrorId(`${kind}-timeout`) : undefined}
                     value={timeoutSeconds}
-                    onChange={(event) => setTimeoutSeconds(event.target.value)}
+                    onChange={(event) => {
+                      setTimeoutSeconds(event.target.value);
+                      setFieldErrors((current) => ({ ...current, timeout: null }));
+                    }}
                     className={INPUT_CLASS}
                   />
                 </Field>
                 {isNl2Sql ? (
-                  <Field label={t("settings.defaultLimit")} htmlFor="nl2sql-default-limit" required>
+                  <Field
+                    label={t("settings.defaultLimit")}
+                    htmlFor="nl2sql-default-limit"
+                    required
+                    error={fieldErrors.defaultLimit}
+                  >
                     <input
                       id="nl2sql-default-limit"
                       type="number"
@@ -2295,8 +2355,16 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                       min="1"
                       max="1000"
                       value={defaultLimit}
-                      onChange={(event) => setDefaultLimit(event.target.value)}
-                      aria-describedby="nl2sql-default-limit-hint"
+                      aria-invalid={fieldErrors.defaultLimit ? true : undefined}
+                      onChange={(event) => {
+                        setDefaultLimit(event.target.value);
+                        setFieldErrors((current) => ({ ...current, defaultLimit: null }));
+                      }}
+                      aria-describedby={
+                        fieldErrors.defaultLimit
+                          ? `nl2sql-default-limit-hint ${fieldErrorId("nl2sql-default-limit")}`
+                          : "nl2sql-default-limit-hint"
+                      }
                       className={INPUT_CLASS}
                     />
                     <p id="nl2sql-default-limit-hint" className="mt-1 text-xs leading-5 text-fg-muted">
@@ -2412,7 +2480,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -2420,7 +2488,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Button
@@ -2560,9 +2628,9 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
 }
 
 const INPUT_CLASS =
-  "h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+  "h-10 w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 const TEXTAREA_CLASS =
-  "w-full rounded-md border border-border bg-surface-sunken p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+  "w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
@@ -2781,6 +2849,7 @@ function McpServerEditor({
   const [form, setForm] = useState<McpServerFormState>(() => mcpFormOf(server));
   const [formBaseline, setFormBaseline] = useState<McpServerFormState>(() => mcpFormOf(server));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const editingId = server?.server_id ?? null;
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
@@ -2820,10 +2889,23 @@ function McpServerEditor({
   }
 
   function save() {
-    setServerIdError(null);
-    if (!editingId && !form.serverId.trim()) {
-      setServerIdError(t("settings.mcpServers.idRequired"));
-      focusField("mcp-server-id");
+    const nextServerIdError =
+      !editingId && !form.serverId.trim() ? t("settings.mcpServers.idRequired") : null;
+    // 空のタイムアウトを 0 として保存しない。規則は backend（ExternalMcpServerCreate / Patch）と同じ（#540）。
+    const nextTimeoutError = numberFieldError(form.timeoutSeconds, {
+      label: t("settings.timeout"),
+      min: 0,
+      exclusiveMin: true,
+      max: MCP_TIMEOUT_MAX_SECONDS,
+    });
+    setServerIdError(nextServerIdError);
+    setTimeoutError(nextTimeoutError);
+    if (
+      focusFirstInvalidField([
+        ["mcp-server-id", nextServerIdError],
+        ["mcp-server-timeout", nextTimeoutError],
+      ])
+    ) {
       return;
     }
     saveMutation.mutate(form);
@@ -2932,13 +3014,19 @@ function McpServerEditor({
                     className={INPUT_CLASS}
                   />
                 </Field>
-                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
+                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout" required error={timeoutError}>
                   <input
                     id="mcp-server-timeout"
                     type="number"
                     min="1"
+                    aria-required="true"
+                    aria-invalid={timeoutError ? true : undefined}
+                    aria-describedby={timeoutError ? fieldErrorId("mcp-server-timeout") : undefined}
                     value={form.timeoutSeconds}
-                    onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
+                    onChange={(event) => {
+                      setForm({ ...form, timeoutSeconds: event.target.value });
+                      setTimeoutError(null);
+                    }}
                     className={INPUT_CLASS}
                   />
                 </Field>
@@ -3268,6 +3356,13 @@ export function SkillsPage() {
  * Skill の全画面エディタ（A 型。`?id=new` / `?id=<skill id>`）。
  * 実行時に追加した Skill だけを編集でき、ビルトイン / ファイル / env の Skill は読み取り専用の詳細を出す。
  */
+type SkillFieldErrors = {
+  id?: string;
+  name?: string;
+  mcpRequirements?: string;
+  resourceIds?: string;
+};
+
 function SkillEditor({
   skill,
   actions,
@@ -3284,8 +3379,7 @@ function SkillEditor({
 }) {
   const [form, setForm] = useState<SkillFormState>(() => skillFormOf(skill));
   const [formBaseline, setFormBaseline] = useState<SkillFormState>(() => skillFormOf(skill));
-  const [formError, setFormError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<{ id?: string; name?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<SkillFieldErrors>({});
   const editingId = skill?.id ?? null;
   const editable = !readOnly && (!skill || skill.source === "runtime");
 
@@ -3325,32 +3419,31 @@ function SkillEditor({
   }
 
   function save() {
-    setFormError(null);
-    // 未入力は欄の下に出し、画面の並び順で最初のエラーの欄へフォーカスする（#531）。
-    const errors: { id?: string; name?: string } = {};
-    if (!editingId && !form.id.trim()) {
-      errors.id = t("skills.idRequired");
-    }
-    if (!form.name.trim()) {
-      errors.name = t("skills.nameRequired");
-    }
+    // 未入力・JSON の形式のエラーは欄の下に出し、画面の並び順で最初のエラーの欄へフォーカスする（#531 / #541）。
+    const mcpRequirements = parseJsonField(form.mcpRequirementsJson, t("skills.mcpRequirements"), {
+      required: true,
+      expect: "array",
+    });
+    const resourceIds = parseJsonField(form.resourceIdsJson, t("skills.resourceIds"), {
+      required: true,
+      expect: "array",
+    });
+    const errors: SkillFieldErrors = {
+      id: !editingId && !form.id.trim() ? t("skills.idRequired") : undefined,
+      name: form.name.trim() ? undefined : t("skills.nameRequired"),
+      mcpRequirements: mcpRequirements.ok ? undefined : mcpRequirements.error,
+      resourceIds: resourceIds.ok ? undefined : resourceIds.error,
+    };
     setFieldErrors(errors);
-    if (errors.id || errors.name) {
-      focusField(errors.id ? "skill-id" : "skill-name");
+    if (
+      focusFirstInvalidField([
+        ["skill-id", errors.id],
+        ["skill-name", errors.name],
+        ["skill-mcp-requirements", errors.mcpRequirements],
+        ["skill-resource-ids", errors.resourceIds],
+      ])
+    ) {
       return;
-    }
-    for (const json of [form.mcpRequirementsJson, form.resourceIdsJson]) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(json);
-      } catch {
-        setFormError(t("skills.invalidJson"));
-        return;
-      }
-      if (!Array.isArray(parsed)) {
-        setFormError(t("skills.invalidJson"));
-        return;
-      }
     }
     saveMutation.mutate(form);
   }
@@ -3408,7 +3501,6 @@ function SkillEditor({
           <SkillReadOnlyDetail skill={skill} />
         ) : (
           <>
-            {formError ? <Banner severity="danger">{formError}</Banner> : null}
             {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
@@ -3483,24 +3575,52 @@ function SkillEditor({
             <Section title={t("skills.dependencies")}>
               <Card className="min-w-0">
                 <CardContent className="space-y-4 pt-5">
-                  <Field label={t("skills.mcpRequirements")} htmlFor="skill-mcp-requirements">
+                  <Field
+                    label={t("skills.mcpRequirements")}
+                    htmlFor="skill-mcp-requirements"
+                    required
+                    error={fieldErrors.mcpRequirements}
+                  >
                     <textarea
                       id="skill-mcp-requirements"
                       value={form.mcpRequirementsJson}
                       rows={8}
                       spellCheck={false}
-                      onChange={(event) => setForm({ ...form, mcpRequirementsJson: event.target.value })}
+                      aria-required="true"
+                      aria-invalid={fieldErrors.mcpRequirements ? true : undefined}
+                      aria-describedby={
+                        fieldErrors.mcpRequirements
+                          ? `skill-mcp-requirements-hint ${fieldErrorId("skill-mcp-requirements")}`
+                          : "skill-mcp-requirements-hint"
+                      }
+                      onChange={(event) => {
+                        setForm({ ...form, mcpRequirementsJson: event.target.value });
+                        setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
+                      }}
                       className={`${TEXTAREA_CLASS} font-mono`}
                     />
-                    <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.mcpRequirementsHint")}</p>
+                    <p id="skill-mcp-requirements-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                      {t("skills.mcpRequirementsHint")}
+                    </p>
                   </Field>
-                  <Field label={t("skills.resourceIds")} htmlFor="skill-resource-ids">
+                  <Field
+                    label={t("skills.resourceIds")}
+                    htmlFor="skill-resource-ids"
+                    required
+                    error={fieldErrors.resourceIds}
+                  >
                     <textarea
                       id="skill-resource-ids"
                       value={form.resourceIdsJson}
                       rows={4}
                       spellCheck={false}
-                      onChange={(event) => setForm({ ...form, resourceIdsJson: event.target.value })}
+                      aria-required="true"
+                      aria-invalid={fieldErrors.resourceIds ? true : undefined}
+                      aria-describedby={fieldErrors.resourceIds ? fieldErrorId("skill-resource-ids") : undefined}
+                      onChange={(event) => {
+                        setForm({ ...form, resourceIdsJson: event.target.value });
+                        setFieldErrors((current) => ({ ...current, resourceIds: undefined }));
+                      }}
                       className={`${TEXTAREA_CLASS} font-mono`}
                     />
                   </Field>
@@ -3765,7 +3885,6 @@ function PluginInstallEditor({
   onInstalled: (pluginId: string) => Promise<void>;
 }) {
   const [manifestJson, setManifestJson] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const installMutation = useMutation({
     mutationFn: (manifest: PluginManifest) => agentApi.installPlugin({ manifest }),
@@ -3782,25 +3901,18 @@ function PluginInstallEditor({
   }
 
   function install() {
-    setFormError(null);
-    setManifestError(null);
-    if (!manifestJson.trim()) {
-      setManifestError(t("plugins.manifestRequired"));
+    // 未入力・JSON の形式のエラーは、どちらも manifest の欄の直下に出す（#541）。
+    const manifest = parseJsonField<PluginManifest>(manifestJson, t("plugins.manifest"), {
+      required: true,
+      expect: "object",
+    });
+    if (!manifest.ok || !manifest.value) {
+      setManifestError(manifest.ok ? t("plugins.manifestRequired") : manifest.error);
       focusField("plugin-manifest");
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(manifestJson);
-    } catch {
-      setFormError(t("plugins.invalidJson"));
-      return;
-    }
-    if (typeof parsed !== "object" || parsed === null) {
-      setFormError(t("plugins.invalidJson"));
-      return;
-    }
-    installMutation.mutate(parsed as PluginManifest);
+    setManifestError(null);
+    installMutation.mutate(manifest.value);
   }
 
   const title = t("plugins.installTitle");
@@ -3825,7 +3937,6 @@ function PluginInstallEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {formError ? <Banner severity="danger">{formError}</Banner> : null}
         {installMutation.error ? <Banner severity="danger">{(installMutation.error as Error).message}</Banner> : null}
         {installMutation.isPending ? (
           // manifest の検証と Skill / MCP の登録を行うため数秒かかる。スピナーはヘッダーの install ボタンが担う。
@@ -4552,6 +4663,25 @@ interface CommandPolicyDraft {
   artifactStoragePath: string;
 }
 
+type CommandPolicyField = "workspaceRoot" | "outputLimit" | "defaultTimeout" | "maxTimeout" | "artifactStoragePath";
+type CommandPolicyFieldErrors = Partial<Record<CommandPolicyField, string | null>>;
+
+/** 画面の並び順（送信に失敗したら最初のエラーの欄へフォーカスする）。 */
+const COMMAND_POLICY_FIELD_ORDER: readonly CommandPolicyField[] = [
+  "workspaceRoot",
+  "outputLimit",
+  "defaultTimeout",
+  "maxTimeout",
+  "artifactStoragePath",
+];
+const COMMAND_POLICY_FIELD_IDS: Record<CommandPolicyField, string> = {
+  workspaceRoot: "command-policy-workspace-root",
+  outputLimit: "command-policy-output-limit",
+  defaultTimeout: "command-policy-default-timeout",
+  maxTimeout: "command-policy-max-timeout",
+  artifactStoragePath: "command-policy-artifact-path",
+};
+
 export function CommandPolicySettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({
@@ -4573,8 +4703,15 @@ export function CommandPolicySettingsPage() {
   const [outputLimit, setOutputLimit] = useState("20000");
   const [artifactStorageBackend, setArtifactStorageBackend] = useState<"inline" | "filesystem">("inline");
   const [artifactStoragePath, setArtifactStoragePath] = useState(".agent-artifacts");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<CommandPolicyFieldErrors>({});
   const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
+  const clearFieldError = (field: CommandPolicyField) =>
+    setFieldErrors((current) => (current[field] ? { ...current, [field]: null } : current));
+  /** 欄の aria-invalid / aria-describedby（エラーは Field が欄の直下に出す）。 */
+  const invalidProps = (field: CommandPolicyField) =>
+    fieldErrors[field]
+      ? { "aria-invalid": true, "aria-describedby": fieldErrorId(COMMAND_POLICY_FIELD_IDS[field]) }
+      : {};
 
   // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
   const serverChanged = useValuesChanged([settings.data]);
@@ -4598,7 +4735,7 @@ export function CommandPolicySettingsPage() {
       artifactStorageBackend: current.artifact_storage_backend,
       artifactStoragePath: current.artifact_storage_path,
     });
-    setFormError(null);
+    setFieldErrors({});
   }
 
   // prefix は集合として比べる（順序・重複・空行の違いは変更に数えない）。#87
@@ -4615,25 +4752,40 @@ export function CommandPolicySettingsPage() {
   useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
+    // 欄ごとに検証し、エラーは欄の直下に出す（#541）。規則と文言は backend（_validate_command_policy_patch）と同じ。
+    const nextErrors: CommandPolicyFieldErrors = {
+      workspaceRoot: requiredTextError(workspaceRoot, t("settings.commandPolicy.workspaceRoot")),
+      outputLimit: numberFieldError(outputLimit, {
+        label: t("settings.commandPolicy.outputLimit"),
+        integer: true,
+        min: 1,
+      }),
+      defaultTimeout: numberFieldError(defaultTimeout, {
+        label: t("settings.commandPolicy.defaultTimeout"),
+        min: 0,
+        exclusiveMin: true,
+      }),
+      maxTimeout: numberFieldError(maxTimeout, {
+        label: t("settings.commandPolicy.maxTimeout"),
+        min: 0,
+        exclusiveMin: true,
+      }),
+      artifactStoragePath: requiredTextError(artifactStoragePath, t("settings.commandPolicy.artifactPath")),
+    };
+    if (!nextErrors.defaultTimeout && !nextErrors.maxTimeout && Number(defaultTimeout) > Number(maxTimeout)) {
+      nextErrors.defaultTimeout = t("settings.commandPolicy.timeoutOrderInvalid");
+    }
+    setFieldErrors(nextErrors);
+    if (
+      focusFirstInvalidField(
+        COMMAND_POLICY_FIELD_ORDER.map((field) => [COMMAND_POLICY_FIELD_IDS[field], nextErrors[field]] as const)
+      )
+    ) {
+      return;
+    }
     const parsedDefaultTimeout = Number(defaultTimeout);
     const parsedMaxTimeout = Number(maxTimeout);
     const parsedOutputLimit = Number(outputLimit);
-    if (
-      !Number.isFinite(parsedDefaultTimeout) ||
-      !Number.isFinite(parsedMaxTimeout) ||
-      !Number.isInteger(parsedOutputLimit) ||
-      parsedDefaultTimeout <= 0 ||
-      parsedMaxTimeout <= 0 ||
-      parsedOutputLimit <= 0
-    ) {
-      setFormError(t("settings.commandPolicy.invalidNumber"));
-      return;
-    }
-    if (parsedDefaultTimeout > parsedMaxTimeout) {
-      setFormError(t("settings.commandPolicy.timeoutOrderInvalid"));
-      return;
-    }
-    setFormError(null);
     const submitted = draft;
     mutation.mutate(
       {
@@ -4686,48 +4838,86 @@ export function CommandPolicySettingsPage() {
               </label>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label={t("settings.commandPolicy.workspaceRoot")} htmlFor="command-policy-workspace-root" required>
+                <Field
+                  label={t("settings.commandPolicy.workspaceRoot")}
+                  htmlFor="command-policy-workspace-root"
+                  required
+                  error={fieldErrors.workspaceRoot}
+                >
                   <input
                     id="command-policy-workspace-root"
                     aria-required="true"
+                    {...invalidProps("workspaceRoot")}
                     value={workspaceRoot}
-                    onChange={(event) => setWorkspaceRoot(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setWorkspaceRoot(event.target.value);
+                      clearFieldError("workspaceRoot");
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit" required>
+                <Field
+                  label={t("settings.commandPolicy.outputLimit")}
+                  htmlFor="command-policy-output-limit"
+                  required
+                  error={fieldErrors.outputLimit}
+                >
                   <input
                     id="command-policy-output-limit"
                     aria-required="true"
+                    {...invalidProps("outputLimit")}
                     type="number"
                     min="1"
                     value={outputLimit}
-                    onChange={(event) => setOutputLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setOutputLimit(event.target.value);
+                      clearFieldError("outputLimit");
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout" required>
+                <Field
+                  label={t("settings.commandPolicy.defaultTimeout")}
+                  htmlFor="command-policy-default-timeout"
+                  required
+                  error={fieldErrors.defaultTimeout}
+                >
                   <input
                     id="command-policy-default-timeout"
                     aria-required="true"
+                    {...invalidProps("defaultTimeout")}
                     type="number"
                     min="0.1"
                     step="0.1"
                     value={defaultTimeout}
-                    onChange={(event) => setDefaultTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setDefaultTimeout(event.target.value);
+                      clearFieldError("defaultTimeout");
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout" required>
+                <Field
+                  label={t("settings.commandPolicy.maxTimeout")}
+                  htmlFor="command-policy-max-timeout"
+                  required
+                  error={fieldErrors.maxTimeout}
+                >
                   <input
                     id="command-policy-max-timeout"
                     aria-required="true"
+                    {...invalidProps("maxTimeout")}
                     type="number"
                     min="0.1"
                     step="0.1"
                     value={maxTimeout}
-                    onChange={(event) => setMaxTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setMaxTimeout(event.target.value);
+                      clearFieldError("maxTimeout");
+                      // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
+                      clearFieldError("defaultTimeout");
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -4738,7 +4928,7 @@ export function CommandPolicySettingsPage() {
                   value={allowedPrefixes}
                   onChange={(event) => setAllowedPrefixes(event.target.value)}
                   rows={5}
-                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
               </Field>
@@ -4749,25 +4939,33 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
                   </select>
                   <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.storageHint")}</p>
                 </Field>
-                <Field label={t("settings.commandPolicy.artifactPath")} htmlFor="command-policy-artifact-path" required>
+                <Field
+                  label={t("settings.commandPolicy.artifactPath")}
+                  htmlFor="command-policy-artifact-path"
+                  required
+                  error={fieldErrors.artifactStoragePath}
+                >
                   <input
                     id="command-policy-artifact-path"
                     aria-required="true"
+                    {...invalidProps("artifactStoragePath")}
                     value={artifactStoragePath}
-                    onChange={(event) => setArtifactStoragePath(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setArtifactStoragePath(event.target.value);
+                      clearFieldError("artifactStoragePath");
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
 
-              {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
@@ -4885,7 +5083,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -4933,7 +5131,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -4977,7 +5175,10 @@ export function RuntimeSafetySettingsPage() {
   });
   const [maxToolCalls, setMaxToolCalls] = useState("20");
   const [maxPendingApprovals, setMaxPendingApprovals] = useState("5");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{
+    maxToolCalls?: string | null;
+    maxPendingApprovals?: string | null;
+  }>({});
   const [baseline, setBaseline] = useState<{ maxToolCalls: string; maxPendingApprovals: string } | null>(null);
 
   // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
@@ -4990,30 +5191,40 @@ export function RuntimeSafetySettingsPage() {
       maxToolCalls: String(current.max_tool_calls_per_run),
       maxPendingApprovals: String(current.max_pending_approvals_per_run),
     });
-    setFormError(null);
+    setFieldErrors({});
   }
 
   const draft = { maxToolCalls, maxPendingApprovals };
   useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
-    const parsedMaxToolCalls = Number(maxToolCalls);
-    const parsedMaxPendingApprovals = Number(maxPendingApprovals);
+    // 0 は「許可しない」という正当な値なので、空を 0 として保存しない（空は未入力のエラー。#540）。
+    const nextErrors = {
+      maxToolCalls: numberFieldError(maxToolCalls, {
+        label: t("settings.runtimeSafety.maxToolCalls"),
+        integer: true,
+        min: 0,
+      }),
+      maxPendingApprovals: numberFieldError(maxPendingApprovals, {
+        label: t("settings.runtimeSafety.maxPendingApprovals"),
+        integer: true,
+        min: 0,
+      }),
+    };
+    setFieldErrors(nextErrors);
     if (
-      !Number.isInteger(parsedMaxToolCalls) ||
-      !Number.isInteger(parsedMaxPendingApprovals) ||
-      parsedMaxToolCalls < 0 ||
-      parsedMaxPendingApprovals < 0
+      focusFirstInvalidField([
+        ["runtime-safety-max-tool-calls", nextErrors.maxToolCalls],
+        ["runtime-safety-max-pending-approvals", nextErrors.maxPendingApprovals],
+      ])
     ) {
-      setFormError("0 以上の整数を入力してください。");
       return;
     }
-    setFormError(null);
     const submitted = draft;
     mutation.mutate(
       {
-        max_tool_calls_per_run: parsedMaxToolCalls,
-        max_pending_approvals_per_run: parsedMaxPendingApprovals,
+        max_tool_calls_per_run: Number(maxToolCalls),
+        max_pending_approvals_per_run: Number(maxPendingApprovals),
       },
       { onSuccess: () => setBaseline(submitted) }
     );
@@ -5033,31 +5244,55 @@ export function RuntimeSafetySettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                <Field label={t("settings.runtimeSafety.maxToolCalls")} htmlFor="runtime-safety-max-tool-calls">
+                <Field
+                  label={t("settings.runtimeSafety.maxToolCalls")}
+                  htmlFor="runtime-safety-max-tool-calls"
+                  required
+                  error={fieldErrors.maxToolCalls}
+                >
                   <input
                     id="runtime-safety-max-tool-calls"
                     type="number"
                     min="0"
+                    aria-required="true"
+                    aria-invalid={fieldErrors.maxToolCalls ? true : undefined}
+                    aria-describedby={
+                      fieldErrors.maxToolCalls ? fieldErrorId("runtime-safety-max-tool-calls") : undefined
+                    }
                     value={maxToolCalls}
-                    onChange={(event) => setMaxToolCalls(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setMaxToolCalls(event.target.value);
+                      setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field
                   label={t("settings.runtimeSafety.maxPendingApprovals")}
                   htmlFor="runtime-safety-max-pending-approvals"
+                  required
+                  error={fieldErrors.maxPendingApprovals}
                 >
                   <input
                     id="runtime-safety-max-pending-approvals"
                     type="number"
                     min="0"
+                    aria-required="true"
+                    aria-invalid={fieldErrors.maxPendingApprovals ? true : undefined}
+                    aria-describedby={
+                      fieldErrors.maxPendingApprovals
+                        ? fieldErrorId("runtime-safety-max-pending-approvals")
+                        : undefined
+                    }
                     value={maxPendingApprovals}
-                    onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onChange={(event) => {
+                      setMaxPendingApprovals(event.target.value);
+                      setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
-              {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
@@ -5104,7 +5339,6 @@ export function RuntimeSnapshotSettingsPage() {
   const [importText, setImportText] = useState("");
   const [reason, setReason] = useState("");
   const [confirmText, setConfirmText] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<RuntimeSnapshotImportResult | null>(null);
   // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
@@ -5117,26 +5351,23 @@ export function RuntimeSnapshotSettingsPage() {
   }
 
   function parseImportSnapshot(): RuntimeSnapshot | null {
-    setFormError(null);
-    setImportError(null);
-    if (!importText.trim()) {
-      setImportError(t("settings.snapshot.importJsonRequired"));
+    // 未入力・JSON の形式のエラーは、どちらもインポート JSON の欄の直下に出す（#541）。
+    const parsed = parseJsonField<RuntimeSnapshot>(importText, t("settings.snapshot.importJson"), {
+      required: true,
+      expect: "object",
+    });
+    if (!parsed.ok || !parsed.value) {
+      setImportError(parsed.ok ? t("settings.snapshot.importJsonRequired") : parsed.error);
       focusField("runtime-snapshot-import");
       return null;
     }
-    try {
-      const parsed = JSON.parse(importText) as RuntimeSnapshot;
-      return parsed;
-    } catch {
-      setFormError(t("settings.snapshot.invalidJson"));
-      return null;
-    }
+    setImportError(null);
+    return parsed.value;
   }
 
   function copyCurrentSnapshotToImport() {
     setImportText(exportText);
     setValidationResult(null);
-    setFormError(null);
     setImportError(null);
   }
 
@@ -5172,8 +5403,8 @@ export function RuntimeSnapshotSettingsPage() {
     if (!parsed) {
       return;
     }
+    // 確認語が一致するまで置換のボタンは押せず、理由は確認語の欄の説明（helper）が示す。
     if (confirmText !== SNAPSHOT_REPLACE_CONFIRMATION) {
-      setFormError(t("settings.snapshot.confirmRequired"));
       return;
     }
     const ok = await confirm({
@@ -5228,7 +5459,7 @@ export function RuntimeSnapshotSettingsPage() {
                   id="runtime-snapshot-export"
                   value={exportText}
                   readOnly
-                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -5267,7 +5498,7 @@ export function RuntimeSnapshotSettingsPage() {
                   setValidationResult(null);
                   setImportError(null);
                 }}
-                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
               />
             </Field>
@@ -5276,7 +5507,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -5314,7 +5545,6 @@ export function RuntimeSnapshotSettingsPage() {
                 </Button>
               }
             />
-            {formError ? <Banner severity="danger">{formError}</Banner> : null}
             {importSnapshot.error ? <Banner severity="danger">{importSnapshot.error.message}</Banner> : null}
           </CardContent>
         </Card>
@@ -5634,7 +5864,7 @@ function AgentEditorView({
                       setName(event.target.value);
                       setNameError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
@@ -5642,7 +5872,7 @@ function AgentEditorView({
                     id={`${fieldId}-agent-description`}
                     value={agentDescription}
                     onChange={(event) => setAgentDescription(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("agent.instructions")} htmlFor={`${fieldId}-agent-instructions`}>
@@ -5650,7 +5880,7 @@ function AgentEditorView({
                     id={`${fieldId}-agent-instructions`}
                     value={instructions}
                     onChange={(event) => setInstructions(event.target.value)}
-                    className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 {!agent ? (
@@ -5732,6 +5962,9 @@ function bindingSyncVariant(status: string): StatusVariant {
 }
 
 /** Agent の実行先（Runtime Binding）。登録済みの行の操作は RowActionMenu にまとめ、削除は確認する。 */
+/** backend の RuntimeBinding の識別子（`_SAFE_ID`）と同じ規則。 */
+const BINDING_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
 function RuntimeBindingsPanel({
   agent,
   bindings,
@@ -5754,6 +5987,8 @@ function RuntimeBindingsPanel({
   const defaultRuntimeId = candidates[0]?.id ?? "";
   const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   const [nativeAgentRef, setNativeAgentRef] = useState(agent.id);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [nativeAgentRefError, setNativeAgentRefError] = useState<string | null>(null);
   // 既定値（先頭の Runtime と Agent ID）から変えた入力を未保存の変更として扱う（#87）。
   const dirty =
     nativeAgentRef !== agent.id || (runtimeId !== "" && runtimeId !== defaultRuntimeId);
@@ -5793,6 +6028,34 @@ function RuntimeBindingsPanel({
   // Runtime が未選択のまま候補が揃ったら、先頭の候補を選ぶ（effect で setState しない。選べば条件が外れる）。
   if (!runtimeId && candidates[0]) {
     setRuntimeId(candidates[0].id);
+  }
+
+  // 追加ボタンを押せなくするだけにせず、押したときに欄の直下へ理由を出す（UX 契約 messaging.md §3.2.1。#541）。
+  function addBinding() {
+    const runtimeFieldId = `${agent.id}-binding-runtime`;
+    const refFieldId = `${agent.id}-binding-native-ref`;
+    const nextRuntimeError = requiredSelectError(runtimeId, t("binding.runtime"));
+    const trimmedRef = nativeAgentRef.trim();
+    const nextRefError =
+      requiredTextError(trimmedRef, t("binding.nativeAgentRef")) ??
+      (BINDING_REF_PATTERN.test(trimmedRef) ? null : t("binding.nativeAgentRefInvalid"));
+    setRuntimeError(nextRuntimeError);
+    setNativeAgentRefError(nextRefError);
+    if (
+      focusFirstInvalidField([
+        [runtimeFieldId, nextRuntimeError],
+        [refFieldId, nextRefError],
+      ])
+    ) {
+      return;
+    }
+    createBinding.mutate({
+      agent_id: agent.id,
+      runtime_id: runtimeId,
+      native_agent_ref: trimmedRef,
+      is_default: !bindings.length,
+      enabled: true,
+    });
   }
 
   async function removeBinding(binding: RuntimeBinding) {
@@ -5913,14 +6176,24 @@ function RuntimeBindingsPanel({
           {readOnly ? null : (
             <>
               <div className="grid gap-3 md:grid-cols-2">
-                {/* Runtime と Runtime 内 Agent ID は RuntimeBinding の必須項目（未入力では追加ボタンを押せない）。 */}
-                <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`} required>
+                {/* Runtime と Runtime 内 Agent ID は RuntimeBinding の必須項目（未入力は追加を押したときに欄の下へ出す）。 */}
+                <Field
+                  label={t("binding.runtime")}
+                  htmlFor={`${agent.id}-binding-runtime`}
+                  required
+                  error={runtimeError}
+                >
                   <select
                     id={`${agent.id}-binding-runtime`}
                     value={runtimeId}
                     aria-required="true"
-                    onChange={(event) => setRuntimeId(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+                    aria-invalid={runtimeError ? true : undefined}
+                    aria-describedby={runtimeError ? fieldErrorId(`${agent.id}-binding-runtime`) : undefined}
+                    onChange={(event) => {
+                      setRuntimeId(event.target.value);
+                      setRuntimeError(null);
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
                   >
                     {candidates.map((runtime) => (
                       <option key={runtime.id} value={runtime.id}>
@@ -5929,13 +6202,25 @@ function RuntimeBindingsPanel({
                     ))}
                   </select>
                 </Field>
-                <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`} required>
+                <Field
+                  label={t("binding.nativeAgentRef")}
+                  htmlFor={`${agent.id}-binding-native-ref`}
+                  required
+                  error={nativeAgentRefError}
+                >
                   <input
                     id={`${agent.id}-binding-native-ref`}
                     value={nativeAgentRef}
                     aria-required="true"
-                    onChange={(event) => setNativeAgentRef(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+                    aria-invalid={nativeAgentRefError ? true : undefined}
+                    aria-describedby={
+                      nativeAgentRefError ? fieldErrorId(`${agent.id}-binding-native-ref`) : undefined
+                    }
+                    onChange={(event) => {
+                      setNativeAgentRef(event.target.value);
+                      setNativeAgentRefError(null);
+                    }}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
                   />
                 </Field>
               </div>
@@ -5943,16 +6228,7 @@ function RuntimeBindingsPanel({
               <Button
                 variant="secondary"
                 loading={createBinding.isPending}
-                disabled={!runtimeId || !nativeAgentRef.trim()}
-                onClick={() =>
-                  createBinding.mutate({
-                    agent_id: agent.id,
-                    runtime_id: runtimeId,
-                    native_agent_ref: nativeAgentRef.trim(),
-                    is_default: !bindings.length,
-                    enabled: true,
-                  })
-                }
+                onClick={addBinding}
                 icon={Plus}
               >
                 {t("binding.add")}

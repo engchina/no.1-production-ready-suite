@@ -9,6 +9,8 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
   profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
   metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
+  文書の 1 ページ目の本文(chunk set ごとに 1 つ)も ``document.first_page_context`` に載せ、
+  回答の「文書の背景」に使う(#557)。
   質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
   照合して docrag へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
 - 画面目録の連携(``RAG_DOCRAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
@@ -109,6 +111,9 @@ class _SearchState:
     loaded_classification_ids: set[str] = field(default_factory=set)
     # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
+    # 文書の 1 ページ目の本文(rag_chunk_sets.first_page_context)を chunk_set_id ごとに持つ(#557)。
+    first_page_contexts: dict[str, dict[str, object]] = field(default_factory=dict)
+    loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
 
 
 def build_docrag_settings(
@@ -343,12 +348,14 @@ class DocragAnswerEngine:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
+        await self._load_first_page_contexts([*anchors, *siblings], state)
         classifications = state.classifications
         children = [
             _stored_child(
                 chunk,
                 rrf_score=fused.get(chunk.chunk_id, 0.0),
                 classification=classifications.get(chunk.document_id),
+                first_page_context=_first_page_context(chunk, state),
             )
             for chunk in anchors
         ]
@@ -357,7 +364,10 @@ class DocragAnswerEngine:
             all_children.setdefault(
                 sibling.chunk_id,
                 _stored_child(
-                    sibling, rrf_score=0.0, classification=classifications.get(sibling.document_id)
+                    sibling,
+                    rrf_score=0.0,
+                    classification=classifications.get(sibling.document_id),
+                    first_page_context=_first_page_context(sibling, state),
                 ),
             )
         parents = _stored_parents(list(all_children.values()), state)
@@ -499,6 +509,17 @@ class DocragAnswerEngine:
             return
         state.classifications.update(await self._oracle.document_classifications(missing))
         state.loaded_classification_ids.update(missing)
+
+    async def _load_first_page_contexts(
+        self, chunks: Sequence[RetrievedChunk], state: _SearchState
+    ) -> None:
+        """まだ読んでいない chunk set の 1 ページ目の本文を、まとめて 1 回で読む(#557)。"""
+        chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
+        missing = sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
+        if not missing:
+            return
+        state.first_page_contexts.update(await self._oracle.chunk_set_first_page_contexts(missing))
+        state.loaded_first_page_chunk_set_ids.update(missing)
 
     async def _materialize_image_evidence(self, chunk: RetrievedChunk, state: _SearchState) -> None:
         """根拠 chunk の image_evidence を作業ディレクトリへ切り出し、crop_path を差し替える。
@@ -702,18 +723,26 @@ def _inquiry_channel_rankings(
     return channels
 
 
+def _first_page_context(chunk: RetrievedChunk, state: _SearchState) -> Mapping[str, object] | None:
+    return state.first_page_contexts.get(str(chunk.metadata.get("chunk_set_id") or ""))
+
+
 def _stored_child(
     chunk: RetrievedChunk,
     *,
     rrf_score: float,
     classification: Mapping[str, object] | None = None,
+    first_page_context: Mapping[str, object] | None = None,
 ) -> Any:
     """backend の chunk を docrag の子 chunk にする。
 
     ``classification`` は文書の分類(rag_documents.classification)。docrag は
     ``metadata["document"]["classification"]`` で業務の候補を絞る
     (``_same_business_records``。#545)。
-    分類は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    ``first_page_context`` は chunk set の文書の 1 ページ目の本文。docrag は
+    ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
+    chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
+    分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
     """
     from docrag.models.storage import StoredChunk
 
@@ -726,6 +755,11 @@ def _stored_child(
             **(document if isinstance(document, dict) else {}),
             "classification": dict(classification),
         }
+    if first_page_context:
+        document = metadata.get("document")
+        document = document if isinstance(document, dict) else {}
+        if "first_page_context" not in document:
+            metadata["document"] = {**document, "first_page_context": dict(first_page_context)}
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,

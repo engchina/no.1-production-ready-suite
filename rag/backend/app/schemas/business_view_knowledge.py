@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from app.schemas.common import JsonValue
 
@@ -51,8 +51,18 @@ class ApprovedFaqListData(BaseModel):
 
 
 class ApprovedFaqAddRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=1000)
-    answer: str = Field(min_length=1, max_length=20000)
+    # 空・空白だけは画面の欄の下と同じ文言で拒否する（#541）。前後の空白は画面と同じく除く。
+    question: str = Field(max_length=1000)
+    answer: str = Field(max_length=20000)
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _require_text(cls, value: str, info: ValidationInfo) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            label = "質問" if info.field_name == "question" else "回答"
+            raise ValueError(f"{label}を入力してください。")
+        return cleaned
 
 
 class ApprovedFaqDeleteRequest(BaseModel):

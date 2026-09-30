@@ -61,6 +61,8 @@ class FakeOracle:
         ]
         self.classifications: dict[str, dict[str, object]] = {}
         self.classification_calls: list[list[str]] = []
+        self.first_page_contexts: dict[str, dict[str, object]] = {}
+        self.first_page_calls: list[list[str]] = []
         self.probes: list[dict[str, str]] = []
         # 検索範囲の文書に保存済みの大分類(#553)。
         self.large_categories: list[str] = []
@@ -83,6 +85,16 @@ class FakeOracle:
             document_id: self.classifications[document_id]
             for document_id in document_ids
             if document_id in self.classifications
+        }
+
+    async def chunk_set_first_page_contexts(
+        self, chunk_set_ids: list[str]
+    ) -> dict[str, dict[str, object]]:
+        self.first_page_calls.append(list(chunk_set_ids))
+        return {
+            chunk_set_id: self.first_page_contexts[chunk_set_id]
+            for chunk_set_id in chunk_set_ids
+            if chunk_set_id in self.first_page_contexts
         }
 
     async def hybrid_search(
@@ -1150,6 +1162,157 @@ async def test_docrag_search_puts_document_classification_on_child_and_parent() 
     # 分類は検索用テキスト(埋め込み・全文検索の入力)には入れない。
     child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-a:c1")
     assert "業務A" not in child.retrieval_text
+
+
+FIRST_PAGE_TEXT = "受注管理規程 第3版 営業本部 2025年4月1日"
+
+
+def _first_page_context(text: str = FIRST_PAGE_TEXT) -> dict[str, object]:
+    return {
+        "page": 1,
+        "status": "available",
+        "text": text,
+        "engine": "docling",
+        "record_ids": ["docling-p1-1"],
+        "truncated": False,
+    }
+
+
+def _chunk_in_chunk_set(chunk: RetrievedChunk, *, page: int = 2) -> RetrievedChunk:
+    return chunk.model_copy(
+        update={
+            "metadata": {
+                **chunk.metadata,
+                "chunk_set_id": "cs-1",
+                "page_start": page,
+                "page_end": page,
+            }
+        }
+    )
+
+
+class RecordingEmbedGenAi(FakeGenAi):
+    def __init__(self) -> None:
+        self.embedded: list[str] = []
+
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        self.embedded.extend(texts)
+        return await super().embed(texts, input_type=input_type)
+
+
+async def test_docrag_answer_passes_first_page_context_as_document_background(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """chunk set の 1 ページ目の本文を「文書の背景」として回答の LLM に渡す(#557)。
+
+    ヒットした chunk set の分を 1 回の回答で 1 回だけ読み、検索の文には入れない。
+    """
+    import docrag.adapters.oci as docrag_oci
+
+    prompts: list[str] = []
+
+    def recording_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        prompts.append(prompt)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", recording_llm)
+    oracle = FakeOracle()
+    oracle.chunks = [_chunk_in_chunk_set(chunk) for chunk in oracle.chunks]
+    oracle.first_page_contexts = {"cs-1": _first_page_context()}
+    genai = RecordingEmbedGenAi()
+    engine = DocragAnswerEngine(
+        Settings(rag_answer_engine="docrag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in outcome.answer
+    assert oracle.first_page_calls == [["cs-1"]]
+    background = [prompt for prompt in prompts if FIRST_PAGE_TEXT in prompt]
+    assert background
+    assert all("First-page background" in prompt for prompt in background)
+    # 検索の文(embedding・全文検索の入力)には入れない。
+    assert genai.embedded
+    assert all(FIRST_PAGE_TEXT not in text for text in genai.embedded)
+
+
+async def test_docrag_search_puts_first_page_context_on_child_and_parent() -> None:
+    """子・親の chunk の document に first_page_context を載せ、検索用テキストには入れない(#557)。
+
+    #557 より前に保存した chunk(自身が持つ値)は、そちらを使う。
+    """
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = FakeOracle()
+    legacy = _chunk_in_chunk_set(oracle.chunks[1])
+    legacy_metadata = json.loads(str(legacy.metadata["docrag_metadata_json"]))
+    legacy_metadata["document"] = {"first_page_context": _first_page_context("旧い表紙")}
+    oracle.chunks = [
+        _chunk_in_chunk_set(oracle.chunks[0]),
+        legacy.model_copy(
+            update={
+                "metadata": {
+                    **legacy.metadata,
+                    "docrag_metadata_json": json.dumps(legacy_metadata, ensure_ascii=False),
+                }
+            }
+        ),
+    ]
+    oracle.first_page_contexts = {"cs-1": _first_page_context()}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+
+    result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["受注"])
+    await engine._search(SearchRequest(query="q"), state, retrieval_queries=["受注の登録"])
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
+    assert documents["doc-1:c1"] == {"first_page_context": _first_page_context()}
+    assert documents["doc-1:chunk-docling-p000001"] == documents["doc-1:c1"]
+    assert documents["doc-1:c2"] == {"first_page_context": _first_page_context("旧い表紙")}
+    child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-1:c1")
+    assert FIRST_PAGE_TEXT not in child.retrieval_text
+    # CRAG の 2 回目の検索でも、読んだ chunk set は読み直さない。
+    assert oracle.first_page_calls == [["cs-1"]]
+
+
+async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 ページ目の本文はヒットした chunk set の IN で 1 回だけ読む(#557)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [
+            {"chunk_set_id": "cs-a", "first_page_context": json.dumps(_first_page_context())},
+            {"chunk_set_id": "cs-b", "first_page_context": None},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.chunk_set_first_page_contexts([]) == {}
+    assert calls == []
+    result = await client.chunk_set_first_page_contexts(["cs-a", "cs-b", "cs-a"])
+
+    assert result == {"cs-a": _first_page_context()}
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "FROM rag_chunk_sets cs" in statement
+    # 文書の参照範囲(tenant・許可された文書)で絞る。
+    assert "JOIN rag_documents d" in statement
+    chunk_set_binds = [
+        value for key, value in binds.items() if key.startswith("first_page_chunk_set")
+    ]
+    assert chunk_set_binds == ["cs-a", "cs-b"]
 
 
 def _inquiry(question: str, business_names: tuple[str, ...] = ()) -> Any:
