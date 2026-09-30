@@ -26,6 +26,7 @@ import {
   ExecutionConfirmationField,
   FieldLabel,
   FieldLegend,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -2412,16 +2413,16 @@ function SyntheticWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-            <span>{t("dataTools.syntheticData.prompt")}</span>
-            <textarea
-              value={syntheticPrompt}
-              onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
-              rows={5}
-              placeholder={t("dataTools.syntheticData.promptPlaceholder")}
-              className="min-h-40 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
-            />
-          </label>
+          <TextareaField
+            id="data-synthetic-prompt"
+            label={t("dataTools.syntheticData.prompt")}
+            className="min-w-0"
+            value={syntheticPrompt}
+            onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
+            rows={5}
+            placeholder={t("dataTools.syntheticData.promptPlaceholder")}
+            textareaClassName="min-h-40"
+          />
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
             <label className="grid gap-1 text-sm font-medium text-fg">

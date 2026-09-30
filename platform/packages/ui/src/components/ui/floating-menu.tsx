@@ -251,6 +251,16 @@ export function useFloatingMenuPosition({
   return position;
 }
 
+/**
+ * 操作メニューを開くボタン・メニューの読み上げ名（#582）。「その他の操作」だけだと、ページ（PageHeader）と
+ * カード（ObjectActionBar）・フォーム（FormActionBar）のボタンが同じ名前で並び、読み上げ・音声操作で区別できない。
+ * 見えている文言を先頭に置き（WCAG 2.5.3 Label in Name）、括弧で対象（操作のグループの読み上げ名）を足す。
+ */
+export function contextualMenuLabel(label: string, context?: string) {
+  const target = context?.trim();
+  return target ? `${label}（${target}）` : label;
+}
+
 export function FloatingActionMenu({
   align,
   ariaLabel,

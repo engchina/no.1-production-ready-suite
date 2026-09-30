@@ -3507,7 +3507,7 @@ test("ロール編集の下端メニューは viewport 下端では上方向に�
   expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(triggerBox!.y + 1);
 });
 
-test("ロール管理の compact header menu は短い viewport 内に収まる", async ({ page }) => {
+test("ロール管理の compact header は操作が 2 つなら畳まず、短い viewport でも横にはみ出さない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.setViewportSize({ width: 375, height: 360 });
   await page.route("**/api/security/roles?include_archived=true", (route) =>
@@ -3517,17 +3517,16 @@ test("ロール管理の compact header menu は短い viewport 内に収まる"
 
   await page.goto("/settings/security/roles");
   const actions = page.getByTestId("security-roles-actions");
-  // 共有 PageHeader は lg 未満で「その他の操作」+ 主操作（右端）に畳む。
-  const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
-  await expect(actions.getByRole("button")).toHaveText(["その他の操作", "新規作成"]);
-  await moreButton.click();
-
-  const menu = page.getByRole("menu", { name: "その他の操作" });
-  await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
-  await expectFloatingMenuInsideViewport(page, menu);
-  await page.keyboard.press("Escape");
-  await expect(menu).toHaveCount(0);
-  await expect(moreButton).toBeFocused();
+  // 共有 PageHeader は lg 未満で「その他の操作」+ 主操作に畳むが、メニューに入るのが 1 つだけなら
+  // 畳まず両方を出す（1 項目のメニューを開かせない。#582）。
+  await expect(actions.getByRole("button")).toHaveText(["表示を更新", "新規作成"]);
+  await expect(actions.getByTestId("page-actions-more")).toHaveCount(0);
+  const [refreshBox, createBox] = await Promise.all([
+    actions.getByRole("button", { name: "表示を更新" }).boundingBox(),
+    actions.getByRole("button", { name: "新規作成" }).boundingBox(),
+  ]);
+  // 2 つは 1 行に並ぶ（折り返してヘッダーを高くしない）。
+  expect(Math.abs(refreshBox!.y - createBox!.y)).toBeLessThanOrEqual(1);
   await expectNoPageHorizontalScroll(page);
 });
 

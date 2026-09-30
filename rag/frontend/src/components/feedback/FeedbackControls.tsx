@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Button,
   FieldLegend,
+  TextareaField,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import {
@@ -200,42 +201,31 @@ export function FeedbackControls({
               </ToggleChip>
             ))}
           </div>
-          <label className="mt-3 block text-xs font-medium text-fg" htmlFor={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}>
-            {t("feedback.controls.commentLabel")}
-          </label>
-          <textarea
+          <TextareaField
             id={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}
+            label={t("feedback.controls.commentLabel")}
+            className="mt-3"
             value={comment}
             maxLength={1000}
             rows={3}
             disabled={mutation.isPending}
             placeholder={t("feedback.controls.commentPlaceholder")}
-            className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-muted disabled:opacity-50"
+            showCount={(count) => t("feedback.controls.commentCount", { count })}
             onChange={(event) => setComment(event.target.value)}
           />
-          <p className="mt-1 text-right text-xs tabular-nums text-fg-muted">
-            {t("feedback.controls.commentCount", { count: comment.length })}
-          </p>
           {targetType === "answer" ? (
-            <>
-              <label className="mt-1 block text-xs font-medium text-fg" htmlFor={`feedback-corrected-${chunkId ?? "answer"}`}>
-                {t("feedback.controls.correctedAnswerLabel")}
-              </label>
-              <textarea
-                id={`feedback-corrected-${chunkId ?? "answer"}`}
-                value={correctedAnswer}
-                maxLength={20000}
-                rows={3}
-                disabled={mutation.isPending}
-                placeholder={t("feedback.controls.correctedAnswerPlaceholder")}
-                aria-describedby={`feedback-corrected-help-${chunkId ?? "answer"}`}
-                className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-muted disabled:opacity-50"
-                onChange={(event) => setCorrectedAnswer(event.target.value)}
-              />
-              <p id={`feedback-corrected-help-${chunkId ?? "answer"}`} className="mt-1 text-xs text-fg-muted">
-                {t("feedback.controls.correctedAnswerHelp")}
-              </p>
-            </>
+            <TextareaField
+              id={`feedback-corrected-${chunkId ?? "answer"}`}
+              label={t("feedback.controls.correctedAnswerLabel")}
+              className="mt-3"
+              value={correctedAnswer}
+              maxLength={20000}
+              rows={3}
+              disabled={mutation.isPending}
+              placeholder={t("feedback.controls.correctedAnswerPlaceholder")}
+              helper={t("feedback.controls.correctedAnswerHelp")}
+              onChange={(event) => setCorrectedAnswer(event.target.value)}
+            />
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
             <Button

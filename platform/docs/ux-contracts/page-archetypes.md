@@ -14,7 +14,7 @@
 4. 一覧・結果の表は共有 `DataTable` + `Pagination`、詳細の併置は `FixedSplitPane`、確認は `useConfirm`、通知は [messaging.md](./messaging.md) の 6 チャネル。
 5. 文言はすべて i18n 経由。共有パッケージのプリミティブは i18n に依存しない（翻訳済みの文字列・ラベルを props で受ける）。
 6. 一覧の行と詳細パネルの対象オブジェクトの操作は `EntityAction` を 1 つの定義にし、行は `RowActionMenu`、詳細は `ObjectActionBar` で出す（[buttons.md §5.1](./buttons.md#51-オブジェクト操作一覧行--詳細)）。
-7. 一覧 / 詳細の単一選択は、行の操作以外の領域のクリックで選び、選択の状態は行全体の背景と `aria-current` で示す。キーボード向けに先頭セルの対象名のボタン（共有の `RowTitleButton`。選択中は `current` で `aria-current`）を残し、行のメニューには削除・アーカイブなどの実際の操作だけを入れる。
+7. 一覧 / 詳細の単一選択は、行の操作以外の領域のクリックで選び、選択の状態は行全体の背景と `aria-current` で示す。キーボード向けに先頭セルの対象名のボタン（共有の `RowTitleButton`。選択中は `current` で `aria-current`）を残し、行のメニューには削除・アーカイブなどの実際の操作だけを入れる。A 型（一覧 → 全画面エディタ）のように URL で開く対象は、`RowTitleButton` に `href` を渡してリンクにし、新しいタブでも開けるようにする（#583）。
 8. ページの操作は `PageHeader` の右側に置く（[buttons.md §5](./buttons.md#5-ページヘッダー操作)）。
 9. コードブロック・プレビュー・結果などのコンテンツ内の操作は `ContentActionBar` で右上に寄せる。ページ・オブジェクト・行・コンテンツの操作を混ぜない。
 
@@ -27,6 +27,7 @@
 - URL の検索パラメータ（`?id=` など）を**唯一の情報源**とし、`null` = 一覧 / `"new"` = 新規 / `<id>` = 編集。
 - 一覧：共有 `DataTable`（検索 / ソート / `Pagination`）+「新規」ボタン + 必要なら状態バー。
 - エディタ：全幅で `Section` を**縦に積む**。上部に 戻る / 保存（primary）/ 削除（danger）。
+- **保存の失敗**：欄に結び付く失敗は欄の直下、それ以外はヘッダーの直下の `SaveErrorBanner` の 1 か所だけ（Toast・フォームの下の `FormStatus` に重ねない。[messaging.md §3.3.1](./messaging.md#331-全画面のエディタの保存の失敗585)）。
 - **離脱ガード**：未保存のまま離れるときは破棄を確認する（[workspace-state.md](./workspace-state.md#未保存変更の離脱ガード)）。
 - **パンくず**：一覧 › 対象名 を出す。
 - 古いタブ（list / create / import など）は、**一覧上の操作** か **エディタ内の節** に平らにする。破壊的な操作は `useConfirm` に集める。

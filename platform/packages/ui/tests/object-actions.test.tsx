@@ -40,6 +40,8 @@ describe("ObjectActionBar", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('data-testid="obj-more"');
     expect(html).toContain("その他の操作");
+    // 読み上げ名に対象を足し、ページの「その他の操作」と区別する（#582）。
+    expect(html).toContain('aria-label="その他の操作（対象の操作）"');
   });
 
   it("moreLabel で文言を差し替え、操作が無ければ何も描かない", () => {

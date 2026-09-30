@@ -1450,6 +1450,45 @@ export type TextFieldProps = {
 - 候補の一覧の見た目（ポップアップ）はブラウザが描くため、トークンの色・角丸にはなりません（日付選択と同じ）。候補を絞り込む・複数選ぶ・候補に無い値を拒む入力は、この部品ではなく `SelectField` や `SearchableSelectField` / `SearchableMultiSelect`（#578）の型です。
 - テストは `packages/ui/tests/text-field-slots.test.tsx`（datalist との結び付き・`autocomplete`）、実ブラウザは RAG の `e2e/structure-explainability.spec.ts`（文書詳細の分類、desktop / 375px、light / dark）。
 
+
+## TextareaField — 新規（#584）
+
+複数行の入力欄。3 製品が `<textarea>` を手書きしていて、地（`bg-surface` / `bg-surface-sunken`）・角丸（`rounded-md`）・余白・フォーカスの枠線・disabled の見た目（`opacity-50` など）・ラベルと必須とエラーの付け方・文字数の表示が画面ごとに違いました。`TextField` と同じ見た目と API の部品にそろえます。
+
+```tsx
+import { TextareaField } from "@engchina/production-ready-ui";
+
+<TextareaField
+  id="business-view-system-prompt"
+  label={t("businessViews.field.systemPrompt")}
+  helper={t("businessViews.field.systemPromptHelper")}
+  value={prompt}
+  onValueChange={setPrompt}
+  rows={3}
+/>
+
+// 必須・エラー・文字数（上限があれば「12 / 1,000」。関数で翻訳済みの文言にできる）
+<TextareaField id="faq-answer" label={t("faq.answer")} required error={errors.answer} maxLength={20000}
+  showCount={(count) => t("faq.answerCount", { count })} value={answer} onValueChange={setAnswer} />
+
+// SQL・JSON・プロンプトの雛形は等幅。読み取り専用のプレビューは resize="none"
+<TextareaField id="preview" label={title} labelHidden readOnly monospace resize="none" value={json} />
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 枠線・角丸・地・フォーカス・disabled・read-only は `TextField` と同じ class（`fieldControlClass`）。上下の余白は `py-2`、行間は `leading-relaxed` | 1 行の入力欄と並べても同じ部品に見える。read-only は `bg-surface-sunken`（プレビュー）、disabled は `bg-surface-disabled`（`opacity` で薄めない） |
+| 既定 `rows={3}`・縦だけ伸ばせる（`resize-y`）。`resize="none"` で固定 | 横に伸ばすと列の幅を崩す。高さは `rows` か `textareaClassName`（`min-h-*`）で決める |
+| `monospace` は `--font-mono` の 12px | SQL・JSON・プロンプトの雛形を画面ごとに `font-mono text-xs` で書いていた |
+| `surface="code"` は暗いコードの面（`data-surface="code"`）・等幅で、read-only でもコードの地のまま | 生成した SQL などの読み取り専用の表示。`bg-surface-sunken` はコードの面で定義し直されず、明るい地に明るい文字になるため |
+| `showCount` は `maxLength` があれば「現在 / 上限」、無ければ「n 文字」。右下に `tabular-nums` で置き、補足と同じく `aria-describedby` で結ぶ（`aria-live` にしない） | 打鍵ごとに読み上げると入力の邪魔になる。欄に入ったときに上限と一緒に読める |
+| 必須は `required`（`aria-required` と「必須」のタグ）、エラーは `error`（`aria-invalid`・枠線の色・欄の直下の `FieldError`） | `TextField` と同じ（README §4「必須の表示」、UX 契約 messaging.md §3.2.1） |
+| 条件付きの必須は `requiredAnnouncedByControl={false}`（`aria-required` を付けず、`requiredLabel` のタグをラベルの一部として読ませる） | 「「違う」のとき必須」のように常に必須ではない欄で、条件を読み上げに残す（`FieldLabel` の同名の prop と同じ） |
+| 自動で高さを伸ばす機能は持たない | ブラウザの対応（`field-sizing: content`）がそろうまで、`rows` と `resize-y` で足りる |
+
+- adherence の lint が製品の JSX の `<textarea>` を検出します（`design-system/restricted-syntax`）。例外は元の文書の表を再現して編集するグリッドのセルなど、`TextareaField` で表せない所だけで、理由を添えて `eslint-disable-next-line` / `oxlint-disable-next-line` で局所的に除外します。
+- 単体テストは `packages/ui/tests/textarea-field.test.tsx`、lint の規則は RAG の `src/design-system-adherence.test.ts`。
+
 ## Tabs — 変更（#374）
 
 強制カラーモードで、選ばれていないタブの下線を `Canvas`（`forced-colors:border-b-[Canvas]`）、選んだタブの下線を `Highlight`（`forced-colors:aria-selected:border-b-[Highlight]`）にしました。props・id・aria・キー操作は変えていません。
@@ -1920,9 +1959,51 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・業務ビュー、desktop / 375px、ライト / ダーク）。
 - 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、業務ビューの参照 KB、品質評価、文書詳細の所属先、RAG 検索の対象の業務ビュー）。RAG 固有の `MultiSelectCombobox` は削除した。
 
+---
+
+## SaveErrorBanner — **新規**（#585）
+
+ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
+
+```tsx
+<PageBody wide>
+  <SaveErrorBanner
+    message={mutation.isError ? (mutation.error instanceof ApiError ? mutation.error.message : t("…error.save")) : null}
+    attemptKey={mutation.submittedAt}
+    testId="business-view-save-error"
+  />
+  {/* 対象の状態の警告 Banner・本文の節 */}
+</PageBody>
+```
+
+### SaveErrorBanner の props
+
+```ts
+type SaveErrorBannerProps = {
+  /** 失敗の文言（原因 + 次の行動）。空・null なら何も描かない。 */
+  message?: string | null;
+  /** 保存を試みるたびに変わる値（mutation.submittedAt など）。同じ文言の失敗でも画面に入れ直す。 */
+  attemptKey?: string | number;
+  title?: string;
+  testId?: string;
+  className?: string;
+};
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 見た目は danger の `Banner`（アイコン付き・`role="alert"`）。閉じる × は付けない | 状態を色だけで示さない。次の保存まで残し、失敗を消して保存し直したように見せない |
+| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | lg 以上のヘッダーは sticky で、長いフォームを下までスクロールしてから保存すると、本文の先頭の Banner は画面の外にある。中央へ寄せると本文の先頭の Banner はページの先頭まで戻り、sticky のヘッダーに隠れない |
+| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（業務ビューなど）。フォームの下はヘッダーの保存ボタンから遠く、気づけない |
+
+- 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
+- 使う画面: RAG（業務ビュー・ナレッジベースのエディタ）、Agent（Agent・Skill・外部 MCP サーバー・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。
+
+---
+
 ## ListToolbar / ListPicker / LoadMoreFooter — **新規**（#600）
 
-一覧の上のツールバー（検索欄の位置）と、数千〜数万件の候補から一覧で複数を選ぶ部品。数十〜数百件を選択欄で選ぶものは `SearchableSelectField` / `SearchableMultiSelect`（#578）。規則は UX 契約 page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」、見た目の変更は README §7 の 51。
+一覧の上のツールバー（検索欄の位置）と、数千〜数万件の候補から一覧で複数を選ぶ部品。数十〜数百件を選択欄で選ぶものは `SearchableSelectField` / `SearchableMultiSelect`（#578）。規則は UX 契約 page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」、見た目の変更は README §7 の 53。
 
 ```tsx
 import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/production-ready-ui";

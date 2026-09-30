@@ -13,8 +13,8 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FixedSplitPane,
-  FieldError,
   FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -421,40 +421,30 @@ export function SqlToQuestionPage() {
                 </select>
               </div>
 
-              <div className="grid gap-1">
-                <FieldLabel
-                  htmlFor="sql-to-question-sql-input"
-                  label={t("sqlToQuestion.sql.label")}
-                  required
-                />
-                <textarea
-                  id="sql-to-question-sql-input"
-                  value={sql}
-                  onChange={(event) => {
-                    setSql(event.currentTarget.value);
-                    setStructureText("");
-                    setEditingStructure(false);
-                    setStructureItems([]);
-                    setRegenerated(null);
-                    setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
-                    setActionError("");
-                    setSqlError("");
-                    setActivePanel("input");
-                  }}
-                  rows={9}
-                  required
-                  aria-required="true"
-                  aria-invalid={sqlError ? "true" : undefined}
-                  aria-describedby={sqlError ? "sql-to-question-sql-input-error" : undefined}
-                  className={`min-h-56 min-w-0 resize-y rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled ${
-                    sqlError ? "border-danger-fg" : "border-border-control"
-                  }`}
-                  // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
-                  // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
-                  disabled={actionBusy || !selectedProfileId}
-                />
-                <FieldError id="sql-to-question-sql-input-error" message={sqlError} />
-              </div>
+              <TextareaField
+                id="sql-to-question-sql-input"
+                label={t("sqlToQuestion.sql.label")}
+                required
+                error={sqlError || undefined}
+                value={sql}
+                onChange={(event) => {
+                  setSql(event.currentTarget.value);
+                  setStructureText("");
+                  setEditingStructure(false);
+                  setStructureItems([]);
+                  setRegenerated(null);
+                  setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
+                  setActionError("");
+                  setSqlError("");
+                  setActivePanel("input");
+                }}
+                rows={9}
+                monospace
+                textareaClassName="min-h-56 min-w-0"
+                // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
+                // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
+                disabled={actionBusy || !selectedProfileId}
+              />
 
               <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
                 <Button
@@ -520,24 +510,19 @@ export function SqlToQuestionPage() {
           {structureText || reverse || structureItems.length > 0 || regenerated || editingStructure ? (
             <section className="grid min-w-0 gap-4">
               <TextList label={t("sqlToQuestion.result.warnings")} items={reverse?.warnings ?? []} />
-              <div className="grid min-w-0 gap-1">
-                <FieldLabel htmlFor="sql-to-question-structure-input" label={t("sqlToQuestion.structure.editor")} required />
-                <textarea
-                  id="sql-to-question-structure-input"
-                  value={structureText}
-                  onChange={(event) => { setEditingStructure(true); setStructureText(event.currentTarget.value); setStructureItems([]); setSqlGenerationError(""); setStructureError(""); }}
-                  rows={16}
-                  required
-                  aria-required="true"
-                  aria-invalid={structureError ? "true" : undefined}
-                  aria-describedby={structureError ? "sql-to-question-structure-input-error" : undefined}
-                  disabled={actionBusy}
-                  className={`min-h-64 min-w-0 w-full resize-y rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 ${
-                    structureError ? "border-danger-fg" : "border-border-control"
-                  }`}
-                />
-                <FieldError id="sql-to-question-structure-input-error" message={structureError} />
-              </div>
+              <TextareaField
+                id="sql-to-question-structure-input"
+                label={t("sqlToQuestion.structure.editor")}
+                required
+                error={structureError || undefined}
+                className="min-w-0"
+                value={structureText}
+                onChange={(event) => { setEditingStructure(true); setStructureText(event.currentTarget.value); setStructureItems([]); setSqlGenerationError(""); setStructureError(""); }}
+                rows={16}
+                disabled={actionBusy}
+                monospace
+                textareaClassName="min-h-64 min-w-0"
+              />
               {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
                 <Button type="button" size="lg" loading={sqlGenerationLoading} disabled={actionBusy || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()} icon={ArrowRightLeft}>

@@ -4,6 +4,7 @@ import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ConfirmProvider, Toaster, initTheme } from "@engchina/production-ready-ui";
+import { UnsavedChangesBlocker } from "@engchina/production-ready-system-settings";
 
 import { App } from "./App";
 import { AuthProvider } from "@/components/security/AuthProvider";
@@ -30,6 +31,8 @@ const router = createBrowserRouter([
     path: "*",
     element: (
       <>
+        {/* ブラウザの戻る/進むの blocker はアプリで 1 つ。各画面のガードはここへ未保存を登録する（#586）。 */}
+        <UnsavedChangesBlocker />
         <App />
         <Toaster dismissLabel="閉じる" />
       </>

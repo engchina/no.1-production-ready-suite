@@ -25,8 +25,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   ExecutionConfirmationField,
-  FieldError,
-  FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -1000,26 +999,21 @@ export function StatementRunnerCard({
       {executeOnly && header}
       {progressNode}
       {/* SQL が空のままでは実行できない（backend も sql を必須にする）ので必須として示す（#531）。 */}
-      <div className="grid gap-1">
-        <FieldLabel htmlFor={sqlInputId} label={t("dbAdmin.runner.sqlLabel")} required />
-        <textarea
-          id={sqlInputId}
-          aria-required="true"
-          aria-invalid={sqlError ? "true" : undefined}
-          aria-describedby={sqlError ? `${sqlInputId}-error` : undefined}
-          value={sql}
-          onChange={(event) => {
-            setSql(event.currentTarget.value);
-            setSqlError("");
-          }}
-          rows={9}
-          placeholder={placeholder}
-          className={`min-h-52 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
-            sqlError ? "border-danger-fg" : "border-border-control"
-          }`}
-        />
-        <FieldError id={`${sqlInputId}-error`} message={sqlError} />
-      </div>
+      <TextareaField
+        id={sqlInputId}
+        label={t("dbAdmin.runner.sqlLabel")}
+        required
+        error={sqlError || undefined}
+        value={sql}
+        onChange={(event) => {
+          setSql(event.currentTarget.value);
+          setSqlError("");
+        }}
+        rows={9}
+        placeholder={placeholder}
+        monospace
+        textareaClassName="min-h-52"
+      />
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <SqlFileInput
           resetSignal={sqlFileResetSignal}

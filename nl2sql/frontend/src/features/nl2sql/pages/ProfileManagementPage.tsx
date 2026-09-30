@@ -16,6 +16,7 @@ import {
   Banner,
   DataTable,
   EmptyState,
+  FormStatus,
   toast,
   StatusBadge,
   PageHeader,
@@ -39,6 +40,7 @@ import {
   ListPicker,
   type ListPickerGroup,
   type ListPickerItem,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -165,8 +167,6 @@ function emptyProfileForm(): ProfileFormState {
 
 const inputClass =
   "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-focus-ring";
-const textareaClass =
-  "rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring";
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -344,6 +344,7 @@ function ProfileList({
   onSearchChange,
   onSortChange,
   onSelect,
+  profileHref,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -361,6 +362,8 @@ function ProfileList({
   onSearchChange: (value: string) => void;
   onSortChange: (key: ProfileListSortKey) => void;
   onSelect: (profile: ProfileSummary) => void;
+  /** プロファイルの編集画面の URL（名前のリンク。新しいタブで開ける。#583）。 */
+  profileHref: (profile: ProfileSummary) => string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
   loadMoreError: string;
@@ -422,6 +425,7 @@ function ProfileList({
                   subtitle={<span className="line-clamp-2">{profile.category || "-"}</span>}
                   current={profile.id === selectedProfileId}
                   aria-label={t("profiles.action.selectProfile", { name: profile.name })}
+                  href={profileHref(profile)}
                   onClick={() => onSelect(profile)}
                 />
               ),
@@ -603,45 +607,30 @@ function SelectAiConfigFields({
         ))}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="grid content-start gap-1 text-sm font-medium text-fg">
-          <label htmlFor="profile-select-ai-role">{t("profiles.field.role")}</label>
-          <textarea
-            id="profile-select-ai-role"
-            aria-describedby="profile-select-ai-role-hint"
-            value={form.selectAiConfig.role}
-            rows={6}
-            onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
-            className={`${textareaClass} min-h-40`}
-            placeholder={t("profiles.placeholder.role")}
-          />
-          <p id="profile-select-ai-role-hint" className="text-xs font-normal leading-5 text-fg-muted">
-            {t("profiles.field.roleHint")}
-          </p>
-        </div>
-        <div className="grid content-start gap-1 text-sm font-medium text-fg">
-          <label htmlFor="profile-select-ai-additional-instructions">
-            {t("profiles.field.additionalInstructions")}
-          </label>
-          <textarea
-            id="profile-select-ai-additional-instructions"
-            aria-describedby="profile-select-ai-additional-instructions-hint"
-            value={form.selectAiConfig.additional_instructions}
-            rows={6}
-            onChange={(event) =>
-              updateSelectAiConfig(setForm, {
-                additional_instructions: event.currentTarget.value,
-              })
-            }
-            className={`${textareaClass} min-h-40`}
-            placeholder={t("profiles.placeholder.additionalInstructions")}
-          />
-          <p
-            id="profile-select-ai-additional-instructions-hint"
-            className="text-xs font-normal leading-5 text-fg-muted"
-          >
-            {t("profiles.field.additionalInstructionsHint")}
-          </p>
-        </div>
+        <TextareaField
+          id="profile-select-ai-role"
+          label={t("profiles.field.role")}
+          helper={t("profiles.field.roleHint")}
+          value={form.selectAiConfig.role}
+          rows={6}
+          onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
+          textareaClassName="min-h-40"
+          placeholder={t("profiles.placeholder.role")}
+        />
+        <TextareaField
+          id="profile-select-ai-additional-instructions"
+          label={t("profiles.field.additionalInstructions")}
+          helper={t("profiles.field.additionalInstructionsHint")}
+          value={form.selectAiConfig.additional_instructions}
+          rows={6}
+          onChange={(event) =>
+            updateSelectAiConfig(setForm, {
+              additional_instructions: event.currentTarget.value,
+            })
+          }
+          textareaClassName="min-h-40"
+          placeholder={t("profiles.placeholder.additionalInstructions")}
+        />
       </div>
     </section>
   );
@@ -812,6 +801,7 @@ function ProfileEditor({
   canClearOracleExecution,
   oracleSyncJob,
   oracleSyncSubmissionError,
+  saveError,
   retryingOracleSync,
   deleting,
   onObjectFilterChange,
@@ -860,6 +850,8 @@ function ProfileEditor({
   canClearOracleExecution: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
+  /** プロファイルの保存（PATCH / POST）の失敗。保存ボタンの直下だけに出す（messaging.md §3.3.1。#585）。 */
+  saveError: string;
   retryingOracleSync: boolean;
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
@@ -1127,6 +1119,13 @@ function ProfileEditor({
         }
       />
 
+      {/* 保存ボタンはフォームの中（確認語と並ぶ）なので、欄に結び付かない保存の失敗はボタンの直下の
+          FormStatus の 1 か所だけに出す（Toast に重ねない。messaging.md §3.3.1。#585）。 */}
+      {saveError ? (
+        <div data-testid="profile-save-error">
+          <FormStatus tone="danger" message={saveError} />
+        </div>
+      ) : null}
       <ProfileSaveResultRegion
         rebuildAgentAssets={rebuildAgentAssets}
         oracleSyncJob={oracleSyncJob}
@@ -1209,6 +1208,7 @@ export function ProfileManagementPage() {
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
+  const [profileSaveError, setProfileSaveError] = useState("");
   // 完了を通知済みの Oracle 同期 job ID。render 中に比べるため state で持つ。
   const [reportedOracleSyncJobId, setReportedOracleSyncJobId] = useState("");
   // 成功を通知する Oracle 同期 job（通知と再取得は effect で行う）。
@@ -1353,6 +1353,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     setSearchParams({ profile: profile.id });
@@ -1576,6 +1577,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     setSearchParams({ profile: "new" });
@@ -1670,6 +1672,7 @@ export function ProfileManagementPage() {
     setRequiredErrors({});
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     setReportedOracleSyncJobId("");
     mutationBusyRef.current = true;
     setLoading("save");
@@ -1707,7 +1710,9 @@ export function ProfileManagementPage() {
         setLoading("");
         return;
       }
-      toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
+      if (editTargetRef.current === target) {
+        setProfileSaveError(err instanceof Error && err.message ? err.message : t("profiles.error.save"));
+      }
       setLoading("");
       return;
     }
@@ -1865,6 +1870,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     if (syncJobParam) {
@@ -1903,6 +1909,7 @@ export function ProfileManagementPage() {
       canClearOracleExecution={canClearOracleExecution}
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
+      saveError={profileSaveError}
       retryingOracleSync={loading === "retry-oracle-sync"}
       deleting={selectedProfile ? loading === `delete-profile-${selectedProfile.id}` : false}
       onObjectFilterChange={setObjectFilter}
@@ -2075,6 +2082,7 @@ export function ProfileManagementPage() {
                 onSearchChange={setProfileSearch}
                 onSortChange={toggleSort}
                 onSelect={selectProfile}
+                profileHref={(profile) => `${location.pathname}?${new URLSearchParams({ profile: profile.id })}`}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
                 loadMoreError={profileLoadMoreError}

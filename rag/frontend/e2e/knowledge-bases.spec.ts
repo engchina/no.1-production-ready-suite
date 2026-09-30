@@ -836,6 +836,36 @@ test("詳細で名前・説明を変えると離脱を確認し、同じ詳細�
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
 });
 
+// #585: 欄に結び付かない保存の失敗はヘッダーの直下の 1 か所だけ（Toast・フォームの下に重ねない）。
+test("詳細の保存に失敗すると、理由をヘッダーの直下だけに出し、次の保存で消える", async ({ page }) => {
+  const message = "ナレッジベースを更新できませんでした。時間をおいて再試行してください。";
+  const state = createKnowledgeBaseState();
+  await mockKnowledgeBaseApi(page, state);
+  let fail = true;
+  await page.route("**/api/knowledge-bases/kb-1", async (route) => {
+    if (route.request().method() !== "PATCH" || !fail) return route.fallback();
+    await route.fulfill({
+      status: 503,
+      json: { data: null, error_messages: [message], warning_messages: [] },
+    });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const description = page.getByRole("textbox", { name: "説明", exact: true });
+  await description.fill("就業規則と経費精算");
+  await page.getByRole("group", { name: "ページ操作" }).getByRole("button", { name: "保存する" }).click();
+
+  const banner = page.getByTestId("knowledge-base-save-error");
+  await expect(banner.getByRole("alert")).toHaveText(message);
+  await expect(banner).toBeInViewport();
+  await expect(page.getByText(message)).toHaveCount(1);
+  await expect(description).toHaveValue("就業規則と経費精算");
+
+  fail = false;
+  await page.getByRole("group", { name: "ページ操作" }).getByRole("button", { name: "保存する" }).click();
+  await expect(page.getByText("ナレッジベースを更新しました")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+});
+
 test("ナレッジベースが無いときは、空の状態から作成の画面へ進める", async ({ page }) => {
   await mockKnowledgeBaseApi(page, { knowledgeBases: [], documents: [] });
   await page.goto("/knowledge-bases");

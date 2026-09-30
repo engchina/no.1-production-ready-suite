@@ -397,7 +397,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
     // ビルトインは詳細を開けるが、行メニュー（削除）を持たない
     await expect(page.getByRole("button", { name: "業務 RAG 調査 の操作" })).toHaveCount(0);
-    await page.getByRole("button", { name: /業務 RAG 調査/ }).click();
+    await page.getByRole("link", { name: /業務 RAG 調査/ }).click();
     await expect(page.getByText("このスキルは読み取り専用です", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
     await page.getByRole("button", { name: "一覧に戻る" }).click();
@@ -435,7 +435,7 @@ test.describe("Agent Runtime settings", () => {
     await chooseRowAction(page, "E2E カスタム改", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
     await expect(page.getByText("スキルを削除しました")).toBeVisible();
-    await expect(page.getByRole("button", { name: /E2E カスタム改/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /E2E カスタム改/ })).toHaveCount(0);
 
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);

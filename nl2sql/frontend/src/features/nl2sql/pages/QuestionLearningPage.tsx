@@ -21,7 +21,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
-  FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -940,12 +940,14 @@ function TrainingDataTable({
             className: "break-words align-top text-sm leading-6",
             render: (example) =>
               editingExampleId === example.id ? (
-                <textarea
-                  aria-label={t("qcm.training.editQuestion")}
+                <TextareaField
+                  id={`qcm-training-edit-question-${example.id}`}
+                  label={t("qcm.training.editQuestion")}
+                  labelHidden
                   value={editingText}
                   onChange={(event) => onEditTextChange(event.currentTarget.value)}
                   rows={3}
-                  className={`${controlClass} min-h-24`}
+                  textareaClassName="min-h-24"
                 />
               ) : (
                 example.text
@@ -1171,18 +1173,17 @@ function ModelTestPanel({
           />
         ) : null}
         {/* 分類テストは質問が空では実行できない（backend: ClassifierPredictRequest.question min_length=1）。 */}
-        <div className={fieldClass}>
-          <FieldLabel htmlFor="qcm-test-question" label={t("qcm.test.text")} required />
-          <textarea
-            id="qcm-test-question"
-            aria-required="true"
-            value={question}
-            disabled={loading}
-            onChange={(event) => onQuestionChange(event.currentTarget.value)}
-            rows={6}
-            className={`${controlClass} min-h-36 leading-6`}
-          />
-        </div>
+        <TextareaField
+          id="qcm-test-question"
+          label={t("qcm.test.text")}
+          required
+          className="min-w-0"
+          value={question}
+          disabled={loading}
+          onChange={(event) => onQuestionChange(event.currentTarget.value)}
+          rows={6}
+          textareaClassName="min-h-36"
+        />
       </section>
       <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
         <h3 className="text-sm font-semibold text-fg">{t("qcm.test.result")}</h3>

@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Database,
   Code2,
   FileText,
@@ -21,6 +21,7 @@ import {
   ContentActionBar,
   ProcessingIndicator,
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 
@@ -1149,15 +1150,14 @@ function MetadataInputPanel({
             </p>
           ))}
 
-          <label className="grid gap-1 text-sm font-medium text-fg">
-            <span>{t("metadataSql.input.extra")}</span>
-            <textarea
-              value={extraText}
-              onChange={(event) => onExtraTextChange(event.currentTarget.value)}
-              rows={6}
-              className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
-            />
-          </label>
+          <TextareaField
+            id={`${pageId}-extra-text`}
+            label={t("metadataSql.input.extra")}
+            value={extraText}
+            onChange={(event) => onExtraTextChange(event.currentTarget.value)}
+            rows={6}
+            textareaClassName="min-h-32"
+          />
 
           <ContentActionBar
             ariaLabel={t("metadataSql.input.actions")}
@@ -1259,17 +1259,9 @@ function MetadataExecutePanel({
 }
 
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {
-  return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-      <span>{label}</span>
-      <textarea
-        readOnly
-        value={value}
-        rows={rows}
-        className="rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 text-fg"
-      />
-    </label>
-  );
+  // 同じ画面に複数並ぶ読み取り専用の欄なので、ラベルと結び付ける id は React で一意に作る。
+  const id = useId();
+  return <TextareaField id={id} label={label} className="min-w-0" readOnly value={value} rows={rows} monospace />;
 }
 
 function targetItemsFromObjects(items: DbAdminObjectSummary[]) {

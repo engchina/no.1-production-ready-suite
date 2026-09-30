@@ -7,11 +7,14 @@ import { expect, test } from "./fixtures/mock-api";
 
 async function expectFieldError(page: Page, fieldId: string, message: string) {
   const field = page.locator(`#${fieldId}`);
-  const error = page.locator(`#${fieldId}-error`);
+  await expect(field).toHaveAttribute("aria-invalid", "true");
+  // エラーは aria-describedby で結んだ要素（素の入力欄は `<id>-error`、共有の TextareaField は `<id>-<生成 id>-error`。#584）。
+  await expect(field).toHaveAttribute("aria-describedby", new RegExp(`${fieldId}-\\S*error`));
+  const describedBy = (await field.getAttribute("aria-describedby")) ?? "";
+  const errorId = describedBy.split(/\s+/).find((id) => id.startsWith(`${fieldId}-`) && id.endsWith("-error"));
+  const error = page.locator(`[id="${errorId}"]`);
   await expect(error).toHaveText(message);
   await expect(error).toHaveAttribute("role", "alert");
-  await expect(field).toHaveAttribute("aria-invalid", "true");
-  await expect(field).toHaveAttribute("aria-describedby", new RegExp(`${fieldId}-error`));
 }
 
 async function expectNoHorizontalOverflow(page: Page) {

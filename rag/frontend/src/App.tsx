@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
-  Link,
   Navigate,
   Outlet,
   Route,
@@ -9,9 +8,8 @@ import {
   useNavigationType,
   useParams,
 } from "react-router-dom";
-import { ChevronLeft } from "lucide-react";
 
-import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
+import { AppShell, PageHeader } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
@@ -20,7 +18,7 @@ import { SecurityPermissionsPage } from "@/components/security/SecurityPermissio
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
-import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
+import { DocumentDetailPage } from "@/components/documents/DocumentDetailPage";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FeedbackClient } from "@/components/feedback/FeedbackClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
@@ -331,24 +329,8 @@ function DocumentDetailRoute() {
   const { id } = useParams<{ id: string }>();
   if (!id) return <Navigate to={APP_ROUTES.fileList} replace />;
 
-  return (
-    <div>
-      <div className="border-b border-border bg-surface">
-        <PageBody wide className="py-4">
-        <Link
-          to={APP_ROUTES.fileList}
-          className="inline-flex items-center gap-1 text-sm text-fg-muted transition-colors hover:text-fg"
-        >
-          <ChevronLeft size={16} aria-hidden />
-          {t("workspace.back")}
-        </Link>
-        </PageBody>
-      </div>
-      <PageBody wide>
-        <DocumentWorkspace documentId={id} />
-      </PageBody>
-    </div>
-  );
+  // 見出し・パンくず・状態・一覧へ戻るは詳細の PageHeader が持つ（ナレッジベース・業務ビューと同じ構成。#581）。
+  return <DocumentDetailPage documentId={id} />;
 }
 
 function KnowledgeBaseDetailRoute() {

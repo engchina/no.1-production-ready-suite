@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkPreviewForm,
   chunkPreviewValidationError,
+  documentDisplayStatus,
   ingestConflictBannerIsStale,
   isIndexedTransition,
   phaseLabelKey,
@@ -14,6 +15,7 @@ import {
   resolveIngestionProgressSummary,
   resolvePhaseRows,
   resolveStatusMessageSlot,
+  selectDocumentRecipe,
   shouldShowProcessingWatchBanner,
   shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
@@ -22,7 +24,28 @@ import {
   resolveIngestionErrorDisplayPlan,
 } from "./ingestion-error-display";
 import { t } from "@/lib/i18n";
-import type { FileStatus, IngestionJobPhase } from "@/lib/api";
+import type { DocumentRecipeView, FileStatus, IngestionJobPhase } from "@/lib/api";
+
+// #581: 文書詳細の見出し（PageHeader の状態）と本文は、同じレシピ・同じ状態を指す。
+describe("文書詳細の見出しの状態", () => {
+  const recipes = [
+    { recipe_id: "recipe-1", status: "INDEXED" },
+    { recipe_id: "recipe-2", status: "REVIEW" },
+  ] as DocumentRecipeView[];
+
+  it("?recipe= のレシピを選び、無い・見つからないときは先頭のレシピ", () => {
+    expect(selectDocumentRecipe(recipes, "recipe-2")?.recipe_id).toBe("recipe-2");
+    expect(selectDocumentRecipe(recipes, null)?.recipe_id).toBe("recipe-1");
+    expect(selectDocumentRecipe(recipes, "missing")?.recipe_id).toBe("recipe-1");
+    expect(selectDocumentRecipe(undefined, "recipe-1")).toBeNull();
+  });
+
+  it("状態はレシピの状態、無ければ文書の状態、どちらも無ければ UPLOADED", () => {
+    expect(documentDisplayStatus(recipes[1], "INDEXED")).toBe("REVIEW");
+    expect(documentDisplayStatus(null, "ERROR")).toBe("ERROR");
+    expect(documentDisplayStatus(null, undefined)).toBe("UPLOADED");
+  });
+});
 
 describe("分割プレビュー設定", () => {
   it("レシピ未指定時は現行の既定値を使う", () => {

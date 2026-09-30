@@ -3,10 +3,10 @@ import {
   DataTable,
   type DataTableColumn,
   Disclosure,
-  FieldLabel,
   FormStatus,
   ProcessingIndicator,
   StatusBadge,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import { ClipboardCheck } from "lucide-react";
 import { useState } from "react";
@@ -55,20 +55,17 @@ export function DocragAnswerEvaluation({
           {t("search.evaluation.description")}
         </p>
       </div>
-      <div>
-        <FieldLabel htmlFor={inputId} label={t("search.evaluation.standardAnswer")} required />
-        <textarea
-          id={inputId}
-          aria-required="true"
-          value={standardAnswer}
-          onChange={(event) => setStandardAnswer(event.target.value)}
-          rows={3}
-          maxLength={20000}
-          disabled={evaluate.isPending}
-          placeholder={t("search.evaluation.standardAnswerPlaceholder")}
-          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-        />
-      </div>
+      <TextareaField
+        id={inputId}
+        label={t("search.evaluation.standardAnswer")}
+        required
+        value={standardAnswer}
+        onChange={(event) => setStandardAnswer(event.target.value)}
+        rows={3}
+        maxLength={20000}
+        disabled={evaluate.isPending}
+        placeholder={t("search.evaluation.standardAnswerPlaceholder")}
+      />
       <div className="flex flex-wrap items-center gap-3">
         <Button
           type="button"
