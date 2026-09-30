@@ -733,7 +733,7 @@ export function DocumentWorkspace({
     parsedExtraction.pages,
     urlFallbackFocus,
   ]);
-  // chunk の強調は、DocRAG の表示領域（根拠にした要素ごとの bbox）があれば要素ごとに重ねる（#349）。
+  // chunk の強調は、要素の表示領域（根拠にした要素ごとの bbox）があれば要素ごとに重ねる（#349）。
   const focusChunkRegions = useMemo(
     () =>
       previewFocusSource === "chunk" && selectedChunk
@@ -2414,7 +2414,7 @@ function ChunkPreviewControls({
             onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
           />
         ) : form.chunking_strategy === "docrag_small_to_big" ? (
-          // DocRAG 親子階層は chunk サイズ等を使わず、rag_poc と同じ 5 項目で分割する。
+          // 親子階層（small-to-big）は chunk サイズ等を使わず、子と親の大きさの 5 項目で分割する。
           DOCRAG_CHUNKING_PARAMS.map((spec) => (
             <PreviewNumberField
               key={spec.field}
@@ -2713,7 +2713,7 @@ function DocumentChunksPanel({
     </ol>
   );
   if (!docragFellBack) return list;
-  // DocRAG 親子階層を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
+  // 親子階層（small-to-big）を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
   return (
     <div className="space-y-3">
       <Banner severity="warning" title={t("flow.chunks.docragFallbackTitle")}>

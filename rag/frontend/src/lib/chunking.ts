@@ -34,11 +34,11 @@ export function overlapLabelKey(strategy: ChunkingStrategyName): I18nKey {
 
 export const DOCRAG_CHUNKING_STRATEGY: ChunkingStrategyName = "docrag_small_to_big";
 
-/** Docling の解析結果がなく、DocRAG 親子階層の代わりに構造認識で分割したときの理由(#300)。 */
+/** Docling の解析結果がなく、親子階層（small-to-big）の代わりに構造認識で分割したときの理由(#300)。 */
 export const DOCRAG_LAYOUT_MISSING_REASON = "docrag_layout_missing";
 
 /**
- * DocRAG 親子階層を選んだが、解析結果が Docling でないため構造認識で分割した chunk を含むか。
+ * 親子階層（small-to-big）を選んだが、解析結果が Docling でないため構造認識で分割した chunk を含むか。
  * backend が chunk metadata の `chunk_strategy_fallback_reason` に残した縮退の印を見る。
  */
 export function docragChunkingFellBack(chunks: readonly Pick<DocumentChunkView, "metadata">[]): boolean {
@@ -67,7 +67,7 @@ export type DocragChunkingParamSpec = {
 };
 
 /**
- * DocRAG 親子階層の分割パラメータ。既定値・範囲・刻みは rag_poc の
+ * 親子階層（small-to-big）の分割パラメータ。既定値・範囲・刻みは rag_poc（移植元）の
  * docrag.chunking.constants(DEFAULT_* / *_RANGE)と同じ(backend の Settings と一致させる)。
  */
 export const DOCRAG_CHUNKING_PARAMS: readonly DocragChunkingParamSpec[] = [
@@ -122,7 +122,7 @@ export const DEFAULT_DOCRAG_CHUNKING_PARAMS: DocragChunkingParams = Object.fromE
   DOCRAG_CHUNKING_PARAMS.map((spec) => [spec.field, spec.defaultValue])
 ) as DocragChunkingParams;
 
-/** 範囲外・未入力の DocRAG パラメータがあれば、最初のその項目の定義を返す。 */
+/** 範囲外・未入力の親子階層のパラメータがあれば、最初のその項目の定義を返す。 */
 export function invalidDocragChunkingParam(
   values: Partial<Record<DocragChunkingParamField, number | null | undefined>>
 ): DocragChunkingParamSpec | null {

@@ -58,7 +58,7 @@ type ChunkingParamField =
   | "delimiter"
   | DocragChunkingParamField;
 
-// DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
+// 親子階層（small-to-big）は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
 const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "structure_aware",
   "recursive_character",
@@ -366,7 +366,7 @@ function ParamsCard({
   const fields = STRATEGY_PARAM_FIELDS[form.strategy];
   const hasField = (field: ChunkingParamField) => fields.includes(field);
   const semanticBoundary = isSemanticBoundaryStrategy(form.strategy);
-  // DocRAG 親子階層は検索用テキストを docrag 自身が組み立てるため、文脈ヘッダは効かない。
+  // 親子階層（small-to-big）は検索用テキストを分割側（docrag_core）が組み立てるため、文脈ヘッダは効かない。
   const docrag = form.strategy === "docrag_small_to_big";
   const chunkSizeField = hasField("chunk_size") ? (
     <NumberField
@@ -761,7 +761,7 @@ function chunkingFieldId(field: ChunkingErrorField): string {
   return field === "delimiter" ? "chunking-delimiter" : `chunking-${field.replaceAll("_", "-")}`;
 }
 
-/** 画面の並び順（DocRAG の欄 → 分割符 → chunk サイズ → overlap → 最小文字数）。 */
+/** 画面の並び順（親子階層の欄 → 分割符 → chunk サイズ → overlap → 最小文字数）。 */
 function chunkingFieldOrder(form: ChunkingForm): ChunkingErrorField[] {
   const docrag = form.strategy === "docrag_small_to_big" ? DOCRAG_CHUNKING_PARAMS.map((spec) => spec.field) : [];
   return [...docrag, "delimiter", "chunk_size", "overlap", "min_chars"];

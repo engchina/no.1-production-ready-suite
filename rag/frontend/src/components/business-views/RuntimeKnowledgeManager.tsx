@@ -106,7 +106,7 @@ const FIELD_IDS: Record<RequiredField, string> = {
 };
 
 /**
- * 保存前の必須の検証（#540）。規則と文言は backend（docrag の edit_knowledge）と同じ:
+ * 保存前の必須の検証（#540）。規則と文言は backend（docrag_core の edit_knowledge）と同じ:
  * 用語は「用語」、ルールは「ルール ID」「ルール名」「ルール内容」が必須。
  */
 export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors {
@@ -124,7 +124,7 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
 }
 
-/** 業務ビューの用語(別名・説明)とルール(照合キーワード・内容)。DocRAG 回答エンジンで使う。 */
+/** 業務ビューの用語(別名・説明)とルール(照合キーワード・内容)。回答フローで使う。 */
 export function RuntimeKnowledgeManager({
   businessViewId,
 }: {

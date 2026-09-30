@@ -41,7 +41,7 @@ export function documentDisplayStatus(
 export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPreviewForm {
   const config = recipe?.effective_processing_config;
   return {
-    // 既定は DocRAG 親子階層(backend の RAG_CHUNKING_STRATEGY の既定と同じ。#594)。
+    // 既定は親子階層（small-to-big）(backend の RAG_CHUNKING_STRATEGY の既定と同じ。#594)。
     chunking_strategy: config?.chunking_strategy ?? "docrag_small_to_big",
     chunk_size: config?.chunk_size ?? 800,
     chunk_overlap: config?.chunk_overlap ?? 120,
@@ -69,7 +69,7 @@ export function chunkPreviewValidationError(form: ChunkPreviewForm): string | nu
     return form.chunk_delimiter.trim() ? null : t("settings.chunking.params.delimiter");
   }
   if (form.chunking_strategy === "docrag_small_to_big") {
-    // DocRAG 親子階層は chunk サイズ等を使わない。5 項目の範囲だけを確かめる。
+    // 親子階層（small-to-big）は chunk サイズ等を使わない。5 項目の範囲だけを確かめる。
     const invalid = invalidDocragChunkingParam(form);
     return invalid
       ? `${t(invalid.labelKey)}: ${invalid.min.toLocaleString("ja-JP")}〜${invalid.max.toLocaleString("ja-JP")}`

@@ -38,7 +38,7 @@ export interface ChatStreamHandlers {
     trace_id: string;
     elapsed_ms: number;
     guardrail_warnings: string[];
-    /** DocRAG 回答エンジンの根拠・実行記録(standard では null / 未指定)。 */
+    /** 回答の根拠・実行記録(無い回答では null / 未指定)。 */
     docrag?: unknown;
   }) => void;
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;

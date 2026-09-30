@@ -182,7 +182,7 @@ def _normalize_extraction_field_filter(value: str) -> str:
 class SearchMode(StrEnum):
     """Oracle AI Database の検索の種類(``OracleClient.hybrid_search`` の ``mode``)。
 
-    回答は DocRAG の回答フローが hybrid(RRF)と vector を内部で使い分ける。利用者が選ぶ
+    回答は回答フローが hybrid(RRF)と vector を内部で使い分ける。利用者が選ぶ
     検索モードは #595 で削除した。
     """
 
@@ -513,7 +513,7 @@ def normalize_query_text(query: str) -> str:
 
 
 class AnswerRecordSummary(BaseModel):
-    """保存済み DocRAG 回答の一覧行(本文・根拠は含めない)。"""
+    """保存された回答の一覧行(本文・根拠は含めない)。"""
 
     trace_id: str
     business_view_id: str | None = None
@@ -526,7 +526,7 @@ class AnswerRecordSummary(BaseModel):
 
 
 class AnswerRecordDetail(AnswerRecordSummary):
-    """保存済み DocRAG 回答(本文・引用・根拠と実行記録)。"""
+    """保存された回答(本文・引用・根拠と実行記録)。"""
 
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
@@ -537,7 +537,7 @@ class AnswerRecordDetail(AnswerRecordSummary):
 
 
 class AnswerEvaluationRequest(BaseModel):
-    """保存済み DocRAG 回答を評価する標準回答。"""
+    """保存された回答を評価する標準回答。"""
 
     standard_answer: str = Field(min_length=1, max_length=20000)
 
@@ -550,6 +550,6 @@ class AnswerEvaluationRequest(BaseModel):
 
 
 class AnswerRecordDeleteResult(BaseModel):
-    """DocRAG 回答の削除結果。"""
+    """保存された回答の削除結果。"""
 
     trace_id: str

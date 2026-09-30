@@ -95,7 +95,7 @@ async function mockWorkspace(
     putFails?: boolean;
     previewFails?: boolean;
     recipeCount?: number;
-    /** プレビュー結果の chunk に足す metadata(例: DocRAG から構造認識への縮退の印)。 */
+    /** プレビュー結果の chunk に足す metadata(例: 親子階層から構造認識への縮退の印)。 */
     previewChunkMetadata?: Record<string, string>;
   } = {}
 ) {
@@ -941,16 +941,16 @@ for (const viewport of [
   });
 }
 
-test("分割プレビューで DocRAG 親子階層の 5 項目を指定できる", async ({ page }) => {
+test("分割プレビューで親子階層（small-to-big）の 5 項目を指定できる", async ({ page }) => {
   const state = await mockWorkspace(page, { documentStatus: "REVIEW" });
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: "Chunk" }).click();
 
   const preview = page.getByRole("region", { name: "分割プレビュー" });
   await preview.getByRole("combobox", { name: "分割方式" }).click();
-  await page.getByRole("option", { name: "DocRAG 親子階層" }).click();
+  await page.getByRole("option", { name: "親子階層（small-to-big）" }).click();
 
-  // DocRAG は chunk サイズ等を使わず、rag_poc と同じ 5 項目だけを出す。
+  // 親子階層は chunk サイズ等を使わず、子と親の大きさの 5 項目だけを出す。
   await expect(preview.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveCount(0);
   await expect(preview.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
   await expect(preview.getByRole("spinbutton", { name: "親チャンク最大 child 数", exact: true })).toHaveValue("12");
@@ -973,7 +973,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`Docling 以外の解析結果で DocRAG 親子階層を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
+  test(`Docling 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -990,7 +990,7 @@ for (const viewport of [
 
     const preview = page.getByRole("region", { name: "分割プレビュー" });
     await preview.getByRole("combobox", { name: "分割方式" }).click();
-    await page.getByRole("option", { name: "DocRAG 親子階層" }).click();
+    await page.getByRole("option", { name: "親子階層（small-to-big）" }).click();
     await preview.getByRole("button", { name: "プレビュー実行" }).click();
 
     // 失敗させず構造認識で分割し、その事実と親子で分割する方法を Chunk 一覧の上に出す(#300)。
@@ -1002,7 +1002,7 @@ for (const viewport of [
   });
 }
 
-test("DocRAG 親子階層で分割した chunk には縮退の表示を出さない", async ({ page }) => {
+test("親子階層（small-to-big）で分割した chunk には縮退の表示を出さない", async ({ page }) => {
   await mockWorkspace(page, { documentStatus: "REVIEW" });
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: "Chunk" }).click();

@@ -18,7 +18,7 @@ import { useDeleteDocragAnswer, useDocragAnswer } from "@/lib/queries";
 import { CitationCard } from "./CitationCard";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 
-/** 保存済み DocRAG 回答 1 件(質問・回答・根拠パネル・引用)。 */
+/** 保存された回答 1 件(質問・回答・根拠パネル・引用)。 */
 export function SavedDocragAnswer({
   traceId,
   businessViewId,

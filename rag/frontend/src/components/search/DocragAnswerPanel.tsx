@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 import { DocragAnswerEvaluation } from "./DocragAnswerEvaluation";
 
 /**
- * DocRAG 回答エンジンの根拠構成と実行記録(信頼度・人手確認・根拠木・工程)。
+ * 回答の根拠の構成と実行記録(信頼度・人手確認・根拠木・工程)。
  * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
  */
 export function DocragAnswerPanel({

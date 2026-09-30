@@ -7,6 +7,7 @@
 
 - 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
 - ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
+- 「DocRAG」は rag_poc 由来の内部の名前で、画面・API のメッセージ・docs の地の文には出さない。回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）など RAG の標準の用語で呼ぶ。コードの識別子（`docrag_*`・`RAG_DOCRAG_*`・`packages/docrag_core` など）は変えない（#598）。
 - 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
 - PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
 

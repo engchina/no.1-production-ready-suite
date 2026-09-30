@@ -1161,7 +1161,7 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
 }
 
 /**
- * 指定した trace_id のうち、保存済みの DocRAG 回答があるもの（チャットの会話の回答用。#304）。
+ * 指定した trace_id のうち、保存された回答があるもの（チャットの会話の回答用。#304）。
  * 開いている会話の回答だけを引き当てる。
  */
 export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: string[]) {
@@ -1180,7 +1180,7 @@ export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: 
   });
 }
 
-/** 保存済み DocRAG 回答 1 件。traceId が null の間は取得しない。 */
+/** 保存された回答 1 件。traceId が null の間は取得しない。 */
 export function useDocragAnswer(traceId: string | null) {
   return useQuery({
     queryKey: ["docrag-answer", traceId],
@@ -1189,7 +1189,7 @@ export function useDocragAnswer(traceId: string | null) {
   });
 }
 
-/** 保存済み DocRAG 回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
+/** 保存された回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
 export function useEvaluateDocragAnswer() {
   const qc = useQueryClient();
   return useMutation({
@@ -1232,12 +1232,12 @@ export function useQuerySuggestions(
   });
 }
 
-/** 編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプト。 */
+/** 編集できるプロンプトと、回答フローの各段の読み取り専用プロンプト。 */
 export function useDocragPrompts() {
   return useQuery({ queryKey: ["settings", "docrag-prompts"], queryFn: api.getDocragPrompts });
 }
 
-/** DocRAG プロンプトの保存(content あり)と既定値への復帰(content なし)。 */
+/** 編集できるプロンプトの保存(content あり)と既定値への復帰(content なし)。 */
 export function useSaveDocragPrompt() {
   const qc = useQueryClient();
   return useMutation({
@@ -1265,7 +1265,7 @@ export function useFeedbackEvaluationCase() {
   });
 }
 
-/** 保存済み DocRAG 回答の削除。一覧・詳細のキャッシュを捨てる。 */
+/** 保存された回答の削除。一覧・詳細のキャッシュを捨てる。 */
 export function useDeleteDocragAnswer() {
   const qc = useQueryClient();
   return useMutation({

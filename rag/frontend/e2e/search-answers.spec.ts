@@ -157,7 +157,7 @@ test("backend が参照 KB のない業務ビューを 409 で断ったら、そ
   await expect(page.getByText(NO_KB_MESSAGE)).toBeVisible();
 });
 
-test("RAG 検索画面には DocRAG の回答履歴の一覧を出さない（#444）", async ({ page }) => {
+test("RAG 検索画面には回答履歴の一覧を出さない（#444）", async ({ page }) => {
   await mockAnswerHistory(page, 4);
 
   await page.goto("/search");

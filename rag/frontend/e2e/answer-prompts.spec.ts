@@ -27,7 +27,7 @@ for (const viewport of [
     await page.goto("/settings/prompts");
 
     await expect(page.getByRole("heading", { name: "回答プロンプト", exact: true, level: 1 })).toBeVisible();
-    await expect(page.getByText("回答生成テンプレート", { exact: true })).toBeVisible();
+    await expect(page.getByText("回答生成のプロンプト", { exact: true })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "テンプレート", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "版を作成" })).toHaveCount(0);
     await expect(page.getByTestId("prompt-version-list")).toHaveCount(0);
@@ -67,7 +67,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`回答生成テンプレートを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
+  test(`回答生成のプロンプトを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -122,7 +122,7 @@ for (const viewport of [
   });
 }
 
-test("回答生成テンプレートは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
+test("回答生成のプロンプトは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   let content = "保存版 A {{question}} {{images}}";
   await page.route("**/api/settings/docrag-prompts**", (route) =>

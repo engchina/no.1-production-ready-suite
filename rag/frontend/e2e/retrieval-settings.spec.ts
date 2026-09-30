@@ -202,7 +202,7 @@ for (const viewport of [
       await expect(card).not.toContainText("DocRAG");
       const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
-      await expect(page.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("補正 RAG");
+      await expect(page.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("CRAG");
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
       const screenLinking = page.getByRole("switch", { name: "画面目録で操作画面を探す" });
       await expect(screenLinking).not.toBeChecked();

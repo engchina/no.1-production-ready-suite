@@ -11,7 +11,7 @@ RAG の回答は、単純な「近い chunk を prompt へ入れる」形では�
 1. 依頼を受け、安全チェックで質問を検査する（ブロックしたら検索しない）
 2. Business Context Pack（誰のどの業務か＝検索範囲）を確定する
 3. チャットでは、会話履歴から質問を単独で意味が通る形に書き換える（`RAG_DOCRAG_HISTORY_REWRITE_ENABLED`）
-4. 回答フロー: 質問の理解 → 質問拡張戦略で検索文を作る → 文書検索（Oracle AI Vector Search と Oracle Text の hybrid 検索を RRF で融合）→ Rerank（OCI Generative AI Cohere Rerank）→ 根拠の評価と補正検索（CRAG）→ small-to-big（親本文と前後の child）で文脈を足す → 回答文の生成と根拠確認（監査）
+4. 回答フロー: 質問の理解 → 質問の拡張で検索文を作る → 文書検索（Oracle AI Vector Search と Oracle Text の hybrid 検索を RRF で融合）→ Rerank（OCI Generative AI Cohere Rerank）→ 根拠の評価と補正検索（CRAG）→ small-to-big（親本文と前後の child）で文脈を足す → 回答文の生成と根拠確認（監査）
 5. 回答側の安全チェックを行い、監査・回答の記録・質問履歴を残す
 
 ## Business Context Pack
@@ -32,12 +32,12 @@ raw tenant/user id や query 本文は audit / trace へ保存しない。
 
 | 手法の要素 | 回答フローでの扱い |
 |---|---|
-| Memory Router / Retrieval Plan | 質問の理解（`inquiry_conditions`）と質問拡張戦略（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング）が、検索文・検索語・名指しされた文書名・業務を決める |
+| Memory Router / Retrieval Plan | 質問の理解（`inquiry_conditions`）と質問の拡張（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング）が、検索文・検索語・名指しされた文書名・業務を決める |
 | evidence（必須根拠） | Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF。原質問を主軸にした重み付き融合）と Cohere Rerank で選んだ child chunk |
 | structure（構造） | 親子階層の親本文（`docrag_parent_text`）と、根拠の child の前後の child（`RAG_DOCRAG_NEIGHBOR_CHILD_COUNT`）。画面目録で操作画面を探す（`RAG_DOCRAG_SCREEN_LINKING_ENABLED`）。GraphRAG の構築（関係情報の構築）と KB のグラフ表示は残しているが、回答の検索では使わない |
 | history（継続文脈） | チャットの会話履歴による質問の書き換えと、質問履歴（`rag_query_history`。候補の提示だけで、回答の根拠にはしない）。Agent Memory（`rag_agent_memories`）への検索・保存は #595 で削除した |
 | Resolver / Verifier | 根拠確認（CRAG の grade）と補正検索（`RAG_DOCRAG_ANSWER_FLOW=crag`）、回答文の生成後の根拠確認（監査）。根拠が足りないときは、足りない理由（`insufficient_reason`）と人手確認の要否を回答に付ける |
-| Context Builder | small-to-big で親子を復元した文脈を、回答生成テンプレート（検索・回答設定 > 回答プロンプト）で LLM へ渡す |
+| Context Builder | small-to-big で親子を復元した文脈を、回答生成のプロンプト（検索・回答設定 > 回答プロンプト）で LLM へ渡す |
 
 `SearchDiagnostics` は `retrieval_strategy`（常に `docrag`）・`retrieval_strategy_adapter`（`docrag_grounded` / `docrag_retrieval_only` / `blocked`）・`docrag`（回答フローの診断。実行記録 `execution_steps` など）・安全チェックの policy / backend・`filter_keys`・`knowledge_base_count`・`config_fingerprint` などを返す。回答フローの工程ごとの記録は回答の記録（`rag_answer_records`）にも残す。
 

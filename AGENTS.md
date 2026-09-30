@@ -72,6 +72,7 @@
 - 本文は Markdown 見出しで構造化し、確認した事実と推測を区別する。未調査・未確定の項目は断定せず「調査中」「未確認」と明記し、判明後に本文を更新する。
 - API、関数、設定 key、status code、error message、再現値など、調査・レビュー・回帰テストに必要な具体情報を記載する。secret、token、個人情報、実 credential は記載しない。
 - 製品ごとの用語規約（例: RAG の `ナレッジ構築` / `業務ビュー` / `検索・回答設定`）は各製品の `AGENTS.md` に従う。
+- RAG の「DocRAG」は rag_poc 由来の内部の名前で、画面・docs・Issue / PR の地の文には出さず、RAG の標準の用語で呼ぶ（コードの識別子は除く。[rag/AGENTS.md](./rag/AGENTS.md)、#598）。
 
 #### Issue
 
