@@ -651,6 +651,58 @@ class OracleClient:
             max_chunks_per_group=max_chunks_per_group,
         )
 
+    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
+        """検索と同じ条件(KB・分類・文書名など)で、検索対象の chunk が 1 件でもあるかを返す。
+
+        質問が名指しした文書名がナレッジベースに無いときに、その条件を外すために使う(#546)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT 1 AS found
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND ROWNUM = 1
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return row is not None
+
+    async def document_classifications(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """文書の分類(rag_documents.classification)を document_id ごとにまとめて返す。
+
+        分類の無い文書は含めない。分類は chunk に焼き込まず、回答のときに読む(#545)。
+        """
+        ids = _unique_optional_sequence(list(document_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("d.document_id", "classification_document", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.document_id, d.classification
+            FROM rag_documents d
+            WHERE {in_sql}
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        classifications: dict[str, dict[str, object]] = {}
+        for row in rows:
+            classification = _json_loads(row.get("classification"))
+            if classification:
+                classifications[str(row["document_id"])] = classification
+        return classifications
+
     async def context_dependency_chunks(
         self,
         anchors: list[RetrievedChunk],
