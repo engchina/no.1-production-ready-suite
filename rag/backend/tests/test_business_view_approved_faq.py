@@ -85,3 +85,20 @@ def test_excel_preview_and_import_modes(fake_oracle: FakeKnowledgeOracle) -> Non
 
     bad = client.post(f"{BASE}/import/preview", files={"file": ("faq.csv", b"a,b", "text/csv")})
     assert bad.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"question": "  ", "answer": "a"}, "body.question: Value error, 質問を入力してください。"),
+        ({"question": "q", "answer": ""}, "body.answer: Value error, 回答を入力してください。"),
+    ],
+    ids=["question", "answer"],
+)
+def test_add_rejects_blank_fields_like_the_screen(
+    fake_oracle: FakeKnowledgeOracle, payload: dict[str, str], message: str
+) -> None:
+    """FAQ の追加の未入力は、画面の欄の下と同じ文言で欄を指す 422（#541）。"""
+    response = client.post(BASE, json=payload)
+    assert response.status_code == 422
+    assert response.json()["error_messages"] == [message]

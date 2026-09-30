@@ -215,6 +215,19 @@ def request(**values: Any) -> SyntheticRunRequest:
     )
 
 
+def test_create_rejects_empty_profile_with_field_error(service: Any) -> None:
+    """Profile の未選択は、画面の欄と同じ文言で /profile_name を指す 422（#540）。"""
+    with pytest.raises(HTTPException) as error:
+        service.create(request(profile_name=" "), actor())
+    assert error.value.status_code == 422
+    detail = error.value.detail
+    assert isinstance(detail, dict)
+    assert detail["field_errors"] == [
+        {"pointer": "/profile_name", "code": "required", "message": "Profile を選択してください。"}
+    ]
+    service.adapter.generate_synthetic_data.assert_not_called()
+
+
 def test_create_validates_confirmation_and_actor_even_on_idempotent_replay(service: Any) -> None:
     with pytest.raises(HTTPException) as error:
         service.create(request(confirmation=""), actor())

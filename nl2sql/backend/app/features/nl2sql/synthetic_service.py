@@ -149,7 +149,20 @@ class SyntheticService:
                 self.adapter._db_admin_identity(n).qualified_name for n in source if n.strip()
             )
         )
-        if not names or len(names) > 100 or not request.profile_name.strip():
+        if not request.profile_name.strip():
+            # 画面の「Profile」の必須と同じ規則・文言で、欄を指す 422 にする（#540）。
+            message = "Profile を選択してください。"
+            raise HTTPException(
+                422,
+                {
+                    "code": "synthetic_profile_required",
+                    "message_ja": message,
+                    "field_errors": [
+                        {"pointer": "/profile_name", "code": "required", "message": message}
+                    ],
+                },
+            )
+        if not names or len(names) > 100:
             raise HTTPException(400, "Profile と 1〜100 件の対象テーブルを指定してください。")
         expected = (
             {names[0], names[0].split(".", 1)[-1]}

@@ -1789,7 +1789,7 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
   const createButton = page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true });
   await createButton.click();
-  await expect(page.getByText("ロールを1つ選択してください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("ロールを選択してください。", { exact: true })).toBeVisible();
   expect(createRequestCount).toBe(0);
 
   const viewerRadio = page.getByRole("radio", { name: /検索閲覧/ });

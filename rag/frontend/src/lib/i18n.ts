@@ -732,8 +732,6 @@ export const ja = {
   "settings.grounding.crag.abstain": "低 grade で回答を保留する",
   "settings.grounding.crag.abstain.helper":
     "再検索後も低しきい値未満のとき、回答せず保留メッセージを返します(既定 OFF)。",
-  "settings.grounding.crag.invalid":
-    "しきい値は 0〜1(高しきい値は低しきい値以上)、再検索回数は 0〜3 で入力してください。",
   "settings.grounding.loadError": "根拠確認設定を取得できませんでした。",
   "settings.grounding.saveError": "根拠確認設定を保存できませんでした。",
   "settings.generation.subtitle":
@@ -807,8 +805,10 @@ export const ja = {
   "settings.prompts.docragUnused":
     "ここで作る system prompt の版（カスタム回答スタイル）は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は下の「DocRAG の回答生成テンプレート」で回答します。",
   "settings.prompts.form.name": "版名",
+  "settings.prompts.form.nameRequired": "版名を入力してください。",
   "settings.prompts.form.namePlaceholder": "例: 監査向け厳密版 v2",
   "settings.prompts.form.systemPrompt": "system prompt",
+  "settings.prompts.form.systemPromptRequired": "system prompt を入力してください。",
   "settings.prompts.form.systemPromptPlaceholder":
     "あなたは社内ナレッジ検索アシスタントです。検索根拠だけを使って…",
   "settings.prompts.form.note": "メモ",
@@ -1191,6 +1191,8 @@ export const ja = {
   "businessViews.faq.title": "Approved FAQ（類似問）",
   "businessViews.faq.question": "質問（QUESTION）",
   "businessViews.faq.answer": "回答（ANSWER）",
+  "businessViews.faq.error.questionRequired": "質問を入力してください。",
+  "businessViews.faq.error.answerRequired": "回答を入力してください。",
   "businessViews.faq.actions": "操作",
   "businessViews.faq.delete": "削除",
   "businessViews.faq.deleted": "FAQ を削除しました。",
@@ -1229,6 +1231,10 @@ export const ja = {
   "businessViews.runtime.triggers": "照合キーワード",
   "businessViews.runtime.triggersInput": "照合キーワード（1 行に 1 つ）",
   "businessViews.runtime.content": "ルール内容",
+  "businessViews.runtime.error.termRequired": "用語を入力してください。",
+  "businessViews.runtime.error.ruleIdRequired": "ルール ID を入力してください。",
+  "businessViews.runtime.error.ruleTitleRequired": "ルール名を入力してください。",
+  "businessViews.runtime.error.ruleContentRequired": "ルール内容を入力してください。",
   "businessViews.runtime.status": "状態",
   "businessViews.runtime.enabled": "有効",
   "businessViews.runtime.disabled": "無効",
@@ -1648,8 +1654,7 @@ export const ja = {
   "upload.knowledgeBases.selected": "{count} 件のナレッジベースへ登録します。",
   "upload.knowledgeBases.defaultHint": "未選択の場合は DEFAULT へ登録します。",
   "upload.knowledgeBases.requiredHint": "登録先のナレッジベースを 1 件以上選択してください。",
-  "upload.knowledgeBases.requiredError":
-    "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。",
+  "upload.knowledgeBases.requiredError": "所属させるナレッジベースを 1 件以上選択してください。",
   "upload.knowledgeBases.emptyRestrictedHint":
     "登録先にできるナレッジベースがありません。管理者にナレッジベースの利用権限を依頼してください。",
   "upload.knowledgeBases.loadWarningRequiredHint":
@@ -2110,7 +2115,7 @@ export const ja = {
   "documents.knowledgeBases.helper":
     "文書は 1 件以上の有効なナレッジベースに所属させてください。",
   "documents.knowledgeBases.noneSelected": "所属先が未選択です。",
-  "documents.knowledgeBases.required": "1 件以上のナレッジベースを選択してください。",
+  "documents.knowledgeBases.required": "所属先を 1 件以上選択してください。",
   "documents.knowledgeBases.save": "所属先を保存",
   "documents.knowledgeBases.saved": "所属ナレッジベースを保存しました。",
   "documents.knowledgeBases.saveError":
@@ -2620,14 +2625,21 @@ export const ja = {
     "リクエスト JSON に thresholds があるため、スイートより優先して適用されます。",
   "evaluation.suite.settingsLink": "設定で既定スイートを変更",
   "evaluation.suite.applied": "適用スイート",
+  // 入力欄の検証の共通の文言（UX 契約 messaging.md §3.2.1。{field} は欄のラベル。#541）
+  "validation.required": "{field}を入力してください。",
+  "validation.integerRange": "{field}は {min} 以上 {max} 以下の整数を入力してください。",
+  "validation.numberRange": "{field}は {min} 以上 {max} 以下の数値を入力してください。",
+  "validation.lessThan": "{field}は{other}より小さい数値を入力してください。",
+  "validation.notLessThan": "{field}は{other}以上の数値を入力してください。",
   "evaluation.input.title": "評価リクエスト",
   "evaluation.input.description":
     "cases と検索設定を JSON で入力します。閾値はスイートで決まるため thresholds は任意です。",
   "evaluation.input.label": "Golden set JSON",
   "evaluation.input.placeholder":
     "{\"cases\":[{\"id\":\"case-1\",\"query\":\"質問\",\"relevant_document_ids\":[\"doc-1\"],\"expected_answer_keywords\":[\"キーワード\"]}],\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"hybrid\"}",
-  "evaluation.input.invalidJson": "JSON を確認してください。",
-  "evaluation.input.noCases": "cases を 1 件以上入力してください。",
+  "evaluation.input.required": "Golden set JSON を入力してください。",
+  "evaluation.input.invalidJson": "Golden set JSON は有効な JSON で入力してください。",
+  "evaluation.input.noCases": "Golden set JSON の cases を 1 件以上入力してください。",
   "evaluation.actions.run": "評価実行",
   "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
@@ -2703,6 +2715,9 @@ export const ja = {
   "evaluation.knowledgeBaseScope.helper":
     "選択したナレッジベースを評価実行と比較実行の検索対象にします。未選択の場合は JSON の指定を使います。",
   "evaluation.compare.experiments": "Experiments JSON",
+  "evaluation.compare.required": "Experiments JSON を入力してください。",
+  "evaluation.compare.invalidJson": "Experiments JSON は有効な JSON で入力してください。",
+  "evaluation.compare.noExperiments": "Experiments JSON は実験を 1 件以上含む JSON の配列で入力してください。",
   "evaluation.compare.placeholder":
     "[{\"id\":\"hybrid-structure\",\"top_k\":20,\"rerank_top_n\":8,\"mode\":\"hybrid\",\"filters\":{\"status\":\"INDEXED\"},\"rag_overrides\":{\"rrf_k\":30,\"context_diversity_lambda\":0.4,\"context_adaptive_expansion_enabled\":true,\"context_adaptive_neighbor_window\":1,\"context_adaptive_min_overlap\":0.08,\"context_dependency_promotion_enabled\":true,\"context_dependency_max_chunks\":2,\"context_group_expansion_enabled\":true,\"context_group_max_chunks\":2}},{\"id\":\"keyword-k10\",\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"keyword\",\"filters\":{\"status\":\"INDEXED\"}}]",
   "evaluation.compare.metric": "ランキング指標",
