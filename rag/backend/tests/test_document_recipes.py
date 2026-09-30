@@ -1559,9 +1559,21 @@ async def test_docrag_chunk_contract_is_part_of_metadata_fingerprint(
 
 
 class _ListFingerprintOracle:
-    def __init__(self, rows: list[dict[str, object]] | Exception) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]] | Exception,
+        field_sets: dict[str, list[list[FieldDefinition] | None]] | None = None,
+    ) -> None:
         self.rows = rows
         self.requested: list[str] = []
+        self.field_sets = field_sets or {}
+        self.field_set_requests: list[list[str]] = []
+
+    async def list_documents_extraction_field_sets(
+        self, document_ids: Collection[str]
+    ) -> dict[str, list[list[FieldDefinition] | None]]:
+        self.field_set_requests.append(list(document_ids))
+        return {key: value for key, value in self.field_sets.items() if key in document_ids}
 
     async def list_serving_artifact_layer_fingerprints(
         self, document_ids: Collection[str]
@@ -1642,3 +1654,36 @@ async def test_documents_list_keeps_rows_when_fingerprint_lookup_fails() -> None
     )
 
     assert documents[0].layers_rebuild_required is False
+
+
+async def test_documents_list_compares_with_each_documents_knowledge_base_definitions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """一覧は文書ごとに、属する KB の今の定義(無ければ全体の既定)と比べる(#548)。"""
+    monkeypatch.setenv(FIELD_SCHEMA_FILE_ENV, str(tmp_path / "extraction-fields.json"))
+    save_field_schema(_FIELDS_V2)
+    settings = _layer_settings(enabled=True)
+    kb_fields = [FieldDefinition(name="契約日", value_type="date")]
+    kb_hash = {"field_schema_hash": field_schema_hash(kb_fields)}
+    default_hash = {"field_schema_hash": field_schema_hash(_FIELDS_V2)}
+    oracle = _ListFingerprintOracle(
+        [
+            # KB の定義で抽出した層。全体の既定とは違うが、KB の定義は変わっていない。
+            _layer_row("doc-kb", settings, kb_hash),
+            # KB に定義を足す前に、全体の既定で作った層。
+            _layer_row("doc-kb-stale", settings, default_hash),
+            # KB の定義を持たない文書は全体の既定と比べる。
+            _layer_row("doc-default", settings, default_hash),
+        ],
+        field_sets={"doc-kb": [kb_fields], "doc-kb-stale": [kb_fields], "doc-default": [None]},
+    )
+    documents = [_summary(name) for name in ("doc-kb", "doc-kb-stale", "doc-default")]
+
+    await _mark_layers_rebuild_required(oracle, documents, settings)  # type: ignore[arg-type]
+
+    assert oracle.field_set_requests == [["doc-kb", "doc-kb-stale", "doc-default"]]
+    assert {document.id: document.layers_rebuild_required for document in documents} == {
+        "doc-kb": False,
+        "doc-kb-stale": True,
+        "doc-default": False,
+    }

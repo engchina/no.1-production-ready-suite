@@ -950,26 +950,48 @@ class OracleClient:
         self, document_id: str
     ) -> list[list[FieldDefinition] | None]:
         """文書が属する有効な KB ごとの項目抽出の定義(None は既定に従う)を作成の古い順に返す。"""
+        field_sets = await self.list_documents_extraction_field_sets([document_id])
+        return field_sets.get(document_id, [])
+
+    async def list_documents_extraction_field_sets(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, list[list[FieldDefinition] | None]]:
+        """複数の文書について、属する有効な KB ごとの項目抽出の定義を 1 回の問い合わせで返す。
+
+        文書 ID ごとに、KB の作成の古い順の定義(None は既定に従う)を並べる。有効な KB に属さない
+        文書は結果に含めない(呼び出し側で全体の既定を使う。#548 / #550)。
+        """
+        if not document_ids:
+            return {}
+        in_sql, in_binds = _oracle_in_predicate(
+            "dkb.document_id", "extraction_document_id", list(document_ids)
+        )
         rows = await self._fetch_all(
             """
-            SELECT kb.extraction_fields
+            SELECT dkb.document_id, kb.extraction_fields
             FROM rag_document_knowledge_bases dkb
             JOIN rag_knowledge_bases kb
                 ON kb.knowledge_base_id = dkb.knowledge_base_id
             JOIN rag_documents d
                 ON d.document_id = dkb.document_id
-            WHERE dkb.document_id = :document_id
+            WHERE {in_sql}
               AND kb.status = 'ACTIVE'
               AND {document_access_sql}
               AND {knowledge_base_access_sql}
-            ORDER BY kb.created_at ASC, kb.knowledge_base_id ASC
+            ORDER BY dkb.document_id ASC, kb.created_at ASC, kb.knowledge_base_id ASC
             """.format(
+                in_sql=in_sql,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             ),
-            _with_tenant_bind({"document_id": document_id}),
+            _with_tenant_bind(in_binds),
         )
-        return [_knowledge_base_extraction_fields(row) for row in rows]
+        field_sets: dict[str, list[list[FieldDefinition] | None]] = {}
+        for row in rows:
+            field_sets.setdefault(str(row["document_id"]), []).append(
+                _knowledge_base_extraction_fields(row)
+            )
+        return field_sets
 
     async def list_knowledge_base_extraction_field_sets(
         self, knowledge_base_ids: Sequence[str]
