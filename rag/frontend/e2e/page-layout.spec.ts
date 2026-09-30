@@ -20,8 +20,8 @@ test.beforeEach(async ({ page }) => {
 
 /**
  * 認証画面（ログイン・パスワード変更・権限なし。AppShell を持たない）以外の全ルート。
- * 詳細画面は代表 id で開く（文書詳細は戻るリンク + 本文の 2 つの PageBody、ナレッジベース詳細は
- * 業務ビューと同じ PageHeader + PageBody。#555）。A 型の作成の画面（`?id=new`）も測る。
+ * 詳細画面は代表 id で開く（文書詳細・ナレッジベース詳細は業務ビューと同じ PageHeader + PageBody。
+ * #555 / #581）。A 型の作成の画面（`?id=new`）も測る。
  */
 const PATHS = [
   ...Object.entries(APP_ROUTES)
@@ -34,7 +34,7 @@ const PATHS = [
 ];
 
 /**
- * ページタイトル（h1、詳細画面は無し）と、main 内のすべての計測コンテナ（PageHeader の中身 / PageBody）を測り、
+ * ページタイトル（h1）と、main 内のすべての計測コンテナ（PageHeader の中身 / PageBody）を測り、
  * 左端のずれと 1440px 以下のコンテナを問題として列挙する。読み込み中 → 本来の PageBody の切り替わりは poll で吸収する。
  */
 async function layoutProblems(page: Page, { wide }: { wide: boolean }) {
@@ -54,7 +54,7 @@ async function layoutProblems(page: Page, { wide }: { wide: boolean }) {
     };
   });
   const problems: string[] = [];
-  // PageHeader の中身 + PageBody（詳細画面は戻るリンク + 本文）で 2 つ以上ある。
+  // PageHeader の中身 + PageBody で 2 つ以上ある。
   if (layout.containers.length < 2) problems.push(`計測コンテナが ${layout.containers.length} 個`);
   const left = layout.titleLeft ?? layout.containers[0]?.contentLeft;
   for (const [index, container] of layout.containers.entries()) {
@@ -68,12 +68,7 @@ async function layoutProblems(page: Page, { wide }: { wide: boolean }) {
 
 async function openPage(page: Page, path: string) {
   await page.goto(path);
-  const main = page.locator("main");
-  if (/^\/documents\/.+/u.test(path)) {
-    await expect(main.getByRole("link").first()).toBeVisible();
-  } else {
-    await expect(main.getByRole("heading", { level: 1 })).toBeVisible();
-  }
+  await expect(page.locator("main").getByRole("heading", { level: 1 })).toBeVisible();
 }
 
 for (const width of [1920, 2560]) {

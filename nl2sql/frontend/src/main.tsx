@@ -4,6 +4,7 @@ import { RouterProvider, createBrowserRouter, useLocation } from "react-router-d
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster } from "@engchina/production-ready-ui";
 import { initTheme } from "@engchina/production-ready-ui";
+import { UnsavedChangesBlocker } from "@engchina/production-ready-system-settings";
 
 import { App } from "./App";
 import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
@@ -55,6 +56,8 @@ function RootLayout() {
   return (
     <AuthProvider>
       <AppConfirmProvider>
+        {/* ブラウザの戻る/進むの blocker はアプリで 1 つ。各画面のガードはここへ未保存を登録する（#586）。 */}
+        <UnsavedChangesBlocker />
         <App />
         <Toaster
           dismissLabel={t("common.dismiss")}

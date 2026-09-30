@@ -16,6 +16,7 @@ import {
   FormStatus,
   ObjectActionBar,
   RowActionMenu,
+  SaveErrorBanner,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -752,6 +753,13 @@ function BusinessViewEditor({
   });
 
   const pending = create.isPending || update.isPending;
+  // 保存の失敗は欄に結び付かないため、ヘッダーの直下の 1 か所だけに出す（messaging.md §3.3.1。#585）。
+  const saveMutation = mode === "edit" ? update : create;
+  const saveError = saveMutation.isError
+    ? saveMutation.error instanceof ApiError
+      ? saveMutation.error.message
+      : t(mode === "edit" ? "businessViews.error.update" : "businessViews.error.create")
+    : null;
   // アーカイブ済みは保存できないので、入力できないようにする（入力しても保存できない欄を出さない。#555）。
   const locked = pending || isArchived;
   const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
@@ -800,10 +808,6 @@ function BusinessViewEditor({
             toast.success(t("businessViews.toast.updated"));
             onSaved(detail.id);
           },
-          onError: (error) =>
-            toast.error(
-              error instanceof ApiError ? error.message : t("businessViews.error.update")
-            ),
         }
       );
       return;
@@ -817,8 +821,6 @@ function BusinessViewEditor({
           // 作成した対象のエディタへ履歴を積まずに移る（戻るで空の新規フォームへ戻さない）。
           onSaved(detail.id);
         },
-        onError: (error) =>
-          toast.error(error instanceof ApiError ? error.message : t("businessViews.error.create")),
       }
     );
   };
@@ -879,6 +881,11 @@ function BusinessViewEditor({
         moreActionsLabel={t("common.objectActions.more")}
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
+        <SaveErrorBanner
+          message={saveError}
+          attemptKey={saveMutation.submittedAt}
+          testId="business-view-save-error"
+        />
         {isArchived ? (
           <Banner severity="warning">{t("businessViews.archivedReadonly")}</Banner>
         ) : (
@@ -1179,20 +1186,6 @@ function BusinessViewEditor({
                 >
                   {t("editor.actions.discard")}
                 </Button>
-                <FormStatus
-                  tone="danger"
-                  message={
-                    create.isError
-                      ? create.error instanceof ApiError
-                        ? create.error.message
-                        : t("businessViews.error.create")
-                      : update.isError
-                        ? update.error instanceof ApiError
-                          ? update.error.message
-                          : t("businessViews.error.update")
-                        : null
-                  }
-                />
               </div>
             </form>
           </CardContent>

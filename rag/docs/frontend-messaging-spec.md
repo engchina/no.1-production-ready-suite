@@ -3,6 +3,18 @@
 > 通知・成功 / エラー表示・フォーム検証・確認ダイアログ・空 / 読込 / エラー状態の共通規約は platform の [UX 契約 messaging.md](../../platform/docs/ux-contracts/messaging.md) が正本。ボタンは [UX 契約 buttons.md](../../platform/docs/ux-contracts/buttons.md)。
 > 本書には RAG 固有の適用だけを書く。節番号は共通規約にそろえる。
 
+## 3.3.1 全画面のエディタの保存の失敗（#585）
+
+共通規約は [UX 契約 messaging.md §3.3.1](../../platform/docs/ux-contracts/messaging.md#331-全画面のエディタの保存の失敗585)。RAG の適用先:
+
+| 画面 | 欄に結び付く失敗 | 欄に結び付かない失敗 |
+|---|---|---|
+| 業務ビューのエディタ（`?id=`） | 名前・説明・参照 KB の未入力（欄の直下） | `PageBody` の先頭の `SaveErrorBanner`（`business-view-save-error`）。409（カスタム回答スタイルの前提・アーカイブ済みなど）もここ |
+| ナレッジベースの作成・詳細 | 名前・説明の未入力、同じ名前の 409（名前の欄の直下 + フォーカス） | `SaveErrorBanner`（`knowledge-base-save-error`） |
+
+- 保存の失敗の `toast.error` と、フォームの下の `FormStatus` は出さない（成功だけ `toast.success`）。
+- エディタの中の節の保存（業務ビューの知識の節・ナレッジベースの抽出する項目・所属文書の追加など）は、節のボタンの近く（§3.3）のまま。
+
 ## 9. 失敗状態の情報設計（文書詳細への適用）
 
 原則 P1–P5 は [UX 契約 messaging.md §9](../../platform/docs/ux-contracts/messaging.md#9-失敗状態の情報設計error-state-ia) を参照。

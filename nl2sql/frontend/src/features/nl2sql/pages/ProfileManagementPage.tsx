@@ -16,6 +16,7 @@ import {
   Banner,
   DataTable,
   EmptyState,
+  FormStatus,
   toast,
   StatusBadge,
   PageHeader,
@@ -923,6 +924,7 @@ function ProfileEditor({
   canClearOracleExecution,
   oracleSyncJob,
   oracleSyncSubmissionError,
+  saveError,
   retryingOracleSync,
   deleting,
   onObjectFilterChange,
@@ -971,6 +973,8 @@ function ProfileEditor({
   canClearOracleExecution: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
+  /** プロファイルの保存（PATCH / POST）の失敗。保存ボタンの直下だけに出す（messaging.md §3.3.1。#585）。 */
+  saveError: string;
   retryingOracleSync: boolean;
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
@@ -1234,6 +1238,13 @@ function ProfileEditor({
         }
       />
 
+      {/* 保存ボタンはフォームの中（確認語と並ぶ）なので、欄に結び付かない保存の失敗はボタンの直下の
+          FormStatus の 1 か所だけに出す（Toast に重ねない。messaging.md §3.3.1。#585）。 */}
+      {saveError ? (
+        <div data-testid="profile-save-error">
+          <FormStatus tone="danger" message={saveError} />
+        </div>
+      ) : null}
       <ProfileSaveResultRegion
         rebuildAgentAssets={rebuildAgentAssets}
         oracleSyncJob={oracleSyncJob}
@@ -1316,6 +1327,7 @@ export function ProfileManagementPage() {
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
+  const [profileSaveError, setProfileSaveError] = useState("");
   // 完了を通知済みの Oracle 同期 job ID。render 中に比べるため state で持つ。
   const [reportedOracleSyncJobId, setReportedOracleSyncJobId] = useState("");
   // 成功を通知する Oracle 同期 job（通知と再取得は effect で行う）。
@@ -1460,6 +1472,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     setSearchParams({ profile: profile.id });
@@ -1683,6 +1696,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     setSearchParams({ profile: "new" });
@@ -1777,6 +1791,7 @@ export function ProfileManagementPage() {
     setRequiredErrors({});
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     setReportedOracleSyncJobId("");
     mutationBusyRef.current = true;
     setLoading("save");
@@ -1814,7 +1829,9 @@ export function ProfileManagementPage() {
         setLoading("");
         return;
       }
-      toast.error(err instanceof Error ? err.message : t("profiles.error.save"));
+      if (editTargetRef.current === target) {
+        setProfileSaveError(err instanceof Error && err.message ? err.message : t("profiles.error.save"));
+      }
       setLoading("");
       return;
     }
@@ -1972,6 +1989,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     if (syncJobParam) {
@@ -2010,6 +2028,7 @@ export function ProfileManagementPage() {
       canClearOracleExecution={canClearOracleExecution}
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
+      saveError={profileSaveError}
       retryingOracleSync={loading === "retry-oracle-sync"}
       deleting={selectedProfile ? loading === `delete-profile-${selectedProfile.id}` : false}
       onObjectFilterChange={setObjectFilter}

@@ -2151,7 +2151,6 @@ export const ja = {
   "preview.download": "ファイルをダウンロード",
 
   "workspace.notFound": "ドキュメントが見つかりません。",
-  "workspace.back": "一覧へ戻る",
   "documents.knowledgeBases.title": "所属ナレッジベース",
   "documents.knowledgeBases.description":
     "この文書をどのナレッジベースの検索対象に含めるかを管理します。",

@@ -549,6 +549,100 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("");
 });
 
+// #586: エディタには業務ビューのフォームのほかに知識の節のフォーム（それぞれ離脱の確認を持つ）がある。
+// どのフォームが未保存でも、ブラウザの戻る・進むで確認し、キャンセルで留まる。
+test("業務ビューのエディタは未保存の変更があるとブラウザの戻る・進むでも確認する", async ({ page }) => {
+  const consoleWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") consoleWarnings.push(message.text());
+  });
+  await mockBusinessViews(page, [accountingView]);
+  await page.goto("/business-views");
+  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
+
+  await page.goBack();
+  const dialog = page.getByRole("alertdialog", { name: "保存していない変更があります" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
+
+  await page.goBack();
+  await dialog.getByRole("button", { name: "移動する" }).click();
+  await expect(page).toHaveURL(/\/business-views$/);
+
+  // 業務ビューのフォームは未変更のまま、知識の節（重要語句）だけを変えても、戻るで確認する。
+  // （移動しても下書きはこのタブに残るため、開き直したら先に元に戻す。）
+  await page.goForward();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await page.getByRole("button", { name: "変更を元に戻す" }).click();
+  await page.locator("#domain-keywords-editor").fill("経費精算");
+  await page.goBack();
+  const discardDialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+  await expect(discardDialog).toBeVisible();
+  await discardDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await expect(page.locator("#domain-keywords-editor")).toHaveValue("経費精算");
+  // リンク（パンくず）とリロード（beforeunload）も同じく確認する。
+  await page
+    .getByRole("navigation", { name: "パンくず" })
+    .getByRole("link", { name: "業務ビュー (Business View)" })
+    .click();
+  await expect(discardDialog).toBeVisible();
+  await discardDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  const reloadPrevented = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(reloadPrevented).toBe(true);
+  // 1 画面に離脱の確認が複数あっても、router の blocker は 1 つだけにする。
+  expect(consoleWarnings.filter((text) => text.includes("only supports one blocker"))).toEqual([]);
+});
+
+// #585: ヘッダーに保存がある全画面のエディタは、欄に結び付かない保存の失敗をヘッダーの直下の 1 か所だけに出す
+// （Toast とフォームの下の FormStatus に重ねない。UX 契約 messaging.md §3.3.1）。
+test("業務ビューの保存に失敗すると、理由をヘッダーの直下だけに出し、下までスクロールしていても見える", async ({
+  page,
+}) => {
+  const message = "カスタム回答スタイルを使う前に Prompt 版を作成して有効化してください。";
+  await mockBusinessViews(page, [accountingView]);
+  let attempts = 0;
+  await page.route("**/api/business-views/bv-1", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    attempts += 1;
+    await route.fulfill({
+      status: 409,
+      json: { data: null, error_messages: [message], warning_messages: [] },
+    });
+  });
+  await page.goto("/business-views?id=bv-1");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
+  // 長いフォームの下（取り消しの行）までスクロールしてから、ヘッダーの保存を押す。
+  await page.getByRole("button", { name: "変更を元に戻す" }).scrollIntoViewIfNeeded();
+  const actions = page.getByRole("group", { name: "ページ操作" });
+  const save = actions.getByRole("button", { name: "保存する" });
+  if (await save.isVisible()) {
+    await save.click();
+  } else {
+    await actions.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "保存する" }).click();
+  }
+
+  const banner = page.getByTestId("business-view-save-error");
+  await expect(banner.getByRole("alert")).toHaveText(message);
+  await expect(banner).toBeInViewport();
+  await expect.poll(() => attempts).toBe(1);
+  // 同じ失敗を Toast とフォームの下に重ねない。
+  await expect(page.getByText(message)).toHaveCount(1);
+  // 入力は残り、未保存のまま（離脱の確認の対象）。
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
+  await expectNoPageOverflow(page);
+});
+
 test("URL の業務ビューが存在しないときは別の対象へ置き換えず、一覧へ戻る導線を出す", async ({ page }) => {
   await mockBusinessViews(page, [accountingView]);
   await page.goto("/business-views?id=bv-missing");

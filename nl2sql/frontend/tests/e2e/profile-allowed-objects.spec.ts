@@ -2980,7 +2980,9 @@ test("保存中はプロファイル編集と競合操作を固定し失敗後�
     await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
     await expect(page.getByTestId("profile-allowed-table-list").getByRole("checkbox").first()).toBeDisabled();
   } finally { release?.(); }
-  await expect(page.getByText("保存失敗テスト", { exact: true })).toBeVisible();
+  // 保存の失敗は保存ボタンの直下の FormStatus の 1 か所だけに出し、Toast に重ねない（messaging.md §3.3.1。#585）。
+  await expect(page.getByTestId("profile-save-error").getByRole("alert")).toHaveText("保存失敗テスト");
+  await expect(page.getByText("保存失敗テスト", { exact: true })).toHaveCount(1);
   await expect(name).toBeEnabled();
   await expect(name).toHaveValue("PENDING_PROFILE");
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();

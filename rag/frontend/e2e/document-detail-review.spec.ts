@@ -160,8 +160,42 @@ test("存在しない文書は再試行せずにすぐ「見つかりません�
 
   await page.goto("/documents/missing-doc");
 
-  await expect(page.getByText("ドキュメントが見つかりません。").first()).toBeVisible({
-    timeout: 2_500,
-  });
+  // 見つからないときも見出し（PageHeader）を先に出し、本文だけを「対象が見つかりません」にする
+  // （ナレッジベース・業務ビューと共有の EditorTargetState。#581）。
+  await expect(page.getByText("対象が見つかりません")).toBeVisible({ timeout: 2_500 });
+  await expect(page.getByText("「missing-doc」は削除されたか、存在しません。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "文書インデックス", level: 1 })).toBeVisible();
   expect(detailCalls).toBe(1);
+  await page.getByRole("main").getByRole("button", { name: "一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/file-list$/);
+});
+
+// #581: 文書詳細の見出しは、ナレッジベース・業務ビューの詳細と同じ PageHeader（パンくず・状態・一覧へ戻る）。
+test("文書詳細の見出しは PageHeader にパンくず・ファイル名・状態・一覧へ戻るを出す", async ({ page }) => {
+  await mockWorkspace(page, "ERROR", "このレシピは処理中または待機中です。");
+  await page.route((url) => url.pathname === "/api/documents", (route) =>
+    route.fulfill(ok({ items: [], total: 0, limit: 50, offset: 0, has_next: false }))
+  );
+  await page.goto(`/documents/${DOC_ID}`);
+
+  const header = page.locator("header[data-page-header]");
+  await expect(header.getByRole("heading", { name: "policy.txt", level: 1 })).toBeVisible();
+  const breadcrumbs = header.getByRole("navigation", { name: "パンくず" });
+  await expect(breadcrumbs.getByRole("link", { name: "文書インデックス" })).toHaveAttribute("href", "/file-list");
+  await expect(breadcrumbs.getByText("policy.txt")).toHaveAttribute("aria-current", "page");
+  // 状態はレシピの状態（色だけでなくアイコンと文言）。本文のカードにファイル名と状態を重ねない。
+  await expect(header.getByText("エラー", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "policy.txt" })).toHaveCount(1);
+  // 本文（処理レシピ・操作）はそのまま。
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行", exact: true }).first()).toBeVisible();
+
+  const actions = page.getByRole("group", { name: "ページ操作" });
+  const back = actions.getByRole("button", { name: "一覧へ戻る" });
+  if (await back.isVisible()) {
+    await back.click();
+  } else {
+    await actions.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "一覧へ戻る" }).click();
+  }
+  await expect(page).toHaveURL(/\/file-list$/);
 });

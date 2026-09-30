@@ -35,6 +35,15 @@
 - 詳細からアーカイブしたら一覧へ `replace` で戻る。アーカイブ済みは警告を出し、名前・説明を読み取り専用にして保存を無効にする。
 - 読み込み中・見つからない（404。再試行しない）・取得の失敗は、業務ビューと同じ `EditorTargetState`（パンくず + `一覧へ戻る` の `PageHeader` の下に Skeleton / 「対象が見つかりません」/ 再試行）。
 
+### 1.3 文書詳細（`/documents/:id`。#581）
+
+見出しはナレッジベース・業務ビューの詳細と同じ構成にする（`src/components/documents/DocumentDetailPage.tsx`）。URL と本文（`DocumentWorkspace`）は変えない。
+
+- `PageHeader`: パンくず（`文書インデックス › ファイル名`、`EditorBreadcrumbs`）・タイトル（ファイル名）・状態（`StatusBadge`。本文と同じく `?recipe=` で選んだレシピの状態、無ければ文書の状態）・`一覧へ戻る`（secondary。375px では「その他の操作」）。本文のカードにはファイル名と状態を重ねない（`DocumentWorkspace` の `showTitle={false}`。アップロード直後の画面では今までどおりカードに出す）。
+- 主な操作（処理の開始・承認・再試行・再処理、レシピの操作）は本文の工程の段のまま（§3。対象の操作ではなく工程を進める操作のため、ヘッダーへ上げない）。
+- 読み込み中・見つからない（404。再試行しない）・取得の失敗は `EditorTargetState`（§1.2 と同じ）。取得済みの文書があれば、ポーリング中の一時的な失敗で本文を置き換えない。
+- `一覧へ戻る` は `navigate()` で移るため、先に `confirmPendingLeave()` を通す（抽出確認の未保存の編集の確認）。パンくずのリンクは共有の離脱ガードが確認する。
+
 ## 2. 対象の操作（`EntityAction` / `RowActionMenu` / `ObjectActionBar`）
 
 対象オブジェクトの操作は画面ごとに `EntityAction[]` を 1 回だけ定義し、一覧の行は `RowActionMenu`（1 行に 1 個）、詳細は `ObjectActionBar` に渡す。危険な操作は `tone: "danger"` にして、確定は `useConfirm` の確認ダイアログで行う。メニューのトリガーと詳細の操作のバーの名前は `common.objectActions.aria`（`{name} の操作`）、「その他の操作」は `common.objectActions.more`。
