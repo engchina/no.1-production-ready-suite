@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -54,15 +54,24 @@ def _section_path(chunk: Any) -> list[str]:
 
 def build_screen_catalog(chunks: Sequence[Any]) -> dict[str, list[str]]:
     """文書名 → 番号付きの画面見出し（出現の多い順）。知識ベースの chunk の `section_path` から作る。"""
+    return catalog_from_section_paths(
+        (str(getattr(chunk, "source_file_name", "") or ""), _section_path(chunk), 1) for chunk in chunks)
+
+
+def catalog_from_section_paths(rows: Iterable[tuple[str, Sequence[str], int]]) -> dict[str, list[str]]:
+    """（文書名、`section_path`、その見出しの列を持つ chunk 数）の列から画面目録を作る。
+
+    chunk を 1 件ずつ持たない呼び出し元（DB で文書名と見出しを集計する）が `build_screen_catalog` と同じ目録を作る。
+    """
     counts: dict[str, dict[str, int]] = {}
-    for chunk in chunks:
-        source = str(getattr(chunk, "source_file_name", "") or "")
+    for source, path, weight in rows:
         if not source:
             continue
-        for heading in _section_path(chunk):
+        for raw in path:
+            heading = str(raw).strip()
             if _NUMBERED_HEADING.match(heading) and _HEADING_MIN_CHARS <= len(heading) <= _HEADING_MAX_CHARS:
                 bucket = counts.setdefault(source, {})
-                bucket[heading] = bucket.get(heading, 0) + 1
+                bucket[heading] = bucket.get(heading, 0) + max(1, int(weight or 1))
     return {source: sorted(bucket, key=lambda h: -bucket[h]) for source, bucket in counts.items()}
 
 

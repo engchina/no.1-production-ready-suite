@@ -792,6 +792,8 @@ export interface KnowledgeBaseQueryConfig {
   docrag_answer_flow?: DocragAnswerFlowName | null;
   docrag_neighbor_child_count?: number | null;
   docrag_rerank_enabled?: boolean | null;
+  // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
+  docrag_screen_linking_enabled?: boolean | null;
 }
 
 export type DocragQueryStrategyName =

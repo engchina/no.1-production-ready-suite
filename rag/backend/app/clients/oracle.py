@@ -31,7 +31,7 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import docrag_search_text
+from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
 from app.rag.graph_index import (
     GraphClaim,
     GraphCommunitySummary,
@@ -703,6 +703,166 @@ class OracleClient:
             if classification:
                 classifications[str(row["document_id"])] = classification
         return classifications
+
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
+
+        質問が名指しした業務を、検索範囲の大分類の語の一覧から見つけるために使う(#553)。
+        値は保存どおりに返す(比較の正規化は呼び出し側で行う)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT large_category FROM (
+                SELECT DISTINCT
+                    JSON_VALUE(d.classification, '$.large_category') AS large_category
+                FROM rag_documents d
+                WHERE d.classification IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunks c
+                      WHERE c.document_id = d.document_id
+                        AND {where_sql}
+                  )
+            )
+            WHERE large_category IS NOT NULL
+            ORDER BY large_category
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [str(row["large_category"]) for row in rows if row.get("large_category")]
+
+    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
+        """検索と同じ条件の chunk 集合の状態を表す短い値(画面目録の cache の key。#554)。
+
+        文書の追加・削除・再索引(chunk_id が変わる)・文書名の変更で変わる。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS chunk_count,
+                   NVL(SUM(ORA_HASH(c.chunk_id || '/' || d.file_name)), 0) AS chunk_hash
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        if row is None:
+            return "0:0"
+        return f"{row.get('chunk_count') or 0}:{row.get('chunk_hash') or 0}"
+
+    async def retrieval_screen_sections(
+        self, filters: dict[str, str]
+    ) -> list[tuple[str, str, int]]:
+        """検索と同じ条件の chunk の(文書名、見出しの列、chunk 数)を DISTINCT で返す(#554)。
+
+        見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.file_name,
+                   JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                   COUNT(*) AS chunk_count
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL
+            GROUP BY d.file_name, JSON_VALUE(c.metadata_json, '$.section_path')
+            ORDER BY d.file_name, MIN(c.chunk_index)
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [
+            (str(row["file_name"]), str(row["section_path"]), _int_value(row.get("chunk_count")))
+            for row in rows
+            if row.get("file_name") and row.get("section_path")
+        ]
+
+    async def retrieval_screen_chunks(
+        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
+    ) -> list[RetrievedChunk]:
+        """検索と同じ条件で、文書名が一致し見出しの列に ``heading`` を含む chunk を返す(#554)。
+
+        SQL は見出しの部分一致で候補を絞り、見出しの列の要素としての一致は呼び出し側で確かめる。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    c.chunk_set_id,
+                    d.file_name,
+                    d.category_name,
+                    0 AS score
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND d.file_name = :screen_file_name
+                  AND INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                ORDER BY c.document_id, c.chunk_index, c.chunk_id
+            ) WHERE ROWNUM <= :screen_limit
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "screen_file_name": file_name,
+                "screen_heading": heading,
+                "screen_limit": max(1, int(limit)),
+            },
+        )
+        return [_retrieved_chunk_from_row(row) for row in rows]
+
+    async def chunk_set_first_page_contexts(
+        self, chunk_set_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """chunk set の文書の 1 ページ目の本文(first_page_context)を chunk_set_id ごとに返す。
+
+        回答の「文書の背景」に使う。ヒットした chunk set の分を IN で 1 回だけ読む。値の無い
+        chunk set は含めない(#557)。
+        """
+        ids = _unique_optional_sequence(list(chunk_set_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("cs.chunk_set_id", "first_page_chunk_set", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT cs.chunk_set_id, cs.first_page_context
+            FROM rag_chunk_sets cs
+            JOIN rag_documents d ON d.document_id = cs.document_id
+            WHERE {in_sql}
+              AND cs.first_page_context IS NOT NULL
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        contexts: dict[str, dict[str, object]] = {}
+        for row in rows:
+            context = _json_loads(row.get("first_page_context"))
+            if context:
+                contexts[str(row["chunk_set_id"])] = context
+        return contexts
 
     async def context_dependency_chunks(
         self,
@@ -8551,7 +8711,12 @@ class OracleClient:
                         "chunk_index": chunk.index,
                         "start_offset": chunk.start_offset,
                         "end_offset": chunk.end_offset,
-                        **chunk.metadata,
+                        # 1 ページ目の本文は chunk の行に入れず chunk set に保存する(#557)。
+                        **{
+                            key: value
+                            for key, value in chunk.metadata.items()
+                            if key != DOCRAG_FIRST_PAGE_CONTEXT_KEY
+                        },
                     }
                 ),
                 "embedding": None if embedding is None else _to_vector_bind(embedding),
@@ -8593,7 +8758,23 @@ class OracleClient:
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
+
+        DocRAG の文書の 1 ページ目の本文(先頭の chunk の ``DOCRAG_FIRST_PAGE_CONTEXT_KEY``)は、
+        chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
+        ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
         """
+        first_page_context = (
+            next(
+                (
+                    json.loads(str(chunk.metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+                    for chunk in chunks
+                    if chunk.metadata.get(DOCRAG_FIRST_PAGE_CONTEXT_KEY)
+                ),
+                None,
+            )
+            if chunk_set_id is not None
+            else None
+        )
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
             document = _select_document_state(connection, document_id)
@@ -8666,6 +8847,29 @@ class OracleClient:
                     )
                     """,
                     rows,
+                )
+            if first_page_context is not None:
+                _execute(
+                    connection,
+                    """
+                    MERGE INTO rag_chunk_sets t
+                    USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
+                    ON (t.chunk_set_id = s.chunk_set_id)
+                    WHEN MATCHED THEN UPDATE SET
+                        t.first_page_context = :first_page_context
+                    WHEN NOT MATCHED THEN INSERT
+                        (chunk_set_id, document_id, tenant_id_hash, first_page_context)
+                        VALUES (
+                            :chunk_set_id, :document_id, :tenant_id_hash, :first_page_context
+                        )
+                    """,
+                    {
+                        "chunk_set_id": chunk_set_id,
+                        "document_id": document_id,
+                        "tenant_id_hash": document.tenant_id_hash,
+                        "first_page_context": _json_bind(first_page_context),
+                    },
+                    input_sizes=_json_input_sizes("first_page_context"),
                 )
             return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
 
@@ -13290,6 +13494,7 @@ CREATE TABLE rag_chunk_sets (
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     is_active       NUMBER(1) DEFAULT 0 NOT NULL,
     metrics_json    JSON,
+    first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_chunk_sets_document_fk

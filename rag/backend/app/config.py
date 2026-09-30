@@ -879,6 +879,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=True,
         description="DocRAG 回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
     )
+    rag_docrag_screen_linking_enabled: bool = Field(
+        default=False,
+        description=(
+            "DocRAG 回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
+            "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
+            "(LLM の呼び出しが 1 回増える。#554)。"
+            "業務ビューで上書きできる。"
+        ),
+    )
     rag_answer_record_retention_days: int = Field(
         default=90,
         ge=0,
