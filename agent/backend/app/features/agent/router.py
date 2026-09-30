@@ -175,11 +175,35 @@ _rbac_policy_cache: dict[str, tuple[ActorPolicy, float]] = {}
 _jwt_jwks_cache: dict[str, tuple[dict[str, object], float]] = {}
 
 
+_MCP_TIMEOUT_MAX_SECONDS = 600
+
+
+def _validate_mcp_timeout(value: float | None) -> float | None:
+    """外部 MCP のタイムアウト秒（画面の「タイムアウト秒」と同じ規則・文言。#540）。
+
+    省略（None）は既定値（作成）・変更なし（更新）。
+    0 以下を保存すると呼び出しがすぐ失敗するため受け付けない。
+    """
+    if value is None:
+        return None
+    if not 0 < value <= _MCP_TIMEOUT_MAX_SECONDS:
+        raise ValueError(
+            f"タイムアウト秒は 0 より大きく {_MCP_TIMEOUT_MAX_SECONDS} 以下の"
+            "数値を入力してください。"
+        )
+    return value
+
+
 class SettingsPatch(BaseModel):
     base_url: str | None = None
     timeout_seconds: float | None = None
     default_limit: int | None = None
     session_id: str | None = None
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout(cls, value: float | None) -> float | None:
+        return _validate_mcp_timeout(value)
 
 
 class ProductMcpSettings(BaseModel):
@@ -197,8 +221,21 @@ class ProductMcpSettings(BaseModel):
 
 class ProductMcpSettingsPatch(BaseModel):
     mcp_url: str | None = None
-    timeout_seconds: float | None = Field(default=None, gt=0, le=600)
-    default_limit: int | None = Field(default=None, ge=1, le=1000)
+    timeout_seconds: float | None = None
+    default_limit: int | None = None
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout(cls, value: float | None) -> float | None:
+        return _validate_mcp_timeout(value)
+
+    @field_validator("default_limit")
+    @classmethod
+    def _validate_default_limit(cls, value: int | None) -> int | None:
+        # 画面の「既定取得件数」と同じ文言（#541）。
+        if value is not None and not 1 <= value <= 1000:
+            raise ValueError("既定取得件数は 1 以上 1000 以下の整数を入力してください。")
+        return value
 
     @field_validator("mcp_url")
     @classmethod
@@ -235,6 +272,11 @@ class ExternalMcpServerCreate(BaseModel):
     oauth_client_secret: str | None = None
     oauth_scope: str | None = None
 
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout(cls, value: float | None) -> float | None:
+        return _validate_mcp_timeout(value)
+
 
 class ExternalMcpServerPatch(BaseModel):
     label: str | None = None
@@ -245,6 +287,11 @@ class ExternalMcpServerPatch(BaseModel):
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
     oauth_scope: str | None = None
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout(cls, value: float | None) -> float | None:
+        return _validate_mcp_timeout(value)
 
 
 class AgentSkillCreate(BaseModel):
@@ -3777,10 +3824,11 @@ def _runtime_safety_settings_response() -> RuntimeSafetySettings:
 
 
 def _validate_runtime_safety_patch(patch: RuntimeSafetySettingsPatch) -> None:
+    # 文言は画面の欄のラベルと同じ（#541）。0 は「許可しない」という正当な値（空は画面で必須）。
     if patch.max_tool_calls_per_run is not None and patch.max_tool_calls_per_run < 0:
-        raise ValueError("max_tool_calls_per_run must be greater than or equal to 0")
+        raise ValueError("Run あたり最大ツール呼び出しは 0 以上の整数を入力してください。")
     if patch.max_pending_approvals_per_run is not None and patch.max_pending_approvals_per_run < 0:
-        raise ValueError("max_pending_approvals_per_run must be greater than or equal to 0")
+        raise ValueError("Run あたり最大承認待ちは 0 以上の整数を入力してください。")
 
 
 def _planner_settings_response() -> PlannerSettings:
@@ -3867,30 +3915,32 @@ def _mcp_oauth_configured(config: object) -> bool:
 
 
 def _validate_command_policy_patch(patch: CommandPolicySettingsPatch) -> None:
+    # 文言は画面の欄のラベルと同じ（「〇〇を入力してください。」など。#541）。
     if patch.workspace_root is not None and not patch.workspace_root.strip():
-        raise ValueError("workspace_root must not be empty")
+        raise ValueError("Workspace root を入力してください。")
     if patch.allowed_prefixes is not None:
         patch.allowed_prefixes = _normalized_command_prefixes(patch.allowed_prefixes)
     if patch.default_timeout_seconds is not None and patch.default_timeout_seconds <= 0:
-        raise ValueError("default_timeout_seconds must be greater than 0")
+        raise ValueError("既定タイムアウト秒は 0 より大きい数値を入力してください。")
     if patch.max_timeout_seconds is not None and patch.max_timeout_seconds <= 0:
-        raise ValueError("max_timeout_seconds must be greater than 0")
+        raise ValueError("最大タイムアウト秒は 0 より大きい数値を入力してください。")
     current = runtime_config_store.get_command_policy()
     default_timeout = patch.default_timeout_seconds or current.default_timeout_seconds
     max_timeout = patch.max_timeout_seconds or current.max_timeout_seconds
     if default_timeout > max_timeout:
-        raise ValueError(
-            "default_timeout_seconds must be less than or equal to max_timeout_seconds"
-        )
+        raise ValueError("既定タイムアウト秒は最大タイムアウト秒以下の数値を入力してください。")
     if patch.output_limit_bytes is not None and patch.output_limit_bytes <= 0:
-        raise ValueError("output_limit_bytes must be greater than 0")
+        raise ValueError("出力上限 bytes は 1 以上の整数を入力してください。")
     if patch.artifact_storage_backend is not None:
         backend = patch.artifact_storage_backend.strip().lower()
         if backend not in {"inline", "filesystem"}:
-            raise ValueError("artifact_storage_backend must be inline or filesystem")
+            raise ValueError(
+                "Artifact storage（artifact_storage_backend）は"
+                " inline か filesystem を選択してください。"
+            )
         patch.artifact_storage_backend = backend
     if patch.artifact_storage_path is not None and not patch.artifact_storage_path.strip():
-        raise ValueError("artifact_storage_path must not be empty")
+        raise ValueError("Artifact storage path を入力してください。")
 
 
 def _normalized_command_prefixes(prefixes: list[str]) -> list[str]:

@@ -10,6 +10,7 @@ import {
   toast,
   StatusBadge,
   FormStatus,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 
@@ -44,6 +45,7 @@ export function SelectAiFeedbackAddPanel({
   const [feedbackContent, setFeedbackContent] = useState("");
   const [savingRating, setSavingRating] = useState<Rating | null>(null);
   const [message, setMessage] = useState("");
+  const [contentError, setContentError] = useState("");
   const saving = useRef(false);
   const currentHistoryId = useRef("");
 
@@ -60,6 +62,7 @@ export function SelectAiFeedbackAddPanel({
   if (useValuesChanged([generatedSql, result?.original_question, history?.feedback_comment, history?.id])) {
     setFeedbackContent(history?.feedback_comment ?? "");
     setMessage("");
+    setContentError("");
   }
 
   if (!result) return null;
@@ -73,10 +76,14 @@ export function SelectAiFeedbackAddPanel({
       setMessage(t("nl2sql.selectAiFeedbackAdd.requiresHistory"));
       return;
     }
+    // 「違う」のコメントの未入力は欄の直下に出し、その欄へフォーカスする（#541）。backend も同じ規則で拒否する（#540）。
     if (rating === "bad" && !trimmedContent) {
-      setMessage(t("nl2sql.selectAiFeedbackAdd.requiresContent"));
+      setMessage("");
+      setContentError(t("nl2sql.selectAiFeedbackAdd.requiresContent"));
+      document.getElementById("nl2sql-select-ai-feedback-content")?.focus();
       return;
     }
+    setContentError("");
 
     saving.current = true;
     setSavingRating(rating);
@@ -147,11 +154,19 @@ export function SelectAiFeedbackAddPanel({
             id="nl2sql-select-ai-feedback-content"
             disabled={savingRating !== null}
             value={feedbackContent}
-            onChange={(event) => setFeedbackContent(event.currentTarget.value)}
+            onChange={(event) => {
+              setFeedbackContent(event.currentTarget.value);
+              setContentError("");
+            }}
             rows={3}
-            className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
+            aria-invalid={contentError ? "true" : undefined}
+            aria-describedby={contentError ? "nl2sql-select-ai-feedback-content-error" : undefined}
+            className={`min-h-24 rounded-md border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring ${
+              contentError ? "border-danger-fg" : "border-border-control"
+            }`}
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
+          <FieldError id="nl2sql-select-ai-feedback-content-error" message={contentError} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
           <FormStatus

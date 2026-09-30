@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
   Button,
+  FieldError,
   FieldLabel,
   FormStatus,
   RowActionMenu,
@@ -32,6 +33,7 @@ import { DocragPromptCard } from "./DocragPromptEditor";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
 import { usePromptVersions, useCreatePromptVersion, useActivatePromptVersion } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +51,7 @@ export function PromptVersionsClient() {
   const [note, setNote] = useState("");
   const [activateOnCreate, setActivateOnCreate] = useState(true);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errors, setErrors] = useState<{ name?: string | null; systemPrompt?: string | null }>({});
 
   // 作成前の新しい版の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
   useLeaveGuard(Boolean(name.trim() || systemPrompt.trim() || note.trim()));
@@ -82,7 +85,6 @@ export function PromptVersionsClient() {
   }
 
   const versions = query.data?.versions ?? [];
-  const canSubmit = name.trim().length > 0 && systemPrompt.trim().length > 0;
   const createError =
     create.error instanceof ApiError ? create.error.message : t("settings.prompts.actions.saveError");
   const activateError =
@@ -91,7 +93,20 @@ export function PromptVersionsClient() {
       : t("settings.prompts.actions.saveError");
 
   function submit() {
-    if (!canSubmit) return;
+    // 作成のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出す（#541）。文言は backend と同じ。
+    const nextErrors = {
+      name: requiredTextError(name, t("settings.prompts.form.nameRequired")),
+      systemPrompt: requiredTextError(systemPrompt, t("settings.prompts.form.systemPromptRequired")),
+    };
+    setErrors(nextErrors);
+    if (
+      focusFirstInvalidField([
+        ["prompt-version-name", nextErrors.name],
+        ["prompt-version-system-prompt", nextErrors.systemPrompt],
+      ])
+    ) {
+      return;
+    }
     create.reset();
     setSuccessMessage(null);
     create.mutate(
@@ -159,8 +174,12 @@ export function PromptVersionsClient() {
             label={t("settings.prompts.form.name")}
             value={name}
             maxLength={NAME_MAX}
-            onValueChange={setName}
+            onValueChange={(value) => {
+              setName(value);
+              setErrors((current) => ({ ...current, name: null }));
+            }}
             placeholder={t("settings.prompts.form.namePlaceholder")}
+            error={errors.name ?? undefined}
             required
           />
           <div className="space-y-1.5">
@@ -173,13 +192,22 @@ export function PromptVersionsClient() {
             <textarea
               id="prompt-version-system-prompt"
               aria-required="true"
+              aria-invalid={errors.systemPrompt ? true : undefined}
+              aria-describedby={errors.systemPrompt ? "prompt-version-system-prompt-error" : undefined}
               value={systemPrompt}
               maxLength={PROMPT_MAX}
-              onChange={(event) => setSystemPrompt(event.target.value)}
+              onChange={(event) => {
+                setSystemPrompt(event.target.value);
+                setErrors((current) => ({ ...current, systemPrompt: null }));
+              }}
               placeholder={t("settings.prompts.form.systemPromptPlaceholder")}
               rows={6}
-              className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+              className={cn(
+                "w-full resize-y rounded-md border bg-surface p-3 text-sm leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring",
+                errors.systemPrompt ? "border-danger-fg" : "border-border-control",
+              )}
             />
+            <FieldError id="prompt-version-system-prompt-error" message={errors.systemPrompt} />
           </div>
           <TextField
             id="prompt-version-note"
@@ -206,7 +234,6 @@ export function PromptVersionsClient() {
             <Button
               type="button"
               loading={create.isPending}
-              disabled={!canSubmit}
               onClick={submit}
               aria-label={t("settings.prompts.actions.create")} icon={Plus}>
               {t("settings.prompts.actions.create")}

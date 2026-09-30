@@ -154,8 +154,12 @@ test("文書分割設定は DocRAG 親子階層のパラメータを保存でき
 
   const childTarget = page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true });
   await childTarget.fill("2000");
-  await expect(page.getByText("子チャンク目標文字数: 300〜1,600").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+  // 範囲外は保存を押したときに欄の直下へ理由を出し、その欄へフォーカスする（押せないボタンだけにしない。#541）。
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(childTarget).toHaveAccessibleDescription(/子チャンク目標文字数は 300 以上 1,600 以下の整数を入力してください。/);
+  await expect(childTarget).toHaveAttribute("aria-invalid", "true");
+  await expect(childTarget).toBeFocused();
+  expect(savedPayload).toBeNull();
 
   await childTarget.fill("600");
   await page.getByRole("spinbutton", { name: "親チャンク最大ページ数", exact: true }).fill("2");

@@ -4,6 +4,8 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
+  FieldError,
+  FieldLabel,
   FormStatus,
   RowTitleButton,
   SelectField,
@@ -27,6 +29,7 @@ import {
 import { PagedDataTable } from "@/components/PagedDataTable";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
 import { useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
 
 type Row = Record<string, JsonValue>;
@@ -94,6 +97,30 @@ function rowName(kind: RuntimeKnowledgeKind, row: Row): string {
   return kind === "terms" ? text(row.term) : text(row.title) || text(row.id);
 }
 
+type RequiredField = "name" | "title" | "content";
+type RequiredErrors = Partial<Record<RequiredField, string | null>>;
+
+const FIELD_IDS: Record<RequiredField, string> = {
+  name: "runtime-knowledge-name",
+  title: "runtime-knowledge-title",
+  content: "runtime-knowledge-content",
+};
+
+/**
+ * 保存前の必須の検証（#540）。規則と文言は backend（docrag の edit_knowledge）と同じ:
+ * 用語は「用語」、ルールは「ルール ID」「ルール名」「ルール内容」が必須。
+ */
+export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors {
+  if (form.kind === "terms") {
+    return { name: requiredTextError(form.name, t("businessViews.runtime.error.termRequired")) };
+  }
+  return {
+    name: requiredTextError(form.name, t("businessViews.runtime.error.ruleIdRequired")),
+    title: requiredTextError(form.title, t("businessViews.runtime.error.ruleTitleRequired")),
+    content: requiredTextError(form.content, t("businessViews.runtime.error.ruleContentRequired")),
+  };
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
 }
@@ -113,6 +140,7 @@ export function RuntimeKnowledgeManager({
   const load = (next: FormState) => {
     setForm(next);
     setBaseline(next);
+    setErrors({});
   };
   useLeaveGuard(editableSnapshot(form) !== editableSnapshot(baseline));
   const [question, setQuestion] = useState("");
@@ -120,8 +148,25 @@ export function RuntimeKnowledgeManager({
     null,
   );
   const [previewing, setPreviewing] = useState(false);
-  const update = (patch: Partial<FormState>) =>
+  const [errors, setErrors] = useState<RequiredErrors>({});
+  const update = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
+    // 直した欄のエラーだけを消す。種類を切り替えたときは必須の欄が変わるので全部消す。
+    setErrors((current) =>
+      "kind" in patch
+        ? {}
+        : Object.fromEntries(Object.entries(current).filter(([field]) => !(field in patch))),
+    );
+  };
+
+  // 保存のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出す（UX 契約 messaging.md §3.2.1。#541）。
+  const saveForm = () => {
+    const nextErrors = runtimeKnowledgeRequiredErrors(form);
+    setErrors(nextErrors);
+    const order: RequiredField[] = ["name", "title", "content"];
+    if (focusFirstInvalidField(order.map((field) => [FIELD_IDS[field], nextErrors[field]] as const))) return;
+    submit();
+  };
 
   const submit = (remove = false) =>
     save.mutate(
@@ -304,6 +349,7 @@ export function RuntimeKnowledgeManager({
             value={form.name}
             maxLength={160}
             onChange={(event) => update({ name: event.target.value })}
+            error={errors.name ?? undefined}
             required
           />
           {form.kind === "rules" ? (
@@ -313,33 +359,46 @@ export function RuntimeKnowledgeManager({
               value={form.title}
               maxLength={160}
               onChange={(event) => update({ title: event.target.value })}
+              error={errors.title ?? undefined}
+              required
             />
           ) : null}
-          {(["labels", "content"] as const).map((field) => (
-            <div key={field}>
-              <label
-                htmlFor={`runtime-knowledge-${field}`}
-                className="text-sm font-medium text-fg"
-              >
-                {t(
-                  field === "labels"
-                    ? form.kind === "terms"
-                      ? "businessViews.runtime.aliasesInput"
-                      : "businessViews.runtime.triggersInput"
-                    : form.kind === "terms"
-                      ? "businessViews.runtime.description"
-                      : "businessViews.runtime.content",
-                )}
-              </label>
-              <textarea
-                id={`runtime-knowledge-${field}`}
-                value={form[field]}
-                onChange={(event) => update({ [field]: event.target.value })}
-                rows={field === "labels" ? 3 : 4}
-                className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring"
-              />
-            </div>
-          ))}
+          {(["labels", "content"] as const).map((field) => {
+            // ルール内容だけが必須（用語の説明・別名・照合キーワードは任意。backend と同じ）。
+            const required = field === "content" && form.kind === "rules";
+            const error = field === "content" ? errors.content : null;
+            const errorId = `runtime-knowledge-${field}-error`;
+            return (
+              <div key={field}>
+                <FieldLabel
+                  htmlFor={`runtime-knowledge-${field}`}
+                  required={required}
+                  label={t(
+                    field === "labels"
+                      ? form.kind === "terms"
+                        ? "businessViews.runtime.aliasesInput"
+                        : "businessViews.runtime.triggersInput"
+                      : form.kind === "terms"
+                        ? "businessViews.runtime.description"
+                        : "businessViews.runtime.content",
+                  )}
+                />
+                <textarea
+                  id={`runtime-knowledge-${field}`}
+                  value={form[field]}
+                  onChange={(event) => update({ [field]: event.target.value })}
+                  rows={field === "labels" ? 3 : 4}
+                  aria-required={required || undefined}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? errorId : undefined}
+                  className={`mt-1 w-full rounded-md border bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring ${
+                    error ? "border-danger-fg" : "border-border-control"
+                  }`}
+                />
+                <FieldError id={errorId} message={error} className="mt-1" />
+              </div>
+            );
+          })}
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-fg">
               {t("businessViews.runtime.enabledLabel")}
@@ -355,8 +414,7 @@ export function RuntimeKnowledgeManager({
               size="sm"
               icon={Save}
               loading={save.isPending}
-              disabled={!form.name.trim()}
-              onClick={() => submit()}
+              onClick={saveForm}
             >
               {t("businessViews.runtime.save")}
             </Button>
