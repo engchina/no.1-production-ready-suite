@@ -16,11 +16,11 @@ import { RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
-import { ApiError, type DocragPromptKey, type DocragPromptView } from "@/lib/api";
+import { ApiError, type AnswerPromptKey, type AnswerPromptView } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useDocragPrompts, useSaveDocragPrompt } from "@/lib/queries";
+import { useAnswerPrompts, useSaveAnswerPrompt } from "@/lib/queries";
 
 const PROMPT_MAX = 50000;
 
@@ -28,21 +28,21 @@ const PROMPT_MAX = 50000;
  * 編集できるプロンプト（回答生成のプロンプト `vlm_answer` / 図・画像の読み取りプロンプト `image_retrieval`）を 1 つ編集する。
  * 全体で 1 つの設定（業務ビュー・文書レシピでは上書きしない）。保存した内容は次の回答・次の解析から使う。
  */
-export function DocragPromptCard({
+export function AnswerPromptCard({
   promptKey,
   showStages = false,
 }: {
-  promptKey: DocragPromptKey;
+  promptKey: AnswerPromptKey;
   showStages?: boolean;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t(`settings.docragPrompts.${promptKey}.title`)}</CardTitle>
-        <CardDescription>{t(`settings.docragPrompts.${promptKey}.description`)}</CardDescription>
+        <CardTitle>{t(`settings.answerPrompts.${promptKey}.title`)}</CardTitle>
+        <CardDescription>{t(`settings.answerPrompts.${promptKey}.description`)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <DocragPromptPanel promptKey={promptKey} showStages={showStages} />
+        <AnswerPromptPanel promptKey={promptKey} showStages={showStages} />
       </CardContent>
     </Card>
   );
@@ -52,31 +52,31 @@ export function DocragPromptCard({
  * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
  * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
  */
-export function DocragPromptPanel({
+export function AnswerPromptPanel({
   promptKey,
   showStages = false,
 }: {
-  promptKey: DocragPromptKey;
+  promptKey: AnswerPromptKey;
   showStages?: boolean;
 }) {
-  const query = useDocragPrompts();
+  const query = useAnswerPrompts();
   const prompt = query.data?.prompts.find((item) => item.key === promptKey);
   if (query.isPending) return <Skeleton className="h-40 w-full" />;
   if (query.isError || !prompt) {
     return (
-      <ErrorState message={t("settings.docragPrompts.loadError")} onRetry={() => void query.refetch()} />
+      <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void query.refetch()} />
     );
   }
   return (
     <div className="space-y-4">
-      <DocragPromptEditor prompt={prompt} />
+      <AnswerPromptEditor prompt={prompt} />
       {showStages ? <ReadonlyStages stages={query.data.stages} /> : null}
     </div>
   );
 }
 
-function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
-  const save = useSaveDocragPrompt();
+function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
+  const save = useSaveAnswerPrompt();
   const confirm = useConfirm();
   const [content, setContent] = useState(prompt.content);
   // 編集欄が基にした保存値。保存値が変わったレンダーで、未編集なら編集欄を保存値へ揃える。
@@ -88,13 +88,13 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
   }
   const dirty = content !== prompt.content;
   useLeaveGuard(dirty);
-  const inputId = `docrag-prompt-${prompt.key}`;
+  const inputId = `answer-prompt-${prompt.key}`;
 
   async function reset() {
     const confirmed = await confirm({
-      title: t("settings.docragPrompts.resetTitle"),
-      description: t("settings.docragPrompts.resetDescription"),
-      confirmLabel: t("settings.docragPrompts.reset"),
+      title: t("settings.answerPrompts.resetTitle"),
+      description: t("settings.answerPrompts.resetDescription"),
+      confirmLabel: t("settings.answerPrompts.reset"),
       tone: "danger",
     });
     if (!confirmed) return;
@@ -115,9 +115,9 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
       {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
       <TextareaField
         id={inputId}
-        label={t(`settings.docragPrompts.${prompt.key}.field`)}
+        label={t(`settings.answerPrompts.${prompt.key}.field`)}
         required
-        helper={t("settings.docragPrompts.placeholders", {
+        helper={t("settings.answerPrompts.placeholders", {
           names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
         })}
         value={content}
@@ -137,7 +137,7 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
           disabled={!dirty || !content.trim()}
           onClick={() => save.mutate({ key: prompt.key, content })}
         >
-          {t("settings.docragPrompts.save")}
+          {t("settings.answerPrompts.save")}
         </Button>
         <Button
           type="button"
@@ -148,17 +148,17 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
           disabled={!prompt.customized || save.isPending}
           onClick={() => void reset()}
         >
-          {t("settings.docragPrompts.reset")}
+          {t("settings.answerPrompts.reset")}
         </Button>
         {/* 既定値か変更済みか。ラベルは文字列だけを持つため、「既定に戻す」の隣に置く（#584）。 */}
         <StatusBadge
           variant={prompt.customized ? "info" : "neutral"}
           label={
             prompt.customized
-              ? t("settings.docragPrompts.customized", {
+              ? t("settings.answerPrompts.customized", {
                   value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
                 })
-              : t("settings.docragPrompts.default")
+              : t("settings.answerPrompts.default")
           }
         />
         {save.isSuccess && !dirty ? (
@@ -166,8 +166,8 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
             tone="success"
             message={t(
               save.variables?.content === null
-                ? "settings.docragPrompts.resetDone"
-                : "settings.docragPrompts.saved"
+                ? "settings.answerPrompts.resetDone"
+                : "settings.answerPrompts.saved"
             )}
           />
         ) : null}
@@ -175,7 +175,7 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
           <FormStatus
             tone="danger"
             message={
-              save.error instanceof ApiError ? save.error.message : t("settings.docragPrompts.saveError")
+              save.error instanceof ApiError ? save.error.message : t("settings.answerPrompts.saveError")
             }
           />
         ) : null}
@@ -187,19 +187,19 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
 function ReadonlyStages({ stages }: { stages: { id: string; prompts: { id: string; content: string }[] }[] }) {
   return (
     <section className="space-y-2 border-t border-border pt-4">
-      <h3 className="text-sm font-semibold text-fg">{t("settings.docragPrompts.stages.title")}</h3>
-      <p className="text-xs leading-relaxed text-fg-muted">{t("settings.docragPrompts.stages.description")}</p>
+      <h3 className="text-sm font-semibold text-fg">{t("settings.answerPrompts.stages.title")}</h3>
+      <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answerPrompts.stages.description")}</p>
       {stages.map((stage) => (
         <Disclosure
           key={stage.id}
-          summary={t(`settings.docragPrompts.stage.${stage.id}` as I18nKey)}
+          summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
           surface="sunken"
           contentClassName="space-y-3"
         >
             {stage.prompts.map((part) => (
               <div key={part.id}>
                 <p className="text-xs font-medium text-fg-muted">
-                  {t(`settings.docragPrompts.part.${part.id}` as I18nKey)}
+                  {t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
                 </p>
                 <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-2 font-mono text-xs leading-relaxed text-fg">
                   {part.content}

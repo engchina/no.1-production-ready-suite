@@ -32,32 +32,32 @@ export function overlapLabelKey(strategy: ChunkingStrategyName): I18nKey {
     : "settings.chunking.params.overlap";
 }
 
-export const DOCRAG_CHUNKING_STRATEGY: ChunkingStrategyName = "docrag_small_to_big";
+export const SMALL_TO_BIG_STRATEGY: ChunkingStrategyName = "small_to_big";
 
 /** Docling の解析結果がなく、親子階層（small-to-big）の代わりに構造認識で分割したときの理由(#300)。 */
-export const DOCRAG_LAYOUT_MISSING_REASON = "docrag_layout_missing";
+export const LAYOUT_MISSING_REASON = "layout_missing";
 
 /**
  * 親子階層（small-to-big）を選んだが、解析結果が Docling でないため構造認識で分割した chunk を含むか。
  * backend が chunk metadata の `chunk_strategy_fallback_reason` に残した縮退の印を見る。
  */
-export function docragChunkingFellBack(chunks: readonly Pick<DocumentChunkView, "metadata">[]): boolean {
+export function smallToBigFellBack(chunks: readonly Pick<DocumentChunkView, "metadata">[]): boolean {
   return chunks.some(
-    (chunk) => chunk.metadata.chunk_strategy_fallback_reason === DOCRAG_LAYOUT_MISSING_REASON
+    (chunk) => chunk.metadata.chunk_strategy_fallback_reason === LAYOUT_MISSING_REASON
   );
 }
 
-export type DocragChunkingParamField =
-  | "docrag_child_target_chars"
-  | "docrag_table_child_target_chars"
-  | "docrag_parent_target_chars"
-  | "docrag_parent_max_pages"
-  | "docrag_parent_max_children";
+export type SmallToBigParamField =
+  | "chunk_child_target_chars"
+  | "chunk_table_child_target_chars"
+  | "chunk_parent_target_chars"
+  | "chunk_parent_max_pages"
+  | "chunk_parent_max_children";
 
-export type DocragChunkingParams = Record<DocragChunkingParamField, number>;
+export type SmallToBigParams = Record<SmallToBigParamField, number>;
 
-export type DocragChunkingParamSpec = {
-  field: DocragChunkingParamField;
+export type SmallToBigParamSpec = {
+  field: SmallToBigParamField;
   labelKey: I18nKey;
   hintKey: I18nKey;
   min: number;
@@ -68,49 +68,49 @@ export type DocragChunkingParamSpec = {
 
 /**
  * 親子階層（small-to-big）の分割パラメータ。既定値・範囲・刻みは rag_poc（移植元）の
- * docrag.chunking.constants(DEFAULT_* / *_RANGE)と同じ(backend の Settings と一致させる)。
+ * rag_engine.chunking.constants(DEFAULT_* / *_RANGE)と同じ(backend の Settings と一致させる)。
  */
-export const DOCRAG_CHUNKING_PARAMS: readonly DocragChunkingParamSpec[] = [
+export const SMALL_TO_BIG_PARAMS: readonly SmallToBigParamSpec[] = [
   {
-    field: "docrag_child_target_chars",
-    labelKey: "settings.chunking.params.docragChildTargetChars",
-    hintKey: "settings.chunking.params.docragChildTargetCharsHint",
+    field: "chunk_child_target_chars",
+    labelKey: "settings.chunking.params.chunkChildTargetChars",
+    hintKey: "settings.chunking.params.chunkChildTargetCharsHint",
     min: 300,
     max: 1600,
     step: 50,
     defaultValue: 1000,
   },
   {
-    field: "docrag_table_child_target_chars",
-    labelKey: "settings.chunking.params.docragTableChildTargetChars",
-    hintKey: "settings.chunking.params.docragTableChildTargetCharsHint",
+    field: "chunk_table_child_target_chars",
+    labelKey: "settings.chunking.params.chunkTableChildTargetChars",
+    hintKey: "settings.chunking.params.chunkTableChildTargetCharsHint",
     min: 300,
     max: 8000,
     step: 100,
     defaultValue: 3000,
   },
   {
-    field: "docrag_parent_target_chars",
-    labelKey: "settings.chunking.params.docragParentTargetChars",
-    hintKey: "settings.chunking.params.docragParentTargetCharsHint",
+    field: "chunk_parent_target_chars",
+    labelKey: "settings.chunking.params.chunkParentTargetChars",
+    hintKey: "settings.chunking.params.chunkParentTargetCharsHint",
     min: 1200,
     max: 10000,
     step: 100,
     defaultValue: 6000,
   },
   {
-    field: "docrag_parent_max_pages",
-    labelKey: "settings.chunking.params.docragParentMaxPages",
-    hintKey: "settings.chunking.params.docragParentMaxPagesHint",
+    field: "chunk_parent_max_pages",
+    labelKey: "settings.chunking.params.chunkParentMaxPages",
+    hintKey: "settings.chunking.params.chunkParentMaxPagesHint",
     min: 1,
     max: 5,
     step: 1,
     defaultValue: 3,
   },
   {
-    field: "docrag_parent_max_children",
-    labelKey: "settings.chunking.params.docragParentMaxChildren",
-    hintKey: "settings.chunking.params.docragParentMaxChildrenHint",
+    field: "chunk_parent_max_children",
+    labelKey: "settings.chunking.params.chunkParentMaxChildren",
+    hintKey: "settings.chunking.params.chunkParentMaxChildrenHint",
     min: 3,
     max: 20,
     step: 1,
@@ -118,16 +118,16 @@ export const DOCRAG_CHUNKING_PARAMS: readonly DocragChunkingParamSpec[] = [
   },
 ];
 
-export const DEFAULT_DOCRAG_CHUNKING_PARAMS: DocragChunkingParams = Object.fromEntries(
-  DOCRAG_CHUNKING_PARAMS.map((spec) => [spec.field, spec.defaultValue])
-) as DocragChunkingParams;
+export const DEFAULT_SMALL_TO_BIG_PARAMS: SmallToBigParams = Object.fromEntries(
+  SMALL_TO_BIG_PARAMS.map((spec) => [spec.field, spec.defaultValue])
+) as SmallToBigParams;
 
 /** 範囲外・未入力の親子階層のパラメータがあれば、最初のその項目の定義を返す。 */
-export function invalidDocragChunkingParam(
-  values: Partial<Record<DocragChunkingParamField, number | null | undefined>>
-): DocragChunkingParamSpec | null {
+export function invalidSmallToBigParam(
+  values: Partial<Record<SmallToBigParamField, number | null | undefined>>
+): SmallToBigParamSpec | null {
   return (
-    DOCRAG_CHUNKING_PARAMS.find((spec) => {
+    SMALL_TO_BIG_PARAMS.find((spec) => {
       const value = values[spec.field];
       return (
         typeof value !== "number" ||

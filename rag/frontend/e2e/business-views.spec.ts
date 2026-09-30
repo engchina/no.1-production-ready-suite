@@ -54,7 +54,7 @@ for (const viewport of [
     await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(4);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
-    await expect(settings.getByTestId("docrag-unused-note")).toHaveCount(0);
+    await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
     await expect(settings).not.toContainText("DocRAG");
     await expectNoPageOverflow(page);
   });
@@ -154,11 +154,11 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
   expect("answer_engine" in query).toBe(false);
-  expect(query.docrag_query_strategy).toBe("hyde");
-  expect(query.docrag_neighbor_child_count).toBe(3);
-  expect(query.docrag_rerank_enabled).toBe(false);
-  expect(query.docrag_screen_linking_enabled).toBe(true);
-  expect(query.docrag_answer_flow ?? null).toBeNull();
+  expect(query.query_strategy).toBe("hyde");
+  expect(query.neighbor_child_count).toBe(3);
+  expect(query.rerank_enabled).toBe(false);
+  expect(query.screen_linking_enabled).toBe(true);
+  expect(query.answer_flow ?? null).toBeNull();
 });
 
 for (const viewport of [
@@ -865,8 +865,8 @@ function searchStreamBody(answer = "上限額を確認しました。"): string 
       elapsed_ms: 10,
       guardrail_warnings: [],
       diagnostics: {
-        retrieval_strategy: "docrag",
-        retrieval_strategy_adapter: "docrag_grounded",
+        retrieval_strategy: "hybrid",
+        retrieval_strategy_adapter: "grounded",
         filter_keys: [],
         knowledge_base_count: 1,
         business_view_applied: "bv-1",

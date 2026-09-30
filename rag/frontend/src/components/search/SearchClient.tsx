@@ -56,7 +56,7 @@ import { formatDateTime } from "@/lib/format";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
-import { DocragAnswerPanel } from "./DocragAnswerPanel";
+import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
@@ -737,8 +737,8 @@ export function SearchClient() {
                   {meta && phase === "done" ? (
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
-                  {meta && phase === "done" && meta.diagnostics?.docrag ? (
-                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} traceId={meta.trace_id} />
+                  {meta && phase === "done" && meta.diagnostics?.answer ? (
+                    <AnswerDetailsPanel diagnostics={meta.diagnostics.answer} traceId={meta.trace_id} />
                   ) : null}
                 </CardContent>
               </Card>
@@ -1000,7 +1000,7 @@ function contentKindFilterLabel(value: string): string {
     : value;
 }
 
-/** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（DocragAnswerPanel）が出す。 */
+/** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（AnswerDetailsPanel）が出す。 */
 function SearchExecutionMeta({ meta }: { meta: Meta }) {
   return (
     <div className="mt-4 border-t border-border pt-3">

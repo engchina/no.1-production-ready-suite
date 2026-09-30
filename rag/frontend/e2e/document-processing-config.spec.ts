@@ -959,12 +959,12 @@ test("分割プレビューで親子階層（small-to-big）の 5 項目を指�
 
   await expect(preview).toContainText("件数");
   expect(state.previewPayload()).toMatchObject({
-    chunking_strategy: "docrag_small_to_big",
-    docrag_child_target_chars: 600,
-    docrag_table_child_target_chars: 3000,
-    docrag_parent_target_chars: 6000,
-    docrag_parent_max_pages: 3,
-    docrag_parent_max_children: 12,
+    chunking_strategy: "small_to_big",
+    chunk_child_target_chars: 600,
+    chunk_table_child_target_chars: 3000,
+    chunk_parent_target_chars: 6000,
+    chunk_parent_max_pages: 3,
+    chunk_parent_max_children: 12,
   });
   await expectNoPageOverflow(page);
 });
@@ -981,8 +981,8 @@ for (const viewport of [
       documentStatus: "REVIEW",
       previewChunkMetadata: {
         chunk_strategy: "structure_aware",
-        chunk_strategy_requested: "docrag_small_to_big",
-        chunk_strategy_fallback_reason: "docrag_layout_missing",
+        chunk_strategy_requested: "small_to_big",
+        chunk_strategy_fallback_reason: "layout_missing",
       },
     });
     await page.goto("/documents/doc-1");

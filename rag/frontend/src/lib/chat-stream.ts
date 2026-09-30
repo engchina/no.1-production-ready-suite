@@ -39,7 +39,7 @@ export interface ChatStreamHandlers {
     elapsed_ms: number;
     guardrail_warnings: string[];
     /** 回答の根拠・実行記録(無い回答では null / 未指定)。 */
-    docrag?: unknown;
+    answer_diagnostics?: unknown;
   }) => void;
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;

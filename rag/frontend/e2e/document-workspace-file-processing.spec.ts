@@ -763,7 +763,7 @@ function expectBoxClose(
 }
 
 test("PDF はページ画像で表示し、要素の表示領域を要素ごとに強調する", async ({ page }) => {
-  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
 
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
@@ -812,7 +812,7 @@ test("PDF はページ画像で表示し、要素の表示領域を要素ごと�
 test("プレビューの回転・拡大の後も強調が同じ位置に重なり、キーボードでも操作できる", async ({
   page,
 }) => {
-  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
 
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
@@ -908,7 +908,7 @@ for (const viewportCase of [
       );
     }, viewportCase.theme);
     await page.setViewportSize({ width: viewportCase.width, height: viewportCase.height });
-    await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+    await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
 
     await page.goto("/documents/doc-1");
 
@@ -992,7 +992,7 @@ test("ページ画像の寸法が届く前は A4 縦で領域を取り、届い�
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop の幅で確かめる");
   await page.setViewportSize({ width: 1920, height: 1080 });
-  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
   // ページ一覧の応答を遅らせ、読み込み中の表示の高さを測る。
   let releasePages: () => void = () => {};
   const pagesGate = new Promise<void>((resolve) => {
@@ -1021,7 +1021,7 @@ test("「強調した位置へ移動」は画面の外にある強調をペー�
   test.skip(testInfo.project.name !== "desktop", "desktop の幅で確かめる");
   // 画面が低いと、プレビューのページの上の方の強調でも開いた直後は画面の外にある。
   await page.setViewportSize({ width: 1440, height: 600 });
-  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
   await page
@@ -1548,7 +1548,7 @@ async function mockDocumentWorkspace(
     /** PDF をページ画像で表示する API（preview-pages）を返す（#349）。無ければ iframe に戻る。 */
     pdfPages?: boolean;
     /** Chunk「交通費は1000円」に要素の表示領域（要素ごとの bbox・2 ページ）を持たせる（#349）。 */
-    docragRegions?: boolean;
+    layoutRegions?: boolean;
     segmentError?: boolean;
     segmentCount?: number;
     /** 既定の 2 件の後ろに足す chunk の数（一覧の内部スクロールの検証用。#403）。 */
@@ -1984,13 +1984,13 @@ async function mockDocumentWorkspace(
                     ...(options.chunkBboxUnit ? { bbox_unit: options.chunkBboxUnit } : {}),
                     chunk_profile: "structure_v1",
                   }
-                : options.docragRegions
+                : options.layoutRegions
                   ? {
                       chunk_profile: "structure_v1",
                       page_width: 612,
                       page_height: 792,
                       bbox_unit: "absolute",
-                      docrag_metadata_json: JSON.stringify({
+                      engine_metadata_json: JSON.stringify({
                         schema_version: 4,
                         layout: {
                           display_regions: [

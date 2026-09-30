@@ -607,7 +607,7 @@ function RecipeLayerStatusChips({ statuses }: { statuses: RecipeLayerStatusView[
 
 const REBUILD_INPUT_LABEL_KEYS: Record<DocumentLayerRebuildInput, I18nKey> = {
   field_schema_hash: "documents.recipes.layerRebuildInput.field_schema_hash",
-  docrag_chunk_contract: "documents.recipes.layerRebuildInput.docrag_chunk_contract",
+  chunk_metadata_contract: "documents.recipes.layerRebuildInput.chunk_metadata_contract",
   navigation_summary_max_nodes: "documents.recipes.layerRebuildInput.navigation_summary_max_nodes",
 };
 

@@ -10,12 +10,12 @@ import {
 
 // rag_poc の viewer（getImageBoxStyle）と同じく、解析時のページ画像 px（左上原点・[x1, y1, x2, y2]）を
 // ページに対する % に直す。実データ（Docling・A4 を 300dpi で描いた 2480x3509 px）の形で確かめる。
-const docragMetadata = {
+const engineMetadata = {
   page_width: 2480,
   page_height: 3509,
   bbox: "[342.6, 392.9, 2127.0, 1247.4]",
   bbox_unit: "absolute",
-  docrag_metadata_json: JSON.stringify({
+  engine_metadata_json: JSON.stringify({
     schema_version: 4,
     layout: {
       display_regions: [
@@ -43,7 +43,7 @@ const docragMetadata = {
 
 describe("displayRegionsFromMetadata", () => {
   it("親子階層の chunk の metadata JSON から、ページごとの要素 bbox を取り出す", () => {
-    const regions = displayRegionsFromMetadata(docragMetadata);
+    const regions = displayRegionsFromMetadata(engineMetadata);
     expect(regions.map((region) => region.page)).toEqual([1, 2]);
     expect(regions[0].boxes[0]).toEqual({
       recordId: "docling-p1-1",
@@ -62,7 +62,7 @@ describe("displayRegionsFromMetadata", () => {
     ).toEqual([
       { page: 3, boxes: [{ recordId: "", seqNo: 0, category: "", bbox: [1, 2, 3, 4], textPreview: null }] },
     ]);
-    expect(displayRegionsFromMetadata({ docrag_metadata_json: "{broken" })).toEqual([]);
+    expect(displayRegionsFromMetadata({ engine_metadata_json: "{broken" })).toEqual([]);
     expect(displayRegionsFromMetadata({ layout: { display_regions: [{ page: 0, boxes: [] }] } })).toEqual(
       []
     );
@@ -76,7 +76,7 @@ describe("buildPreviewHighlights", () => {
       focusPage: 1,
       focusBbox: [342.6, 392.9, 2127.0, 1247.4],
       focusPageSize: { width: 2480, height: 3509 },
-      regions: displayRegionsFromMetadata(docragMetadata),
+      regions: displayRegionsFromMetadata(engineMetadata),
     });
     expect(highlights).toHaveLength(3);
     expect(highlights.every((highlight) => highlight.tone === "primary")).toBe(true);
@@ -123,7 +123,7 @@ describe("buildPreviewHighlights", () => {
     const highlights = buildPreviewHighlights({
       focusPage: 1,
       focusPageSize: { width: 2480, height: 3509 },
-      regions: displayRegionsFromMetadata(docragMetadata),
+      regions: displayRegionsFromMetadata(engineMetadata),
       pageSizeFor: (page) => (page === 2 ? { width: 2480, height: 3509 } : null),
     });
     const page2 = highlightRectsForPage(highlights, 2);

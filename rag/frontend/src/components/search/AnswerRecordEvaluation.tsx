@@ -16,10 +16,10 @@ import {
   evaluationOutcome,
   parseAnswerEvaluation,
   type AnswerEvaluationView,
-} from "@/lib/docrag-answer";
+} from "@/lib/answer-diagnostics";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useEvaluateDocragAnswer } from "@/lib/queries";
+import { useEvaluateAnswerRecord } from "@/lib/queries";
 
 type Axis = AnswerEvaluationView["axes"][number];
 
@@ -29,19 +29,19 @@ const COVERAGE_VARIANT = { addressed: "success", partial: "warning", missing: "d
  * 保存された回答を標準回答で評価する（LLM による回答の評価、4 軸・20 点満点）。
  * rag_poc と違い、生成の後に標準回答を入れて評価する。評価は LLM を複数回呼ぶので時間がかかる。
  */
-export function DocragAnswerEvaluation({
+export function AnswerRecordEvaluation({
   traceId,
   evaluation: initial,
 }: {
   traceId: string;
   evaluation?: unknown;
 }) {
-  const evaluate = useEvaluateDocragAnswer();
+  const evaluate = useEvaluateAnswerRecord();
   const [standardAnswer, setStandardAnswer] = useState(
     () => parseAnswerEvaluation(initial)?.standardAnswer ?? ""
   );
   const evaluation = parseAnswerEvaluation(evaluate.data?.evaluation ?? initial);
-  const inputId = `docrag-standard-answer-${traceId}`;
+  const inputId = `standard-answer-${traceId}`;
   const canSubmit = standardAnswer.trim().length > 0 && !evaluate.isPending;
 
   return (
@@ -94,10 +94,10 @@ export function DocragAnswerEvaluation({
         <ProcessingIndicator
           active
           label={t("search.evaluation.running")}
-          operationKey={`docrag-evaluation-${traceId}`}
+          operationKey={`answer-evaluation-${traceId}`}
           placement="action"
           activityIcon="none"
-          testId="docrag-evaluation-processing"
+          testId="answer-evaluation-processing"
         />
       ) : null}
       {evaluation ? <EvaluationResult evaluation={evaluation} /> : null}

@@ -843,8 +843,8 @@ function searchStreamBody(): string {
       elapsed_ms: 12,
       guardrail_warnings: [],
       diagnostics: {
-        retrieval_strategy: "docrag",
-        retrieval_strategy_adapter: "docrag_grounded",
+        retrieval_strategy: "hybrid",
+        retrieval_strategy_adapter: "grounded",
         filter_keys: [],
         knowledge_base_count: 1,
         config_fingerprint: "fp-1",

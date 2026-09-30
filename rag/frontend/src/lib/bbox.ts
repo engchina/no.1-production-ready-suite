@@ -479,7 +479,7 @@ function normalizeBboxUnitValue(value: string): BboxOverlayUnit | null {
 }
 
 // ---- 強調する領域（#349） ----
-// 親子階層（small-to-big）の chunk は metadata.docrag_metadata_json.layout.display_regions に、根拠にした要素ごとの
+// 親子階層（small-to-big）の chunk は metadata.engine_metadata_json.layout.display_regions に、根拠にした要素ごとの
 // bbox（解析時のページ画像 px・左上原点・[x1, y1, x2, y2]）をページ別に持つ（rag_poc と同じ形式）。
 // プレビューでは要素ごとに矩形を重ね、無い chunk だけ包含 bbox 1 つを重ねる。
 
@@ -517,7 +517,7 @@ export function displayRegionsFromMetadata(
 ): BboxDisplayRegion[] {
   if (!metadata) return [];
   const layout =
-    recordValue(docragMetadata(metadata)?.layout) ?? recordValue(metadata.layout);
+    recordValue(engineMetadata(metadata)?.layout) ?? recordValue(metadata.layout);
   const raw = layout?.display_regions ?? metadata.display_regions;
   if (!Array.isArray(raw)) return [];
   const regions: BboxDisplayRegion[] = [];
@@ -543,8 +543,8 @@ export function displayRegionsFromMetadata(
   return regions;
 }
 
-function docragMetadata(metadata: Record<string, unknown>): Record<string, unknown> | null {
-  const raw = metadata.docrag_metadata_json ?? metadata.docrag_metadata;
+function engineMetadata(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  const raw = metadata.engine_metadata_json;
   if (typeof raw === "string" && raw.trim()) {
     try {
       return recordValue(JSON.parse(raw));

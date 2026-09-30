@@ -20,8 +20,8 @@ for (const viewport of [
   test(`回答プロンプトの画面はテンプレートだけを出し、版の一覧と作成は無い (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
-    await page.route("**/api/settings/docrag-prompts**", (route) =>
-      route.fulfill({ json: docragPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) })
+    await page.route("**/api/settings/answer-prompts**", (route) =>
+      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) })
     );
 
     await page.goto("/settings/prompts");
@@ -31,7 +31,7 @@ for (const viewport of [
     await expect(page.getByRole("textbox", { name: "テンプレート", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "版を作成" })).toHaveCount(0);
     await expect(page.getByTestId("prompt-version-list")).toHaveCount(0);
-    await expect(page.getByTestId("docrag-unused-note")).toHaveCount(0);
+    await expect(page.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
     await expect(page.locator("main")).not.toContainText("DocRAG");
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "回答プロンプト" })).toHaveAttribute(
@@ -48,9 +48,9 @@ for (const viewport of [
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route("**/api/settings/docrag-prompts**", async (route) => {
+    await page.route("**/api/settings/answer-prompts**", async (route) => {
       await gate;
-      await route.fulfill({ json: docragPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
+      await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
     });
 
     await page.goto("/settings/prompts");
@@ -72,10 +72,10 @@ for (const viewport of [
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const requests: { method: string; body: unknown }[] = [];
-    await page.route("**/api/settings/docrag-prompts**", async (route) => {
+    await page.route("**/api/settings/answer-prompts**", async (route) => {
       const method = route.request().method();
       if (method === "GET") {
-        await route.fulfill({ json: docragPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
+        await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
         return;
       }
       const body = method === "PUT" ? route.request().postDataJSON() : null;
@@ -90,8 +90,8 @@ for (const viewport of [
       await route.fulfill({
         json:
           method === "PUT"
-            ? docragPromptsEnvelope((body as { content: string }).content, true)
-            : docragPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false),
+            ? answerPromptsEnvelope((body as { content: string }).content, true)
+            : answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false),
       });
     });
 
@@ -125,8 +125,8 @@ for (const viewport of [
 test("回答生成のプロンプトは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   let content = "保存版 A {{question}} {{images}}";
-  await page.route("**/api/settings/docrag-prompts**", (route) =>
-    route.fulfill({ json: docragPromptsEnvelope(content, true) })
+  await page.route("**/api/settings/answer-prompts**", (route) =>
+    route.fulfill({ json: answerPromptsEnvelope(content, true) })
   );
 
   await page.goto("/settings/prompts");
@@ -141,7 +141,7 @@ test("回答生成のプロンプトは編集中の内容を背景の再取得�
   // 編集中は、保存値が変わっても編集内容を残す。
   await editor.fill("編集中 {{question}} {{images}}");
   content = "保存版 C {{question}} {{images}}";
-  const refetched = page.waitForResponse("**/api/settings/docrag-prompts**");
+  const refetched = page.waitForResponse("**/api/settings/answer-prompts**");
   await refetchOnFocus(page);
   await refetched;
   await expect(editor).toHaveValue("編集中 {{question}} {{images}}");
@@ -156,7 +156,7 @@ async function collapseSidebar(page: Page) {
   });
 }
 
-function docragPromptsEnvelope(content: string, customized: boolean) {
+function answerPromptsEnvelope(content: string, customized: boolean) {
   return {
     data: {
       prompts: [

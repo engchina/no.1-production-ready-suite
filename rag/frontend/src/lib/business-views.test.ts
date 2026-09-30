@@ -28,7 +28,7 @@ describe("api 業務ビュー(Business View)", () => {
             knowledge_base_ids: ["kb-1", "kb-2"],
             query: {
               guardrail_policy: null,
-              docrag_query_strategy: "rag_fusion",
+              query_strategy: "rag_fusion",
             },
           },
           knowledge_bases: [
@@ -52,7 +52,7 @@ describe("api 業務ビュー(Business View)", () => {
         knowledge_base_ids: ["kb-1", "kb-2"],
         query: {
           guardrail_policy: null,
-          docrag_query_strategy: "rag_fusion",
+          query_strategy: "rag_fusion",
         },
         serving_mode: "fused",
       },
@@ -65,7 +65,7 @@ describe("api 業務ビュー(Business View)", () => {
     expect(path).toBe("/api/business-views");
     expect(init?.method).toBe("POST");
     const body = JSON.parse(String(init?.body));
-    expect(body.config.query.docrag_query_strategy).toBe("rag_fusion");
+    expect(body.config.query.query_strategy).toBe("rag_fusion");
   });
 
   it("listBusinessViews は warning_messages 付きで縮退できる", async () => {

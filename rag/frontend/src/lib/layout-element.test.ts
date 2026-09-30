@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DocumentElement } from "@/lib/api";
-import { docragVisionDetails, elementCropUrl, elementVision, tableHtmlToText } from "./docrag-element";
+import { layoutVisionDetails, elementCropUrl, elementVision, tableHtmlToText } from "./layout-element";
 
 function element(metadata: DocumentElement["metadata"]): DocumentElement {
   return { kind: "figure", text: "", order: 0, metadata } as DocumentElement;
@@ -33,10 +33,10 @@ describe("elementVision", () => {
   });
 });
 
-describe("docragVisionDetails", () => {
+describe("layoutVisionDetails", () => {
   const extraction = {
     parser_artifacts: {
-      docrag_layout: {
+      layout_records: {
         records: [
           {
             id: "docling-p1-2",
@@ -60,7 +60,7 @@ describe("docragVisionDetails", () => {
   };
 
   it("値のある Vision 項目だけを整形して返す", () => {
-    const details = docragVisionDetails(extraction, "docling-p1-2");
+    const details = layoutVisionDetails(extraction, "docling-p1-2");
     expect(details?.lines).toEqual([
       { field: "visual_kind", value: "screenshot" },
       { field: "visible_buttons", value: "登録\n取消" },
@@ -70,9 +70,9 @@ describe("docragVisionDetails", () => {
   });
 
   it("装飾画像は除外理由を返し、該当しない要素は null", () => {
-    expect(docragVisionDetails(extraction, "docling-p1-3")?.excludedReason).toBe("ロゴ");
-    expect(docragVisionDetails(extraction, "missing")).toBeNull();
-    expect(docragVisionDetails({}, "docling-p1-2")).toBeNull();
+    expect(layoutVisionDetails(extraction, "docling-p1-3")?.excludedReason).toBe("ロゴ");
+    expect(layoutVisionDetails(extraction, "missing")).toBeNull();
+    expect(layoutVisionDetails({}, "docling-p1-2")).toBeNull();
   });
 });
 

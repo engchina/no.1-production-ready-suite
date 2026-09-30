@@ -13,13 +13,13 @@ import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { toast } from "@/lib/toast";
-import { useDeleteDocragAnswer, useDocragAnswer } from "@/lib/queries";
+import { useDeleteAnswerRecord, useAnswerRecord } from "@/lib/queries";
 
 import { CitationCard } from "./CitationCard";
-import { DocragAnswerPanel } from "./DocragAnswerPanel";
+import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 
 /** 保存された回答 1 件(質問・回答・根拠パネル・引用)。 */
-export function SavedDocragAnswer({
+export function SavedAnswerRecord({
   traceId,
   businessViewId,
   showAnswer = true,
@@ -30,8 +30,8 @@ export function SavedDocragAnswer({
   showAnswer?: boolean;
   onDeleted?: () => void;
 }) {
-  const detail = useDocragAnswer(traceId);
-  const remove = useDeleteDocragAnswer();
+  const detail = useAnswerRecord(traceId);
+  const remove = useDeleteAnswerRecord();
   const confirm = useConfirm();
 
   async function handleDelete() {
@@ -85,7 +85,7 @@ export function SavedDocragAnswer({
       tone: "danger",
       disabled: remove.isPending,
       loading: remove.isPending,
-      testId: `docrag-answer-delete-${record.trace_id}`,
+      testId: `answer-record-delete-${record.trace_id}`,
       onSelect: () => void handleDelete(),
     },
   ];
@@ -101,7 +101,7 @@ export function SavedDocragAnswer({
           actions={actions}
           ariaLabel={t("common.objectActions.aria", { name: t("search.history.objectName") })}
           moreLabel={t("common.objectActions.more")}
-          testId="docrag-answer-actions"
+          testId="answer-record-actions"
         />
       </div>
       {showAnswer ? (
@@ -109,8 +109,8 @@ export function SavedDocragAnswer({
           {record.answer}
         </p>
       ) : null}
-      <DocragAnswerPanel
-        docrag={record.docrag}
+      <AnswerDetailsPanel
+        diagnostics={record.answer_diagnostics}
         traceId={record.evaluation_available ? record.trace_id : null}
         evaluation={record.evaluation}
       />

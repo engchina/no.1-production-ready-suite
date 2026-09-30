@@ -1,5 +1,5 @@
-/** 回答フローの診断(backend の diagnostics.docrag)。 */
-export type DocragDiagnostics = {
+/** 回答フローの診断(backend の diagnostics.answer)。 */
+export type AnswerDiagnostics = {
   confidence: string;
   needsHumanReview: boolean | null;
   insufficientReason: string;
@@ -39,10 +39,10 @@ function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** diagnostics.docrag を表示用に正規化する。回答フローの診断が無い回答では null。 */
-export function parseDocragDiagnostics(
+/** diagnostics.answer を表示用に正規化する。回答フローの診断が無い回答では null。 */
+export function parseAnswerDiagnostics(
   value: unknown,
-): DocragDiagnostics | null {
+): AnswerDiagnostics | null {
   if (!value || typeof value !== "object") return null;
   const raw = record(value);
   return {

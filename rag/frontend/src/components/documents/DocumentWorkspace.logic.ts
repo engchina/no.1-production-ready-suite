@@ -10,9 +10,9 @@ import {
   CHUNK_OVERLAP_MAX_CHARS,
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
-  DEFAULT_DOCRAG_CHUNKING_PARAMS,
+  DEFAULT_SMALL_TO_BIG_PARAMS,
   chunkSizeLabelKey,
-  invalidDocragChunkingParam,
+  invalidSmallToBigParam,
   overlapLabelKey,
 } from "@/lib/chunking";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -42,25 +42,25 @@ export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPrevie
   const config = recipe?.effective_processing_config;
   return {
     // 既定は親子階層（small-to-big）(backend の RAG_CHUNKING_STRATEGY の既定と同じ。#594)。
-    chunking_strategy: config?.chunking_strategy ?? "docrag_small_to_big",
+    chunking_strategy: config?.chunking_strategy ?? "small_to_big",
     chunk_size: config?.chunk_size ?? 800,
     chunk_overlap: config?.chunk_overlap ?? 120,
     chunk_min_chars: config?.chunk_min_chars ?? 120,
     chunk_delimiter: "\\n\\n",
     chunk_context_header_enabled: config?.chunk_context_header_enabled ?? true,
-    docrag_child_target_chars:
-      config?.docrag_child_target_chars ?? DEFAULT_DOCRAG_CHUNKING_PARAMS.docrag_child_target_chars,
-    docrag_table_child_target_chars:
-      config?.docrag_table_child_target_chars ??
-      DEFAULT_DOCRAG_CHUNKING_PARAMS.docrag_table_child_target_chars,
-    docrag_parent_target_chars:
-      config?.docrag_parent_target_chars ??
-      DEFAULT_DOCRAG_CHUNKING_PARAMS.docrag_parent_target_chars,
-    docrag_parent_max_pages:
-      config?.docrag_parent_max_pages ?? DEFAULT_DOCRAG_CHUNKING_PARAMS.docrag_parent_max_pages,
-    docrag_parent_max_children:
-      config?.docrag_parent_max_children ??
-      DEFAULT_DOCRAG_CHUNKING_PARAMS.docrag_parent_max_children,
+    chunk_child_target_chars:
+      config?.chunk_child_target_chars ?? DEFAULT_SMALL_TO_BIG_PARAMS.chunk_child_target_chars,
+    chunk_table_child_target_chars:
+      config?.chunk_table_child_target_chars ??
+      DEFAULT_SMALL_TO_BIG_PARAMS.chunk_table_child_target_chars,
+    chunk_parent_target_chars:
+      config?.chunk_parent_target_chars ??
+      DEFAULT_SMALL_TO_BIG_PARAMS.chunk_parent_target_chars,
+    chunk_parent_max_pages:
+      config?.chunk_parent_max_pages ?? DEFAULT_SMALL_TO_BIG_PARAMS.chunk_parent_max_pages,
+    chunk_parent_max_children:
+      config?.chunk_parent_max_children ??
+      DEFAULT_SMALL_TO_BIG_PARAMS.chunk_parent_max_children,
   };
 }
 
@@ -68,9 +68,9 @@ export function chunkPreviewValidationError(form: ChunkPreviewForm): string | nu
   if (form.chunking_strategy === "fixed_delimiter") {
     return form.chunk_delimiter.trim() ? null : t("settings.chunking.params.delimiter");
   }
-  if (form.chunking_strategy === "docrag_small_to_big") {
+  if (form.chunking_strategy === "small_to_big") {
     // 親子階層（small-to-big）は chunk サイズ等を使わない。5 項目の範囲だけを確かめる。
-    const invalid = invalidDocragChunkingParam(form);
+    const invalid = invalidSmallToBigParam(form);
     return invalid
       ? `${t(invalid.labelKey)}: ${invalid.min.toLocaleString("ja-JP")}〜${invalid.max.toLocaleString("ja-JP")}`
       : null;

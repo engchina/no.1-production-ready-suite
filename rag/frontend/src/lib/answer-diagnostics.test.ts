@@ -4,12 +4,12 @@ import {
   confidenceVariant,
   evaluationOutcome,
   parseAnswerEvaluation,
-  parseDocragDiagnostics,
-} from "./docrag-answer";
+  parseAnswerDiagnostics,
+} from "./answer-diagnostics";
 
-describe("parseDocragDiagnostics", () => {
+describe("parseAnswerDiagnostics", () => {
   it("回答フローの診断を表示用に正規化する", () => {
-    const parsed = parseDocragDiagnostics({
+    const parsed = parseAnswerDiagnostics({
       confidence: "high",
       needs_human_review: false,
       insufficient_reason: "",
@@ -55,7 +55,7 @@ describe("parseDocragDiagnostics", () => {
   });
 
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
-    expect(parseDocragDiagnostics(null)).toBeNull();
+    expect(parseAnswerDiagnostics(null)).toBeNull();
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");
     expect(confidenceVariant("")).toBe("neutral");

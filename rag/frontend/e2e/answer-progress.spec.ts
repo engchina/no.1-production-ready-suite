@@ -51,14 +51,14 @@ function searchStage(stage: string, outcome: string, elapsed_ms = 0) {
 }
 
 /**
- * 根拠の検索と回答の生成（docrag_answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 根拠の検索と回答の生成（answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
  * 中の各工程は `answer_step:` の入れ子の工程として届く（#593）。
  */
 const slowSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      searchStage("docrag_answer", "started"),
+      searchStage("answer", "started"),
       searchStage("answer_step:質問の理解", "started"),
     ].join(""),
   },
@@ -80,14 +80,14 @@ const slowSearchStream: TimedChunk[] = [
     afterMs: 600,
     text: [
       searchStage("answer_step:回答の生成", "success", 600),
-      searchStage("docrag_answer", "success", 3600),
+      searchStage("answer", "success", 3600),
       sse("metadata", {
         trace_id: "trace-1",
         elapsed_ms: 3600,
         guardrail_warnings: [],
         diagnostics: {
-          retrieval_strategy: "docrag",
-          retrieval_strategy_adapter: "docrag_grounded",
+          retrieval_strategy: "hybrid",
+          retrieval_strategy_adapter: "grounded",
           filter_keys: [],
           knowledge_base_count: 1,
           config_fingerprint: "fp-1",
@@ -104,7 +104,7 @@ const timedOutSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      searchStage("docrag_answer", "started"),
+      searchStage("answer", "started"),
       searchStage("answer_step:文書検索", "started"),
     ].join(""),
   },
@@ -314,7 +314,7 @@ const timedOutChatStream: TimedChunk[] = [
         user_message: userMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatStage("docrag_answer", "started"),
+      chatStage("answer", "started"),
       chatStage("answer_step:質問の理解", "started"),
     ].join(""),
   },
@@ -329,7 +329,7 @@ const timedOutChatStream: TimedChunk[] = [
     afterMs: 1500,
     text: [
       chatStage("answer_step:文書検索", "cancelled", 1500),
-      chatStage("docrag_answer", "cancelled", 1500),
+      chatStage("answer", "cancelled", 1500),
       sse("error", {
         model_id: "m1",
         message: TIMEOUT_MESSAGE,
@@ -350,13 +350,13 @@ const okChatStream: TimedChunk[] = [
         user_message: retryUserMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatStage("docrag_answer", "started"),
+      chatStage("answer", "started"),
     ].join(""),
   },
   {
     afterMs: 500,
     text: [
-      chatStage("docrag_answer", "success", 500),
+      chatStage("answer", "success", 500),
       sse("metadata", {
         model_id: "m1",
         message_id: "a2",

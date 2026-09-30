@@ -24,7 +24,7 @@ const detail = {
     knowledge_base_ids: ["kb-1"],
     query: {
       guardrail_policy: null,
-      answer_engine: "docrag",
+      answer_engine: "grounded",
     },
     serving_mode: "single",
   },
@@ -224,7 +224,7 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
 test("類似問を使わない場合は回答と根拠パネルを表示する", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });
-  await mockDocragStream(page);
+  await mockAnswerStream(page);
 
   await selectBusinessViewAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない（通常の回答生成）" }).click();
@@ -249,23 +249,23 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockCommon(page);
     await mockBusinessViewApi(page);
-    await mockDocragStream(page);
+    await mockAnswerStream(page);
     let evaluationBody: Record<string, unknown> | null = null;
-    await page.route("**/api/search/answers/trace-docrag/evaluation", (route) => {
+    await page.route("**/api/search/answers/trace-answer/evaluation", (route) => {
       evaluationBody = route.request().postDataJSON() as Record<string, unknown>;
       return route.fulfill({
         json: envelope({
-          trace_id: "trace-docrag",
+          trace_id: "trace-answer",
           business_view_id: "bv-1",
           surface: "search",
-          answer_engine: "docrag",
+          answer_engine: "grounded",
           question: "受注を取り消すには？",
           rewritten_question: null,
           confidence: "high",
           created_at: "2026-09-26T01:00:00Z",
           answer: "受注一覧で取消を押します。",
           citations: [],
-          docrag: {},
+          answer_diagnostics: {},
           evaluation_available: true,
           evaluation: {
             status: "completed",
@@ -320,8 +320,8 @@ for (const viewport of [
   });
 }
 
-async function mockDocragStream(page: Page) {
-  const docrag = {
+async function mockAnswerStream(page: Page) {
+  const answerDiagnostics = {
     confidence: "high",
     needs_human_review: true,
     insufficient_reason: "",
@@ -342,14 +342,14 @@ async function mockDocragStream(page: Page) {
       headers: { "content-type": "text/event-stream" },
       body: [
         `event: metadata\ndata: ${JSON.stringify({
-          trace_id: "trace-docrag",
+          trace_id: "trace-answer",
           elapsed_ms: 20,
           guardrail_warnings: [],
-          diagnostics: { business_view_applied: "bv-1", retrieval_strategy: "docrag", docrag },
+          diagnostics: { business_view_applied: "bv-1", retrieval_strategy: "hybrid", answer: answerDiagnostics },
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: "受注一覧で取消を押します。" })}\n\n`,
         `event: citations\ndata: ${JSON.stringify([])}\n\n`,
-        `event: done\ndata: ${JSON.stringify({ trace_id: "trace-docrag" })}\n\n`,
+        `event: done\ndata: ${JSON.stringify({ trace_id: "trace-answer" })}\n\n`,
       ].join(""),
     })
   );
