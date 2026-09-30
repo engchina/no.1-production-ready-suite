@@ -54,6 +54,7 @@ import {
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
+  SecurityClearSearchAction,
   describeErrorMessageOnly,
   SecurityIdentityRowTitleButton,
   identitySecondaryName,
@@ -625,6 +626,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   value={search}
                   testId="security-roles-search"
                   disabled={operationBusy}
+                  resultCountLabel={securityFilteredCount(filteredRoles.length, roles.length)}
                   onChange={setSearch}
                 />
               </div>
@@ -668,6 +670,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   <EmptyState
                     title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")}
                     hint={search ? t("security.roles.noResultsHint") : undefined}
+                    action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined}
                   />
                 }
                 columns={roleColumns}

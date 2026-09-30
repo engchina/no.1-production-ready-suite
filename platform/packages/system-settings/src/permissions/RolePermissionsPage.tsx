@@ -23,6 +23,7 @@ import {
   ProcessingIndicator,
   StatusBadge,
   TextField,
+  isSubmitEnter,
   toast,
   useConfirm,
   type DataTableColumn,
@@ -45,6 +46,7 @@ import {
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
+  SecurityClearSearchAction,
   SecurityIdentityRowTitleButton,
   identitySecondaryName,
   isAbortError,
@@ -649,6 +651,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   value={search}
                   testId="security-permissions-search"
                   disabled={operationBusy}
+                  resultCountLabel={securityFilteredCount(filteredRoles.length, roles.length)}
                   onChange={setSearch}
                 />
               </div>
@@ -690,6 +693,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   <EmptyState
                     title={search ? m.noResultsTitle : m.empty}
                     hint={search ? m.noResultsHint : undefined}
+                    action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined}
                   />
                 }
                 columns={roleColumns}
@@ -967,6 +971,7 @@ function TargetFieldset<R extends PermissionRole>({
               placeholder={tm.searchPlaceholder}
               value={search}
               testId={`${idPrefix}-search`}
+              resultCountLabel={securityFilteredCount(filteredItems.length, displayItems.length)}
               disabled={targetReadOnly}
               onChange={(value) => {
                 if (targetReadOnly) return;
@@ -1149,7 +1154,8 @@ function CustomTargetIdField({
             if (error) setError("");
           }}
           onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            // IME の変換を確定する Enter では追加しない（Safari の keyCode 229 も含めて判定する。#535）。
+            if (!isSubmitEnter(event)) return;
             event.preventDefault();
             add();
           }}

@@ -16,7 +16,7 @@ import {
   StatusBadge,
   Skeleton,
   TableSkeleton,
-  TextField,
+  SearchField,
   TimedLoadingState,
   ToggleChip,
   useConfirm,
@@ -32,7 +32,6 @@ import {
   FileText,
   FilterX,
   MessageSquareText,
-  Search,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -83,7 +82,6 @@ type DetailTab = "content" | "evidence" | "execution";
 export function FeedbackClient() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
-  const [searchDraft, setSearchDraft] = useState(urlState.q);
   // 利用者が行を選んだ直後だけ、縦積み（xl 未満）の詳細へフォーカスを移す（URL からの復元では動かさない）。
   const revealDetailRef = useRef(false);
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
@@ -113,21 +111,14 @@ export function FeedbackClient() {
     if (changed) setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams, urlState]);
 
-  // URL の検索語が変わったレンダーで、入力欄を URL の値に合わせる。
-  const urlQueryChanged = useValuesChanged([urlState.q]);
-  if (urlQueryChanged) setSearchDraft(urlState.q);
-
-  useEffect(() => {
-    if (searchDraft === urlState.q) return;
-    const timer = window.setTimeout(() => {
-      const next = new URLSearchParams(searchParams);
-      if (searchDraft.trim()) next.set("q", searchDraft.trim().slice(0, 200));
-      else next.delete("q");
-      next.set("page", "1");
-      setSearchParams(next, { replace: true });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [searchDraft, searchParams, setSearchParams, urlState.q]);
+  // 検索語は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は確定しない）で URL に入れる（#535）。
+  function applySearch(value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("q", value.slice(0, 200));
+    else next.delete("q");
+    next.set("page", "1");
+    setSearchParams(next, { replace: true });
+  }
 
   useEffect(() => {
     if (!page || page.total === 0 || urlState.page <= totalPages) return;
@@ -145,7 +136,6 @@ export function FeedbackClient() {
   }
 
   function clearFilters() {
-    setSearchDraft("");
     setSearchParams(new URLSearchParams("period=30&sort=newest&size=50&page=1"));
   }
 
@@ -259,17 +249,17 @@ export function FeedbackClient() {
                 onValueChange={(value) => setParam("sort", value)}
               />
             </div>
-            <TextField
+            <SearchField
               id="feedback-search"
               label={t("feedback.filters.search")}
-              type="search"
-              value={searchDraft}
+              value={urlState.q}
               maxLength={200}
               placeholder={t("feedback.filters.searchPlaceholder")}
-              leadingIcon={Search}
-              onValueChange={setSearchDraft}
-              onClear={() => setSearchDraft("")}
+              onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
             />
           </CardContent>
         </Card>

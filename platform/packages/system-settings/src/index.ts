@@ -210,6 +210,7 @@ export {
   SecurityManagementStatusBar,
   SecurityPanelHeader,
   SecuritySearchField,
+  SecurityClearSearchAction,
   identityInlineLabel,
   identitySecondaryName,
   securityFilteredCount,

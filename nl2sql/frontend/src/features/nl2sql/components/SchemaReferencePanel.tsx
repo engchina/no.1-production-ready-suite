@@ -1,4 +1,4 @@
-import { ListPlus, Plus, RefreshCw, Search, Table2 } from "lucide-react";
+import { ListPlus, Plus, RefreshCw, Table2 } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import {
@@ -7,7 +7,7 @@ import {
   Skeleton,
   TimedLoadingState,
   DisclosureChevron,
-  TextField,
+  SearchField,
 } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
@@ -156,15 +156,14 @@ export function SchemaReferencePanel({
         </span>
       </p>
 
-      <TextField
+      {/* 表の一覧の絞り込み（入力に合わせて適用。debounce・IME 対応は SearchField。#535）。 */}
+      <SearchField
         id={`nl2sql-schema-search-${searchId}`}
         label={t("nl2sql.schema.search")}
         labelHidden
         value={query}
-        onValueChange={setQuery}
-        onClear={() => setQuery("")}
+        onSearch={setQuery}
         clearLabel={t("common.clearSearch")}
-        leadingIcon={Search}
         placeholder={t("nl2sql.schema.searchPlaceholder")}
         disabled={disabled}
         className="min-w-0 max-w-full"

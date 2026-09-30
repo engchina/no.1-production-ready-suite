@@ -9036,14 +9036,12 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("履歴から再実行したい請求金額");
   await expect(page.getByText("確認待ち", { exact: true }).first()).toBeVisible();
   const feedbackFilters = page.getByTestId("feedback-app-filters");
-  const feedbackSearch = feedbackFilters.getByLabel("履歴検索");
-  const feedbackFilterButton = feedbackFilters.getByRole("button", { name: "絞り込み" });
+  const feedbackSearch = feedbackFilters.getByRole("searchbox", { name: "履歴検索" });
+  // 一覧の絞り込みは入力に合わせて適用する（「絞り込み」ボタンを置かない。#535）。
+  await expect(feedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
   const feedbackSearchBox = await feedbackSearch.boundingBox();
-  const feedbackFilterButtonBox = await feedbackFilterButton.boundingBox();
   expect(feedbackSearchBox).not.toBeNull();
-  expect(feedbackFilterButtonBox).not.toBeNull();
-  expect(feedbackFilterButtonBox!.height).toBeCloseTo(feedbackSearchBox!.height, 0);
-  expect(feedbackFilterButtonBox!.height).toBe(44);
+  expect(feedbackSearchBox!.height).toBe(44);
   const appFeedbackActions = page.getByTestId("feedback-app-actions");
   const saveAppFeedbackButton = appFeedbackActions.getByRole("button", {
     name: "フィードバック保存",
@@ -9171,10 +9169,12 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   });
   await feedbackSearch.press("Enter");
   await filterRequest;
-  await expect(feedbackFilterButton).toBeDisabled();
-  await expect(feedbackFilterButton.locator("svg.animate-spin")).toBeVisible();
+  // 読込中は一覧の上に経過時間とスピナーを出す（「絞り込み」ボタンはない。#535）。
+  const filterProcessing = page.getByTestId("app-feedback-load-processing");
+  await expect(filterProcessing).toBeVisible();
+  await expect(filterProcessing.locator("svg.animate-spin")).toBeVisible();
   filterGate.release();
-  await expect(feedbackFilterButton).toBeEnabled();
+  await expect(filterProcessing).toHaveCount(0);
   await expect(page.getByText("一致する履歴がありません")).toBeVisible();
 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
@@ -9404,8 +9404,8 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expect(rows).toHaveCount(15);
   await expect(pagination).toHaveCount(0);
 
-  await page.getByLabel("履歴検索").fill("ページング対象");
-  await page.getByRole("button", { name: "絞り込み" }).click();
+  // 検索語は入力に合わせて適用する（debounce。#535）。
+  await page.getByRole("searchbox", { name: "履歴検索" }).fill("ページング対象");
 
   await expect(rows).toHaveCount(20);
   await expect(pagination).toBeVisible();
@@ -9560,19 +9560,17 @@ test("app feedback keeps history left of the editor without crossing the divider
   expect(stackedEditor).not.toBeNull();
   expect(stackedHistory!.y + stackedHistory!.height).toBeLessThanOrEqual(stackedEditor!.y + 1);
   const mobileFeedbackFilters = page.getByTestId("feedback-app-filters");
-  const mobileFeedbackSearch = mobileFeedbackFilters.getByLabel("履歴検索");
-  const mobileFilterButton = mobileFeedbackFilters.getByRole("button", { name: "絞り込み" });
-  const [mobileFilterFormBox, mobileSearchBox, mobileFilterButtonBox] = await Promise.all([
+  const mobileFeedbackSearch = mobileFeedbackFilters.getByRole("searchbox", { name: "履歴検索" });
+  const [mobileFilterFormBox, mobileSearchBox] = await Promise.all([
     mobileFeedbackFilters.boundingBox(),
     mobileFeedbackSearch.boundingBox(),
-    mobileFilterButton.boundingBox(),
   ]);
   expect(mobileFilterFormBox).not.toBeNull();
   expect(mobileSearchBox).not.toBeNull();
-  expect(mobileFilterButtonBox).not.toBeNull();
   expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
-  expect(mobileFilterButtonBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
-  expect(mobileFilterButtonBox!.height).toBe(44);
+  expect(mobileSearchBox!.height).toBe(44);
+  // 「絞り込み」ボタンは置かない（#535）。
+  await expect(mobileFeedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
   const mobileActionBar = page.getByTestId("feedback-app-actions");
   const mobileActionControls = [
     mobileActionBar.getByRole("button", { name: "フィードバック保存" }),
@@ -10244,11 +10242,11 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   holdNoResultsRequest = true;
   await search.fill("一致なし");
   await search.press("Enter");
-  const applyFiltersButton = page.getByRole("button", { name: "絞り込み" });
   const filteredSkeleton = page.getByTestId("qcm-candidates-list-skeleton");
   await expect(filteredSkeleton).toBeVisible();
-  await expect(applyFiltersButton.locator("svg.animate-spin")).toHaveCount(1);
-  await expect(filteredSkeleton.locator("svg.animate-spin")).toHaveCount(0);
+  // 絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。読込のスピナーは Skeleton の 1 つだけ。
+  await expect(page.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(filteredSkeleton.locator("svg.animate-spin")).toHaveCount(1);
   noResultsGate.release();
   await expect(page.getByText("条件に一致する学習候補がありません", { exact: true })).toBeVisible();
   holdNoResultsRequest = false;
@@ -16627,18 +16625,18 @@ test("classifier refresh retains the applied candidate filter and current page",
   });
   await page.goto("/question-classifier-models?tab=candidates");
   await page.getByLabel("候補検索", { exact: true }).fill("請求");
-  await page.getByRole("button", { name: "絞り込み", exact: true }).click();
+  // Enter は debounce を待たずにすぐ適用する（#535）。
+  await page.getByLabel("候補検索", { exact: true }).press("Enter");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("請求");
   const pagination = page.getByTestId("qcm-candidate-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("2 / 2 ページ");
-  await page.getByLabel("候補検索", { exact: true }).fill("未適用の検索");
   await page.getByRole("button", { name: "表示を更新", exact: true }).click();
   await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 21");
   await expect(pagination).toContainText("2 / 2 ページ");
   expect(requests.at(-1)?.searchParams.get("cursor")).toBe("cursor-2");
   expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
-  await expect(page.getByLabel("候補検索", { exact: true })).toHaveValue("未適用の検索");
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("classifier-refresh-page.png"), fullPage: true });
   await pagination.getByRole("button", { name: "前へ" }).click();

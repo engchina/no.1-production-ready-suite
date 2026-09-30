@@ -151,7 +151,7 @@ test("検索欄から focus を外しただけでは選択とページを解除�
   await page.locator("tbody tr").filter({ hasText: "file-21.txt" }).getByRole("checkbox").check();
   await expect(page.getByText("1 件選択中")).toBeVisible();
 
-  const search = page.getByRole("textbox", { name: "ファイル名で検索" });
+  const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
   await search.focus();
   await search.blur();
 

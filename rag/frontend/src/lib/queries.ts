@@ -337,6 +337,8 @@ export function useDocuments(
       offset: params.offset,
     }),
     queryFn: () => api.listDocuments(params),
+    // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535。useKnowledgeBases と同じ）。
+    placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       documentsHaveActiveWork(query.state.data?.items) || options.graceActive
         ? ACTIVE_REFETCH_INTERVAL_MS
@@ -816,6 +818,9 @@ export function useKnowledgeBases(params: {
   return useQuery({
     queryKey: queryKeys.knowledgeBases(params),
     queryFn: () => api.listKnowledgeBases(params),
+    // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（表を Skeleton に戻さない。#535）。
+    // 応答は query key ごとに持つので、遅れて返った古い条件の応答が新しい条件の一覧を上書きしない。
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -953,6 +958,8 @@ export function useBusinessViews(params: {
   return useQuery({
     queryKey: queryKeys.businessViews(params),
     queryFn: () => api.listBusinessViews(params),
+    // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535。useKnowledgeBases と同じ）。
+    placeholderData: keepPreviousData,
   });
 }
 

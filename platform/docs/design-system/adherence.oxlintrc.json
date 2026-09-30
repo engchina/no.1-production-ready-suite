@@ -79,6 +79,10 @@
             "message": "回転するアイコンを手書きしない（lucide の Loader2 / RefreshCw 等に animate-spin を付けない）。共有の Spinner（全周トラック・線の実寸 2px・reduced-motion 対応）を使い、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」）。"
           },
           {
+            "selector": "JSXOpeningElement[name.name=/^(?:TextField|input)$/]:has(> JSXAttribute[name.name='type'][value.value='search'])",
+            "message": "一覧の絞り込みの検索欄は SearchField（@engchina/production-ready-ui）で作る。入力に合わせて絞り込み（debounce 300ms・Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持つ。検索ボタンは置かない（UX 契約 page-archetypes.md「一覧の絞り込みの検索」、#535）。LLM・ベクトル検索などの重い検索は type=\"search\" にせず、TextField と明示的な実行（ボタンと isSubmitEnter の Enter）で作る。"
+          },
+          {
             "selector": "JSXOpeningElement[name.name='details']",
             "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           }

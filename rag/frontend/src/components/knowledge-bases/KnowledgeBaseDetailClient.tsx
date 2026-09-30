@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus2, Files, Save, Search, Unlink } from "lucide-react";
+import { FilePlus2, Files, Save, Unlink } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
@@ -23,6 +23,7 @@ import {
   SelectField,
   type SelectFieldOption,
   Skeleton,
+  SearchField,
   TextField,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
@@ -33,7 +34,6 @@ import {
   type DocumentSummary,
   type KnowledgeBaseDetail,
 } from "@/lib/api";
-import { isSubmitEnter } from "@/lib/keyboard";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -316,7 +316,6 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDetail }) {
   // 候補は新しい順に CANDIDATE_LIMIT 件まで。それより古い文書も選べるよう、文書名で検索して絞り込む。
-  const [candidateSearch, setCandidateSearch] = useState("");
   const [candidateQuery, setCandidateQuery] = useState("");
   const allDocuments = useDocuments({
     q: candidateQuery || undefined,
@@ -324,7 +323,6 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
     offset: 0,
   });
   const candidatesTruncated = (allDocuments.data?.total ?? 0) > CANDIDATE_LIMIT;
-  const applyCandidateSearch = () => setCandidateQuery(candidateSearch.trim());
   const assign = useAssignDocumentsToKnowledgeBase();
   const [documentId, setDocumentId] = useState("");
 
@@ -368,23 +366,15 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
     <div className="space-y-2">
       {/* 追加ツールバー: コンボボックスは幅制約し、追加ボタンを入力のすぐ隣へ左寄せ(右端に孤立させない)。 */}
       <div className="flex flex-wrap items-end gap-2">
-        <TextField
+        {/* 候補の文書を名前で絞る（入力に合わせて適用。#535）。 */}
+        <SearchField
           id="knowledge-base-add-document-search"
-          type="search"
           label={t("knowledgeBases.assignment.search")}
           placeholder={t("knowledgeBases.assignment.searchPlaceholder")}
-          value={candidateSearch}
-          onValueChange={setCandidateSearch}
-          onKeyDown={(event) => {
-            if (isSubmitEnter(event)) applyCandidateSearch();
-          }}
-          onBlur={applyCandidateSearch}
-          onClear={() => {
-            setCandidateSearch("");
-            setCandidateQuery("");
-          }}
+          value={candidateQuery}
+          onSearch={setCandidateQuery}
           clearLabel={t("common.clearSearch")}
-          leadingIcon={Search}
+          resultCountLabel={t("common.searchResultCount", { count: formatNumber(options.length) })}
           className="w-full min-w-0 sm:w-64"
         />
         <SelectField

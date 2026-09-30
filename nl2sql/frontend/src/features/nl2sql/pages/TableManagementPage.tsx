@@ -21,7 +21,6 @@ import { FieldLabel } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
@@ -387,13 +386,13 @@ export function TableManagementPage() {
   const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const [reportedImportSchemaRefresh, setReportedImportSchemaRefresh] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const debouncedTableSearch = useDebouncedValue(tableSearch, 250);
-  const debouncedTableOwnerPrefix = useDebouncedValue(tableOwnerPrefix, 250);
+  // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
+  // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
   const tableObjectsQuery = useDbAdminObjects(
-    debouncedTableSearch,
+    tableSearch,
     "table",
     "all",
-    debouncedTableOwnerPrefix,
+    tableOwnerPrefix,
     "name_comment"
   );
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button, isImeComposing } from "@engchina/production-ready-ui";
 import { Check, ChevronDown, ChevronsDown, Search, X } from "lucide-react";
 import {
   type FocusEvent,
@@ -234,7 +234,8 @@ export function MultiSelectCombobox<T>({
   };
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (disabled) return;
+    // IME の変換中の Enter・矢印は候補の確定・移動なので、一覧の選択に使わない（#535）。
+    if (disabled || isImeComposing(event)) return;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();

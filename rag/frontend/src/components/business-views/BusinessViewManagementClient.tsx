@@ -29,6 +29,8 @@ import {
   offsetForPage,
   offsetPagination,
   RowTitleButton,
+  ClearActionButton,
+  SearchField,
   TextField,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
@@ -380,7 +382,6 @@ function BusinessViewList({
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
   const { filter, q, offset } = view;
-  const [search, setSearch] = useState(q);
   const setFilter = (next: BusinessViewStatus | "ALL") =>
     setView((current) => ({ ...current, filter: next, offset: 0 }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next, offset: 0 }));
@@ -459,28 +460,22 @@ function BusinessViewList({
               </ToggleChip>
             ))}
           </div>
-          {/* 375px 幅では入力欄の固定 w-56 と検索ボタンが収まらず親を押し広げるため、
-              狭い幅では行いっぱいに伸ばし、sm 以上で従来の固定幅へ戻す。 */}
-          <form
-            className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setQ(search.trim());
+          {/* 一覧の絞り込みは入力に合わせて適用する（検索ボタンを置かない。ナレッジベースの一覧と同じ部品・幅。#535）。 */}
+          <SearchField
+            id="business-view-search"
+            label={t("businessViews.search.placeholder")}
+            labelHidden
+            value={q}
+            onSearch={(next) => {
+              if (next !== q) setQ(next);
             }}
-          >
-            <TextField
-              id="business-view-search"
-              label={t("businessViews.search.placeholder")}
-              labelHidden
-              className="w-full min-w-0 sm:w-56"
-              value={search}
-              onValueChange={setSearch}
-              placeholder={t("businessViews.search.placeholder")}
-            />
-            <Button size="sm" variant="secondary" type="submit" className="shrink-0">
-              {t("businessViews.search.placeholder")}
-            </Button>
-          </form>
+            clearLabel={t("common.clearSearch")}
+            resultCountLabel={
+              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+            }
+            placeholder={t("businessViews.search.placeholder")}
+            className="w-full sm:w-64"
+          />
         </div>
 
         {query.isError ? (
@@ -500,14 +495,28 @@ function BusinessViewList({
           </TimedLoadingState>
         ) : items.length === 0 && !query.isFetching ? (
           <Card>
-            <EmptyState
-              title={t("businessViews.empty.title")}
-              hint={
-                onCreate
-                  ? t("businessViews.empty.description")
-                  : t("businessViews.empty.restrictedDescription")
-              }
-            />
+            {q ? (
+              <EmptyState
+                title={t("businessViews.search.noResultsTitle")}
+                hint={t("businessViews.search.noResultsHint")}
+                action={
+                  <ClearActionButton
+                    label={t("common.clearSearch")}
+                    matchButtonHeight
+                    onClick={() => setQ("")}
+                  />
+                }
+              />
+            ) : (
+              <EmptyState
+                title={t("businessViews.empty.title")}
+                hint={
+                  onCreate
+                    ? t("businessViews.empty.description")
+                    : t("businessViews.empty.restrictedDescription")
+                }
+              />
+            )}
           </Card>
         ) : (
           <div className="grid gap-2">

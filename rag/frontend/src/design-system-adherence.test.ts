@@ -10,6 +10,7 @@ const LOADING_ICON = "loading を渡す Button には icon を渡す";
 const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
+const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -105,5 +106,18 @@ const d = <button aria-expanded={open}>詳細<DisclosureChevron expanded={open} 
 const e = <div data-details="x">詳細</div>;
 `);
     expect(linesWith(messages, HANDWRITTEN_DISCLOSURE)).toEqual([2, 3]);
+  });
+});
+
+describe("adherence: 一覧の絞り込みの検索欄は SearchField（#535）", () => {
+  it("type=search の TextField と input を検出し、SearchField・重い検索の TextField は許す", async () => {
+    const messages = await lint(`
+const a = <TextField id="q" label="検索" type="search" value={q} onValueChange={setQ} />;
+const b = <input type="search" value={q} onChange={onChange} />;
+const c = <SearchField id="q" label="検索" value={q} onSearch={setQ} clearLabel="検索語をクリア" />;
+const d = <TextField id="ask" label="質問" value={q} leadingIcon={Search} onKeyDown={onKeyDown} />;
+const e = <input type="text" value={q} onChange={onChange} />;
+`);
+    expect(linesWith(messages, LIST_SEARCH)).toEqual([2, 3]);
   });
 });

@@ -12,6 +12,8 @@ export const ja = {
   "common.dismiss": "閉じる",
   "common.apiError": "APIエラー ({status})",
   "common.clearSearch": "検索語をクリア",
+  // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
+  "common.searchResultCount": "{count} 件が一致しました",
   "common.degraded.title": "データベースに接続できません",
   // DB ゲート（3製品共通の部品。#325）。製品名の入る文言だけ RAG の値にし、他は NL2SQL と同じ文言にそろえる。
   "dbGate.checking": "データベースの状態を確認しています…",
@@ -1351,6 +1353,8 @@ export const ja = {
   "businessViews.filter.active": "有効",
   "businessViews.filter.archived": "アーカイブ済み",
   "businessViews.search.placeholder": "名前・説明で検索",
+  "businessViews.search.noResultsTitle": "検索に一致する業務ビューがありません",
+  "businessViews.search.noResultsHint": "検索語を変えるか、検索語をクリアしてください。",
   "businessViews.status.ACTIVE": "有効",
   "businessViews.status.ARCHIVED": "アーカイブ済み",
   "businessViews.empty.title": "業務ビューがありません",
@@ -1415,6 +1419,8 @@ export const ja = {
   "knowledgeBases.status.ACTIVE": "有効",
   "knowledgeBases.status.ARCHIVED": "アーカイブ済み",
   "knowledgeBases.search.placeholder": "名前・説明で検索",
+  "knowledgeBases.search.noResultsTitle": "検索に一致するナレッジベースがありません。",
+  "knowledgeBases.search.noResultsHint": "検索語を変えるか、検索語をクリアしてください。",
   "knowledgeBases.col.name": "名前",
   "knowledgeBases.col.status": "状態",
   "knowledgeBases.col.documents": "文書",

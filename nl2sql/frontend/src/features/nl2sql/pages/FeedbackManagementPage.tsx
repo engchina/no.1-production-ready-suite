@@ -44,6 +44,7 @@ import {
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 
+import { DbManagementSearchField } from "@/components/DbObjectFilterFields";
 import { PageNotice } from "@/components/page-notice";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -167,6 +168,7 @@ export function FeedbackManagementPage() {
   const [selectAiResponse, setSelectAiResponse] = useState("");
   const [feedbackFilter, setFeedbackFilter] = useState<AppFeedbackFilter>("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
+  const appFeedbackLoadSequence = useRef(0);
   const [appProfileFilter, setAppProfileFilter] = useState("");
   const [feedbackCursor, setFeedbackCursor] = useState("");
   const [feedbackCursorStack, setFeedbackCursorStack] = useState<string[]>([]);
@@ -376,10 +378,13 @@ export function FeedbackManagementPage() {
     filters: AppFeedbackFilters = {}
   ) => {
     if (direction !== "current" && reviewDirty && !(await confirmDiscard())) return;
+    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
+    const sequence = ++appFeedbackLoadSequence.current;
     setLoading("app-feedback-load");
     setMessage("");
     try {
       const data = await fetchAppFeedback(cursor, undefined, filters);
+      if (sequence !== appFeedbackLoadSequence.current) return;
       reviewDirtyRef.current = false;
       if (filters.rating !== undefined) setFeedbackFilter(filters.rating);
       if (filters.profileId !== undefined) setAppProfileFilter(filters.profileId);
@@ -403,9 +408,10 @@ export function FeedbackManagementPage() {
         setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
     } catch (err) {
+      if (sequence !== appFeedbackLoadSequence.current) return;
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === appFeedbackLoadSequence.current) setLoading("");
     }
   };
 
@@ -946,23 +952,21 @@ export function FeedbackManagementPage() {
                   />
                 }
               />
-              <form
-                className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_16rem_auto] xl:items-end"
+              {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
+                  「絞り込み」ボタンを置かない。#535）。 */}
+              <div
+                className="grid min-w-0 gap-3 md:grid-cols-3 xl:grid-cols-[minmax(0,1fr)_12rem_16rem] xl:items-end"
                 data-testid="feedback-app-filters"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void refreshAppFeedback("", "reset", { query: feedbackSearch });
-                }}
               >
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                  <span>{t("feedbackManagement.appFeedback.search")}</span>
-                  <input
-                    value={feedbackSearch}
-                    onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
-                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
-                  />
-                </label>
+                <DbManagementSearchField
+                  label={t("feedbackManagement.appFeedback.search")}
+                  placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
+                  value={feedbackSearch}
+                  onChange={(value) => {
+                    setFeedbackSearch(value);
+                    void refreshAppFeedback("", "reset", { query: value });
+                  }}
+                />
                 <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                   <span>{t("feedbackManagement.appFeedback.filter")}</span>
                   <select
@@ -997,17 +1001,18 @@ export function FeedbackManagementPage() {
                     ))}
                   </select>
                 </label>
-                {/* 入力と同じ行の送信操作なので、Button spec の許容例に従い入力高 44px に揃える。 */}
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  size="lg"
-                  touchTarget className="w-full whitespace-nowrap md:w-auto"
-                  loading={loading === "app-feedback-load"} icon={RefreshCw}>
-                  <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
-                </Button>
-              </form>
-              <div className="grid min-w-0 gap-2">
+              </div>
+              {loading === "app-feedback-load" ? (
+                // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
+                <ProcessingIndicator
+                  active
+                  label={t("feedbackManagement.appFeedback.loading")}
+                  operationKey="app-feedback-load"
+                  placement="panel"
+                  testId="app-feedback-load-processing"
+                />
+              ) : null}
+              <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
                 {appFeedbackItems.length > 0 ? (
                   appFeedbackItems.map((item) => (
                     <FeedbackHistoryRow
