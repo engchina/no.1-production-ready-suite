@@ -1,6 +1,6 @@
 """Vector Index プロファイルの決定論解決(backend / サービス共有)。
 
-profile(balanced/accurate/fast)→ Oracle 26ai AI Vector Search の target accuracy + HNSW
+profile(balanced/accurate/fast)→ Oracle AI Vector Search の target accuracy + HNSW
 ビルド推奨値を決定論で解決する。Settings 依存を持たず、balanced の target accuracy は
 呼び出し側から ``settings_target_accuracy`` で渡す(backend と service が同一結果を返す)。
 """

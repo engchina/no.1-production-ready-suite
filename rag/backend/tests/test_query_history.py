@@ -245,7 +245,7 @@ def test_query_history_settings_api(monkeypatch: pytest.MonkeyPatch, tmp_path: A
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_query_history_round_trip_on_real_oracle() -> None:
-    """実 Oracle 26ai で、質問履歴の追記・一覧・期限切れの削除ができる。"""
+    """実 Oracle AI Database で、質問履歴の追記・一覧・期限切れの削除ができる。"""
     from app.clients.oracle import OracleClient, _execute_count
 
     oracle = OracleClient()

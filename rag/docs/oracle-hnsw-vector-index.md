@@ -1,12 +1,12 @@
 # Oracle HNSW ベクトル索引 推奨設定
 
-この文書は、本プロジェクトで Oracle 26ai AI Vector Search を使う際の HNSW ベクトル索引の推奨設定、採用理由、検証方法、Oracle 公式ドキュメントへのリンクをまとめる。
+この文書は、本プロジェクトで Oracle AI Vector Search を使う際の HNSW ベクトル索引の推奨設定、採用理由、検証方法、Oracle 公式ドキュメントへのリンクをまとめる。
 
 > 注意: 索引名は **HNSW**。正式名称は `Hierarchical Navigable Small World`。`HWSW` ではない。
 
 ## 適用前提
 
-- データベース: Oracle 26ai / Oracle AI Database。
+- データベース: Oracle AI Database（対応バージョンは [terraform/README.md](../../terraform/README.md) の「Autonomous AI Database（全製品で共有）」）。
 - ベクトル列: `VECTOR(1536, FLOAT32)`。
 - 埋め込み: OCI Generative AI Cohere Embed v4、1536 次元。
 - RAG 検索の優先度: まず根拠チャンクの召回率と回答の根拠性を重視し、その後にリランク、フィルタ、キャッシュでレイテンシを最適化する。
@@ -101,7 +101,7 @@ WITH TARGET ACCURACY PARAMETERS (efsearch 500);
 
 Oracle では、HNSW は In-Memory Neighbor Graph ベクトル索引に分類される。HNSW はグラフベースの近似最近傍索引であり、大規模な意味検索で低レイテンシと高い召回率の両立を狙いやすい。
 
-本プロジェクトでは外部ベクトル DB を導入しない。Oracle 26ai の HNSW を使うことで、データ、メタデータフィルタ、トランザクション整合性、ベクトル検索を同じ Oracle 境界内に集約できる。
+本プロジェクトでは外部ベクトル DB を導入しない。Oracle AI Database の HNSW を使うことで、データ、メタデータフィルタ、トランザクション整合性、ベクトル検索を同じ Oracle 境界内に集約できる。
 
 ### `DISTANCE COSINE`
 
@@ -274,7 +274,7 @@ ORDER BY task_time DESC;
 
 ## Oracle 公式ドキュメント
 
-- [Oracle AI Vector Search User's Guide 26ai](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/)
+- [Oracle AI Vector Search User's Guide](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/)
 - [CREATE VECTOR INDEX](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/create-vector-index.html)
 - [Hierarchical Navigable Small World Index Syntax and Parameters](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/hierarchical-navigable-small-world-index-syntax-and-parameters.html)
 - [Guidelines for Using Vector Indexes](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/guidelines-using-vector-indexes.html)

@@ -163,7 +163,7 @@ test("接続テストのタイムアウト診断を表示できる", async ({ pa
     async () => ({
       status: "failed",
       readiness: "ok",
-      message: "Oracle 26ai 接続テストが 15 秒でタイムアウトしました。",
+      message: "Oracle AI Database の接続テストが 15 秒でタイムアウトしました。",
       elapsed_ms: 15001,
       troubleshooting: [
         "接続テストがタイムアウトしました。ADB が起動中か、TCPS 1522 に到達できるか確認してください。",
@@ -177,7 +177,7 @@ test("接続テストのタイムアウト診断を表示できる", async ({ pa
   await page.goto("/settings/database");
   await page.getByRole("button", { name: "DB接続テスト" }).click();
 
-  await expect(page.getByText("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")).toBeVisible();
+  await expect(page.getByText("Oracle AI Database の接続テストが 15 秒でタイムアウトしました。")).toBeVisible();
   await expect(page.getByText(/所要時間: 15001 ms/)).toBeVisible();
   await expect(page.getByText(/TCPS 1522/)).toBeVisible();
 });
@@ -203,7 +203,7 @@ for (const viewport of [
         return {
           status: "success",
           readiness: "ok",
-          message: "Oracle 26ai に接続できました。",
+          message: "Oracle AI Database に接続できました。",
           elapsed_ms: 1200,
           troubleshooting: [],
           details: {},
@@ -222,7 +222,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
 
     release();
-    await expect(page.getByText("Oracle 26ai に接続できました。")).toBeVisible();
+    await expect(page.getByText("Oracle AI Database に接続できました。")).toBeVisible();
     await expect(processing).toHaveCount(0);
   });
 }
@@ -315,7 +315,7 @@ async function mockDatabaseSettings(
             (await onTest?.()) ?? {
               status: "success",
               readiness: "ok",
-              message: "Oracle 26ai への接続に成功しました。",
+              message: "Oracle AI Database への接続に成功しました。",
               elapsed_ms: 12,
               troubleshooting: [],
               details: { timeout_seconds: 15, tcp_connect_timeout_seconds: 10 },

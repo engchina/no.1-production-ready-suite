@@ -355,7 +355,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
     fulfillJson(route, {
       status: "success",
       readiness: "ok",
-      message: "Oracle 26ai への接続に成功しました。",
+      message: "Oracle AI Database への接続に成功しました。",
       elapsed_ms: 1,
       troubleshooting: [],
       details: { network_call: true },
@@ -813,7 +813,7 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   expect(databaseSavedSecretBadgeStyle).toEqual(modelSavedSecretBadgeStyle);
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "DB接続テスト" }).click();
-  await expect(page.getByText("Oracle 26ai への接続に成功しました。")).toBeVisible();
+  await expect(page.getByText("Oracle AI Database への接続に成功しました。")).toBeVisible();
   await expect(page.getByTestId("settings-database-test-result")).toHaveAttribute(
     "data-tone",
     "success"
@@ -1016,7 +1016,7 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
     fulfillJson(route, {
       status: "success",
       readiness: "ok",
-      message: "Oracle 26ai への接続に成功しました。",
+      message: "Oracle AI Database への接続に成功しました。",
       elapsed_ms: 9,
       troubleshooting: [],
       details: { network_call: true },
@@ -1029,7 +1029,7 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
   const databaseResult = page.getByTestId("settings-database-test-result");
   await expect(databaseResult.getByRole("status")).toBeVisible();
   await expect(databaseResult).toHaveAttribute("data-tone", "success");
-  await expect(databaseResult).toContainText("Oracle 26ai への接続に成功しました。");
+  await expect(databaseResult).toContainText("Oracle AI Database への接続に成功しました。");
   await expect(databaseResult).toContainText("所要時間: 9 ms");
   await expect(databaseResult).toContainText("確認時刻:");
   await expect(databaseResult).toContainText("network_call");

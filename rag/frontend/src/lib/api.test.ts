@@ -614,7 +614,7 @@ describe("api.request envelope", () => {
         data: {
           status: "failed",
           readiness: "ok",
-          message: "Oracle 26ai 接続テストが 15 秒でタイムアウトしました。",
+          message: "Oracle AI Database の接続テストが 15 秒でタイムアウトしました。",
           elapsed_ms: 15001,
           troubleshooting: ["ADB が起動中か確認してください。"],
           details: { timeout_seconds: 15, tcp_connect_timeout_seconds: 10 },

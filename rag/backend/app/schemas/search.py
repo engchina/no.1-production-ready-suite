@@ -11,7 +11,7 @@ from app.config import GenerationProfile
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
 
-# PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle 26ai の JSON_VALUE 数値述語・
+# PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle AI Database の JSON_VALUE 数値述語・
 # TIMESTAMP 範囲・IN 述語へ再マップし、ベクトル/hybrid 検索の候補集合を事前に絞り込む。
 SUPPORTED_SEARCH_NUMERIC_RANGE_FILTERS = {
     "page_number_min",
@@ -80,7 +80,7 @@ SUPPORTED_CONTENT_KIND_FILTERS = {
 
 
 class SearchMode(StrEnum):
-    """検索モード。Oracle 26ai 側ではベクトル・キーワード・ハイブリッドへ対応する。"""
+    """検索モード。Oracle AI Database 側ではベクトル・キーワード・ハイブリッドへ対応する。"""
 
     HYBRID = "hybrid"
     VECTOR = "vector"

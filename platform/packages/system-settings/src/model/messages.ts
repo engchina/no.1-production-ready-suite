@@ -98,7 +98,7 @@ export const MODEL_MESSAGES = {
     "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp":
-    "固定値です。Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
+    "固定値です。Cohere Embed v4 と Oracle AI Database のベクトル列に合わせます。",
   "settings.model.genai.embeddingModel": "埋め込みモデル ID",
   "settings.model.genai.rerankModel": "リランクモデル ID",
   "settings.model.genai.saved": "OCI Generative AI 設定を保存しました。",

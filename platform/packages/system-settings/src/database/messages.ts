@@ -51,7 +51,7 @@ export const DATABASE_MESSAGES = {
   "settings.database.actions.walletUploaded":
     "Wallet ZIP をアップロードしました: {fileName}",
   "settings.database.cardDescription":
-    "アプリが Oracle 26ai へ接続するユーザー・パスワード・Wallet・サービス名を設定します。",
+    "アプリが Oracle AI Database へ接続するユーザー・パスワード・Wallet・サービス名を設定します。",
   "settings.database.cardTitle": "データベース設定",
   "settings.database.connectionSecurity.walletMtlS": "Wallet mTLS",
   "settings.database.connectionSecurity.walletMtlS.description":

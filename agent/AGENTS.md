@@ -68,7 +68,7 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 
 - Backend: Python 3.12、FastAPI、Pydantic v2、httpx、uv、Oracle (`python-oracledb`)。
 - Frontend: Vite、React Router、TypeScript、Tailwind、shadcn/ui、TanStack Query、Zustand。
-- 状態: 開発 memory/file、本番 Oracle 26ai。外部 queue・外部 vector DB は追加しない。
+- 状態: 開発 memory/file、本番 Oracle AI Database。外部 queue・外部 vector DB は追加しない。
 - モデル: 既存 OCI Enterprise AI 設定を Runtime へ渡す。別 LLM provider を Control Plane に
   組み込まない。
 - 観測: Prometheus、OpenTelemetry、Langfuse。業務データ原文と secret は trace に送らない。

@@ -1,6 +1,6 @@
 """chunk_set 永続化の実 Oracle 統合テスト(3 層モデル: 文書単位 serving)。
 
-実 Oracle 26ai を使い、文書単位 serving(is_serving)の確定/付け替え、所属 KB の
+実 Oracle AI Database を使い、文書単位 serving(is_serving)の確定/付け替え、所属 KB の
 membership 由来導出、save_index の chunk_set スコープ、抽出 artifact の永続化を検証する。
 未到達なら oracle_db fixture が skip し、作成行は cleanup_to_baseline で後始末する。
 """

@@ -234,7 +234,7 @@ def test_answer_evaluation_timeout_follows_llm_timeout_limit() -> None:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
-    """実 Oracle 26ai で、評価の入力と結果の JSON 列を保存・読み戻しできる。"""
+    """実 Oracle AI Database で、評価の入力と結果の JSON 列を保存・読み戻しできる。"""
     from app.clients.oracle import OracleClient
 
     oracle = OracleClient()

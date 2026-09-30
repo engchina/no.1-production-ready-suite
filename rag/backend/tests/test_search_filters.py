@@ -1,6 +1,6 @@
 """scalar / 日付 / カテゴリ pre-filter（PoweRAG 由来）の単体テスト。
 
-`normalize_search_filters`（schema 検証）と `_oracle_retrieval_where`（Oracle 26ai 述語生成）は
+`normalize_search_filters`（schema 検証）と `_oracle_retrieval_where`（Oracle の述語生成）は
 いずれも純粋関数なので、実 Oracle なしで pre-filter のロジックを検証できる。
 """
 

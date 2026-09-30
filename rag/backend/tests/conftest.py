@@ -158,7 +158,7 @@ async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
 
 @pytest.fixture
 def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """実 Oracle 26ai を使う統合テスト用。未到達なら skip し、作成行を後始末する。
+    """実 Oracle AI Database を使う統合テスト用。未到達なら skip し、作成行を後始末する。
 
     Oracle は実 DB を使うが、VLM/embedding/rerank/LLM は決定論スタブへ差し替える。
     `isolated_local_state` が Oracle 接続設定を初期化した後に実値を再適用するため、
@@ -175,7 +175,7 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     from tests.support import TEST_REQUEST_HEADERS
 
     if not _oracle_test_db.db_available():
-        pytest.skip("実 Oracle 26ai に未到達のため統合テストをスキップします。")
+        pytest.skip("実 Oracle AI Database に未到達のため統合テストをスキップします。")
     settings = get_settings()
     # 実 Oracle の接続の項目だけを入れる。手元の model-settings.json（文書解析の既定など）は読まない
     # （テストの既定値を上書きして CI と違う経路を通るため。AI は決定論スタブに差し替える。#483）。

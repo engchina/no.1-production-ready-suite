@@ -3130,7 +3130,9 @@ def test_database_connection_test_returns_timeout_guidance(
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
 
     async def fake_test_oracle_connection(candidate: Settings) -> None:
-        raise OracleConnectionTimeoutError("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")
+        raise OracleConnectionTimeoutError(
+            "Oracle AI Database の接続テストが 15 秒でタイムアウトしました。"
+        )
 
     _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
