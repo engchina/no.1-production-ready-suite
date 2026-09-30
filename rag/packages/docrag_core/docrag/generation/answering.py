@@ -247,7 +247,8 @@ def rerank_records(
     candidate_limit は並べ替える候補数。既定の None は取得できた候補すべてで、取得幅（`_retrieval_candidate_limit`）が
     top_k に応じて広がれば rerank 幅も追従する。定数で固定すると、取得した候補のうち後ろの方は一段目の順位のまま
     残り、context の起点が先頭 top_k 件で埋まるため質問に合致していても context に入らない (#1084)。
-    business_domains は質問から推定した業務名（domain profile の `business_patterns`）、screen_terms は質問が名指しした
+    business_domains は質問が名指しした業務名（`inquiry_conditions.business_domains`。注入された照合か domain profile の
+    `business_patterns` から得る）、screen_terms は質問が名指しした
     画面名（`inquiry_conditions.screen_terms`）。どちらも None なら質問文から推定する。rerank の有効・無効に関わらず、
     業務の絞り込み（`_same_business_records`。#954）と画面名の先頭寄せ（`_named_screen_first`。#1044）は適用する。
     """

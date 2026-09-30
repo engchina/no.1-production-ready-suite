@@ -9,6 +9,8 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
   profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
   metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
+  質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
+  照合して docrag へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。docrag 内部の Responses API 経路を使う。
 回答フローは同期関数のため worker thread で動かし、非同期 I/O はイベントループへ戻して実行する。
@@ -39,6 +41,7 @@ from app.config import (
 from app.rag.docrag_chunking import docrag_search_text
 from app.rag.docrag_prompts import prompt_overrides
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
+from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 T = TypeVar("T")
@@ -51,6 +54,8 @@ DOCRAG_SOURCE_RUN_ID = "0" * 16
 _IO_TIMEOUT_SECONDS = 600.0
 # 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
 _MAX_QUESTION_FILE_TERMS = 3
+# 質問の業務名として照合する大分類の名前の最短の文字数(1 文字の名前は質問の別の語に偶然含まれる)。
+_MIN_BUSINESS_NAME_CHARS = 2
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,7 @@ class DocragAnswerEngine:
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
             logger.warning("docrag prompt overrides load failed", exc_info=True)
             overrides = {}
+        business_names = await self._business_names(request)
         with tempfile.TemporaryDirectory(prefix="docrag-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -179,9 +185,26 @@ class DocragAnswerEngine:
                 self._settings, output_dir=work_dir, runtime_knowledge_path=runtime_path
             )
             result = await asyncio.to_thread(
-                self._answer_sync, request, docrag_settings, loop, state, overrides
+                self._answer_sync,
+                request,
+                docrag_settings,
+                loop,
+                state,
+                overrides,
+                business_names,
             )
         return _outcome_from_result(result, state)
+
+    async def _business_names(self, request: SearchRequest) -> list[str]:
+        """検索範囲(``request.filters``)の文書の大分類の語の一覧を、1 回の回答で 1 回読む(#553)。
+
+        読めないときは空(業務の絞り込みをせずに回答を続ける)。
+        """
+        try:
+            return await self._oracle.retrieval_large_categories(dict(request.filters))
+        except Exception:  # noqa: BLE001 - 業務の絞り込みは補助。絞らずに回答を続ける。
+            logger.warning("docrag business names load failed", exc_info=True)
+            return []
 
     def _answer_sync(
         self,
@@ -190,6 +213,7 @@ class DocragAnswerEngine:
         loop: asyncio.AbstractEventLoop,
         state: _SearchState,
         overrides: Mapping[str, str] | None = None,
+        business_names: Sequence[str] = (),
     ) -> Any:
         from docrag.adapters.oci import parse_multimodal_response, parse_text_response
         from docrag.dependencies import AnswerDependencies, bind_dependencies
@@ -210,6 +234,7 @@ class DocragAnswerEngine:
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
+            business_domains=lambda question: question_business_domains(question, business_names),
         )
         with bind_dependencies(dependencies), prompt_overrides(overrides or {}):
             return answer_question_result(
@@ -445,6 +470,30 @@ class DocragAnswerEngine:
 
 async def _call[R](factory: Callable[[], Awaitable[R]]) -> R:
     return await factory()
+
+
+def question_business_domains(question: str, large_categories: Sequence[str]) -> list[str]:
+    """質問が名指しした大分類を、検索範囲の大分類の語の一覧(保存どおりの値)から返す(#553)。
+
+    - 比べるときは #547 の正規化(NFKC・空白・``category_label`` で番号の接頭辞を外す)と
+      大文字・小文字の違いを無視する。返す値は保存どおり(docrag の ``_same_business_records`` は
+      候補の大分類と番号の接頭辞を外して完全一致で比べる)。
+    - 長い名前から照合し、照合した箇所は短い名前の照合に使わない
+      (「業務A」の中の「業務」を拾わない)。
+    - 名指しが無ければ空(絞り込まない)。
+    """
+    text = (normalize_category_value(question) or "").casefold()
+    values_by_label: dict[str, list[str]] = {}
+    for value in large_categories:
+        label = category_label(value).casefold()
+        if len(label) >= _MIN_BUSINESS_NAME_CHARS:
+            values_by_label.setdefault(label, []).append(value)
+    matched: list[str] = []
+    for label in sorted(values_by_label, key=lambda item: (-len(item), item)):
+        if label in text:
+            text = text.replace(label, "\0")
+            matched.extend(values_by_label[label])
+    return list(dict.fromkeys(matched))
 
 
 def _json_list(value: object) -> list[Any]:

@@ -704,6 +704,37 @@ class OracleClient:
                 classifications[str(row["document_id"])] = classification
         return classifications
 
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
+
+        質問が名指しした業務を、検索範囲の大分類の語の一覧から見つけるために使う(#553)。
+        値は保存どおりに返す(比較の正規化は呼び出し側で行う)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT large_category FROM (
+                SELECT DISTINCT
+                    JSON_VALUE(d.classification, '$.large_category') AS large_category
+                FROM rag_documents d
+                WHERE d.classification IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunks c
+                      WHERE c.document_id = d.document_id
+                        AND {where_sql}
+                  )
+            )
+            WHERE large_category IS NOT NULL
+            ORDER BY large_category
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [str(row["large_category"]) for row in rows if row.get("large_category")]
+
     async def context_dependency_chunks(
         self,
         anchors: list[RetrievedChunk],

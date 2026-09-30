@@ -62,6 +62,13 @@ class FakeOracle:
         self.classifications: dict[str, dict[str, object]] = {}
         self.classification_calls: list[list[str]] = []
         self.probes: list[dict[str, str]] = []
+        # 検索範囲の文書に保存済みの大分類(#553)。
+        self.large_categories: list[str] = []
+        self.large_category_calls: list[dict[str, str]] = []
+
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        self.large_category_calls.append(dict(filters))
+        return list(self.large_categories)
 
     async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
         self.probes.append(dict(filters))
@@ -883,10 +890,9 @@ async def test_docrag_rewrite_is_rechecked_by_guardrail(monkeypatch: pytest.Monk
 
 @pytest.fixture
 def business_profile(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """質問の業務名(business_domains)を取れる domain profile に差し替える。
+    """業務名の規則(business_patterns)を持つ domain profile に差し替える。
 
-    本製品の既定(DOCRAG_DOMAIN_PROFILE_FILE 未指定)では業務名の規則が空で、業務の絞り込みは
-    効かない。ここでは規則を持つ profile で、分類が渡れば絞り込みが効くことを確かめる。
+    質問の業務名は検索範囲の大分類の語の一覧から照合し、この規則は使わない(#553)ことを確かめる。
     """
     from docrag.profiles import load_profile
 
@@ -958,7 +964,10 @@ class TwoDocumentOracle(FakeOracle):
 
 
 async def _answer_two_documents(
-    monkeypatch: pytest.MonkeyPatch, oracle: TwoDocumentOracle, question: str
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: TwoDocumentOracle,
+    question: str,
+    filters: dict[str, str] | None = None,
 ) -> Any:
     import docrag.adapters.oci as docrag_oci
 
@@ -972,50 +981,152 @@ async def _answer_two_documents(
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
-    return await engine.run(SearchRequest(query=question))
+    return await engine.run(SearchRequest(query=question, filters=filters or {}))
 
 
+@pytest.mark.parametrize(
+    ("stored", "question"),
+    [
+        ("10_業務A", "業務Aの受注の登録方法は？"),
+        ("業務A", "業務Ａの受注の登録方法は？"),
+        ("10_業務Ａ", "業務Aで受注を登録する方法は？"),
+    ],
+    ids=["code-prefix", "full-width-question", "full-width-stored"],
+)
 async def test_docrag_keeps_only_candidates_of_named_business(
-    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+    monkeypatch: pytest.MonkeyPatch, stored: str, question: str
 ) -> None:
-    """質問が業務を名指ししたら、その業務の文書の候補だけが根拠に残る(#545)。"""
+    """質問が検索範囲の大分類を名指ししたら、その業務の文書の候補だけが根拠に残る(#545 / #553)。
+
+    番号の接頭辞・全角半角の違いは #547 の正規化で吸収する。
+    """
     oracle = TwoDocumentOracle()
     oracle.classifications = {
-        "doc-a": {"large_category": "10_業務A"},
+        "doc-a": {"large_category": stored},
         "doc-b": {"large_category": "20_業務B"},
     }
+    oracle.large_categories = [stored, "20_業務B"]
 
-    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+    outcome = await _answer_two_documents(
+        monkeypatch, oracle, question, filters={"knowledge_base_id": "kb-1"}
+    )
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
     # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
     assert oracle.classification_calls == [["doc-a", "doc-b"]]
+    # 大分類の語の一覧は、検索と同じ範囲で 1 回の回答に 1 回だけ読む(#553)。
+    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1"}]
 
 
 @pytest.mark.parametrize(
-    ("classifications", "question"),
+    ("classifications", "large_categories", "question"),
     [
-        ({}, "業務Aの受注の登録方法は？"),
+        ({}, ["業務A", "業務B"], "業務Aの受注の登録方法は？"),
         (
             {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "業務Cの受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B", "業務C"],
             "業務Cの受注の登録方法は？",
         ),
     ],
-    ids=["no-classification", "no-matching-business"],
+    ids=["no-classification", "no-business-named", "out-of-scope", "no-matching-candidate"],
 )
 async def test_docrag_business_filter_keeps_candidates_without_match(
     monkeypatch: pytest.MonkeyPatch,
-    business_profile: Any,
     classifications: dict[str, dict[str, object]],
+    large_categories: list[str],
     question: str,
 ) -> None:
-    """分類の無い文書、名指しした業務の候補が無いときは、候補を落とさない(#545)。"""
+    """名指しが無い・範囲外の大分類・一致する候補が無いときは、候補を落とさない(#545 / #553)。"""
     oracle = TwoDocumentOracle()
     oracle.classifications = classifications
+    oracle.large_categories = large_categories
 
     outcome = await _answer_two_documents(monkeypatch, oracle, question)
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_docrag_business_names_do_not_come_from_domain_profile(
+    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+) -> None:
+    """domain profile の business_patterns は質問の業務名に使わない(#553)。
+
+    profile の規則が「業務A」に一致しても、検索範囲の大分類に無ければ絞らない。
+    """
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_docrag_answers_without_business_names_when_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧を読めなくても、絞らずに回答を続ける(#553)。"""
+
+    class FailingOracle(TwoDocumentOracle):
+        async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+            raise RuntimeError("db down")
+
+    oracle = FailingOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+@pytest.mark.parametrize(
+    ("question", "large_categories", "expected"),
+    [
+        ("業務Aの登録は？", ["10_業務A", "20_業務B"], ["10_業務A"]),
+        ("ｇｙｏｍｕ-Xの登録は？", ["gyomu-x"], ["gyomu-x"]),
+        ("業務Aと業務Bの違いは？", ["業務A", "業務B"], ["業務A", "業務B"]),
+        # 長い名前から照合し、「業務A」の中の「業務」は拾わない。
+        ("業務Aの登録は？", ["業務", "業務A"], ["業務A"]),
+        ("業務の登録は？", ["業務", "業務A"], ["業務"]),
+        # 同じ名前の保存値(番号の接頭辞の有無)はどちらも返す。
+        ("業務Aの登録は？", ["10_業務A", "業務A"], ["10_業務A", "業務A"]),
+        # 1 文字の名前は質問の別の語に偶然含まれるため照合しない。
+        ("Aの登録は？", ["A"], []),
+        ("登録は？", ["業務A"], []),
+    ],
+    ids=[
+        "code-prefix",
+        "width-and-case",
+        "two-businesses",
+        "longest-first",
+        "short-name-alone",
+        "same-label-values",
+        "single-char",
+        "no-name",
+    ],
+)
+def test_question_business_domains_matches_scope_vocabulary(
+    question: str, large_categories: list[str], expected: list[str]
+) -> None:
+    """質問の業務名は、検索範囲の大分類を #547 の正規化で照合して保存どおりの値で返す(#553)。"""
+    from app.rag.docrag_answer import question_business_domains
+
+    assert question_business_domains(question, large_categories) == expected
 
 
 async def test_docrag_search_puts_document_classification_on_child_and_parent() -> None:
@@ -1041,10 +1152,26 @@ async def test_docrag_search_puts_document_classification_on_child_and_parent() 
     assert "業務A" not in child.retrieval_text
 
 
-def _inquiry(question: str) -> Any:
+def _inquiry(question: str, business_names: tuple[str, ...] = ()) -> Any:
+    """回答フローと同じく、業務名の照合(検索範囲の大分類。#553)を注入して質問を理解する。"""
+    from docrag.dependencies import AnswerDependencies, bind_dependencies
     from docrag.retrieval.inquiry_conditions import parse_inquiry_conditions
 
-    return parse_inquiry_conditions(question)
+    from app.rag.docrag_answer import question_business_domains
+
+    def unused(*args: object, **kwargs: object) -> Any:
+        raise AssertionError("質問の理解では I/O を呼ばない")
+
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        parse_text=unused,
+        parse_images=unused,
+        rerank=unused,
+        business_domains=lambda text: question_business_domains(text, business_names),
+    )
+    with bind_dependencies(dependencies):
+        return parse_inquiry_conditions(question)
 
 
 async def _search_filters(
@@ -1113,10 +1240,8 @@ def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
 
 
-async def test_business_match_channel_raises_candidate_of_named_business(
-    business_profile: Any,
-) -> None:
-    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546)。"""
+async def test_business_match_channel_raises_candidate_of_named_business() -> None:
+    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546 / #553)。"""
     from app.rag.docrag_answer import _SearchState
 
     oracle = TwoDocumentOracle()
@@ -1131,7 +1256,7 @@ async def test_business_match_channel_raises_candidate_of_named_business(
         SearchRequest(query=question),
         _SearchState(),
         retrieval_queries=[question],
-        inquiry_conditions=_inquiry(question),
+        inquiry_conditions=_inquiry(question, ("業務A", "業務B")),
     )
 
     assert _order(baseline) == ["doc-b:c1", "doc-a:c1"]
@@ -1232,4 +1357,32 @@ async def test_oracle_has_retrieval_chunks_uses_search_scope(
     assert "ROWNUM = 1" in statement
     assert "LOWER(d.file_name) LIKE :filter_file_name" in statement
     assert binds["filter_file_name"] == "%manual.pdf%"
+    assert "kb-1" in binds.values()
+
+
+async def test_oracle_retrieval_large_categories_uses_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧は、検索と同じ条件の文書の大分類を DISTINCT で 1 回だけ読む(#553)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [{"large_category": "10_業務A"}, {"large_category": "業務B"}]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    result = await client.retrieval_large_categories({"knowledge_base_id": "kb-1"})
+
+    assert result == ["10_業務A", "業務B"]
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "SELECT DISTINCT" in statement
+    assert "JSON_VALUE(d.classification, '$.large_category')" in statement
+    assert "d.status = 'INDEXED'" in statement
     assert "kb-1" in binds.values()
