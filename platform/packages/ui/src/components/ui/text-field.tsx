@@ -119,8 +119,13 @@ export type TextFieldProps = {
   /** クリアボタンの読み上げ名と Tooltip（翻訳済み。例:「検索語をクリア」）。 */
   clearLabel?: string;
   onValueChange?: (value: string) => void;
+  /**
+   * 入力の候補（翻訳しないデータの値。例: 保存済みの分類の値）。渡すと、候補から選べて候補に無い値も
+   * そのまま入力できる入力欄（ネイティブの `<datalist>`。読み上げは role=combobox）になる。#547
+   */
+  suggestions?: readonly string[];
   ref?: Ref<HTMLInputElement>;
-} & Omit<InputHTMLAttributes<HTMLInputElement>, "id" | "required" | "size">;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "id" | "required" | "size" | "list">;
 
 /**
  * ラベル・補足・エラー付きの 1 行入力。API は SelectField と揃える。
@@ -133,6 +138,9 @@ export type TextFieldProps = {
  *   押すと値を消して入力欄に戻る）。Escape でも消える（値があるときだけ。空なら Escape は囲むダイアログ等に渡す）。
  *   value を制御して使う。
  * - `trailing`: 末尾の任意の要素（単位・件数・ボタンなど）。枠線の内側の右端に置き、実際の幅の分だけ文字の右の余白を空ける。
+ * - `suggestions`: 候補を選べる自由入力（editable combobox）。独自の listbox ではなくネイティブの `<datalist>` にする
+ *   （キー操作・読み上げ・モバイルの候補表示・`color-scheme` によるダークテーマを OS / ブラウザに任せる。
+ *   `type="date"` の日付選択と同じ扱い）。ブラウザの入力履歴を候補に混ぜないよう既定で `autoComplete="off"`。
  */
 export function TextField({
   id,
@@ -151,6 +159,7 @@ export function TextField({
   onClear,
   clearLabel,
   onValueChange,
+  suggestions,
   onChange,
   onKeyDown,
   type = "text",
@@ -160,6 +169,7 @@ export function TextField({
   const reactId = useId();
   const hintId = `${id}-${reactId}-hint`;
   const errorId = `${id}-${reactId}-error`;
+  const suggestionListId = suggestions?.length ? `${id}-${reactId}-suggestions` : undefined;
   const describedBy =
     [helper ? hintId : "", error ? errorId : "", props["aria-describedby"] ?? ""].filter(Boolean).join(" ") ||
     undefined;
@@ -228,6 +238,8 @@ export function TextField({
           type={type}
           aria-required={required || undefined}
           aria-invalid={Boolean(error)}
+          list={suggestionListId}
+          autoComplete={suggestionListId ? "off" : undefined}
           {...props}
           aria-describedby={describedBy}
           onChange={(event) => {
@@ -281,6 +293,11 @@ export function TextField({
               />
             ) : null}
           </div>
+        ) : null}
+        {suggestionListId ? (
+          <datalist id={suggestionListId}>
+            {suggestions?.map((suggestion) => <option key={suggestion} value={suggestion} />)}
+          </datalist>
         ) : null}
       </div>
       {helper ? (

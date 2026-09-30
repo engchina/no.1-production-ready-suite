@@ -41,7 +41,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 編集したプロンプトは `rag_docrag_prompts` に保存する（migration `20260926_004_docrag_prompts`）。回答では docrag の runtime の `prompt_overrides` で渡し、解析では backend の Vision の段（`app/rag/vision.py`）が読み取りの指示として使う（#497 以前は docling サービスへ `parser_options` で渡していた）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
 
-分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを完全一致で比べる。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
+分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを比べる。保存・検索の入力の両方で表記をそろえ（NFKC・前後の空白・連続する空白。`app/schemas/classification.py` の `normalize_category_value`）、比較は先頭の番号の接頭辞（`10_` など）を除いた名前で行う（docrag_core の `_category_label` と同じ。保存値の接頭辞は残す。#547）。文書詳細の分類の入力は、保存済みの分類の値（`GET /api/documents/classification-options`）を候補に出す。既存の文書の分類の表記は `uv run python -m app.rag.classification_normalization --dry-run` で件数を確かめ、Oracle のバックアップ後に `--apply` でそろえる。アップロードはファイル名だけを送り、フォルダの相対パスを持たないため、rag_poc のパスからの分類の推定は移していない。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
 ## 使い方（推奨の流れ）
 

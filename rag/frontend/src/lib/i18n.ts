@@ -1087,6 +1087,9 @@ export const ja = {
   "fileList.col.knowledgeBases": "ナレッジベース",
   "fileList.col.category": "文書種別",
   "fileList.col.status": "状態",
+  "fileList.layersRebuild": "作り直しが必要",
+  "fileList.layersRebuildTitle":
+    "項目抽出などの作成後に、項目の定義などが変わりました。文書の詳細で「再処理」すると作り直せます。",
   "fileList.col.size": "サイズ",
   "fileList.col.uploadedAt": "アップロード日時",
   "fileList.col.actions": "操作",
@@ -1944,6 +1947,15 @@ export const ja = {
   "documents.recipes.updated": "更新 {time}",
   "documents.recipes.reprocess": "再処理が必要",
   "documents.recipes.staleError": "再処理に失敗しました。旧索引は検索対象のままです。",
+  "documents.recipes.layerRebuild": "作り直しが必要",
+  "documents.recipes.layerRebuildBanner":
+    "{layers}は、作成後に{inputs}が変わりました。レシピの再処理で作り直すまで、検索・回答は作成時の内容を使います。",
+  "documents.recipes.layerRebuildTitle": "作成後に{inputs}が変わりました。「再処理」で作り直してください。",
+  "documents.recipes.layerRebuildInput.field_schema_hash": "項目の定義",
+  "documents.recipes.layerRebuildInput.docrag_chunk_contract": "チャンクのメタデータの形式",
+  "documents.recipes.layerRebuildInput.navigation_summary_max_nodes": "ナビゲーション要約の上限数",
+  "documents.recipes.layerRebuildInput.unknown": "作成時の設定",
+  "documents.recipes.layerRebuildJoin": "、",
   "documents.recipes.addTitle": "処理レシピを追加",
   "documents.recipes.addDescription": "作成方法を選択してください。",
   "documents.recipes.clone": "選択中のレシピを複製",
@@ -2111,6 +2123,8 @@ export const ja = {
   "documents.classification.title": "文書の分類と有効期間",
   "documents.classification.description":
     "RAG 検索の「文書の分類」で絞り込むときに使います。有効期間外の文書は、基準日（未指定なら今日）の検索に出ません。",
+  "documents.classification.suggestionsHelper":
+    "ほかの文書で使っている分類から選べます。新しい分類はそのまま入力してください。",
   "documents.classification.large_category": "大分類",
   "documents.classification.middle_category": "中分類",
   "documents.classification.small_category": "小分類",
@@ -2209,7 +2223,7 @@ export const ja = {
     "見出し名や階層が分かる場合だけ使います。「経費申請」や「料金表」のように一部だけでも絞り込めます。",
   "search.filters.classificationGroup": "文書の分類で絞り込む",
   "search.filters.classificationHelper":
-    "文書詳細で設定した分類と完全に一致する文書だけを検索します。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
+    "文書詳細で設定した分類と一致する文書だけを検索します（全角・半角、前後の空白、先頭の番号（「10_」など）の違いは同じ分類として扱います）。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
   "search.filters.large_category": "大分類",
   "search.filters.middle_category": "中分類",
   "search.filters.small_category": "小分類",

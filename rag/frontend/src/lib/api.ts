@@ -374,6 +374,8 @@ export interface DocumentSummary {
   indexed_at: string | null;
   knowledge_bases: KnowledgeBaseRef[];
   source_profile: SourceProfile | null;
+  /** 検索対象のレシピの派生情報レイヤーに、作り直しが必要なものがあるか（一覧だけが返す。#550）。 */
+  layers_rebuild_required?: boolean;
 }
 
 export interface DuplicateDocumentRef {
@@ -510,6 +512,13 @@ export interface DocumentClassification {
   effective_to: string | null;
 }
 
+/** 分類の入力の候補（保存済みの文書の分類の値。番号の接頭辞付きの表記を優先する。#547）。 */
+export interface DocumentClassificationOptions {
+  large_categories: string[];
+  middle_categories: string[];
+  small_categories: string[];
+}
+
 export interface DocumentDeleteResult {
   id: string;
   file_name: string;
@@ -601,11 +610,20 @@ export type DocumentLayerStatusName =
   | "needs_reingest"
   | "error";
 
+/** レイヤーの作成後に変わると作り直しが必要になる入力（backend の layer_fingerprint。#550）。 */
+export type DocumentLayerRebuildInput =
+  | "field_schema_hash"
+  | "docrag_chunk_contract"
+  | "navigation_summary_max_nodes";
+
 export interface DocumentMaterializationLayerStatus {
   layer_id: string | null;
   requested: boolean;
   status: DocumentLayerStatusName;
   reason: string | null;
+  /** 作ったときの入力が今の設定と違う（status とは別の印。指紋の無い古い行は false）。 */
+  rebuild_required?: boolean;
+  rebuild_inputs?: string[];
 }
 
 export interface DocumentChunkSetLayerStatuses {
@@ -2623,6 +2641,8 @@ export const api = {
     for (const id of ids) search.append("document_id", id);
     return request<DocumentDeleteImpact[]>(`/api/documents/delete-impact?${search.toString()}`);
   },
+  getDocumentClassificationOptions: () =>
+    request<DocumentClassificationOptions>("/api/documents/classification-options"),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",
