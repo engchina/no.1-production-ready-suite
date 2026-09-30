@@ -8,7 +8,7 @@ import {
   type TestInfo,
 } from "@playwright/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
-import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { mockDatabaseGateReady, profileAccessPage, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 
@@ -188,16 +188,6 @@ async function expectBoundedSecurityTableScroll(
   });
   expect(bottomState.headerOffset).toBeLessThanOrEqual(1);
   expect(bottomState.lastRowVisible).toBe(true);
-}
-
-async function expectEqualFilterWidths(search: Locator, owner: Locator) {
-  await expect
-    .poll(async () => {
-      const [searchBox, ownerBox] = await Promise.all([search.boundingBox(), owner.boundingBox()]);
-      if (!searchBox || !ownerBox) return Number.POSITIVE_INFINITY;
-      return Math.abs(searchBox.width - ownerBox.width);
-    })
-    .toBeLessThanOrEqual(2);
 }
 
 async function waitForAnimationFrames(page: Page) {
@@ -407,7 +397,9 @@ const systemRole = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, profileAccessPage(route.request().url(), []))
+  );
 });
 
 test("ユーザー管理の migration 未適用は初回 ErrorState、再取得失敗は既存データ保持で示す", async ({
@@ -3069,7 +3061,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
-    fulfill(route, [
+    fulfill(route, profileAccessPage(route.request().url(), [
       {
         id: "default",
         name: "標準プロファイル",
@@ -3094,7 +3086,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         archived: false,
         allowed_role_ids: [],
       })),
-    ])
+    ]))
   );
   const permissionRows = [
     {
@@ -3259,7 +3251,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
-    fulfill(route, [
+    fulfill(route, profileAccessPage(route.request().url(), [
       {
         id: "default",
         name: "標準プロファイル",
@@ -3276,7 +3268,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
         archived: false,
         allowed_role_ids: ["role-profile-manager"],
       },
-    ])
+    ]))
   );
   const permissionRows = [
     {
@@ -3534,7 +3526,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
-    fulfill(route, [
+    fulfill(route, profileAccessPage(route.request().url(), [
       {
         id: "default",
         name: "標準プロファイル",
@@ -3551,7 +3543,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
         archived: false,
         allowed_role_ids: [],
       },
-    ])
+    ]))
   );
   const permissionRows = [
     {
@@ -4423,6 +4415,111 @@ test("DeepSec は保存済み DATA USER password を変更なしで Oracle へ�
   await expectNoPageHorizontalScroll(page);
 });
 
+// #608: 対象 table/view は 1 つを選ぶので、検索できる選択欄（SearchableSelectField）。候補は数千件になりうるので、
+// サーバー側で検索し、続きは 50 件ずつ読む。desktop / 375px（projects）とライト / ダークで確かめる。
+for (const theme of ["light", "dark"] as const) {
+  test(`DeepSec の対象 table/view は大量でも検索できる選択欄で選べる (${theme})`, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => {
+      localStorage.setItem(
+        "production-ready-nl2sql.ui",
+        JSON.stringify({ state: { sidebarCollapsed: false, collapsedSections: {}, theme: value }, version: 0 })
+      );
+    }, theme);
+    await mockDatabaseGateReady(page);
+    const role = {
+      ...systemRole,
+      role_id: "role-many",
+      role_code: "MANY_DATA_ROLE",
+      display_name: "大量対象ロール",
+      is_built_in: false,
+      permissions: ["menu.security_deepsec"],
+      data_entitlements: [],
+    };
+    const objects = Array.from({ length: 3000 }, (_, index) => ({
+      ...deepSecTargetObject,
+      owner: index % 2 === 0 ? "SALES" : "HR",
+      name: `TABLE_${String(index + 1).padStart(4, "0")}`,
+      qualified_name: `${index % 2 === 0 ? "SALES" : "HR"}.TABLE_${String(index + 1).padStart(4, "0")}`,
+      comment: `対象 ${index + 1}`,
+    }));
+    const requests: URL[] = [];
+    await page.route("**/api/security/deepsec/status", (route) =>
+      fulfill(route, {
+        configured: true,
+        driver_mode: "thin",
+        connection_security: "wallet_mtls",
+        deepsec_enabled: true,
+        data_user: "DEEPSEC_DATA_USER",
+        has_data_user_password: true,
+        objects: { data_grants: 0 },
+        message: "構成済みです。",
+      })
+    );
+    await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+    await page.route("**/api/security/deepsec/data-entitlements", (route) => fulfill(route, [role]));
+    await page.route("**/api/security/deepsec/target-objects?*", (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      // backend と同じく `OWNER.OBJECT` とコメントを照合し、カーソルで 50 件ずつ返す（件数は返さない）。
+      const q = (url.searchParams.get("q") ?? "").toUpperCase();
+      const matched = objects.filter((item) => !q || `${item.qualified_name} ${item.comment}`.toUpperCase().includes(q));
+      const offset = Number(url.searchParams.get("cursor") ?? "0");
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      return fulfill(route, {
+        runtime: "oracle",
+        owner: "",
+        items: matched.slice(offset, offset + limit),
+        total: null,
+        counts_included: false,
+        next_cursor: offset + limit < matched.length ? String(offset + limit) : null,
+        warnings: [],
+      });
+    });
+
+    await page.goto("/settings/security/deepsec");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    await page.getByRole("tab", { name: "データ権限" }).click();
+    const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+    await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+    const objectButton = entitlementForm.locator("#deepsec-entitlement-resource-0");
+    await expect(objectButton).toContainText("対象 object を選択");
+    await objectButton.click();
+    const popover = page.getByRole("dialog", { name: "対象 table/view" });
+    const search = popover.getByRole("combobox");
+    await expect(search).toBeFocused();
+    await expect(popover.getByRole("option")).toHaveCount(50);
+    await expect(popover.getByText("50 件", { exact: true })).toBeVisible();
+
+    // 一覧の下端までスクロールすると続きの 50 件を読む（「さらに読み込む」のボタンは置かない）。
+    await popover.getByRole("listbox").evaluate((node) => node.scrollTo({ top: node.scrollHeight }));
+    await expect(popover.getByRole("option")).toHaveCount(100);
+    expect(requests.at(-1)?.searchParams.get("cursor")).toBe("50");
+
+    // スキーマ名を付けた名前でもサーバー側で検索する。↓ と Enter で選び、選択欄へ戻る。
+    await search.fill("hr.table_2999");
+    await expect(popover.getByRole("option")).toHaveCount(0);
+    await search.fill("hr.table_300");
+    await expect(popover.getByRole("option")).toHaveCount(1);
+    expect(requests.at(-1)?.searchParams.get("q")).toBe("hr.table_300");
+    expect(requests.at(-1)?.searchParams.has("owner_prefix")).toBe(false);
+    await search.press("Enter");
+    await expect(popover).toHaveCount(0);
+    await expect(objectButton).toBeFocused();
+    await expect(objectButton).toContainText("HR.TABLE_3000");
+    await expect(entitlementForm.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("HR.TABLE_3000");
+
+    // 閉じると検索語を消し、開き直すと 1 ページ目の候補に戻る。
+    await objectButton.click();
+    await expect(search).toHaveValue("");
+    await expect(popover.getByRole("option")).toHaveCount(50);
+    await page.screenshot({ path: testInfo.outputPath(`deepsec-object-select-${theme}.png`) });
+    await search.press("Escape");
+    await expectNoPageHorizontalScroll(page);
+  });
+}
+
 test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表示しない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const emptyRole = {
@@ -4466,18 +4563,22 @@ test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表�
   await page.getByRole("tab", { name: "データ権限" }).click();
   const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
   await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  // 対象 table/view は検索できる選択欄（#608）。候補の一覧は開いた選択欄（dialog）の中に出す。
   const objectPicker = entitlementForm.getByTestId("security-deepsec-object-picker-0");
+  await objectPicker.locator("#deepsec-entitlement-resource-0").click();
+  const objectPopover = page.getByRole("dialog", { name: "対象 table/view" });
 
-  await expect(objectPicker.getByText("0 / 0 件", { exact: true })).toHaveCount(0);
-  await expect(objectPicker.getByText("0 件", { exact: true })).toBeVisible();
-  await expect(objectPicker.getByText("参照可能な対象 object がありません。")).toBeVisible();
+  await expect(objectPopover.getByText("0 / 0 件", { exact: true })).toHaveCount(0);
+  await expect(objectPopover.getByText("0 件", { exact: true })).toBeVisible();
+  await expect(objectPopover.getByText(/参照可能な対象 object がありません。/)).toBeVisible();
   await expect(
-    objectPicker.getByText("Oracle 接続ユーザーの参照権限、所有者、NL2SQL_SCHEMA_OWNER_ALLOWLIST を確認してください。")
+    objectPopover.getByText(/Oracle 接続ユーザーの参照権限、所有者、NL2SQL_SCHEMA_OWNER_ALLOWLIST を確認してください。/)
   ).toBeVisible();
 
-  await objectPicker.getByRole("searchbox", { name: "検索" }).fill("ORDERS");
-  await expect(objectPicker.getByText("条件に一致する object はありません。")).toBeVisible();
-  await expect(objectPicker.getByText("参照可能な対象 object がありません。")).toHaveCount(0);
+  await objectPopover.getByRole("combobox").fill("ORDERS");
+  await expect(objectPopover.getByText("条件に一致する object はありません。")).toBeVisible();
+  await expect(objectPopover.getByText(/参照可能な対象 object がありません。/)).toHaveCount(0);
+  await objectPopover.getByRole("combobox").press("Escape");
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -4775,49 +4876,34 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const objectPicker = firstRule.getByTestId("security-deepsec-object-picker-0");
   await expect(objectPicker).toBeVisible();
-  const loadMoreButton = objectPicker.getByTestId("security-deepsec-object-picker-load-more-0");
-  await expect(loadMoreButton).toBeVisible();
-  await expect
-    .poll(async () => {
-      const [pickerBox, buttonBox] = await Promise.all([
-        objectPicker.boundingBox(),
-        loadMoreButton.boundingBox(),
-      ]);
-
-      return Boolean(
-        pickerBox &&
-          buttonBox &&
-          buttonBox.x >= pickerBox.x - 1 &&
-          buttonBox.x + buttonBox.width <= pickerBox.x + pickerBox.width + 1
-      );
-    })
-    .toBeTruthy();
-  await loadMoreButton.click();
+  // 対象 table/view は検索できる選択欄（SearchableSelectField。#608）。1 つを選ぶので、手書きの一覧・所有者の欄・
+  // 「さらに読み込む」のボタンは持たない。続きは最後の候補から ↓（または一覧の下端までのスクロール）で読む。
+  const objectButton = objectPicker.locator("#deepsec-entitlement-resource-0");
+  await expect(objectButton).toHaveAttribute("aria-required", "true");
+  await expect(objectPicker.getByRole("searchbox")).toHaveCount(0);
+  await objectButton.click();
+  const objectPopover = page.getByRole("dialog", { name: "対象 table/view" });
+  const objectSearch = objectPopover.getByRole("combobox");
+  await expect(objectSearch).toBeFocused();
+  await expect(objectSearch).toHaveAttribute("placeholder", "スキーマ名・名前・コメントで検索");
+  await expect(objectPopover.getByRole("option", { name: /HR\.EMPLOYEES/ })).toBeVisible();
+  await objectSearch.press("ArrowDown");
   await expect.poll(() => objectRequests.some((request) => request.cursor === "deepsec-page-2")).toBeTruthy();
-  const objectSearch = objectPicker.getByRole("searchbox", { name: "検索" });
-  const objectOwner = objectPicker.getByRole("searchbox", { name: "所有者" });
-  await expect(objectSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
-  await expect(objectOwner).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-  await expectEqualFilterWidths(objectSearch, objectOwner);
-  await objectSearch.focus();
-  await page.keyboard.press("Tab");
-  await expect(objectOwner).toBeFocused();
-  await objectOwner.fill("sal");
-  await expect(objectOwner).toHaveValue("SAL");
-  await expect
-    .poll(() => objectRequests.some((request) => request.ownerPrefix === "SAL"))
-    .toBeTruthy();
-  await expect(objectPicker.getByRole("option", { name: /SALES\.ORDERS/ })).toBeVisible();
+  await expect(objectPopover.getByRole("option", { name: /SALES\.ORDERS/ })).toBeVisible();
+  // 検索は入力に合わせてサーバーの q で絞る（親で遅延させない）。所有者の接頭辞は送らない。
   await objectSearch.fill("ORDERS");
   await expect.poll(() => objectRequests.some((request) => request.q === "ORDERS")).toBeTruthy();
-  await objectPicker.getByRole("option", { name: /SALES\.ORDERS/ }).click();
+  expect(objectRequests.every((request) => request.ownerPrefix === null)).toBe(true);
+  await objectPopover.getByRole("option", { name: /SALES\.ORDERS/ }).click();
+  await expect(objectPopover).toHaveCount(0);
+  await expect(objectButton).toBeFocused();
+  await expect(objectButton).toContainText("SALES.ORDERS");
   await expect(entitlementForm.getByText("CUSTOMER_NAME", { exact: true })).toBeVisible();
   const scopeModeSelect = entitlementForm.getByLabel("行 scope");
   const columnsFieldset = entitlementForm.getByRole("group", { name: /許可列/ });
   const columnsLegend = columnsFieldset.locator("legend");
   const columnActions = firstRule.getByTestId("security-deepsec-entitlement-column-selection-actions-0");
   const columnsGrid = firstRule.getByTestId("security-deepsec-entitlement-columns-grid-0");
-  const objectPickerList = objectPicker.getByTestId("security-deepsec-object-picker-list-0");
   const main = page.getByRole("main");
   const selectAllColumnsButton = columnActions.getByTestId(
     "security-deepsec-entitlement-column-selection-actions-0-select"
@@ -4837,18 +4923,17 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     await setMainScrollTop(page, 32);
   }
   await selectAllColumnsButton.scrollIntoViewIfNeeded();
-  await setElementScrollTop(objectPickerList, 72);
   await setElementScrollTop(columnsGrid, 72);
   await expect
     .poll(() =>
       Promise.all(
-        [main, firstRule, objectPickerList, columnsGrid].map((container) =>
+        [main, firstRule, columnsGrid].map((container) =>
           container.evaluate((node) => node.scrollTop)
         )
       ).then((positions) => positions.every((position) => position > 0))
     )
     .toBeTruthy();
-  const preservedScrollContainers = [main, firstRule, objectPickerList, columnsGrid];
+  const preservedScrollContainers = [main, firstRule, columnsGrid];
   await expectScrollPositionsPreserved(page, preservedScrollContainers, () =>
     selectAllColumnsButton.click()
   );
@@ -4875,9 +4960,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     clearAllColumnsButton.press("Space")
   );
   await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).not.toBeChecked();
-  // 対象 object は複合入力（group）なので、必須バッジは見出しの一部として読み上げる。
-  await expect(objectPicker.locator("#deepsec-entitlement-resource-0")).toHaveText("対象 table/view必須");
-  await expect(objectPicker.locator("#deepsec-entitlement-resource-0 [aria-hidden='true']")).toHaveCount(0);
+  // 対象 object は検索できる選択欄（#608）。必須はラベルの印と選択欄の aria-required で伝える。
+  await expect(objectPicker.locator("label")).toHaveText("対象 table/view必須");
+  await expect(objectButton).toHaveAttribute("aria-required", "true");
   await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const scopeModeLabelText = entitlementForm.getByTestId("security-deepsec-scope-mode-label-text-0");
@@ -5155,7 +5240,11 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   const replacementRule = entitlementForm.getByTestId("security-deepsec-entitlement-rule-0");
   const replacementPicker = replacementRule.getByTestId("security-deepsec-object-picker-0");
   await expect(replacementRule.getByText("Data Grant", { exact: true })).toBeVisible();
-  await replacementPicker.getByRole("option", { name: /SALES\.ORDERS/ }).click();
+  // 選択欄を閉じると検索語は消え、候補は 1 ページ目に戻る。検索して選ぶ。
+  await replacementPicker.locator("#deepsec-entitlement-resource-0").click();
+  const replacementPopover = page.getByRole("dialog", { name: "対象 table/view" });
+  await replacementPopover.getByRole("combobox").fill("ORDERS");
+  await replacementPopover.getByRole("option", { name: /SALES\.ORDERS/ }).click();
   await replacementRule.getByRole("checkbox", { name: /ORDER_ID/ }).check();
   await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
   failNextApply = true;
@@ -5436,11 +5525,9 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
             editorMatchesWorkspace: Boolean(
               workspaceBox && editorBox && Math.abs(workspaceBox.height - editorBox.height) <= 1
             ),
-            editorScrollable: Boolean(
-              editor &&
-                window.getComputedStyle(editor).overflowY === "auto" &&
-                editor.scrollHeight > editor.clientHeight
-            ),
+            // 編集欄は固定の高さで、溢れたら中をスクロールする。対象の選択は 1 行の選択欄（#608）になり、
+            // 対象未選択の新しいルールは溢れないことがあるので、スクロールできる設定であることだけを確かめる。
+            editorScrollable: Boolean(editor && window.getComputedStyle(editor).overflowY === "auto"),
           };
         })
       )
@@ -5455,12 +5542,14 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   const thirdObjectPicker = entitlementForm
     .getByTestId("security-deepsec-entitlement-rule-2")
     .getByTestId("security-deepsec-object-picker-2");
-  await expectElementCenterUnobscured(thirdObjectPicker.getByRole("option", { name: /HR\.EMPLOYEES/u }));
-  await expectElementCenterUnobscured(
-    thirdObjectPicker.getByTestId("security-deepsec-object-picker-load-more-2")
-  );
+  await expectElementCenterUnobscured(thirdObjectPicker.locator("#deepsec-entitlement-resource-2"));
   await expectElementCenterUnobscured(entitlementForm.getByRole("button", { name: "データ権限を削除" }));
-  await thirdObjectPicker.getByTestId("security-deepsec-object-picker-load-more-2").click();
+  // 開いた選択欄の候補は、ルールの編集欄のスクロール領域に隠れない（画面の最前面に重ねる）。
+  await thirdObjectPicker.locator("#deepsec-entitlement-resource-2").click();
+  await expectElementCenterUnobscured(
+    page.getByRole("dialog", { name: "対象 table/view" }).getByRole("option", { name: /HR\.EMPLOYEES/u })
+  );
+  await page.getByRole("dialog", { name: "対象 table/view" }).getByRole("combobox").press("Escape");
   await setElementScrollTop(entitlementForm.getByTestId("security-deepsec-entitlement-rule-2"), 96);
   await setMainScrollTop(page, 0);
   await expectMainScrollPreservedAfterClick(page, firstRuleTab);
@@ -6748,14 +6837,16 @@ test("DeepSec は引用が必要な表名を対象に選び、大文字の同名
   await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
   const rule = entitlementForm.getByTestId("security-deepsec-entitlement-rule-0");
   const objectPicker = rule.getByTestId("security-deepsec-object-picker-0");
-  const upperOption = objectPicker.getByRole("option", { name: /SALES\.MIXED_CASE/u });
-  const quotedOption = objectPicker.getByRole("option", { name: /SALES\."Mixed_Case"/u });
+  const objectButton = objectPicker.locator("#deepsec-entitlement-resource-0");
+  const objectPopover = page.getByRole("dialog", { name: "対象 table/view" });
+  const upperOption = objectPopover.getByRole("option", { name: /SALES\.MIXED_CASE/u });
+  const quotedOption = objectPopover.getByRole("option", { name: /SALES\."Mixed_Case"/u });
+  await objectButton.click();
   await expect(upperOption).toBeVisible();
   await expect(quotedOption).toBeVisible();
 
   await quotedOption.click();
-  await expect(quotedOption).toHaveAttribute("aria-selected", "true");
-  await expect(upperOption).toHaveAttribute("aria-selected", "false");
+  await expect(objectButton).toContainText('SALES."Mixed_Case"');
   await expect(rule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText(
     'SALES."Mixed_Case"'
   );
@@ -6763,6 +6854,13 @@ test("DeepSec は引用が必要な表名を対象に選び、大文字の同名
   await expect.poll(() => detailRequests).toContain('"Mixed_Case"');
   expect(detailRequests).not.toContain("MIXED_CASE");
   expect(detailRequests).not.toContain("Mixed_Case");
+  // 開き直すと、選んだ引用名の表だけが選択中（大文字の同名表は選択中にならない）。
+  await objectButton.click();
+  await expect(objectButton).toHaveAttribute("aria-expanded", "true");
+  await expect(quotedOption).toHaveAttribute("aria-selected", "true");
+  await expect(upperOption).toHaveAttribute("aria-selected", "false");
+  await objectPopover.getByRole("combobox").press("Escape");
+  await expect(objectPopover).toHaveCount(0);
   const quotedAmount = rule.getByRole("checkbox", { name: /^"Amount"/u });
   const upperAmount = rule.getByRole("checkbox", { name: /^AMOUNT/u });
   await quotedAmount.check();
@@ -6804,7 +6902,11 @@ test("DeepSec は引用が必要な表名を対象に選び、大文字の同名
   const savedTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0");
   await expect(savedTab).toContainText('SALES."Mixed_Case"');
   await expect(savedTab.getByText("適用済み", { exact: true })).toBeVisible();
+  await expect(objectButton).toContainText('SALES."Mixed_Case"');
+  await objectButton.click();
   await expect(quotedOption).toHaveAttribute("aria-selected", "true");
+  await expect(upperOption).toHaveAttribute("aria-selected", "false");
+  await objectPopover.getByRole("combobox").press("Escape");
   await expect(quotedAmount).toBeChecked();
   await expect(upperAmount).not.toBeChecked();
   await expect(applyField.getByRole("button", { name: "Data Grant を適用" })).toBeDisabled();

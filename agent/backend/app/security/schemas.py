@@ -6,6 +6,7 @@ Agent の権限と対象範囲を、ログイン中の利用者に実効の権�
 
 from __future__ import annotations
 
+from pr_backend_core import Page
 from pr_system_settings.users_roles import RoleData as SharedRoleData
 from pydantic import BaseModel, Field
 
@@ -120,11 +121,11 @@ class BusinessViewTargetData(BaseModel):
     name: str
 
 
-class AccessTargetsData(BaseModel):
-    agents: list[AgentTargetData]
-    business_views: list[BusinessViewTargetData]
+class BusinessViewTargetPage(Page[BusinessViewTargetData]):
+    """権限管理の業務ビューの候補の 1 ページ（#608）。"""
+
     # RAG の業務ビューを読めなかった理由（#240。画面は候補を出したまま警告を表示する）。
-    business_view_warnings: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 def _sorted_or_none(values: frozenset[str] | None) -> list[str] | None:

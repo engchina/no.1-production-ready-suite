@@ -149,6 +149,15 @@ export interface ProfileAccessProfile {
   allowed_role_ids: string[];
 }
 
+/** 権限管理の業務プロファイルの候補の 1 ページ（検索とページング。#608）。 */
+export interface ProfileAccessProfilePage {
+  items: ProfileAccessProfile[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+}
+
 export interface DeepSecRoleEntitlements {
   role_id: string;
   role_code: string;

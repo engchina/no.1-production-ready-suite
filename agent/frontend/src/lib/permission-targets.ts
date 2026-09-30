@@ -3,12 +3,14 @@ import {
   permissionNavSections,
   type PermissionDefinition,
   type RolePermissionTargetItem,
+  type RolePermissionTargetPage,
+  type RolePermissionTargetQuery,
   type RolePermissionTargetSection,
   type RolePermissionsApi,
 } from "@engchina/production-ready-system-settings";
 
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
-import type { AccessTargetsData, AgentAccessTarget, SecurityRole } from "./api";
+import type { AccessTargetPage, AgentAccessTarget, BusinessViewAccessTarget, SecurityRole } from "./api";
 import { t } from "./i18n";
 import { CAPABILITY_PERMISSIONS } from "./permissions";
 import { securityApi } from "./security-api";
@@ -59,27 +61,19 @@ function agentTargetItem(item: AgentAccessTarget): RolePermissionTargetItem {
   };
 }
 
-/**
- * エージェントと業務ビューの候補は `/security/access-targets` の 1 回の応答から作る。共通画面は 1 回の読み込みで
- * 対象ごとに同じ signal を渡すため、signal ごとに応答を共有する（表示の更新では signal が変わり取り直す）。
- */
-export function accessTargetsLoader(fetchTargets: (signal: AbortSignal) => Promise<AccessTargetsData>) {
-  const inFlight = new WeakMap<AbortSignal, Promise<AccessTargetsData>>();
-  return (signal: AbortSignal) => {
-    const cached = inFlight.get(signal);
-    if (cached) return cached;
-    const request = fetchTargets(signal);
-    inFlight.set(signal, request);
-    return request;
-  };
+/** 候補を読む関数（`GET /api/security/access-targets/{agents,business-views}`。検索とページング。#608）。 */
+export interface AccessTargetFetchers {
+  agents: (query: RolePermissionTargetQuery, signal: AbortSignal) => Promise<AccessTargetPage<AgentAccessTarget>>;
+  businessViews: (
+    query: RolePermissionTargetQuery,
+    signal: AbortSignal,
+  ) => Promise<AccessTargetPage<BusinessViewAccessTarget>>;
 }
 
 const grantsAllByAdmin = (effective: ReadonlySet<string>) => effective.has(CAPABILITY_PERMISSIONS.admin);
 
-/** エージェント / 業務ビューの対象範囲（RolePermissionsPage の targets）。 */
-export function agentPermissionTargets(
-  loadTargets: (signal: AbortSignal) => Promise<AccessTargetsData>,
-): RolePermissionTargetSection<SecurityRole>[] {
+/** エージェント / 業務ビューの対象範囲（RolePermissionsPage の targets）。候補はサーバー側で検索し、50 件ずつ読む。 */
+export function agentPermissionTargets(fetchers: AccessTargetFetchers): RolePermissionTargetSection<SecurityRole>[] {
   return [
     {
       key: AGENT_ACCESS_KEY,
@@ -95,7 +89,8 @@ export function agentPermissionTargets(
         grantsAllByPermission: t("security.permissions.agentsManagedAll"),
         grantsAllSystemAdmin: t("security.permissions.agentsSystemAdmin"),
       },
-      load: ({ signal }) => loadTargets(signal).then((data) => data.agents.map(agentTargetItem)),
+      query: (query, { signal }): Promise<RolePermissionTargetPage> =>
+        fetchers.agents(query, signal).then((page) => ({ items: page.items.map(agentTargetItem), total: page.total })),
       selectedIds: (role) => role.agent_ids ?? [],
       grantsAll: grantsAllByAdmin,
     },
@@ -115,10 +110,11 @@ export function agentPermissionTargets(
       },
       // Agent に業務ビューのマスタはなく、backend は名前 = ID で返す。
       // RAG の業務ビューを読めなかったときは、読めた候補を出したまま理由を警告で表示する（#240）。
-      load: ({ signal }) =>
-        loadTargets(signal).then((data) => ({
-          items: data.business_views.map((item) => ({ id: item.id, name: item.name })),
-          warning: (data.business_view_warnings ?? []).join(" "),
+      query: (query, { signal }): Promise<RolePermissionTargetPage> =>
+        fetchers.businessViews(query, signal).then((page) => ({
+          items: page.items.map((item) => ({ id: item.id, name: item.name })),
+          total: page.total,
+          warning: (page.warnings ?? []).join(" "),
         })),
       selectedIds: (role) => role.business_view_ids ?? [],
       grantsAll: grantsAllByAdmin,

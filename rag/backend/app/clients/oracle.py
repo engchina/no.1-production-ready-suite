@@ -2275,13 +2275,18 @@ class OracleClient:
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        business_view_ids: Sequence[str] | None = None,
     ) -> list[BusinessViewSummary]:
-        """業務ビュー一覧を返す。参照 KB のうちアーカイブ済み・存在しない件数も埋める(#302)。"""
+        """業務ビュー一覧を返す。参照 KB のうちアーカイブ済み・存在しない件数も埋める(#302)。
+
+        `business_view_ids` を渡すとその ID に絞る（権限管理の選択済みの名前の解決。#608）。
+        """
         stored = await self._list_business_views_with_oracle(
             status=status,
             query=query,
             limit=limit,
             offset=offset,
+            business_view_ids=business_view_ids,
         )
         return await self._with_knowledge_base_reference_counts(stored)
 
@@ -2329,9 +2334,12 @@ class OracleClient:
         *,
         status: BusinessViewStatus | None = None,
         query: str | None = None,
+        business_view_ids: Sequence[str] | None = None,
     ) -> int:
         """条件に一致する業務ビュー数を返す。"""
-        return await self._count_business_views_with_oracle(status=status, query=query)
+        return await self._count_business_views_with_oracle(
+            status=status, query=query, business_view_ids=business_view_ids
+        )
 
     async def get_business_view(
         self,
@@ -6146,9 +6154,12 @@ class OracleClient:
         query: str | None,
         limit: int | None,
         offset: int,
+        business_view_ids: Sequence[str] | None = None,
     ) -> list[StoredBusinessView]:
         """Oracle business view table から一覧取得する(集計前の保存値)。"""
-        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        where_sql, binds = _oracle_business_view_where(
+            status=status, query=query, business_view_ids=business_view_ids
+        )
         binds["offset"] = offset
         if limit is not None:
             binds["limit"] = limit
@@ -6188,9 +6199,12 @@ class OracleClient:
         *,
         status: BusinessViewStatus | None,
         query: str | None,
+        business_view_ids: Sequence[str] | None = None,
     ) -> int:
         """Oracle business view table の件数を取得する。"""
-        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        where_sql, binds = _oracle_business_view_where(
+            status=status, query=query, business_view_ids=business_view_ids
+        )
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -11252,9 +11266,19 @@ def _oracle_business_view_where(
     *,
     status: BusinessViewStatus | None = None,
     query: str | None = None,
+    business_view_ids: Sequence[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_business_view_access_predicates(alias="bv")
     binds = _with_business_view_scope_bind(_with_tenant_bind({}))
+    if business_view_ids is not None:
+        ids = _unique_optional_sequence(business_view_ids)
+        if not ids:
+            # 空の ID 指定は「どれにも一致しない」(IN () は SQL として不正)。
+            clauses.append("1 = 0")
+        else:
+            in_sql, in_binds = _oracle_in_predicate("bv.business_view_id", "filter_bv_id", ids)
+            clauses.append(in_sql)
+            binds.update(in_binds)
     if status is not None:
         clauses.append("bv.status = :business_view_status")
         binds["business_view_status"] = status.value

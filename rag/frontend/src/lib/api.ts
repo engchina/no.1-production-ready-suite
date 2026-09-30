@@ -267,9 +267,16 @@ export interface AccessTarget {
   description: string | null;
 }
 
-export interface AccessTargetsData {
-  business_views: AccessTarget[];
-  knowledge_bases: AccessTarget[];
+/** 権限管理の対象の種類（`GET /api/security/access-targets/{kind}`。#608）。 */
+export type AccessTargetKind = "business-views" | "knowledge-bases";
+
+/** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
+export interface AccessTargetPage {
+  items: AccessTarget[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
 }
 
 /** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */

@@ -152,6 +152,35 @@ for (const viewport of VIEWPORTS) {
       await expect(views.getByRole("option", { name: /legacy-view/ })).toBeChecked();
     });
 
+    test("エージェントが大量でも全件を読まず、サーバー側で検索して 50 件ずつ読む（#608）", async ({ page, mockApi }) => {
+      mockApi.state.security.accessTargets.agents = Array.from({ length: 180 }, (_, index) => ({
+        id: `agent-${String(index + 1).padStart(3, "0")}`,
+        name: `業務 Agent ${String(index + 1).padStart(3, "0")}`,
+        description: null,
+        status: "enabled",
+      }));
+
+      await page.goto("/settings/security/permissions?role=role-operator");
+      await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
+      await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+      const agents = page.getByTestId("security-roles-agent-access-list");
+      await expect(agents.getByRole("option")).toHaveCount(50);
+      await expect(agents).toContainText("50 / 180 件、選択 1 件");
+      await agents.getByRole("button", { name: "さらに読み込む" }).click();
+      await expect(agents.getByRole("option")).toHaveCount(100);
+      await agents.getByRole("searchbox").fill("177");
+      await expect(agents.getByRole("option")).toHaveCount(1);
+      const searched = mockApi.requests.filter((request) => request.path === "/api/security/access-targets/agents").at(-1);
+      expect(searched?.searchParams.get("q")).toBe("177");
+      expect(searched?.searchParams.get("offset")).toBe("0");
+      await agents.getByRole("option", { name: /業務 Agent 177/ }).click();
+      await editActions(page).getByRole("button", { name: "保存" }).click();
+      await expect
+        .poll(() => (mockApi.lastRequest("PUT", "/api/security/roles/role-operator/access")?.body as { agent_ids?: string[] })?.agent_ids)
+        .toEqual(["default", "agent-177"]);
+      await expectNoPageOverflow(page);
+    });
+
     test("RAG の業務ビューを読めなかったときは、候補を出したまま理由を警告で表示する（#240）", async ({
       page,
       mockApi,

@@ -11,9 +11,11 @@ import {
   permissionInheritanceSources,
   targetItemLabel,
   targetItemsWithCustomIds,
-  targetLoadRows,
+  resolveTargetItems,
+  rolePermissionTargetSearchParams,
   type PermissionDefinition,
   type PermissionRole,
+  type RolePermissionTargetQuery,
   type RolePermissionTargetSection,
   type RolePermissionsApi,
 } from "../src";
@@ -46,14 +48,14 @@ const ragTargets: RolePermissionTargetSection<RagRole>[] = [
   {
     key: "business-views",
     messages: targetMessages("業務ビュー"),
-    load: pending,
+    query: pending,
     selectedIds: (role) => role.business_view_ids,
     grantsAll: (codes) => codes.has("rag.business_views.manage"),
   },
   {
     key: "knowledge-bases",
     messages: targetMessages("ナレッジベース"),
-    load: pending,
+    query: pending,
     selectedIds: (role) => role.knowledge_base_ids,
   },
 ];
@@ -163,14 +165,59 @@ describe("候補にない ID の直接入力（allowCustomIds。#215）", () => 
   });
 });
 
-describe("候補の一部だけ読めた場合（#240）", () => {
-  it("配列は警告なし、{ items, warning } は候補を残して警告を出す", () => {
-    const items = [{ id: "sales", name: "営業" }];
-    expect(targetLoadRows(items)).toEqual({ rows: items, warning: "" });
-    expect(targetLoadRows({ items, warning: "  RAG の業務ビューを読めませんでした。  " })).toEqual({
-      rows: items,
-      warning: "RAG の業務ビューを読めませんでした。",
-    });
-    expect(targetLoadRows({ items: [] })).toEqual({ rows: [], warning: "" });
+describe("選択済みの対象の名前の解決（#608）", () => {
+  const signal = new AbortController().signal;
+
+  it("ID を 100 件ずつに分けて ids で問い合わせ、重複を除いて読む", async () => {
+    const calls: RolePermissionTargetQuery[] = [];
+    const ids = Array.from({ length: 150 }, (_, index) => `bv-${index}`);
+    const result = await resolveTargetItems(
+      {
+        query: async (query) => {
+          calls.push(query);
+          return { items: (query.ids ?? []).map((id) => ({ id, name: `名前 ${id}` })), total: query.ids?.length ?? 0 };
+        },
+      },
+      [...ids, "bv-0", "bv-1"],
+      signal,
+    );
+    expect(calls.map((call) => [call.q, call.offset, call.limit, call.ids?.length])).toEqual([
+      ["", 0, 100, 100],
+      ["", 0, 50, 50],
+    ]);
+    expect(result.items).toHaveLength(150);
+    expect(result.items[0]).toEqual({ id: "bv-0", name: "名前 bv-0" });
+    expect(result.warning).toBe("");
+  });
+
+  it("クエリ文字列は q（空なら付けない）・limit・offset と繰り返しの ids", () => {
+    expect(rolePermissionTargetSearchParams({ q: "  人事 ", limit: 50, offset: 100 }).toString()).toBe(
+      "limit=50&offset=100&q=%E4%BA%BA%E4%BA%8B",
+    );
+    expect(rolePermissionTargetSearchParams({ q: "", limit: 2, offset: 0, ids: ["a", "b"] }).toString()).toBe(
+      "limit=2&offset=0&ids=a&ids=b",
+    );
+  });
+
+  it("選択が無ければ問い合わせない。一部だけ読めた理由（#240）は前後の空白を除いて返す", async () => {
+    let called = false;
+    const none = await resolveTargetItems(
+      {
+        query: async () => {
+          called = true;
+          return { items: [], total: 0 };
+        },
+      },
+      [],
+      signal,
+    );
+    expect(called).toBe(false);
+    expect(none).toEqual({ items: [], warning: "" });
+    const partial = await resolveTargetItems(
+      { query: async () => ({ items: [{ id: "sales", name: "営業" }], total: 1, warning: "  RAG の業務ビューを読めませんでした。  " }) },
+      ["sales"],
+      signal,
+    );
+    expect(partial).toEqual({ items: [{ id: "sales", name: "営業" }], warning: "RAG の業務ビューを読めませんでした。" });
   });
 });

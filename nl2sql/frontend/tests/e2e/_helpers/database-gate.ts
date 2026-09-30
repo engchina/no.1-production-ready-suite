@@ -12,6 +12,33 @@ async function fulfill(route: Route, data: unknown) {
   });
 }
 
+/**
+ * `GET /api/security/profile-access/profiles` の応答（#608）。backend と同じく `q`（名前・カテゴリ・説明）・
+ * `ids`・`limit` / `offset` で絞った Page（items / total）を返す。
+ */
+export function profileAccessPage<
+  T extends { id: string; name: string; category?: string; description?: string },
+>(url: string, profiles: readonly T[]) {
+  const params = new URL(url).searchParams;
+  const q = (params.get("q") ?? "").toLowerCase();
+  const ids = params.getAll("ids");
+  const limit = Number(params.get("limit") ?? "50");
+  const offset = Number(params.get("offset") ?? "0");
+  const matched = profiles.filter(
+    (profile) =>
+      (ids.length === 0 || ids.includes(profile.id)) &&
+      (!q ||
+        [profile.name, profile.category ?? "", profile.description ?? ""].join(" ").toLowerCase().includes(q))
+  );
+  return {
+    items: matched.slice(offset, offset + limit),
+    total: matched.length,
+    limit,
+    offset,
+    has_next: offset + limit < matched.length,
+  };
+}
+
 export const systemAdminMe = {
   user_uuid: "00000000-0000-0000-0000-000000000001",
   login_user_id: "SYSTEM",
@@ -33,7 +60,9 @@ export async function mockDatabaseGateReady(page: Page) {
   await page.route("**/api/schema/refresh-jobs/active", (route) =>
     fulfill(route, { active_job: null })
   );
-  await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, profileAccessPage(route.request().url(), []))
+  );
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, { status: "ok", check: "ok", detail: null })
   );

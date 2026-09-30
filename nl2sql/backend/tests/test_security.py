@@ -5744,3 +5744,44 @@ def test_oci_settings_can_read_shared_storage_without_write_permission(
             assert get_settings().model_dump() == before
 
     asyncio.run(exercise())
+
+
+def test_profile_access_profiles_search_and_page_on_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """権限管理の業務プロファイルの候補は `q` / `limit` / `offset` / `ids` で絞る（#608）。"""
+    from app.features.nl2sql import service as nl2sql_service_module
+    from app.security import router as security_router_module
+
+    feature_service = Nl2SqlService(store=MemoryNl2SqlStore())
+    for index in range(1, 6):
+        feature_service.create_profile(
+            Nl2SqlProfile(
+                id=f"p{index}",
+                name=f"検索試験 {index}" if index <= 3 else f"財務試験 {index}",
+                category="試験会計" if index == 5 else "試験営業",
+                description="",
+            )
+        )
+    monkeypatch.setattr(nl2sql_service_module, "nl2sql_service", feature_service)
+    monkeypatch.setattr(security_router_module, "get_security_service", _service)
+
+    def ids_of(**kwargs: Any) -> tuple[list[str], int, bool]:
+        params: dict[str, Any] = {
+            "include_archived": False,
+            "q": "",
+            "limit": 50,
+            "offset": 0,
+            "ids": None,
+            **kwargs,
+        }
+        page = security_router_module.list_profile_access_profiles(**params).data
+        assert page is not None
+        return [item.id for item in page.items if item.id != "default"], page.total, page.has_next
+
+    assert ids_of(q="検索試験", limit=2) == (["p1", "p2"], 3, True)
+    assert ids_of(q="検索試験", limit=2, offset=2) == (["p3"], 3, False)
+    # カテゴリも照合する。
+    assert ids_of(q="試験会計")[0] == ["p5"]
+    # 選択済みの名前の解決（ids）は検索語と関係なく ID で引く。
+    assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]

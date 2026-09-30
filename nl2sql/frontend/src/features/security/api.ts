@@ -1,7 +1,12 @@
 import { normalizeExpression } from "./scope-expression";
 import { formatDbObjectPart } from "@/features/nl2sql/dbObjectIdentity";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
-import type { RoleDraft, UserDraft } from "@engchina/production-ready-system-settings";
+import {
+  rolePermissionTargetSearchParams,
+  type RoleDraft,
+  type RolePermissionTargetQuery,
+  type UserDraft,
+} from "@engchina/production-ready-system-settings";
 
 import type {
   CurrentUser,
@@ -18,7 +23,7 @@ import type {
   DeepSecTargetObjectPage,
   DeepSecVerification,
   PermissionDefinition,
-  ProfileAccessProfile,
+  ProfileAccessProfilePage,
   SecurityRole,
   SecurityRoleDeleteResult,
   SecurityUser,
@@ -147,8 +152,12 @@ export const securityApi = {
     }),
   permissions: (options: ApiRequestOptions = {}) =>
     apiGet<PermissionDefinition[]>("/api/security/permissions", options),
-  profileAccessProfiles: (options: ApiRequestOptions = {}) =>
-    apiGet<ProfileAccessProfile[]>("/api/security/profile-access/profiles", options),
+  /** 権限管理で選べる業務プロファイルの候補（サーバー側の検索とページング。#608）。 */
+  profileAccessProfiles: (query: RolePermissionTargetQuery, options: ApiRequestOptions = {}) =>
+    apiGet<ProfileAccessProfilePage>(
+      `/api/security/profile-access/profiles?${rolePermissionTargetSearchParams(query).toString()}`,
+      options,
+    ),
   deepSecStatus: (options: ApiRequestOptions = {}) =>
     apiGet<DeepSecStatus>("/api/security/deepsec/status", options),
   deepSecPlan: (options: ApiRequestOptions = {}) =>

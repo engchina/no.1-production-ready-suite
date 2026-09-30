@@ -5,7 +5,7 @@ import { AGENT_SPLIT_STORAGE_PREFIX } from "@/components/EntityLayout";
 import type { SecurityRole } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
-import { PERMISSIONS_API, accessTargetsLoader, agentPermissionTargets } from "@/lib/permission-targets";
+import { PERMISSIONS_API, agentPermissionTargets } from "@/lib/permission-targets";
 import { securityApi } from "@/lib/security-api";
 import { useAuth } from "./AuthProvider";
 
@@ -17,7 +17,11 @@ export function SecurityPermissionsPage() {
   const { hasPermission } = useAuth();
   // 一覧の検索を毎 render 作り直さないよう、targets は mount 中は同じ配列を使う。
   const targets = useMemo(
-    () => agentPermissionTargets(accessTargetsLoader((signal) => securityApi.accessTargets({ signal }))),
+    () =>
+      agentPermissionTargets({
+        agents: (query, signal) => securityApi.agentTargets(query, { signal }),
+        businessViews: (query, signal) => securityApi.businessViewTargets(query, { signal }),
+      }),
     [],
   );
   return (
