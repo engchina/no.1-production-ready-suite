@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
 import {
+  confirmUnsavedChanges,
   useSettingsDraftGuard,
   useUnsavedChangesGuard,
   type DraftGuardMessages,
@@ -22,41 +22,21 @@ export function draftGuardMessages(): DraftGuardMessages {
   };
 }
 
-const activeGuards = new Set<{ current: () => Promise<boolean> }>();
-
-function useRegisterLeaveGuard(enabled: boolean, confirmLeave: () => Promise<boolean>) {
-  const ref = useRef(confirmLeave);
-  // 最新の確認関数を commit 時に入れる（render 中に ref を書かない）。
-  useLayoutEffect(() => {
-    ref.current = confirmLeave;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    activeGuards.add(ref);
-    return () => {
-      activeGuards.delete(ref);
-    };
-  }, [enabled]);
-}
-
 /**
  * 編集画面の標準ガード。dirty のときは離脱を確認し、戻り値は画面内の移動前に呼ぶ確認関数。
  * `busy`（保存中など）の間は、共通のシステム設定の画面と同じく離脱そのものを止める。
  */
 export function useLeaveGuard(isDirty: boolean, busy = false): () => Promise<boolean> {
-  const confirmLeave = useSettingsDraftGuard(isDirty, busy, draftGuardMessages());
-  useRegisterLeaveGuard(isDirty || busy, confirmLeave);
-  return confirmLeave;
+  return useSettingsDraftGuard(isDirty, busy, draftGuardMessages());
 }
 
 /** 画面固有の確認文言を使うガード（例: 抽出確認の編集）。 */
 export function useCustomLeaveGuard(enabled: boolean, confirmLeave: () => Promise<boolean>): void {
   useUnsavedChangesGuard(enabled, confirmLeave);
-  useRegisterLeaveGuard(enabled, confirmLeave);
 }
 
-/** `navigate()` で移動する前に呼ぶ。dirty な画面がなければ即 true。確認は 1 回だけ出す。 */
-export async function confirmPendingLeave(): Promise<boolean> {
-  const [first] = activeGuards;
-  return first ? first.current() : true;
-}
+/**
+ * `navigate()` で移動する前に呼ぶ。dirty な画面がなければ即 true。確認は 1 回だけ出す。
+ * 未保存の画面の一覧は共有のガードが持つ（戻る / 進むの blocker と同じ。#586）。
+ */
+export const confirmPendingLeave = confirmUnsavedChanges;

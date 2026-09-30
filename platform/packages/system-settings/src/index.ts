@@ -14,8 +14,12 @@ export {
 export { AppearanceSettingsPage, type AppearanceSettingsPageProps } from "./appearance/AppearanceSettingsPage";
 export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messages";
 
-// 未保存変更の離脱ガード（NL2SQL から移設。#97）
-export { useUnsavedChangesGuard } from "./guards/useUnsavedChangesGuard";
+// 未保存変更の離脱ガード（NL2SQL から移設。#97）。戻る / 進むの blocker はアプリで 1 つ（#586）。
+export {
+  confirmUnsavedChanges,
+  UnsavedChangesBlocker,
+  useUnsavedChangesGuard,
+} from "./guards/useUnsavedChangesGuard";
 export {
   DRAFT_GUARD_MESSAGES,
   useSettingsDraftGuard,

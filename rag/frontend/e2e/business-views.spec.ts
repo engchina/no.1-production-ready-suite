@@ -546,6 +546,60 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("");
 });
 
+// #586: エディタには業務ビューのフォームのほかに知識の節のフォーム（それぞれ離脱の確認を持つ）がある。
+// どのフォームが未保存でも、ブラウザの戻る・進むで確認し、キャンセルで留まる。
+test("業務ビューのエディタは未保存の変更があるとブラウザの戻る・進むでも確認する", async ({ page }) => {
+  const consoleWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") consoleWarnings.push(message.text());
+  });
+  await mockBusinessViews(page, [accountingView]);
+  await page.goto("/business-views");
+  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
+
+  await page.goBack();
+  const dialog = page.getByRole("alertdialog", { name: "保存していない変更があります" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
+
+  await page.goBack();
+  await dialog.getByRole("button", { name: "移動する" }).click();
+  await expect(page).toHaveURL(/\/business-views$/);
+
+  // 業務ビューのフォームは未変更のまま、知識の節（重要語句）だけを変えても、戻るで確認する。
+  // （移動しても下書きはこのタブに残るため、開き直したら先に元に戻す。）
+  await page.goForward();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await page.getByRole("button", { name: "変更を元に戻す" }).click();
+  await page.locator("#domain-keywords-editor").fill("経費精算");
+  await page.goBack();
+  const discardDialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+  await expect(discardDialog).toBeVisible();
+  await discardDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  await expect(page.locator("#domain-keywords-editor")).toHaveValue("経費精算");
+  // リンク（パンくず）とリロード（beforeunload）も同じく確認する。
+  await page
+    .getByRole("navigation", { name: "パンくず" })
+    .getByRole("link", { name: "業務ビュー (Business View)" })
+    .click();
+  await expect(discardDialog).toBeVisible();
+  await discardDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+  const reloadPrevented = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(reloadPrevented).toBe(true);
+  // 1 画面に離脱の確認が複数あっても、router の blocker は 1 つだけにする。
+  expect(consoleWarnings.filter((text) => text.includes("only supports one blocker"))).toEqual([]);
+});
+
 test("URL の業務ビューが存在しないときは別の対象へ置き換えず、一覧へ戻る導線を出す", async ({ page }) => {
   await mockBusinessViews(page, [accountingView]);
   await page.goto("/business-views?id=bv-missing");
