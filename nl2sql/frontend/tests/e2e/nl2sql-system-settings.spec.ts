@@ -2250,6 +2250,45 @@ test("ADB 情報の not_configured は lifecycle がなくても表示する", a
   await expectNoHorizontalOverflow(page);
 });
 
+test("ADB のリージョンは ap-tokyo-1 / ap-osaka-1 だけを候補に出す（#660）", async ({ page }) => {
+  await page.goto("/settings/database");
+
+  const adbCard = page.locator("#adb-management");
+  const region = adbCard.getByRole("combobox", { name: "リージョン", exact: true });
+  await expect(region).toContainText("ap-osaka-1");
+  await region.click();
+  const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
+  await expect(listbox.getByRole("option")).toHaveText(["ap-tokyo-1", "ap-osaka-1"]);
+  await page.keyboard.press("Escape");
+  await expect(listbox).toBeHidden();
+  await expect(adbCard.getByText("はサポートしていません")).toHaveCount(0);
+});
+
+test("ADB のリージョンの保存値が us-chicago-1 でも画面を出し、選び直しを案内する（#660）", async ({ page }) => {
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", (route) =>
+    fulfillJson(route, databaseSettingsFixture({ region: "us-chicago-1" }))
+  );
+
+  await page.goto("/settings/database");
+
+  const adbCard = page.locator("#adb-management");
+  const region = adbCard.getByRole("combobox", { name: "リージョン", exact: true });
+  const unsupported = adbCard.getByText(
+    "保存済みのリージョン us-chicago-1 はサポートしていません。ap-tokyo-1 または ap-osaka-1 を選んで保存してください。"
+  );
+  await expect(region).toContainText("us-chicago-1");
+  await expect(unsupported).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await region.click();
+  const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
+  await expect(listbox.getByRole("option")).toHaveText(["ap-tokyo-1", "ap-osaka-1"]);
+  await listbox.getByRole("option", { name: "ap-tokyo-1", exact: true }).click();
+  await expect(region).toContainText("ap-tokyo-1");
+  await expect(unsupported).toHaveCount(0);
+});
+
 test("ADB 情報の query error をカード内に表示する", async ({ page }) => {
   const apiError =
     "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。";
