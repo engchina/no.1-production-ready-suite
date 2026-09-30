@@ -2389,6 +2389,69 @@ async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> Non
     assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
 
 
+async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> None:
+    """1 ページ目の本文は chunk の行に入れず、chunk set に 1 つだけ保存する(#557)。
+
+    chunk set の行は chunk の保存の後に upsert_chunk_set が作るため、無ければ MERGE で作る。
+    chunk set の無い保存(未タグ)では書かない。
+    """
+    from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY
+
+    first_page = {
+        "page": 1,
+        "status": "available",
+        "text": "受注管理規程 第3版",
+        "engine": "docling",
+        "record_ids": ["docling-p1-1"],
+        "truncated": False,
+    }
+    chunks = [
+        Chunk(
+            index=index,
+            text=f"本文{index}",
+            start_offset=0,
+            end_offset=3,
+            metadata={
+                "docrag_search_text": f"Child text: 本文{index}",
+                **(
+                    {DOCRAG_FIRST_PAGE_CONTEXT_KEY: json.dumps(first_page, ensure_ascii=False)}
+                    if index == 0
+                    else {}
+                ),
+            },
+        )
+        for index in range(2)
+    ]
+
+    for chunk_set_id in ("cs-1", None):
+        pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
+        client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+        await client.save_index(
+            "doc-1",
+            StructuredExtraction(raw_text="本文", confidence=0.9),
+            chunks,
+            [[1.0, 0.0, 0.0]] * 2,
+            chunk_set_id=chunk_set_id,
+        )
+
+        rows = pool.connection.many_calls[0].rows
+        assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
+        assert all("受注管理規程" not in str(row["search_text"]) for row in rows)
+        merges = [
+            call for call in pool.connection.calls if "MERGE INTO rag_chunk_sets" in call.statement
+        ]
+        if chunk_set_id is None:
+            assert merges == []
+            continue
+        assert len(merges) == 1
+        assert merges[0].parameters["chunk_set_id"] == "cs-1"
+        assert merges[0].parameters["document_id"] == "doc-1"
+        assert merges[0].parameters["first_page_context"] == first_page
+        assert "first_page_context" in merges[0].input_sizes
+        assert pool.connection.commits == 1
+
+
 async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_metadata() -> None:
     """chunk view は JSON array element_ids と table row-group metadata を保持する。"""
     pool = FakeOraclePool(
