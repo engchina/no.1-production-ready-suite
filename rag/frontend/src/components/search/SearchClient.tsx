@@ -50,7 +50,11 @@ import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
-import { useBusinessViews, useSearchExtractionFields } from "@/lib/queries";
+import {
+  useBusinessViews,
+  useSearchAnswerModels,
+  useSearchExtractionFields,
+} from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { RunStopButton } from "@/components/RunStopButton";
@@ -130,6 +134,13 @@ export function SearchClient() {
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
   // 回答の生成は既定でオフ（検索結果までを表示する。#649）。選んだ値は作業状態に残す。
   const [generateAnswer, setGenerateAnswer] = useWorkspaceState("search.generateAnswer", false);
+  // 回答のモデル（既定のテキストモデルか既定の Vision モデル。比較はしない。#675）。
+  // 候補に無い保存値（モデルの設定が変わった後など）は既定（テキスト）として扱う。
+  const [storedAnswerModelId, setAnswerModelId] = useWorkspaceState("search.answerModelId", "");
+  const answerModels = useSearchAnswerModels().data ?? [];
+  const answerModelId = answerModels.some((model) => model.model_id === storedAnswerModelId)
+    ? storedAnswerModelId
+    : "";
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   // 対象の業務ビューは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
   const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
@@ -250,6 +261,7 @@ export function SearchClient() {
           top_k: Number(topK),
           business_view_id: businessViewId,
           generate_answer: generateAnswer,
+          ...(generateAnswer && answerModelId ? { model_id: answerModelId } : {}),
           ...(excludedAutoFields.length ? { auto_field_filter_excluded: excludedAutoFields } : {}),
           ...(Object.keys(filters).length ? { filters } : {}),
         },
@@ -555,6 +567,24 @@ export function SearchClient() {
                   data-testid="search-generate-answer"
                 />
               </div>
+
+              {/* 候補が 2 つ（テキストと Vision）あるときだけ選ばせる。1 つならテキストで答えるだけ。 */}
+              {generateAnswer && answerModels.length > 1 ? (
+                <SelectField
+                  id="search-answer-model"
+                  label={t("search.answerModel.label")}
+                  value={answerModelId || answerModels[0].model_id}
+                  options={answerModels.map((model) => ({
+                    value: model.model_id,
+                    label: t(`answerModel.${model.kind}`, { name: model.display_name }),
+                  }))}
+                  helper={t("search.answerModel.help")}
+                  onValueChange={setAnswerModelId}
+                  disabled={isStreaming}
+                  width="md"
+                  data-testid="search-answer-model"
+                />
+              ) : null}
 
               {/* 質問と検索の行はフォームの最後（詳細条件・スイッチの下。#413）。チャットの入力欄と同じく
                   複数行の入力欄（2 行）と lg のボタンを FieldActionRow に置く（ボタンは入力欄の下端にそろい、

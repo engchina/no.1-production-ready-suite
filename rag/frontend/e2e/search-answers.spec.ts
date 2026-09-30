@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import {
+  enableSearchAnswer,
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
@@ -336,3 +337,48 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+const ANSWER_MODELS = [
+  { model_id: "text-m", display_name: "gpt-oss-120b", kind: "text" },
+  { model_id: "vision-m", display_name: "grok-4.3", kind: "vision" },
+];
+
+test("回答のモデルは既定のテキストモデルと Vision モデルだけ。検索は 1 つを選び、チャットは比較できる（#675）", async ({
+  page,
+}) => {
+  const bodies: Record<string, unknown>[] = [];
+  await mockAnswerHistory(page, 0);
+  await page.route("**/api/search/models", (route) => route.fulfill(envelope(ANSWER_MODELS)));
+  await page.route("**/api/search/stream", async (route) => {
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({ status: 500, json: { data: null, error_messages: [], warning_messages: [] } });
+  });
+
+  await page.goto("/search");
+  await selectBusinessView(page, /経理ビュー/);
+  // 回答を生成しないときはモデルを選ばせない。
+  const modelSelect = page.getByRole("combobox", { name: "回答するモデル" });
+  await expect(modelSelect).toHaveCount(0);
+  await enableSearchAnswer(page);
+  await expect(modelSelect).toContainText("テキスト: gpt-oss-120b");
+  await expect(page.getByText("根拠の図や画像を読むときだけ Vision モデルを使います")).toBeVisible();
+  await modelSelect.click();
+  await expect(page.getByRole("option")).toHaveText(["テキスト: gpt-oss-120b", "Vision: grok-4.3"]);
+  await page.getByRole("option", { name: "Vision: grok-4.3" }).click();
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({ generate_answer: true, model_id: "vision-m" });
+  await expectNoPageOverflow(page);
+
+  await mockChat(page, "bv-1");
+  await page.route("**/api/chat/models", (route) => route.fulfill(envelope(ANSWER_MODELS)));
+  await page.goto("/chat");
+  await selectBusinessView(page, "経理ビュー");
+  await expect(page.getByRole("button", { name: "テキスト: gpt-oss-120b" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Vision: grok-4.3" })).toBeVisible();
+  await expect(page.getByTestId("chat-default-model")).toHaveText(
+    "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ Vision モデルを使います。両方選ぶと回答を並べて比較できます。"
+  );
+  await expectNoPageOverflow(page);
+});

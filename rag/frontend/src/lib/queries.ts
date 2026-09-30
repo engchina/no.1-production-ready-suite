@@ -171,6 +171,7 @@ export const queryKeys = {
   feedback: (params: FeedbackListParams) => ["feedback", params] as const,
   feedbackDetail: (id: string) => ["feedback", "detail", id] as const,
   compareModels: ["chat", "models"] as const,
+  searchAnswerModels: ["search", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   systemTables: SYSTEM_TABLES_QUERY_KEY,
@@ -1478,6 +1479,16 @@ export function useCompareModels(enabled = true) {
   return useQuery({
     queryKey: queryKeys.compareModels,
     queryFn: () => api.listCompareModels(),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。 */
+export function useSearchAnswerModels(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.searchAnswerModels,
+    queryFn: () => api.listSearchAnswerModels(),
     enabled,
     staleTime: 5 * 60 * 1000,
   });

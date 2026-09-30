@@ -23,6 +23,7 @@ export type WorkspaceField =
   | "search.topK"
   | "search.advancedOpen"
   | "search.generateAnswer"
+  | "search.answerModelId"
   | "chat.businessViewId"
   | "chat.conversationId"
   | "chat.composer"

@@ -14,7 +14,14 @@ from fastapi.responses import StreamingResponse
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
+from app.config import (
+    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
+    enterprise_ai_vision_model_id,
+    get_settings,
+)
 from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
@@ -58,6 +65,50 @@ ANSWER_EVALUATION_TIMEOUT_MESSAGE = (
     "標準回答による評価が時間内に終わりませんでした。評価は保存していません。"
     "時間をおいて再度お試しください。"
 )
+
+
+def answer_model_choices(settings: Settings) -> list[dict[str, str]]:
+    """回答に選べるモデル(既定のテキストモデル、既定の Vision モデルの順。#675)。
+
+    チャットの比較と RAG 検索の選択で共通に使う。Vision が未設定か、テキストと同じモデルなら
+    テキストの 1 件だけ。``kind`` は ``text`` / ``vision``。
+    """
+    labels = {
+        model.model_id: model.display_name or model.model_id
+        for model in enterprise_ai_model_catalog(settings)
+        if model.model_id
+    }
+    choices: list[dict[str, str]] = []
+    for kind, model_id in (
+        ("text", enterprise_ai_default_model_id(settings)),
+        ("vision", enterprise_ai_vision_model_id(settings)),
+    ):
+        if model_id and all(choice["model_id"] != model_id for choice in choices):
+            choices.append(
+                {"model_id": model_id, "display_name": labels.get(model_id, model_id), "kind": kind}
+            )
+    return choices
+
+
+def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
+    """RAG 検索で選んだ回答のモデル。候補外・未指定は None(既定のテキストモデル)。"""
+    if request.model_id and any(
+        choice["model_id"] == request.model_id for choice in answer_model_choices(settings)
+    ):
+        return request.model_id
+    return None
+
+
+@router.get("/models", response_model=ApiResponse[list[dict[str, str]]])
+async def list_answer_models() -> ApiResponse[list[dict[str, str]]]:
+    """RAG 検索の回答に選べるモデル(先頭が未選択のときの既定。#675)。"""
+    models = answer_model_choices(get_settings())
+    return ApiResponse(
+        data=models,
+        warning_messages=(
+            [] if models else ["生成モデルが未設定です。システム設定 > モデルで登録してください。"]
+        ),
+    )
 
 
 @router.post("", response_model=ApiResponse[SearchResponse])
@@ -243,9 +294,9 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
     trace_id = new_trace_id()
     try:
         result = await run_answer_with_timeout(
-            lambda tracker: RagPipeline(settings=settings).run(
-                request, trace_id=trace_id, progress_callback=tracker
-            ),
+            lambda tracker: RagPipeline(
+                settings=settings, answer_model_id=_answer_model_id(request, settings)
+            ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
         )
         if applied_kb is not None:
@@ -310,7 +361,9 @@ async def _stream_search_events_with_timeout(
         try:
             # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
             result = await run_answer_with_timeout(
-                lambda tracker: RagPipeline(settings=settings).run(
+                lambda tracker: RagPipeline(
+                    settings=settings, answer_model_id=_answer_model_id(request, settings)
+                ).run(
                     request,
                     trace_id=trace_id,
                     progress_callback=tracker,

@@ -360,6 +360,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
     # 検索の絞り込みに使える項目（業務ビューの KB の項目抽出の定義。#549）。
     ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
+    # RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。
+    ("GET", "/search/models"): _any(MENU_SEARCH),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,

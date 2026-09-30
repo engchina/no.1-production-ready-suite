@@ -1180,13 +1180,13 @@ export function ChatClient() {
                       selected={selectedModelIds.includes(model.model_id)}
                       onClick={() => toggleModel(model.model_id)}
                     >
-                      {model.display_name}
+                      {t(`answerModel.${model.kind}`, { name: model.display_name })}
                     </ToggleChip>
                   ))}
-                  {/* 未選択のときにどのモデルで答えるかを示す（backend は一覧の先頭＝既定のモデルで答える）。 */}
+                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の Vision モデル（#675）。 */}
                   {selectedModelIds.length === 0 ? (
                     <span className="text-xs text-fg-muted" data-testid="chat-default-model">
-                      {t("chat.compare.default", { name: compareModels[0].display_name })}
+                      {t(compareModels.length > 1 ? "chat.compare.default" : "chat.compare.defaultTextOnly")}
                     </span>
                   ) : null}
                 </div>
