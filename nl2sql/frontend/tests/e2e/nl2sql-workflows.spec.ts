@@ -324,10 +324,11 @@ async function expectRequiredTextarea(scope: Page | Locator, id: string, label: 
   const field = scope.locator(`#${id}`);
   const fieldLabel = scope.locator(`label[for="${id}"]`);
   await expect(fieldLabel).toContainText(label);
-  // 必須は共有 RequiredBadge（中立色の「必須」）。入力側の required / aria-required で伝えるのでバッジは読み上げない。
+  // 必須は共有 RequiredBadge（中立色の「必須」）。入力側の aria-required で伝えるのでバッジは読み上げない。
   await expect(fieldLabel.locator('[aria-hidden="true"]')).toHaveText("必須");
   await expect(field).toHaveAccessibleName(label);
-  await expect(field).toHaveAttribute("required", "");
+  // 共有 TextareaField はネイティブの required 検証を使わず、実行時にアプリ側で検証する（TextField と同じ。#584）。
+  await expect(field).not.toHaveAttribute("required");
   await expect(field).toHaveAttribute("aria-required", "true");
 }
 

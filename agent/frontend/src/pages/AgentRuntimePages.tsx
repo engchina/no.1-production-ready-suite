@@ -71,6 +71,7 @@ import {
   RowTitleButton,
   isSubmitEnter,
   SearchField,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -1208,20 +1209,18 @@ export function RunsPage() {
                         ))}
                       </select>
                     </Field>
-                    <Field label={t("run.form.goal")} htmlFor="run-goal" required error={goalError}>
-                      <textarea
-                        id="run-goal"
-                        value={goal}
-                        aria-required="true"
-                        aria-invalid={goalError ? true : undefined}
-                        aria-describedby={goalError ? fieldErrorId("run-goal") : undefined}
-                        onChange={(event) => {
-                          setGoal(event.target.value);
-                          setGoalError(null);
-                        }}
-                        className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      />
-                    </Field>
+                    <TextareaField
+                      id="run-goal"
+                      label={t("run.form.goal")}
+                      required
+                      error={goalError ?? undefined}
+                      value={goal}
+                      onValueChange={(value) => {
+                        setGoal(value);
+                        setGoalError(null);
+                      }}
+                      textareaClassName="min-h-24"
+                    />
                     {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
                     <Field
                       label={t("run.form.binding")}
@@ -2102,36 +2101,33 @@ export function MemoryPage() {
                       <option value="run_summary">{t("memory.kind.runSummary")}</option>
                     </select>
                   </Field>
-                  <Field label={t("memory.content")} htmlFor="memory-content" required error={contentError}>
-                    <textarea
-                      id="memory-content"
-                      value={content}
-                      aria-required="true"
-                      aria-invalid={contentError ? true : undefined}
-                      aria-describedby={contentError ? fieldErrorId("memory-content") : undefined}
-                      onChange={(event) => {
-                        setContent(event.target.value);
-                        setContentError(null);
-                      }}
-                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    />
-                  </Field>
+                  <TextareaField
+                    id="memory-content"
+                    label={t("memory.content")}
+                    required
+                    error={contentError ?? undefined}
+                    value={content}
+                    onValueChange={(value) => {
+                      setContent(value);
+                      setContentError(null);
+                    }}
+                    textareaClassName="min-h-28"
+                  />
                 </div>
                 <div className="min-w-0 space-y-4">
-                  <Field label={t("memory.metadata")} htmlFor="memory-metadata" error={metadataError}>
-                    <textarea
-                      id="memory-metadata"
-                      value={metadataText}
-                      aria-invalid={metadataError ? true : undefined}
-                      aria-describedby={metadataError ? fieldErrorId("memory-metadata") : undefined}
-                      onChange={(event) => {
-                        setMetadataText(event.target.value);
-                        setMetadataError(null);
-                      }}
-                      className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      spellCheck={false}
-                    />
-                  </Field>
+                  <TextareaField
+                    id="memory-metadata"
+                    label={t("memory.metadata")}
+                    error={metadataError ?? undefined}
+                    value={metadataText}
+                    onValueChange={(value) => {
+                      setMetadataText(value);
+                      setMetadataError(null);
+                    }}
+                    monospace
+                    spellCheck={false}
+                    textareaClassName="min-h-28"
+                  />
                   {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
                   <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
                     {t("memory.create")}
@@ -2635,9 +2631,6 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
 
 const INPUT_CLASS =
   "h-10 w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
-const TEXTAREA_CLASS =
-  "w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
-
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
     return t("settings.mcpServers.authOauth");
@@ -3554,15 +3547,12 @@ function SkillEditor({
                       className={INPUT_CLASS}
                     />
                   </Field>
-                  <Field label={t("skills.instructions")} htmlFor="skill-instructions">
-                    <textarea
-                      id="skill-instructions"
-                      value={form.instructions}
-                      rows={3}
-                      onChange={(event) => setForm({ ...form, instructions: event.target.value })}
-                      className={TEXTAREA_CLASS}
-                    />
-                  </Field>
+                  <TextareaField
+                    id="skill-instructions"
+                    label={t("skills.instructions")}
+                    value={form.instructions}
+                    onValueChange={(value) => setForm({ ...form, instructions: value })}
+                  />
                   <Field label={t("skills.tags")} htmlFor="skill-tags">
                     <input
                       id="skill-tags"
@@ -3586,55 +3576,35 @@ function SkillEditor({
             <Section title={t("skills.dependencies")}>
               <Card className="min-w-0">
                 <CardContent className="space-y-4 pt-5">
-                  <Field
+                  <TextareaField
+                    id="skill-mcp-requirements"
                     label={t("skills.mcpRequirements")}
-                    htmlFor="skill-mcp-requirements"
                     required
                     error={fieldErrors.mcpRequirements}
-                  >
-                    <textarea
-                      id="skill-mcp-requirements"
-                      value={form.mcpRequirementsJson}
-                      rows={8}
-                      spellCheck={false}
-                      aria-required="true"
-                      aria-invalid={fieldErrors.mcpRequirements ? true : undefined}
-                      aria-describedby={
-                        fieldErrors.mcpRequirements
-                          ? `skill-mcp-requirements-hint ${fieldErrorId("skill-mcp-requirements")}`
-                          : "skill-mcp-requirements-hint"
-                      }
-                      onChange={(event) => {
-                        setForm({ ...form, mcpRequirementsJson: event.target.value });
-                        setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
-                      }}
-                      className={`${TEXTAREA_CLASS} font-mono`}
-                    />
-                    <p id="skill-mcp-requirements-hint" className="mt-1 text-xs leading-5 text-fg-muted">
-                      {t("skills.mcpRequirementsHint")}
-                    </p>
-                  </Field>
-                  <Field
+                    helper={t("skills.mcpRequirementsHint")}
+                    value={form.mcpRequirementsJson}
+                    rows={8}
+                    monospace
+                    spellCheck={false}
+                    onValueChange={(value) => {
+                      setForm({ ...form, mcpRequirementsJson: value });
+                      setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
+                    }}
+                  />
+                  <TextareaField
+                    id="skill-resource-ids"
                     label={t("skills.resourceIds")}
-                    htmlFor="skill-resource-ids"
                     required
                     error={fieldErrors.resourceIds}
-                  >
-                    <textarea
-                      id="skill-resource-ids"
-                      value={form.resourceIdsJson}
-                      rows={4}
-                      spellCheck={false}
-                      aria-required="true"
-                      aria-invalid={fieldErrors.resourceIds ? true : undefined}
-                      aria-describedby={fieldErrors.resourceIds ? fieldErrorId("skill-resource-ids") : undefined}
-                      onChange={(event) => {
-                        setForm({ ...form, resourceIdsJson: event.target.value });
-                        setFieldErrors((current) => ({ ...current, resourceIds: undefined }));
-                      }}
-                      className={`${TEXTAREA_CLASS} font-mono`}
-                    />
-                  </Field>
+                    value={form.resourceIdsJson}
+                    rows={4}
+                    monospace
+                    spellCheck={false}
+                    onValueChange={(value) => {
+                      setForm({ ...form, resourceIdsJson: value });
+                      setFieldErrors((current) => ({ ...current, resourceIds: undefined }));
+                    }}
+                  />
                 </CardContent>
               </Card>
             </Section>
@@ -3970,22 +3940,20 @@ function PluginInstallEditor({
         <Section title={t("plugins.manifest")} description={t("plugins.manifestHint")}>
           <Card className="min-w-0">
             <CardContent className="pt-5">
-              <Field label={t("plugins.manifest")} htmlFor="plugin-manifest" required error={manifestError}>
-                <textarea
-                  id="plugin-manifest"
-                  value={manifestJson}
-                  rows={16}
-                  spellCheck={false}
-                  aria-required="true"
-                  aria-invalid={manifestError ? true : undefined}
-                  aria-describedby={manifestError ? fieldErrorId("plugin-manifest") : undefined}
-                  onChange={(event) => {
-                    setManifestJson(event.target.value);
-                    setManifestError(null);
-                  }}
-                  className={`${TEXTAREA_CLASS} font-mono`}
-                />
-              </Field>
+              <TextareaField
+                id="plugin-manifest"
+                label={t("plugins.manifest")}
+                required
+                error={manifestError ?? undefined}
+                value={manifestJson}
+                rows={16}
+                monospace
+                spellCheck={false}
+                onValueChange={(value) => {
+                  setManifestJson(value);
+                  setManifestError(null);
+                }}
+              />
             </CardContent>
           </Card>
         </Section>
@@ -4951,16 +4919,16 @@ export function CommandPolicySettingsPage() {
                 </Field>
               </div>
 
-              <Field label={t("settings.commandPolicy.allowedPrefixes")} htmlFor="command-policy-allowed-prefixes">
-                <textarea
-                  id="command-policy-allowed-prefixes"
-                  value={allowedPrefixes}
-                  onChange={(event) => setAllowedPrefixes(event.target.value)}
-                  rows={5}
-                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
-              </Field>
+              <TextareaField
+                id="command-policy-allowed-prefixes"
+                label={t("settings.commandPolicy.allowedPrefixes")}
+                helper={t("settings.commandPolicy.allowedPrefixesHint")}
+                value={allowedPrefixes}
+                onValueChange={setAllowedPrefixes}
+                rows={5}
+                monospace
+                textareaClassName="min-h-32"
+              />
 
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label={t("settings.commandPolicy.artifactStorage")} htmlFor="command-policy-artifact-storage">
@@ -5483,15 +5451,15 @@ export function RuntimeSnapshotSettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {currentSummary ? <SnapshotSummaryGrid summary={currentSummary} /> : null}
-              <Field label={t("settings.snapshot.current")} htmlFor="runtime-snapshot-export">
-                <textarea
-                  id="runtime-snapshot-export"
-                  value={exportText}
-                  readOnly
-                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  spellCheck={false}
-                />
-              </Field>
+              <TextareaField
+                id="runtime-snapshot-export"
+                label={t("settings.snapshot.current")}
+                value={exportText}
+                readOnly
+                monospace
+                spellCheck={false}
+                textareaClassName="min-h-80"
+              />
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={downloadSnapshot} icon={Download}>
                   {t("common.download")}
@@ -5510,27 +5478,21 @@ export function RuntimeSnapshotSettingsPage() {
             <CardDescription>{t("page.settings.runtimeSnapshot.subtitle")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Field
+            <TextareaField
+              id="runtime-snapshot-import"
               label={t("settings.snapshot.importJson")}
-              htmlFor="runtime-snapshot-import"
               required
-              error={importError}
-            >
-              <textarea
-                id="runtime-snapshot-import"
-                value={importText}
-                aria-required="true"
-                aria-invalid={importError ? true : undefined}
-                aria-describedby={importError ? fieldErrorId("runtime-snapshot-import") : undefined}
-                onChange={(event) => {
-                  setImportText(event.target.value);
-                  setValidationResult(null);
-                  setImportError(null);
-                }}
-                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                spellCheck={false}
-              />
-            </Field>
+              error={importError ?? undefined}
+              value={importText}
+              onValueChange={(value) => {
+                setImportText(value);
+                setValidationResult(null);
+                setImportError(null);
+              }}
+              monospace
+              spellCheck={false}
+              textareaClassName="min-h-80"
+            />
             <Field label={t("settings.snapshot.reason")} htmlFor="runtime-snapshot-reason">
               <input
                 id="runtime-snapshot-reason"
@@ -5904,14 +5866,13 @@ function AgentEditorView({
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("agent.instructions")} htmlFor={`${fieldId}-agent-instructions`}>
-                  <textarea
-                    id={`${fieldId}-agent-instructions`}
-                    value={instructions}
-                    onChange={(event) => setInstructions(event.target.value)}
-                    className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  />
-                </Field>
+                <TextareaField
+                  id={`${fieldId}-agent-instructions`}
+                  label={t("agent.instructions")}
+                  value={instructions}
+                  onValueChange={setInstructions}
+                  textareaClassName="min-h-24"
+                />
                 {!agent ? (
                   <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
                     <input

@@ -42,6 +42,7 @@ import {
   RowTitleButton,
   FieldError,
   FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -1114,15 +1115,16 @@ export function FeedbackManagementPage() {
                       )}
                     </div>
                   </div>
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                    <span>{t("feedbackManagement.appFeedback.generatedSql")}</span>
-                    <textarea data-surface="code"
-                      value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
-                      readOnly
-                      rows={5}
-                      className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
-                    />
-                  </label>
+                  <TextareaField
+                    id="app-feedback-generated-sql"
+                    label={t("feedbackManagement.appFeedback.generatedSql")}
+                    surface="code"
+                    className="min-w-0"
+                    value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
+                    readOnly
+                    rows={5}
+                    textareaClassName="min-h-32 min-w-0 max-w-full"
+                  />
                   <div className="grid min-w-0 gap-3 sm:grid-cols-2">
                     <div className="rounded-md border border-border bg-surface p-3">
                       <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.userRating")}</p>
@@ -1143,17 +1145,16 @@ export function FeedbackManagementPage() {
                       </div>
                     </div>
                   </div>
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                    <span>{t("feedbackManagement.appFeedback.userFeedbackContent")}</span>
-                    <textarea
-                      aria-label={t("feedbackManagement.appFeedback.userFeedbackContent")}
-                      value={selectedAppFeedback.feedback_comment}
-                      readOnly
-                      rows={3}
-                      className="min-h-24 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 text-fg outline-none"
-                      placeholder={t("feedbackManagement.appFeedback.userFeedbackEmpty")}
-                    />
-                  </label>
+                  <TextareaField
+                    id="app-feedback-user-content"
+                    label={t("feedbackManagement.appFeedback.userFeedbackContent")}
+                    className="min-w-0"
+                    value={selectedAppFeedback.feedback_comment}
+                    readOnly
+                    rows={3}
+                    textareaClassName="min-h-24 min-w-0 max-w-full"
+                    placeholder={t("feedbackManagement.appFeedback.userFeedbackEmpty")}
+                  />
                   <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <span>{t("feedbackManagement.appFeedback.adminRating")}</span>
                     <select
@@ -1186,6 +1187,7 @@ export function FeedbackManagementPage() {
                         <span>{t("feedbackManagement.appFeedback.copyUserContent")}</span>
                       </Button>
                     </div>
+                    {/* oxlint-disable-next-line design-system/restricted-syntax -- ラベルの行に「利用者コメントを反映」ボタンを並べるため、ラベルと入力を分けて置く（TextareaField のラベルには要素を並べられない） */}
                     <textarea
                       ref={adminFeedbackContentRef}
                       id="app-feedback-admin-content"
@@ -1217,36 +1219,23 @@ export function FeedbackManagementPage() {
                     <span>{t("feedbackManagement.appFeedback.registerSelectAi")}</span>
                   </label>
                   {registerSelectAiFeedback && (
-                    <div className="grid min-w-0 gap-1">
-                      {/* Select AI feedback に登録するときは response SQL が必須（saveAppFeedback のガード）。 */}
-                      <FieldLabel
-                        htmlFor="app-feedback-select-ai-response"
-                        label={t("feedbackManagement.appFeedback.selectAiResponse")}
-                        required
-                      />
-                      <textarea data-surface="code"
-                        id="app-feedback-select-ai-response"
-                        aria-required="true"
-                        aria-invalid={reviewErrors.selectAiResponse ? "true" : undefined}
-                        aria-describedby={
-                          reviewErrors.selectAiResponse ? "app-feedback-select-ai-response-error" : undefined
-                        }
-                        value={selectAiResponse}
-                        onChange={(event) => {
-                          setSelectAiResponse(event.currentTarget.value);
-                          setReviewErrors((current) => ({ ...current, selectAiResponse: undefined }));
-                        }}
-                        rows={5}
-                        className={`min-h-32 w-full min-w-0 max-w-full rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring ${
-                          reviewErrors.selectAiResponse ? "border-danger-fg" : "border-border-control"
-                        }`}
-                        placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
-                      />
-                      <FieldError
-                        id="app-feedback-select-ai-response-error"
-                        message={reviewErrors.selectAiResponse}
-                      />
-                    </div>
+                    // Select AI feedback に登録するときは response SQL が必須（saveAppFeedback のガード）。
+                    <TextareaField
+                      id="app-feedback-select-ai-response"
+                      label={t("feedbackManagement.appFeedback.selectAiResponse")}
+                      required
+                      error={reviewErrors.selectAiResponse}
+                      surface="code"
+                      className="min-w-0"
+                      value={selectAiResponse}
+                      onChange={(event) => {
+                        setSelectAiResponse(event.currentTarget.value);
+                        setReviewErrors((current) => ({ ...current, selectAiResponse: undefined }));
+                      }}
+                      rows={5}
+                      textareaClassName="min-h-32 min-w-0 max-w-full"
+                      placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
+                    />
                   )}
                   <FormActionBar
                     ariaLabel={t("feedbackManagement.appFeedback.actions")}

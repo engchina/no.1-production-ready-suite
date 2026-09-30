@@ -31,6 +31,7 @@ import {
   RowTitleButton,
   ClearActionButton,
   SearchField,
+  TextareaField,
   TextField,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
@@ -1159,34 +1160,24 @@ function BusinessViewEditor({
                           {docragUnusedNote}
                         </DocragUnusedNote>
                       ) : null}
-                      <div>
-                        <label
-                          htmlFor="business-view-system-prompt"
-                          className="text-sm font-medium text-fg"
-                        >
-                          {t("businessViews.field.systemPrompt")}
-                        </label>
-                        <textarea
-                          id="business-view-system-prompt"
-                          value={config.system_prompt ?? ""}
-                          onChange={(event) =>
-                            setConfig((current) => ({
-                              ...current,
-                              system_prompt: event.target.value || null,
-                            }))
-                          }
-                          placeholder={t("businessViews.field.systemPromptPlaceholder")}
-                          aria-describedby={
-                            docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
-                          }
-                          rows={3}
-                          disabled={pending}
-                          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                        <p className="mt-1 text-xs text-fg-muted">
-                          {t("businessViews.field.systemPromptHelper")}
-                        </p>
-                      </div>
+                      <TextareaField
+                        id="business-view-system-prompt"
+                        label={t("businessViews.field.systemPrompt")}
+                        helper={t("businessViews.field.systemPromptHelper")}
+                        value={config.system_prompt ?? ""}
+                        onChange={(event) =>
+                          setConfig((current) => ({
+                            ...current,
+                            system_prompt: event.target.value || null,
+                          }))
+                        }
+                        placeholder={t("businessViews.field.systemPromptPlaceholder")}
+                        aria-describedby={
+                          docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
+                        }
+                        rows={3}
+                        disabled={pending}
+                      />
                       <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
                         <TextField
                           id="business-view-language"

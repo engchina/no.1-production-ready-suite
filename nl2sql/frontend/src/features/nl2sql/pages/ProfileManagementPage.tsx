@@ -38,6 +38,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
   FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -170,8 +171,6 @@ function emptyProfileForm(): ProfileFormState {
 
 const inputClass =
   "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-focus-ring";
-const textareaClass =
-  "rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring";
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -612,45 +611,30 @@ function SelectAiConfigFields({
         ))}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="grid content-start gap-1 text-sm font-medium text-fg">
-          <label htmlFor="profile-select-ai-role">{t("profiles.field.role")}</label>
-          <textarea
-            id="profile-select-ai-role"
-            aria-describedby="profile-select-ai-role-hint"
-            value={form.selectAiConfig.role}
-            rows={6}
-            onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
-            className={`${textareaClass} min-h-40`}
-            placeholder={t("profiles.placeholder.role")}
-          />
-          <p id="profile-select-ai-role-hint" className="text-xs font-normal leading-5 text-fg-muted">
-            {t("profiles.field.roleHint")}
-          </p>
-        </div>
-        <div className="grid content-start gap-1 text-sm font-medium text-fg">
-          <label htmlFor="profile-select-ai-additional-instructions">
-            {t("profiles.field.additionalInstructions")}
-          </label>
-          <textarea
-            id="profile-select-ai-additional-instructions"
-            aria-describedby="profile-select-ai-additional-instructions-hint"
-            value={form.selectAiConfig.additional_instructions}
-            rows={6}
-            onChange={(event) =>
-              updateSelectAiConfig(setForm, {
-                additional_instructions: event.currentTarget.value,
-              })
-            }
-            className={`${textareaClass} min-h-40`}
-            placeholder={t("profiles.placeholder.additionalInstructions")}
-          />
-          <p
-            id="profile-select-ai-additional-instructions-hint"
-            className="text-xs font-normal leading-5 text-fg-muted"
-          >
-            {t("profiles.field.additionalInstructionsHint")}
-          </p>
-        </div>
+        <TextareaField
+          id="profile-select-ai-role"
+          label={t("profiles.field.role")}
+          helper={t("profiles.field.roleHint")}
+          value={form.selectAiConfig.role}
+          rows={6}
+          onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
+          textareaClassName="min-h-40"
+          placeholder={t("profiles.placeholder.role")}
+        />
+        <TextareaField
+          id="profile-select-ai-additional-instructions"
+          label={t("profiles.field.additionalInstructions")}
+          helper={t("profiles.field.additionalInstructionsHint")}
+          value={form.selectAiConfig.additional_instructions}
+          rows={6}
+          onChange={(event) =>
+            updateSelectAiConfig(setForm, {
+              additional_instructions: event.currentTarget.value,
+            })
+          }
+          textareaClassName="min-h-40"
+          placeholder={t("profiles.placeholder.additionalInstructions")}
+        />
       </div>
     </section>
   );

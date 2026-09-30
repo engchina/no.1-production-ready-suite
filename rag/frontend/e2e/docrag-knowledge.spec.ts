@@ -378,7 +378,7 @@ test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に�
   await expect(add).toBeEnabled();
   await add.click();
   await expect(page.locator("#approved-faq-question")).toHaveAccessibleDescription(/質問を入力してください。/);
-  await expect(page.locator("#approved-faq-answer-error")).toHaveText("回答を入力してください。");
+  await expect(page.locator("#approved-faq-answer")).toHaveAccessibleDescription(/回答を入力してください。/);
   await expect(page.locator("#approved-faq-question")).toBeFocused();
 
   await page.getByRole("tab", { name: "用語・ルール" }).click();
@@ -389,7 +389,7 @@ test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に�
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
   await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
-  await expect(page.locator("#runtime-knowledge-content-error")).toHaveText("ルール内容を入力してください。");
+  await expect(page.locator("#runtime-knowledge-content")).toHaveAccessibleDescription(/ルール内容を入力してください。/);
   await expect(page.locator("#runtime-knowledge-name")).toBeFocused();
   expect(writes).toHaveLength(0);
   await expectNoPageOverflow(page);

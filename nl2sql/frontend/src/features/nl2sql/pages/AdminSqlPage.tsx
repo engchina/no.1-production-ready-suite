@@ -10,8 +10,7 @@ import {
   PageBody,
   ActionResultRegion,
   ExecutionConfirmationField,
-  FieldError,
-  FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -450,32 +449,22 @@ export function AdminSqlPage() {
           }
         />
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="admin-sql-input"
-              label={t("nl2sql.adminSqlRunner.label")}
-              required
-            />
-            <textarea
-              id="admin-sql-input"
-              value={sqlText}
-              onChange={(event) => {
-                setSqlText(event.currentTarget.value);
-                setSqlError("");
-              }}
-              disabled={loading}
-              rows={12}
-              required
-              aria-required="true"
-              aria-invalid={sqlError ? "true" : undefined}
-              aria-describedby={sqlError ? "admin-sql-input-error" : undefined}
-              className={`min-h-64 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
-                sqlError ? "border-danger-fg" : "border-border-control"
-              }`}
-              placeholder={t("nl2sql.adminSqlRunner.placeholder")}
-            />
-            <FieldError id="admin-sql-input-error" message={sqlError} />
-          </div>
+          <TextareaField
+            id="admin-sql-input"
+            label={t("nl2sql.adminSqlRunner.label")}
+            required
+            error={sqlError || undefined}
+            value={sqlText}
+            onChange={(event) => {
+              setSqlText(event.currentTarget.value);
+              setSqlError("");
+            }}
+            disabled={loading}
+            rows={12}
+            monospace
+            textareaClassName="min-h-64"
+            placeholder={t("nl2sql.adminSqlRunner.placeholder")}
+          />
           <SqlFileInput
             resetSignal={sqlFileResetSignal}
             disabled={loading}

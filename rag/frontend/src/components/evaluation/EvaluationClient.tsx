@@ -9,13 +9,12 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  FieldError,
-  FieldLabel,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ProcessingIndicator,
   SelectField,
   StatusBadge as UiStatusBadge,
+  TextareaField,
   useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -1059,25 +1058,18 @@ function JsonField({
   onChange: (value: string) => void;
 }) {
   // どちらの JSON も空・不正のままでは実行できず、backend も cases / experiments を 1 件以上必須にする（#531）。
-  const errorId = `${id}-error`;
   return (
-    <div className="space-y-1.5">
-      <FieldLabel htmlFor={id} label={label} required className="block" />
-      <textarea
-        id={id}
-        aria-required="true"
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
-        value={value}
-        rows={rows}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className={`min-w-0 w-full resize-y rounded-md border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring ${
-          error ? "border-danger-fg" : "border-border-control"
-        }`}
-      />
-      <FieldError id={errorId} message={error} />
-    </div>
+    <TextareaField
+      id={id}
+      label={label}
+      required
+      error={error ?? undefined}
+      value={value}
+      rows={rows}
+      placeholder={placeholder}
+      monospace
+      onValueChange={onChange}
+    />
   );
 }
 

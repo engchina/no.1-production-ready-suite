@@ -83,6 +83,10 @@
             "message": "一覧の絞り込みの検索欄は SearchField（@engchina/production-ready-ui）で作る。入力に合わせて絞り込み（debounce 300ms・Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持つ。検索ボタンは置かない（UX 契約 page-archetypes.md「一覧の絞り込みの検索」、#535）。LLM・ベクトル検索などの重い検索は type=\"search\" にせず、TextField と明示的な実行（ボタンと isSubmitEnter の Enter）で作る。"
           },
           {
+            "selector": "JSXOpeningElement[name.name='textarea']",
+            "message": "複数行の入力欄は <textarea> を手書きせず TextareaField（@engchina/production-ready-ui）を使う。ラベル・必須・エラー・補足・文字数・枠線・フォーカスの表示を TextField と同じ 1 つの実装にそろえる（#584）。元の文書の表を再現して編集するグリッドのセルなど TextareaField で表せない所だけ、理由を添えて局所的に除外する。"
+          },
+          {
             "selector": "JSXOpeningElement[name.name='details']",
             "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           },

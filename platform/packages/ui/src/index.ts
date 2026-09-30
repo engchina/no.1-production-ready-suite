@@ -21,6 +21,7 @@ export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps }
 export { Tooltip, type TooltipProps, type TooltipPlacement } from "./components/ui/tooltip";
 export { DEFAULT_TAB_INVALID_LABEL, Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
 export { TextField, type TextFieldProps, type TextFieldSize } from "./components/ui/text-field";
+export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
 export {
   SearchField,
   SEARCH_FIELD_DEBOUNCE_MS,

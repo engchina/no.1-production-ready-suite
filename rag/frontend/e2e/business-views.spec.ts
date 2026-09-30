@@ -59,8 +59,9 @@ for (const viewport of [
     const notes = settings.getByTestId("docrag-unused-note");
     await expect(notes).toHaveCount(5);
     await expect(notes.first()).toHaveText("回答エンジンが DocRAG のときは、この設定は使われません。");
+    // 説明は欄の補足と DocRAG の注記をまとめたもの（#584）。
     await expect(page.getByLabel("回答の役割・口調")).toHaveAccessibleDescription(
-      "回答エンジンが DocRAG のときは、この設定は使われません。"
+      /回答エンジンが DocRAG のときは、この設定は使われません。/
     );
     await expectNoPageOverflow(page);
   });

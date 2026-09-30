@@ -494,6 +494,15 @@ import { Search } from "lucide-react";
 - **adherence の lint が、アイコンの分の左の余白（`pl-7`〜`pl-12` / `ps-*` / `pl-[…]`、variant 付きを含む）を持つ `<input>` を検出します。** 検索欄は `TextField` で作ってください。
 - 対象外（手書きのまま）: 枠の中に枠なしの入力欄を置く**複合部品**（NL2SQL のオントロジーのグラフのツールバーの検索欄、RAG の `MultiSelectCombobox`）。外枠に `focus-within:outline-*` を付ける型（§4「フォーカスの表示」）で、`pl-*` を使いません。
 
+### `TextareaField`（新規）— ★ 複数行の入力欄は 1 つの実装（#584）
+
+3 製品が `<textarea>` を手書きしていました（RAG 17・NL2SQL 28・Agent 11・system-settings 1）。地が `bg-surface` / `bg-surface-sunken`、角丸が `rounded-md`（`--radius-control` ではない）、disabled が `opacity-50` / `opacity-60` / `bg-surface-hover`、ラベル・必須・エラー・文字数の付け方も画面ごとに違いました。`TextField` と同じ見た目と API の `TextareaField` にそろえます（props・決めたことは components-reference.md「TextareaField」）。
+
+- 枠線・角丸（`--radius-control`）・地（`bg-surface`、read-only は `bg-surface-sunken`、disabled は `bg-surface-disabled`）・フォーカスは `TextField` と同じ。SQL・JSON などは `monospace`（`--font-mono` の 12px）。
+- ラベル（`label` / `labelHidden`）・補足（`helper`）・必須（`required`）・エラー（`error`）・文字数（`showCount`）は `TextField` と同じ位置と読み上げ。
+- adherence の lint が製品の JSX の `<textarea>` を検出する。例外（理由を添えて局所的に除外）は、RAG の `ReviewTextEditor.tsx` の元の文書の要素・表のセルを再現して編集するエディタ（ラベルにバッジを並べる・枠を表が持つ）と、NL2SQL のフィードバック管理の「管理者レビューコメント」（ラベルの行に「利用者コメントを反映」ボタンを並べる）の 3 か所だけ。
+- 条件付きの必須（「「違う」のとき必須」など）は `requiredAnnouncedByControl={false}` で、`aria-required` を付けずにタグをラベルの一部として読ませる（`FieldLabel` と同じ）。
+
 ### `SearchField`（新規）— ★ 一覧の絞り込みは入力に合わせて、検索ボタンを置かない（#535）
 
 一覧を絞り込む検索の操作が画面ごとに違いました。RAG の業務ビューの一覧は検索欄の隣に「名前・説明で検索」のボタンがあり、ボタンか Enter で検索、ナレッジベース・文書の一覧は Enter か blur で検索、フィードバックは入力に合わせて（300ms）、NL2SQL は入力のたびに（一部は各ページの 250ms の debounce）、学習候補・アプリ内フィードバックは「絞り込み」ボタン、Agent のメモリは入力のたびに問い合わせていました。日本語入力の変換中の読み（「じ」「じん」…）でも問い合わせる画面がありました。`TextField` を包んだ `SearchField` にそろえます。規則（どの検索を入力に合わせるか・明示実行にするか・例外）は UX 契約 [page-archetypes.md「一覧の絞り込みの検索」](../ux-contracts/page-archetypes.md#一覧の絞り込みの検索535)。
@@ -835,6 +844,7 @@ QA に事前共有してください。**47点あります。**
 | 48 | **一覧の絞り込みの検索ボタンが無くなり、入力に合わせて絞り込む**（#535） | RAG の業務ビューの一覧: 検索欄（固定 `w-56`・先頭アイコンなし）+「名前・説明で検索」のボタン → ナレッジベースの一覧と同じ `SearchField`（先頭アイコン・消去、`w-64`、375px は全幅）でボタンなし。NL2SQL の学習候補・アプリ内フィードバック: 条件の行の右端の「絞り込み」（44px）→ ボタンなしで、条件を変えるとすぐ読み込む（読込中は一覧の上に経過時間とスピナー）。アプリ内フィードバックの検索欄は手書きの入力欄 → `SearchField`（44px、虫眼鏡・消去付き）。Agent のメモリの検索欄は手書きの入力欄（40px、地が `surface-sunken`）→ `SearchField`（36px、地は `surface`）。0 件の空の状態に「検索語をクリア」（RAG のナレッジベース・業務ビュー・文書、ユーザー・ロール・権限管理） | 同じ種類の画面（一覧の絞り込み）の操作を 3 製品でそろえる。押し忘れ・押し直しを無くす。0 件から 1 操作で戻れる（UX 契約 page-archetypes.md「一覧の絞り込みの検索」） |
 | 49 | **モデル設定の OCI Enterprise AI の接続がタブになり、エラーのあるタブに印が付く** | 「接続 1（既定）」「接続 2」の枠（`border` + `bg-surface-sunken`）を縦に並べ、各接続に自由入力の「表示名」があった → カードの中の共有の `Tabs`（「プライマリ接続」「セカンダリ接続」）で切り替え、表示名の欄は無い。未設定のセカンダリ接続は `EmptyState` と「セカンダリ接続を設定」、設定済みは入力欄と「セカンダリ接続を削除」（説明の行の右端、ghost の danger）。エラーのあるタブはラベルの後ろに danger 色の `CircleAlert`、未保存の入力があるタブは「未保存」のバッジ。Endpoint URL・Project OCID・API key の必須のタグは、プライマリ接続が 3 つとも「OCI 運用時必須」、セカンダリ接続が 3 つとも「必須」 | 同じ設定の別の枠はタブで切り替える（§4「`Tabs`」）。名前を画面・選択肢・保存値でそろえ、別のタブのエラーを見落とさない（#542） |
 | 50 | **狭い画面のページの操作が 2 つなら「その他の操作」に畳まない**（#582） | lg 未満の `PageHeader` は主操作 1 つ +「その他の操作」。操作が 2 つ（RAG の業務ビュー・Agent のエディタの「一覧へ戻る」+ 保存、NL2SQL・system-settings の一覧の「表示を更新」+「新規作成」など）でも、残りの 1 つだけのメニューになり、戻るのに 2 タップ要った → メニューに入るのが 1 つだけなら畳まず 2 つとも出す。読み上げ名は「その他の操作」→「その他の操作（ページ操作）」「その他の操作（〇〇の操作）」（見た目の文言は同じ） | 戻る操作を 1 タップにし、ページとカードの「その他の操作」を読み上げで区別する（§4「`PageHeader`」7・8） |
+| 51 | **複数行の入力欄の見た目が 1 つにそろう**（#584） | 手書きの `<textarea>`: 地が `bg-surface-sunken`（RAG の業務ビュー・設定・評価など）/ `bg-surface`、角丸 `rounded-md`、disabled が `opacity-50` など、ラベル・文字数の位置も画面ごと → 共有 `TextareaField`: 地は `bg-surface`（read-only は `bg-surface-sunken`、disabled は `bg-surface-disabled`）、角丸 `--radius-control`、余白 `px-3 py-2`、枠線・フォーカスは `TextField` と同じ、文字数と補足は欄の下（RAG のドメインキーワードの補足は欄の上 → 下）。等幅の欄（SQL・JSON・論理構造など。NL2SQL の SQL の入力欄は 14px だった）は `--font-mono` の 12px。RAG の DocRAG プロンプトの「既定値／カスタマイズ済み」のバッジはラベルの横 → 操作の行 | 1 行の入力欄と同じ部品に見せ、disabled を透過で薄めない（§4「`TextareaField`」） |
 
 ### API の非互換
 
@@ -867,6 +877,7 @@ QA に事前共有してください。**47点あります。**
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
 | `RowTitleButton`（#583） | `href?: string` を追加（渡すと `<a href>` のリンクの形。修飾キーの無いクリックは `onClick`、修飾キー付き・中クリックはブラウザの既定）。`ref` の型は `Ref<HTMLButtonElement \| HTMLAnchorElement>`。E2E で題名を `getByRole("button")` で探している一覧は、`href` を渡すと `getByRole("link")` になる |
+| `TextareaField`（#584） | **新規 export。** `TextareaField` / `TextareaFieldProps` / `defaultTextareaCount`。adherence の lint（`design-system/restricted-syntax`）が製品の JSX の `<textarea>` を検出する |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 
