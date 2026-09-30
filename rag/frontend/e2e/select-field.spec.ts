@@ -168,25 +168,19 @@ test("評価のランキング指標も同じドロップダウン UI で選択�
 
   const listbox = page.getByRole("listbox", { name: "ランキング指標" });
   await expect(listbox.getByRole("option")).toHaveText([
-    "MRR",
-    "Recall@K",
-    "Precision@K",
-    "回答キーワード",
-    "Groundedness",
-    "Citation Traceability",
-    "BBox Citation",
-    "Element Lineage",
-    "Content Kind 命中",
-    "章節カバレッジ",
-    "Faithfulness",
-    "Context Precision",
-    "Context Recall",
-    "Response Relevancy",
-    "Noise Robustness",
+    "正解文書の再現率",
+    "正解文書の順位(MRR)",
+    "根拠への忠実さ",
+    "引用の追跡可能性",
+    "主張の裏付け",
+    "期待する語の一致",
+    "拒答の正しさ",
+    "標準回答の網羅",
+    "標準回答での合格",
   ]);
 
-  await listbox.getByRole("option", { name: "Recall@K" }).click();
-  await expect(rankingMetric).toContainText("Recall@K");
+  await listbox.getByRole("option", { name: "根拠への忠実さ" }).click();
+  await expect(rankingMetric).toContainText("根拠への忠実さ");
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────
@@ -273,8 +267,8 @@ test("画面の下端では一覧を上に開き、画面の外にはみ出さ�
   expect(Math.abs(list!.x - button!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(list!.width - button!.width)).toBeLessThanOrEqual(1);
 
-  await listbox.getByRole("option", { name: "Recall@K" }).click();
-  await expect(rankingMetric).toContainText("Recall@K");
+  await listbox.getByRole("option", { name: "根拠への忠実さ" }).click();
+  await expect(rankingMetric).toContainText("根拠への忠実さ");
 });
 
 test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", async ({ page }) => {
@@ -284,50 +278,54 @@ test("7 件以上の一覧でも、キーボードで強調した選択肢を表
   await page.keyboard.press("ArrowDown");
   const listbox = page.getByRole("listbox", { name: "ランキング指標" });
   await expect(listbox).toBeVisible();
-  await expectActiveOptionInView(rankingMetric, listbox, "MRR");
+  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
 
   await page.keyboard.press("End");
-  await expectActiveOptionInView(rankingMetric, listbox, "Noise Robustness");
+  await expectActiveOptionInView(rankingMetric, listbox, "標準回答での合格");
   await page.keyboard.press("Home");
-  await expectActiveOptionInView(rankingMetric, listbox, "MRR");
-  for (let index = 0; index < 8; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "Content Kind 命中");
+  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
+  for (let index = 0; index < 4; index += 1) await page.keyboard.press("ArrowDown");
+  await expectActiveOptionInView(rankingMetric, listbox, "主張の裏付け");
+  // PageDown / PageUp は 10 件ずつ動き、端で止まる。
   await page.keyboard.press("PageDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "Noise Robustness");
+  await expectActiveOptionInView(rankingMetric, listbox, "標準回答での合格");
   await page.keyboard.press("PageUp");
-  await expectActiveOptionInView(rankingMetric, listbox, "Groundedness");
+  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
+  for (let index = 0; index < 3; index += 1) await page.keyboard.press("ArrowDown");
+  await expectActiveOptionInView(rankingMetric, listbox, "引用の追跡可能性");
 
   await page.keyboard.press("Enter");
   await expect(listbox).toBeHidden();
-  await expect(rankingMetric).toContainText("Groundedness");
+  await expect(rankingMetric).toContainText("引用の追跡可能性");
 });
 
 test("文字の入力で選択肢に飛ぶ（typeahead）", async ({ page }) => {
-  await page.goto("/evaluation");
-  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
-  await rankingMetric.focus();
+  // 評価の指標の表示名は日本語になった（#591）ため、英字の選択肢を持つリージョンで確かめる。
+  await page.goto("/settings/oci");
+  const region = page.getByRole("combobox", { name: "リージョン", exact: true });
+  await region.focus();
 
   // 閉じているときに打つと開き、その文字で始まる選択肢を強調する。
-  await page.keyboard.press("c");
-  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  await page.keyboard.press("a");
+  const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
   await expect(listbox).toBeVisible();
-  await expectActiveOptionInView(rankingMetric, listbox, "Citation Traceability");
+  await expectActiveOptionInView(region, listbox, "ap-tokyo-1");
   // 同じ文字を続けて打つと、その文字で始まる次の選択肢へ巡る。
-  await page.keyboard.press("c");
-  await expectActiveOptionInView(rankingMetric, listbox, "Content Kind 命中");
+  await page.keyboard.press("a");
+  await expectActiveOptionInView(region, listbox, "ap-osaka-1");
 
-  // 入力が途切れたら（500ms）リセットし、続けて打った文字は前方一致で絞り込む
-  // （"c" は次の Context Precision、"ci" で Citation Traceability に戻る）。
+  // 入力が途切れたら（500ms）リセットし、続けて打った文字は前方一致で絞り込む。
   await page.waitForTimeout(700);
-  await page.keyboard.type("ci", { delay: 30 });
-  await expectActiveOptionInView(rankingMetric, listbox, "Citation Traceability");
+  await page.keyboard.type("us", { delay: 30 });
+  await expectActiveOptionInView(region, listbox, "us-chicago-1");
 
+  // 大文字・小文字を区別しない。
   await page.waitForTimeout(700);
-  await page.keyboard.type("FA", { delay: 30 });
-  await expectActiveOptionInView(rankingMetric, listbox, "Faithfulness");
+  await page.keyboard.type("AP-T", { delay: 30 });
+  await expectActiveOptionInView(region, listbox, "ap-tokyo-1");
   await page.keyboard.press("Enter");
   await expect(listbox).toBeHidden();
-  await expect(rankingMetric).toContainText("Faithfulness");
+  await expect(region).toContainText("ap-tokyo-1");
 });
 
 test("モーダルの層の中でも一覧を暗幕とモーダルの上に出し、Esc は一覧だけを閉じる", async ({ page }) => {
