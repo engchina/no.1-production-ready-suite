@@ -154,7 +154,7 @@ for (const viewport of VIEWPORTS) {
       await pager.getByRole("button", { name: "次へ" }).click();
       await expect(pager).toContainText("11 - 20 / 23 件");
 
-      await page.getByRole("button", { name: /^検証 Agent 12 agent-12/ }).click();
+      await page.getByRole("link", { name: /^検証 Agent 12 agent-12/ }).click();
       await expect(page).toHaveURL(/\/agents\?id=agent-12$/);
       // 375px ではヘッダーの操作がメニューに入るため、ブラウザの戻るで一覧へ戻る。
       await page.goBack();
@@ -163,7 +163,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.reload();
       await expect(pager).toContainText("11 - 20 / 23 件");
-      await expect(page.getByRole("button", { name: /^検証 Agent 12 agent-12/ })).toBeVisible();
+      await expect(page.getByRole("link", { name: /^検証 Agent 12 agent-12/ })).toBeVisible();
     });
 
     test("実行履歴: 再取得で行が増えてもページが戻らない", async ({ page, mockApi }) => {
