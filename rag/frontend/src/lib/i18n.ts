@@ -310,7 +310,7 @@ export const ja = {
   "settings.chunking.overview.description":
     "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、backend 内処理または pipeline-chunking へ渡す方式として選択できます。",
   "settings.chunking.serviceNote":
-    "ここで選ぶ 7 個は分割方式です。DocRAG 親子階層は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
+    "ここで選ぶ 7 個は分割方式です。親子階層（small-to-big）は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
   "settings.chunking.recommendedFor": "推奨用途",
   "settings.chunking.source": "設定元",
@@ -320,7 +320,7 @@ export const ja = {
   "settings.chunking.strategy.recursive_character": "再帰文字分割",
   "settings.chunking.strategy.recursive_character.description":
     "章節→文→文字の順に固定長で分割(LangChain 風)",
-  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子階層",
+  "settings.chunking.strategy.docrag_small_to_big": "親子階層（small-to-big）",
   "settings.chunking.strategy.docrag_small_to_big.description":
     "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書は構造認識で分割します。既定）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
@@ -339,7 +339,7 @@ export const ja = {
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",
   "settings.chunking.params.docragDescription":
-    "DocRAG 親子階層で使う子 chunk と親 chunk の大きさを設定します。既定値は rag_poc と同じです。親は番号付きの機能見出しもまたぎません。",
+    "親子階層（small-to-big）で使う子 chunk と親 chunk の大きさを設定します。親は番号付きの機能見出しもまたぎません。",
   "settings.chunking.params.docragChildTargetChars": "子チャンク目標文字数",
   "settings.chunking.params.docragChildTargetCharsHint":
     "検索に使う子の大きさ（300〜1,600、既定 1,000）。超える本文は文末で分けます。",
@@ -921,8 +921,8 @@ export const ja = {
   "businessViews.docragQueryStrategy.query_decomposition": "質問分解",
   "businessViews.docragQueryStrategy.step_back_prompting": "ステップバックプロンプト",
   "businessViews.docragQueryStrategy.hyde": "仮説文生成（HyDE）",
-  "businessViews.docragAnswerFlow.crag": "補正 RAG（CRAG：検索結果を評価し、必要なら補正検索）",
-  "businessViews.docragAnswerFlow.standard_rag": "通常 RAG（検索して回答生成・補正なし）",
+  "businessViews.docragAnswerFlow.crag": "CRAG（検索結果を評価し、必要なら補正検索）",
+  "businessViews.docragAnswerFlow.standard_rag": "標準 RAG（検索して回答を生成・補正なし）",
   "businessViews.faq.title": "Approved FAQ（類似問）",
   "businessViews.faq.question": "質問（QUESTION）",
   "businessViews.faq.answer": "回答（ANSWER）",
@@ -1655,7 +1655,7 @@ export const ja = {
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.docragFallbackTitle": "構造認識で分割しました",
   "flow.chunks.docragFallback":
-    "DocRAG 親子階層を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
+    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
   "flow.chunks.pageRange": "p.{start}-{end}",
@@ -2093,13 +2093,13 @@ export const ja = {
   "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
   "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
   "search.history.deleted": "保存された回答を削除しました。",
-  "settings.docragPrompts.vlm_answer.title": "回答生成テンプレート",
+  "settings.docragPrompts.vlm_answer.title": "回答生成のプロンプト",
   "settings.docragPrompts.vlm_answer.description":
-    "根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
+    "根拠と質問を回答モデルへ渡す指示のテンプレートです。全体で 1 つの設定で、保存した内容は次の回答から使います。",
   "settings.docragPrompts.vlm_answer.field": "テンプレート",
   "settings.docragPrompts.image_retrieval.title": "図・画像の読み取りプロンプト",
   "settings.docragPrompts.image_retrieval.description":
-    "「図・画像を AI で読み取る（Vision）」を使うとき（全体の既定か文書のレシピで有効にしたとき）、解析エンジンに関係なく画像ごとに Vision モデルへ渡す指示です（rag_poc の image_retrieval.txt）。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
+    "「図・画像を AI で読み取る（Vision）」を使うとき（全体の既定か文書のレシピで有効にしたとき）、解析エンジンに関係なく画像ごとに Vision モデルへ渡す指示です。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
   "settings.docragPrompts.image_retrieval.field": "プロンプト",
   "settings.docragPrompts.default": "既定値",
   "settings.docragPrompts.customized": "編集済み（{value}）",
@@ -2116,7 +2116,7 @@ export const ja = {
   "settings.docragPrompts.stages.description":
     "回答フローが各段で使う指示です。コードで管理しているため、ここでは確認だけできます。",
   "settings.docragPrompts.stage.routing": "1. 検索戦略の自動ルーティング",
-  "settings.docragPrompts.stage.expansion": "2. 質問拡張",
+  "settings.docragPrompts.stage.expansion": "2. 質問の拡張",
   "settings.docragPrompts.stage.crag": "3. CRAG 根拠判定",
   "settings.docragPrompts.stage.generation": "4. 回答生成（system）",
   "settings.docragPrompts.stage.audit": "5. 回答の監査",

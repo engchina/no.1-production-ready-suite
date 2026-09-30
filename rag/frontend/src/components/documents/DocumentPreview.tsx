@@ -115,7 +115,7 @@ export function DocumentPreview({
   focusBboxMode?: BboxCoordinateMode | null;
   focusBboxUnit?: BboxOverlayUnit | null;
   focusPageSize?: BboxPageSize | null;
-  /** 強調する領域（DocRAG の表示領域など）。省略時は focusBbox 1 つを強調する。 */
+  /** 強調する領域（要素の表示領域など）。省略時は focusBbox 1 つを強調する。 */
   highlights?: PreviewHighlight[] | null;
   sizing?: PreviewSizing;
   className?: string;

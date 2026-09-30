@@ -8,7 +8,7 @@ import {
 } from "./docrag-answer";
 
 describe("parseDocragDiagnostics", () => {
-  it("DocRAG 診断を表示用に正規化する", () => {
+  it("回答フローの診断を表示用に正規化する", () => {
     const parsed = parseDocragDiagnostics({
       confidence: "high",
       needs_human_review: false,
@@ -54,7 +54,7 @@ describe("parseDocragDiagnostics", () => {
     });
   });
 
-  it("DocRAG 以外は null、信頼度を variant に写す", () => {
+  it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
     expect(parseDocragDiagnostics(null)).toBeNull();
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");

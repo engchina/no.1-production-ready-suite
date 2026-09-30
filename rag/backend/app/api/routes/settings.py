@@ -533,7 +533,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
 
 @router.get("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
 async def get_answer_record_settings() -> ApiResponse[AnswerRecordSettingsData]:
-    """DocRAG 回答記録の保持日数を返す。"""
+    """回答の記録の保持日数を返す。"""
     return ApiResponse(
         data=AnswerRecordSettingsData(
             retention_days=get_settings().rag_answer_record_retention_days
@@ -611,7 +611,7 @@ def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
 
 @router.get("/docrag-prompts", response_model=ApiResponse[DocragPromptsData])
 async def get_docrag_prompts() -> ApiResponse[DocragPromptsData]:
-    """編集できる DocRAG プロンプトと、回答フローの各段の読み取り専用プロンプトを返す。"""
+    """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
     saved = await OracleClient().list_docrag_prompts()
     return ApiResponse(data=_docrag_prompts_data(saved))
 
@@ -620,7 +620,7 @@ async def get_docrag_prompts() -> ApiResponse[DocragPromptsData]:
 async def put_docrag_prompt(
     key: str, payload: DocragPromptUpdate
 ) -> ApiResponse[DocragPromptsData]:
-    """DocRAG プロンプトを保存する(次の回答・次の解析から使う)。"""
+    """編集できるプロンプトを保存する(次の回答・次の解析から使う)。"""
     try:
         validate_docrag_prompt(key, payload.content)
     except KeyError as exc:
@@ -634,7 +634,7 @@ async def put_docrag_prompt(
 
 @router.delete("/docrag-prompts/{key}", response_model=ApiResponse[DocragPromptsData])
 async def reset_docrag_prompt(key: str) -> ApiResponse[DocragPromptsData]:
-    """保存した DocRAG プロンプトを消して既定値へ戻す。"""
+    """保存したプロンプトを消して既定値へ戻す。"""
     if key not in EDITABLE_PROMPT_KEYS:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
     oracle = OracleClient()

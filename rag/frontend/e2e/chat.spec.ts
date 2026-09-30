@@ -668,7 +668,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
   await expectNoPageOverflow(page);
 });
 
-test("DocRAG 回答ではチャットにも根拠パネルと会話から補った質問を表示する", async ({ page }) => {
+test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const docrag = {
     confidence: "high",

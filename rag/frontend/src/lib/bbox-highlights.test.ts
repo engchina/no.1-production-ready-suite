@@ -42,7 +42,7 @@ const docragMetadata = {
 };
 
 describe("displayRegionsFromMetadata", () => {
-  it("DocRAG の metadata JSON から、ページごとの要素 bbox を取り出す", () => {
+  it("親子階層の chunk の metadata JSON から、ページごとの要素 bbox を取り出す", () => {
     const regions = displayRegionsFromMetadata(docragMetadata);
     expect(regions.map((region) => region.page)).toEqual([1, 2]);
     expect(regions[0].boxes[0]).toEqual({

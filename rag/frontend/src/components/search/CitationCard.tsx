@@ -73,7 +73,7 @@ export function CitationCard({
     bboxPageRotationFromMetadata(chunk.metadata)
   );
 
-  // 回答の根拠でも、DocRAG の表示領域（要素ごとの bbox）を要素ごとに強調する（#349）。
+  // 回答の根拠でも、要素の表示領域（要素ごとの bbox）を要素ごとに強調する（#349）。
   const previewHighlights = previewOpen
     ? buildPreviewHighlights({
         focusPage,

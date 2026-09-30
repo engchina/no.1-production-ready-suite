@@ -25,7 +25,7 @@ import { useDocragPrompts, useSaveDocragPrompt } from "@/lib/queries";
 const PROMPT_MAX = 50000;
 
 /**
- * DocRAG のプロンプト（rag_poc の vlm_answer.txt / image_retrieval.txt）を 1 つ編集する。
+ * 編集できるプロンプト（回答生成のプロンプト `vlm_answer` / 図・画像の読み取りプロンプト `image_retrieval`）を 1 つ編集する。
  * 全体で 1 つの設定（業務ビュー・文書レシピでは上書きしない）。保存した内容は次の回答・次の解析から使う。
  */
 export function DocragPromptCard({

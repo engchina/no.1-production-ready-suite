@@ -762,7 +762,7 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_min_chars: number | null;
-  /** DocRAG 親子階層の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。 */
+  /** 親子階層（small-to-big）の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。 */
   docrag_child_target_chars?: number | null;
   docrag_table_child_target_chars?: number | null;
   docrag_parent_target_chars?: number | null;
@@ -780,8 +780,8 @@ export interface KnowledgeBaseIngestionConfig {
 export interface KnowledgeBaseQueryConfig {
   // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
   guardrail_policy: GuardrailPolicyName | null;
-  // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は DocRAG だけ)。
-  /** DocRAG 回答フローの設定。null / 未指定はグローバル継承。 */
+  // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
+  /** 回答フローの設定。null / 未指定はグローバル継承。 */
   docrag_query_strategy?: DocragQueryStrategyName | null;
   docrag_answer_flow?: DocragAnswerFlowName | null;
   docrag_neighbor_child_count?: number | null;
@@ -1196,7 +1196,7 @@ export interface QuerySuggestionsData {
 
 export type DocragPromptKey = "vlm_answer" | "image_retrieval";
 
-/** 編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。 */
+/** 編集できるプロンプト(回答生成 `vlm_answer` / 図・画像の読み取り `image_retrieval`)。 */
 export interface DocragPromptView {
   key: DocragPromptKey;
   content: string;
@@ -1765,7 +1765,7 @@ export interface ChunkingSettingsData {
   min_chars: number;
   delimiter: string;
   context_header_enabled: boolean;
-  /** DocRAG 親子階層の分割パラメータ(rag_poc と同じ 5 項目)。 */
+  /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   docrag_child_target_chars: number;
   docrag_table_child_target_chars: number;
   docrag_parent_target_chars: number;
@@ -1782,7 +1782,7 @@ export interface ChunkingSettingsUpdate {
   min_chars: number;
   delimiter: string;
   context_header_enabled: boolean;
-  /** DocRAG 親子階層の分割パラメータ(rag_poc と同じ 5 項目)。 */
+  /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   docrag_child_target_chars: number;
   docrag_table_child_target_chars: number;
   docrag_parent_target_chars: number;
@@ -3139,7 +3139,7 @@ export const api = {
   },
 };
 
-// --- 業務ビューの知識: ドメインキーワード(rag_poc DocRAG 由来) ---
+// --- 業務ビューの知識: ドメインキーワード(rag_poc 由来) ---
 export interface DomainKeywordsData {
   business_view_id: string;
   keywords: string[];
@@ -3224,7 +3224,7 @@ export interface RuntimeKnowledgePreviewData {
   matched_rules: string[];
 }
 
-// --- 保存済み DocRAG 回答(rag_poc の answer JSON 相当) ---
+// --- 保存された回答(rag_poc の answer JSON 相当) ---
 export interface DocragAnswerSummary {
   trace_id: string;
   business_view_id: string | null;

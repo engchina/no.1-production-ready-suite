@@ -1,4 +1,4 @@
-/** DocRAG 回答エンジンの診断(backend diagnostics.docrag)。 */
+/** 回答フローの診断(backend の diagnostics.docrag)。 */
 export type DocragDiagnostics = {
   confidence: string;
   needsHumanReview: boolean | null;
@@ -39,7 +39,7 @@ function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** diagnostics.docrag を表示用に正規化する。DocRAG 以外の回答では null。 */
+/** diagnostics.docrag を表示用に正規化する。回答フローの診断が無い回答では null。 */
 export function parseDocragDiagnostics(
   value: unknown,
 ): DocragDiagnostics | null {

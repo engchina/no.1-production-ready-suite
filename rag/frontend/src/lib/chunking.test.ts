@@ -42,7 +42,7 @@ describe("chunking strategy presentation", () => {
   });
 });
 
-describe("DocRAG 親子階層のパラメータ", () => {
+describe("親子階層（small-to-big）のパラメータ", () => {
   it("rag_poc と同じ既定値を持つ", () => {
     expect(DEFAULT_DOCRAG_CHUNKING_PARAMS).toEqual({
       docrag_child_target_chars: 1000,
@@ -88,7 +88,7 @@ describe("docragChunkingFellBack", () => {
     ).toBe(true);
   });
 
-  it("DocRAG 親子階層で分割した chunk や空の一覧では偽", () => {
+  it("親子階層（small-to-big）で分割した chunk や空の一覧では偽", () => {
     expect(docragChunkingFellBack([{ metadata: { chunk_strategy: "docrag_small_to_big" } }])).toBe(
       false
     );
