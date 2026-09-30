@@ -15,7 +15,6 @@ from typing import Any
 
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER,
-    oracle_agent_memory_schema_sql,
     oracle_answer_record_schema_sql,
     oracle_business_view_knowledge_schema_sql,
     oracle_business_view_schema_sql,
@@ -28,14 +27,12 @@ from app.clients.oracle import (
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
-    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
-    oracle_prompt_version_schema_sql,
     oracle_query_history_schema_sql,
     oracle_role_access_schema_sql,
     oracle_search_audit_schema_sql,
@@ -73,7 +70,7 @@ def vector_index_reindex_sql(
     backend は実行時に DDL を実行しないため、ここでは適用用の SQL を生成するだけにする
     (DBA がレビュー済み artifact として適用する)。引数は ``resolve_vector_index_adapter``
     で解決済みの値を呼び出し側が渡す。
-    ponytail: 主検索索引 rag_chunks のみ。agent memory 索引(同形状)は必要時に追従。
+    対象は主検索索引 rag_chunks だけ。
     """
     return (
         f"DROP INDEX {index};\n"
@@ -193,16 +190,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_business_view_knowledge_schema_sql(),
         ),
         OracleSchemaSection(
-            name="prompt_versions",
-            table_name="rag_prompt_versions",
-            sql=oracle_prompt_version_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="generation_settings",
-            table_name="rag_generation_settings",
-            sql=oracle_generation_settings_schema_sql(),
-        ),
-        OracleSchemaSection(
             name="conversations",
             table_name="rag_conversations",
             sql=oracle_conversation_schema_sql(),
@@ -246,11 +233,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="knowledge_graph",
             table_name="rag_graph_entities",
             sql=oracle_knowledge_graph_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="agent_memory",
-            table_name="rag_agent_memories",
-            sql=oracle_agent_memory_schema_sql(),
         ),
         OracleSchemaSection(
             name="citation_feedback",
@@ -535,6 +517,12 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260930_004_knowledge_base_extraction_fields",
             table_name="rag_knowledge_bases",
             sql=_knowledge_base_extraction_fields_migration_sql(),
+        ),
+        # 旧 standard の回答エンジンだけが使っていたテーブルとメニュー権限を片付ける（#596）。
+        OracleSchemaSection(
+            name="20260930_005_retire_standard_engine_objects",
+            table_name="rag_agent_memories",
+            sql=_retire_standard_engine_objects_migration_sql(),
         ),
     ]
 
@@ -1308,6 +1296,47 @@ BEGIN
     IF v_count > 0 THEN
         EXECUTE IMMEDIATE
             'DELETE FROM rag_role_permissions WHERE permission_code = ''menu.dashboard''';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _retire_standard_engine_objects_migration_sql() -> str:
+    """旧 standard の回答エンジンだけが使っていたオブジェクトを片付ける(冪等。#596)。
+
+    - ロールに保存済みのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` /
+      `menu.settings_agentic` の行を消す（#595 で画面とカタログから削除済み。platform の
+      権限昇格の判定が生のコードで読むため残さない）。
+    - `rag_generation_settings`（`rag_prompt_versions` を参照する）・`rag_prompt_versions`・
+      `rag_agent_memories` を DROP する。index・制約は表と一緒に消える（sequence は持たない）。
+      `rag_agent_memories` は削除の前に `app.rag.legacy_export` で書き出す
+      （rag/docs/deployment.md の「既存環境の更新手順（#596）」）。
+
+    表が無い環境では何もしない。`rag_answer_records.answer_engine` と知識グラフの表は残す。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code IN ('
+            || '''menu.settings_grounding'', ''menu.settings_generation'', '
+            || '''menu.settings_agentic'')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GENERATION_SETTINGS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_generation_settings CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_PROMPT_VERSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_prompt_versions CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_AGENT_MEMORIES';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_agent_memories CASCADE CONSTRAINTS PURGE';
     END IF;
 END;
 /

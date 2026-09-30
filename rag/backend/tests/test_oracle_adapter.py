@@ -20,18 +20,15 @@ from app.clients.oracle import (
     OracleWalletPasswordRequiredError,
     _datetime_value,
     _test_oracle_connection_sync,
-    oracle_agent_memory_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
-    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
-    oracle_prompt_version_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_terms,
     oracle_vector_schema_sql,
@@ -125,18 +122,6 @@ async def test_vector_index_build_params_unknown_without_connection_settings(
     )
 
     assert await client.get_vector_index_build_params() is None
-
-
-def test_generation_schema_has_singleton_revision_and_active_pointer() -> None:
-    prompt_sql = oracle_prompt_version_schema_sql()
-    settings_sql = oracle_generation_settings_schema_sql()
-
-    assert "CREATE TABLE rag_prompt_versions" in prompt_sql
-    assert "system_prompt    CLOB NOT NULL" in prompt_sql
-    assert "CREATE TABLE rag_generation_settings" in settings_sql
-    assert "CHECK (settings_key = 'GLOBAL')" in settings_sql
-    assert "active_prompt_version_id" in settings_sql
-    assert "revision >= 1" in settings_sql
 
 
 @pytest.mark.anyio
@@ -2656,29 +2641,6 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "query_text" not in normalized
     assert "prompt" not in normalized
     assert " mode " not in normalized
-
-
-def test_oracle_agent_memory_schema_uses_vector_and_hashed_scope() -> None:
-    """Agent Memory は Oracle AI Database 内の vector table と hash scope で保持する。"""
-    ddl = oracle_agent_memory_schema_sql()
-    normalized = ddl.lower()
-
-    assert "create table rag_agent_memories" in normalized
-    assert "tenant_id_hash   char(64)" in normalized
-    assert "user_id_hash     char(64)" in normalized
-    assert "role_id_hash     char(64)" in normalized
-    assert "agent_id_hash    char(64)" in normalized
-    assert "thread_id_hash   char(64)" in normalized
-    assert "memory_text      clob not null" in normalized
-    assert "embedding        vector(1536, float32) not null" in normalized
-    assert "create vector index rag_agent_memories_embedding_hnsw_idx" in normalized
-    assert "organization inmemory neighbor graph" in normalized
-    assert "indextype is ctxsys.context" in normalized
-    assert "rag_agent_memories_scope_idx" in ddl
-    assert "raw_user_id" not in normalized
-    assert "thread_id " not in normalized
-    assert "qdrant" not in normalized
-    assert "pgvector" not in normalized
 
 
 def test_oracle_ingestion_audit_schema_redacts_ocr_body() -> None:

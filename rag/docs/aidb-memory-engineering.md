@@ -46,4 +46,4 @@ raw tenant/user id や query 本文は audit / trace へ保存しない。
 - Memory Router / Retrieval Plan（`memory_plan_id`）、memory type 別の検索、Resolver / Verifier、Context Builder（`Evidence` / `Support` / `Structure` / `History` の label）と、その診断（evidence/support/structure/history 件数、resolver rejected 件数など）。
 - Agent Memory Loop（`rag_agent_memories` への Agent Memory Search と writeback）。
 - Retrieval アダプター（検索モード hybrid_rrf / vector / keyword / graph_augmented / reasoning_tree_search と、gap-stop・業務適合加重・補正再検索・クエリ拡張のトグル）と Grounding アダプター（検索後処理の preset）、`GET/PATCH /api/settings/retrieval`・`/api/settings/grounding` と設定画面。補正検索は回答フローの CRAG が行う。
-- 監査テーブル `rag_search_audit` の `memory_plan_id`・`agent_memory_*` などの列は残し、既定値を書く。列とテーブル（`rag_agent_memories` など）の削除は #596 で行う。
+- 監査テーブル `rag_search_audit` の `memory_plan_id`・`agent_memory_*` などの列は、既存の監査の行を変えないため残し、既定値を書く。テーブル `rag_agent_memories`・`rag_prompt_versions`・`rag_generation_settings` は #596 で削除した（`rag_agent_memories` は更新の前に書き出す。[deployment.md の「既存環境の更新手順（#596）」](./deployment.md)）。

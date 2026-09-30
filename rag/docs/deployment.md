@@ -239,13 +239,56 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
+## 既存環境の更新手順（#596 標準の回答フローのテーブルの削除）
+
+#595 で標準の回答フロー（`standard`）のコードを削除した後、#596 で、それだけが使っていたデータベースのオブジェクトを片付けた。システムテーブルの更新（migration `20260930_005_retire_standard_engine_objects`）が次を行う。あるものだけを消し、無ければ何もしない（冪等）。
+
+- **削除するテーブル**: `rag_prompt_versions`（system prompt の版）・`rag_generation_settings`（回答スタイルの設定）・`rag_agent_memories`（Agent Memory）。index・制約はテーブルと一緒に消える（sequence は持っていない）。システムテーブルの全再作成でも、残っていれば消す。
+- **削除する行**: `rag_role_permissions` のメニュー権限 `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic`（#595 から読み込み時に捨てていた値。共通のロール管理の権限昇格の判定が生の値を読むため、行も消す）。
+
+### 残すもの
+
+- **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
+- **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
+- **関係情報の構築（知識グラフ。`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う。
+
+### 手順
+
+**システムテーブルを更新すると、3 つのテーブルの行は戻せない。** `rag_agent_memories` は更新の前に書き出す。`init_script.sh` の再実行と画面の「システム設定 > データベース > RAG システムテーブル」の更新も、システムテーブルを更新する（`init_script.sh` は `system_schema_cli initialize` を実行する）ので、書き出してから行う。
+
+1. #596 の版のコードを取得する（`git pull` など）。まだ backend の再起動・`init_script.sh` の再実行・システムテーブルの更新はしない。
+2. `rag_agent_memories` を書き出す。書き出しの CLI（`app.rag.legacy_export`）は標準ライブラリと既存の Oracle 接続だけを使うので、取得したコードを今の venv で実行できる（import のエラーになる場合は、先に backend の venv を `uv sync --locked --no-dev` で更新する。Compute ではリポジトリの所有者 `ubuntu` で実行する）。テーブルが無い環境では何も書かずに `"status": "table_missing"` を出して終わる。`rag_prompt_versions`・`rag_generation_settings` も残したい場合は、`--table` を変えて同じように書き出す。
+
+   ```bash
+   # OCI Compute（init_script.sh で配備した環境）
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc mkdir -p /var/lib/production-ready-rag/exports
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.legacy_export \
+     --table rag_agent_memories --output /var/lib/production-ready-rag/exports/rag_agent_memories.jsonl
+
+   # ローカル
+   cd rag/backend
+   uv run python -m app.rag.legacy_export --table rag_agent_memories --output ~/rag-exports/rag_agent_memories.jsonl
+   ```
+
+   出力は 1 行 1 レコードの JSON Lines（列名は小文字、日時は ISO 8601、CLOB は文字列、JSON の列は object、`embedding` は数値の配列）。書き終えてから出力先に置くので、途中で失敗したときは出力先にファイルを残さない。記憶の本文など利用者の入力を含むので、ファイルは所有者だけが読める権限（600）で作る。保管と削除は運用の規則に従う。標準出力の `row_count` が DB の件数（`SELECT COUNT(*) FROM rag_agent_memories`）と合うことを確かめる。
+3. backend と frontend を再起動する（`init_script.sh` を再実行する場合は、手順 4 もあわせて行われる）。削除するテーブルはもう使わないので、システムテーブルを更新する前でも動く。
+4. システムテーブルを更新する。画面の「システム設定 > データベース > RAG システムテーブル」からでもよい。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
+   ```
+
+5. `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空であることを確かめる。
+
 ## 既存環境の更新手順（#595 標準の回答フローの削除）
 
 #594 で回答を回答フローだけにした後、#595 で標準の回答フロー（`standard`）だけが使っていたコード・画面・API・設定を削除した。回答の挙動は #594 から変わらない。旧名との互換は持たない。一覧は [docrag-port.md の「標準の回答フローの設定の削除」](./docrag-port.md)。
 
 - **画面**: 根拠確認（`/settings/grounding`）・回答スタイル（`/settings/generation`）・高度な検索（`/settings/agentic`）を削除した。ブックマークなどの古い URL は検索方法（`/settings/retrieval`）へ移す。検索方法は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カード、回答プロンプトは回答生成のプロンプトだけ（system prompt の版の作成・有効化は削除）。業務ビューの検索モード・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt / 既定の言語）の欄と、RAG 検索の検索モードのチップ・検索の内訳の診断も削除した。
 - **API**: `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate` を削除した。`POST /api/search` などの `mode`・`strategy`・`rerank_top_n`・`generation_profile` と、チャットの送信の `mode` は、送っても 422 にせず読み捨てる。
-- **メニュー権限**: `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` を削除した。ロールに保存済みの値は読み込み時に捨てる（権限管理の画面にも出ない）。DB の行は #596 で削除する。
+- **メニュー権限**: `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` を削除した。ロールに保存済みの値は読み込み時に捨てる（権限管理の画面にも出ない）。DB の行は #596 で削除した（上の「既存環境の更新手順（#596）」）。
 - **環境変数**: 次の `RAG_*` は読まなくなった。`backend/.env` に残っていても起動し、値は使わない。次に編集するときに消してよい。
   - `RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_ADAPTIVE_*`・`RAG_CONTEXT_DEPENDENCY_*`・`RAG_CONTEXT_COMPRESSION_*`（`RAG_CONTEXT_GROUP_MAX_CHUNKS` は回答フローの small-to-big が使うので残る）
   - `RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD`・`RAG_CRAG_*`・`RAG_QUERY_EXPANSION_*`・`RAG_STREAM_REALTIME_ENABLED`・`RAG_AGENT_MEMORY_*`
@@ -258,7 +301,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   ```
 
 - **サービス**: 検索・根拠確認・高度な検索・回答生成の段のサービス（`services/pipeline/{retrieval,grounding,agentic,generation}`）を削除し、サービス管理の一覧からも外した。いずれも backend の中で動く段（`deployable=False`）で systemd の unit を持たず、配備の対象ではなかったので、Compute での作業は要らない。
-- **データベース**: `rag_prompt_versions`・`rag_generation_settings`・`rag_agent_memories` などのテーブルと、`rag_search_audit` の検索・context の内訳の列（`memory_plan_id`・`agent_memory_*` など。今は既定値を書く）は残している。削除は #596 で行う。この更新では DDL・データの移行は要らない。
+- **データベース**: #595 の更新では DDL・データの移行は要らない。`rag_prompt_versions`・`rag_generation_settings`・`rag_agent_memories` のテーブルは #596 で削除した（上の「既存環境の更新手順（#596）」。`rag_agent_memories` は更新の前に書き出す）。`rag_search_audit` の検索・context の内訳の列（`memory_plan_id`・`agent_memory_*` など）は残し、既定値を書く。
 - **手順**: コードを更新して backend と frontend を再起動する（上の環境変数は消さなくてもよい）。
 
 ## 既存環境の更新手順（#594 回答の方式を 1 つにする）
@@ -789,7 +832,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 
 ## OCI へ切り替えるときの順序
 
-1. Oracle AI Database に document / chunk / audit tables を作成する。まず backend の venv（`rag/backend`）または CI runner で `uv run python -m app.rag.oracle_schema --output ../artifacts/oracle-schema.sql --manifest-output ../artifacts/oracle-schema.manifest.json` を実行し、DDL 成果物と manifest の hash / statement 数をレビューする。既存 DB を現行 DDL 契約へ寄せる場合は `uv run python -m app.rag.oracle_schema --migration --output ../artifacts/oracle-schema-migration.sql --manifest-output ../artifacts/oracle-schema-migration.manifest.json` を実行し、migration artifact をレビューして適用する。V3 の構築 artifact(`rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、`rag_chunks.chunk_set_id`)を既存データへ反映する場合は、あわせて `uv run python -m app.rag.variant_backfill_cli --format sql --checks-only --output ../artifacts/variant-backfill-checks.sql` と `uv run python -m app.rag.variant_backfill_cli --format json --output ../artifacts/variant-backfill.manifest.json` を生成し、[oracle-variant-backfill-runbook.md](./oracle-variant-backfill-runbook.md) の acceptance を staging artifact として保存する。生成 SQL は document table に `content_sha256`、`file_size_bytes`、`duplicate_of_document_id`、`tenant_id_hash` を含め、`content_sha256` と `tenant_id_hash, status, uploaded_at` に索引を作る。chunk table は `VECTOR(1536, FLOAT32)`、HNSW ベクトル索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)、`tenant_id_hash`、`document_id + chunk_index`、`chunk_set_id + chunk_index` 用索引を含め、retrieval で tenant 条件、request access scope 条件、KB serving chunk_set 条件を必ず適用できるようにする。audit table は query 本文、OCR 原文、tenant/user id の raw 値を保存せず、hash、request id、trace id、guardrail code、検索件数・citation 件数、設定 fingerprint、error type を保存する（旧 standard の検索・context の内訳の列は #595 以降は既定値。列の削除は #596）。レビュー済み SQL を SQLcl や管理された migration 手順で適用してから次へ進む。
+1. Oracle AI Database に document / chunk / audit tables を作成する。まず backend の venv（`rag/backend`）または CI runner で `uv run python -m app.rag.oracle_schema --output ../artifacts/oracle-schema.sql --manifest-output ../artifacts/oracle-schema.manifest.json` を実行し、DDL 成果物と manifest の hash / statement 数をレビューする。既存 DB を現行 DDL 契約へ寄せる場合は `uv run python -m app.rag.oracle_schema --migration --output ../artifacts/oracle-schema-migration.sql --manifest-output ../artifacts/oracle-schema-migration.manifest.json` を実行し、migration artifact をレビューして適用する。V3 の構築 artifact(`rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、`rag_chunks.chunk_set_id`)を既存データへ反映する場合は、あわせて `uv run python -m app.rag.variant_backfill_cli --format sql --checks-only --output ../artifacts/variant-backfill-checks.sql` と `uv run python -m app.rag.variant_backfill_cli --format json --output ../artifacts/variant-backfill.manifest.json` を生成し、[oracle-variant-backfill-runbook.md](./oracle-variant-backfill-runbook.md) の acceptance を staging artifact として保存する。生成 SQL は document table に `content_sha256`、`file_size_bytes`、`duplicate_of_document_id`、`tenant_id_hash` を含め、`content_sha256` と `tenant_id_hash, status, uploaded_at` に索引を作る。chunk table は `VECTOR(1536, FLOAT32)`、HNSW ベクトル索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)、`tenant_id_hash`、`document_id + chunk_index`、`chunk_set_id + chunk_index` 用索引を含め、retrieval で tenant 条件、request access scope 条件、KB serving chunk_set 条件を必ず適用できるようにする。audit table は query 本文、OCR 原文、tenant/user id の raw 値を保存せず、hash、request id、trace id、guardrail code、検索件数・citation 件数、設定 fingerprint、error type を保存する（旧 standard の検索・context の内訳の列は #595 以降は既定値。既存の監査の行を変えないため列は残す。#596）。レビュー済み SQL を SQLcl や管理された migration 手順で適用してから次へ進む。
 
 2. `ObjectStorageClient` の OCI Object Storage SDK 実装を有効化する。`PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_NAMESPACE` / `PLATFORM_OBJECT_STORAGE_BUCKET` を設定し、保存 URI が `oci://namespace/bucket/key` になり、取得時に namespace / bucket 不一致を拒否することを staging で確認する。取込前に Object Storage から取得した bytes が document table の `file_size_bytes` / `content_sha256` と一致することも確認する。
 3. `OracleClient` の python-oracledb pool、vector search、keyword search、document/chunk persistence、同じ chunk group の兄弟 chunk の取得を有効化する。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` / `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に配置した wallet を設定する。`INGESTING` / `ERROR` への状態遷移では該当 document の chunk/index 行と古い抽出結果を削除し、検索対象は `INDEXED` に限定する。staging では `VECTOR_DISTANCE`、`FETCH APPROX ... WITH TARGET ACCURACY`、Oracle Text `CONTAINS`、document 別 chunk count、`chunk_index` window による同一 document 前後 chunk 取得、`INDEXED` 文書が hybrid search の citation に含まれることを確認する。
