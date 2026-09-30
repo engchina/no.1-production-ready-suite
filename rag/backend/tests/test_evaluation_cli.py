@@ -59,7 +59,7 @@ def test_evaluation_gate_cli_passes_and_writes_output_file(
     assert exit_code == 0
     assert captured.out == ""
     assert "評価 gate passed" in captured.err
-    assert "groundedness_pass_rate=1.0" in captured.err
+    assert "refusal_accuracy=1.0" in captured.err
     assert "tenant-secret" not in captured.err
     assert "user-secret" not in captured.err
     assert observed["api_url"] == "http://rag.example.test/api/evaluation/run"
@@ -135,7 +135,7 @@ def test_evaluation_gate_cli_detects_compare_request_and_gates_best_experiment(
     assert observed["payload"]["experiments"][0]["id"] == "hybrid-deep"
     assert "評価 gate passed" in captured.err
     assert "best_experiment=hybrid-deep" in captured.err
-    assert "ranking_metric=recall_at_k" in captured.err
+    assert "ranking_metric=context_recall" in captured.err
     response = json.loads(captured.out)
     assert response["data"]["best_experiment_id"] == "hybrid-deep"
 
@@ -169,8 +169,10 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
     assert trend["best_experiment_id"] == "hybrid-deep"
     assert trend["metrics"]["case_count"] == 1
     assert trend["metrics"]["citation_traceability_coverage"] == 1.0
-    assert trend["metrics"]["bbox_citation_coverage"] == 0.75
-    assert trend["metrics"]["element_lineage_coverage"] == 1.0
+    assert trend["metrics"]["answer_pass_rate"] is None
+    assert trend["metrics"]["metric_case_counts"]["context_recall"] == 1
+    assert "bbox_citation_coverage" not in trend["metrics"]
+    assert "mode" not in trend["experiments"][0]
     assert trend["experiments"][0]["id"] == "hybrid-deep"
     trend_text = json.dumps(trend, ensure_ascii=False)
     assert "承認条件はいくらですか" not in trend_text
@@ -320,7 +322,7 @@ def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
                         "relevant_document_ids": ["doc-1"],
                     }
                 ],
-                "thresholds": {"recall_at_k": 1.1},
+                "thresholds": {"context_recall": 1.1},
             },
             ensure_ascii=False,
         ),
@@ -344,7 +346,7 @@ def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "評価ファイルの形式が不正です" in captured.err
-    assert "thresholds.recall_at_k" in captured.err
+    assert "thresholds.context_recall" in captured.err
     assert "INV-SECRET" not in captured.err
 
 
@@ -393,15 +395,12 @@ def _write_golden_set(tmp_path: Path) -> Path:
                     }
                 ],
                 "top_k": 5,
-                "rerank_top_n": 3,
-                "mode": "hybrid",
                 "filters": {"status": "indexed"},
                 "thresholds": {
-                    "precision_at_k": 0.3,
-                    "recall_at_k": 0.8,
+                    "context_recall": 0.8,
                     "mrr": 0.7,
                     "answer_keyword_hit_rate": 0.8,
-                    "groundedness_pass_rate": 0.9,
+                    "refusal_accuracy": 0.9,
                 },
             },
             ensure_ascii=False,
@@ -428,20 +427,17 @@ def _write_compare_set(tmp_path: Path) -> Path:
                     {
                         "id": "hybrid-deep",
                         "top_k": 10,
-                        "rerank_top_n": 5,
-                        "mode": "hybrid",
                         "filters": {"status": "indexed"},
                     },
                     {
                         "id": "keyword-shallow",
                         "top_k": 5,
-                        "rerank_top_n": 3,
-                        "mode": "keyword",
                         "filters": {"status": "indexed"},
+                        "rag_overrides": {"query_strategy": "simple_retrieval"},
                     },
                 ],
-                "ranking_metric": "recall_at_k",
-                "thresholds": {"recall_at_k": 0.8},
+                "ranking_metric": "context_recall",
+                "thresholds": {"context_recall": 0.8},
             },
             ensure_ascii=False,
         ),
@@ -455,7 +451,7 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
     if not passed:
         failures = [
             {
-                "metric": "recall_at_k",
+                "metric": "context_recall",
                 "actual": 0.5,
                 "threshold": 0.8,
             }
@@ -463,15 +459,13 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
     return {
         "case_count": 1,
         "error_count": error_count,
-        "evaluated_k": 3,
-        "precision_at_k": 0.3333,
-        "recall_at_k": 1.0 if passed else 0.5,
+        "context_recall": 1.0 if passed else 0.5,
         "mrr": 1.0,
-        "answer_keyword_hit_rate": 1.0,
-        "groundedness_pass_rate": 1.0 if passed else 0.0,
+        "faithfulness": 0.8,
         "citation_traceability_coverage": 1.0 if passed else 0.5,
-        "bbox_citation_coverage": 0.75 if passed else 0.25,
-        "element_lineage_coverage": 1.0 if passed else 0.5,
+        "answer_keyword_hit_rate": 1.0,
+        "refusal_accuracy": 1.0 if passed else 0.0,
+        "metric_case_counts": {"context_recall": 1, "answer_pass_rate": 0},
         "passed": passed,
         "threshold_failures": failures,
         "case_results": [],
@@ -480,7 +474,7 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
 
 def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
     return {
-        "ranking_metric": "recall_at_k",
+        "ranking_metric": "context_recall",
         "best_experiment_id": "hybrid-deep",
         "results": [
             {
@@ -489,8 +483,6 @@ def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
                 "experiment": {
                     "id": "hybrid-deep",
                     "top_k": 10,
-                    "rerank_top_n": 5,
-                    "mode": "hybrid",
                     "filters": {"status": "INDEXED"},
                 },
                 "metrics": _metrics_payload(passed=best_passed),
@@ -501,8 +493,6 @@ def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
                 "experiment": {
                     "id": "keyword-shallow",
                     "top_k": 5,
-                    "rerank_top_n": 3,
-                    "mode": "keyword",
                     "filters": {"status": "INDEXED"},
                 },
                 "metrics": _metrics_payload(passed=False),

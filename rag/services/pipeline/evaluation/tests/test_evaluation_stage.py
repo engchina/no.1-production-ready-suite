@@ -23,22 +23,22 @@ def test_health_ok() -> None:
     assert client.get("/health").json()["stage"] == "evaluation"
 
 
-def test_request_only_has_no_thresholds() -> None:
-    body = _run("request_only")
-    assert body["thresholds"] is None
-
-
-def test_strict_ci_thresholds() -> None:
-    body = _run("strict_ci")
-    assert body["thresholds"]["precision_at_k"] == 0.7
-    assert body["thresholds"]["citation_traceability_coverage"] == 0.9
-
-
-def test_ragas_like_thresholds() -> None:
-    body = _run("ragas_like")
-    assert body["thresholds"]["faithfulness"] == 0.8
+def test_standard_thresholds() -> None:
+    body = _run("standard")
     assert body["thresholds"]["context_recall"] == 0.8
+    assert body["thresholds"]["refusal_accuracy"] == 0.9
+
+
+def test_strict_thresholds() -> None:
+    body = _run("strict")
+    assert body["thresholds"]["mrr"] == 0.8
+    assert body["thresholds"]["claim_support_rate"] == 1.0
+
+
+def test_legacy_suite_maps_to_successor() -> None:
+    assert _run("strict_ci")["suite"] == "strict"
+    assert _run("ragas_like")["suite"] == "standard"
 
 
 def test_unknown_suite_falls_back() -> None:
-    assert _run("bogus")["suite"] == "request_only"
+    assert _run("bogus")["suite"] == "standard"

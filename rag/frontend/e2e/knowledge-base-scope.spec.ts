@@ -92,8 +92,7 @@ test("評価実行と比較実行は選択したナレッジベースを使う",
   await kbCombo.press("Escape");
   await page.getByRole("button", { name: "評価実行" }).click();
   await expect.poll(() => jobs.runPayloads[0]?.knowledge_base_ids).toEqual(["kb-1"]);
-  await expect(page.getByText("Segment artifact 再抽出").first()).toBeVisible();
-  await expect(page.getByText("Segment artifact 再抽出: 1")).toBeVisible();
+  await expect(page.getByTestId("evaluation-metric-context_recall")).toContainText("100%");
 
   await page.getByRole("button", { name: "比較実行" }).click();
   await expect.poll(() => {
@@ -217,35 +216,19 @@ function evaluationMetrics() {
   return {
     case_count: 1,
     error_count: 0,
-    evaluated_k: 10,
-    precision_at_k: 1,
-    recall_at_k: 1,
-    mrr: 1,
-    answer_keyword_hit_rate: 1,
-    groundedness_pass_rate: 1,
-    faithfulness: 1,
-    context_precision: 1,
+    evaluation_suite: "standard",
     context_recall: 1,
-    response_relevancy: 1,
-    noise_sensitivity: 1,
+    mrr: 1,
+    faithfulness: 1,
     citation_traceability_coverage: 1,
-    bbox_citation_coverage: 1,
-    element_lineage_coverage: 1,
-    content_kind_hit_rate: 1,
-    section_coverage: 1,
+    claim_support_rate: null,
+    answer_keyword_hit_rate: 1,
+    refusal_accuracy: 1,
+    requirement_coverage: null,
+    answer_pass_rate: null,
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},
-    ingestion_quality: {
-      document_count: 1,
-      table_document_count: 0,
-      figure_document_count: 0,
-      segment_artifact_cache_miss_document_count: 1,
-      long_document_count: 0,
-      risk_counts: { high: 0, medium: 1 },
-      warning_counts: { segment_extraction_artifact_cache_miss: 1 },
-      parser_profile_counts: {},
-    },
     case_results: [
       {
         case_id: "policy-approval-flow-basic",
@@ -254,24 +237,16 @@ function evaluationMetrics() {
         retrieved_document_ids: ["doc-1"],
         relevant_document_ids: ["doc-1"],
         hit_document_ids: ["doc-1"],
-        precision_at_k: 1,
-        recall_at_k: 1,
+        context_recall: 1,
         reciprocal_rank: 1,
-        answer_keyword_hit: true,
-        groundedness_passed: true,
-        groundedness_score: 1,
+        faithfulness: 1,
         grounding_overlap_count: 2,
         grounding_answer_feature_count: 2,
-        faithfulness: 1,
-        context_precision: 1,
-        context_recall: 1,
-        response_relevancy: 1,
-        noise_sensitivity: 1,
         citation_traceability_coverage: 1,
-        bbox_citation_coverage: 1,
-        element_lineage_coverage: 1,
-        content_kind_hit_rate: 1,
-        section_coverage: 1,
+        answer_keyword_hit: true,
+        abstained: false,
+        refusal_correct: true,
+        answer_evaluation: null,
         guardrail_warnings: [],
         failure_reasons: [],
         diagnostics: {},
@@ -285,20 +260,20 @@ function evaluationMetrics() {
 
 function comparisonResult() {
   return {
-    ranking_metric: "mrr",
-    best_experiment_id: "hybrid-k10",
+    ranking_metric: "context_recall",
+    best_experiment_id: "default",
     results: [
       {
         rank: 1,
         ranking_score: 1,
-        experiment: { id: "hybrid-k10", top_k: 10, rerank_top_n: 5, mode: "hybrid", filters: {} },
+        experiment: { id: "default", top_k: 20, filters: {} },
         metrics: evaluationMetrics(),
       },
       {
         rank: 2,
         ranking_score: 0.8,
-        experiment: { id: "keyword-k10", top_k: 10, rerank_top_n: 5, mode: "keyword", filters: {} },
-        metrics: { ...evaluationMetrics(), mrr: 0.8 },
+        experiment: { id: "rag-fusion", top_k: 20, filters: {}, rag_overrides: { query_strategy: "rag_fusion" } },
+        metrics: { ...evaluationMetrics(), context_recall: 0.8 },
       },
     ],
   };

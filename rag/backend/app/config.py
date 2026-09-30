@@ -44,6 +44,7 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.chunking import (
     CHUNK_SIZE_MIN_CHARS as CHUNK_SIZE_MIN_CHARS,
 )
+from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
@@ -230,12 +231,10 @@ VectorIndexProfile = Literal[
     "accurate",
     "fast",
 ]
+# 評価の基準(閾値のプリセット。#591)。
 EvaluationSuite = Literal[
-    "request_only",
-    "retrieval_focused",
-    "balanced",
-    "strict_ci",
-    "ragas_like",
+    "standard",
+    "strict",
 ]
 GraphProfile = Literal[
     "off",
@@ -1173,11 +1172,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_evaluation_suite: EvaluationSuite = Field(
-        default="request_only",
+        default="standard",
         description=(
-            "評価の Evaluation アダプター。request_only(既定)はプリセット閾値なしで現行どおり"
-            "request の thresholds を使う。retrieval_focused/balanced/strict_ci/ragas_like は"
-            "CI gate 用の名前付き閾値スイートを既定として補う(request の thresholds が最優先)。"
+            "品質評価の基準(閾値のプリセット。#591)。standard(標準。既定)/ strict(厳格)。"
+            "request の thresholds が最優先。閾値は、そのケースの集合で測れた指標だけに適用する。"
         ),
     )
     rag_graph_profile: GraphProfile = Field(
@@ -1827,6 +1825,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     def normalize_legacy_chunking_strategy(cls, value: object) -> object:
         """削除した分割方式(sentence_window / hierarchical_parent_child)を後継へ寄せる。"""
         return normalize_legacy_chunking_strategy_value(value)
+
+    @field_validator("rag_evaluation_suite", mode="before")
+    @classmethod
+    def normalize_legacy_evaluation_suite(cls, value: object) -> object:
+        """削除した評価の基準(#591)を後継へ寄せる(起動互換。未知の値は拒否する)。"""
+        normalized = str(value).strip().casefold()
+        return LEGACY_EVALUATION_SUITES.get(normalized, value)
 
     @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")
     @classmethod

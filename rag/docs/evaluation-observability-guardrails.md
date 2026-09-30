@@ -6,7 +6,7 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 
 設定比較 API: `POST /api/evaluation/compare`
 
-評価ケースは query、関連 document id、回答に含めたいキーワードで構成する。
+評価ケースは query と、期待値（関連 document id・回答に含めたいキーワード・標準回答）で構成する。
 リポジトリには `evaluation/golden-set.example.json` と `evaluation/compare.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
 
 ```json
@@ -16,63 +16,64 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
       "id": "policy-flow-001",
       "query": "経費申請の承認フローは？",
       "relevant_document_ids": ["<document-id>"],
-      "expected_answer_keywords": ["部門長", "承認"]
+      "expected_answer_keywords": ["部門長", "承認"],
+      "standard_answer": "申請者が提出し、部門長が承認します。"
+    },
+    {
+      "id": "out-of-scope-001",
+      "query": "社員食堂の来月の献立は？",
+      "answerable": false
     }
   ],
-  "top_k": 10,
-  "rerank_top_n": 5,
-  "mode": "hybrid",
+  "top_k": 20,
   "filters": {
     "status": "INDEXED"
   },
-  "thresholds": {
-    "precision_at_k": 0.6,
-    "recall_at_k": 0.8,
-    "mrr": 0.7,
-    "answer_keyword_hit_rate": 0.9,
-    "groundedness_pass_rate": 0.9
-  }
+  "suite": "standard"
 }
 ```
 
-`cases` は 1 件以上必須です。`rerank_top_n` は `top_k` 以下である必要があります。返却指標:
+`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、業務ビューを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。回答エンジンの全体の既定が別のエンジンでも、評価は根拠付き回答で行う。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
 
-- `evaluated_k`: 実際に評価した最終 citation 数の上限。`min(top_k, rerank_top_n)`。
-- `precision_at_k`: 上位 `evaluated_k` 件の document-level citation のうち relevant document が占める割合。同一 document の複数 chunk は 1 件として扱う。隣接・同一 group の context 展開などで citation が `evaluated_k` 件より多くても、数えるのは上位 `evaluated_k` 件の document だけ(1.0 を超えない)。
-- `recall_at_k`: relevant document をどれだけ取得できたか。
-- `mrr`: 最初の relevant document が何位に出たか。
-- `answer_keyword_hit_rate`: 回答が期待キーワードを含んだ割合。
-- `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。判定は安全チェックの方針に関係なく standard の閾値(一致数 3・一致率 0.12)で行う。正解の document がある case で no-results になったときのように citation context がない case は、回答が空でなければ(「見つかりませんでした」等の固定文言を含む)根拠なしとして `low_groundedness` に数える。正解が no-results の否定 case は下記のとおり合格として数える。
-- `citation_traceability_coverage`: citation が `document_id` / `chunk_id` / page range と、`element_ids`・`bbox`・`section_path` のいずれかを持つ割合。RAGFlow / Docling 的な引用追跡品質の gate に使う。
-- `bbox_citation_coverage`: citation が原本 preview へ位置決めできる `bbox` を持つ割合。画像 OCR、PDF、レイアウト文書の bbox 回帰検知に使う。
-- `preview_addressability_coverage`: chunk bbox だけでなく、StructuredExtraction の `DocumentElement` / `ExtractionTableCell` / `ExtractionAsset` bbox が page number と page size / page rotation / coordinate unit metadata で preview 座標へ解決できる割合。staging gate では chunk bbox が正常でも table cell / asset bbox が定位不能、または page rotation が非法 / bbox metadata と矛盾する場合は失敗にし、RAGFlow 的な citation-to-preview 精度を cell-level まで退化検知する。
-- `adapter_contract_coverage`: parser routing、source/backend coverage、page coverage、preview addressability、element lineage、table/cell lineage、visual chunk metadata、quality report、parser warning taxonomy を合成した adapter 構造契約の総合指標。外部 adapter が local より良いと推薦されるには、この総合指標も staging evidence として揃っている必要がある。
-- `element_lineage_coverage`: citation が parser / VLM 由来の `element_ids` を保持する割合。chunk から structured block/tree へ戻れるかを評価する。
-- `content_kind_hit_rate`: golden case の `expected_content_kind` が citation metadata の `content_kind` と一致した割合。document-level recall は高いが表・図・コード・メール本文など別 block へ逸れた退化を検知する。
-- `section_coverage`: golden case の `expected_section_paths[]` が citation metadata の `section_path` / `section_title` で覆われた割合。RAGFlow / GraLC-RAG 的な structural section coverage を通常 evaluation gate に持ち込む。
-- `error_count`: 検索失敗または timeout になった evaluation case 数（評価全体の上限に達して実行しなかった case を含む）。
+### 評価の指標（#591）
 
-**否定 case(正解が no-results)**: `relevant_document_ids` が空の case は「期待する回答がない」否定 case として扱う。検索が根拠を 1 件も返さず no-results で答えたときは期待どおりなので、`precision_at_k` / `recall_at_k` / `mrr` / `groundedness_pass_rate`(`faithfulness`)/ `context_precision` / `context_recall` / `response_relevancy` / citation 系 coverage を 1.0(合格)として数え、`low_groundedness` や no-results の `guardrail_warning` を失敗理由に入れない(#301)。否定 case で根拠を返したときは `unexpected_retrieval` とし、precision / recall / mrr を 0、groundedness は通常どおり判定する。否定 case を含む golden set でも `balanced` / `strict_ci` / `ragas_like` の閾値で不当に落ちない。`expected_answer_keywords` を指定した場合(例: 「見つかりません」)は通常どおり回答キーワードを判定する。
-- `passed`: 指定された `thresholds` をすべて満たし、`error_count=0` だったか。`thresholds` 未指定でも case error があれば `false`。
+指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つ。rag_poc が最後に使っていた 7 つの指標（平均点・合格・未裏付け主張・必要内容欠落・監査での除去・拒答・引用照合での除外）と、Ragas・TruLens の RAG triad・ARES の観点を照らして、残す・まとめる・削除を決めた。
+
+| 観点 | 指標 | 意味 | 対象のケース | 由来 |
+|---|---|---|---|---|
+| 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース | 旧 `recall_at_k` と `context_recall`（同じ計算）をまとめた。Ragas ID-based context recall |
+| 検索 | `mrr` | 最初の正解の文書の順位の逆数 | 同上 | 残す（rag_poc の検索評価も使う） |
+| 根拠 | `faithfulness` | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似） | 拒答していないケース | 旧 `groundedness_pass_rate`（同じ判定の合否）と `faithfulness`（同じ判定の点）をまとめた。RAG triad の groundedness |
+| 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合 | 引用のあるケース | 旧 `bbox_citation_coverage`・`element_lineage_coverage` をまとめた（bbox・要素の細部は file-processing の golden gate が見る） |
+| 根拠 | `claim_support_rate` | 根拠のない主張・根拠と矛盾する主張が無いケースの割合 | `standard_answer` のあるケース | rag_poc の「未裏付け主張」。主張ごとの監査（Ragas faithfulness の LLM 版） |
+| 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース | 残す（標準回答の無い golden set の決定論の近似） |
+| 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース | rag_poc の「拒答」。RGB の negative rejection。否定 case の特別扱い（#301）もこれにまとめた |
+| 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース | rag_poc の「必要内容欠落」（網羅性の軸の対応率） |
+| 回答 | `answer_pass_rate` | 4 軸（正確性・網羅性・根拠との整合性・生成品質）で 16 / 20 点以上、かつ監査を終え、目的から外れていない割合 | `standard_answer` のあるケース | rag_poc の「平均点」と「合格」をまとめた（点はケースごとに返す） |
+
+削除した指標: `precision_at_k`（正解の文書が k 件より少ないと 1.0 に届かず、回答エンジンは rerank の件数を使わない）・`context_precision`（正解の文書以外の補足の根拠を減点する。根拠の質は `faithfulness` と `claim_support_rate` で見る）・`response_relevancy`（質問の語を繰り返すだけで上がる近似）・`noise_sensitivity`（失敗理由の件数から作った独自の式で、失敗理由と重なる）・`content_kind_hit_rate`・`section_coverage`（期待値の無いケースを 1.0 と数え平均を押し上げ、ほぼ使われていない）。rag_poc の「監査での除去」「引用照合での除外」は回答生成の工程の診断で、利用者が見る品質ではないため指標にしない（回答の記録の実行記録で確かめる）。
+
+- 各指標は、その指標を測れるケースだけの平均にし、対象の件数を `metric_case_counts` に返す。対象のケースが無い指標は `null`（0 と区別する）。失敗したケース（検索失敗・時間切れ）は `error_count` で数え、指標の平均には入れない。
+- **答えるべきでない質問（#301）**: `answerable: false` のケース（省略時は、正解の文書・期待する語・標準回答のどれも無いケース）は、拒答の正しさだけを測る。拒答は、回答の本文か引用が無い回答と、回答エンジンが不足の理由を返しモデルが使った根拠が 1 つも無い回答。
+- **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、rag_poc の 4 軸の評価（`evaluate_answer_payload`。標準回答から比較の範囲を固定 → 4 軸の採点・主張の監査・必要な項目の網羅）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
+- `passed`: 閾値をすべて満たし、`error_count=0` で、標準回答による評価がすべて終わったか。閾値は測れた指標だけに適用する。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
+- 削除した指標の `thresholds` は受け付けない（422）。ケースの `expected_content_kind`・`expected_section_paths` と評価の `mode`・`rerank_top_n` は以前の評価ファイルを読めるように無視する（比較の experiment では受け付けない）。保存済みの評価の結果（job・artifact）に残る古い指標は読み込み時に捨て、画面は削除した指標・基準の名前を原文のまま出す。
 
-### Evaluation アダプター(評価スイート/閾値プリセット)
+### Evaluation アダプター(評価の基準 = 閾値のプリセット)
 
-CI gate の閾値を毎回インラインで書かずに選べるよう、**Evaluation アダプター(`rag_evaluation_suite`)** に名前付きスイートを束ねる。`app/rag/evaluation_adapter.py` が suite を `EvaluationThresholds` へ解決し、`GET/PATCH /api/settings/evaluation-suite` と専用設定画面で切り替える。
+CI gate の閾値を毎回インラインで書かずに選べるよう、**Evaluation アダプター(`rag_evaluation_suite`)** に評価の基準を 2 つ束ねる（#591）。`app/rag/evaluation_adapter.py` が基準を `EvaluationThresholds` へ解決し、`GET/PATCH /api/settings/evaluation-suite` と「評価の基準」画面で切り替える。
 
-| suite | 解決する閾値(要点) |
-|---|---|
-| `request_only`(既定) | プリセットなし。request の `thresholds` をそのまま使う(現行挙動・変更なし) |
-| `retrieval_focused` | precision_at_k 0.6 / recall_at_k 0.8 / mrr 0.7 |
-| `balanced` | retrieval + answer_keyword_hit_rate 0.9 / groundedness_pass_rate 0.9 |
-| `strict_ci` | precision 0.7 / recall 0.85 / mrr 0.75 / groundedness 0.95 / answer_keyword 0.9 / citation_traceability_coverage 0.9 |
-| `ragas_like` | faithfulness 0.8 / context_precision 0.7 / context_recall 0.8 / response_relevancy 0.7 |
+| 基準 | 用途 | 閾値 |
+|---|---|---|
+| `standard`（標準。既定） | 日常の確認と nightly の回帰 | context_recall 0.8 / mrr 0.6 / faithfulness 0.7 / citation_traceability 0.9 / claim_support 0.9 / answer_keyword 0.8 / refusal 0.9 / requirement_coverage 0.8 / answer_pass 0.7 |
+| `strict`（厳格） | リリース前の判定 | context_recall 0.9 / mrr 0.8 / faithfulness 0.8 / citation_traceability 0.95 / claim_support 1.0 / answer_keyword 0.9 / refusal 1.0 / requirement_coverage 0.9 / answer_pass 0.8 |
 
-- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`/api/evaluation/run` `…/compare` は golden-set JSON で `suite` を指定でき、`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定 suite を残す。
-- 評価スイートはグローバル設定(と request の `suite`)だけで決まり、業務ビューでは上書きしない。評価 API は業務ビューを受け取らないため、業務ビューの「品質評価」上書きは #301 で画面・API・保存から削除した。保存済みの `view_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
-- 既定 `request_only` は閾値なしで現行どおり `error_count` だけで `passed` を判定する。外部評価 SaaS / LLM-as-judge の追加呼び出しは導入せず、決定論ヒューリスティック指標のみを使う。
+- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定した基準を残す。
+- 削除した基準（`request_only` / `retrieval_focused` / `balanced` / `ragas_like` / `strict_ci`）は、保存済みの `RAG_EVALUATION_SUITE` を起動時に後継（`strict_ci` → `strict`、ほか → `standard`）へ寄せる。API では受け付けない。閾値を使わない評価は、request に `thresholds: {}` を書く。
+- 評価の基準はグローバル設定(と request の `suite`)だけで決まり、業務ビューでは上書きしない。保存済みの `view_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
 
-レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、citation traceability / bbox / element lineage coverage、content kind hit、section coverage、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足・引用 lineage / content kind / section lineage 欠落のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
+レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の context recall / reciprocal rank / faithfulness（overlap count）/ citation traceability、回答キーワード命中、拒答したか（`abstained`）とそれが期待どおりか（`refusal_correct`）、標準回答による評価の要約（`answer_evaluation`: status・点・合否・主張の裏付け・必要な項目の対応率）、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。測れない値は `null`。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 
 **時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 300 秒）で打ち切る。agentic（検索の計画・multi_hop の再分解）の業務ビューでは LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `agentic_planning`）と `error_message`（例:「評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。…」。query 本文は含めない）に残して、評価は次の case へ進む。評価全体の上限は、job（#390）では `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒。compare は experiment の間で共有）、同期の `/run`・`/compare` では 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。Nginx は 660 秒待つ）。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。
 
@@ -80,9 +81,9 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 
 **画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
 
-各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`、`partial_recall`、`unexpected_retrieval`、`answer_keyword_miss`、`low_groundedness`、`guardrail_warning`、`case_error` に固定する。AutoRAG / FlashRAG 的な比較では、この分布を見ることで chunking / filter / hybrid retrieval / rerank / prompt / guardrail のどこを次に調整すべきかを切り分ける。
+各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`・`partial_recall`（検索）、`low_groundedness`・`unsupported_claim`（根拠）、`unexpected_refusal`・`unexpected_answer`・`answer_keyword_miss`・`missing_content`・`answer_failed`（回答）、`answer_evaluation_error`・`guardrail_warning`・`case_error` に固定する。この分布で、検索・根拠・回答のどこを次に調整すべきかを切り分ける。
 
-`/api/evaluation/compare` は `cases` と複数の `experiments` を受け取る。各 experiment は `id`、`mode`、`top_k`、`rerank_top_n`、`filters`、任意の `rag_overrides` を持ち、同じ golden set に対して順番に `/run` 相当の評価を行う。`filters` には document/status 系だけでなく `content_kind`、`section_title`、`section_path` も指定できるため、表・図だけを優先する設定や特定章節へ絞る設定を golden set で比較できる。`rag_overrides` は RRF 定数、query expansion、context window、context diversity、隣接 context、adaptive context expansion、dependency context promotion、group context expansion、context compression、Oracle vector target accuracy だけを一時的に上書きし、secret やモデル credential は扱わない。結果は `ranking_metric`、`best_experiment_id`、rank 付き experiment results として返る。順位は `passed=true` を優先し、その後 ranking metric 降順、error 数昇順、failure reason 件数昇順、experiment id 昇順で安定化する。これにより AutoRAG のように retrieval depth、hybrid/vector/keyword、scope filter、SCAR 型 adaptive expansion、M3DocDep 型 dependency promotion などの context 構成候補を安全に比較できる。
+`/api/evaluation/compare` は `cases` と複数の `experiments` を受け取る。各 experiment は `id`、`top_k`、`filters`、任意の `rag_overrides` を持ち（回答エンジンが使わない `mode`・`rerank_top_n` は受け付けない）、同じ golden set に対して順番に `/run` 相当の評価を行う。`rag_overrides` は回答エンジンの全体の既定（`query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限（`context_group_max_chunks`）・Oracle vector target accuracy だけを一時的に上書きし、secret やモデル credential は扱わない（削除したキーは 422）。結果は `ranking_metric`（既定 `context_recall`）、`best_experiment_id`、rank 付き experiment results として返る。順位は `passed=true` を優先し、その後 ranking metric 降順（測れなかった experiment は後ろ）、error 数昇順、failure reason 件数昇順、experiment id 昇順で安定化する。
 
 本番運用では、カテゴリごとに 20-50 件の golden set を作り、chunking / embedding model / rerank top N / prompt を変えたときにこの API を CI または nightly job で実行する。CI では `thresholds` を指定し、`passed=false`、`error_count>0`、または `threshold_failures` 非空なら失敗にする。nightly では API レスポンス artifact と trend summary を保存して回帰差分を追う。`python -m app.rag.evaluation_cli` は入力 JSON に `experiments` がある場合 `/api/evaluation/compare` へ送り、rank 1 の best experiment の metrics を終了コードの gate 判定に使う。`--trend-output` は aggregate metrics、best experiment、experiment rank、result hash だけを含む非機密 JSON を出力し、query/context 原文や `case_results` は含めない。
 
