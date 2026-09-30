@@ -297,7 +297,7 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   // 必須の利用者がファイルを選んでも黙って何も起きないのではなく、案内を出す。
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   await expect(
-    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。" })
+    picker.getByRole("alert").filter({ hasText: "所属させるナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
   failing = false;
   await picker.getByRole("button", { name: "再読み込み" }).click();

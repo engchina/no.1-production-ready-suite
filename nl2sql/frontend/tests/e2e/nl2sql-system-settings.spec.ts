@@ -876,7 +876,8 @@ test("OCI 認証設定は保存前に必須値と形式を検証する", async (
   await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
 
   await expect(page.getByLabel("ユーザー OCID")).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  // 未入力の文言は欄のラベルを主語にする（「〇〇を入力してください。」。#541）。
+  await expect(page.getByText("ユーザー OCID を入力してください。")).toBeVisible();
   expect(authPatchRequests).toBe(0);
 
   await page.getByLabel("ユーザー OCID").fill("not-a-user-ocid");
@@ -898,7 +899,8 @@ test("OCI 認証設定は保存前に必須値と形式を検証する", async (
   await expect(
     page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
   ).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  await expect(page.getByText("Object Storage リージョンを選択してください。")).toBeVisible();
+  await expect(page.getByText("Object Storage ネームスペースを入力してください。")).toBeVisible();
   expect(storagePatchRequests).toBe(0);
   await expectNoHorizontalOverflow(page);
 });

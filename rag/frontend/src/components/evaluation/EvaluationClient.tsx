@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  FieldError,
   FieldLabel,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -78,6 +79,8 @@ import {
 
 /** suite セレクタの「設定の既定に従う」を表す擬似値(suite を送らない)。 */
 const DEFAULT_SUITE_VALUE = "__default__" as const;
+const REQUEST_JSON_ID = "evaluation-request-json";
+const EXPERIMENTS_JSON_ID = "evaluation-experiments-json";
 type SuiteSelection = EvaluationSuiteName | typeof DEFAULT_SUITE_VALUE;
 
 const SUITE_ORDER: EvaluationSuiteName[] = [
@@ -184,13 +187,14 @@ export function EvaluationClient() {
   );
   const [runError, setRunError] = useState("");
   const [compareError, setCompareError] = useState("");
+  // JSON の未入力・形式のエラーは、実行を押したときに欄の直下へ出す（押せないボタンだけにしない。#541）。
+  const [requestJsonError, setRequestJsonError] = useState<string | null>(null);
+  const [experimentsJsonError, setExperimentsJsonError] = useState<string | null>(null);
 
   const parsedRequest = useMemo(() => parseEvaluationRequest(requestJson), [requestJson]);
   const parsedExperiments = useMemo(() => parseExperiments(experimentsJson), [experimentsJson]);
   const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
   const compareActive = compareMutation.isPending || isEvaluationJobActive(compareJob.job);
-  const canRun = parsedRequest.ok && !runActive;
-  const canCompare = parsedRequest.ok && parsedExperiments.ok && !compareActive;
 
   const globalSuite = settingsQuery.data?.suite ?? null;
   const suiteStatuses = settingsQuery.data?.suites ?? [];
@@ -200,7 +204,12 @@ export function EvaluationClient() {
 
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!parsedRequest.ok) return;
+    if (runActive) return;
+    setRequestJsonError(parsedRequest.ok ? null : parsedRequest.error);
+    if (!parsedRequest.ok) {
+      document.getElementById(REQUEST_JSON_ID)?.focus();
+      return;
+    }
     setRunError("");
     runMutation.reset();
     try {
@@ -217,7 +226,14 @@ export function EvaluationClient() {
 
   const compareEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!parsedRequest.ok || !parsedExperiments.ok) return;
+    if (compareActive) return;
+    // 比較は Golden set JSON の cases も使うので、両方の欄を検証し、画面の並び順で最初のエラーの欄へ移す。
+    setRequestJsonError(parsedRequest.ok ? null : parsedRequest.error);
+    setExperimentsJsonError(parsedExperiments.ok ? null : parsedExperiments.error);
+    if (!parsedRequest.ok || !parsedExperiments.ok) {
+      document.getElementById(parsedRequest.ok ? EXPERIMENTS_JSON_ID : REQUEST_JSON_ID)?.focus();
+      return;
+    }
     setCompareError("");
     compareMutation.reset();
     try {
@@ -235,8 +251,6 @@ export function EvaluationClient() {
     }
   };
 
-  const validationMessage = !parsedRequest.ok ? parsedRequest.error : "";
-  const experimentValidationMessage = !parsedExperiments.ok ? parsedExperiments.error : "";
 
   return (
     <div>
@@ -275,17 +289,20 @@ export function EvaluationClient() {
             <CardContent>
               <form className="space-y-4" onSubmit={(event) => void runEvaluation(event)}>
                 <JsonField
-                  id="evaluation-request-json"
+                  id={REQUEST_JSON_ID}
                   label={t("evaluation.input.label")}
                   value={requestJson}
                   rows={18}
                   placeholder={t("evaluation.input.placeholder")}
-                  onChange={setRequestJson}
+                  error={requestJsonError}
+                  onChange={(value) => {
+                    setRequestJson(value);
+                    setRequestJsonError(null);
+                  }}
                 />
-                {validationMessage ? <ValidationNotice message={validationMessage} /> : null}
                 {runError ? <ErrorNotice message={runError} /> : null}
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="submit" loading={runMutation.isPending} disabled={!canRun} icon={BarChart3}>
+                  <Button type="submit" loading={runMutation.isPending} disabled={runActive} icon={BarChart3}>
                     {t("evaluation.actions.run")}
                   </Button>
                   <Button
@@ -293,6 +310,7 @@ export function EvaluationClient() {
                     variant="secondary"
                     onClick={() => {
                       setRequestJson(SAMPLE_REQUEST);
+                      setRequestJsonError(null);
                       setRunError("");
                     }}
                   >
@@ -333,22 +351,23 @@ export function EvaluationClient() {
                   onValueChange={setRankingMetric}
                 />
                 <JsonField
-                  id="evaluation-experiments-json"
+                  id={EXPERIMENTS_JSON_ID}
                   label={t("evaluation.compare.experiments")}
                   value={experimentsJson}
                   rows={13}
                   placeholder={t("evaluation.compare.placeholder")}
-                  onChange={setExperimentsJson}
+                  error={experimentsJsonError}
+                  onChange={(value) => {
+                    setExperimentsJson(value);
+                    setExperimentsJsonError(null);
+                  }}
                 />
-                {experimentValidationMessage ? (
-                  <ValidationNotice message={experimentValidationMessage} />
-                ) : null}
                 {compareError ? <ErrorNotice message={compareError} /> : null}
                 <Button
                   type="submit"
                   className="w-full"
                   loading={compareMutation.isPending}
-                  disabled={!canCompare} icon={GitCompare}>
+                  disabled={compareActive} icon={GitCompare}>
                   {t("evaluation.actions.compare")}
                 </Button>
                 {compareMutation.isPending ? (
@@ -1027,6 +1046,7 @@ function JsonField({
   value,
   rows,
   placeholder,
+  error,
   onChange,
 }: {
   id: string;
@@ -1034,27 +1054,31 @@ function JsonField({
   value: string;
   rows: number;
   placeholder: string;
+  /** 欄の直下に出すエラー（未入力・JSON の形式・件数）。 */
+  error: string | null;
   onChange: (value: string) => void;
 }) {
   // どちらの JSON も空・不正のままでは実行できず、backend も cases / experiments を 1 件以上必須にする（#531）。
+  const errorId = `${id}-error`;
   return (
     <div className="space-y-1.5">
       <FieldLabel htmlFor={id} label={label} required className="block" />
       <textarea
         id={id}
         aria-required="true"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
         value={value}
         rows={rows}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+        className={`min-w-0 w-full resize-y rounded-md border bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring ${
+          error ? "border-danger-fg" : "border-border-control"
+        }`}
       />
+      <FieldError id={errorId} message={error} />
     </div>
   );
-}
-
-function ValidationNotice({ message }: { message: string }) {
-  return <Banner severity="warning">{message}</Banner>;
 }
 
 function ErrorNotice({ message }: { message: string }) {
@@ -1129,31 +1153,33 @@ function BooleanIcon({ value }: { value: boolean }) {
 }
 
 function parseEvaluationRequest(raw: string): ParseResult<EvaluationRunRequestBody> {
-  const parsed = parseJson(raw);
+  const parsed = parseJson(raw, "evaluation.input.required", "evaluation.input.invalidJson");
   if (!parsed.ok) return parsed;
-  if (!isRecord(parsed.value) || !Array.isArray(parsed.value.cases)) {
-    return { ok: false, error: t("evaluation.input.noCases") };
-  }
-  if (parsed.value.cases.length < 1) {
+  if (!isRecord(parsed.value) || !Array.isArray(parsed.value.cases) || parsed.value.cases.length < 1) {
     return { ok: false, error: t("evaluation.input.noCases") };
   }
   return { ok: true, value: parsed.value as unknown as EvaluationRunRequestBody };
 }
 
 function parseExperiments(raw: string): ParseResult<EvaluationExperiment[]> {
-  const parsed = parseJson(raw);
+  const parsed = parseJson(raw, "evaluation.compare.required", "evaluation.compare.invalidJson");
   if (!parsed.ok) return parsed;
   if (!Array.isArray(parsed.value) || parsed.value.length < 1) {
-    return { ok: false, error: t("evaluation.input.invalidJson") };
+    return { ok: false, error: t("evaluation.compare.noExperiments") };
   }
   return { ok: true, value: parsed.value as unknown as EvaluationExperiment[] };
 }
 
-function parseJson(raw: string): ParseResult<unknown> {
+function parseJson(
+  raw: string,
+  requiredKey: "evaluation.input.required" | "evaluation.compare.required",
+  invalidKey: "evaluation.input.invalidJson" | "evaluation.compare.invalidJson",
+): ParseResult<unknown> {
+  if (!raw.trim()) return { ok: false, error: t(requiredKey) };
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch {
-    return { ok: false, error: t("evaluation.input.invalidJson") };
+    return { ok: false, error: t(invalidKey) };
   }
 }
 

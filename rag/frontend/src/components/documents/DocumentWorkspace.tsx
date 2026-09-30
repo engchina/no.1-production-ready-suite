@@ -65,6 +65,7 @@ import {
   CardHeader,
   CardTitle,
   Disclosure,
+  FieldError,
   FormStatus,
   INFORMATION_LIST_SCROLL_CLASS,
   ListSkeleton,
@@ -2949,10 +2950,20 @@ function DocumentKnowledgeBaseEditor({
   const isDirty = !isSameIdSet(selectedIds, savedIds);
   // KB 所属の未保存の選択（順序は無視して集合で比べる）があるときだけ離脱を確認する。
   useLeaveGuard(isDirty);
-  const canSave = selectedIds.length > 0 && isDirty && !membership.isPending;
+  // 0 件は押せないボタンだけにせず、保存を押したときに選択欄の直下へ理由を出す（#541）。
+  const canSave = isDirty && !membership.isPending;
+  const [requiredError, setRequiredError] = useState<string | null>(null);
 
   const onSave = () => {
     if (!canSave) return;
+    if (selectedIds.length === 0) {
+      setRequiredError(t("documents.knowledgeBases.required"));
+      document
+        .getElementById(DOCUMENT_KB_PICKER_ID)
+        ?.querySelector<HTMLElement>("input, button")
+        ?.focus();
+      return;
+    }
     replace.mutate(
       {
         id: documentId,
@@ -2983,16 +2994,23 @@ function DocumentKnowledgeBaseEditor({
         </Banner>
       ) : null}
 
-      <KnowledgeBaseScopePicker
-        selectedIds={selectedIds}
-        onChange={setSelectedIds}
-        disabled={replace.isPending || membership.isPending}
-        label={t("documents.knowledgeBases.pickerLabel")}
-        helper={t("documents.knowledgeBases.helper")}
-        // 所属先を 0 件にはできない（保存ボタンが止め、backend も 1 件以上を必須にする）。
-        required
-        emptySelectionText={t("documents.knowledgeBases.noneSelected")}
-      />
+      <div id={DOCUMENT_KB_PICKER_ID}>
+        <KnowledgeBaseScopePicker
+          selectedIds={selectedIds}
+          onChange={(ids) => {
+            setSelectedIds(ids);
+            setRequiredError(null);
+          }}
+          disabled={replace.isPending || membership.isPending}
+          label={t("documents.knowledgeBases.pickerLabel")}
+          helper={t("documents.knowledgeBases.helper")}
+          // 所属先を 0 件にはできない（保存を押すと欄の下に理由を出し、backend も 1 件以上を必須にする）。
+          required
+          errorId={requiredError ? DOCUMENT_KB_REQUIRED_ERROR_ID : undefined}
+          emptySelectionText={t("documents.knowledgeBases.noneSelected")}
+        />
+        <FieldError id={DOCUMENT_KB_REQUIRED_ERROR_ID} message={requiredError} className="mt-1" />
+      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <Button
@@ -3003,9 +3021,6 @@ function DocumentKnowledgeBaseEditor({
           disabled={!canSave} icon={Save}>
           {t("documents.knowledgeBases.save")}
         </Button>
-        {selectedIds.length === 0 ? (
-          <FormStatus tone="warning" message={t("documents.knowledgeBases.required")} />
-        ) : null}
         {replace.isSuccess && !isDirty && selectedIds.length > 0 ? (
           <FormStatus tone="success" message={t("documents.knowledgeBases.saved")} />
         ) : null}
@@ -3019,6 +3034,9 @@ function DocumentKnowledgeBaseEditor({
     </section>
   );
 }
+
+const DOCUMENT_KB_PICKER_ID = "document-knowledge-base-picker";
+const DOCUMENT_KB_REQUIRED_ERROR_ID = "document-knowledge-base-required-error";
 
 const EMPTY_CLASSIFICATION: DocumentClassification = {
   large_category: null,

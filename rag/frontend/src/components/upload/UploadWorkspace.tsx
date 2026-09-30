@@ -117,7 +117,10 @@ export function UploadWorkspace() {
     if (!canSubmitUpload(knowledgeBaseRequired, knowledgeBaseIds)) {
       // 送信前に案内し、選択欄へ移動する（backend の 400 を待たない）。
       setKnowledgeBaseMissing(true);
-      document.getElementById(UPLOAD_KNOWLEDGE_BASE_PICKER_ID)?.scrollIntoView({ block: "center" });
+      // 欄の直下にエラーを出し、選択欄（先頭の入力）へフォーカスを移す（UX 契約 messaging.md §3.2.1。#541）。
+      const picker = document.getElementById(UPLOAD_KNOWLEDGE_BASE_PICKER_ID);
+      picker?.scrollIntoView({ block: "center" });
+      picker?.querySelector<HTMLElement>("input, button")?.focus({ preventScroll: true });
       return;
     }
     setKnowledgeBaseMissing(false);
@@ -717,7 +720,8 @@ function UploadKnowledgeBasePicker({
             ) : null}
           </div>
         )}
-        {items.length > 0 ? (
+        {/* 未選択のエラーを出している間は、同じ内容の案内を重ねない。 */}
+        {items.length > 0 && !missing ? (
           <p className="mt-3 text-xs text-fg-muted">
             {selectedIds.length > 0
               ? t("upload.knowledgeBases.selected", { count: selectedIds.length })

@@ -330,7 +330,8 @@ test("OCI 認証設定は必須項目が空なら保存前に止める", async (
   await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
   await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
 
-  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  await expect(page.getByText("ユーザー OCID を入力してください。")).toBeVisible();
+  await expect(page.getByLabel("ユーザー OCID")).toBeFocused();
   expect(patchCount).toBe(0);
 });
 

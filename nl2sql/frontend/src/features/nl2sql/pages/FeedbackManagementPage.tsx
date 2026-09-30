@@ -40,6 +40,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   RowTitleButton,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 
@@ -166,6 +167,8 @@ export function FeedbackManagementPage() {
   const [adminFeedbackContent, setAdminFeedbackContent] = useState("");
   const [registerSelectAiFeedback, setRegisterSelectAiFeedback] = useState(false);
   const [selectAiResponse, setSelectAiResponse] = useState("");
+  // 管理者レビューの欄のエラー（欄の直下に出す。#541）。
+  const [reviewErrors, setReviewErrors] = useState<{ adminContent?: string; selectAiResponse?: string }>({});
   const [feedbackFilter, setFeedbackFilter] = useState<AppFeedbackFilter>("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
   const [appProfileFilter, setAppProfileFilter] = useState("");
@@ -485,13 +488,24 @@ export function FeedbackManagementPage() {
     if (loading) return;
     if (!selectedAppFeedback) return;
     const trimmedAdminFeedbackContent = adminFeedbackContent.trim();
-    if (adminFeedbackRating === "bad" && !trimmedAdminFeedbackContent) {
-      setMessage(t("feedbackManagement.appFeedback.adminFeedbackRequired"));
-      window.requestAnimationFrame(() => adminFeedbackContentRef.current?.focus());
-      return;
-    }
-    if (registerSelectAiFeedback && !selectAiResponse.trim()) {
-      setMessage(t("feedbackManagement.appFeedback.selectAiResponseRequired"));
+    // 未入力はページ先頭ではなく欄の直下に出し、画面の並び順で最初のエラーの欄へフォーカスする（#541）。
+    const nextErrors = {
+      adminContent:
+        adminFeedbackRating === "bad" && !trimmedAdminFeedbackContent
+          ? t("feedbackManagement.appFeedback.adminFeedbackRequired")
+          : undefined,
+      selectAiResponse:
+        registerSelectAiFeedback && !selectAiResponse.trim()
+          ? t("feedbackManagement.appFeedback.selectAiResponseRequired")
+          : undefined,
+    };
+    setReviewErrors(nextErrors);
+    if (nextErrors.adminContent || nextErrors.selectAiResponse) {
+      setMessage("");
+      const target = nextErrors.adminContent
+        ? adminFeedbackContentRef.current
+        : document.getElementById("app-feedback-select-ai-response");
+      window.requestAnimationFrame(() => target?.focus());
       return;
     }
     setLoading("app-feedback");
@@ -615,9 +629,11 @@ export function FeedbackManagementPage() {
       setAdminFeedbackContent("");
       setRegisterSelectAiFeedback(false);
       setSelectAiResponse("");
+      setReviewErrors({});
     } else {
       const switchedFeedback = syncedAppFeedbackId !== selectedAppFeedback.id;
       if (switchedFeedback || !reviewDirty) {
+        if (switchedFeedback) setReviewErrors({});
         setSyncedAppFeedbackId(selectedAppFeedback.id);
         setSavedReview(JSON.stringify([selectedAppFeedback.id,
           selectedAppFeedback.admin_feedback_rating ?? "good",
@@ -1138,7 +1154,10 @@ export function FeedbackManagementPage() {
                     <select
                       aria-label={t("feedbackManagement.appFeedback.adminRating")}
                       value={adminFeedbackRating}
-                      onChange={(event) => setAdminFeedbackRating(event.currentTarget.value as FeedbackRating)}
+                      onChange={(event) => {
+                        setAdminFeedbackRating(event.currentTarget.value as FeedbackRating);
+                        setReviewErrors((current) => ({ ...current, adminContent: undefined }));
+                      }}
                       className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
@@ -1167,13 +1186,21 @@ export function FeedbackManagementPage() {
                       id="app-feedback-admin-content"
                       aria-label={t("feedbackManagement.appFeedback.adminFeedbackContent")}
                       aria-required={adminFeedbackContentRequired}
+                      aria-invalid={reviewErrors.adminContent ? "true" : undefined}
+                      aria-describedby={reviewErrors.adminContent ? "app-feedback-admin-content-error" : undefined}
                       value={adminFeedbackContent}
-                      onChange={(event) => setAdminFeedbackContent(event.currentTarget.value)}
+                      onChange={(event) => {
+                        setAdminFeedbackContent(event.currentTarget.value);
+                        setReviewErrors((current) => ({ ...current, adminContent: undefined }));
+                      }}
                       required={adminFeedbackContentRequired}
                       rows={4}
-                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
+                      className={`min-h-28 w-full min-w-0 max-w-full rounded-md border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring ${
+                        reviewErrors.adminContent ? "border-danger-fg" : "border-border-control"
+                      }`}
                       placeholder={t("feedbackManagement.appFeedback.adminFeedbackPlaceholder")}
                     />
+                    <FieldError id="app-feedback-admin-content-error" message={reviewErrors.adminContent} />
                   </div>
                   <label className="flex min-h-11 min-w-0 items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
                     <input
@@ -1195,11 +1222,24 @@ export function FeedbackManagementPage() {
                       <textarea data-surface="code"
                         id="app-feedback-select-ai-response"
                         aria-required="true"
+                        aria-invalid={reviewErrors.selectAiResponse ? "true" : undefined}
+                        aria-describedby={
+                          reviewErrors.selectAiResponse ? "app-feedback-select-ai-response-error" : undefined
+                        }
                         value={selectAiResponse}
-                        onChange={(event) => setSelectAiResponse(event.currentTarget.value)}
+                        onChange={(event) => {
+                          setSelectAiResponse(event.currentTarget.value);
+                          setReviewErrors((current) => ({ ...current, selectAiResponse: undefined }));
+                        }}
                         rows={5}
-                        className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring"
+                        className={`min-h-32 w-full min-w-0 max-w-full rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring ${
+                          reviewErrors.selectAiResponse ? "border-danger-fg" : "border-border-control"
+                        }`}
                         placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
+                      />
+                      <FieldError
+                        id="app-feedback-select-ai-response-error"
+                        message={reviewErrors.selectAiResponse}
                       />
                     </div>
                   )}

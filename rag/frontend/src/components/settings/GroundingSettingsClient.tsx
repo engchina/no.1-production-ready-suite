@@ -14,7 +14,7 @@ import {
   FormSkeleton,
   TextField,
 } from "@engchina/production-ready-ui";
-import { useState, useId } from "react";
+import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -26,6 +26,7 @@ import {
   type PostRetrievalPipelineName,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { focusFirstInvalidField, numberRangeError } from "@/lib/required-fields";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGroundingSettings, useUpdateGroundingSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -63,18 +64,55 @@ function isDirty(form: GroundingForm, settings: GroundingSettingsData): boolean 
   return (Object.keys(base) as (keyof GroundingForm)[]).some((key) => form[key] !== base[key]);
 }
 
-function isValid(form: GroundingForm): boolean {
-  return (
-    Number.isFinite(form.crag_low_confidence_threshold) &&
-    form.crag_low_confidence_threshold >= 0 &&
-    form.crag_low_confidence_threshold <= 1 &&
-    Number.isFinite(form.crag_high_confidence_threshold) &&
-    form.crag_high_confidence_threshold >= form.crag_low_confidence_threshold &&
-    form.crag_high_confidence_threshold <= 1 &&
-    Number.isInteger(form.crag_max_hops) &&
-    form.crag_max_hops >= 0 &&
-    form.crag_max_hops <= 3
-  );
+type GroundingNumberField =
+  | "crag_low_confidence_threshold"
+  | "crag_high_confidence_threshold"
+  | "crag_max_hops";
+type GroundingFieldErrors = Partial<Record<GroundingNumberField, string | null>>;
+
+const GROUNDING_FIELD_IDS: Record<GroundingNumberField, string> = {
+  crag_low_confidence_threshold: "grounding-crag-low-threshold",
+  crag_high_confidence_threshold: "grounding-crag-high-threshold",
+  crag_max_hops: "grounding-crag-max-hops",
+};
+const GROUNDING_FIELD_ORDER: GroundingNumberField[] = [
+  "crag_low_confidence_threshold",
+  "crag_high_confidence_threshold",
+  "crag_max_hops",
+];
+
+/**
+ * 欄ごとの検証（#541）。規則は backend（GroundingSettingsUpdate）と同じ: しきい値は 0〜1 で、
+ * 高しきい値は低しきい値以上。再検索の上限回数は 0〜3 の整数。空（NaN）は未入力として扱う。
+ */
+export function validateGroundingForm(form: GroundingForm): GroundingFieldErrors {
+  const lowLabel = t("settings.grounding.crag.lowThreshold");
+  const highLabel = t("settings.grounding.crag.highThreshold");
+  const low = numberRangeError(form.crag_low_confidence_threshold, {
+    label: lowLabel,
+    min: 0,
+    max: 1,
+    integer: false,
+  });
+  const high =
+    numberRangeError(form.crag_high_confidence_threshold, {
+      label: highLabel,
+      min: 0,
+      max: 1,
+      integer: false,
+    }) ??
+    (!low && form.crag_high_confidence_threshold < form.crag_low_confidence_threshold
+      ? t("validation.notLessThan", { field: highLabel, other: lowLabel })
+      : null);
+  return {
+    crag_low_confidence_threshold: low,
+    crag_high_confidence_threshold: high,
+    crag_max_hops: numberRangeError(form.crag_max_hops, {
+      label: t("settings.grounding.crag.maxHops"),
+      min: 0,
+      max: 3,
+    }),
+  };
 }
 
 /** 根拠確認(処理方式 + CRAG 補正)の設定画面。 */
@@ -83,6 +121,7 @@ export function GroundingSettingsClient() {
   const save = useUpdateGroundingSettings();
   const [form, setForm] = useState<GroundingForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<GroundingFieldErrors>({});
 
   // 初期化時のみ render 中に server 値で同期する。dirty な未保存選択は背景 refetch で上書きしない。
   if (query.data && form === null) {
@@ -124,7 +163,6 @@ export function GroundingSettingsClient() {
   if (!settings || !form) return null;
 
   const dirty = isDirty(form, settings);
-  const valid = isValid(form);
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.grounding.saveError");
   const pipelines = orderedPipelines(settings.pipelines);
@@ -133,16 +171,34 @@ export function GroundingSettingsClient() {
     save.reset();
     setSuccessMessage(null);
     setForm((current) => (current ? { ...current, ...patch } : current));
+    // 直した欄のエラーだけを消す（大小の関係のエラーは高しきい値に出すので、低しきい値を直したときも消す）。
+    setFieldErrors((current) => {
+      const next = { ...current };
+      for (const field of Object.keys(patch)) delete next[field as GroundingNumberField];
+      if ("crag_low_confidence_threshold" in patch) delete next.crag_high_confidence_threshold;
+      return next;
+    });
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
+    setFieldErrors({});
     if (settings) setForm(formFromSettings(settings));
   }
 
   function submit() {
-    if (!form || !isValid(form)) return;
+    if (!form) return;
+    // 保存を押したときに欄ごとに検証し、欄の直下に出して最初のエラーの欄へ移す（#541）。
+    const errors = validateGroundingForm(form);
+    setFieldErrors(errors);
+    if (
+      focusFirstInvalidField(
+        GROUNDING_FIELD_ORDER.map((field) => [GROUNDING_FIELD_IDS[field], errors[field]] as const),
+      )
+    ) {
+      return;
+    }
     save.mutate(
       { ...form },
       {
@@ -231,6 +287,8 @@ export function GroundingSettingsClient() {
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <NumberField
+                id={GROUNDING_FIELD_IDS.crag_low_confidence_threshold}
+                error={fieldErrors.crag_low_confidence_threshold}
                 label={t("settings.grounding.crag.lowThreshold")}
                 helper={t("settings.grounding.crag.lowThreshold.helper")}
                 value={form.crag_low_confidence_threshold}
@@ -241,6 +299,8 @@ export function GroundingSettingsClient() {
                 onChange={(value) => updateForm({ crag_low_confidence_threshold: value })}
               />
               <NumberField
+                id={GROUNDING_FIELD_IDS.crag_high_confidence_threshold}
+                error={fieldErrors.crag_high_confidence_threshold}
                 label={t("settings.grounding.crag.highThreshold")}
                 helper={t("settings.grounding.crag.highThreshold.helper")}
                 value={form.crag_high_confidence_threshold}
@@ -251,6 +311,8 @@ export function GroundingSettingsClient() {
                 onChange={(value) => updateForm({ crag_high_confidence_threshold: value })}
               />
               <NumberField
+                id={GROUNDING_FIELD_IDS.crag_max_hops}
+                error={fieldErrors.crag_max_hops}
                 label={t("settings.grounding.crag.maxHops")}
                 helper={t("settings.grounding.crag.maxHops.helper")}
                 value={form.crag_max_hops}
@@ -278,9 +340,6 @@ export function GroundingSettingsClient() {
                 className="mt-0.5 shrink-0"
               />
             </div>
-            {!valid ? (
-              <FormStatus tone="danger" message={t("settings.grounding.crag.invalid")} />
-            ) : null}
           </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
@@ -302,7 +361,7 @@ export function GroundingSettingsClient() {
               <Button
                 type="button"
                 loading={save.isPending}
-                disabled={!dirty || !valid}
+                disabled={!dirty}
                 onClick={submit}
                 aria-label={t("settings.grounding.actions.save")} icon={Save}>
                 {t("settings.grounding.actions.save")}
@@ -346,6 +405,8 @@ function StageChips({ pipeline }: { pipeline: GroundingPipelineStatusData }) {
 }
 
 function NumberField({
+  id,
+  error,
   label,
   helper,
   value,
@@ -355,6 +416,9 @@ function NumberField({
   disabled,
   onChange,
 }: {
+  id: string;
+  /** 欄の直下に出すエラー（保存を押したときの検証）。 */
+  error?: string | null;
   label: string;
   helper: string;
   value: number;
@@ -364,13 +428,13 @@ function NumberField({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
-  const id = useId();
   return (
     <TextField
       id={id}
       label={label}
       helper={helper}
-      // 空欄は未入力(NaN)として保存できない(valid が止める)ので必須(#531)。
+      error={error ?? undefined}
+      // 空欄は未入力(NaN)として保存できない(validateGroundingForm が止める)ので必須(#531)。
       required
       type="number"
       inputMode="decimal"

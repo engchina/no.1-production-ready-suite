@@ -42,7 +42,7 @@ async function expectBoundedRowLimit(input: Locator, action: Locator) {
   for (const value of ["", "0", "-1", "1.5", "100001"]) {
     await input.fill(value);
     await expect(input).toHaveAttribute("aria-invalid", "true");
-    await expect(label.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+    await expect(label.getByRole("alert")).toContainText("取得件数上限は 1 以上 100000 以下の整数を入力してください。");
     await expect(action).toBeDisabled();
   }
   for (const value of ["1", "100000"]) {
@@ -122,7 +122,8 @@ async function expectRowLimitActionRow(input: Locator, button: Locator) {
   // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。lg 以上では取得件数上限を 50% 幅にする。
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
   expect(buttonBox!.x).toBeLessThanOrEqual(inputBox!.x + 1);
-  const rowWidth = await input.evaluate((element) => element.closest("label")!.parentElement!.clientWidth);
+  // 取得件数上限の欄（FieldLabel と入力を包む要素）の親が操作の行（#531 で label の包みから FieldLabel に変わった）。
+  const rowWidth = await input.evaluate((element) => element.parentElement!.parentElement!.clientWidth);
   const viewport = input.page().viewportSize();
   if (viewport && viewport.width >= 1024) {
     expect(inputBox!.width).toBeLessThanOrEqual(rowWidth / 2 + 1);
@@ -306,13 +307,15 @@ function sqlToQuestionInput(scope: Page | Locator) {
 
 /**
  * SQL を入力して「SQL 分析・質問生成」を押す。再読み込みの直後は初期化（下書きの復元など）が fill の後に走り、
- * 入力が空へ戻ってボタンが無効のまま残ることがあるため、ボタンが有効になるまで fill をやり直す（#431）。
+ * 入力が空へ戻ることがあるため、入力が残り、ボタンが押せるようになるまで fill をやり直す（#431）。
+ * ボタンは SQL が空でも押せる（押すと欄の直下に理由を出す。#541）ので、入力の値そのものを確かめる。
  */
 async function fillSqlAndGenerateQuestions(page: Page, sql: string) {
   const button = page.getByRole("button", { name: "SQL 分析・質問生成", exact: true });
   await expect(async () => {
     await sqlToQuestionInput(page).fill(sql);
     await expect(button).toBeEnabled({ timeout: 1_000 });
+    await expect(sqlToQuestionInput(page)).toHaveValue(sql, { timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
   await button.click();
 }
@@ -3349,9 +3352,9 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
 
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
-  // 生成は業務プロファイルの選択が前提なので、選択欄も「必須」のタグと aria-required で示す（#531）。
-  await expect(page.locator('label[for="nl2sql-profile-select"] [aria-hidden="true"]')).toHaveText("必須");
-  await expect(page.locator("#nl2sql-profile-select")).toHaveAttribute("aria-required", "true");
+  // 業務プロファイルは空にできない選択欄で、API で省略しても backend が既定を使うので「必須」を付けない（#540）。
+  await expect(page.locator('label[for="nl2sql-profile-select"]')).not.toContainText("必須");
+  await expect(page.locator("#nl2sql-profile-select")).not.toHaveAttribute("aria-required", "true");
   await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
   const runQueryButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(runQueryButton).toBeDisabled();
@@ -3362,18 +3365,26 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   const directSql = page.getByTestId("nl2sql-direct-sql");
   await expectRequiredTextarea(directSql, "direct-sql-input", "SQL");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
-  await expect(directExecuteButton).toBeDisabled();
+  // SQL の未入力は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。
+  await expect(directExecuteButton).toBeEnabled();
+  await directExecuteButton.click();
+  await expect(directSqlInput(directSql)).toHaveAccessibleDescription("SQL を入力してください。");
+  await expect(directSqlInput(directSql)).toBeFocused();
   await directSqlInput(directSql).fill("SELECT 1 FROM DUAL");
+  await expect(directSqlInput(directSql)).not.toHaveAttribute("aria-invalid", "true");
   await expect(directSql.getByRole("spinbutton", { name: "取得件数上限", exact: true })).toHaveAttribute("aria-required", "true");
   await directSql.getByLabel("取得件数上限").fill("100");
   await expect(directExecuteButton).toBeEnabled();
 
   await page.goto("/sql-to-question");
   await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveAttribute("aria-required", "true");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).not.toHaveAttribute("aria-required", "true");
   await expectRequiredTextarea(page, "sql-to-question-sql-input", "対象 SQL");
   const generateButton = page.getByRole("button", { name: "SQL 分析・質問生成" });
-  await expect(generateButton).toBeDisabled();
+  await expect(generateButton).toBeEnabled();
+  await generateButton.click();
+  await expect(sqlToQuestionInput(page)).toHaveAccessibleDescription("対象 SQL を入力してください。");
+  await expect(sqlToQuestionInput(page)).toBeFocused();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(generateButton).toBeEnabled();
 
@@ -3381,7 +3392,10 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   const adminSql = page.getByTestId("nl2sql-admin-sql");
   await expectRequiredTextarea(adminSql, "admin-sql-input", "管理 SQL");
   const adminExecuteButton = adminSql.getByRole("button", { name: "SQL 実行" });
-  await expect(adminExecuteButton).toBeDisabled();
+  await expect(adminExecuteButton).toBeEnabled();
+  await adminExecuteButton.click();
+  await expect(adminSqlInput(adminSql)).toHaveAccessibleDescription("管理 SQL を入力してください。");
+  await expect(adminSqlInput(adminSql)).toBeFocused();
   await adminSqlInput(adminSql).fill("SELECT 1 FROM DUAL");
   await expect(adminExecuteButton).toBeEnabled();
 });
@@ -4286,7 +4300,11 @@ test("query workbench generates SQL through the job flow and shows results", asy
   // 「違う」= negative。利用者コメント未入力なら送信をブロックする。
   await page.getByLabel("利用者コメント（feedback_content）").fill("");
   await page.getByRole("button", { name: "違う", exact: true }).click();
-  await expect(page.getByText("「違う」の場合は利用者コメントの入力が必須です。")).toBeVisible();
+  // 未入力の理由は欄の直下に出し、その欄へフォーカスする（#541）。
+  const userComment = page.getByLabel("利用者コメント（feedback_content）");
+  await expect(userComment).toHaveAccessibleDescription("「違う」のときは利用者コメントを入力してください。");
+  await expect(userComment).toHaveAttribute("aria-invalid", "true");
+  await expect(userComment).toBeFocused();
 
   await page.getByLabel("利用者コメント（feedback_content）").fill("列を請求金額だけに修正");
   await page.getByRole("button", { name: "違う", exact: true }).click();
@@ -7348,7 +7366,8 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(rowLimitInput).toHaveValue("100");
   await expect(rowLimitHelper).toBeVisible();
   await expect(directSql.getByRole("button", { name: "SQL 入力・結果をリセット" })).toBeDisabled();
-  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  // SQL が空でも押せる（押すと欄の直下に理由を出す。#541）。
+  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeEnabled();
   const helperLayout = await rowLimitHelper.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -7405,14 +7424,14 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await rowLimitInput.fill("");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
   await rowLimitInput.fill("-1");
-  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+  await expect(directSql.getByRole("alert")).toContainText("取得件数上限は 1 以上 100000 以下の整数を入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
   await rowLimitInput.fill("0");
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+  await expect(directSql.getByRole("alert")).toContainText("取得件数上限は 1 以上 100000 以下の整数を入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
   await rowLimitInput.fill("100001");
-  await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+  await expect(directSql.getByRole("alert")).toContainText("取得件数上限は 1 以上 100000 以下の整数を入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
 
   await clearButton.click();
@@ -9100,7 +9119,9 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAttribute("aria-required", "true");
   await page.getByLabel("管理者レビューコメント（feedback_content）").fill("");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
-  await expect(page.getByText("「違う」の場合は管理者レビューコメントの入力が必須です。")).toBeVisible();
+  await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAccessibleDescription(
+    "「違う」のときは管理者レビューコメントを入力してください。"
+  );
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toBeFocused();
   expect(api.adminFeedbackPayload).toEqual({
     history_id: "hist-001",
@@ -11899,11 +11920,11 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const showDataButton = syntheticResultsSection.getByRole("button", { name: "データを表示" });
   await expectBoundedRowLimit(resultLimitInput, showDataButton);
   await resultLimitInput.fill("-1");
-  await expect(syntheticResultsSection.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+  await expect(syntheticResultsSection.getByRole("alert")).toContainText("取得件数上限は 1 以上 100000 以下の整数を入力してください。");
   await expect(showDataButton).toBeDisabled();
   expect(syntheticResultsRequests).toHaveLength(0);
   await resultLimitInput.fill("100");
-  await expect(syntheticResultsSection.getByText("1〜100000 の整数で入力してください。")).toHaveCount(0);
+  await expect(syntheticResultsSection.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toHaveCount(0);
   await expect(showDataButton).toBeEnabled();
   await resultLimitInput.fill("100000");
   await showDataButton.click();
@@ -12621,12 +12642,12 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
   expect(api.previewDataPayload).toBeNull();
   await previewRowLimitInput.fill("-1");
-  await expect(dataPreviewPanel.getByText("1〜100000 の整数で入力してください。")).toBeVisible();
+  await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
   await expect(previewExportButton).toBeDisabled();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeEnabled();
   await previewRowLimitInput.fill("100");
-  await expect(dataPreviewPanel.getByText("1〜100000 の整数で入力してください。")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toHaveCount(0);
   await previewShowButton.click();
   await expect(previewExportButton).toBeVisible();
   await expect(previewMoreButton).toBeVisible();
@@ -15800,8 +15821,14 @@ test("sql to question roundtrip uses the edited structure and preserves drafts o
   expect(executeCalls).toBe(0);
   await editor.fill("");
   await expect(editor).toBeVisible();
-  await expect(generate).toBeDisabled();
+  // 空の論理構造は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(editor).toHaveAccessibleDescription("再生成に使う SQL 論理構造を入力してください。");
+  await expect(editor).toBeFocused();
+  expect(calls).toBe(2);
   await editor.fill(edited);
+  await expect(editor).not.toHaveAttribute("aria-invalid", "true");
   await expect(generate).toBeEnabled();
 });
 
