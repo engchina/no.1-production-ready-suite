@@ -1,7 +1,7 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
 from datetime import datetime
-from typing import Literal, get_args
+from typing import Literal
 from urllib.parse import urlsplit
 
 # OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
@@ -70,11 +70,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
-from rag_pipeline_core.retrieval import WIRED_RETRIEVAL_MODES
 
 from app.config import (
     CHUNK_OVERLAP_MAX_CHARS,
@@ -95,19 +93,15 @@ from app.config import (
     DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-    AgenticProfile,
     ChunkingStrategy,
     DocragAnswerFlow,
     DocragQueryStrategy,
     EvaluationSuite,
-    GenerationProfile,
     GraphProfile,
     GuardrailBackend,
     GuardrailPolicyName,
     ParserAdapterBackend,
-    PostRetrievalPipeline,
     PreprocessProfile,
-    RetrievalStrategy,
     VectorIndexProfile,
 )
 from app.schemas.document import DocumentProcessingConfig
@@ -567,175 +561,8 @@ class ChunkingSettingsUpdate(BaseModel):
         return self
 
 
-RetrievalStrategyName = RetrievalStrategy
-# 保存を受理する検索モード(新形式)。core の WIRED_RETRIEVAL_MODES と一致させる。
-# legacy 複合値(business_context_strict / corrective_multi_query)は .env / BV JSON の
-# 読み取り互換のみで、API payload では受理しない。
-WiredRetrievalMode = Literal[
-    "hybrid_rrf",
-    "vector",
-    "keyword",
-    "graph_augmented",
-    "reasoning_tree_search",
-]
-assert set(get_args(WiredRetrievalMode)) == set(WIRED_RETRIEVAL_MODES), (
-    "WiredRetrievalMode と core の WIRED_RETRIEVAL_MODES がずれています。"
-)
-PostRetrievalPipelineName = PostRetrievalPipeline
-ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
-
-
-class RetrievalStrategyStatusData(BaseModel):
-    """検索段階の 1 戦略の選択状態と適用場面。"""
-
-    name: RetrievalStrategyName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    gap_stop: bool = False
-    corrective_retrieval: bool = False
-    business_fit_weighting: bool = False
-
-
-class RetrievalSettingsData(BaseModel):
-    """検索方法設定の非機密 runtime snapshot。
-
-    トグル4値は有効値(settings トグル OR legacy 強制トグル)。legacy_strategy は
-    .env / BV に残る legacy 複合値の読み替え元(新形式なら None)。
-    """
-
-    mode: WiredRetrievalMode
-    legacy_strategy: RetrievalStrategyName | None = None
-    query_expansion: bool
-    query_expansion_llm: bool = False
-    gap_stop: bool
-    corrective_retrieval: bool
-    business_fit_weighting: bool
-    modes: list[RetrievalStrategyStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class RetrievalSettingsUpdate(BaseModel):
-    """検索方法設定の更新 payload(部分更新)。未配線戦略は受理しない。
-
-    mode + トグルの新形式のみ受理する(legacy strategy payload は廃止済み)。
-    """
-
-    mode: WiredRetrievalMode | None = None
-    query_expansion: bool | None = None
-    query_expansion_llm: bool | None = None
-    gap_stop: bool | None = None
-    corrective_retrieval: bool | None = None
-    business_fit_weighting: bool | None = None
-
-    @model_validator(mode="after")
-    def validate_any_field(self) -> "RetrievalSettingsUpdate":
-        """空 payload の保存を拒否する。"""
-        if all(
-            value is None
-            for value in (
-                self.mode,
-                self.query_expansion,
-                self.query_expansion_llm,
-                self.gap_stop,
-                self.corrective_retrieval,
-                self.business_fit_weighting,
-            )
-        ):
-            raise ValueError("更新する検索方法設定を 1 つ以上指定してください。")
-        return self
-
-
-class GroundingPipelineStatusData(BaseModel):
-    """検索後処理の 1 プリセットの選択状態と束ねる段。"""
-
-    name: PostRetrievalPipelineName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    dependency_promotion: bool = False
-    diversity: bool = False
-    expansion_mode: ExpansionModeName = "none"
-    compression: bool = False
-    corrective: bool = False
-
-
-class GroundingSettingsData(BaseModel):
-    """根拠確認設定の非機密 runtime snapshot。CRAG 閾値は補正検索の evidence grade 判定。"""
-
-    pipeline: PostRetrievalPipelineName
-    dependency_promotion_enabled: bool
-    diversity_enabled: bool
-    expansion_mode: ExpansionModeName
-    compression_enabled: bool
-    crag_low_confidence_threshold: float
-    crag_high_confidence_threshold: float
-    crag_max_hops: int
-    crag_low_evidence_abstain: bool
-    pipelines: list[GroundingPipelineStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class GroundingSettingsUpdate(BaseModel):
-    """根拠確認設定の更新 payload(部分更新)。"""
-
-    pipeline: PostRetrievalPipelineName | None = None
-    crag_low_confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    crag_high_confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    crag_max_hops: int | None = Field(default=None, ge=0, le=3)
-    crag_low_evidence_abstain: bool | None = None
-
-    @model_validator(mode="after")
-    def validate_grounding_update(self) -> "GroundingSettingsUpdate":
-        """空 payload を拒否し、両閾値を同時指定した場合の逆転を防ぐ。"""
-        if all(
-            value is None
-            for value in (
-                self.pipeline,
-                self.crag_low_confidence_threshold,
-                self.crag_high_confidence_threshold,
-                self.crag_max_hops,
-                self.crag_low_evidence_abstain,
-            )
-        ):
-            raise ValueError("更新する根拠確認設定を 1 つ以上指定してください。")
-        if (
-            self.crag_low_confidence_threshold is not None
-            and self.crag_high_confidence_threshold is not None
-            and self.crag_high_confidence_threshold < self.crag_low_confidence_threshold
-        ):
-            raise ValueError("CRAG の高閾値は低閾値以上にしてください。")
-        return self
-
-
-GenerationProfileName = GenerationProfile
 GuardrailPolicyNameSchema = GuardrailPolicyName
 GuardrailBackendName = GuardrailBackend
-
-
-class GenerationProfileStatusData(BaseModel):
-    """回答生成の 1 プロファイルの選択状態と適用場面。"""
-
-    name: GenerationProfileName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    structured_output: bool = False
-    contract_mode: Literal["groundedness", "format_validated", "json_schema", "custom"]
-    repair_enabled: bool
-
-
-class GenerationSettingsData(BaseModel):
-    """Oracle を正本とする回答スタイル設定の非機密 snapshot。"""
-
-    profile: GenerationProfileName
-    structured_output: bool
-    profiles: list[GenerationProfileStatusData] = Field(default_factory=list)
-    config_source: Literal["oracle"]
-    revision: int = Field(ge=1)
-    updated_at: datetime
-    active_prompt_version_id: str | None = None
-    custom_prompt_configured: bool
 
 
 class AnswerRecordSettingsData(BaseModel):
@@ -822,52 +649,6 @@ class AnswerRecordSettingsUpdate(BaseModel):
     """DocRAG 回答記録の保持設定の更新 payload。"""
 
     retention_days: int = Field(ge=0, le=3650)
-
-
-class GenerationSettingsUpdate(BaseModel):
-    """回答スタイル設定の更新 payload。"""
-
-    profile: GenerationProfileName
-    expected_revision: int | None = Field(default=None, ge=1)
-
-
-class PromptVersionData(BaseModel):
-    """回答生成 system prompt の 1 版(PoweRAG の prompt versioning 由来)。"""
-
-    version_id: str
-    name: str
-    system_prompt: str
-    note: str = ""
-    created_at: datetime
-    created_by: str = ""
-    active: bool = False
-
-
-class PromptVersionsData(BaseModel):
-    """prompt 版一覧と有効版。"""
-
-    active_version_id: str | None = None
-    versions: list[PromptVersionData] = Field(default_factory=list)
-    settings_revision: int = Field(ge=1)
-
-
-class PromptVersionCreate(BaseModel):
-    """新しい prompt 版の作成 payload。"""
-
-    # 空の検証は validator で画面と同じ文言にする（「版名を入力してください。」など。#541）。
-    name: str = Field(max_length=120)
-    system_prompt: str = Field(max_length=20000)
-    note: str = Field(default="", max_length=2000)
-    activate: bool = True
-
-    @field_validator("name", "system_prompt")
-    @classmethod
-    def _strip_non_empty(cls, value: str, info: ValidationInfo) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            label = "版名" if info.field_name == "name" else "system prompt "
-            raise ValueError(f"{label}を入力してください。")
-        return cleaned
 
 
 class FieldDefinitionData(BaseModel):
@@ -1056,7 +837,6 @@ class EvaluationSettingsUpdate(BaseModel):
 
 
 GraphProfileName = GraphProfile
-AgenticProfileName = AgenticProfile
 
 
 class GraphProfileStatusData(BaseModel):
@@ -1086,37 +866,3 @@ class GraphSettingsUpdate(BaseModel):
     """関係情報設定の更新 payload。"""
 
     profile: GraphProfileName
-
-
-class AgenticProfileStatusData(BaseModel):
-    """クエリ計画の 1 プロファイルの選択状態と挙動。"""
-
-    name: AgenticProfileName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    enabled: bool
-    rewrite: bool
-    decompose: bool
-    multi_hop: bool
-    hyde: bool = False
-
-
-class AgenticSettingsData(BaseModel):
-    """高度な検索設定の非機密 runtime snapshot。"""
-
-    profile: AgenticProfileName
-    enabled: bool
-    rewrite: bool
-    decompose: bool
-    multi_hop: bool
-    max_subqueries: int
-    profiles: list[AgenticProfileStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class AgenticSettingsUpdate(BaseModel):
-    """高度な検索設定の更新 payload。"""
-
-    profile: AgenticProfileName
-    max_subqueries: int = Field(default=3, ge=1, le=8)

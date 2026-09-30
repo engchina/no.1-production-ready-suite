@@ -12,7 +12,7 @@ from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient, reset_local_store
+from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
 from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings, get_settings
@@ -30,11 +30,6 @@ NO_TENANT_HEADERS = {"X-Tenant-ID": "", "X-User-ID": ""}
 
 # 実 Oracle AI Database + OCI を用いる統合テスト（DB 未到達環境では自動 skip）。
 pytestmark = pytest.mark.usefixtures("oracle_db")
-
-
-def setup_function() -> None:
-    """テストごとにローカル Oracle ストアを初期化する。"""
-    reset_local_store()
 
 
 @pytest.fixture
@@ -143,7 +138,7 @@ def test_upload_ingest_search_flow() -> None:
 
     search_resp = client.post(
         "/api/search",
-        json={"query": "経費申請の承認者は？", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "経費申請の承認者は？", "top_k": 5},
     )
     assert search_resp.status_code == 200
     search_data = search_resp.json()["data"]
@@ -669,7 +664,6 @@ def test_search_filters_are_applied_to_retrieval() -> None:
         json={
             "query": "クラウド利用料",
             "top_k": 10,
-            "rerank_top_n": 5,
             "filters": {"document_id": document_ids[1]},
         },
     )
@@ -693,7 +687,7 @@ def test_search_scalar_prefilters_are_applied_to_retrieval() -> None:
     def _search(filters: dict[str, str]) -> list[dict[str, object]]:
         response = client.post(
             "/api/search",
-            json={"query": "クラウド利用料", "top_k": 10, "rerank_top_n": 5, "filters": filters},
+            json={"query": "クラウド利用料", "top_k": 10, "filters": filters},
         )
         assert response.status_code == 200
         return cast(list[dict[str, object]], response.json()["data"]["citations"])
@@ -782,7 +776,7 @@ def test_stream_search_returns_sse_events() -> None:
 
     response = client.post(
         "/api/search/stream",
-        json={"query": "クラウド利用料", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "クラウド利用料", "top_k": 5},
     )
 
     assert response.status_code == 200
@@ -794,9 +788,8 @@ def test_stream_search_returns_sse_events() -> None:
     assert "event: citations" in body
     assert "event: done" in body
     assert body.index("event: stage") < body.index("event: metadata")
-    assert '"stage": "embedding"' in body
+    assert '"stage": "docrag_answer"' in body
     assert '"outcome": "started"' in body
-    assert '"stream_stage_timings"' in body
     assert document_id in body
 
 
@@ -823,19 +816,6 @@ def test_search_rejects_blank_query() -> None:
     assert body["error_messages"]
 
 
-def test_search_rejects_rerank_top_n_larger_than_top_k() -> None:
-    """rerank_top_n が top_k を超える検索リクエストは拒否する。"""
-    response = client.post(
-        "/api/search",
-        json={"query": "承認条件", "top_k": 2, "rerank_top_n": 3},
-    )
-
-    assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert any("rerank_top_n は top_k 以下" in message for message in body["error_messages"])
-
-
 def test_stream_search_rejects_blank_query() -> None:
     """SSE 検索でも SearchRequest の query 検証を適用する。"""
     response = client.post("/api/search/stream", json={"query": "   "})
@@ -844,19 +824,6 @@ def test_stream_search_rejects_blank_query() -> None:
     body = response.json()
     assert body["data"] is None
     assert body["error_messages"]
-
-
-def test_stream_search_rejects_rerank_top_n_larger_than_top_k() -> None:
-    """SSE 検索でも rerank depth の制約を適用する。"""
-    response = client.post(
-        "/api/search/stream",
-        json={"query": "承認条件", "top_k": 2, "rerank_top_n": 3},
-    )
-
-    assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert any("rerank_top_n は top_k 以下" in message for message in body["error_messages"])
 
 
 def test_list_documents_supports_pagination_status_and_query_filter() -> None:
@@ -1027,12 +994,12 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
 
     search_a = client.post(
         "/api/search",
-        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "社内規程", "top_k": 5},
         headers=tenant_a,
     )
     search_b = client.post(
         "/api/search",
-        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "社内規程", "top_k": 5},
         headers=tenant_b,
     )
     assert search_a.status_code == 200
@@ -1071,7 +1038,7 @@ def test_documents_and_search_are_scoped_by_access_scope_header() -> None:
 
     search_a = client.post(
         "/api/search",
-        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "社内規程", "top_k": 5},
         headers=access_a,
     )
     assert search_a.status_code == 200

@@ -1,8 +1,8 @@
 /**
  * 回答生成（RAG 検索・チャット）の進捗の工程の名前と、今の工程の判定（#375）。
  *
- * backend は embedding / retrieval / rerank / generation に加え、LLM を呼ぶ検索の計画
- * （`agentic_planning`）・追加の検索の計画（`agentic_multi_hop`）などを SSE の `stage` で送る。
+ * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`docrag_history_rewrite`）・根拠の検索と
+ * 回答の生成（`docrag_answer`。中の各工程は `answer_step:` で入れ子に送る）・検索だけのとき（`retrieval`）を送る。
  * 工程の名前は backend の時間切れの文言（`app/rag/answer_timeout.py` の `ANSWER_STAGE_LABELS`）と揃える。
  */
 
@@ -14,28 +14,9 @@ export interface AnswerStageEvent {
 }
 
 export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
-  query_expansion: "search.stage.queryExpansion",
-  agentic_planning: "search.stage.agentic",
-  embedding: "search.stage.embedding",
   retrieval: "search.stage.retrieval",
-  rerank: "search.stage.rerank",
-  business_fit_weighting: "search.stage.businessFit",
-  context_adaptive_expansion: "search.stage.context",
-  context_compression: "search.stage.context",
-  context_dependency_promotion: "search.stage.context",
-  context_diversity: "search.stage.context",
-  context_expansion: "search.stage.context",
-  context_group_expansion: "search.stage.context",
-  crag_rewrite: "search.stage.queryRewrite",
-  crag_retrieval: "search.stage.additionalSearch",
-  crag_corrective: "search.stage.additionalSearch",
-  corrective_retrieval: "search.stage.corrective",
-  agentic_multi_hop: "search.stage.multiHop",
-  agentic_multi_hop_retrieval: "search.stage.additionalSearch",
   docrag_history_rewrite: "search.stage.historyRewrite",
   docrag_answer: "search.stage.docragAnswer",
-  generation: "search.stage.generation",
-  answer_guardrail: "search.stage.answerGuardrail",
 };
 
 /**

@@ -43,17 +43,12 @@ class _ViewAndSearchOracle(FakeViewOracle, FakeOracle):
         FakeOracle.__init__(self)
 
 
-async def _keep_settings(settings: Settings, **_kwargs: object) -> Settings:
-    return settings
-
-
 def _install_real_pipeline(
     monkeypatch: MonkeyPatch, views: dict[str, BusinessViewConfig]
 ) -> _ViewAndSearchOracle:
     """検索 API から本物の RagPipeline を動かし、Oracle と embedding だけスタブにする。"""
     oracle = _ViewAndSearchOracle(views)
     monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
-    monkeypatch.setattr(search_route, "resolve_oracle_generation_settings", _keep_settings)
     monkeypatch.setattr(pipeline_module, "OracleClient", lambda *_args, **_kwargs: oracle)
     monkeypatch.setattr(pipeline_module, "OciGenAiClient", lambda *_args, **_kwargs: FakeGenAi())
     return oracle

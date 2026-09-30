@@ -3,7 +3,7 @@
 sibling repo `../rag_poc`（DocRAG）の、解析から回答生成までの実装を本リポジトリへ移植した機能の使い方と設定をまとめる。経緯と各段階の PR は Epic #117 を参照。
 
 - Gradio UI は移植していない。
-- 回答は #594 でこの回答フロー（`DocragAnswerEngine`）だけにした（回答エンジンの選択は削除。標準の回答フローのコードは #595 で削除する）。文書分割の既定も親子階層（`docrag_small_to_big`）にした。既存環境の更新手順は [deployment.md の「既存環境の更新手順（#594）」](./deployment.md#既存環境の更新手順594-回答の方式を-1-つにする)。
+- 回答は #594 でこの回答フロー（`DocragAnswerEngine`）だけにした（回答エンジンの選択は削除。標準の回答フローのコード・画面・設定は #595 で削除した）。文書分割の既定も親子階層（`docrag_small_to_big`）にした。既存環境の更新手順は [deployment.md の「既存環境の更新手順（#594）」](./deployment.md#既存環境の更新手順594-回答の方式を-1-つにする) と「既存環境の更新手順（#595）」。
 - 解析・分割の rag_poc の処理は選択肢として追加している（解析の既定は Docling）。
 
 ## 構成
@@ -66,7 +66,7 @@ DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲�
 6. **評価**：DocRAG の回答パネル（RAG 検索・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。評価は LLM を複数回呼ぶため、この API だけ時間の上限を長くしている（#304）：backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で打ち切って 504 と理由を返し、評価を保存しない。画面は 630 秒、Nginx（`init_script.sh` が生成する、評価と回答生成・MCP の `location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$`）は 660 秒待つ（backend の理由が画面に届くよう、外側ほど長くする）。
 7. **フィードバック**：回答を「役に立たなかった」と評価するときに、rag_poc の分類（ナレッジ不足・情報が古い・質問が曖昧を含む）と修正した回答を入力できる。管理者はフィードバック画面の詳細から、Approved FAQ への登録と品質評価のケースへの追加ができる。フィードバック画面の一覧・集計・詳細は、SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけで、画面の先頭に見える範囲を案内する（#408）。
 8. **検証**：`uv run python -m app.rag.docrag_verify_cli`（`answers` / `regression` / `crag-goldset`）で、QA の一括の標準回答評価、rag_poc の問い合わせ回帰、CRAG goldset の評価を実行できる（`docs/evaluation-observability-guardrails.md`）。
-9. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
+9. **チャット**：会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
 
 ## 設定一覧
 
@@ -86,7 +86,7 @@ DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲�
 | `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。docrag の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「DocRAG のオプション」） |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
-| `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
+| `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | 回答の記録の保存日数（`0` は無期限）。検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
 | `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
 | `DOCRAG_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。docrag の `docrag.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。docrag の設定（`build_docrag_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
@@ -129,7 +129,7 @@ ai-foundations-lab の検証との照合（#512）:
 
 ## 保存先
 
-- **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（標準・DocRAG、検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
+- **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
@@ -139,19 +139,24 @@ ai-foundations-lab の検証との照合（#512）:
 
 DocRAG 親子階層の 5 項目は rag_poc の「チャンキング」tab と同じ名前・既定値・範囲（`docrag.chunking.constants` の `DEFAULT_*` / `*_RANGE`）。検索用テキストの 3 項目（`contextual_search_text_enabled` / `search_text_context_max_chars` / `child_search_text_max_chars`）は rag_poc でも画面に出していないので、既定値のまま使う。DocRAG 親子階層は検索用テキストを自分で組み立てるため、文書分割の「文脈ヘッダを検索対象へ追加」は効かない（画面でも DocRAG 選択時は出さない）。5 項目を既定から変えた文書だけ chunk_set_id が変わる（既定のままなら変わらない）。
 
-## 回答に使われない設定（#300 / #594）
+## 標準の回答フローの設定の削除（#300 / #594 / #595）
 
-回答フロー（`DocragAnswerEngine`）は `rag_docrag_*` の設定と回答生成テンプレートで回答し、標準の回答フロー向けの次の設定は読まない。#594 で回答をこのフローだけにしたので、次の設定はどの業務ビューでも使われない。入力は残し、画面の各欄に「現在の回答では使われません」と表示する（欄は #595 で削除する）。
+回答フロー（`DocragAnswerEngine`）は `rag_docrag_*` の設定と回答生成テンプレートで回答し、標準の回答フロー向けの設定は読まなかった（#300）。#594 で回答をこのフローだけにし、#595 で次の画面・欄・API を削除した。
 
-| 設定 | 画面 | DocRAG での扱い |
+| 削除した設定 | あった場所 | 今の回答フローでの扱い |
 |---|---|---|
-| 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、業務ビュー「検索方法」 | 使わない。回答は「質問の拡張」で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答の生成方式）が行う |
-| 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認、業務ビュー「根拠確認」 | 使わない。根拠の確認は「回答の生成方式」（補正 RAG / 通常 RAG）で選ぶ |
-| 回答スタイル | 検索・回答設定 > 回答スタイル、業務ビュー「回答スタイル」 | 使わない（回答の記録の保存期間と質問履歴は、#593 で検索方法の画面へ移した） |
-| system prompt の版（カスタム回答スタイル） | 検索・回答設定 > 回答プロンプト | 使わない。回答は同じ画面の「回答生成テンプレート」を使う |
-| 回答の役割・口調・既定の回答言語 | 業務ビュー「回答プロンプト」 | 使わない |
+| 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、業務ビュー「検索方法」 | 「質問の拡張」で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答の生成方式）が行う。検索方法の画面は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カードになった |
+| 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認（`/settings/grounding`）、業務ビュー「根拠確認」 | 根拠の確認は「回答の生成方式」（補正 RAG / 通常 RAG）で選ぶ |
+| 回答スタイル | 検索・回答設定 > 回答スタイル（`/settings/generation`）、業務ビュー「回答スタイル」 | 回答は回答生成テンプレートの形で書く（回答の記録の保存期間と質問履歴は、#593 で検索方法の画面へ移した） |
+| 高度な検索（検索の計画: 書き換え / HyDE / 分解） | 検索・回答設定 > 高度な検索（`/settings/agentic`） | 「質問の拡張」（質問拡張戦略）が同じ役割を持つ |
+| system prompt の版（カスタム回答スタイル） | 検索・回答設定 > 回答プロンプト | 回答プロンプトの画面は回答生成テンプレートだけになった |
+| 回答の役割・口調・既定の回答言語 | 業務ビュー「回答プロンプト」 | 削除した（保存済みの値は読み込み時に捨て、次に保存すると消える） |
 
-安全チェックは DocRAG でも質問と回答の両方に適用する。
+- 削除した画面の URL（`/settings/grounding`・`/settings/generation`・`/settings/agentic`）は検索方法（`/settings/retrieval`）へ移す。
+- 削除した API は `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate`。回答の設定は `/api/settings/answering`・`/answer-records`・`/query-history`・`/docrag-prompts` だけになった。
+- 保存済みのロールのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` は読み捨てる（DB の行の削除は #596）。
+
+安全チェックは質問と回答の両方に適用する。
 
 ## 回答エンジンを 1 つにする前の取り込み（#593）
 
@@ -161,7 +166,7 @@ standard の回答エンジンを消す（#592）前に、standard だけが持�
 - **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`DocragAnswerEngine.retrieve` が回答の検索（`_search`）を原質問 1 本で呼び、候補を引用として返す（回答は空）。質問の理解・質問の拡張・rerank・CRAG・回答の生成は行わず、LLM を呼ばない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
 - **全体既定の画面**: 質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すの全体既定を、検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
 - **回答フローの進捗**: 回答フローの各工程（`docrag.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）の開始と終了を、`docrag_answer` の中の入れ子の工程として進捗（SSE の `stage`）へ流す。工程の名前は `answer_step:<工程名>` で、画面の進捗と時間切れの文言は工程名をそのまま出す（`ANSWER_STEP_STAGE_PREFIX`。frontend の `answer-progress.ts` と同じ）。
-- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・ルール、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。standard と一緒に削除する（#595）。
+- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・ルール、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
 
 ## 親子階層（`hierarchical_parent_child`）の削除（#271）
 

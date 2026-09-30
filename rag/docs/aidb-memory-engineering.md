@@ -2,26 +2,25 @@
 
 Oracle Developer Day 2026 の「AIDBで進化するRAG / ベクトルを超えるMemory Engineering」で示された RAG 手法を、本プロジェクトの確定スタックへ再マップした実装方針。
 
+> #595 で、旧 standard の回答エンジン（Memory Router / Retrieval Plan、memory type 別の検索、Agent Memory Loop、Resolver / Verifier、Context Builder、Retrieval / Grounding アダプター）を削除した。回答は回答フロー（`app/rag/docrag_answer.py`・`packages/docrag_core`）だけが行う。以下は、手法の各要素が今の回答フローのどこに当たるかを書く。
+
 ## 採用する runtime flow
 
-本プロジェクトの RAG runtime は、単純な「近い chunk を prompt へ入れる」形ではなく、次の順序で動く。
+RAG の回答は、単純な「近い chunk を prompt へ入れる」形ではなく、次の順序で動く（`app/rag/pipeline.py` → `app/rag/docrag_answer.py`）。
 
-1. 依頼を受ける
-2. Business Context Pack を確定する
-3. Memory Router / Plan Builder で Retrieval Plan を作る
-4. AIDB Retrieval で memory type 別に候補を取得する
-5. Resolver / Verifier で候補を検証する
-6. Context Builder で根拠・補助・過去文脈を分けて LLM へ渡す
-7. Agent Memory Loop の writeback / eval 方針を監査・診断に残す
+1. 依頼を受け、安全チェックで質問を検査する（ブロックしたら検索しない）
+2. Business Context Pack（誰のどの業務か＝検索範囲）を確定する
+3. チャットでは、会話履歴から質問を単独で意味が通る形に書き換える（`RAG_DOCRAG_HISTORY_REWRITE_ENABLED`）
+4. 回答フロー: 質問の理解 → 質問拡張戦略で検索文を作る → 文書検索（Oracle AI Vector Search と Oracle Text の hybrid 検索を RRF で融合）→ Rerank（OCI Generative AI Cohere Rerank）→ 根拠の評価と補正検索（CRAG）→ small-to-big（親本文と前後の child）で文脈を足す → 回答文の生成と根拠確認（監査）
+5. 回答側の安全チェックを行い、監査・回答の記録・質問履歴を残す
 
 ## Business Context Pack
 
 検索前に、誰のどの業務かを確定する。
 
 - tenant: production では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす（#225）。local だけは `X-Tenant-ID` を hash 化し、Oracle document/chunk/knowledge base の predicate に使う。
-- user: production はログイン中の利用者（MCP ではサービストークンの利用者。#232）、local は `X-User-ID` を hash 化し、監査相関と Agent Memory scope に使う。
-- role: `X-RAG-Role-ID` を hash 化し、Business Context と Agent Memory scope に使う。
-- agent / thread: `X-RAG-Agent-ID`、`X-RAG-Thread-ID` を hash 化し、Agent Memory の検索・保存 scope に使う。MCP（`POST /api/mcp`。#232）では header ではなくサービストークンの `agent_id` / `run_id` を使う。
+- user: production はログイン中の利用者（MCP ではサービストークンの利用者。#232）、local は `X-User-ID` を hash 化し、監査相関と回答の記録の持ち主に使う。
+- role / agent / thread: `X-RAG-Role-ID`、`X-RAG-Agent-ID`、`X-RAG-Thread-ID`（MCP（`POST /api/mcp`。#232）では header ではなくサービストークンの `agent_id` / `run_id`）を hash 化して request context に持つ。Agent Memory の scope に使っていたが、Agent Memory は #595 で削除した。
 - ACL: production はログイン中の利用者のロールの業務ビュー / ナレッジベースの対象範囲を使う（#214）。local だけは `X-RAG-Allowed-Document-Ids`、`X-RAG-Allowed-Category-Names`、`X-RAG-Allowed-Knowledge-Base-Ids` を request scope として固定する。
 - dataset: `knowledge_base_ids` / `filters.knowledge_base_id` を Oracle knowledge base membership に固定する。
 - source ACL: `filters.source_acl` を chunk metadata `source_acl` に固定する。
@@ -29,97 +28,22 @@ Oracle Developer Day 2026 の「AIDBで進化するRAG / ベクトルを超え�
 
 raw tenant/user id や query 本文は audit / trace へ保存しない。
 
-## Retrieval Plan
+## 手法と回答フローの対応
 
-Router の分岐結果は、自由検索ではなく Retrieval Plan として固定する。
+| 手法の要素 | 回答フローでの扱い |
+|---|---|
+| Memory Router / Retrieval Plan | 質問の理解（`inquiry_conditions`）と質問拡張戦略（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング）が、検索文・検索語・名指しされた文書名・業務を決める |
+| evidence（必須根拠） | Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF。原質問を主軸にした重み付き融合）と Cohere Rerank で選んだ child chunk |
+| structure（構造） | 親子階層の親本文（`docrag_parent_text`）と、根拠の child の前後の child（`RAG_DOCRAG_NEIGHBOR_CHILD_COUNT`）。画面目録で操作画面を探す（`RAG_DOCRAG_SCREEN_LINKING_ENABLED`）。GraphRAG の構築（関係情報の構築）と KB のグラフ表示は残しているが、回答の検索では使わない |
+| history（継続文脈） | チャットの会話履歴による質問の書き換えと、質問履歴（`rag_query_history`。候補の提示だけで、回答の根拠にはしない）。Agent Memory（`rag_agent_memories`）への検索・保存は #595 で削除した |
+| Resolver / Verifier | 根拠確認（CRAG の grade）と補正検索（`RAG_DOCRAG_ANSWER_FLOW=crag`）、回答文の生成後の根拠確認（監査）。根拠が足りないときは、足りない理由（`insufficient_reason`）と人手確認の要否を回答に付ける |
+| Context Builder | small-to-big で親子を復元した文脈を、回答生成テンプレート（検索・回答設定 > 回答プロンプト）で LLM へ渡す |
 
-- `plan_id`: trace と非機密 routing 情報から作る短い ID。
-- `purpose`: grounded answer、structured query boundary、relationship summary など。
-- `memory_sequence`: `evidence -> similar -> structure -> history`。
-- `memory_backends`: Oracle AI Vector Search（hybrid search）、Oracle AI Vector Search + OCI Rerank、GraphRAG-lite、Oracle Agent Memory Search policy。
-- `query_shape`: hybrid/vector/keyword/graph/structured candidate。
-- `scope_keys`: tenant、ACL、dataset、source_acl、version、filter key。
-- `evidence_rules`: citation、scope、version、source ACL、contradiction の検証。
-- `termination_criteria`: 検証済み根拠がない場合は LLM を呼ばない。
-- `gap_handling`: 不足時に Agent の自由検索へ逃がさず、no-results / warning / evaluation へ渡す。
+`SearchDiagnostics` は `retrieval_strategy`（常に `docrag`）・`retrieval_strategy_adapter`（`docrag_grounded` / `docrag_retrieval_only` / `blocked`）・`docrag`（回答フローの診断。実行記録 `execution_steps` など）・安全チェックの policy / backend・`filter_keys`・`knowledge_base_count`・`config_fingerprint` などを返す。回答フローの工程ごとの記録は回答の記録（`rag_answer_records`）にも残す。
 
-## Memory Type
+## 削除したもの（#595）
 
-Retrieval は同じ候補集合を無差別に扱わず、役割を分ける。
-
-| memory type | 役割 | backend |
-|---|---|---|
-| evidence | 回答の主張を支える必須根拠 | Oracle AI Vector Search（hybrid search） + Oracle Text |
-| similar | 理解・説明を補助する類似情報 | Oracle AI Vector Search + OCI Cohere Rerank |
-| structure | 関係・集計・構造条件 | GraphRAG-lite relationship boundary |
-| history | user / role / agent / thread の継続文脈 | Oracle AI Database `rag_agent_memories` |
-
-## Agent Memory Loop
-
-Agent Memory は外部ストアを使わず、Oracle AI Database 内の `rag_agent_memories` に保存する。
-
-- scope: `tenant_id_hash`、`user_id_hash`、`role_id_hash`、`agent_id_hash`、`thread_id_hash`。raw ID は保存しない。
-- vector: `memory_text` を OCI Generative AI Cohere Embed v4 で `SEARCH_DOCUMENT` embedding 化し、`VECTOR(1536, FLOAT32)` に保存する。
-- search: 検索 request に user / agent / thread scope がある場合だけ、query embedding で Agent Memory Search を行う。取得結果は `retrieval_mode=agent_memory`、`context_role=history` として扱う。
-- writeback: 回答が guardrail を通過し、引用付き context がある場合だけ、query 原文ではなく「回答要約 + 根拠 ID」の短い memory を保存する。
-- eval: `usefulness_score`（既定 0.5）の列を持つ。helpful / not helpful で更新する経路は未実装（更新用の `evaluate_agent_memory()` は呼び出し元がなかったため #473 で削除した）。
-
-`History` は継続性の補助であり、回答主張の必須根拠ではない。rerank では Evidence / Support 候補を優先し、Agent Memory が一次根拠を押し出さないようにする。
-
-## Resolver / Verifier
-
-取得候補はそのまま根拠にしない。Context Builder へ渡す前に次を確認する。
-
-- citation があること
-- source ACL / request scope に反していないこと
-- version が archived / expired / inactive / obsolete / superseded ではないこと
-- contradiction metadata が conflict / contradicted ではないこと
-- support-only は根拠ではなく補助扱いにすること
-
-検証済み chunk には `context_role`、`resolver_verified`、`resolver_confidence`、`resolver_necessity`、`memory_plan_id` を付ける。除外件数と理由は diagnostics / audit に残す。
-
-## Context Builder
-
-LLM context は `Evidence`、`Support`、`Structure`、`History` の label を付けた構造で渡す。回答の根拠として扱えるのは `Evidence` のみで、`Support` と `History` は説明・比較・継続性の補助に使う。
-
-`SearchDiagnostics` と `rag_search_audit` には、`memory_plan_id`、business context、retrieval plan、context pack、evidence/support/structure/history 件数、Agent Memory retrieval / writeback 件数、resolver rejected 件数、不足 context 件数を残す。
-
-## Retrieval アダプター / Grounding アダプター
-
-検索段階と検索後処理を、Parser / Chunking アダプターと同型の **手動選択できるアダプター**に束ねる。
-
-- **Retrieval アダプター(`rag_retrieval_strategy` + 合成トグル)** — `app/rag/retrieval_adapter.py`。
-  検索モードは hybrid_rrf(既定)/ vector / keyword / graph_augmented /
-  reasoning_tree_search(PageIndex-lite)の 5 択で、既存の hybrid / AI Vector Search /
-  Oracle Text / GraphRAG-lite / navigation 要約経路へ解決する。gap-stop /
-  業務適合加重 / 補正再検索 / クエリ拡張は**任意のモードに合成できるトグル**
-  (`RAG_RETRIEVAL_GAP_STOP_ENABLED` 等)。legacy 複合値(business_context_strict /
-  corrective_multi_query)は読み取り互換でモード + 強制トグルへ分解し(
-  `rag_pipeline_core.decompose_retrieval_strategy`)、保存は常に新形式のみ。per-request の
-  `strategy` / `mode` を明示した場合はそちらを優先する。
-  `GET/PATCH /api/settings/retrieval` と専用設定画面で切替。
-- **Grounding アダプター(`rag_post_retrieval_pipeline`)** — `app/rag/grounding_adapter.py`。
-  custom(既定・既存 `rag_context_*` フラグを尊重)/ lean / verified_context /
-  context_enrich / compact / full_governed。dedupe / Resolver-Verifier / Context Builder は
-  常時実行し、任意段(dependency promotion / MMR diversity / context expansion /
-  compression)を preset で束ねる。`GET/PATCH /api/settings/grounding` と専用設定画面で切替。
-
-### 追加した決定論的手法(他 RAG を上回るための差分)
-
-- **gap-stop(PDF Memory Router Route D)**: gap-stop トグル
-  (`RAG_RETRIEVAL_GAP_STOP_ENABLED`)で業務スコープ(tenant / dataset / ACL / version)が
-  未確定なら検索を実行せず、`gap_stopped` 診断付きで insufficient_context を返す。
-  Agent の自由検索へ逃がさない。
-- **corrective / iterative retrieval(PDF Step5「過不足あれば追加検索」+ CRAG 3分岐)**:
-  補正再検索トグル(`RAG_RETRIEVAL_CORRECTIVE_ENABLED`)で、検証済み根拠が 0 件のとき
-  top_k 拡大・絞り込み filter 緩和で再検索→再 rerank→再 verify する。加えて evidence grade
-  3分岐(高 ≥ `RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD` → そのまま生成 / 中間 → クエリ精緻化 +
-  再検索を `RAG_CRAG_MAX_HOPS` まで / 低 < 低閾値 → 棄権は
-  `RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED` の opt-in)。診断に `crag_hops` /
-  `crag_evidence_grade` を残す。
-- **business-fit 加重(PDF AIDB Proof)**: rerank 後に `final = semantic × business_fit`
-  (version active / source_acl / 鮮度 を metadata から決定論的に算出)で並べ替える。
-
-既定 preset(hybrid_rrf / custom)は現行挙動と一致させ、明示選択時のみ挙動を束ねる。
-`SearchDiagnostics` には `retrieval_strategy_adapter` / `post_retrieval_pipeline` /
-`gap_stopped` / `corrective_retried` / `business_fit_reordered_count` を残す。
+- Memory Router / Retrieval Plan（`memory_plan_id`）、memory type 別の検索、Resolver / Verifier、Context Builder（`Evidence` / `Support` / `Structure` / `History` の label）と、その診断（evidence/support/structure/history 件数、resolver rejected 件数など）。
+- Agent Memory Loop（`rag_agent_memories` への Agent Memory Search と writeback）。
+- Retrieval アダプター（検索モード hybrid_rrf / vector / keyword / graph_augmented / reasoning_tree_search と、gap-stop・業務適合加重・補正再検索・クエリ拡張のトグル）と Grounding アダプター（検索後処理の preset）、`GET/PATCH /api/settings/retrieval`・`/api/settings/grounding` と設定画面。補正検索は回答フローの CRAG が行う。
+- 監査テーブル `rag_search_audit` の `memory_plan_id`・`agent_memory_*` などの列は残し、既定値を書く。列とテーブル（`rag_agent_memories` など）の削除は #596 で行う。

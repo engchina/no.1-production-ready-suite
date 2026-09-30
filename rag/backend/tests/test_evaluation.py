@@ -20,8 +20,6 @@ from app.rag.evaluation import (
 )
 from app.rag.evaluation_adapter import resolve_evaluation_suite
 from app.rag.pipeline import (
-    NO_RESULTS_ANSWER,
-    NO_RESULTS_WARNING,
     SearchStageProgress,
     SearchStageProgressCallback,
 )
@@ -71,12 +69,7 @@ def _approval_response(
         trace_id=trace_id,
         guardrail_warnings=[],
         elapsed_ms=1.0,
-        diagnostics=SearchDiagnostics(
-            mode=request.mode.value,
-            top_k=request.top_k,
-            retrieved_count=1,
-            citation_count=1,
-        ),
+        diagnostics=SearchDiagnostics(knowledge_base_count=len(request.knowledge_base_ids)),
     ).with_evaluation_input(evaluation_input)
 
 
@@ -391,8 +384,12 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
     ]
 
 
+NO_RESULTS_ANSWER = "資料の中に、この質問に答えられる根拠が見つかりませんでした。"
+NO_RESULTS_WARNING = "検索条件に一致する根拠が見つかりませんでした。"
+
+
 class NoResultsPipeline:
-    """根拠が見つからず no-results で答える pipeline(本番の固定文言と同じ応答)。"""
+    """根拠が見つからず、引用なしで「答えられない」と返す pipeline。"""
 
     async def run(
         self,
@@ -819,7 +816,7 @@ class SlowPipeline:
 
 
 class StagedSlowPipeline:
-    """「遅い」を含む質問だけ、検索の計画（agentic_planning）の工程で止まる pipeline。"""
+    """「遅い」を含む質問だけ、回答フロー（docrag_answer）の工程で止まる pipeline。"""
 
     def __init__(self, *, sleep_seconds: float) -> None:
         self._sleep_seconds = sleep_seconds
@@ -837,7 +834,7 @@ class StagedSlowPipeline:
                 await progress_callback(
                     SearchStageProgress(
                         trace_id=trace_id or "trace",
-                        stage="agentic_planning",
+                        stage="docrag_answer",
                         outcome="started",
                         elapsed_ms=0.0,
                         attributes={},
@@ -903,10 +900,10 @@ async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
     assert slow.status == "error"
     assert slow.error_type == "TimeoutError"
     assert slow.failure_reasons == ["case_error"]
-    assert slow.error_stage == "agentic_planning"
+    assert slow.error_stage == "docrag_answer"
     assert slow.error_message is not None
     assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
-    assert "時間切れになった工程: 検索の計画" in slow.error_message
+    assert "時間切れになった工程: 根拠の検索と回答の生成" in slow.error_message
     assert "遅い" not in slow.error_message
     assert fast.status == "success"
     assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]
@@ -1080,14 +1077,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
         ) -> SearchResponse:
             return _approval_response(request, trace_id or "trace")
 
-    async def keep_test_settings(settings: Settings) -> Settings:
-        return settings
-
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
-    monkeypatch.setattr(
-        "app.rag.evaluation.resolve_oracle_generation_settings",
-        keep_test_settings,
-    )
     runner = EvaluationRunner(
         settings=Settings(rag_answer_timeout_seconds=30.0, rag_rrf_k=60),
         answer_judge=FakeJudge(_completed_judgement()),

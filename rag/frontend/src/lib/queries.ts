@@ -67,14 +67,6 @@ import {
   type ServiceControlResultData,
   type ServiceLogsData,
   type ServiceStatusData,
-  type RetrievalSettingsData,
-  type RetrievalSettingsUpdate,
-  type GroundingSettingsData,
-  type GroundingSettingsUpdate,
-  type GenerationSettingsData,
-  type GenerationSettingsUpdate,
-  type PromptVersionsData,
-  type PromptVersionCreate,
   type ExtractionFieldDefinition,
   type ExtractionFieldsSettingsData,
   type KnowledgeBaseExtractionFieldsData,
@@ -89,8 +81,6 @@ import {
   type EvaluationSettingsUpdate,
   type GraphSettingsData,
   type GraphSettingsUpdate,
-  type AgenticSettingsData,
-  type AgenticSettingsUpdate,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
 } from "./api";
@@ -193,17 +183,12 @@ export const queryKeys = {
     ["settings", "parser-adapters", "status", backend] as const,
   preprocessSettings: ["settings", "preprocess"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
-  retrievalSettings: ["settings", "retrieval"] as const,
-  groundingSettings: ["settings", "grounding"] as const,
-  generationSettings: ["settings", "generation"] as const,
-  promptVersions: ["settings", "prompts"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
   extractionFieldsSettings: ["settings", "extraction-fields"] as const,
   pipelineSettings: ["settings", "pipeline"] as const,
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
-  agenticSettings: ["settings", "agentic"] as const,
   services: ["services"] as const,
   serviceCatalog: ["services", "catalog"] as const,
   serviceStatus: (serviceId: string) =>
@@ -1755,27 +1740,6 @@ export function useUpdateGraphSettings() {
   });
 }
 
-/** Agentic アダプター(クエリ計画)の runtime 設定。 */
-export function useAgenticSettings() {
-  return useQuery<AgenticSettingsData>({
-    queryKey: queryKeys.agenticSettings,
-    queryFn: api.getAgenticSettings,
-    retry: false,
-  });
-}
-
-/** Agentic アダプター設定をランタイム保存。 */
-export function useUpdateAgenticSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: AgenticSettingsUpdate) =>
-      api.updateAgenticSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.agenticSettings, data);
-    },
-  });
-}
-
 /** Evaluation アダプター(評価の基準 = 閾値のプリセット)の runtime 設定。 */
 export function useEvaluationSettings() {
   return useQuery<EvaluationSettingsData>({
@@ -1818,61 +1782,6 @@ export function useUpdateVectorIndexSettings() {
   });
 }
 
-/** Generation アダプター(回答生成)の runtime 設定。 */
-export function useGenerationSettings() {
-  return useQuery<GenerationSettingsData>({
-    queryKey: queryKeys.generationSettings,
-    queryFn: api.getGenerationSettings,
-    retry: false,
-  });
-}
-
-/** Generation アダプター設定をランタイム保存。 */
-export function useUpdateGenerationSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: GenerationSettingsUpdate) =>
-      api.updateGenerationSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.generationSettings, data);
-    },
-  });
-}
-
-/** 回答プロンプト版の一覧と有効版(custom 回答スタイルが使用)。 */
-export function usePromptVersions() {
-  return useQuery<PromptVersionsData>({
-    queryKey: queryKeys.promptVersions,
-    queryFn: api.getPromptVersions,
-    retry: false,
-  });
-}
-
-/** 有効版変更は custom 回答スタイルの実体に影響するため generationSettings も無効化する。 */
-function invalidatePromptDependents(qc: QueryClient, data: PromptVersionsData) {
-  qc.setQueryData(queryKeys.promptVersions, data);
-  qc.invalidateQueries({ queryKey: queryKeys.generationSettings });
-}
-
-/** 新しい回答プロンプト版を作成(activate=true で即時有効化)。 */
-export function useCreatePromptVersion() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: PromptVersionCreate) =>
-      api.createPromptVersion(payload),
-    onSuccess: (data) => invalidatePromptDependents(qc, data),
-  });
-}
-
-/** 指定の回答プロンプト版を有効化(rollback = 旧版の再有効化)。 */
-export function useActivatePromptVersion() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (versionId: string) => api.activatePromptVersion(versionId),
-    onSuccess: (data) => invalidatePromptDependents(qc, data),
-  });
-}
-
 /** メタデータ/項目抽出のスキーマ定義。項目抽出トグルの警告表示などに使う。 */
 export function useExtractionFieldsSettings(enabled = true) {
   return useQuery<ExtractionFieldsSettingsData>({
@@ -1900,48 +1809,6 @@ export function useUpdateGuardrailSettings() {
       api.updateGuardrailSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.guardrailSettings, data);
-    },
-  });
-}
-
-/** Retrieval アダプター(検索戦略)の runtime 設定。 */
-export function useRetrievalSettings() {
-  return useQuery<RetrievalSettingsData>({
-    queryKey: queryKeys.retrievalSettings,
-    queryFn: api.getRetrievalSettings,
-    retry: false,
-  });
-}
-
-/** Retrieval アダプター設定をランタイム保存。 */
-export function useUpdateRetrievalSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: RetrievalSettingsUpdate) =>
-      api.updateRetrievalSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.retrievalSettings, data);
-    },
-  });
-}
-
-/** Grounding アダプター(検索後処理)の runtime 設定。 */
-export function useGroundingSettings() {
-  return useQuery<GroundingSettingsData>({
-    queryKey: queryKeys.groundingSettings,
-    queryFn: api.getGroundingSettings,
-    retry: false,
-  });
-}
-
-/** Grounding アダプター設定をランタイム保存。 */
-export function useUpdateGroundingSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: GroundingSettingsUpdate) =>
-      api.updateGroundingSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.groundingSettings, data);
     },
   });
 }

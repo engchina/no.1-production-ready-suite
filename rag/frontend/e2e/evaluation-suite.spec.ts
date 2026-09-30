@@ -108,9 +108,9 @@ for (const viewport of [
     const error = page.getByTestId("evaluation-case-error");
     await expect(error).toContainText("case-slow");
     await expect(error).toContainText("エラー");
-    await expect(error).toContainText("工程: 検索の計画");
+    await expect(error).toContainText("工程: 根拠の検索と回答の生成");
     await expect(error).toContainText(
-      "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。"
+      "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。"
     );
     await expectNoPageOverflow(page);
   });
@@ -351,9 +351,9 @@ function evaluationMetricsWithTimedOutCase() {
         failure_reasons: ["case_error"],
         elapsed_ms: 300000,
         error_type: "TimeoutError",
-        error_stage: "agentic_planning",
+        error_stage: "docrag_answer",
         error_message:
-          "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 検索の計画）。trace_id で監査ログを確認してください。",
+          "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。trace_id で監査ログを確認してください。",
       },
       success,
     ],

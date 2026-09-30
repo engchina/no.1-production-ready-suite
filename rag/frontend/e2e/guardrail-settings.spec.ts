@@ -9,30 +9,6 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`回答スタイル設定は回答スタイルを表示する (${viewport.name})`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapse) await collapseSidebar(page);
-    await mockGeneration(page);
-
-    await page.goto("/settings/generation");
-
-    await expect(page.getByRole("heading", { name: "回答スタイル", exact: true, level: 1 })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /根拠重視・簡潔/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /構造化 JSON/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /逐句出典付与/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
-    // 現在の回答では使われない(#300 / #594)。
-    await expect(page.getByRole("group", { name: "回答スタイル" })).toHaveAccessibleDescription(
-      /現在の回答では使われません/
-    );
-    // 回答の記録の保存期間と質問履歴は「検索方法」の画面へ移した（#593）。
-    await expect(page.getByText("回答の記録の保存期間")).toHaveCount(0);
-    await expect(page.getByText("質問履歴", { exact: true })).toHaveCount(0);
-    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
-    await expect((await openSidebarNav(page)).getByRole("link", { name: "回答スタイル" })).toHaveAttribute("aria-current", "page");
-    await expectNoHorizontalOverflow(page);
-  });
-
   test(`安全チェック設定は安全チェックを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
@@ -48,87 +24,6 @@ for (const viewport of [
     await expectNoHorizontalOverflow(page);
   });
 }
-
-test("回答スタイル設定は回答スタイルを保存できる", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  let saved: unknown = null;
-  await page.route("**/api/settings/generation", async (route) => {
-    if (route.request().method() === "PATCH") {
-      saved = route.request().postDataJSON();
-      await route.fulfill({ json: generationEnvelope("detailed_cited") });
-      return;
-    }
-    await route.fulfill({ json: generationEnvelope("grounded_concise") });
-  });
-
-  await page.goto("/settings/generation");
-  const detailed = page.getByRole("radio", { name: /詳細・出典明示/ });
-  await detailed.check();
-  await expect(detailed).toBeChecked();
-  await page.getByRole("button", { name: "保存" }).click();
-
-  await expect(page.getByText("回答スタイルを保存しました。")).toBeVisible();
-  expect(saved).toEqual({ profile: "detailed_cited", expected_revision: 3 });
-  await expectNoHorizontalOverflow(page);
-});
-
-test("カスタム回答スタイル選択でプロンプト版管理への導線が出る", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  await page.route("**/api/settings/generation", async (route) => {
-    await route.fulfill({ json: generationEnvelope("grounded_concise") });
-  });
-
-  await page.goto("/settings/generation");
-  await page.getByRole("radio", { name: /カスタム/ }).check();
-
-  const manageLink = page.getByRole("link", { name: "プロンプト版を管理 →" });
-  await expect(manageLink).toBeVisible();
-  await expect(manageLink).toHaveAttribute("href", "/settings/prompts");
-});
-
-test("有効な Prompt がない場合はカスタムを無効化する", async ({ page }) => {
-  await page.route("**/api/settings/generation", async (route) => {
-    await route.fulfill({ json: generationEnvelope("grounded_concise", false) });
-  });
-
-  await page.goto("/settings/generation");
-
-  await expect(page.getByText("カスタム回答スタイルはまだ使えません")).toBeVisible();
-  await expect(page.getByRole("radio", { name: /カスタム/ })).toBeDisabled();
-});
-
-test("回答スタイルの native radio は方向キーで移動できる", async ({ page }) => {
-  await mockGeneration(page);
-  await page.goto("/settings/generation");
-
-  const concise = page.getByRole("radio", { name: /根拠重視・簡潔/ });
-  await concise.focus();
-  await page.keyboard.press("ArrowRight");
-
-  await expect(page.getByRole("radio", { name: /詳細・出典明示/ })).toBeChecked();
-});
-
-test("revision 競合時は最新の設定を読み込み直して案内する", async ({ page }) => {
-  await page.route("**/api/settings/generation", async (route) => {
-    if (route.request().method() === "PATCH") {
-      await route.fulfill({
-        status: 409,
-        json: {
-          data: null,
-          error_messages: ["回答スタイル設定は別の操作で更新されています。"],
-          warning_messages: [],
-        },
-      });
-      return;
-    }
-    await route.fulfill({ json: generationEnvelope("grounded_concise") });
-  });
-  await page.goto("/settings/generation");
-  await page.getByRole("radio", { name: /詳細・出典明示/ }).check();
-  await page.getByRole("button", { name: "保存" }).click();
-
-  await expect(page.getByText(/最新の設定を読み込みました/)).toBeVisible();
-});
 
 test("安全チェック設定は方針を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -241,21 +136,6 @@ test("OCI の注意は OCI Guardrails を選んだときだけ、未設定の理
   await expect(page.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
 });
 
-test("回答スタイル設定取得に失敗したら再試行できる", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  await page.route("**/api/settings/generation", async (route) => {
-    await route.fulfill({
-      status: 503,
-      json: { data: null, error_messages: ["回答スタイル設定を取得できませんでした。"], warning_messages: [] },
-    });
-  });
-
-  await page.goto("/settings/generation");
-
-  await expect(page.getByRole("alert")).toContainText("回答スタイル設定を取得できませんでした。");
-  await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
-});
-
 async function collapseSidebar(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(
@@ -263,53 +143,6 @@ async function collapseSidebar(page: Page) {
       JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
     );
   });
-}
-
-function generationEnvelope(profile: string, customPromptConfigured = true) {
-  const specs = [
-    { name: "grounded_concise", structured_output: false },
-    { name: "detailed_cited", structured_output: false },
-    { name: "strict_extractive", structured_output: false },
-    { name: "structured_json", structured_output: true },
-    { name: "bilingual_ja_en", structured_output: false },
-    { name: "inline_cited", structured_output: false },
-    { name: "custom", structured_output: false },
-  ];
-  const selected = specs.find((s) => s.name === profile) ?? specs[0];
-  return {
-    data: {
-      profile,
-      structured_output: selected.structured_output,
-      profiles: specs.map((s) => ({
-        ...s,
-        origin: "x",
-        recommended_for: ["general"],
-        selected: s.name === profile,
-        contract_mode:
-          s.name === "structured_json"
-            ? "json_schema"
-            : s.name === "custom"
-              ? "custom"
-              : s.name === "grounded_concise"
-                ? "groundedness"
-                : "format_validated",
-        repair_enabled: [
-          "detailed_cited",
-          "strict_extractive",
-          "structured_json",
-          "bilingual_ja_en",
-          "inline_cited",
-        ].includes(s.name),
-      })),
-      config_source: "oracle",
-      revision: 3,
-      updated_at: "2026-07-03T00:00:00Z",
-      active_prompt_version_id: customPromptConfigured ? "prompt-v1" : null,
-      custom_prompt_configured: customPromptConfigured,
-    },
-    error_messages: [],
-    warning_messages: [],
-  };
 }
 
 function guardrailEnvelope(
@@ -348,12 +181,6 @@ function guardrailEnvelope(
     error_messages: [],
     warning_messages: [],
   };
-}
-
-async function mockGeneration(page: Page) {
-  await page.route("**/api/settings/generation", async (route) => {
-    await route.fulfill({ json: generationEnvelope("grounded_concise") });
-  });
 }
 
 async function mockGuardrail(page: Page) {

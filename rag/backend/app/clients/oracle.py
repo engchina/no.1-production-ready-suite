@@ -9,7 +9,6 @@ import hashlib
 import importlib
 import json
 import logging
-import math
 import re
 from array import array
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
@@ -247,29 +246,6 @@ class StoredBusinessView:
     archived_at: datetime | None = None
 
 
-@dataclass(frozen=True)
-class StoredGenerationSettings:
-    """Oracle を正本とする deploy-wide 回答生成設定。"""
-
-    profile: str
-    active_prompt_version_id: str | None
-    revision: int
-    updated_at: datetime
-    updated_by_hash: str | None = None
-
-
-@dataclass(frozen=True)
-class StoredPromptVersion:
-    """Oracle に保存する回答生成 system prompt の版。"""
-
-    version_id: str
-    name: str
-    system_prompt: str
-    note: str
-    created_at: datetime
-    created_by_hash: str | None = None
-
-
 @dataclass
 class StoredConversation:
     """チャット会話(conversation)行。業務ビュー配下に置く。"""
@@ -305,34 +281,6 @@ class StoredMessage:
     user_id_hash: str | None = None
 
 
-@dataclass
-class StoredAgentMemory:
-    """Agent Memory 行。raw user/thread id ではなく hash scope だけを保持する。"""
-
-    memory_id: str
-    tenant_id_hash: str | None
-    user_id_hash: str | None
-    role_id_hash: str | None
-    agent_id_hash: str | None
-    thread_id_hash: str | None
-    trace_id: str
-    memory_text: str
-    embedding: list[float]
-    metadata: dict[str, object] = field(default_factory=dict)
-    usefulness_score: float = 0.5
-    eval_count: int = 0
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-
-@dataclass
-class LocalOracleStore:
-    """Oracle row 変換などの単体テストで使う補助ストア。"""
-
-    agent_memories: dict[str, StoredAgentMemory] = field(default_factory=dict)
-
-
-_LOCAL_STORE = LocalOracleStore()
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
 _ORACLE_CLIENT_INITIALIZED_LIB_DIR: str | None = None
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
@@ -352,18 +300,6 @@ class OracleWalletPasswordRequiredError(RuntimeError):
 
 class OracleConnectionTimeoutError(TimeoutError):
     """Oracle 接続テストが所定時間内に終わらないときのユーザー向けエラー。"""
-
-    safe_for_user = True
-
-
-class GenerationSettingsRevisionConflictError(RuntimeError):
-    """回答生成設定が別 worker / 利用者により先に更新された。"""
-
-    safe_for_user = True
-
-
-class CustomPromptNotConfiguredError(RuntimeError):
-    """custom profile に必要な active Prompt が未設定。"""
 
     safe_for_user = True
 
@@ -484,24 +420,6 @@ class OracleClient:
             for chunk_id in ranked_ids
         ]
 
-    async def graph_local_search(
-        self,
-        query: str,
-        top_k: int,
-        filters: dict[str, str] | None = None,
-    ) -> list[RetrievedChunk]:
-        """軽量 KG の entity/claim/chunk link から local graph 根拠を取得する。"""
-        return await self._graph_local_search_with_oracle(query, top_k, filters or {})
-
-    async def graph_global_search(
-        self,
-        query: str,
-        top_k: int,
-        filters: dict[str, str] | None = None,
-    ) -> list[RetrievedChunk]:
-        """軽量 KG の community summary から横断・全体質問向け根拠を取得する。"""
-        return await self._graph_global_search_with_oracle(query, top_k, filters or {})
-
     async def fetch_knowledge_base_subgraph(
         self,
         knowledge_base_id: str,
@@ -579,17 +497,6 @@ class OracleClient:
         return nodes, [
             edge for edge in edges if edge["source"] in node_ids and edge["target"] in node_ids
         ]
-
-    async def context_neighbors(
-        self,
-        anchors: list[RetrievedChunk],
-        *,
-        window: int,
-    ) -> list[RetrievedChunk]:
-        """rerank 済み anchor chunk の前後を LLM context 補完用に取得する。"""
-        if window <= 0 or not anchors:
-            return []
-        return await self._context_neighbors_with_oracle(anchors, window=window)
 
     async def context_group_siblings(
         self,
@@ -816,20 +723,6 @@ class OracleClient:
             if context:
                 contexts[str(row["chunk_set_id"])] = context
         return contexts
-
-    async def context_dependency_chunks(
-        self,
-        anchors: list[RetrievedChunk],
-        *,
-        max_chunks_per_anchor: int,
-    ) -> list[RetrievedChunk]:
-        """rerank anchor と dependency metadata を共有する候補 chunk を取得する。"""
-        if max_chunks_per_anchor <= 0 or not anchors:
-            return []
-        return await self._context_dependency_chunks_with_oracle(
-            anchors,
-            max_chunks_per_anchor=max_chunks_per_anchor,
-        )
 
     async def create_document(
         self,
@@ -2816,322 +2709,6 @@ class OracleClient:
         return await self._archive_business_view_with_oracle(business_view_id)
 
     # --- 回答生成設定 / Prompt 版 -----------------------------------------
-
-    async def get_generation_settings(self) -> StoredGenerationSettings:
-        """Oracle GLOBAL 行を毎回読み、未作成なら deploy 既定で初期化する。"""
-
-        return await self._run_transaction(
-            lambda connection: _ensure_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-        )
-
-    async def update_generation_settings(
-        self,
-        *,
-        profile: str,
-        expected_revision: int | None = None,
-    ) -> StoredGenerationSettings:
-        """GLOBAL 行を悲観 lock し、revision を検査して更新する。"""
-
-        def operation(connection: OracleConnectionProtocol) -> StoredGenerationSettings:
-            current = _lock_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            _assert_generation_revision(current, expected_revision)
-            if profile == "custom" and current.active_prompt_version_id is None:
-                raise CustomPromptNotConfiguredError(
-                    "カスタム回答スタイルを使う前に Prompt 版を作成して有効化してください。"
-                )
-            updated_at = datetime.now(UTC)
-            _execute(
-                connection,
-                """
-                UPDATE rag_generation_settings
-                SET generation_profile = :generation_profile,
-                    revision = revision + 1,
-                    updated_at = :updated_at,
-                    updated_by_hash = :updated_by_hash
-                WHERE settings_key = 'GLOBAL'
-                """,
-                {
-                    "generation_profile": profile,
-                    "updated_at": updated_at,
-                    "updated_by_hash": current_audit_request_context().user_id_hash,
-                },
-            )
-            return replace(
-                current,
-                profile=profile,
-                revision=current.revision + 1,
-                updated_at=updated_at,
-                updated_by_hash=current_audit_request_context().user_id_hash,
-            )
-
-        return await self._run_transaction(operation)
-
-    async def list_prompt_versions(
-        self,
-    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-        """有効 pointer と Prompt 版を同じ transaction snapshot で返す。"""
-
-        def operation(
-            connection: OracleConnectionProtocol,
-        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-            settings = _ensure_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            return settings, _select_prompt_versions(connection)
-
-        return await self._run_transaction(operation)
-
-    async def create_prompt_version(
-        self,
-        *,
-        name: str,
-        system_prompt: str,
-        note: str = "",
-        activate: bool = True,
-    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-        """Prompt 版の作成・任意 activation・上限整理を原子的に行う。"""
-
-        def operation(
-            connection: OracleConnectionProtocol,
-        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-            current = _lock_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            version_id = uuid4().hex
-            now = datetime.now(UTC)
-            user_hash = current_audit_request_context().user_id_hash
-            _execute(
-                connection,
-                """
-                INSERT INTO rag_prompt_versions (
-                    version_id, name, system_prompt, note, created_at, created_by_hash
-                ) VALUES (
-                    :version_id, :name, :system_prompt, :note, :created_at, :created_by_hash
-                )
-                """,
-                {
-                    "version_id": version_id,
-                    "name": name,
-                    "system_prompt": system_prompt,
-                    "note": note,
-                    "created_at": now,
-                    "created_by_hash": user_hash,
-                },
-            )
-            active_version_id = current.active_prompt_version_id
-            if activate:
-                active_version_id = version_id
-            _execute(
-                connection,
-                """
-                UPDATE rag_generation_settings
-                SET active_prompt_version_id = :active_prompt_version_id,
-                    revision = revision + 1,
-                    updated_at = :updated_at,
-                    updated_by_hash = :updated_by_hash
-                WHERE settings_key = 'GLOBAL'
-                """,
-                {
-                    "active_prompt_version_id": active_version_id,
-                    "updated_at": now,
-                    "updated_by_hash": user_hash,
-                },
-            )
-            updated = replace(
-                current,
-                active_prompt_version_id=active_version_id,
-                revision=current.revision + 1,
-                updated_at=now,
-                updated_by_hash=user_hash,
-            )
-            _delete_stale_prompt_versions(
-                connection,
-                active_prompt_version_id=active_version_id,
-            )
-            return updated, _select_prompt_versions(connection)
-
-        return await self._run_transaction(operation)
-
-    async def activate_prompt_version(
-        self,
-        version_id: str,
-    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-        """既存 Prompt 版を lock 下で有効化する。"""
-
-        def operation(
-            connection: OracleConnectionProtocol,
-        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
-            current = _lock_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            if _select_prompt_version(connection, version_id) is None:
-                raise KeyError(f"version_id={version_id} は存在しません。")
-            now = datetime.now(UTC)
-            user_hash = current_audit_request_context().user_id_hash
-            _execute(
-                connection,
-                """
-                UPDATE rag_generation_settings
-                SET active_prompt_version_id = :active_prompt_version_id,
-                    revision = revision + 1,
-                    updated_at = :updated_at,
-                    updated_by_hash = :updated_by_hash
-                WHERE settings_key = 'GLOBAL'
-                """,
-                {
-                    "active_prompt_version_id": version_id,
-                    "updated_at": now,
-                    "updated_by_hash": user_hash,
-                },
-            )
-            updated = replace(
-                current,
-                active_prompt_version_id=version_id,
-                revision=current.revision + 1,
-                updated_at=now,
-                updated_by_hash=user_hash,
-            )
-            return updated, _select_prompt_versions(connection)
-
-        return await self._run_transaction(operation)
-
-    async def get_active_prompt_version(self) -> StoredPromptVersion | None:
-        """現在有効な custom Prompt を Oracle から取得する。"""
-
-        def operation(connection: OracleConnectionProtocol) -> StoredPromptVersion | None:
-            settings = _ensure_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            if settings.active_prompt_version_id is None:
-                return None
-            return _select_prompt_version(connection, settings.active_prompt_version_id)
-
-        return await self._run_transaction(operation)
-
-    async def get_generation_runtime_config(
-        self,
-    ) -> tuple[StoredGenerationSettings, StoredPromptVersion | None]:
-        """GLOBAL 設定と active Prompt を同じ transaction snapshot で返す。"""
-
-        def operation(
-            connection: OracleConnectionProtocol,
-        ) -> tuple[StoredGenerationSettings, StoredPromptVersion | None]:
-            settings = _ensure_generation_settings_row(
-                connection,
-                default_profile=self._settings.rag_generation_profile,
-            )
-            active = (
-                _select_prompt_version(connection, settings.active_prompt_version_id)
-                if settings.active_prompt_version_id is not None
-                else None
-            )
-            return settings, active
-
-        return await self._run_transaction(operation)
-
-    async def import_legacy_generation_settings(
-        self,
-        *,
-        profile: str,
-        versions: Sequence[Mapping[str, object]],
-        active_version_id: str | None,
-    ) -> dict[str, object]:
-        """旧 .env / JSON を idempotent に Oracle へ取り込む。"""
-
-        def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
-            before = _fetch_one(
-                connection,
-                """
-                SELECT generation_profile, active_prompt_version_id, revision,
-                       updated_at, updated_by_hash
-                FROM rag_generation_settings
-                WHERE settings_key = 'GLOBAL'
-                FOR UPDATE
-                """,
-                {},
-            )
-            rows = [
-                _legacy_prompt_version_binds(version)
-                for version in versions
-                if str(version.get("version_id") or "").strip()
-                and str(version.get("name") or "").strip()
-                and str(version.get("system_prompt") or "").strip()
-            ]
-            imported_ids = {str(row["version_id"]) for row in rows}
-            if rows:
-                _executemany(
-                    connection,
-                    """
-                    MERGE INTO rag_prompt_versions target
-                    USING (
-                        SELECT :version_id AS version_id,
-                               :name AS name,
-                               :system_prompt AS system_prompt,
-                               :note AS note,
-                               :created_at AS created_at,
-                               :created_by_hash AS created_by_hash
-                        FROM dual
-                    ) source
-                    ON (target.version_id = source.version_id)
-                    WHEN NOT MATCHED THEN INSERT (
-                        version_id, name, system_prompt, note, created_at, created_by_hash
-                    ) VALUES (
-                        source.version_id, source.name, source.system_prompt, source.note,
-                        source.created_at, source.created_by_hash
-                    )
-                    """,
-                    rows,
-                )
-            imported_active = active_version_id if active_version_id in imported_ids else None
-            now = datetime.now(UTC)
-            _execute(
-                connection,
-                """
-                MERGE INTO rag_generation_settings target
-                USING (SELECT 'GLOBAL' AS settings_key FROM dual) source
-                ON (target.settings_key = source.settings_key)
-                WHEN NOT MATCHED THEN INSERT (
-                    settings_key, generation_profile, active_prompt_version_id,
-                    revision, updated_at, updated_by_hash
-                ) VALUES (
-                    'GLOBAL', :generation_profile, :active_prompt_version_id,
-                    1, :updated_at, :updated_by_hash
-                )
-                """,
-                {
-                    "generation_profile": _initial_generation_profile(profile, imported_active),
-                    "active_prompt_version_id": imported_active,
-                    "updated_at": now,
-                    "updated_by_hash": current_audit_request_context().user_id_hash,
-                },
-            )
-            current = _lock_generation_settings_row(
-                connection,
-                default_profile=profile,
-            )
-            _delete_stale_prompt_versions(
-                connection,
-                active_prompt_version_id=current.active_prompt_version_id,
-            )
-            return {
-                "settings_created": before is None,
-                "profile": current.profile,
-                "active_prompt_version_id": current.active_prompt_version_id,
-                "prompt_version_count": len(_select_prompt_versions(connection)),
-                "legacy_prompt_count": len(rows),
-            }
-
-        return await self._run_transaction(operation)
 
     # --- チャット会話 / メッセージ -----------------------------------------
 
@@ -5152,136 +4729,6 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def agent_memory_search(
-        self,
-        query: str,
-        embedding: list[float],
-        top_k: int,
-        filters: dict[str, str] | None = None,
-    ) -> list[RetrievedChunk]:
-        """Oracle AI Database の Agent Memory から scoped history context を取得する。"""
-        del filters
-        if top_k <= 0 or not _agent_memory_scope_available():
-            return []
-        self._validate_embedding_width(embedding, "agent memory query embedding")
-        if _LOCAL_STORE.agent_memories and not _oracle_connection_configured(self):
-            return _local_agent_memory_search(query, embedding, top_k)
-        if not _oracle_connection_configured(self):
-            return []
-        return await self._agent_memory_search_with_oracle(query, embedding, top_k)
-
-    async def save_agent_memory(
-        self,
-        memory: Mapping[str, object],
-        embedding: list[float],
-    ) -> str | None:
-        """根拠付き回答の低機密 summary を scoped Agent Memory として保存する。"""
-        if not _agent_memory_scope_available():
-            return None
-        if not str(memory.get("memory_text") or "").strip():
-            return None
-        self._validate_embedding_width(embedding, "agent memory embedding")
-        memory_id = _audit_str(memory, "memory_id", uuid4().hex)
-        binds = _agent_memory_binds(memory, memory_id=memory_id, embedding=embedding)
-        if _LOCAL_STORE.agent_memories and not _oracle_connection_configured(self):
-            _LOCAL_STORE.agent_memories[memory_id] = _stored_agent_memory_from_binds(binds)
-            return memory_id
-        if not _oracle_connection_configured(self):
-            return None
-        await self._run_transaction(
-            lambda connection: _execute(
-                connection,
-                """
-                INSERT INTO rag_agent_memories (
-                    memory_id,
-                    tenant_id_hash,
-                    user_id_hash,
-                    role_id_hash,
-                    agent_id_hash,
-                    thread_id_hash,
-                    trace_id,
-                    memory_text,
-                    metadata_json,
-                    embedding,
-                    usefulness_score,
-                    eval_count,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :memory_id,
-                    :tenant_id_hash,
-                    :user_id_hash,
-                    :role_id_hash,
-                    :agent_id_hash,
-                    :thread_id_hash,
-                    :trace_id,
-                    :memory_text,
-                    :metadata_json,
-                    :embedding,
-                    :usefulness_score,
-                    :eval_count,
-                    :created_at,
-                    :updated_at
-                )
-                """,
-                binds,
-            )
-        )
-        return memory_id
-
-    async def _agent_memory_search_with_oracle(
-        self,
-        query: str,
-        embedding: list[float],
-        top_k: int,
-    ) -> list[RetrievedChunk]:
-        """Oracle VECTOR + Text で scoped Agent Memory を検索する。"""
-        where_sql, binds = _oracle_agent_memory_where()
-        binds.update(
-            {
-                "embedding": _to_vector_bind(embedding),
-                "min_similarity": self._settings.rag_min_similarity,
-                "query": query,
-            }
-        )
-        fetch_clause = _oracle_vector_fetch_clause(
-            top_k=top_k,
-            target_accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
-        )
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT
-                memory_id,
-                memory_text,
-                metadata_json,
-                usefulness_score,
-                eval_count,
-                updated_at,
-                (
-                    1 - VECTOR_DISTANCE(embedding, :embedding, COSINE)
-                ) AS vector_score,
-                (
-                    (1 - VECTOR_DISTANCE(embedding, :embedding, COSINE)) * 0.85
-                    + LEAST(NVL(usefulness_score, 0.5), 1) * 0.15
-                ) AS score
-            FROM rag_agent_memories m
-            WHERE {where_sql}
-              AND 1 - VECTOR_DISTANCE(embedding, :embedding, COSINE) >= :min_similarity
-            ORDER BY
-                VECTOR_DISTANCE(embedding, :embedding, COSINE) ASC,
-                usefulness_score DESC,
-                updated_at DESC,
-                memory_id ASC
-            {fetch_clause}
-            """,
-                where_sql=where_sql,
-                fetch_clause=fetch_clause,
-            ),
-            binds,
-        )
-        return [_agent_memory_chunk_from_row(row, rank=rank) for rank, row in enumerate(rows, 1)]
-
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -5394,200 +4841,6 @@ class OracleClient:
             for rank, row in enumerate(rows, start=1)
         ]
 
-    async def _graph_local_search_with_oracle(
-        self,
-        query: str,
-        top_k: int,
-        filters: dict[str, str],
-    ) -> list[RetrievedChunk]:
-        """Oracle KG entity/claim から関連 chunk を取得する。"""
-        where_sql, binds = _oracle_retrieval_where(filters)
-        match_sql, match_binds = _oracle_graph_local_match_predicate(query)
-        binds.update(match_binds)
-        binds["top_k"] = top_k
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT *
-            FROM (
-                SELECT
-                    c.document_id,
-                    c.chunk_id,
-                    c.chunk_text,
-                    c.metadata_json,
-                    c.chunk_index,
-                    c.chunk_set_id,
-                    cs.recipe_id,
-                    r.slot_no AS recipe_slot_no,
-                    d.file_name,
-                    d.category_name,
-                    e.entity_id,
-                    e.canonical_name,
-                    e.entity_type,
-                    NVL(e.confidence, 1) AS entity_confidence,
-                    NVL(ec.relevance_score, 1) AS entity_chunk_relevance,
-                    (
-                        NVL(ec.relevance_score, 1) * 0.65
-                        + NVL(e.confidence, 1) * 0.35
-                    ) AS score
-                FROM rag_graph_entities e
-                JOIN rag_graph_entity_chunks ec
-                  ON ec.entity_id = e.entity_id
-                JOIN rag_chunks c
-                  ON c.chunk_id = ec.chunk_id
-                 AND c.document_id = ec.document_id
-                JOIN rag_documents d
-                  ON d.document_id = c.document_id
-                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-                WHERE {where_sql}
-                  AND {match_sql}
-                ORDER BY
-                    score DESC,
-                    c.document_id ASC,
-                    c.chunk_index ASC,
-                    c.chunk_id ASC
-            )
-            WHERE ROWNUM <= :top_k
-            """,
-                where_sql=where_sql,
-                match_sql=match_sql,
-            ),
-            binds,
-        )
-        return [
-            _with_retrieval_metadata(
-                _retrieved_chunk_from_row(row),
-                retrieval_mode="graph_local",
-                graph_rank=rank,
-                graph_entity_id=_optional_str(row.get("entity_id")),
-                graph_entity_name=_optional_str(row.get("canonical_name")),
-                graph_entity_type=_optional_str(row.get("entity_type")),
-                graph_entity_confidence=round(_float_value(row.get("entity_confidence")), 6),
-                graph_entity_chunk_relevance=round(
-                    _float_value(row.get("entity_chunk_relevance")),
-                    6,
-                ),
-            )
-            for rank, row in enumerate(rows, start=1)
-        ]
-
-    async def _graph_global_search_with_oracle(
-        self,
-        query: str,
-        top_k: int,
-        filters: dict[str, str],
-    ) -> list[RetrievedChunk]:
-        """Oracle KG community summary から横断 context を取得する。"""
-        where_sql, binds = _oracle_graph_community_where(filters)
-        match_sql, match_binds = _oracle_graph_global_match_predicate(query)
-        binds.update(match_binds)
-        binds["top_k"] = top_k
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT *
-            FROM (
-                SELECT
-                    g.community_id,
-                    g.knowledge_base_id,
-                    g.level_no,
-                    g.title,
-                    g.summary_text,
-                    g.source_document_ids,
-                    cs.recipe_id,
-                    r.slot_no AS recipe_slot_no,
-                    (
-                        CASE
-                            WHEN LOWER(title) LIKE :graph_title_exact ESCAPE '\\' THEN 1
-                            ELSE 0
-                        END
-                        + 0.75
-                    ) AS score
-                FROM rag_graph_community_summaries g
-                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = g.chunk_set_id
-                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-                WHERE {where_sql}
-                  AND {match_sql}
-                ORDER BY
-                    score DESC,
-                    level_no ASC,
-                    community_id ASC
-            )
-            WHERE ROWNUM <= :top_k
-            """,
-                where_sql=where_sql,
-                match_sql=match_sql,
-            ),
-            binds,
-        )
-        return [
-            _graph_community_chunk_from_row(row, rank=rank)
-            for rank, row in enumerate(rows, start=1)
-        ]
-
-    async def _context_neighbors_with_oracle(
-        self,
-        anchors: list[RetrievedChunk],
-        *,
-        window: int,
-    ) -> list[RetrievedChunk]:
-        """Oracle から同一 document の隣接 chunk を取得する。"""
-        neighbors: list[RetrievedChunk] = []
-        for anchor in anchors:
-            anchor_index = _chunk_index_from_retrieved(anchor)
-            if anchor_index is None:
-                continue
-            where_sql, binds = _context_anchor_retrieval_where(anchor)
-            binds.update(
-                {
-                    "anchor_index": anchor_index,
-                    "anchor_chunk_id": anchor.chunk_id,
-                    "start_index": anchor_index - window,
-                    "end_index": anchor_index + window,
-                }
-            )
-            rows = await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT
-                    c.document_id,
-                    c.chunk_id,
-                    c.chunk_text,
-                    c.metadata_json,
-                    c.chunk_index,
-                    c.chunk_set_id,
-                    d.file_name,
-                    d.category_name,
-                    0 AS score
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND c.chunk_index BETWEEN :start_index AND :end_index
-                  AND c.chunk_id <> :anchor_chunk_id
-                ORDER BY
-                    ABS(c.chunk_index - :anchor_index) ASC,
-                    c.chunk_index ASC,
-                    c.chunk_id ASC
-                """,
-                    where_sql=where_sql,
-                ),
-                binds,
-            )
-            for row in rows:
-                neighbor = _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
-                neighbor_index = _chunk_index_from_retrieved(neighbor)
-                if neighbor_index is None:
-                    continue
-                neighbors.append(
-                    _with_context_neighbor_metadata(
-                        neighbor,
-                        anchor=anchor,
-                        distance=neighbor_index - anchor_index,
-                    )
-                )
-        return neighbors
-
     async def _context_group_siblings_with_oracle(
         self,
         anchors: list[RetrievedChunk],
@@ -5655,67 +4908,6 @@ class OracleClient:
                     )
                 )
         return siblings
-
-    async def _context_dependency_chunks_with_oracle(
-        self,
-        anchors: list[RetrievedChunk],
-        *,
-        max_chunks_per_anchor: int,
-    ) -> list[RetrievedChunk]:
-        """Oracle から dependency promotion 用の同一 document 候補を取得する。"""
-        dependency_chunks: list[RetrievedChunk] = []
-        candidate_limit = max(max_chunks_per_anchor * 8, max_chunks_per_anchor)
-        for anchor in anchors:
-            anchor_index = _chunk_index_from_retrieved(anchor) or 0
-            where_sql, binds = _context_anchor_retrieval_where(anchor)
-            dependency_match_sql, dependency_binds = _context_dependency_match_sql(anchor)
-            binds.update(
-                {
-                    "anchor_index": anchor_index,
-                    "anchor_chunk_id": anchor.chunk_id,
-                    "candidate_limit": candidate_limit,
-                    **dependency_binds,
-                }
-            )
-            rows = await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT *
-                FROM (
-                    SELECT
-                        c.document_id,
-                        c.chunk_id,
-                        c.chunk_text,
-                        c.metadata_json,
-                        c.chunk_index,
-                        c.chunk_set_id,
-                        d.file_name,
-                        d.category_name,
-                        0 AS score
-                    FROM rag_chunks c
-                    JOIN rag_documents d ON d.document_id = c.document_id
-                    WHERE {where_sql}
-                      AND c.chunk_id <> :anchor_chunk_id
-                      AND (
-                        {dependency_match_sql}
-                      )
-                    ORDER BY
-                        ABS(c.chunk_index - :anchor_index) ASC,
-                        c.chunk_index ASC,
-                        c.chunk_id ASC
-                )
-                WHERE ROWNUM <= :candidate_limit
-                """,
-                    where_sql=where_sql,
-                    dependency_match_sql=dependency_match_sql,
-                ),
-                binds,
-            )
-            dependency_chunks.extend(
-                _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
-                for row in rows
-            )
-        return dependency_chunks
 
     async def _create_document_with_oracle(
         self,
@@ -9488,212 +8680,6 @@ def _execute_count_with_input_sizes(
         cursor.close()
 
 
-def _ensure_generation_settings_row(
-    connection: OracleConnectionProtocol,
-    *,
-    default_profile: str,
-) -> StoredGenerationSettings:
-    """GLOBAL 行を一度だけ作成し、現在値を返す。
-
-    新しい行は有効な Prompt 版を持たないため、deploy 既定が custom でも grounded_concise で
-    作る(custom は有効な版が必須。#276)。
-    """
-
-    now = datetime.now(UTC)
-    _execute(
-        connection,
-        """
-        MERGE INTO rag_generation_settings target
-        USING (SELECT 'GLOBAL' AS settings_key FROM dual) source
-        ON (target.settings_key = source.settings_key)
-        WHEN NOT MATCHED THEN INSERT (
-            settings_key,
-            generation_profile,
-            active_prompt_version_id,
-            revision,
-            updated_at,
-            updated_by_hash
-        ) VALUES (
-            'GLOBAL',
-            :generation_profile,
-            NULL,
-            1,
-            :updated_at,
-            :updated_by_hash
-        )
-        """,
-        {
-            "generation_profile": _initial_generation_profile(default_profile, None),
-            "updated_at": now,
-            "updated_by_hash": current_audit_request_context().user_id_hash,
-        },
-    )
-    row = _fetch_one(
-        connection,
-        """
-        SELECT generation_profile,
-               active_prompt_version_id,
-               revision,
-               updated_at,
-               updated_by_hash
-        FROM rag_generation_settings
-        WHERE settings_key = 'GLOBAL'
-        """,
-        {},
-    )
-    if row is None:  # pragma: no cover - MERGE/SELECT の DB invariant
-        raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を初期化できませんでした。")
-    return _stored_generation_settings_from_row(row)
-
-
-def _initial_generation_profile(profile: str, active_prompt_version_id: str | None) -> str:
-    """GLOBAL 行を新しく作るときの profile。有効な版がない custom は既定へ戻す。"""
-
-    if profile == "custom" and active_prompt_version_id is None:
-        return "grounded_concise"
-    return profile
-
-
-def _lock_generation_settings_row(
-    connection: OracleConnectionProtocol,
-    *,
-    default_profile: str,
-) -> StoredGenerationSettings:
-    """GLOBAL 行を作成後 SELECT FOR UPDATE で lock する。"""
-
-    _ensure_generation_settings_row(connection, default_profile=default_profile)
-    row = _fetch_one(
-        connection,
-        """
-        SELECT generation_profile,
-               active_prompt_version_id,
-               revision,
-               updated_at,
-               updated_by_hash
-        FROM rag_generation_settings
-        WHERE settings_key = 'GLOBAL'
-        FOR UPDATE
-        """,
-        {},
-    )
-    if row is None:  # pragma: no cover - GLOBAL 行は直前に作成済み
-        raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を lock できませんでした。")
-    return _stored_generation_settings_from_row(row)
-
-
-def _assert_generation_revision(
-    current: StoredGenerationSettings,
-    expected_revision: int | None,
-) -> None:
-    if expected_revision is not None and expected_revision != current.revision:
-        raise GenerationSettingsRevisionConflictError(
-            "回答スタイル設定は別の操作で更新されています。再読み込みしてから保存してください。"
-        )
-
-
-def _select_prompt_versions(
-    connection: OracleConnectionProtocol,
-) -> list[StoredPromptVersion]:
-    rows = _fetch_all(
-        connection,
-        """
-        SELECT version_id, name, system_prompt, note, created_at, created_by_hash
-        FROM rag_prompt_versions
-        ORDER BY created_at DESC, version_id DESC
-        """,
-        {},
-    )
-    return [_stored_prompt_version_from_row(row) for row in rows]
-
-
-def _select_prompt_version(
-    connection: OracleConnectionProtocol,
-    version_id: str,
-) -> StoredPromptVersion | None:
-    row = _fetch_one(
-        connection,
-        """
-        SELECT version_id, name, system_prompt, note, created_at, created_by_hash
-        FROM rag_prompt_versions
-        WHERE version_id = :version_id
-        """,
-        {"version_id": version_id},
-    )
-    return _stored_prompt_version_from_row(row) if row is not None else None
-
-
-def _delete_stale_prompt_versions(
-    connection: OracleConnectionProtocol,
-    *,
-    active_prompt_version_id: str | None,
-) -> None:
-    """全体 100 版を超えた分だけ、最古の非 active 版から削除する。"""
-
-    row = _fetch_one(
-        connection,
-        "SELECT COUNT(*) AS count_value FROM rag_prompt_versions",
-        {},
-    )
-    excess = max(0, _row_count_value(row) - 100)
-    if excess == 0:
-        return
-    _execute(
-        connection,
-        """
-        DELETE FROM rag_prompt_versions
-        WHERE version_id IN (
-            SELECT version_id
-            FROM rag_prompt_versions
-            WHERE (:active_prompt_version_id IS NULL
-                   OR version_id <> :active_prompt_version_id)
-            ORDER BY created_at ASC, version_id ASC
-            FETCH FIRST :delete_limit ROWS ONLY
-        )
-        """,
-        {
-            "active_prompt_version_id": active_prompt_version_id,
-            "delete_limit": excess,
-        },
-    )
-
-
-def _stored_generation_settings_from_row(
-    row: Mapping[str, object],
-) -> StoredGenerationSettings:
-    return StoredGenerationSettings(
-        profile=str(row.get("generation_profile") or "grounded_concise"),
-        active_prompt_version_id=_optional_str(row.get("active_prompt_version_id")),
-        revision=max(1, _int_value(row.get("revision"))),
-        updated_at=_datetime_value(row.get("updated_at")),
-        updated_by_hash=_optional_str(row.get("updated_by_hash")),
-    )
-
-
-def _stored_prompt_version_from_row(row: Mapping[str, object]) -> StoredPromptVersion:
-    return StoredPromptVersion(
-        version_id=str(row.get("version_id") or ""),
-        name=str(row.get("name") or ""),
-        system_prompt=_text_value(row.get("system_prompt")),
-        note=_text_value(row.get("note")),
-        created_at=_datetime_value(row.get("created_at")),
-        created_by_hash=_optional_str(row.get("created_by_hash")),
-    )
-
-
-def _legacy_prompt_version_binds(version: Mapping[str, object]) -> dict[str, object]:
-    created_by = str(version.get("created_by") or "").strip()
-    return {
-        "version_id": str(version.get("version_id") or "").strip(),
-        "name": str(version.get("name") or "").strip(),
-        "system_prompt": str(version.get("system_prompt") or "").strip(),
-        "note": str(version.get("note") or "").strip(),
-        "created_at": _datetime_value(version.get("created_at")),
-        "created_by_hash": (
-            hashlib.sha256(created_by.encode("utf-8")).hexdigest() if created_by else None
-        ),
-    }
-
-
 def _executemany(
     connection: OracleConnectionProtocol,
     statement: str,
@@ -10150,57 +9136,6 @@ def _evaluation_artifact_binds(
     }
 
 
-def _agent_memory_binds(
-    memory: Mapping[str, object],
-    *,
-    memory_id: str,
-    embedding: list[float],
-) -> dict[str, object]:
-    """Agent Memory を Oracle bind 値へ変換する。scope は hash のみ保存する。"""
-    context = current_audit_request_context()
-    now = datetime.now(UTC)
-    metadata = memory.get("metadata", {})
-    if not isinstance(metadata, Mapping):
-        metadata = {}
-    usefulness_score = _bounded_float(memory.get("usefulness_score"), default=0.5)
-    return {
-        "memory_id": memory_id,
-        "tenant_id_hash": _audit_optional_str(memory, "tenant_id_hash") or context.tenant_id_hash,
-        "user_id_hash": _audit_optional_str(memory, "user_id_hash") or context.user_id_hash,
-        "role_id_hash": _audit_optional_str(memory, "role_id_hash") or context.role_id_hash,
-        "agent_id_hash": _audit_optional_str(memory, "agent_id_hash") or context.agent_id_hash,
-        "thread_id_hash": _audit_optional_str(memory, "thread_id_hash") or context.thread_id_hash,
-        "trace_id": _audit_str(memory, "trace_id", ""),
-        "memory_text": str(memory.get("memory_text") or "").strip(),
-        "metadata_json": _audit_json(metadata),
-        "embedding": _to_vector_bind(embedding),
-        "embedding_list": list(embedding),
-        "usefulness_score": usefulness_score,
-        "eval_count": _audit_int(memory, "eval_count"),
-        "created_at": now,
-        "updated_at": now,
-    }
-
-
-def _stored_agent_memory_from_binds(binds: Mapping[str, object]) -> StoredAgentMemory:
-    return StoredAgentMemory(
-        memory_id=str(binds["memory_id"]),
-        tenant_id_hash=_optional_str(binds.get("tenant_id_hash")),
-        user_id_hash=_optional_str(binds.get("user_id_hash")),
-        role_id_hash=_optional_str(binds.get("role_id_hash")),
-        agent_id_hash=_optional_str(binds.get("agent_id_hash")),
-        thread_id_hash=_optional_str(binds.get("thread_id_hash")),
-        trace_id=str(binds.get("trace_id") or ""),
-        memory_text=str(binds.get("memory_text") or ""),
-        embedding=list(cast(Sequence[float], binds.get("embedding_list") or [])),
-        metadata=_json_loads(binds.get("metadata_json")),
-        usefulness_score=_float_value(binds.get("usefulness_score")),
-        eval_count=_int_value(binds.get("eval_count")),
-        created_at=_datetime_value(binds.get("created_at")),
-        updated_at=_datetime_value(binds.get("updated_at")),
-    )
-
-
 def _graph_entity_binds(entity: GraphEntity) -> dict[str, object]:
     return {
         "entity_id": entity.entity_id,
@@ -10297,12 +9232,6 @@ def _audit_float(event: Mapping[str, object], key: str, default: float = 0.0) ->
 def _audit_optional_float(event: Mapping[str, object], key: str) -> float | None:
     value = event.get(key)
     return float(value) if isinstance(value, int | float) else None
-
-
-def _bounded_float(value: object, *, default: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
-        return default
-    return min(1.0, max(0.0, float(value)))
 
 
 def _stale_running_ingestion_job_predicate_sql(
@@ -11603,83 +10532,6 @@ def _parse_filter_datetime(value: str, *, end_of_day: bool) -> datetime:
     return parsed
 
 
-def _oracle_agent_memory_where() -> tuple[str, dict[str, object]]:
-    """Agent Memory の tenant/user/thread/agent scope predicate を作る。"""
-    context = current_audit_request_context()
-    clauses: list[str] = []
-    binds: dict[str, object] = {}
-    if context.tenant_id_hash is not None:
-        clauses.append("m.tenant_id_hash = :agent_memory_tenant_id_hash")
-        binds["agent_memory_tenant_id_hash"] = context.tenant_id_hash
-    if context.user_id_hash is not None:
-        clauses.append("m.user_id_hash = :agent_memory_user_id_hash")
-        binds["agent_memory_user_id_hash"] = context.user_id_hash
-    if context.role_id_hash is not None:
-        clauses.append("m.role_id_hash = :agent_memory_role_id_hash")
-        binds["agent_memory_role_id_hash"] = context.role_id_hash
-    if context.agent_id_hash is not None:
-        clauses.append("m.agent_id_hash = :agent_memory_agent_id_hash")
-        binds["agent_memory_agent_id_hash"] = context.agent_id_hash
-    if context.thread_id_hash is not None:
-        clauses.append("m.thread_id_hash = :agent_memory_thread_id_hash")
-        binds["agent_memory_thread_id_hash"] = context.thread_id_hash
-    if not _agent_memory_scope_available():
-        clauses.append("1 = 0")
-    return " AND ".join(clauses or ["1 = 1"]), binds
-
-
-def _agent_memory_scope_available() -> bool:
-    """ユーザー・スレッド・エージェントのいずれかで scope できる場合だけ memory を使う。"""
-    context = current_audit_request_context()
-    return any(
-        (
-            context.user_id_hash,
-            context.role_id_hash,
-            context.agent_id_hash,
-            context.thread_id_hash,
-        )
-    )
-
-
-def _oracle_graph_community_where(
-    filters: dict[str, str],
-) -> tuple[str, dict[str, object]]:
-    """community summary table 用の tenant / KB scope predicate を作る。"""
-    clauses = _oracle_knowledge_base_access_predicates(alias="g")
-    binds = _with_tenant_bind({}, alias="g")
-    supported_filters = {"knowledge_base_id", "serving_mode", "chunk_set_id"}
-    unsupported_global_filters = {
-        key for key, value in filters.items() if key not in supported_filters and value.strip()
-    }
-    if unsupported_global_filters:
-        clauses.append("1 = 0")
-    knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
-    if knowledge_base_ids:
-        knowledge_base_filter_sql, knowledge_base_binds = _oracle_in_predicate(
-            "g.knowledge_base_id",
-            "filter_knowledge_base_id",
-            knowledge_base_ids,
-        )
-        clauses.append(knowledge_base_filter_sql)
-        binds.update(knowledge_base_binds)
-    # community summary の knowledge_base_id は取込時点の所属のスナップショット。文書を KB から
-    # 外した後も行が残るため、今もその KB に所属している文書の summary だけに絞る(#274)。
-    clauses.append(_graph_current_membership_predicate("g"))
-    explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
-    if explicit_chunk_set_id:
-        clauses.append("g.chunk_set_id = :graph_chunk_set_id")
-        binds["graph_chunk_set_id"] = explicit_chunk_set_id
-    else:
-        clauses.append(
-            "EXISTS ("
-            "SELECT 1 FROM rag_chunk_sets active_cs "
-            "WHERE active_cs.chunk_set_id = g.chunk_set_id "
-            "AND active_cs.is_active = 1 AND active_cs.status = 'INDEXED'"
-            ")"
-        )
-    return " AND ".join(clauses), binds
-
-
 def _graph_current_membership_predicate(alias: str) -> str:
     """graph 行の KB(取込時のスナップショット)に、元文書が今も所属しているかの predicate。
 
@@ -11697,64 +10549,6 @@ def _graph_current_membership_predicate(alias: str) -> str:
         'PASSING member_dkb.document_id AS "member_document_id")'
         "))"
     )
-
-
-def _oracle_graph_local_match_predicate(query: str) -> tuple[str, dict[str, object]]:
-    """entity local search 用の LIKE predicate を作る。"""
-    return _oracle_like_any_predicate(
-        query,
-        columns=[
-            "LOWER(e.canonical_name)",
-            "LOWER(e.entity_type)",
-            "LOWER(DBMS_LOB.SUBSTR(e.description, 4000, 1))",
-        ],
-        bind_prefix="graph_local_term",
-    )
-
-
-def _oracle_graph_global_match_predicate(query: str) -> tuple[str, dict[str, object]]:
-    """community summary search 用の LIKE predicate を作る。"""
-    match_sql, binds = _oracle_like_any_predicate(
-        query,
-        columns=[
-            "LOWER(g.title)",
-            "LOWER(DBMS_LOB.SUBSTR(g.summary_text, 4000, 1))",
-        ],
-        bind_prefix="graph_global_term",
-    )
-    binds["graph_title_exact"] = _like_pattern(query)
-    return match_sql, binds
-
-
-def _oracle_like_any_predicate(
-    query: str,
-    *,
-    columns: Sequence[str],
-    bind_prefix: str,
-) -> tuple[str, dict[str, object]]:
-    """複数列 x query term の OR predicate を bind 付きで生成する。"""
-    terms = _graph_query_terms(query)
-    if not terms:
-        return "1 = 1", {}
-    clauses: list[str] = []
-    binds: dict[str, object] = {}
-    for index, term in enumerate(terms):
-        bind_name = f"{bind_prefix}_{index}"
-        binds[bind_name] = _like_pattern(term)
-        clauses.extend(f"{column} LIKE :{bind_name} ESCAPE '\\'" for column in columns)
-    return "(" + " OR ".join(clauses) + ")", binds
-
-
-def _graph_query_terms(query: str) -> list[str]:
-    """Graph 検索用に query から短い低コスト term 集合を作る。"""
-    normalized = query.casefold().strip()
-    terms = [normalized] if len(normalized) >= 2 else []
-    terms.extend(
-        token.strip().casefold()
-        for token in TOKEN_PATTERN.findall(normalized)
-        if len(token.strip()) >= 2
-    )
-    return _unique_optional_sequence(terms)[:8]
 
 
 def _oracle_vector_fetch_clause(*, top_k: int, target_accuracy: int) -> str:
@@ -12414,37 +11208,6 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     )
 
 
-def _agent_memory_chunk_from_row(
-    row: Mapping[str, object],
-    *,
-    rank: int,
-) -> RetrievedChunk:
-    metadata = _metadata_from_json(row.get("metadata_json"))
-    memory_id = str(row["memory_id"])
-    metadata.update(
-        {
-            "retrieval_mode": "agent_memory",
-            "context_role": "history",
-            "agent_memory_id": memory_id,
-            "agent_memory_rank": rank,
-            "agent_memory_usefulness_score": round(
-                _float_value(row.get("usefulness_score", 0.5)),
-                6,
-            ),
-            "agent_memory_eval_count": _int_value(row.get("eval_count")),
-            "agent_memory_vector_score": round(_float_value(row.get("vector_score")), 6),
-        }
-    )
-    return RetrievedChunk(
-        document_id="agent-memory",
-        chunk_id=f"agent-memory:{memory_id}",
-        text=str(row["memory_text"]),
-        score=round(_float_value(row.get("score", 0.0)), 6),
-        file_name="agent-memory",
-        metadata=metadata,
-    )
-
-
 def _chunk_search_text(chunk: Chunk) -> str:
     """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
     if search_text := docrag_search_text(chunk.metadata):
@@ -12475,34 +11238,6 @@ def _document_chunk_view_from_row(row: Mapping[str, object]) -> DocumentChunkVie
         chunk_group_id=_metadata_str(metadata.get("chunk_group_id")),
         source_parser=_metadata_str(metadata.get("source_parser")),
         element_ids=_element_ids_from_metadata(metadata.get("element_ids")),
-        metadata=metadata,
-    )
-
-
-def _graph_community_chunk_from_row(row: Mapping[str, object], *, rank: int) -> RetrievedChunk:
-    """community summary row を RetrievedChunk として LLM context へ渡す。"""
-    community_id = str(row["community_id"])
-    source_document_ids = _json_list(row.get("source_document_ids"))
-    primary_document_id = source_document_ids[0] if source_document_ids else community_id
-    title = _optional_str(row.get("title")) or "Graph community summary"
-    metadata: dict[str, MetadataValue] = {
-        "retrieval_mode": "graph_global",
-        "graph_rank": rank,
-        "graph_community_id": community_id,
-        "graph_community_title": title,
-        "graph_level": _int_value(row.get("level_no")),
-        "graph_knowledge_base_id": _optional_str(row.get("knowledge_base_id")),
-        "graph_source_document_count": len(source_document_ids),
-        "graph_source_document_ids": _audit_json(source_document_ids),
-        "recipe_id": _optional_str(row.get("recipe_id")),
-        "recipe_slot_no": _optional_int(row.get("recipe_slot_no")),
-    }
-    return RetrievedChunk(
-        document_id=primary_document_id,
-        chunk_id=f"community:{community_id}",
-        text=str(row["summary_text"]),
-        score=round(_float_value(row.get("score", 0.0)), 6),
-        file_name=title,
         metadata=metadata,
     )
 
@@ -12754,18 +11489,6 @@ def _optional_str(value: object) -> str | None:
     return str(value)
 
 
-def _text_value(value: object) -> str:
-    """str / bytes / python-oracledb LOB を本文文字列へ変換する。"""
-
-    if value is None:
-        return ""
-    read = getattr(value, "read", None)
-    resolved = read() if callable(read) else value
-    if isinstance(resolved, bytes):
-        return resolved.decode("utf-8")
-    return str(resolved)
-
-
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
@@ -12856,11 +11579,6 @@ def _bounded_int_literal(value: int, *, name: str, minimum: int, maximum: int) -
     if value < minimum or value > maximum:
         raise ValueError(f"{name} は {minimum} から {maximum} の範囲で指定してください。")
     return str(value)
-
-
-def reset_local_store() -> None:
-    """テスト用にローカルストアを初期化する。"""
-    _LOCAL_STORE.agent_memories.clear()
 
 
 def close_oracle_pool() -> None:
@@ -14281,64 +12999,6 @@ CREATE INDEX {table_name}_owner_created_idx
 """.strip()
 
 
-def _local_agent_memory_search(
-    query: str,
-    embedding: list[float],
-    top_k: int,
-) -> list[RetrievedChunk]:
-    """テスト用 local store の Agent Memory 検索。"""
-    query_tokens = _tokens(query)
-    scored: list[tuple[StoredAgentMemory, float, float]] = []
-    for memory in _LOCAL_STORE.agent_memories.values():
-        if not _agent_memory_matches_current_scope(memory):
-            continue
-        vector_score = _cosine_similarity(embedding, memory.embedding)
-        keyword_score = _keyword_score(query_tokens, _tokens(memory.memory_text))
-        score = (vector_score * 0.75) + (keyword_score * 0.1) + (memory.usefulness_score * 0.15)
-        scored.append((memory, score, vector_score))
-    ranked = sorted(
-        scored,
-        key=lambda item: (
-            -item[1],
-            -item[0].usefulness_score,
-            item[0].updated_at,
-            item[0].memory_id,
-        ),
-    )[:top_k]
-    return [
-        _agent_memory_chunk_from_row(
-            {
-                "memory_id": memory.memory_id,
-                "memory_text": memory.memory_text,
-                "metadata_json": _json_dumps(memory.metadata),
-                "usefulness_score": memory.usefulness_score,
-                "eval_count": memory.eval_count,
-                "vector_score": vector_score,
-                "score": score,
-            },
-            rank=rank,
-        )
-        for rank, (memory, score, vector_score) in enumerate(ranked, start=1)
-    ]
-
-
-def _agent_memory_matches_current_scope(memory: StoredAgentMemory) -> bool:
-    context = current_audit_request_context()
-    if not _agent_memory_scope_available():
-        return False
-    if context.tenant_id_hash is not None and memory.tenant_id_hash != context.tenant_id_hash:
-        return False
-    if context.user_id_hash is not None and memory.user_id_hash != context.user_id_hash:
-        return False
-    if context.role_id_hash is not None and memory.role_id_hash != context.role_id_hash:
-        return False
-    if context.agent_id_hash is not None and memory.agent_id_hash != context.agent_id_hash:
-        return False
-    return not (
-        context.thread_id_hash is not None and memory.thread_id_hash != context.thread_id_hash
-    )
-
-
 def _metadata_value_equals(
     metadata: Mapping[str, MetadataValue],
     key: str,
@@ -14410,101 +13070,6 @@ def _chunk_group_id_from_metadata(metadata: Mapping[str, MetadataValue]) -> str 
         return None
     cleaned = value.strip()
     return cleaned or None
-
-
-def _context_dependency_match_sql(
-    anchor: RetrievedChunk,
-) -> tuple[str, dict[str, object]]:
-    """anchor lineage に一致する dependency candidate を Oracle metadata から絞り込む。"""
-    tokens = _context_dependency_anchor_tokens(anchor.metadata)
-    if not tokens:
-        return (
-            "JSON_EXISTS(c.metadata_json, '$.element_ids')\n"
-            "                        OR JSON_EXISTS(c.metadata_json, '$.parent_element_ids')\n"
-            "                        OR JSON_EXISTS(c.metadata_json, '$.dependency_edges')",
-            {},
-        )
-    clauses: list[str] = []
-    binds: dict[str, object] = {}
-    for index, token in enumerate(tokens[:16]):
-        bind_name = f"dependency_token_{index}"
-        clauses.append(
-            "LOWER(JSON_SERIALIZE(c.metadata_json RETURNING VARCHAR2(32767))) "
-            f"LIKE :{bind_name} ESCAPE '\\'"
-        )
-        binds[bind_name] = _like_pattern(token)
-    return "\n                        OR ".join(clauses), binds
-
-
-def _context_dependency_anchor_tokens(
-    metadata: Mapping[str, MetadataValue],
-) -> list[str]:
-    """dependency lookup で使う element id / parent id / edge endpoint を抽出する。"""
-    tokens: list[str] = []
-    tokens.extend(_element_ids_from_metadata(metadata.get("element_ids")))
-    tokens.extend(_element_ids_from_metadata(metadata.get("parent_element_ids")))
-    tokens.extend(_dependency_edge_endpoint_ids(metadata.get("dependency_edges")))
-    return _unique_dependency_tokens(tokens)
-
-
-def _dependency_edge_endpoint_ids(value: object) -> list[str]:
-    """dependency_edges metadata から parent/child endpoint id を取り出す。"""
-    payload = value
-    if isinstance(value, str):
-        if not value.strip():
-            return []
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError:
-            return []
-    if not isinstance(payload, Sequence) or isinstance(payload, str | bytes | bytearray):
-        return []
-    endpoint_ids: list[str] = []
-    for item in payload:
-        if not isinstance(item, Mapping):
-            continue
-        for key in ("parent_id", "parent", "child_id", "child"):
-            value = item.get(key)
-            if isinstance(value, str | int):
-                cleaned = str(value).strip()
-                if cleaned:
-                    endpoint_ids.append(cleaned)
-    return endpoint_ids
-
-
-def _unique_dependency_tokens(values: Sequence[str]) -> list[str]:
-    """SQL metadata match に使える短い lineage token を安定順で返す。"""
-    tokens: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        cleaned = value.strip()
-        if len(cleaned) < 2:
-            continue
-        normalized = cleaned.casefold()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        tokens.append(cleaned)
-    return tokens
-
-
-def _with_context_neighbor_metadata(
-    chunk: RetrievedChunk,
-    *,
-    anchor: RetrievedChunk,
-    distance: int,
-) -> RetrievedChunk:
-    """隣接 context と anchor の対応を citation metadata に残す。"""
-    return chunk.model_copy(
-        update={
-            "metadata": {
-                **chunk.metadata,
-                "context_expanded": True,
-                "context_anchor_chunk_id": anchor.chunk_id,
-                "context_neighbor_distance": distance,
-            }
-        }
-    )
 
 
 def _with_context_group_metadata(
@@ -14670,17 +13235,6 @@ def updated_copy_business_view(
     return replace(view, **cast(Any, changes))
 
 
-def _cosine_similarity(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right, strict=True))
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return max(0.0, dot / (left_norm * right_norm))
-
-
 def _tokens(text: str) -> list[str]:
     return [match.group(0).lower() for match in TOKEN_PATTERN.finditer(text)]
 
@@ -14712,15 +13266,6 @@ def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str |
 
 def _text_search_domain_keywords(settings: Settings | None) -> list[str]:
     return list(settings.rag_domain_keywords) if settings is not None else []
-
-
-def _keyword_score(query_tokens: list[str], document_tokens: list[str]) -> float:
-    if not query_tokens or not document_tokens:
-        return 0.0
-    query_set = set(query_tokens)
-    document_set = set(document_tokens)
-    matches = len(query_set & document_set)
-    return matches / len(query_set)
 
 
 def _rrf(rank: int, constant: int = 60) -> float:

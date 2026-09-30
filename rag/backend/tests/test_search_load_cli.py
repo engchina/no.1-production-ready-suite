@@ -39,11 +39,14 @@ def test_search_load_cli_passes_and_writes_redacted_artifacts(
                 "citations": [],
                 "guardrail_warnings": [],
                 "diagnostics": {
-                    "stream_stage_timings": {
-                        "embedding": 12.0,
-                        "retrieval": 24.0,
-                        "rerank": 18.0,
-                        "generation": 46.0,
+                    "docrag": {
+                        "execution_steps": [
+                            {"name": "質問の理解", "elapsed_seconds": 0.012},
+                            {"name": "文書検索", "elapsed_seconds": 0.024},
+                            # 同じ工程が 2 回あれば合計する(補正検索の 2 回目など)。
+                            {"name": "文書検索", "elapsed_seconds": 0.006},
+                            {"name": "回答生成", "elapsed_seconds": 0.046},
+                        ]
                     }
                 },
             }
@@ -86,7 +89,8 @@ def test_search_load_cli_passes_and_writes_redacted_artifacts(
     assert result["data"]["request_count"] == 4
     assert result["data"]["client_latency_ms"]["count"] == 4
     assert result["data"]["server_latency_ms"]["p95"] == 140.0
-    assert result["data"]["stage_latency_ms"]["embedding"]["p95"] == 12.0
+    assert result["data"]["stage_latency_ms"]["質問の理解"]["p95"] == 12.0
+    assert result["data"]["stage_latency_ms"]["文書検索"]["p95"] == 30.0
     output_text = output.read_text(encoding="utf-8")
     trend_text = trend_output.read_text(encoding="utf-8")
     assert "秘密の承認条件" not in output_text
@@ -107,7 +111,7 @@ def test_search_load_cli_returns_one_when_threshold_fails(
             "client_p95_ms": 1.0,
             "server_p95_ms": 1.0,
             "error_rate": 0.0,
-            "stage_p95_ms": {"retrieval": 1.0},
+            "stage_p95_ms": {"文書検索": 1.0},
         },
     )
 
@@ -124,7 +128,9 @@ def test_search_load_cli_returns_one_when_threshold_fails(
             "data": {
                 "trace_id": "trace-slow",
                 "elapsed_ms": 200.0,
-                "diagnostics": {"stream_stage_timings": {"retrieval": 80.0}},
+                "diagnostics": {
+                    "docrag": {"execution_steps": [{"name": "文書検索", "elapsed_seconds": 0.08}]}
+                },
             }
         }
 
@@ -139,7 +145,7 @@ def test_search_load_cli_returns_one_when_threshold_fails(
     failure_metrics = {failure["metric"] for failure in result["data"]["threshold_failures"]}
     assert "client_p95_ms" in failure_metrics
     assert "server_p95_ms" in failure_metrics
-    assert "stage_p95_ms.retrieval" in failure_metrics
+    assert "stage_p95_ms.文書検索" in failure_metrics
 
 
 def test_search_load_cli_counts_http_errors_without_query_leakage(
@@ -185,8 +191,7 @@ def test_search_load_cli_rejects_invalid_scenario_without_query_leakage(
                     {
                         "id": "bad",
                         "query": "秘密の承認条件を教えてください。",
-                        "top_k": 1,
-                        "rerank_top_n": 2,
+                        "top_k": 0,
                     }
                 ]
             },
@@ -246,14 +251,12 @@ def _write_scenario(
                         "id": "approval",
                         "query": "秘密の承認条件を教えてください。",
                         "top_k": 5,
-                        "rerank_top_n": 3,
                         "filters": {"status": "INDEXED"},
                     },
                     {
                         "id": "troubleshooting",
                         "query": "検索できない場合の確認項目は何ですか。",
                         "top_k": 5,
-                        "rerank_top_n": 3,
                     },
                 ],
                 "repeat": 2,

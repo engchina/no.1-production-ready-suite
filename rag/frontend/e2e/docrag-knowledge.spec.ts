@@ -23,14 +23,9 @@ const detail = {
     version: 1,
     knowledge_base_ids: ["kb-1"],
     query: {
-      retrieval_strategy: null,
-      post_retrieval_pipeline: null,
-      generation_profile: null,
       guardrail_policy: null,
       answer_engine: "docrag",
     },
-    system_prompt: null,
-    default_language: null,
     serving_mode: "single",
   },
   knowledge_bases: [{ id: "kb-1", name: "受注マニュアル" }],
@@ -234,7 +229,7 @@ test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示
   await selectBusinessViewAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない（通常の回答生成）" }).click();
 
-  const panel = page.getByRole("region", { name: "回答の根拠と実行記録（DocRAG）" });
+  const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByText("人手確認が必要")).toBeVisible();

@@ -14,22 +14,14 @@ import logging
 
 import httpx
 from rag_pipeline_core.stage import (
-    AgenticStageRequest,
-    AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
     EvaluationStageRequest,
     EvaluationStageResponse,
-    GenerationStageRequest,
-    GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
-    GroundingStageRequest,
-    GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
-    RetrievalStageRequest,
-    RetrievalStageResponse,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
 )
@@ -45,23 +37,15 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_url",
     "vector_index": "rag_vector_index_service_url",
     "graphrag": "rag_graph_service_url",
-    "generation": "rag_generation_service_url",
     "guardrail": "rag_guardrail_service_url",
-    "agentic": "rag_agentic_service_url",
-    "grounding": "rag_grounding_service_url",
     "evaluation": "rag_evaluation_service_url",
-    "retrieval": "rag_retrieval_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
     "vector_index": "rag_vector_index_service_enabled",
     "graphrag": "rag_graph_service_enabled",
-    "generation": "rag_generation_service_enabled",
     "guardrail": "rag_guardrail_service_enabled",
-    "agentic": "rag_agentic_service_enabled",
-    "grounding": "rag_grounding_service_enabled",
     "evaluation": "rag_evaluation_service_enabled",
-    "retrieval": "rag_retrieval_service_enabled",
 }
 
 
@@ -168,19 +152,6 @@ class PipelineStageClient:
         except ValueError as exc:
             raise PipelineStageServiceError("graphrag", "invalid_response") from exc
 
-    def run_generation(self, request: GenerationStageRequest) -> GenerationStageResponse | None:
-        """generation ステージ(静的 prompt 解決)を remote 実行する。
-
-        委譲不可なら None、失敗時は例外。
-        """
-        payload = self._post_run("generation", request.model_dump_json())
-        if payload is None:
-            return None
-        try:
-            return GenerationStageResponse.model_validate(payload)
-        except ValueError as exc:
-            raise PipelineStageServiceError("generation", "invalid_response") from exc
-
     def run_guardrail(self, request: GuardrailStageRequest) -> GuardrailStageResponse | None:
         """guardrail ステージ(静的 policy 解決)を remote 実行する。
 
@@ -194,29 +165,6 @@ class PipelineStageClient:
         except ValueError as exc:
             raise PipelineStageServiceError("guardrail", "invalid_response") from exc
 
-    def run_agentic(self, request: AgenticStageRequest) -> AgenticStageResponse | None:
-        """agentic ステージ(静的 profile 解決)を remote 実行する。
-
-        委譲不可なら None、失敗時は例外。
-        """
-        payload = self._post_run("agentic", request.model_dump_json())
-        if payload is None:
-            return None
-        try:
-            return AgenticStageResponse.model_validate(payload)
-        except ValueError as exc:
-            raise PipelineStageServiceError("agentic", "invalid_response") from exc
-
-    def run_grounding(self, request: GroundingStageRequest) -> GroundingStageResponse | None:
-        """grounding ステージ(preset 解決)を remote 実行する。委譲不可なら None、失敗時は例外。"""
-        payload = self._post_run("grounding", request.model_dump_json())
-        if payload is None:
-            return None
-        try:
-            return GroundingStageResponse.model_validate(payload)
-        except ValueError as exc:
-            raise PipelineStageServiceError("grounding", "invalid_response") from exc
-
     def run_evaluation(self, request: EvaluationStageRequest) -> EvaluationStageResponse | None:
         """evaluation ステージ(suite→閾値解決)を remote 実行する。
 
@@ -229,16 +177,6 @@ class PipelineStageClient:
             return EvaluationStageResponse.model_validate(payload)
         except ValueError as exc:
             raise PipelineStageServiceError("evaluation", "invalid_response") from exc
-
-    def run_retrieval(self, request: RetrievalStageRequest) -> RetrievalStageResponse | None:
-        """retrieval ステージ(strategy 解決)を remote 実行する。委譲不可なら None、失敗時は例外。"""
-        payload = self._post_run("retrieval", request.model_dump_json())
-        if payload is None:
-            return None
-        try:
-            return RetrievalStageResponse.model_validate(payload)
-        except ValueError as exc:
-            raise PipelineStageServiceError("retrieval", "invalid_response") from exc
 
 
 _JSON_HEADERS = {"content-type": "application/json"}

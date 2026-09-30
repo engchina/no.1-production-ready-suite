@@ -25,7 +25,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.clients.http_retry import HttpRetryConfig, async_request_with_retry
-from app.schemas.search import SearchMode, SearchRequest, SearchStrategy
+from app.schemas.search import SearchRequest
 
 DEFAULT_SEARCH_LOAD_API_URL = "http://localhost:8000/api/search"
 DEFAULT_SEARCH_LOAD_API_BASE_URL = "http://localhost:8000"
@@ -77,9 +77,8 @@ class SearchLoadCase(BaseModel):
     id: str = Field(..., min_length=1, max_length=128)
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=20, ge=1, le=100)
-    rerank_top_n: int = Field(default=5, ge=1, le=50)
-    mode: SearchMode = SearchMode.HYBRID
-    strategy: SearchStrategy = SearchStrategy.HYBRID
+    # 旧 standard の指定(rerank_top_n / mode / strategy)は #595 で削除した。scenario に
+    # 残っていても読み捨てる(pydantic の既定 extra="ignore")。
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
 
@@ -92,9 +91,6 @@ class SearchLoadCase(BaseModel):
         return SearchRequest(
             query=self.query,
             top_k=self.top_k,
-            rerank_top_n=self.rerank_top_n,
-            mode=self.mode,
-            strategy=self.strategy,
             filters=self.filters,
             knowledge_base_ids=self.knowledge_base_ids,
         )
@@ -340,17 +336,29 @@ def _api_response_data(response_payload: Mapping[str, Any]) -> Mapping[str, Any]
 
 
 def _stage_timings(data: Mapping[str, Any]) -> dict[str, float]:
+    """回答フローの工程ごとの時間(ms)。``diagnostics.docrag.execution_steps`` から読む。
+
+    同じ名前の工程が複数回あれば合計する(補正検索の 2 回目など)。
+    """
     diagnostics = data.get("diagnostics")
     if not isinstance(diagnostics, Mapping):
         return {}
-    timings = diagnostics.get("stream_stage_timings")
-    if not isinstance(timings, Mapping):
+    docrag = diagnostics.get("docrag")
+    if not isinstance(docrag, Mapping):
         return {}
-    return {
-        str(stage): value
-        for stage, raw_value in timings.items()
-        if (value := _optional_float(raw_value)) is not None
-    }
+    steps = docrag.get("execution_steps")
+    if not isinstance(steps, Sequence) or isinstance(steps, str):
+        return {}
+    timings: dict[str, float] = {}
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        name = str(step.get("name") or "").strip()
+        seconds = _optional_float(step.get("elapsed_seconds"))
+        if not name or seconds is None:
+            continue
+        timings[name] = round(timings.get(name, 0.0) + seconds * 1000, 3)
+    return timings
 
 
 def _summarize_runs(

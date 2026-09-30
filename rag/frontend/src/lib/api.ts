@@ -138,7 +138,6 @@ export type FileStatus =
   | "INDEXED"
   | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
-export type SearchStrategy = "hybrid" | "graph_local" | "graph_global";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 export type CitationFeedbackRating = "helpful" | "not_helpful";
 export type CitationFeedbackReason =
@@ -779,15 +778,7 @@ export interface KnowledgeBaseIngestionConfig {
 
 /** 検索・回答設定。Business View の query 設定として使う。 */
 export interface KnowledgeBaseQueryConfig {
-  retrieval_strategy: RetrievalStrategyName | null;
-  /** 検索方法の合成トグル(null はグローバル継承)。 */
-  retrieval_query_expansion: boolean | null;
-  retrieval_query_expansion_llm: boolean | null;
-  retrieval_gap_stop: boolean | null;
-  retrieval_corrective: boolean | null;
-  retrieval_business_fit_weighting: boolean | null;
-  post_retrieval_pipeline: PostRetrievalPipelineName | null;
-  generation_profile: GenerationProfileName | null;
+  // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
   guardrail_policy: GuardrailPolicyName | null;
   // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は DocRAG だけ)。
   /** DocRAG 回答フローの設定。null / 未指定はグローバル継承。 */
@@ -881,8 +872,7 @@ export interface BusinessViewConfig {
   version: number;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
-  system_prompt: string | null;
-  default_language: string | null;
+  // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   serving_mode: ServingMode;
 }
 
@@ -992,16 +982,13 @@ export interface DocumentKnowledgeBaseReplaceRequest {
 
 // --- 検索 ---
 export interface SearchRequestBody {
+  // 検索の方式（mode / strategy）・rerank の件数・回答スタイルは、回答エンジンが使わないため送らない（#595）。
   query: string;
   top_k?: number;
-  rerank_top_n?: number;
-  mode?: SearchMode;
-  strategy?: SearchStrategy;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   business_view_id?: string | null;
   business_view_ids?: string[];
-  generation_profile?: GenerationProfileName | null;
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
 }
@@ -1062,7 +1049,6 @@ export interface ConversationUpdateBody {
 export interface ChatMessageRequestBody {
   content: string;
   model_ids?: string[];
-  mode?: SearchMode;
   top_k?: number;
 }
 
@@ -1072,81 +1058,19 @@ export interface CompareModel {
 }
 
 export interface SearchDiagnostics {
-  mode: string;
-  retrieval_strategy_adapter?: string;
+  /** 回答エンジンの名前（"docrag"）。 */
   retrieval_strategy: string;
-  generation_profile?: GenerationProfileName | string;
-  generation_config_source?: "request" | "business_view" | "global";
-  generation_contract_mode?:
-    "groundedness" | "format_validated" | "json_schema" | "custom";
-  generation_attempt_count?: number;
-  generation_repair_count?: number;
-  generation_validation_codes?: string[];
-  custom_prompt_version_id?: string | null;
+  /** "docrag_grounded"（回答）/ "docrag_retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
+  retrieval_strategy_adapter?: string;
+  guardrail_policy?: string;
   guardrail_backend?: GuardrailBackend;
   guardrail_degraded?: boolean;
-  route_reason: string;
-  keyword_terms: string[];
-  retrieval_breakdown: SearchRetrievalBreakdown;
-  retrieval_candidates: SearchRetrievalCandidate[];
-  graph_hit_count: number;
-  fallback_reason: string | null;
-  stream_stage_timings: Record<string, number>;
-  top_k: number;
-  rerank_top_n: number;
-  retrieved_count: number;
-  reranked_count: number;
-  deduplicated_count: number;
-  context_diversified_count: number;
-  context_group_expanded_count: number;
-  context_expanded_count: number;
-  context_adaptive_expanded_count: number;
-  context_dependency_promoted_count: number;
-  context_compressed_count: number;
-  context_compression_saved_chars: number;
-  citation_count: number;
-  context_chars: number;
-  context_window_chars: number;
-  rrf_k: number;
-  query_variant_count: number;
-  oracle_vector_target_accuracy: number;
   filter_keys: string[];
   knowledge_base_count: number;
   business_view_applied?: string | null;
   config_fingerprint: string;
-  /** DocRAG 回答エンジンの記録(standard では null)。 */
+  /** 回答エンジンの記録（検索の工程・根拠の評価など）。 */
   docrag?: Record<string, JsonValue> | null;
-}
-
-export interface SearchRetrievalBreakdown {
-  vector_count: number;
-  keyword_count: number;
-  overlap_count: number;
-  fused_count: number;
-  fusion_dropped_count: number;
-  rerank_input_count: number;
-  rerank_kept_count: number;
-  rerank_dropped_count: number;
-  evidence_count: number;
-  citation_count: number;
-  dropped_count: number;
-}
-
-export interface SearchRetrievalCandidate {
-  chunk_id: string;
-  document_id: string;
-  text?: string;
-  file_name: string | null;
-  sources: string[];
-  vector_rank: number | null;
-  vector_score: number | null;
-  keyword_rank: number | null;
-  keyword_score: number | null;
-  rrf_score: number | null;
-  rerank_rank: number | null;
-  rerank_score: number | null;
-  status: string;
-  drop_reason: string | null;
 }
 
 export interface SearchResponse {
@@ -1761,13 +1685,9 @@ export type ServiceCategory =
   | "parser"
   | "chunking"
   | "vector_index"
-  | "retrieval"
-  | "grounding"
-  | "generation"
   | "guardrail"
   | "evaluation"
-  | "graphrag"
-  | "agentic";
+  | "graphrag";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
 // systemd の unit の状態 + /health（#286）。starting は unit が動いているが /health にまだ届かない、
 // failed は unit が失敗して止まった、not_installed は unit が登録されていない。
@@ -1870,129 +1790,6 @@ export interface ChunkingSettingsUpdate {
   docrag_parent_max_children: number;
 }
 
-// --- 設定: Retrieval アダプター ---
-/** 検索モード(新形式・排他選択)。 */
-export type RetrievalModeName =
-  | "hybrid_rrf"
-  | "vector"
-  | "keyword"
-  | "graph_augmented"
-  | "reasoning_tree_search";
-
-/** legacy 複合値込みの読み取り互換型。保存は RetrievalModeName のみ。 */
-export type RetrievalStrategyName =
-  RetrievalModeName | "business_context_strict" | "corrective_multi_query";
-
-export interface RetrievalStrategyStatusData {
-  name: RetrievalStrategyName;
-  origin: string;
-  recommended_for: string[];
-  selected: boolean;
-  gap_stop: boolean;
-  corrective_retrieval: boolean;
-  business_fit_weighting: boolean;
-}
-
-export interface RetrievalSettingsData {
-  mode: RetrievalModeName;
-  legacy_strategy: RetrievalStrategyName | null;
-  query_expansion: boolean;
-  query_expansion_llm: boolean;
-  gap_stop: boolean;
-  corrective_retrieval: boolean;
-  business_fit_weighting: boolean;
-  modes: RetrievalStrategyStatusData[];
-  config_source: "runtime";
-}
-
-/** 部分更新。null/undefined のフィールドは変更しない。 */
-export interface RetrievalSettingsUpdate {
-  mode?: RetrievalModeName;
-  query_expansion?: boolean;
-  query_expansion_llm?: boolean;
-  gap_stop?: boolean;
-  corrective_retrieval?: boolean;
-  business_fit_weighting?: boolean;
-}
-
-// --- 設定: Grounding アダプター ---
-export type PostRetrievalPipelineName =
-  | "custom"
-  | "lean"
-  | "verified_context"
-  | "context_enrich"
-  | "compact"
-  | "full_governed";
-
-export type GroundingExpansionMode = "none" | "neighbor" | "group" | "adaptive";
-
-export interface GroundingPipelineStatusData {
-  name: PostRetrievalPipelineName;
-  origin: string;
-  recommended_for: string[];
-  selected: boolean;
-  dependency_promotion: boolean;
-  diversity: boolean;
-  expansion_mode: GroundingExpansionMode;
-  compression: boolean;
-  corrective: boolean;
-}
-
-export interface GroundingSettingsData {
-  pipeline: PostRetrievalPipelineName;
-  dependency_promotion_enabled: boolean;
-  diversity_enabled: boolean;
-  expansion_mode: GroundingExpansionMode;
-  compression_enabled: boolean;
-  /** CRAG(補正検索)の evidence grade 判定パラメータ。 */
-  crag_low_confidence_threshold: number;
-  crag_high_confidence_threshold: number;
-  crag_max_hops: number;
-  crag_low_evidence_abstain: boolean;
-  pipelines: GroundingPipelineStatusData[];
-  config_source: "runtime";
-}
-
-/** 部分更新。undefined のフィールドは変更しない。 */
-export interface GroundingSettingsUpdate {
-  pipeline?: PostRetrievalPipelineName;
-  crag_low_confidence_threshold?: number;
-  crag_high_confidence_threshold?: number;
-  crag_max_hops?: number;
-  crag_low_evidence_abstain?: boolean;
-}
-
-// --- 設定: Generation アダプター ---
-export type GenerationProfileName =
-  | "grounded_concise"
-  | "detailed_cited"
-  | "strict_extractive"
-  | "structured_json"
-  | "bilingual_ja_en"
-  | "inline_cited"
-  | "custom";
-
-export interface GenerationProfileStatusData {
-  name: GenerationProfileName;
-  origin: string;
-  recommended_for: string[];
-  selected: boolean;
-  structured_output: boolean;
-  contract_mode: "groundedness" | "format_validated" | "json_schema" | "custom";
-  repair_enabled: boolean;
-}
-
-export interface GenerationSettingsData {
-  profile: GenerationProfileName;
-  structured_output: boolean;
-  profiles: GenerationProfileStatusData[];
-  config_source: "oracle";
-  revision: number;
-  updated_at: string;
-  active_prompt_version_id: string | null;
-  custom_prompt_configured: boolean;
-}
-
 /** 回答の検索と生成の全体既定(業務ビューで上書きできる。#593)。 */
 export interface AnsweringSettingsData {
   query_strategy: DocragQueryStrategyName;
@@ -2009,35 +1806,6 @@ export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "confi
 export interface AnswerRecordSettingsData {
   retention_days: number;
   config_source: "runtime";
-}
-
-export interface GenerationSettingsUpdate {
-  profile: GenerationProfileName;
-  expected_revision?: number;
-}
-
-// --- 設定: 回答プロンプト版(custom 回答スタイルが使用) ---
-export interface PromptVersionData {
-  version_id: string;
-  name: string;
-  system_prompt: string;
-  note: string;
-  created_at: string;
-  created_by: string;
-  active: boolean;
-}
-
-export interface PromptVersionsData {
-  active_version_id: string | null;
-  versions: PromptVersionData[];
-  settings_revision: number;
-}
-
-export interface PromptVersionCreate {
-  name: string;
-  system_prompt: string;
-  note?: string;
-  activate?: boolean;
 }
 
 // --- 設定: Guardrail アダプター ---
@@ -2186,43 +1954,6 @@ export interface GraphSettingsData {
 
 export interface GraphSettingsUpdate {
   profile: GraphProfileName;
-}
-
-// --- 設定: Agentic アダプター ---
-export type AgenticProfileName =
-  | "off"
-  | "smart_routing"
-  | "query_rewrite"
-  | "hyde"
-  | "decompose"
-  | "multi_hop";
-
-export interface AgenticProfileStatusData {
-  name: AgenticProfileName;
-  origin: string;
-  recommended_for: string[];
-  selected: boolean;
-  enabled: boolean;
-  rewrite: boolean;
-  decompose: boolean;
-  multi_hop: boolean;
-  hyde: boolean;
-}
-
-export interface AgenticSettingsData {
-  profile: AgenticProfileName;
-  enabled: boolean;
-  rewrite: boolean;
-  decompose: boolean;
-  multi_hop: boolean;
-  max_subqueries: number;
-  profiles: AgenticProfileStatusData[];
-  config_source: "runtime";
-}
-
-export interface AgenticSettingsUpdate {
-  profile: AgenticProfileName;
-  max_subqueries: number;
 }
 
 // --- 設定: OCI config ---
@@ -3300,29 +3031,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // 設定: Retrieval アダプター
-  getRetrievalSettings: () =>
-    request<RetrievalSettingsData>("/api/settings/retrieval"),
-  updateRetrievalSettings: (body: RetrievalSettingsUpdate) =>
-    request<RetrievalSettingsData>("/api/settings/retrieval", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-
-  // 設定: Grounding アダプター
-  getGroundingSettings: () =>
-    request<GroundingSettingsData>("/api/settings/grounding"),
-  updateGroundingSettings: (body: GroundingSettingsUpdate) =>
-    request<GroundingSettingsData>("/api/settings/grounding", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-
-  // 設定: Generation アダプター
-  getGenerationSettings: () =>
-    request<GenerationSettingsData>("/api/settings/generation"),
+  // 設定: 回答の検索と生成・回答の記録
   getAnsweringSettings: () => request<AnsweringSettingsData>("/api/settings/answering"),
   updateAnsweringSettings: (body: AnsweringSettingsUpdate) =>
     request<AnsweringSettingsData>("/api/settings/answering", {
@@ -3338,27 +3047,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  updateGenerationSettings: (body: GenerationSettingsUpdate) =>
-    request<GenerationSettingsData>("/api/settings/generation", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-
-  // 設定: 回答プロンプト版
-  getPromptVersions: () => request<PromptVersionsData>("/api/settings/prompts"),
-  createPromptVersion: (body: PromptVersionCreate) =>
-    request<PromptVersionsData>("/api/settings/prompts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  activatePromptVersion: (versionId: string) =>
-    request<PromptVersionsData>(
-      `/api/settings/prompts/${encodeURIComponent(versionId)}/activate`,
-      { method: "POST" },
-    ),
-
   // 設定: Guardrail アダプター
   getExtractionFieldsSettings: () =>
     request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields"),
@@ -3411,16 +3099,6 @@ export const api = {
   getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
   updateGraphSettings: (body: GraphSettingsUpdate) =>
     request<GraphSettingsData>("/api/settings/graph", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-
-  // 設定: Agentic アダプター
-  getAgenticSettings: () =>
-    request<AgenticSettingsData>("/api/settings/agentic"),
-  updateAgenticSettings: (body: AgenticSettingsUpdate) =>
-    request<AgenticSettingsData>("/api/settings/agentic", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

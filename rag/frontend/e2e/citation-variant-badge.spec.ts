@@ -36,75 +36,30 @@ function searchStreamBody(chunkId: string): string {
       recipe_slot_no: 1,
     },
   };
+  const stage = (name: string, outcome: string, elapsed_ms: number) =>
+    `event: stage\ndata: ${JSON.stringify({
+      trace_id: "trace-1",
+      stage: name,
+      outcome,
+      elapsed_ms,
+      attributes: {},
+    })}\n\n`;
   return [
-    `event: stage\ndata: ${JSON.stringify({
-      trace_id: "trace-1",
-      stage: "embedding",
-      outcome: "started",
-      elapsed_ms: 0,
-      attributes: { input_count: 1 },
-    })}\n\n`,
-    `event: stage\ndata: ${JSON.stringify({
-      trace_id: "trace-1",
-      stage: "embedding",
-      outcome: "success",
-      elapsed_ms: 42,
-      attributes: { output_count: 1 },
-    })}\n\n`,
-    `event: stage\ndata: ${JSON.stringify({
-      trace_id: "trace-1",
-      stage: "retrieval",
-      outcome: "success",
-      elapsed_ms: 55,
-      attributes: { output_count: 1 },
-    })}\n\n`,
-    `event: stage\ndata: ${JSON.stringify({
-      trace_id: "trace-1",
-      stage: "rerank",
-      outcome: "success",
-      elapsed_ms: 18,
-      attributes: { output_count: 1 },
-    })}\n\n`,
+    stage("docrag_answer", "started", 0),
+    stage("answer_step:文書検索", "started", 0),
+    stage("answer_step:文書検索", "success", 42),
+    stage("docrag_answer", "success", 60),
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-1",
       elapsed_ms: 12,
       guardrail_warnings: [],
       diagnostics: {
-        retrieved_count: 1,
-        reranked_count: 1,
-        citation_count: 1,
-        keyword_terms: ["交通費", "交通", "通費"],
-        retrieval_breakdown: {
-          vector_count: 1,
-          keyword_count: 1,
-          overlap_count: 1,
-          fused_count: 1,
-          fusion_dropped_count: 0,
-          rerank_input_count: 1,
-          rerank_kept_count: 1,
-          rerank_dropped_count: 0,
-          evidence_count: 1,
-          citation_count: 1,
-          dropped_count: 0,
-        },
-        retrieval_candidates: [
-          {
-            chunk_id: chunkId,
-            document_id: "doc-1",
-            text: "候補 Chunk 原本\n料金表の交通費は 1000 円です。",
-            file_name: "policy.txt",
-            sources: ["vector", "keyword"],
-            vector_rank: 1,
-            vector_score: 0.91,
-            keyword_rank: 1,
-            keyword_score: 0.82,
-            rrf_score: 0.032,
-            rerank_rank: 1,
-            rerank_score: 0.96,
-            status: "citation",
-            drop_reason: null,
-          },
-        ],
+        retrieval_strategy: "docrag",
+        retrieval_strategy_adapter: "docrag_grounded",
+        filter_keys: ["content_kind", "section_title", "section_path"],
+        knowledge_base_count: 1,
+        business_view_applied: "bv-1",
+        config_fingerprint: "fp-1",
       },
     })}\n\n`,
     `event: delta\ndata: ${JSON.stringify({ text: "確認しました。" })}\n\n`,
@@ -148,21 +103,15 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
 
   await page.getByText("詳細条件", { exact: true }).click();
   const topKSelect = page.getByRole("combobox", { name: "候補取得数" });
-  const rerankTopNSelect = page.getByRole("combobox", { name: "Rerank 採用数" });
   const contentKindSelect = page.getByRole("combobox", { name: "内容種別" });
   await expect(topKSelect).toBeVisible();
-  await expect(rerankTopNSelect).toBeVisible();
   await expect(contentKindSelect).toBeVisible();
+  // 検索の方式と Rerank の件数は回答エンジンが使わないため選ばせない（#595）。
+  await expect(page.getByRole("combobox", { name: "Rerank 採用数" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);
   await expect(page.getByLabel("見出し名")).toBeHidden();
-  await rerankTopNSelect.click();
-  await page.getByRole("option", { name: "10", exact: true }).click();
-  await topKSelect.click();
-  await page.getByRole("option", { name: "5", exact: true }).click();
-  await expect(rerankTopNSelect).toContainText("5");
   await topKSelect.click();
   await page.getByRole("option", { name: "50", exact: true }).click();
-  await rerankTopNSelect.click();
-  await page.getByRole("option", { name: "8", exact: true }).click();
   await contentKindSelect.click();
   await page.getByRole("option", { name: "表", exact: true }).click();
   await page.getByRole("button", { name: "見出しで絞り込む" }).click();
@@ -172,9 +121,11 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => searchRequests.length).toBe(1);
+  for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile"]) {
+    expect(removed in searchRequests[0], removed).toBe(false);
+  }
   expect(searchRequests[0]).toMatchObject({
     top_k: 50,
-    rerank_top_n: 8,
     filters: {
       content_kind: "table",
       section_title: "料金表",
@@ -193,58 +144,17 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
-  await expect(runPanel.getByText("埋め込み")).toBeVisible();
+  await expect(runPanel.getByText("文書検索", { exact: true })).toBeVisible();
   await expect(runPanel.getByText("42 ms")).toBeVisible();
-  const keywordPanel = page.locator('[aria-label="検索キーワード"]');
-  await expect(keywordPanel.getByText("検索キーワード")).toBeVisible();
-  await expect(keywordPanel.getByText("交通費", { exact: true })).toBeVisible();
   const appliedFilters = page.locator('[aria-label="適用中の詳細条件"]');
   await expect(appliedFilters.getByText("内容種別: 表")).toBeVisible();
   await expect(appliedFilters.getByText("見出し名: 料金表")).toBeVisible();
   await expect(appliedFilters.getByText("見出しの階層: 経費申請")).toBeVisible();
-  await expect(page.getByText("検索フロー")).toBeVisible();
-  await expect(page.getByText("ベクトル取得")).toBeVisible();
-  await expect(page.getByText("キーワード取得")).toBeVisible();
-  await expect(page.getByText("詳細メトリクス")).toBeHidden();
-  await expect(page.getByText("候補詳細")).toBeHidden();
-  await page.getByText("診断", { exact: true }).click();
-  await expect(page.getByText("詳細メトリクス")).toBeVisible();
-  await expect(page.getByText("候補詳細")).toBeVisible();
-  const candidateTable = page.getByRole("table", { name: "候補詳細" });
-  const candidateDetails = candidateTable.locator("details").filter({ hasText: "policy.txt" });
-  const candidateSummary = candidateDetails.locator("summary");
-  const candidateFileName = candidateDetails.getByTestId("candidate-file-name");
-  const candidatePreview = candidateDetails.getByTestId("candidate-preview");
-  const candidateOriginal = candidateDetails.getByTestId("candidate-original");
-  const candidateText = candidateOriginal.getByText("候補 Chunk 原本", { exact: false });
-  const fileNameHeader = candidateTable.getByRole("columnheader", { name: "ファイル名" });
-  await expect(candidatePreview).toContainText("候補 Chunk 原本");
-  await expect(candidateFileName).toContainText("policy.txt");
-  await expect(candidateDetails.getByText("doc-1:cs_recipe1:1", { exact: true })).toHaveCount(0);
-  if (testInfo.project.name === "desktop") {
-    await expect(fileNameHeader).toBeVisible();
-    const fileNameBox = await candidateFileName.boundingBox();
-    const previewBox = await candidatePreview.boundingBox();
-    expect(fileNameBox).not.toBeNull();
-    expect(previewBox).not.toBeNull();
-    expect(previewBox!.x).toBeGreaterThan(fileNameBox!.x + fileNameBox!.width);
-  } else {
-    await expect(fileNameHeader).toBeHidden();
-  }
-  await candidateTable.screenshot({
-    path: testInfo.outputPath(`candidate-preview-${testInfo.project.name}.png`),
-  });
-  await expect(candidateDetails).not.toHaveAttribute("open", "");
-  await expect(candidateOriginal).toBeHidden();
-  await candidateSummary.click();
-  await expect(candidateText).toBeVisible();
-  await expectNoPageOverflow(page);
-  await candidateSummary.click();
-  await expect(candidateOriginal).toBeHidden();
-  await candidateSummary.press("Enter");
-  await expect(candidateText).toBeVisible();
-  await candidateSummary.press("Enter");
-  await expect(candidateOriginal).toBeHidden();
+  // 以前の検索の内訳（検索キーワード・検索フロー・候補の表）は出さない（#595）。
+  await expect(page.locator('[aria-label="検索キーワード"]')).toHaveCount(0);
+  await expect(page.getByText("検索フロー")).toHaveCount(0);
+  await expect(page.getByText("診断", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("table", { name: "候補詳細" })).toHaveCount(0);
   await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
   const rerankMeter = page.getByRole("meter", { name: "Rerank スコア: 0.869" });
   await expect(rerankMeter).toBeVisible();

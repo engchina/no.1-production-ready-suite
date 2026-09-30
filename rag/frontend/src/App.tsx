@@ -40,14 +40,11 @@ import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsCl
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
 import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
-import { GroundingSettingsClient } from "@/components/settings/GroundingSettingsClient";
-import { GenerationSettingsClient } from "@/components/settings/GenerationSettingsClient";
-import { PromptVersionsClient } from "@/components/settings/PromptVersionsClient";
+import { AnswerPromptSettingsClient } from "@/components/settings/AnswerPromptSettingsClient";
 import { GuardrailSettingsClient } from "@/components/settings/GuardrailSettingsClient";
 import { VectorIndexSettingsClient } from "@/components/settings/VectorIndexSettingsClient";
 import { EvaluationSettingsClient } from "@/components/settings/EvaluationSettingsClient";
 import { GraphSettingsClient } from "@/components/settings/GraphSettingsClient";
-import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClient";
 import { PipelineHubClient } from "@/components/settings/PipelineHubClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { UploadWorkspace } from "@/components/upload/UploadWorkspace";
@@ -67,6 +64,16 @@ const AUTH_ROUTES = {
   passwordChange: APP_ROUTES.passwordChange,
   forbidden: APP_ROUTES.forbidden,
 };
+
+/**
+ * 削除した設定画面の URL（根拠確認・回答スタイル・高度な検索。#595）。回答の設定は「検索方法」へ移ったため、
+ * ブックマークから開かれたら検索方法へ置き換えで移す（未知の URL と同じ既定の入口へは送らない）。
+ */
+const REMOVED_ANSWER_SETTINGS_ROUTES = [
+  "/settings/grounding",
+  "/settings/generation",
+  "/settings/agentic",
+] as const;
 
 export function App() {
   // API の 403 は共通のイベントで受け、request ID を載せて権限なしの画面へ移す（#214）。
@@ -114,14 +121,20 @@ export function App() {
         <Route path={APP_ROUTES.settingsPreprocess} element={<SettingsPreprocessRoute />} />
         <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
-        <Route path={APP_ROUTES.settingsGrounding} element={<SettingsGroundingRoute />} />
-        <Route path={APP_ROUTES.settingsGeneration} element={<SettingsGenerationRoute />} />
+        {/* 削除した根拠確認・回答スタイル・高度な検索（#595）のブックマークは、回答の設定が移った検索方法へ。
+            移動先の権限は移った後の URL で判定する（検索方法の権限が無ければ権限なしの画面）。 */}
+        {REMOVED_ANSWER_SETTINGS_ROUTES.map((path) => (
+          <Route
+            key={path}
+            path={path}
+            element={<Navigate to={APP_ROUTES.settingsRetrieval} replace />}
+          />
+        ))}
         <Route path={APP_ROUTES.settingsPrompts} element={<SettingsPromptsRoute />} />
         <Route path={APP_ROUTES.settingsGuardrail} element={<SettingsGuardrailRoute />} />
         <Route path={APP_ROUTES.settingsVectorIndex} element={<SettingsVectorIndexRoute />} />
         <Route path={APP_ROUTES.settingsEvaluation} element={<SettingsEvaluationRoute />} />
         <Route path={APP_ROUTES.settingsGraph} element={<SettingsGraphRoute />} />
-        <Route path={APP_ROUTES.settingsAgentic} element={<SettingsAgenticRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsHuggingface} element={<SettingsHuggingfaceRoute />} />
@@ -442,37 +455,11 @@ function SettingsRetrievalRoute() {
   );
 }
 
-function SettingsGroundingRoute() {
-  return (
-    <div>
-      <PageHeader
-        wide
-        title={t("nav.settingsGrounding")}
-        subtitle={t("settings.grounding.subtitle")}
-      />
-      <GroundingSettingsClient />
-    </div>
-  );
-}
-
-function SettingsGenerationRoute() {
-  return (
-    <div>
-      <PageHeader
-        wide
-        title={t("nav.settingsGeneration")}
-        subtitle={t("settings.generation.subtitle")}
-      />
-      <GenerationSettingsClient />
-    </div>
-  );
-}
-
 function SettingsPromptsRoute() {
   return (
     <div>
       <PageHeader wide title={t("nav.settingsPrompts")} subtitle={t("settings.prompts.subtitle")} />
-      <PromptVersionsClient />
+      <AnswerPromptSettingsClient />
     </div>
   );
 }
@@ -521,15 +508,6 @@ function SettingsGraphRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsGraph")} subtitle={t("settings.graph.subtitle")} />
       <GraphSettingsClient />
-    </div>
-  );
-}
-
-function SettingsAgenticRoute() {
-  return (
-    <div>
-      <PageHeader wide title={t("nav.settingsAgentic")} subtitle={t("settings.agentic.subtitle")} />
-      <AgenticSettingsClient />
     </div>
   );
 }

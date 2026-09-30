@@ -17,7 +17,6 @@ from rag_parser_core.oci_enterprise_ai import (
     EnterpriseAiUnsupportedInputError,
     EnterpriseAiValidationError,
     OciEnterpriseAiConfig,
-    _parse_planned_queries,
     _raise_for_status_with_body,
 )
 from rag_parser_core.oci_enterprise_ai import (
@@ -43,7 +42,6 @@ __all__ = [
     "OciEnterpriseAiClient",
     "OciEnterpriseAiConfig",
     "config_from_settings",
-    "_parse_planned_queries",
     "_raise_for_status_with_body",
 ]
 

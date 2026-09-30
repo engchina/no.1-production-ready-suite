@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search import RetrievedChunk
 
 
 class ConversationStatus(StrEnum):
@@ -117,7 +117,7 @@ class ChatMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
     # 複数指定でマルチモデル比較(設定済み OCI モデル間)。空なら既定モデル 1 系統。
     model_ids: list[str] = Field(default_factory=list, max_length=5)
-    mode: SearchMode = SearchMode.HYBRID
+    # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。
     top_k: int = Field(default=20, ge=1, le=100)
 
     @field_validator("content")

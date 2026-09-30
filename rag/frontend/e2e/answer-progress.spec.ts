@@ -21,7 +21,7 @@ function sse(event: string, data: unknown): string {
 }
 
 const TIMEOUT_MESSAGE =
-  "回答の生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 追加の検索の計画）。" +
+  "回答の生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 文書検索）。" +
   "時間をおいて、もう一度送信してください。";
 
 const businessView = {
@@ -50,36 +50,48 @@ function searchStage(stage: string, outcome: string, elapsed_ms = 0) {
   return sse("stage", { trace_id: "trace-1", stage, outcome, elapsed_ms, attributes: {} });
 }
 
-/** 検索の計画 → 検索 → 追加の検索の計画 → 回答の生成と、時間をおいて進む検索の SSE。 */
+/**
+ * 根拠の検索と回答の生成（docrag_answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 中の各工程は `answer_step:` の入れ子の工程として届く（#593）。
+ */
 const slowSearchStream: TimedChunk[] = [
-  { afterMs: 0, text: searchStage("agentic_planning", "started") },
   {
-    afterMs: 1500,
+    afterMs: 0,
     text: [
-      searchStage("agentic_planning", "success", 1500),
-      searchStage("embedding", "started"),
-      searchStage("embedding", "success", 40),
-      searchStage("retrieval", "success", 60),
-      searchStage("rerank", "success", 20),
-      searchStage("agentic_multi_hop", "started"),
+      searchStage("docrag_answer", "started"),
+      searchStage("answer_step:質問の理解", "started"),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      searchStage("agentic_multi_hop", "success", 1500),
-      searchStage("generation", "started"),
+      searchStage("answer_step:質問の理解", "success", 1500),
+      searchStage("answer_step:文書検索", "started"),
+    ].join(""),
+  },
+  {
+    afterMs: 1500,
+    text: [
+      searchStage("answer_step:文書検索", "success", 1500),
+      searchStage("answer_step:回答の生成", "started"),
     ].join(""),
   },
   {
     afterMs: 600,
     text: [
-      searchStage("generation", "success", 600),
+      searchStage("answer_step:回答の生成", "success", 600),
+      searchStage("docrag_answer", "success", 3600),
       sse("metadata", {
         trace_id: "trace-1",
         elapsed_ms: 3600,
         guardrail_warnings: [],
-        diagnostics: { retrieved_count: 1, reranked_count: 1, citation_count: 1 },
+        diagnostics: {
+          retrieval_strategy: "docrag",
+          retrieval_strategy_adapter: "docrag_grounded",
+          filter_keys: [],
+          knowledge_base_count: 1,
+          config_fingerprint: "fp-1",
+        },
       }),
       sse("delta", { text: "銀行の得点は 82 点です。" }),
       sse("citations", [citation]),
@@ -89,14 +101,20 @@ const slowSearchStream: TimedChunk[] = [
 ];
 
 const timedOutSearchStream: TimedChunk[] = [
-  { afterMs: 0, text: searchStage("agentic_multi_hop", "started") },
+  {
+    afterMs: 0,
+    text: [
+      searchStage("docrag_answer", "started"),
+      searchStage("answer_step:文書検索", "started"),
+    ].join(""),
+  },
   {
     afterMs: 800,
     text: sse("error", {
       trace_id: "trace-1",
       message: TIMEOUT_MESSAGE,
       error_type: "TimeoutError",
-      stage: "agentic_multi_hop",
+      stage: "answer_step:文書検索",
     }),
   },
 ];
@@ -189,11 +207,11 @@ for (const viewport of [
 
     const progress = page.getByTestId("search-run-progress");
     const timer = page.getByTestId("search-run-progress-timer");
-    // 検索の計画（LLM）の間も止まって見えない。
-    await expect(progress).toContainText("回答を生成しています（検索の計画）");
+    // 回答の中の工程（LLM）の間も止まって見えない。
+    await expect(progress).toContainText("回答を生成しています（質問の理解）");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(progress).toContainText("回答を生成しています（追加の検索の計画）", {
+    await expect(progress).toContainText("回答を生成しています（文書検索）", {
       timeout: 4_000,
     });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
@@ -211,8 +229,8 @@ for (const viewport of [
     await expect(timer).toContainText("処理時間");
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
     const runPanel = page.getByRole("region", { name: "検索実行" });
-    await expect(runPanel.getByText("検索の計画", { exact: true })).toBeVisible();
-    await expect(runPanel.getByText("追加の検索の計画", { exact: true })).toBeVisible();
+    await expect(runPanel.getByText("根拠の検索と回答の生成", { exact: true })).toBeVisible();
+    await expect(runPanel.getByText("文書検索", { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
   });
 
@@ -223,8 +241,8 @@ for (const viewport of [
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
-    await expect(page.getByTestId("search-run-progress")).toContainText("追加の検索の計画");
-    const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 追加の検索の計画" });
+    await expect(page.getByTestId("search-run-progress")).toContainText("文書検索");
+    const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 4_000 });
     await expect(error).toContainText("もう一度送信してください");
     await page.screenshot({
@@ -296,26 +314,27 @@ const timedOutChatStream: TimedChunk[] = [
         user_message: userMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatStage("agentic_planning", "started"),
+      chatStage("docrag_answer", "started"),
+      chatStage("answer_step:質問の理解", "started"),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      chatStage("agentic_planning", "success", 1500),
-      chatStage("retrieval", "success", 50),
-      chatStage("agentic_multi_hop", "started"),
+      chatStage("answer_step:質問の理解", "success", 1500),
+      chatStage("answer_step:文書検索", "started"),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      chatStage("agentic_multi_hop", "cancelled", 1500),
+      chatStage("answer_step:文書検索", "cancelled", 1500),
+      chatStage("docrag_answer", "cancelled", 1500),
       sse("error", {
         model_id: "m1",
         message: TIMEOUT_MESSAGE,
         error_type: "AnswerTimeoutError",
-        stage: "agentic_multi_hop",
+        stage: "answer_step:文書検索",
       }),
       sse("all_done", { conversation_id: "conv-1" }),
     ].join(""),
@@ -331,13 +350,13 @@ const okChatStream: TimedChunk[] = [
         user_message: retryUserMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatStage("generation", "started"),
+      chatStage("docrag_answer", "started"),
     ].join(""),
   },
   {
     afterMs: 500,
     text: [
-      chatStage("generation", "success", 500),
+      chatStage("docrag_answer", "success", 500),
       sse("metadata", {
         model_id: "m1",
         message_id: "a2",
@@ -429,10 +448,10 @@ for (const viewport of [
 
     const progress = page.getByTestId("chat-answer-progress");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(progress).toContainText("回答を生成しています（検索の計画）");
+    await expect(progress).toContainText("回答を生成しています（質問の理解）");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(progress).toContainText("回答を生成しています（追加の検索の計画）", {
+    await expect(progress).toContainText("回答を生成しています（文書検索）", {
       timeout: 4_000,
     });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
@@ -443,7 +462,7 @@ for (const viewport of [
     });
 
     // 時間切れの文言（工程と再試行の案内）は ERROR の回答として残り、同じ質問を送り直せる。
-    const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 追加の検索の計画" });
+    const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 5_000 });
     await expect(progress).toHaveCount(0);
     await error.scrollIntoViewIfNeeded();

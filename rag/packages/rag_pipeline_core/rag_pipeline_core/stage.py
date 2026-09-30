@@ -126,20 +126,6 @@ class GraphStageResponse(BaseModel):
     build_community_summary: bool
 
 
-class GenerationStageRequest(BaseModel):
-    """``POST /run``(generation)の入力。profile のみ(custom/override は backend)。"""
-
-    profile: str = "grounded_concise"
-
-
-class GenerationStageResponse(BaseModel):
-    """``POST /run``(generation)の出力(静的 system prompt + 構造化出力フラグ)。"""
-
-    profile: str
-    system_prompt: str | None = None
-    structured_output: bool = False
-
-
 class GuardrailStageRequest(BaseModel):
     """``POST /run``(guardrail)の入力。policy のみ。"""
 
@@ -155,41 +141,6 @@ class GuardrailStageResponse(BaseModel):
     audit_emphasis: bool
 
 
-class AgenticStageRequest(BaseModel):
-    """``POST /run``(agentic)の入力。profile のみ(max_subqueries は backend)。"""
-
-    profile: str = "off"
-
-
-class AgenticStageResponse(BaseModel):
-    """``POST /run``(agentic)の出力(クエリ計画の挙動フラグ)。"""
-
-    profile: str
-    enabled: bool
-    rewrite: bool
-    decompose: bool
-    multi_hop: bool
-    smart_routing: bool
-    hyde: bool = False
-
-
-class GroundingStageRequest(BaseModel):
-    """``POST /run``(grounding)の入力。preset のみ(custom は backend が legacy 設定で処理)。"""
-
-    pipeline: str = "verified_context"
-
-
-class GroundingStageResponse(BaseModel):
-    """``POST /run``(grounding)の出力(検索後処理段フラグ)。"""
-
-    pipeline: str
-    dependency_promotion: bool
-    diversity: bool
-    expansion_mode: str
-    compression: bool
-    corrective: bool
-
-
 class EvaluationStageRequest(BaseModel):
     """``POST /run``(evaluation)の入力。suite(評価の基準)のみ。"""
 
@@ -201,22 +152,3 @@ class EvaluationStageResponse(BaseModel):
 
     suite: str
     thresholds: dict[str, float] = Field(default_factory=dict)
-
-
-class RetrievalStageRequest(BaseModel):
-    """``POST /run``(retrieval)の入力。strategy + settings 既定 query_expansion。"""
-
-    strategy: str = "hybrid_rrf"
-    settings_query_expansion: bool = True
-
-
-class RetrievalStageResponse(BaseModel):
-    """``POST /run``(retrieval)の出力(検索挙動。mode/strategy は文字列)。"""
-
-    strategy: str
-    mode_override: str | None = None
-    strategy_bias: str | None = None
-    query_expansion: bool
-    gap_stop: bool
-    corrective_retrieval: bool
-    business_fit_weighting: bool

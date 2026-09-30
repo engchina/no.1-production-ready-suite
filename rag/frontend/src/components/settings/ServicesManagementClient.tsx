@@ -203,13 +203,9 @@ export function ServicesManagementClient() {
     { category: "parser", labelKey: "settings.services.stage.parser" },
     { category: "chunking", labelKey: "settings.services.stage.chunking" },
     { category: "vector_index", labelKey: "settings.services.stage.vectorIndex" },
-    { category: "retrieval", labelKey: "settings.services.stage.retrieval" },
-    { category: "grounding", labelKey: "settings.services.stage.grounding" },
-    { category: "generation", labelKey: "settings.services.stage.generation" },
     { category: "guardrail", labelKey: "settings.services.stage.guardrail" },
     { category: "evaluation", labelKey: "settings.services.stage.evaluation" },
     { category: "graphrag", labelKey: "settings.services.stage.graphrag" },
-    { category: "agentic", labelKey: "settings.services.stage.agentic" },
   ];
   // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
   const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({

@@ -39,9 +39,9 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.file_processing_evaluation import citation_traceability_coverage
-from app.rag.generation_config import resolve_oracle_generation_settings
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.observability import (
+    SEARCH_METRIC_MODE,
     elapsed_ms,
     new_trace_id,
     record_evaluation_case,
@@ -82,7 +82,6 @@ ANSWER_JUDGE_ERROR_MESSAGE = "標準回答による評価を完了できませ�
 # 主張の監査で「根拠で確かめられない」とする判定(rag_poc の run_answer_eval と同じ)。
 UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 logger = logging.getLogger(__name__)
-_DEFAULT_RERANK_TOP_N = int(SearchRequest.model_fields["rerank_top_n"].default)
 
 
 class SearchPipeline(Protocol):
@@ -232,8 +231,6 @@ class EvaluationRunner:
         """
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
-        if self._pipeline is None:
-            effective_settings = await resolve_oracle_generation_settings(effective_settings)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
 
         aggregate = _Aggregate()
@@ -252,8 +249,6 @@ class EvaluationRunner:
             request = SearchRequest(
                 query=case.query,
                 top_k=top_k,
-                # 回答エンジンは rerank の件数を使わない。SearchRequest の制約(top_k 以下)だけ守る。
-                rerank_top_n=min(top_k, _DEFAULT_RERANK_TOP_N),
                 filters=filters or {},
                 knowledge_base_ids=list(knowledge_base_ids or []),
             )
@@ -278,7 +273,7 @@ class EvaluationRunner:
                 )
             except AnswerTimeoutError as exc:
                 elapsed = elapsed_ms(case_started_at)
-                record_evaluation_case(request.mode.value, "error", elapsed / 1000)
+                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
                 _record_case_error_audit(
                     trace_id=trace_id,
                     request=request,
@@ -306,7 +301,7 @@ class EvaluationRunner:
                 continue
             except Exception as exc:
                 elapsed = elapsed_ms(case_started_at)
-                record_evaluation_case(request.mode.value, "error", elapsed / 1000)
+                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
                 _record_case_error_audit(
                     trace_id=trace_id,
                     request=request,
@@ -327,7 +322,7 @@ class EvaluationRunner:
                 continue
 
             record_evaluation_case(
-                request.mode.value,
+                SEARCH_METRIC_MODE,
                 "success",
                 elapsed_ms(case_started_at) / 1000,
             )
@@ -769,12 +764,13 @@ def _record_case_error_audit(
     error_stage: str,
 ) -> None:
     """評価 runner 側で捕捉した case 失敗を RAG 監査へ残す。"""
-    record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
-    diagnostics = build_search_diagnostics(request, settings=settings)
+    record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
+    diagnostics = build_search_diagnostics(
+        request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+    )
     record_rag_search_audit(
         trace_id=trace_id,
         outcome="error",
-        mode=request.mode,
         sanitized_query=request.query,
         filters=request.filters,
         findings=[],
