@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
@@ -93,7 +93,7 @@ class StubPipeline:
 
 
 class FakeJudge:
-    """標準回答による評価(rag_poc の evaluate_answer_payload)の決定論スタブ。"""
+    """標準回答による評価(evaluate_answer_record)の決定論スタブ。"""
 
     def __init__(self, result: Mapping[str, object] | Exception) -> None:
         self.result = result
@@ -105,6 +105,7 @@ class FakeJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
+        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
     ) -> Mapping[str, object]:
         self.calls.append(
@@ -112,6 +113,7 @@ class FakeJudge:
                 "trace_id": trace_id,
                 "evaluation_input": dict(evaluation_input),
                 "standard_answer": standard_answer,
+                "citations": list(citations),
                 "timeout_seconds": timeout_seconds,
             }
         )
@@ -122,22 +124,18 @@ class FakeJudge:
 
 def _completed_judgement(
     *,
-    total: float = 18.0,
     passed: bool = True,
     claim_status: str = "supported",
-    coverage_cap: float = 5.0,
+    requirement_coverage: float = 1.0,
     coverage_statuses: tuple[str, ...] = ("addressed",),
 ) -> dict[str, object]:
     return {
         "status": "completed",
-        "total_score": total,
-        "max_score": 20,
         "passed": passed,
-        "goal_alignment": "aligned",
         "claim_checks": [{"status": claim_status}],
         "coverage_checks": [{"status": status} for status in coverage_statuses],
-        "coverage_cap": coverage_cap,
-        "message": "4 軸で評価しました。",
+        "requirement_coverage": requirement_coverage,
+        "message": "",
     }
 
 
@@ -522,6 +520,8 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
     assert call["evaluation_input"] == EVALUATION_INPUT
     assert call["standard_answer"] == "承認条件は 120000 円です。"
     assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    # 決定的な指標(忠実さ・引用の追跡)に使う回答の引用も渡す(#680)。
+    assert call["citations"]
     assert metrics.claim_support_rate == 1.0
     assert metrics.requirement_coverage == 1.0
     assert metrics.answer_pass_rate == 1.0
@@ -529,7 +529,6 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
     judgement = metrics.case_results[0].answer_evaluation
     assert judgement is not None
     assert judgement.status == "completed"
-    assert judgement.total_score == 18.0
     assert judgement.passed is True
     assert judgement.claims_supported is True
     assert judgement.missing_content is False
@@ -540,10 +539,9 @@ async def test_judgement_failures_are_reported_per_axis() -> None:
     """根拠のない主張・必要な項目の欠落・不合格を、それぞれの失敗理由として残す。"""
     judge = FakeJudge(
         _completed_judgement(
-            total=12.0,
             passed=False,
             claim_status="contradicted",
-            coverage_cap=2.5,
+            requirement_coverage=0.5,
             coverage_statuses=("addressed", "missing"),
         )
     )
@@ -634,11 +632,10 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
 
 def test_summarize_answer_judgement_normalizes_coverage() -> None:
     judgement = summarize_answer_judgement(
-        _completed_judgement(coverage_cap=3.75, coverage_statuses=("partial",))
+        _completed_judgement(requirement_coverage=0.75, coverage_statuses=("partial",))
     )
     assert judgement.requirement_coverage == 0.75
     assert judgement.missing_content is False
-    assert judgement.goal_alignment == "aligned"
 
 
 def test_saved_legacy_metrics_still_validate() -> None:

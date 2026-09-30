@@ -44,6 +44,7 @@ from app.config import (
     enterprise_ai_model_catalog,
     enterprise_ai_vision_model_id,
 )
+from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
@@ -1083,16 +1084,29 @@ def _evaluation_input(result: Any) -> dict[str, Any] | None:
 
 
 def evaluate_answer_record(
-    evaluation_input: Mapping[str, Any], standard_answer: str, settings: Settings
+    evaluation_input: Mapping[str, Any],
+    standard_answer: str,
+    settings: Settings,
+    *,
+    citations: Sequence[RetrievedChunk],
 ) -> dict[str, Any]:
-    """保存した回答を標準回答で評価する(rag_poc の evaluate_answer_payload)。
+    """保存した回答を標準回答で評価する。
 
+    LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
+    評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
     同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
     """
     from rag_engine.evaluation.answer_eval import evaluate_answer_payload
 
     with tempfile.TemporaryDirectory(prefix="rag-engine-eval-") as work:
         engine_settings = build_engine_settings(settings, output_dir=Path(work))
-        return evaluate_answer_payload(
+        evaluation = evaluate_answer_payload(
             {**evaluation_input, "standard_answer": standard_answer}, engine_settings
         )
+    return score_answer_evaluation(
+        evaluation,
+        answer=str(evaluation_input.get("answer_text") or ""),
+        citations=citations,
+        insufficient_reason=str(evaluation_input.get("insufficient_reason") or ""),
+        settings=settings,
+    )

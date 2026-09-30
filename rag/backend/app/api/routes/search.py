@@ -44,6 +44,7 @@ from app.schemas.search import (
     AnswerRecordDeleteResult,
     AnswerRecordDetail,
     AnswerRecordSummary,
+    RetrievedChunk,
     SearchRequest,
     SearchResponse,
 )
@@ -589,7 +590,7 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
 async def evaluate_saved_answer(
     http_request: Request, trace_id: str, body: AnswerEvaluationRequest
 ) -> ApiResponse[AnswerRecordDetail]:
-    """保存された回答を標準回答で評価し(4 軸の LLM 評価)、結果を保存して返す。
+    """保存された回答を標準回答で評価し(評価の基準の指標と閾値。#680)、結果を保存して返す。
 
     評価は LLM を複数回呼ぶ。失敗しても例外にせず、status=error の評価として保存する
     (rag_poc と同じく部分評価は採用しない)。
@@ -605,11 +606,21 @@ async def evaluate_saved_answer(
             status_code=409,
             detail="この回答には評価に必要な記録がありません。もう一度回答を生成してから評価してください。",
         )
+    raw_citations = row.get("citations_json")
+    citations = [
+        RetrievedChunk.model_validate(citation)
+        for citation in (raw_citations if isinstance(raw_citations, list) else [])
+        if isinstance(citation, dict)
+    ]
     try:
         # worker thread の評価は止められないため、時間切れのときは結果を捨てて保存しない。
         evaluation = await asyncio.wait_for(
             asyncio.to_thread(
-                evaluate_answer_record, evaluation_input, body.standard_answer, get_settings()
+                evaluate_answer_record,
+                evaluation_input,
+                body.standard_answer,
+                get_settings(),
+                citations=citations,
             ),
             timeout=ANSWER_EVALUATION_TIMEOUT_SECONDS,
         )

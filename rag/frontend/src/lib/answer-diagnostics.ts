@@ -157,52 +157,55 @@ export function confidenceVariant(
   return "neutral";
 }
 
-/** 標準回答による評価(rag_poc の 4 軸評価、backend の evaluation)。 */
+/** 標準回答による評価（評価の基準の指標と閾値で判定。backend の evaluation。#680）。 */
 export type AnswerEvaluationView = {
   status: string;
   message: string;
-  totalScore: number | null;
-  maxScore: number;
-  passThreshold: number;
   passed: boolean | null;
+  /** 判定に使った評価の基準（standard / strict）。 */
+  suite: string;
   standardAnswer: string;
   evaluatedAt: string;
-  axes: { key: string; score: number | null; reason: string }[];
+  /** reference の指標は表示だけで合否に使わない（1 件の回答の根拠への忠実さ。#680）。 */
+  metrics: {
+    name: string;
+    value: number | null;
+    threshold: number | null;
+    passed: boolean;
+    reference: boolean;
+  }[];
+  /** 以前の方式（4 軸・20 点満点。rubric_version 10 以前）の評価。指標が無いので再評価を促す。 */
+  legacy: boolean;
   coverage: { index: number; requirement: string; status: string; quote: string }[];
   claims: { quote: string; status: string; reason: string }[];
   externalDataItems: string[];
 };
 
-export const EVALUATION_AXES = [
-  "accuracy",
-  "coverage",
-  "evidence_consistency",
-  "generation_quality",
-] as const;
-
 export function parseAnswerEvaluation(value: unknown): AnswerEvaluationView | null {
   if (!value || typeof value !== "object") return null;
   const raw = record(value);
-  const scores = record(raw.scores);
   const requirements = list(record(raw.standard_answer_scope).requirements).map(
     (item) => String(record(item).requirement ?? "")
   );
+  const status = String(raw.status ?? "");
   return {
-    status: String(raw.status ?? ""),
+    status,
     message: String(raw.message ?? ""),
-    totalScore: num(raw.total_score),
-    maxScore: num(raw.max_score) ?? 20,
-    passThreshold: num(raw.pass_threshold) ?? 16,
     passed: typeof raw.passed === "boolean" ? raw.passed : null,
+    suite: String(raw.suite ?? ""),
     standardAnswer: String(raw.standard_answer ?? ""),
     evaluatedAt: String(raw.evaluated_at ?? ""),
-    axes: Object.keys(scores).length
-      ? EVALUATION_AXES.map((key) => ({
-          key,
-          score: num(record(scores[key]).score),
-          reason: String(record(scores[key]).reason ?? ""),
-        }))
-      : [],
+    metrics: list(raw.metrics).map((item) => {
+      const entry = record(item);
+      return {
+        name: String(entry.name ?? ""),
+        value: num(entry.value),
+        threshold: num(entry.threshold),
+        passed: entry.passed === true,
+        reference: entry.reference === true,
+      };
+    }),
+    legacy: status === "completed" && !Array.isArray(raw.metrics),
     coverage: list(raw.coverage_checks).map((item) => {
       const entry = record(item);
       const index = num(entry.requirement_index) ?? 0;
@@ -228,8 +231,12 @@ export function parseAnswerEvaluation(value: unknown): AnswerEvaluationView | nu
 /** 評価の結果 → StatusBadge の variant とラベルの key。 */
 export function evaluationOutcome(
   evaluation: AnswerEvaluationView
-): { variant: "success" | "danger" | "warning"; labelKey: "passed" | "failed" | "notCompleted" } {
+): {
+  variant: "success" | "danger" | "warning" | "neutral";
+  labelKey: "passed" | "failed" | "notCompleted" | "legacy";
+} {
   if (evaluation.status !== "completed") return { variant: "warning", labelKey: "notCompleted" };
+  if (evaluation.legacy) return { variant: "neutral", labelKey: "legacy" };
   return evaluation.passed
     ? { variant: "success", labelKey: "passed" }
     : { variant: "danger", labelKey: "failed" };

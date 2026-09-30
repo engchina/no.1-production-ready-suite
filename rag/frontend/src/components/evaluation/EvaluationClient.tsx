@@ -869,17 +869,12 @@ function JudgementCell({ judgement }: { judgement: EvaluationAnswerJudgement | n
       </span>
     );
   }
-  const params = {
-    score: judgement.total_score ?? "—",
-    max: judgement.max_score,
-  };
   return (
     <span data-testid="evaluation-case-judgement">
       <StatusBadge
         variant={judgement.passed ? "success" : "danger"}
         label={t(
-          judgement.passed ? "evaluation.case.judgement.passed" : "evaluation.case.judgement.failed",
-          params
+          judgement.passed ? "evaluation.case.judgement.passed" : "evaluation.case.judgement.failed"
         )}
       />
     </span>

@@ -280,13 +280,10 @@ function evaluationMetrics(suite: string) {
         refusal_correct: true,
         answer_evaluation: {
           status: "completed",
-          total_score: 18,
-          max_score: 20,
           passed: true,
           claims_supported: true,
           requirement_coverage: 0.75,
           missing_content: false,
-          goal_alignment: "aligned",
           message: null,
         },
         guardrail_warnings: [],
@@ -439,7 +436,7 @@ for (const viewport of [
     );
     const table = page.getByTestId("evaluation-case-scroll-region");
     await expect(table.getByTestId("evaluation-case-judgement").first()).toContainText(
-      "合格 18 / 20 点"
+      "合格"
     );
     await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("拒答した");
     await expectNoPageOverflow(page);

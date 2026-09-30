@@ -29,6 +29,7 @@ from typing import Protocol
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.answer_engine import evaluate_answer_record
+from app.rag.answer_metrics import claims_supported, grounding_text, is_abstained_answer
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     answer_stage_label,
@@ -79,8 +80,6 @@ ANSWER_JUDGE_UNAVAILABLE_MESSAGE = (
 )
 ANSWER_JUDGE_TIMEOUT_MESSAGE = "標準回答による評価が時間内に終わりませんでした。"
 ANSWER_JUDGE_ERROR_MESSAGE = "標準回答による評価を完了できませんでした。"
-# 主張の監査で「根拠で確かめられない」とする判定(rag_poc の run_answer_eval と同じ)。
-UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 logger = logging.getLogger(__name__)
 
 
@@ -100,10 +99,10 @@ class SearchPipeline(Protocol):
 
 
 class AnswerJudge(Protocol):
-    """標準回答で回答を評価する(rag_poc の 4 軸の評価。LLM を複数回呼ぶ)。
+    """標準回答で回答を評価する(LLM を複数回呼ぶ)。
 
-    戻り値は `evaluate_answer_payload` の結果(status / total_score / passed / claim_checks /
-    coverage_checks / coverage_cap など)。時間切れは TimeoutError を送出する。
+    戻り値は `evaluate_answer_record` の結果(status / passed / metrics / claim_checks /
+    coverage_checks / requirement_coverage など。#680)。時間切れは TimeoutError を送出する。
     """
 
     async def __call__(
@@ -112,6 +111,7 @@ class AnswerJudge(Protocol):
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
+        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
     ) -> Mapping[str, object]:
         """評価結果を返す。"""
@@ -140,6 +140,7 @@ async def judge_answer_with_standard(
     trace_id: str,
     evaluation_input: Mapping[str, object],
     standard_answer: str,
+    citations: Sequence[RetrievedChunk],
     timeout_seconds: float,
     settings: Settings | None = None,
 ) -> Mapping[str, object]:
@@ -149,7 +150,13 @@ async def judge_answer_with_standard(
     """
     resolved = settings or get_settings()
     evaluation = await asyncio.wait_for(
-        asyncio.to_thread(evaluate_answer_record, evaluation_input, standard_answer, resolved),
+        asyncio.to_thread(
+            evaluate_answer_record,
+            evaluation_input,
+            standard_answer,
+            resolved,
+            citations=citations,
+        ),
         timeout=max(0.001, timeout_seconds),
     )
     saved = {
@@ -158,7 +165,7 @@ async def judge_answer_with_standard(
         "evaluated_at": datetime.now(UTC).isoformat(),
     }
     try:
-        # 回答の記録の画面から、軸ごとの理由・主張ごとの判定を確かめられるようにする。
+        # 回答の記録の画面から、指標ごとの値・主張ごとの判定を確かめられるようにする。
         await OracleClient(settings=resolved).save_answer_evaluation(trace_id, saved)
     except Exception as exc:  # noqa: BLE001 - 保存は補助。評価の結果は返す。
         logger.info(
@@ -430,6 +437,7 @@ class EvaluationRunner:
                 trace_id=response.trace_id,
                 evaluation_input=evaluation_input,
                 standard_answer=case.standard_answer,
+                citations=response.citations,
                 timeout_seconds=timeout,
             )
         except TimeoutError:
@@ -447,12 +455,14 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
+        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
     ) -> Mapping[str, object]:
         return await judge_answer_with_standard(
             trace_id=trace_id,
             evaluation_input=evaluation_input,
             standard_answer=standard_answer,
+            citations=citations,
             timeout_seconds=timeout_seconds,
             settings=settings,
         )
@@ -461,7 +471,7 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
 
 
 def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAnswerJudgement:
-    """rag_poc の評価結果を、指標に使う要約へ変換する。"""
+    """標準回答による評価の結果を、指標に使う要約へ変換する。"""
     status = str(evaluation.get("status") or "error")
     message = evaluation.get("message")
     if status != "completed":
@@ -472,23 +482,15 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         claim for claim in _mapping_list(evaluation.get("claim_checks")) if claim.get("status")
     ]
     coverage_checks = _mapping_list(evaluation.get("coverage_checks"))
-    coverage_cap = _optional_float(evaluation.get("coverage_cap"))
-    max_score = _optional_float(evaluation.get("max_score")) or 20.0
-    goal = evaluation.get("goal_alignment")
+    coverage = _optional_float(evaluation.get("requirement_coverage"))
     return EvaluationAnswerJudgement(
         status="completed",
-        total_score=_optional_float(evaluation.get("total_score")),
-        max_score=max_score,
         passed=bool(evaluation.get("passed")),
-        claims_supported=not any(
-            str(claim.get("status")) in UNSUPPORTED_CLAIM_STATUSES for claim in claims
-        ),
-        # 網羅性の点(原質問に必要な項目への対応率 × 5)を 0..1 にする。
+        claims_supported=claims_supported(claims),
         requirement_coverage=(
-            round(min(1.0, max(0.0, coverage_cap / 5.0)), 4) if coverage_cap is not None else None
+            round(min(1.0, max(0.0, coverage)), 4) if coverage is not None else None
         ),
         missing_content=any(str(check.get("status")) == "missing" for check in coverage_checks),
-        goal_alignment=str(goal) if goal else None,
         message=str(message) if message else None,
     )
 
@@ -545,7 +547,7 @@ def _case_result(
     feature_count = 0
     if not abstained and response.answer.strip():
         groundedness = evaluate_groundedness(
-            response.answer, "\n".join(chunk.text for chunk in response.citations)
+            grounding_text(response.answer), "\n".join(chunk.text for chunk in response.citations)
         )
         faithfulness = groundedness.score
         grounded = groundedness.grounded
@@ -595,22 +597,11 @@ def _case_result(
 
 
 def is_abstained(response: SearchResponse) -> bool:
-    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。
-
-    本文か引用が無い回答は拒答。回答エンジンが不足の理由を返し、モデルが使った根拠が 1 つも
-    無い回答も拒答とする(必要な根拠を原文のまま示すだけの回答を含む)。
-    """
-    if not response.answer.strip() or not response.citations:
-        return True
+    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。"""
     details = response.diagnostics.answer or {}
-    insufficient = str(details.get("insufficient_reason") or "").strip()
-    if not insufficient:
-        return False
-    return not any(_model_used(chunk) for chunk in response.citations)
-
-
-def _model_used(chunk: RetrievedChunk) -> bool:
-    return bool(chunk.metadata.get("evidence_model_used"))
+    return is_abstained_answer(
+        response.answer, response.citations, str(details.get("insufficient_reason") or "")
+    )
 
 
 def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult) -> None:

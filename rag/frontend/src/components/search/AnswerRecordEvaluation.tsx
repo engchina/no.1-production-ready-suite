@@ -11,6 +11,11 @@ import {
 import { ClipboardCheck } from "lucide-react";
 import { useState } from "react";
 
+import {
+  formatMetricValue,
+  metricLabel,
+  suiteLabel,
+} from "@/components/evaluation/evaluation-metrics";
 import { ApiError } from "@/lib/api";
 import {
   evaluationOutcome,
@@ -21,13 +26,13 @@ import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useEvaluateAnswerRecord } from "@/lib/queries";
 
-type Axis = AnswerEvaluationView["axes"][number];
+type Metric = AnswerEvaluationView["metrics"][number];
 
 const COVERAGE_VARIANT = { addressed: "success", partial: "warning", missing: "danger" } as const;
 
 /**
- * 保存された回答を標準回答で評価する（LLM による回答の評価、4 軸・20 点満点）。
- * rag_poc と違い、生成の後に標準回答を入れて評価する。評価は LLM を複数回呼ぶので時間がかかる。
+ * 保存された回答を標準回答で評価する。評価の基準（standard / strict）の指標のうち 1 件の回答で
+ * 測れるものを、その閾値で判定する（#680）。評価は LLM を複数回呼ぶので時間がかかる。
  */
 export function AnswerRecordEvaluation({
   traceId,
@@ -107,24 +112,41 @@ export function AnswerRecordEvaluation({
 
 function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) {
   const outcome = evaluationOutcome(evaluation);
-  const columns: DataTableColumn<Axis>[] = [
+  const columns: DataTableColumn<Metric>[] = [
     {
-      key: "axis",
-      header: t("search.evaluation.axis"),
+      key: "metric",
+      header: t("search.evaluation.metric"),
       rowHeader: true,
-      render: (axis) => t(`search.evaluation.axis.${axis.key as "accuracy"}`),
+      render: (metric) => metricLabel(metric.name),
     },
     {
-      key: "score",
-      header: t("search.evaluation.score"),
+      key: "value",
+      header: t("search.evaluation.value"),
       align: "right",
       className: "tnum whitespace-nowrap",
-      render: (axis) => (axis.score == null ? "—" : `${axis.score} / 5`),
+      render: (metric) => formatMetricValue(metric.value),
     },
     {
-      key: "reason",
-      header: t("search.evaluation.reason"),
-      render: (axis) => <span className="whitespace-pre-wrap break-words">{axis.reason}</span>,
+      key: "threshold",
+      header: t("search.evaluation.threshold"),
+      align: "right",
+      className: "tnum whitespace-nowrap",
+      render: (metric) => formatMetricValue(metric.threshold),
+    },
+    {
+      key: "verdict",
+      header: t("search.evaluation.verdict"),
+      render: (metric) =>
+        metric.reference ? (
+          <StatusBadge variant="neutral" label={t("search.evaluation.metric.reference")} />
+        ) : (
+          <StatusBadge
+            variant={metric.passed ? "success" : "danger"}
+            label={t(
+              metric.passed ? "search.evaluation.metric.passed" : "search.evaluation.metric.failed"
+            )}
+          />
+        ),
     },
   ];
   return (
@@ -134,13 +156,9 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
           variant={outcome.variant}
           label={t(`search.evaluation.outcome.${outcome.labelKey}`)}
         />
-        {evaluation.totalScore != null ? (
-          <span className="tnum text-sm font-semibold text-fg">
-            {t("search.evaluation.total", {
-              score: evaluation.totalScore,
-              max: evaluation.maxScore,
-              threshold: evaluation.passThreshold,
-            })}
+        {evaluation.suite ? (
+          <span className="text-sm font-semibold text-fg">
+            {t("search.evaluation.suite", { suite: suiteLabel(evaluation.suite) })}
           </span>
         ) : null}
         {evaluation.evaluatedAt ? (
@@ -149,14 +167,16 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
           </span>
         ) : null}
       </div>
-      {evaluation.message ? (
+      {evaluation.legacy ? (
+        <p className="text-xs leading-relaxed text-fg-muted">{t("search.evaluation.legacy")}</p>
+      ) : evaluation.message ? (
         <p className="text-xs leading-relaxed text-fg-muted">{evaluation.message}</p>
       ) : null}
-      {evaluation.axes.length ? (
+      {evaluation.metrics.length ? (
         <DataTable
           columns={columns}
-          rows={evaluation.axes}
-          getRowKey={(axis) => axis.key}
+          rows={evaluation.metrics}
+          getRowKey={(metric) => metric.name}
           dense
         />
       ) : null}

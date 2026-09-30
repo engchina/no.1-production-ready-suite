@@ -49,13 +49,13 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 | 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース | 残す（標準回答の無い golden set の決定論の近似） |
 | 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース | rag_poc の「拒答」。RGB の negative rejection。否定 case の特別扱い（#301）もこれにまとめた |
 | 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース | rag_poc の「必要内容欠落」（網羅性の軸の対応率） |
-| 回答 | `answer_pass_rate` | 4 軸（正確性・網羅性・根拠との整合性・生成品質）で 16 / 20 点以上、かつ監査を終え、目的から外れていない割合 | `standard_answer` のあるケース | rag_poc の「平均点」と「合格」をまとめた（点はケースごとに返す） |
+| 回答 | `answer_pass_rate` | 標準回答による評価で、1 件の回答で測れる指標（claim_support_rate・requirement_coverage・refusal_accuracy・citation_traceability_coverage）がすべて閾値以上だった割合（#680） | `standard_answer` のあるケース | faithfulness は語句の一致の近似のため、1 件の回答の合否には使わない（参考値） |
 
 削除した指標: `precision_at_k`（正解の文書が k 件より少ないと 1.0 に届かず、回答エンジンは rerank の件数を使わない）・`context_precision`（正解の文書以外の補足の根拠を減点する。根拠の質は `faithfulness` と `claim_support_rate` で見る）・`response_relevancy`（質問の語を繰り返すだけで上がる近似）・`noise_sensitivity`（失敗理由の件数から作った独自の式で、失敗理由と重なる）・`content_kind_hit_rate`・`section_coverage`（期待値の無いケースを 1.0 と数え平均を押し上げ、ほぼ使われていない）。rag_poc の「監査での除去」「引用照合での除外」は回答生成の工程の診断で、利用者が見る品質ではないため指標にしない（回答の記録の実行記録で確かめる）。
 
 - 各指標は、その指標を測れるケースだけの平均にし、対象の件数を `metric_case_counts` に返す。対象のケースが無い指標は `null`（0 と区別する）。失敗したケース（検索失敗・時間切れ）は `error_count` で数え、指標の平均には入れない。
 - **答えるべきでない質問（#301）**: `answerable: false` のケース（省略時は、正解の文書・期待する語・標準回答のどれも無いケース）は、拒答の正しさだけを測る。拒答は、回答の本文か引用が無い回答と、回答エンジンが不足の理由を返しモデルが使った根拠が 1 つも無い回答。
-- **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、rag_poc の 4 軸の評価（`evaluate_answer_payload`。標準回答から比較の範囲を固定 → 4 軸の採点・主張の監査・必要な項目の網羅）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
+- **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、標準回答による評価（`evaluate_answer_payload` が標準回答から比較の範囲を固定 → 項目の照合・主張の監査を LLM で行い、`app/rag/answer_metrics.py` が評価の基準の指標と閾値で合否を付ける。#680）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
 - `passed`: 閾値をすべて満たし、`error_count=0` で、標準回答による評価がすべて終わったか。閾値は測れた指標だけに適用する。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
 - 削除した指標の `thresholds` は受け付けない（422）。ケースの `expected_content_kind`・`expected_section_paths` と評価の `mode`・`rerank_top_n` は以前の評価ファイルを読めるように無視する（比較の experiment では受け付けない）。保存済みの評価の結果（job・artifact）に残る古い指標は読み込み時に捨て、画面は削除した指標・基準の名前を原文のまま出す。
@@ -124,7 +124,7 @@ staging 用の実データ manifest は任意で `staging_dataset_policy` を持
 `python -m app.rag.answer_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
 
 ```bash
-# QA（id / question / standard_answer）を業務ビューで回答し、標準回答で 4 軸評価する（rag_poc の run_answer_eval.py）
+# QA（id / question / standard_answer）を業務ビューで回答し、標準回答で評価する（評価の基準の指標と閾値。rag_poc の run_answer_eval.py 相当）
 uv run python -m app.rag.answer_verify_cli answers --qa qa.json --business-view <業務ビュー ID> --out .runs/answers/<label>
 # rag_poc の cases.json（id / question / expect）で回答を文字列の規則で判定する（rag_poc の run_regression.py）
 uv run python -m app.rag.answer_verify_cli regression --cases cases.json --business-view <業務ビュー ID> --out .runs/regression/<label> --repeat 2

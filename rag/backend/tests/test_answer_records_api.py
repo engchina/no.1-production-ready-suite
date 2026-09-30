@@ -152,11 +152,13 @@ def test_delete_saved_answer(fake_oracle: FakeAnswerOracle) -> None:
 def test_evaluate_saved_answer_with_standard_answer(
     fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[tuple[dict[str, Any], str]] = []
+    calls: list[tuple[dict[str, Any], str, list[Any]]] = []
 
-    def fake_evaluate(evaluation_input: dict[str, Any], standard_answer: str, settings: Any) -> Any:
-        calls.append((evaluation_input, standard_answer))
-        return {"status": "completed", "total_score": 18, "max_score": 20, "passed": True}
+    def fake_evaluate(
+        evaluation_input: dict[str, Any], standard_answer: str, settings: Any, *, citations: Any
+    ) -> Any:
+        calls.append((evaluation_input, standard_answer, citations))
+        return {"status": "completed", "passed": True, "metrics": [], "suite": "standard"}
 
     monkeypatch.setattr(search_route, "evaluate_answer_record", fake_evaluate)
 
@@ -167,9 +169,9 @@ def test_evaluate_saved_answer_with_standard_answer(
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["evaluation_available"] is True
-    assert data["evaluation"]["total_score"] == 18
+    assert data["evaluation"]["suite"] == "standard"
     assert data["evaluation"]["standard_answer"] == "受注番号を入力する"
-    assert calls == [
+    assert [call[:2] for call in calls] == [
         ({"question": "受注の登録方法は？", "answer_text": "回答"}, "受注番号を入力する")
     ]
     assert fake_oracle.evaluations["trace-1"]["passed"] is True
@@ -201,10 +203,10 @@ def test_evaluate_saved_answer_times_out_without_saving(
 
     finished = threading.Event()
 
-    def slow_evaluate(*_args: Any) -> Any:
+    def slow_evaluate(*_args: Any, **_kwargs: Any) -> Any:
         try:
             time.sleep(0.3)  # 上限（0.05 秒）の 6 倍。
-            return {"status": "completed", "total_score": 18, "max_score": 20, "passed": True}
+            return {"status": "completed", "passed": True}
         finally:
             finished.set()
 

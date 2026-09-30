@@ -80,13 +80,12 @@ def test_identical_retry_stops_before_another_grade_call():
     assert attempts[-1].stop_reason == "no_new_evidence" and result.records
 
 
-def test_missing_audit_cannot_pass_even_with_high_scores():
+def test_missing_audit_is_reported():
     data,scope,output=evaluation_case("data_confirmation")
     data["answer_text"] += "主档を変更する。"
     with patch("rag_engine.evaluation.answer_eval.parse_text_response",return_value=output):
         result=evaluate_answer_payload(data,object(),standard_scope=scope)
-    assert result["status"]=="completed" and result["total_score"]==20
-    assert not result["passed"] and result["missing_audit_passage_ids"]==["A2"]
+    assert result["status"]=="completed" and result["missing_audit_passage_ids"]==["A2"]
 
 
 def test_evaluation_binds_source_text_by_stable_id():
@@ -98,7 +97,7 @@ def test_evaluation_binds_source_text_by_stable_id():
     with patch("rag_engine.evaluation.answer_eval.parse_text_response",return_value=output):
         result=evaluate_answer_payload(data,object(),standard_scope=scope)
     assert result["claim_checks"][0]["evidence_quote"]==data["evidence_items"][0]["text"]
-    assert result["citation_error_count"]==0
+    assert result["claim_checks"][0]["status"]=="supported"
 
 
 def test_missing_coverage_can_cite_refusal_without_getting_credit():
@@ -107,7 +106,7 @@ def test_missing_coverage_can_cite_refusal_without_getting_credit():
     output.coverage_checks=[CoverageCheck(requirement_index=1,status='missing',answer_quote=data['answer_text'],answer_passage_id='A1')]
     with patch('rag_engine.evaluation.answer_eval.parse_text_response',return_value=output):
         result=evaluate_answer_payload(data,object(),standard_scope=scope)
-    assert result['status']=='completed' and result['scores']['coverage']['score']==0
+    assert result['status']=='completed' and result['requirement_coverage']==0
 
 
 def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
