@@ -78,8 +78,19 @@ function formatDateTime(iso: string | null | undefined): string {
 }
 
 /** Migration head の表示（番号は `v17`、名前はそのまま）。 */
-function formatSchemaHead(head: string | number): string {
-  return typeof head === "number" ? `v${head}` : head;
+/**
+ * migration の表示（3 製品で「v + 番号」にそろえる。NL2SQL が基準。#658）。
+ * NL2SQL は番号そのもの。RAG は名前（`20260930_009_…`）が台帳の識別子のため、並び順の番号
+ * （適用済みと未適用・不一致は全 migration を分けたもの）を出し、名前は補足に回す。
+ */
+function schemaHeadDisplay(data: SystemTablesStatusData): { value: string; name?: string } {
+  if (typeof data.schema_head === "number") return { value: `v${data.schema_head}` };
+  const ordinal = data.applied_versions.length + data.pending_versions.length;
+  return ordinal > 0 ? { value: `v${ordinal}`, name: data.schema_head } : { value: data.schema_head };
+}
+
+function formatVersion(version: string | number): string {
+  return typeof version === "number" ? `v${version}` : version;
 }
 
 /** 確認ダイアログに渡す文言（製品が `useConfirm` などで、danger のトーンで開く）。 */
@@ -163,6 +174,7 @@ export function SystemTablesCard({
   const disabledForeignKeys = data?.disabled_foreign_keys ?? [];
   // データを消す未適用の migration（#619。RAG だけが返す）。
   const destructiveMigrations = data?.pending_destructive_migrations ?? [];
+  const schemaHead = data ? schemaHeadDisplay(data) : null;
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
     canManage && Boolean(api.deleteSystemTableOrphanedRows) && Boolean(confirmDeleteOrphans);
@@ -339,7 +351,9 @@ export function SystemTablesCard({
               />
               <SummaryItem
                 label={text("settings.database.systemTables.summary.head")}
-                value={formatSchemaHead(data.schema_head)}
+                value={schemaHead?.value ?? ""}
+                description={schemaHead?.name}
+                descriptionClassName="font-mono [overflow-wrap:anywhere]"
               />
               <SummaryItem
                 label={text("settings.database.systemTables.summary.epoch")}
@@ -631,12 +645,24 @@ function DestructiveMigrationList({ migrations }: { migrations: SystemTableDestr
   );
 }
 
-function SummaryItem({ label, value, description }: { label: string; value: string; description?: string }) {
+function SummaryItem({
+  label,
+  value,
+  description,
+  descriptionClassName,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+  descriptionClassName?: string;
+}) {
   return (
     <div className="min-w-0 rounded-md border border-border bg-surface-hover p-3">
       <p className="text-xs text-fg-muted">{label}</p>
       <p className="mt-1 break-words font-sans text-sm font-semibold text-fg">{value}</p>
-      {description ? <p className="mt-1 text-xs leading-relaxed text-fg-muted">{description}</p> : null}
+      {description ? (
+        <p className={cn("mt-1 text-xs leading-relaxed text-fg-muted", descriptionClassName)}>{description}</p>
+      ) : null}
     </div>
   );
 }
@@ -665,11 +691,20 @@ function SystemTablesDetails({
       summaryClassName="px-4 py-3 font-medium"
       contentClassName="p-4"
     >
-        <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted">
+        {/* 適用済みは件数だけにする（migration は増え続け、全件を並べても判断に使えない）。
+            未適用・不一致は「作成・更新」で直す対象なので名前を出す（#658）。 */}
+        <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted" data-testid="system-tables-versions">
           {text("settings.database.systemTables.details.versions", {
-            applied: data.applied_versions.join(", ") || "-",
-            pending: data.pending_versions.join(", ") || "-",
+            applied: formatNumber(data.applied_versions.length),
+            pending: formatNumber(data.pending_versions.length),
           })}
+          {data.pending_versions.length > 0 ? (
+            <span className="block font-mono [overflow-wrap:anywhere]">
+              {text("settings.database.systemTables.details.pendingVersions", {
+                versions: data.pending_versions.map(formatVersion).join(", "),
+              })}
+            </span>
+          ) : null}
         </p>
         <DataTable<SystemObjectMetadata>
           columns={[

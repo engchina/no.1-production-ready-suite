@@ -275,7 +275,9 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ### 共通の仕組みと製品固有の仕組みの分け方
 
 - **3製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観）とユーザー管理・ロール管理は、画面を `packages/system-settings`、API（または API 契約）を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ（#70 / #206）。
-- **製品固有の機能は、共通のメニューに混ぜず製品固有のメニューセクションに置く。** 例: NL2SQL の権限管理（ロールごとの機能権限・業務プロファイル利用権限）と Deep Data Security は「NL2SQL セキュリティ」。共通の「ユーザーとロール」「システム設定」はナビの末尾にそろえる。
+- **製品固有の機能は、共通のメニューに混ぜず製品固有のメニューセクションに置く。** 例: NL2SQL の権限管理（ロールごとの機能権限・業務プロファイル利用権限）と Deep Data Security は「セキュリティ設定」。
+- **サイドナビの下部の並びとセクション名は 3 製品で同じにする（#658）**: 製品の業務のセクションの後に「改善・運用」（無い製品は無し）→「セキュリティ設定」（製品固有の権限管理など。旧「◯◯ セキュリティ」）→「ユーザーとロール」→「運用設定」（製品固有の運用。システムテーブルがあれば先頭）→「システム設定」。backend の権限カタログの `group` と並びもナビにそろえる。
+- **ナビのアイコンは、3 製品で同じ機能なら同じアイコン、違う機能なら違うアイコンにする（1 つの製品の中で同じアイコンを 2 つの項目に使わない。#658）。** 共通の項目（システム設定・ユーザーとロール）は `packages/system-settings` のアイコン、製品間で同じ機能（権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・業務ビュー / 業務プロファイル `BriefcaseBusiness`）はそろえる。重複は各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
 - ロールの基本情報（コード・名称・説明・アーカイブ）は共通のロール管理が扱い、ロールに付ける権限は製品ごとの権限管理が扱う。共通のロール API は権限を変更しない。
 - **権限管理の機能（メニュー）の一覧は、左のナビを正本にしてグループ・並び順・名前をそろえる（#567）。** 一覧は製品の `nav-config.ts` から作り（`packages/system-settings` の `permissionNavSections` / `arrangePermissionsByNav` を、製品の `PERMISSIONS_API.permissions` で通す）、backend のカタログの `group` / `label` を画面に使わない。名前はサイドナビの表示名（`sidebarLabelKey` があればそれ）。ナビに無い権限（画面の中の操作を許可する capability）は、ナビの後ろに backend のグループのまま置く。
   - 画面のあるメニュー権限は必ずナビの項目にする。ナビを変えたら権限の一覧は自動で追従し、ナビとメニュー権限・backend のカタログの code のずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。

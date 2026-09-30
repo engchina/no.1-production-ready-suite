@@ -1,14 +1,16 @@
 import {
   BadgeCheck,
+  Blocks,
+  BookOpenText,
   Bot,
-  Boxes,
+  Cable,
   ClipboardList,
+  Container,
   DatabaseBackup,
-  KeyRound,
+  DatabaseZap,
   LockKeyhole,
   PlayCircle,
-  Server,
-  Settings,
+  PlugZap,
   Store,
   type LucideIcon,
 } from "lucide-react";
@@ -57,7 +59,8 @@ const USER_ROLE_MENU_PERMISSIONS = {
 
 /**
  * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
- * （製品のセクション → 製品固有のセキュリティ → 運用設定 → 共通のユーザーとロール → 共通のシステム設定）。
+ * （製品のセクション → セキュリティ設定 → 共通のユーザーとロール → 運用設定 → 共通のシステム設定。
+ * Agent は「改善・運用」を持たない。#658）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
@@ -68,10 +71,10 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.skills,
         labelKey: "nav.skills",
         sidebarLabelKey: "nav.skills.sidebar",
-        icon: Boxes,
+        icon: Blocks,
         permission: MENU_PERMISSIONS.skills,
       },
-      { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Server, permission: MENU_PERMISSIONS.runtimes },
+      { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Container, permission: MENU_PERMISSIONS.runtimes },
       { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle, permission: MENU_PERMISSIONS.runs },
       { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
       { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList, permission: MENU_PERMISSIONS.audit },
@@ -96,42 +99,6 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。
-    titleKey: "nav.section.operations",
-    items: [
-      {
-        href: APP_ROUTES.settingsConnection,
-        labelKey: "nav.settingsConnection",
-        icon: KeyRound,
-        permission: MENU_PERMISSIONS.settingsConnection,
-      },
-      {
-        href: APP_ROUTES.settingsExternalRag,
-        labelKey: "nav.settingsExternalRag",
-        icon: Settings,
-        permission: MENU_PERMISSIONS.settingsExternalRag,
-      },
-      {
-        href: APP_ROUTES.settingsExternalNl2Sql,
-        labelKey: "nav.settingsExternalNl2Sql",
-        icon: Settings,
-        permission: MENU_PERMISSIONS.settingsExternalNl2Sql,
-      },
-      {
-        href: APP_ROUTES.settingsExternalMcp,
-        labelKey: "nav.settingsExternalMcp",
-        icon: Settings,
-        permission: MENU_PERMISSIONS.settingsExternalMcp,
-      },
-      {
-        href: APP_ROUTES.settingsRuntimeSnapshot,
-        labelKey: "nav.settingsRuntimeSnapshot",
-        icon: DatabaseBackup,
-        permission: MENU_PERMISSIONS.settingsRuntimeSnapshot,
-      },
-    ],
-  },
-  {
     // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
     titleKey: "nav.section.userRoles",
     // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ Agent の型へそろえる
@@ -141,6 +108,42 @@ export const NAV_SECTIONS: NavSection[] = [
       icon: item.icon as LucideIcon,
       permission: USER_ROLE_MENU_PERMISSIONS[item.key],
     })),
+  },
+  {
+    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。
+    titleKey: "nav.section.operations",
+    items: [
+      {
+        href: APP_ROUTES.settingsConnection,
+        labelKey: "nav.settingsConnection",
+        icon: Cable,
+        permission: MENU_PERMISSIONS.settingsConnection,
+      },
+      {
+        href: APP_ROUTES.settingsExternalRag,
+        labelKey: "nav.settingsExternalRag",
+        icon: BookOpenText,
+        permission: MENU_PERMISSIONS.settingsExternalRag,
+      },
+      {
+        href: APP_ROUTES.settingsExternalNl2Sql,
+        labelKey: "nav.settingsExternalNl2Sql",
+        icon: DatabaseZap,
+        permission: MENU_PERMISSIONS.settingsExternalNl2Sql,
+      },
+      {
+        href: APP_ROUTES.settingsExternalMcp,
+        labelKey: "nav.settingsExternalMcp",
+        icon: PlugZap,
+        permission: MENU_PERMISSIONS.settingsExternalMcp,
+      },
+      {
+        href: APP_ROUTES.settingsRuntimeSnapshot,
+        labelKey: "nav.settingsRuntimeSnapshot",
+        icon: DatabaseBackup,
+        permission: MENU_PERMISSIONS.settingsRuntimeSnapshot,
+      },
+    ],
   },
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。

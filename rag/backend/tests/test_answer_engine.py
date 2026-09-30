@@ -510,6 +510,93 @@ async def test_rerank_enabled_calls_backend_rerank(
     assert genai.rerank_calls, "Rerank ON なのに backend の rerank が呼ばれていない"
 
 
+class _ScoredGenAi(FakeGenAi):
+    """rerank の関連度を固定値で返すスタブ(OCI は呼ばない)。"""
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        return [(index, 0.87 - index * 0.1) for index in range(len(documents))][:top_n]
+
+
+def _rerank_step_status(diagnostics: dict[str, Any]) -> str:
+    steps = [step for step in diagnostics["execution_steps"] if step["name"] == "Rerank"]
+    assert steps, "実行記録に Rerank の工程が無い"
+    return str(steps[0]["status"])
+
+
+@pytest.mark.parametrize("generate_answer", [True, False], ids=["answer", "search"])
+async def test_rerank_score_and_rank_reach_citations(
+    monkeypatch: pytest.MonkeyPatch, generate_answer: bool
+) -> None:
+    """rerank した候補の関連度と順位を引用の ``rerank_score`` / ``rerank_rank`` に写す(#662)。
+
+    以前は rerank を実行しても引用へ写さず、RAG 検索の引用カードが常に「Rerank 未実行」だった。
+    rerank の候補ではない前後の chunk(同じ節の前後)は ``None`` のまま。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(
+            oci_compartment_id="ocid1.compartment.oc1..example",
+            rag_query_strategy="simple_retrieval",
+            rag_answer_flow="standard_rag",
+        ),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=_ScoredGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="受注の登録方法は？", generate_answer=generate_answer)
+    )
+
+    by_id = {citation.chunk_id: citation for citation in outcome.citations}
+    anchor = by_id["doc-1:c1"]
+    assert anchor.rerank_score == pytest.approx(0.87)
+    assert anchor.metadata["rerank_rank"] == 1
+    if "doc-1:c2" in by_id:
+        assert by_id["doc-1:c2"].rerank_score is None
+        assert "rerank_rank" not in by_id["doc-1:c2"].metadata
+    assert _rerank_step_status(outcome.diagnostics) == "complete"
+
+
+@pytest.mark.parametrize(
+    ("settings", "reason"),
+    [
+        (
+            {"oci_compartment_id": "ocid1.compartment.oc1..example", "rag_rerank_enabled": False},
+            "無効の設定",
+        ),
+        ({"oci_compartment_id": ""}, "モデルまたはコンパートメントが未設定"),
+    ],
+    ids=["disabled", "unconfigured"],
+)
+async def test_rerank_skip_is_recorded_with_reason(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, Any], reason: str
+) -> None:
+    """rerank を実行しないときは、実行記録の状態に理由を付け、引用の rerank は空のまま(#662)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    class NoRerankGenAi(FakeGenAi):
+        async def rerank(
+            self, query: str, documents: list[str], top_n: int
+        ) -> list[tuple[int, float]]:
+            raise AssertionError("rerank は実行しない")
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(rag_query_strategy="simple_retrieval", rag_answer_flow="standard_rag", **settings),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=NoRerankGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？", generate_answer=False))
+
+    assert outcome.citations
+    assert all(citation.rerank_score is None for citation in outcome.citations)
+    assert all("rerank_rank" not in citation.metadata for citation in outcome.citations)
+    assert _rerank_step_status(outcome.diagnostics) == f"未実行: {reason}"
+
+
 def _pdf_with_figure() -> bytes:
     import fitz  # type: ignore[import-untyped]
 

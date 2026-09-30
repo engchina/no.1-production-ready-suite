@@ -73,9 +73,10 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース。
   - **業務ビュー**: RAG 検索、業務ビュー、品質評価。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
-  - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`。#638）。
-  - **RAG セキュリティ**: 権限管理（ロールごとのメニュー権限・業務ビュー・ナレッジベース。RAG 固有。#214）。
+  - **改善・運用**: 品質評価、フィードバック。
+  - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・業務ビュー・ナレッジベース。RAG 固有。#214。セクション名は 3 製品で同じ。#658）。
   - **ユーザーとロール**: ユーザー管理、ロール管理（3製品で共通。画面と API は platform の共有パッケージ）。
+  - **運用設定**: システムテーブル管理（NL2SQL と同じく先頭。#658）、HuggingFace 設定、サービス管理（RAG 固有の運用項目）。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`。#638）。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観（3製品で共通。画面と API は platform の共有パッケージ）。
 - ナビ・ルート・ページ内の操作は権限（`rag/backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
 - 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の保持の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（各ページのページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）に書く。

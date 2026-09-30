@@ -23,11 +23,12 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_guardrail",
   "menu.settings_evaluation",
   "menu.settings_graph",
-  "menu.settings_huggingface",
-  "menu.settings_services",
+  "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",
-  "menu.security_permissions",
+  "menu.settings_system_tables",
+  "menu.settings_huggingface",
+  "menu.settings_services",
   "menu.settings_oci",
   "menu.settings_upload_storage",
   "menu.settings_model",
@@ -153,11 +154,10 @@ export async function mockDatabaseReady(page: Page): Promise<void> {
 }
 
 /**
- * `/settings/database` の SystemTablesCard 用 status stub。
+ * `/settings/system-tables`（運用設定。#658）の SystemTablesCard 用 status stub。
  *
  * `/api/settings/database/system-tables` は `**\/api/settings/database**` に一致するため、
  * 設定ページの mock が catch-all で別 payload を返すとカードがエラー表示になる。
- * 同じページの他カード(ADB 管理・Wallet)を検証する spec は、この stub を明示 route する。
  */
 export const SYSTEM_TABLES_STATUS_OK = {
   data: {

@@ -129,7 +129,7 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
 | Deep Data Security | `/settings/security/deepsec` | `menu.security_deepsec` | ロールごとの Data Grant | NL2SQL 固有 |
 
 - サイドナビは、3製品共通の「ユーザーとロール」（ユーザー管理・ロール管理）と、NL2SQL 固有の
-  「NL2SQL セキュリティ」（権限管理・Deep Data Security）に分ける。
+  「セキュリティ設定」（権限管理・Deep Data Security。セクション名は 3 製品で同じ。#658）に分ける。
 - API も同じ境界で分ける。`POST /api/security/roles` と `PATCH /api/security/roles/{role_id}` は
   基本情報（`role_code` / `display_name` / `description`）だけを受け取り、権限は変更しない
   （旧 client が `permissions` を送っても無視する）。権限の更新は

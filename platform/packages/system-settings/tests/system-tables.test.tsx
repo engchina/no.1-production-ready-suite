@@ -285,12 +285,27 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     }
   });
 
-  it("名前の head はそのまま出し、製品の文言で上書きできる", () => {
-    const html = renderCard(clientWith(statusData("ready", { schema_head: "20260703_002_feedback" })), {
-      messages: { "settings.database.systemTables.title": "RAG システムテーブル" },
-    });
+  it("名前の head は並び順の番号（v + 番号）で出し、名前は補足に出す。製品の文言で上書きできる（#658）", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("outdated", {
+          schema_head: "20260703_002_feedback",
+          applied_versions: ["20260701_001_a", "20260702_001_b"],
+          pending_versions: ["20260703_002_feedback"],
+        }),
+      ),
+      { messages: { "settings.database.systemTables.title": "RAG システムテーブル" } },
+    );
+    expect(html).toContain("v3");
     expect(html).toContain("20260703_002_feedback");
     expect(html).toContain("RAG システムテーブル");
+  });
+
+  it("適用済みの migration は件数だけを出し、未適用・不一致だけを名前で並べる（#658）", () => {
+    const html = renderCard(clientWith(statusData("outdated")));
+    expect(html).toContain("適用済みの migration 3 件 / 未適用・不一致 1 件");
+    expect(html).toContain("未適用・不一致: v17");
+    expect(html).not.toContain("v0, v1, v2");
   });
 
   it("権限が無い利用者には状態と再取得だけを出す", () => {

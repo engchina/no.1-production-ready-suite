@@ -153,7 +153,7 @@ def test_initialize_system_tables_requires_system_tables_manage(
 ) -> None:
     """初期化・再作成は rag.system_tables.manage が必要（旧 ADMIN 判定の置き換え）。
 
-    状態の参照はデータベース設定の権限だけでよい。
+    状態の参照はシステムテーブルのメニュー権限だけでよい（#658）。
     """
     monkeypatch.setattr(system_schema_manager, "status", _status_payload)
     monkeypatch.setattr(
@@ -168,7 +168,7 @@ def test_initialize_system_tables_requires_system_tables_manage(
     )
     monkeypatch.setattr(asyncio, "to_thread", _run_inline)
     auth = enable_production_auth(monkeypatch)
-    auth.user_with_permissions("db-viewer", ["menu.settings_database"])
+    auth.user_with_permissions("db-viewer", ["menu.settings_system_tables"])
     auth.user_with_permissions("table-manager", ["rag.system_tables.manage"])
 
     viewer = login(client, "db-viewer")
@@ -246,7 +246,7 @@ def test_delete_orphaned_rows_returns_result_and_requires_system_tables_manage(
     monkeypatch.setattr(system_schema_manager, "delete_orphaned_rows", delete_orphaned_rows)
     monkeypatch.setattr(asyncio, "to_thread", _run_inline)
     auth = enable_production_auth(monkeypatch)
-    auth.user_with_permissions("db-viewer", ["menu.settings_database"])
+    auth.user_with_permissions("db-viewer", ["menu.settings_system_tables"])
     auth.user_with_permissions("table-manager", ["rag.system_tables.manage"])
     body = {"constraint_name": "RAG_CHUNK_SETS_DOCUMENT_FK", "expected_orphan_rows": 240}
 

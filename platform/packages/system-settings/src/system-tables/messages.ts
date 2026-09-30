@@ -79,7 +79,8 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.details.title":
     "管理オブジェクトの詳細を表示（存在 {existing} / 必須 {expected}）",
   "settings.database.systemTables.details.versions":
-    "適用済み version: {applied} / 未適用・不一致 version: {pending}",
+    "適用済みの migration {applied} 件 / 未適用・不一致 {pending} 件",
+  "settings.database.systemTables.details.pendingVersions": "未適用・不一致: {versions}",
   "settings.database.systemTables.table.scrollLabel":
     "管理オブジェクト一覧（存在 {existing} / 必須 {expected}）。必要に応じて縦方向または横方向にスクロールできます。",
   "settings.database.systemTables.table.name": "オブジェクト名",

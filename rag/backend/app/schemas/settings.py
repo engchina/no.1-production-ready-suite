@@ -167,6 +167,12 @@ class SystemTableMetadata(BaseModel):
     last_analyzed_at: str | None = None
 
 
+class SystemObjectMetadata(SystemTableMetadata):
+    """管理対象の 1 object（テーブル・索引・Oracle Text の設定）の存在と統計。"""
+
+    object_type: str
+
+
 class SystemTablesStatusData(BaseModel):
     """RAG system table の read-only status。"""
 
@@ -193,6 +199,8 @@ class SystemTablesStatusData(BaseModel):
     mismatched_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     disabled_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     tables: list[SystemTableMetadata]
+    # 全管理 object（詳細の一覧。概要の object の件数と同じ。#658）。
+    objects: list[SystemObjectMetadata] = Field(default_factory=list)
     operation_state: SystemTableOperationState
 
 
