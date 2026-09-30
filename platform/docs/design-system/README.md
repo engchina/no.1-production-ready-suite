@@ -454,12 +454,8 @@ import { Wrench } from "lucide-react";
 ```jsx
 import { Search } from "lucide-react";
 
-// 一覧の絞り込み（見出しがある）: 先頭アイコン + クリア
-<TextField id="feedback-search" label="問題・回答・コメントを検索" type="search" value={q}
-  onValueChange={setQ} leadingIcon={Search} onClear={() => setQ("")} clearLabel="検索語をクリア" />
-
-// 見出しを出さない検索欄（アイコンとプレースホルダで目的が分かる toolbar の中だけ）
-<TextField id="kb-search" label="名前・説明で検索" labelHidden placeholder="名前・説明で検索" … />
+// 一覧の絞り込みの検索欄は TextField ではなく SearchField で作る（下の「`SearchField`」、#535）。
+// TextField の先頭アイコン・クリアは、重い検索の質問欄や、単位・件数を後ろに置く入力欄に使う。
 
 // lg の Button と同じ行: size="lg"。44px の Button・select と同じ行: touchTarget
 <TextField id="search-query" label="RAG 検索" labelHidden size="lg" leadingIcon={Search} … />
@@ -479,6 +475,35 @@ import { Search } from "lucide-react";
 
 - **adherence の lint が、アイコンの分の左の余白（`pl-7`〜`pl-12` / `ps-*` / `pl-[…]`、variant 付きを含む）を持つ `<input>` を検出します。** 検索欄は `TextField` で作ってください。
 - 対象外（手書きのまま）: 枠の中に枠なしの入力欄を置く**複合部品**（NL2SQL のオントロジーのグラフのツールバーの検索欄、RAG の `MultiSelectCombobox`）。外枠に `focus-within:outline-*` を付ける型（§4「フォーカスの表示」）で、`pl-*` を使いません。
+
+### `SearchField`（新規）— ★ 一覧の絞り込みは入力に合わせて、検索ボタンを置かない（#535）
+
+一覧を絞り込む検索の操作が画面ごとに違いました。RAG の業務ビューの一覧は検索欄の隣に「名前・説明で検索」のボタンがあり、ボタンか Enter で検索、ナレッジベース・文書の一覧は Enter か blur で検索、フィードバックは入力に合わせて（300ms）、NL2SQL は入力のたびに（一部は各ページの 250ms の debounce）、学習候補・アプリ内フィードバックは「絞り込み」ボタン、Agent のメモリは入力のたびに問い合わせていました。日本語入力の変換中の読み（「じ」「じん」…）でも問い合わせる画面がありました。`TextField` を包んだ `SearchField` にそろえます。規則（どの検索を入力に合わせるか・明示実行にするか・例外）は UX 契約 [page-archetypes.md「一覧の絞り込みの検索」](../ux-contracts/page-archetypes.md#一覧の絞り込みの検索535)。
+
+```jsx
+import { SearchField } from "@engchina/production-ready-ui";
+
+// value には作業状態に保存している「適用中」の検索語を渡す。入力中の文字は部品が持つ。
+<SearchField id="business-view-search" label="名前・説明で検索" labelHidden
+  value={q} onSearch={(next) => setView({ ...view, q: next, offset: 0 })}
+  clearLabel="検索語をクリア" resultCountLabel={`${total} 件が一致しました`}
+  placeholder="名前・説明で検索" className="w-full sm:w-64" />
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| `type="search"`・先頭の `Search`（16px）・値があるときの消去（×、Escape でも消す）は `TextField` のスロットをそのまま使う。見た目（高さ・角丸・地・アイコンの位置）は `TextField` と同じ | 検索欄の見た目を 1 つにする（#384 のまま） |
+| **入力が止まって 300ms**（`SEARCH_FIELD_DEBOUNCE_MS`）で `onSearch` を呼ぶ。**Enter はすぐ**呼び、囲む form を送信しない。消去もすぐ | 1 打鍵ごとに問い合わせない。待たずに確定したい利用者は Enter で確定できる（NN/g・Material 3 の「入力に合わせた絞り込み」） |
+| **IME の変換中は呼ばない。** `compositionstart` で待っている分を取り消し、`compositionend` で確定した値を予約する。変換を確定する Enter（`isComposing`、Safari の `keyCode 229`）では呼ばない | 未確定の読みで一覧を絞らない。確定の Enter を検索の Enter と取り違えない |
+| `onSearch` には正規化した値（既定は `trim`、`normalize` で変えられる）を渡し、前回と同じなら呼ばない | 空白を足しただけ・Enter を押し直しただけでページを 1 ページ目へ戻さない・選択を解除しない |
+| `value` が外から変わったとき（条件のリセット・作業状態の復元）だけ入力欄を合わせ、待っている分を捨てる。自分が渡した値の戻りでは入力欄を書き換えない | 入力中の文字を親の値で上書きしない |
+| 入力欄が外れるとき（一覧 ⇄ 作成の切り替え・読込中の表示）に待っている分があれば、その場で確定する | 消した・入力した検索語が、一覧に戻ったときに元に戻らない |
+| `resultCountLabel` は、検索語があるときだけ入力欄の後ろの `role="status"`（`aria-live="polite"`、`sr-only`）に入れる。領域は最初から置く | 絞り込んだ結果を画面を見ずに知る（WCAG 2.2 SC 4.1.3）。後から足した live region は読まれないことがある |
+| `formatInput` で入力中の文字の見せ方を変えられる（例: 所有者名を大文字）。IME の変換中は変えない | 未確定の文字を書き換えない |
+| 既定で `autocomplete="off"`・`enterkeyhint="search"` | ブラウザの入力履歴の候補を一覧の上に重ねない。モバイルのキーボードの Enter を「検索」にする |
+
+- **adherence の lint が、`type="search"` の `TextField` / `<input>` を検出します。** 一覧の絞り込みは `SearchField` で作ってください。重い検索（LLM・ベクトル検索・SQL の生成）の質問欄は `type="search"` にせず、`TextField` と明示的な実行（ボタンと `isSubmitEnter` の Enter）で作ります。
+- IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` も `@engchina/production-ready-ui` から使います（RAG の `@/lib/keyboard` は再 export）。
 
 ### 操作部品の角丸（新設）— `--radius-control`（#384）
 
@@ -787,6 +812,7 @@ QA に事前共有してください。**46点あります。**
 | 44 | **「アニメーションを減らす」設定でもスピナーが回る** | reduced-motion では `Spinner` の回転を止め、アークの濃さを 1 ↔ 0.5 で変えるだけだった（処理中なのに止まって見えた）→ 設定によらず等速（linear 1s）で回る。他の reduced-motion 対応（Skeleton の点滅・通知・ドロワー・Chevron の動き）は変えない | 処理中を伝える本質的な動きのため（§4「Spinner」、#440） |
 | 45 | **開いたメニュー・選択肢の一覧が通知の上に出る** | `--z-dropdown` は 100 で通知（`--z-toast` 800）の下だったため、375px で通知が 2 つ重なると PageHeader の「その他の操作」のメニュー項目が覆われて押せなかった → `--z-dropdown` を 850（通知の上・モーダルの暗幕の下）にした。モーダル・固定ヘッダーの中では従来どおりその層の 1 段上 | いま操作しているメニューを通知が塞がない（#431） |
 | 46 | **権限管理の「利用できる対象」の候補の行が名前と説明だけになり、高さがそろう** | 各行に名前・説明・内部の ID（等幅、32 桁の hash など）を並べ、行の高さが内容で変わった。高さに上限のあるスクロール領域の grid で行が `min-h-11` まで縮み、375px の 1 列では次の行の名前が前の行の ID・説明に重なった → ID は出さない。名前は 1 行・説明は 2 行で省略し（全文は `title`、チェックボックスの名前は全文）、説明を持つ候補がある対象ではすべての行が説明の 2 行分を取って高さがそろう。行は内容の高さ（`auto-rows-max`）で、縮めて重ねない。名前の行はバッジの高さを常に取る。ホバーで行の地が `surface-hover` になる。NL2SQL の業務プロファイル・Agent のエージェント / 業務ビューも同じ部品（説明を持たない対象は名前だけの行） | 利用者には ID が意味を持たず、何の対象かを名前と説明で見分ける。行の重なりを解消する（`RolePermissionTargetOption`、#521） |
+| 47 | **一覧の絞り込みの検索ボタンが無くなり、入力に合わせて絞り込む**（#535） | RAG の業務ビューの一覧: 検索欄（固定 `w-56`・先頭アイコンなし）+「名前・説明で検索」のボタン → ナレッジベースの一覧と同じ `SearchField`（先頭アイコン・消去、`w-64`、375px は全幅）でボタンなし。NL2SQL の学習候補・アプリ内フィードバック: 条件の行の右端の「絞り込み」（44px）→ ボタンなしで、条件を変えるとすぐ読み込む（読込中は一覧の上に経過時間とスピナー）。アプリ内フィードバックの検索欄は手書きの入力欄 → `SearchField`（44px、虫眼鏡・消去付き）。Agent のメモリの検索欄は手書きの入力欄（40px、地が `surface-sunken`）→ `SearchField`（36px、地は `surface`）。0 件の空の状態に「検索語をクリア」（RAG のナレッジベース・業務ビュー・文書、ユーザー・ロール・権限管理） | 同じ種類の画面（一覧の絞り込み）の操作を 3 製品でそろえる。押し忘れ・押し直しを無くす。0 件から 1 操作で戻れる（UX 契約 page-archetypes.md「一覧の絞り込みの検索」） |
 
 ### API の非互換
 
@@ -807,6 +833,7 @@ QA に事前共有してください。**46点あります。**
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
+| `SearchField`（#535） | **新規 export。** `SearchField` / `SearchFieldProps` / `SEARCH_FIELD_DEBOUNCE_MS` / `trimSearchValue`、IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` / `KeyboardEventLike`。`@engchina/production-ready-system-settings` の `SecuritySearchField` は `SearchField` で作り直し（`onChange` は確定した値で呼ぶ）、`resultCountLabel` と 0 件の「検索語をクリア」の `SecurityClearSearchAction` を追加 |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
 | `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
 | `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
@@ -906,6 +933,7 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - [ ] 375px でタブが入りきらないとき、スクロールできる方向の端だけがフェードし、キーボードで選んだタブがフェードに隠れない
 - [ ] 強制カラーモードで、選んだタブだけに下線（`Highlight`）が出る
 - [ ] 検索欄が `TextField`（手書きの検索欄の adherence の lint の違反 0 件）で、高さが隣の操作部品と同じトークン。クリアボタンに Tab で届き、押すと入力欄にフォーカスが戻る
+- [ ] 一覧の絞り込みの検索欄が `SearchField`（`type="search"` の adherence の lint の違反 0 件）で、隣に検索・絞り込みのボタンが無い。入力に合わせて絞り込み、IME の変換中は絞り込まない。0 件に「検索語をクリア」がある（#535）
 
 ---
 
