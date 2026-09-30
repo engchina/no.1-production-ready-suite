@@ -1,4 +1,4 @@
-"""Oracle 26ai schema artifact generator.
+"""Oracle AI Database schema artifact generator.
 
 Oracle DDL は staging / production でレビュー済み artifact として適用する。
 この CLI はアプリ内の DDL 契約から deterministic な SQL と manifest を生成する。
@@ -3202,7 +3202,7 @@ END;
 
 
 def _agent_memories_migration_sql() -> str:
-    """Oracle 26ai 内に scoped Agent Memory table / index を追加する。"""
+    """Oracle AI Database 内に scoped Agent Memory table / index を追加する。"""
     return """
 DECLARE
     v_table_count NUMBER;
@@ -3379,7 +3379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag-oracle-schema",
-        description="Oracle 26ai 用 RAG schema SQL と監査 manifest を生成します。",
+        description="Oracle AI Database 用 RAG schema SQL と監査 manifest を生成します。",
     )
     parser.add_argument(
         "--output",

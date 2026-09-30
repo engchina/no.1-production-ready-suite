@@ -44,7 +44,8 @@ for (const viewport of [
     );
     await expect(page.getByTestId("docrag-unused-note")).toHaveCount(2);
     await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeEnabled();
-    await expect(page.getByText("回答エンジンが DocRAG の業務ビューでも使われます。", { exact: false })).toBeVisible();
+    // 全文検索の分割方式は 1 つにまとめ、選択を削除した(#588)。
+    await expect(page.getByText("全文検索の分割方式")).toHaveCount(0);
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "検索方法" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
@@ -109,6 +110,27 @@ for (const viewport of [
     await expect(page.getByText("保存期間を保存しました。")).toBeVisible();
     expect(saved).toEqual({ retention_days: 0 });
     await expect(save).toBeDisabled();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`検索方法設定に全文検索の分割方式の選択は無い (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.route("**/api/settings/retrieval", (route) =>
+      route.fulfill({ json: retrievalEnvelope("hybrid_rrf") })
+    );
+
+    await page.goto("/settings/retrieval");
+
+    await expect(page.getByRole("switch", { name: "補正検索" })).toBeVisible();
+    // 分割は 1 つの方式にまとめ、選択を削除した(#588)。
+    await expect(page.getByText("全文検索の分割方式")).toHaveCount(0);
+    // 回答の検索と生成などの別のカード（#593）の選択欄は数えない。
+    await expect(page.getByRole("combobox", { name: /分割方式/ })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -264,8 +286,6 @@ test("検索方法設定はモードとトグルを保存できる", async ({ pa
   await keyword.click();
   await expect(keyword).toBeChecked();
   await page.getByRole("switch", { name: "補正検索" }).click();
-  await page.getByRole("combobox", { name: "全文検索の分割方式" }).click();
-  await page.getByRole("option", { name: "Sudachi（形態素解析・DocRAG）" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
@@ -278,7 +298,6 @@ test("検索方法設定はモードとトグルを保存できる", async ({ pa
     gap_stop: false,
     corrective_retrieval: true,
     business_fit_weighting: false,
-    text_search_tokenizer: "sudachi",
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -482,7 +501,6 @@ function retrievalEnvelope(
       gap_stop: false,
       corrective_retrieval: false,
       business_fit_weighting: false,
-      text_search_tokenizer: "builtin",
       modes: statuses,
       config_source: "runtime",
       ...overrides,

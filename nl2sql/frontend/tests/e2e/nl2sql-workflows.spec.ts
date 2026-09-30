@@ -9206,7 +9206,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   await expect(page.getByRole("heading", { name: "類似検索インデックス" })).toBeVisible();
   await expect(page.getByText("SQL 実行画面に出す類似履歴候補の絞り込み条件を管理します。")).toBeVisible();
-  await expect(page.getByLabel("Oracle 26ai DDL plan")).toHaveCount(0);
+  await expect(page.getByLabel("Oracle AI Database DDL plan")).toHaveCount(0);
   await expect(page.getByText("CREATE TABLE NL2SQL_FEEDBACK_VECTORS", { exact: false })).toHaveCount(0);
   await expect(page.getByText("CREATE VECTOR INDEX NL2SQL_FEEDBACK_VEC_IDX", { exact: false })).toHaveCount(0);
   await expect(page.getByText("現在の状態", { exact: true })).toHaveCount(0);

@@ -280,7 +280,7 @@ class FakePromotionClient:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> None:
-    """実 Oracle 26ai で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
+    """実 Oracle AI Database で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
     from app.clients.oracle import OracleClient, _execute_count
     from app.rag.request_context import (
         AuditRequestContext,

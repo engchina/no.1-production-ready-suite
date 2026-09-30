@@ -476,9 +476,12 @@ async def test_pipeline_keyword_mode_skips_initial_embedding_and_reports_terms()
     ]
     assert "embedding" not in response.diagnostics.stream_stage_timings
     assert response.diagnostics.mode == "keyword"
+    # 全文検索と同じ分割(#588)。Sudachi の語と文字種の区切りの語を出す。
     assert response.diagnostics.keyword_terms == [
+        "社内規程",
         "社内",
         "規程",
+        "申請フロー",
         "申請",
         "フロー",
     ]

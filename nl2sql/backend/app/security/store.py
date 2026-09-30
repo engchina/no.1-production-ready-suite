@@ -211,7 +211,7 @@ class InMemorySecurityStore(InMemoryAuthStore):
 
 
 class OracleSecurityStore(OracleAuthStore):
-    """Oracle 26ai backed security store。NL2SQL 固有のテーブルを hook で読み書きする。"""
+    """Oracle AI Database backed security store。NL2SQL 固有のテーブルを hook で読み書きする。"""
 
     role_class = RoleRecord
     schema_object_names = SECURITY_SCHEMA_OBJECT_NAMES

@@ -415,7 +415,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     oci_genai_rerank_model: str = Field(default="cohere.rerank-v4.0-fast")
 
-    # --- Oracle 26ai ---
+    # --- Oracle AI Database ---
     oracle_user: str = Field(default="")
     oracle_password: str = Field(default="")
     oracle_dsn: str = Field(default="")
@@ -920,13 +920,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "受け付けるが、回答フローには反映されない。"
         ),
     )
-    rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
-        default="builtin",
-        description=(
-            "Oracle Text 全文検索クエリの分割方式。sudachi は rag_poc(DocRAG)の Sudachi 分割。"
-            "業務ビューにドメインキーワードがある場合は builtin でも DocRAG の分割で組み立てる。"
-        ),
-    )
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
@@ -1012,14 +1005,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_agent_memory_search_enabled: bool = Field(
         default=True,
         description=(
-            "Oracle 26ai に保存した Agent Memory を履歴 memory として retrieval に加える。"
+            "Oracle AI Database に保存した Agent Memory を履歴 memory として retrieval に加える。"
             "user/thread/agent scope がない request では安全側で無効化する。"
         ),
     )
     rag_agent_memory_writeback_enabled: bool = Field(
         default=True,
         description=(
-            "根拠付き回答の要約を Oracle 26ai Agent Memory へ writeback する。"
+            "根拠付き回答の要約を Oracle AI Database の Agent Memory へ writeback する。"
             "user/thread/agent scope がない request では保存しない。"
         ),
     )
@@ -1508,7 +1501,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "retrieval の strategy 解決(検索挙動フラグ)の remote 委譲を許可する。"
             "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
             "OFF は常に in-process。"
-            "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
+            "実 retrieval(Oracle AI Database 経路)は backend が実行する。"
         ),
     )
     rag_retrieval_service_url: str = Field(

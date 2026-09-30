@@ -7,6 +7,7 @@ import {
   CardTitle,
   Disclosure,
   FormStatus,
+  StatusBadge,
   Switch,
 } from "@engchina/production-ready-ui";
 import { ListChecks, RotateCcw, Save, Sparkles } from "lucide-react";
@@ -86,6 +87,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
   useLeaveGuard(dirty);
   const fieldsQuery = useExtractionFieldsSettings();
   const fieldCount = fieldsQuery.data?.fields.length;
+  const usesStandardFields = fieldsQuery.data?.uses_standard === true;
 
   function toggle(field: PostParseField, checked: boolean) {
     save.reset();
@@ -124,8 +126,19 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
           surface="sunken"
           meta={
             fieldCount !== undefined ? (
-              <span className="tnum text-xs text-fg-muted">
-                {t("settings.parserAdapters.postParse.fieldExtraction.count", { count: fieldCount })}
+              <span className="flex flex-wrap items-center gap-2">
+                {/* 一度も保存していない環境は標準の項目を使う（#556）。 */}
+                {usesStandardFields ? (
+                  <StatusBadge
+                    variant="info"
+                    label={t("settings.parserAdapters.postParse.fieldExtraction.standard")}
+                  />
+                ) : null}
+                <span className="tnum text-xs text-fg-muted">
+                  {t("settings.parserAdapters.postParse.fieldExtraction.count", {
+                    count: fieldCount,
+                  })}
+                </span>
               </span>
             ) : null
           }

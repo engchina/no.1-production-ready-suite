@@ -1,6 +1,6 @@
 """SchemaOntology を mermaid erDiagram へ決定論変換する serializer。
 
-正本は Oracle 26ai 上の JSON(ontology_store)であり、この module は LLM プロンプト注入と
+正本は Oracle AI Database 上の JSON(ontology_store)であり、この module は LLM プロンプト注入と
 UI プレビュー用の表現を生成するだけ。network・LLM・DB に依存しない。
 """
 

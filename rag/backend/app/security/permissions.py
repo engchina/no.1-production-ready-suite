@@ -472,6 +472,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ),
     # 抽出項目の定義は文書解析の「解析後の処理」で編集する（#528）。
     ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    # 「標準の項目に戻す」（#556）。
+    ("DELETE", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),

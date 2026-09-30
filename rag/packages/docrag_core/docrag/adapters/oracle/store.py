@@ -69,8 +69,7 @@ from docrag.retrieval.text_search_tokenizer import (
     MAX_ORACLE_TEXT_QUERY_CHARS,
     MAX_TEXT_SEARCH_TOKENS,
     TextSearchTokenizerConfig,
-    build_oracle_text_query,
-    tokenize_text_search_query,
+    oracle_text_query_for_question,
 )
 
 
@@ -1055,19 +1054,18 @@ def oracle_text_query(
     domain_keywords: Sequence[str] | None = None,
     tokenizer_config: TextSearchTokenizerConfig | None = None,
 ) -> str:
-    """質問とドメインキーワードから Oracle Text CONTAINS query を構築します。"""
-    terms = tokenize_text_search_query(
+    """質問とドメインキーワードから Oracle Text CONTAINS query（重み付きの ACCUM。#588）を構築します。"""
+    return oracle_text_query_for_question(
         query,
         domain_keywords=domain_keywords,
         config=tokenizer_config,
         max_tokens=MAX_ORACLE_TEXT_TERMS,
+        max_chars=MAX_ORACLE_TEXT_QUERY_CHARS,
     )
-    return build_oracle_text_query(terms, max_chars=MAX_ORACLE_TEXT_QUERY_CHARS)
 
 
 def _text_search_tokenizer_config(settings: Settings) -> TextSearchTokenizerConfig:
     return TextSearchTokenizerConfig(
-        mode=settings.text_search_tokenizer,
         sudachi_dict_type=settings.text_search_tokenizer_sudachi_dict,
         sudachi_config_path=settings.text_search_tokenizer_sudachi_config,
         latin_stemmer=settings.text_search_tokenizer_latin_stemmer,

@@ -785,8 +785,6 @@ export interface KnowledgeBaseQueryConfig {
   guardrail_policy: GuardrailPolicyName | null;
   /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
   answer_engine?: AnswerEngineName | null;
-  /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
-  text_search_tokenizer?: TextSearchTokenizerName | null;
   /** DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。null / 未指定はグローバル継承。 */
   docrag_query_strategy?: DocragQueryStrategyName | null;
   docrag_answer_flow?: DocragAnswerFlowName | null;
@@ -805,8 +803,6 @@ export type DocragQueryStrategyName =
   | "hyde";
 
 export type DocragAnswerFlowName = "crag" | "standard_rag";
-
-export type TextSearchTokenizerName = "builtin" | "sudachi";
 
 export type AnswerEngineName = "standard" | "docrag";
 
@@ -1950,8 +1946,6 @@ export interface RetrievalSettingsData {
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
-  /** 全文検索の分割方式(業務ビューの上書きが優先)。 */
-  text_search_tokenizer: TextSearchTokenizerName;
   modes: RetrievalStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1964,7 +1958,6 @@ export interface RetrievalSettingsUpdate {
   gap_stop?: boolean;
   corrective_retrieval?: boolean;
   business_fit_weighting?: boolean;
-  text_search_tokenizer?: TextSearchTokenizerName;
 }
 
 // --- 設定: Grounding アダプター ---
@@ -2115,7 +2108,14 @@ export interface ExtractionFieldDefinition {
   value_type: ExtractionFieldValueType;
 }
 
+/** 全体の既定の項目の定義。uses_standard なら一度も保存しておらず、fields は標準の項目（#556）。 */
 export interface ExtractionFieldsSettingsData {
+  fields: ExtractionFieldDefinition[];
+  uses_standard: boolean;
+}
+
+/** 検索の絞り込みに使える項目（#549）。 */
+export interface SearchExtractionFieldsData {
   fields: ExtractionFieldDefinition[];
 }
 
@@ -2922,7 +2922,7 @@ export const api = {
     ),
   // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
   getSearchExtractionFields: (businessViewIds: string[]) =>
-    request<ExtractionFieldsSettingsData>(
+    request<SearchExtractionFieldsData>(
       `/api/search/extraction-fields?${new URLSearchParams({
         business_view_ids: businessViewIds.join(","),
       }).toString()}`,
@@ -3417,6 +3417,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  // 保存した全体の既定を消し、標準の項目に戻す（#556）。
+  resetExtractionFieldsSettings: () =>
+    request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields", { method: "DELETE" }),
   getPipelineSettings: () => request<PipelineSettingsData>("/api/settings/pipeline"),
   updatePipelineSettings: (body: PipelineSettingsUpdate) =>
     request<PipelineSettingsData>("/api/settings/pipeline", {

@@ -142,7 +142,7 @@ export interface DatabaseSettingsPageProps {
 /**
  * データベース設定（3製品共通。NL2SQL の画面を基準に移設。#108）。PageHeader は製品の route が描く。
  *
- * - ADB の情報取得・起動・停止、Oracle 26ai の接続設定、Wallet（アップロード / OCI から自動取得）
+ * - ADB の情報取得・起動・停止、Oracle AI Database の接続設定、Wallet（アップロード / OCI から自動取得）
  * - 保存中・テスト中は入力を止め、未保存のまま離れようとすると確認する
  * - 背景の再取得では、利用者が編集していない項目だけを更新する
  */
