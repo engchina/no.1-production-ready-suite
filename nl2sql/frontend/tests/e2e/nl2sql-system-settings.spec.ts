@@ -53,25 +53,41 @@ function adbInfoFixture(overrides: Record<string, unknown> = {}) {
 
 const WALLET_PENDING_MESSAGE = "OCI から Wallet を取得し、サーバーへ安全に設定しています…";
 
+/** モデル設定の payload の接続 1（#533。接続は一覧で持つ）。 */
+function primaryConnection(enterprise: unknown): Record<string, unknown> {
+  return ((enterprise as Record<string, unknown>).connections as Array<Record<string, unknown>>)[0];
+}
+
+function primaryConnectionFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    connection_id: "primary",
+    display_name: "",
+    endpoint: "https://enterprise-ai.example.com",
+    project_ocid: "ocid1.generativeaiproject.oc1.ap-osaka-1.example",
+    api_key: "",
+    has_api_key: true,
+    clear_api_key: false,
+    ...overrides,
+  };
+}
+
 function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
   return {
     settings: {
       enterprise_ai: {
-        endpoint: "https://enterprise-ai.example.com",
-        project_ocid: "ocid1.generativeaiproject.oc1.ap-osaka-1.example",
-        api_key: "",
-        has_api_key: true,
-        clear_api_key: false,
+        connections: [primaryConnectionFixture()],
         models: [
           {
             model_id: "enterprise-nl2sql-llm",
             display_name: "業務 NL2SQL 標準",
             vision_enabled: false,
+            connection_id: "primary",
           },
           {
             model_id: "enterprise-nl2sql-vlm",
             display_name: "OCR / Vision",
             vision_enabled: true,
+            connection_id: "primary",
           },
         ],
         default_text_model_id: "enterprise-nl2sql-llm",
@@ -1630,7 +1646,7 @@ test("モデル設定の読込失敗から再試行し、未設定 Endpoint URL 
       return;
     }
     const fixture = modelSettingsFixture();
-    fixture.settings.enterprise_ai.endpoint = "";
+    fixture.settings.enterprise_ai.connections = [primaryConnectionFixture({ endpoint: "" })];
     await fulfillJson(route, fixture);
   });
   await page.goto("/settings/model");
@@ -1716,7 +1732,7 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
 
   const connectionRequest = requests[0];
   const connectionEnterprise = connectionRequest.enterprise_ai as Record<string, unknown>;
-  expect(connectionEnterprise.endpoint).toBe("https://changed.example.com");
+  expect(primaryConnection(connectionEnterprise).endpoint).toBe("https://changed.example.com");
   expect(connectionEnterprise.api_path).toBe("/custom-responses");
   expect(connectionEnterprise.vlm_input_mode).toBe("inline_image");
   expect(connectionEnterprise.timeout_seconds).toBe(177);
@@ -1738,7 +1754,7 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
   const modelsRequest = requests[1];
   const modelsEnterprise = modelsRequest.enterprise_ai as Record<string, unknown>;
-  expect(modelsEnterprise.endpoint).toBe("https://changed.example.com");
+  expect(primaryConnection(modelsEnterprise).endpoint).toBe("https://changed.example.com");
   expect(modelsEnterprise.api_path).toBe("/custom-responses");
   expect(modelsEnterprise.vlm_input_mode).toBe("inline_image");
   expect(modelsEnterprise.timeout_seconds).toBe(177);
@@ -1805,7 +1821,7 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
       ...modelSettingsFixture().settings,
       enterprise_ai: {
         ...modelSettingsFixture().settings.enterprise_ai,
-        has_api_key: false,
+        connections: [primaryConnectionFixture({ has_api_key: false })],
       },
     },
     secret_source: "missing",
@@ -1815,8 +1831,7 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
     if (route.request().method() === "PATCH") {
       const body = route.request().postDataJSON() as Record<string, unknown>;
       requests.push(body);
-      const enterprise = body.enterprise_ai as Record<string, unknown>;
-      const cleared = enterprise.clear_api_key === true;
+      const cleared = primaryConnection(body.enterprise_ai).clear_api_key === true;
       await fulfillJson(
         route,
         modelSettingsFixture({
@@ -1824,9 +1839,7 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
             ...missing.settings,
             enterprise_ai: {
               ...missing.settings.enterprise_ai,
-              api_key: "",
-              has_api_key: !cleared,
-              clear_api_key: false,
+              connections: [primaryConnectionFixture({ has_api_key: !cleared })],
             },
           },
           secret_source: cleared ? "missing" : "environment",
@@ -1845,14 +1858,63 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   const notificationRegion = page.getByRole("region", { name: "通知" });
   await expect(notificationRegion).toContainText("OCI Enterprise AI 接続設定を保存しました。");
   await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。")).toHaveCount(1);
-  expect((requests[0].enterprise_ai as Record<string, unknown>).api_key).toBe(
-    "new-key-fixture"
-  );
+  expect(primaryConnection(requests[0].enterprise_ai).api_key).toBe("new-key-fixture");
 
   await page.getByLabel("保存済み API key を削除する").check();
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
-  expect((requests[1].enterprise_ai as Record<string, unknown>).clear_api_key).toBe(true);
+  expect(primaryConnection(requests[1].enterprise_ai).clear_api_key).toBe(true);
   await expect(page.getByText("未設定", { exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("モデル設定は接続 2 と登録モデルの接続を表示し、接続を選んで保存する (#533)", async ({
+  page,
+}) => {
+  await page.unroute("**/api/settings/model");
+  const base = modelSettingsFixture();
+  const persisted = modelSettingsFixture({
+    settings: {
+      ...base.settings,
+      enterprise_ai: {
+        ...base.settings.enterprise_ai,
+        connections: [
+          primaryConnectionFixture(),
+          primaryConnectionFixture({
+            connection_id: "secondary",
+            display_name: "シカゴ",
+            endpoint: "https://secondary.example.com",
+          }),
+        ],
+      },
+    },
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/settings/model", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      requests.push(body);
+      await fulfillJson(route, modelSettingsFixture({ settings: body }));
+      return;
+    }
+    await fulfillJson(route, persisted);
+  });
+
+  await page.goto("/settings/model");
+  await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "接続 2", exact: true })).toBeVisible();
+  await expect(page.locator("#enterprise-secondary-endpoint")).toHaveValue(
+    "https://secondary.example.com"
+  );
+  const modelConnection = page.getByRole("combobox", { name: "モデル 2 の接続" });
+  await expect(modelConnection).toContainText("接続 1");
+  await modelConnection.click();
+  await page.getByRole("listbox", { name: "モデル 2 の接続" }).getByRole("option", { name: /シカゴ/ }).click();
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
+  const models = (requests[0].enterprise_ai as Record<string, unknown>).models as Array<
+    Record<string, unknown>
+  >;
+  expect(models.map((model) => model.connection_id)).toEqual(["primary", "secondary"]);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1880,7 +1942,7 @@ test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key 
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
 
   expect(savedRequests).toHaveLength(1);
-  const enterprise = savedRequests[0]?.enterprise_ai as Record<string, unknown>;
+  const enterprise = primaryConnection(savedRequests[0]?.enterprise_ai);
   expect(enterprise.api_key).toBe("");
   expect(enterprise.has_api_key).toBe(true);
   expect(enterprise.clear_api_key).toBe(false);
@@ -2952,7 +3014,12 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0].enterprise_ai.default_vision_model_id).toBe("review-model");
   expect(writes[0].enterprise_ai.default_text_model_id).toBe("review-model");
-  expect(writes[0].enterprise_ai.models[2]).toEqual({ model_id: "review-model", display_name: "レビュー用", vision_enabled: true });
+  expect(writes[0].enterprise_ai.models[2]).toEqual({
+    model_id: "review-model",
+    display_name: "レビュー用",
+    vision_enabled: true,
+    connection_id: "primary",
+  });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();
   await remove.click();

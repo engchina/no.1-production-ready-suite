@@ -687,12 +687,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (method === "GET") return state.modelSettings;
       if (method === "PATCH") {
         const enterpriseAi = { ...(body.enterprise_ai as Json) };
-        const hasApiKey = Boolean(enterpriseAi.api_key) && !enterpriseAi.clear_api_key;
-        // backend と同じく API key の値は応答へ返さない。
+        // backend と同じく API key の値は応答へ返さない（接続ごと。#533）。
+        const connections = ((enterpriseAi.connections as Json[] | undefined) ?? []).map(
+          (connection) => ({
+            ...connection,
+            api_key: "",
+            has_api_key:
+              !connection.clear_api_key &&
+              (Boolean(connection.api_key) || Boolean(connection.has_api_key)),
+            clear_api_key: false,
+          })
+        );
         state.modelSettings = {
           ...state.modelSettings,
           settings: {
-            enterprise_ai: { ...enterpriseAi, api_key: "", has_api_key: hasApiKey, clear_api_key: false },
+            enterprise_ai: { ...enterpriseAi, connections },
             generative_ai: body.generative_ai,
           },
         };

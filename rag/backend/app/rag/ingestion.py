@@ -1743,7 +1743,8 @@ class IngestionPipeline:
             override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
         ).strip()
         loop = asyncio.get_running_loop()
-        config = config_from_settings(self._settings)
+        # 図の読み取りは既定の Vision モデルとその接続で行う(#533)。
+        config = config_from_settings(self._settings).for_vision()
         describer = EnterpriseAiPictureDescriber(
             self._vlm,
             loop,

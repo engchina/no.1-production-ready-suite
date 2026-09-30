@@ -1573,8 +1573,8 @@ def test_model_settings_save_persists_json_and_env_secret(
     assert saved["generative_ai"]["embedding_dim"] == 1536
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     data = resp.json()["data"]
-    assert data["settings"]["enterprise_ai"]["api_key"] == ""
-    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert data["settings"]["enterprise_ai"]["connections"][0]["api_key"] == ""
+    assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
 
 
 def test_model_settings_test_uses_saved_secret_for_blank_key(

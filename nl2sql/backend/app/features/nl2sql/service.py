@@ -41,7 +41,7 @@ from app.security.request_actor import (
     current_actor_context,
     current_actor_is_system_admin,
 )
-from app.settings import get_settings
+from app.settings import connection_label, enterprise_ai_connection_for_model, get_settings
 
 from .embedding_client import (
     EmbeddingClientError,
@@ -13312,6 +13312,12 @@ class Nl2SqlService:
         embedding_configured = self._embedding_client.is_configured()
         embedding_module_available = self._embedding_client.module_available()
         enterprise_ai_configured = self._enterprise_ai_client.is_configured()
+        text_connection = enterprise_ai_connection_for_model(
+            settings, self._enterprise_ai_client.model_id()
+        )
+        text_connection_label = connection_label(
+            text_connection.connection_id, text_connection.display_name
+        )
         uses_oracle_runtime = self._use_oracle_runtime()
         with self._lock:
             select_ai_asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
@@ -13337,22 +13343,23 @@ class Nl2SqlService:
             check_present("PLATFORM_ORACLE_ADB_OCID", "ADB OCID"),
             check_present("PLATFORM_OCI_REGION", "OCI region"),
             check_present("PLATFORM_OCI_COMPARTMENT_ID", "OCI compartment"),
+            # テキストモデルの接続（#533。接続 2 なら PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*）。
             DiagnosticCheck(
                 name="PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
-                status="ok" if settings.oci_enterprise_ai_endpoint.strip() else "warning",
+                status="ok" if text_connection.endpoint else "warning",
                 message=(
-                    "OCI Enterprise AI endpoint は設定済みです。"
-                    if settings.oci_enterprise_ai_endpoint.strip()
-                    else "OCI Enterprise AI endpoint が未設定です。"
+                    f"OCI Enterprise AI endpoint（{text_connection_label}）は設定済みです。"
+                    if text_connection.endpoint
+                    else f"OCI Enterprise AI endpoint（{text_connection_label}）が未設定です。"
                 ),
             ),
             DiagnosticCheck(
                 name="PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
-                status="ok" if settings.oci_enterprise_ai_api_key.strip() else "warning",
+                status="ok" if text_connection.api_key else "warning",
                 message=(
-                    "OCI Enterprise AI API key は設定済みです。"
-                    if settings.oci_enterprise_ai_api_key.strip()
-                    else "OCI Enterprise AI API key が未設定です。"
+                    f"OCI Enterprise AI API key（{text_connection_label}）は設定済みです。"
+                    if text_connection.api_key
+                    else f"OCI Enterprise AI API key（{text_connection_label}）が未設定です。"
                 ),
             ),
             DiagnosticCheck(
