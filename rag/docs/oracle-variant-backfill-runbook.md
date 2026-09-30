@@ -2,7 +2,7 @@
 
 最終更新: 2026-06-22
 
-この runbook は、V3 で追加した構築 artifact を Oracle 26ai 環境へ安全に反映するための運用手順です。対象は `rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、および `rag_chunks.chunk_set_id` です。
+この runbook は、V3 で追加した構築 artifact を Oracle AI Database 環境へ安全に反映するための運用手順です。対象は `rag_chunk_sets`、`rag_document_extractions`、`rag_artifact_layers`、`rag_kb_chunk_set_bindings`、および `rag_chunks.chunk_set_id` です。
 
 方針は安全側です。CLI が生成する SQL は read-only の検証だけに限定し、既存データの回填は staging でレビュー済みの手順として実行します。
 

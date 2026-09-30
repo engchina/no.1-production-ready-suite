@@ -1,6 +1,6 @@
 # 取込チャンク構成 materialization — staging 引き継ぎ
 
-> 「1 文書 × N 構築レシピ(複数チャンク構成)を同時保持・共有」設計の残作業を、**実 Oracle 26ai が
+> 「1 文書 × N 構築レシピ(複数チャンク構成)を同時保持・共有」設計の残作業を、**実 Oracle AI Database が
 > 使える staging 環境**で進めるための引き継ぎ。本リポジトリの CI は実 Oracle 依存(実 DB なしでは
 > 検証不能)のため、DDL・永続化・GC 実行はここで配線・検証する。設計の正本はメモリ
 > `multi-recipe-variants-decision` と本リポジトリの `docs/` 各設計書。
@@ -34,7 +34,7 @@
 
 1. **Camp B**: 文書↔KB は N:N、chunk は共有(不要に複製しない)、**embedding は OCI Cohere v4 / 1536 グローバル固定**。
    チャンク構成は **同一 1536 空間内**で chunk 集合を増やすだけ。per-KB embedding / per-KB 物理表(Camp A)にしない。
-2. **確定スタック**: OCI Enterprise AI / OCI GenAI Cohere / Oracle 26ai。外部ベクトル DB・別 LLM provider を入れない。
+2. **確定スタック**: OCI Enterprise AI / OCI GenAI Cohere / Oracle AI Database。外部ベクトル DB・別 LLM provider を入れない。
 3. **VECTOR 索引は単一・共有**: `rag_chunks.embedding` の HNSW は 1 本のまま。`chunk_set_id` は**フィルタ列**であって索引を分割しない。
 4. **版管理 DDL は自動変更しない**: スキーマ追加は DDL artifact(下記)へ明示追加し、`requires_reprovision` 扱い。
 5. **2 段階処理**: parse → 人手プレビュー確認 → index。チャンク構成の materialize は **index 段**に入る。同じ extraction recipe だけ parse artifact を共有・再利用する。
@@ -95,7 +95,7 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
 ```
 - **refcount = `SELECT COUNT(*) FROM rag_kb_chunk_set_bindings WHERE chunk_set_id = :id`**(列で持たず導出=drift しない)。
 
-> ⚠️ 上記 DDL は **本リポジトリのスタイルに合わせた素案**。Oracle 26ai 構文・制約名長(30 byte)・
+> ⚠️ 上記 DDL は **本リポジトリのスタイルに合わせた素案**。Oracle AI Database 構文・制約名長(30 byte)・
 > VECTOR 索引との相互作用を実 DB で必ず検証してから artifact 確定すること。
 
 **A-2. 取込フローを planner 駆動へ**(owning-KB footgun の解消)
@@ -150,7 +150,7 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
 ## 5. 検証計画
 - **CI(実 Oracle なし)**: `variant_keys` / `variant_planner` / `kb_adapter_config` / `compose_query_settings` の
   決定論ユニットは緑を維持。DDL artifact は `oracle_schema_manifest` の決定論テストで内容固定。
-- **staging(実 Oracle 26ai)**: 新テーブル/列適用 → 取込→共有→GC の統合テスト。`docs/evaluation` /
+- **staging(実 Oracle AI Database)**: 新テーブル/列適用 → 取込→共有→GC の統合テスト。`docs/evaluation` /
   `file_processing_staging` の既存ゲート(retrieval recall / table QA / page hit / ingestion p95)に、
   **chunk_set 共有時に検索品質が劣化しない**こと、**GC が他 KB chunk を消さない**ことを追加。
 - 方針は `docs/pipeline-advanced-strategies.md` の **scaffold(safe-degrade)→ 実配線 → staging 検証** を踏襲。

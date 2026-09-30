@@ -3,7 +3,7 @@
 検索戦略(hybrid_rrf/vector/keyword/graph_augmented/business_context_strict/
 corrective_multi_query)→ 検索挙動フラグ(mode_override / strategy_bias / query_expansion /
 gap_stop / corrective / business_fit)へ解決するステージマイクロサービス。解決ロジックは backend と
-**同一(`rag_pipeline_core.retrieval`)** で決定論・外部依存なし。**実 retrieval(Oracle 26ai 経路)は
+**同一(`rag_pipeline_core.retrieval`)** で決定論・外部依存なし。**実 retrieval(Oracle AI Database 経路)は
 backend が実行**し、本サービスは戦略の「決定」のみを担う(vector_index と同じ分離)。外部検索
 エンジンは導入しない。
 

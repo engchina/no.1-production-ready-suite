@@ -137,12 +137,15 @@ export function DocumentProcessingConfigPanel({
   useLeaveGuard(dirty);
   const overrideCount = RECIPE_CONFIG_FIELDS.filter((field) => form[field] !== null).length;
 
-  // 項目抽出が実効 ON のときだけスキーマ定義を引き、空なら無言 no-op を警告する。
+  // 項目抽出が実効 ON のときだけ全体の既定の定義を引き、標準の項目で動くことを案内し（#556）、
+  // 0 件で保存されていれば無言 no-op を警告する。
   const fieldExtractionEffective =
     form.field_extraction_enabled ?? configs?.effective.field_extraction_enabled ?? false;
   const fieldSchemaQuery = useExtractionFieldsSettings(expanded && fieldExtractionEffective);
   const fieldSchemaEmpty =
     fieldExtractionEffective && fieldSchemaQuery.data?.fields.length === 0;
+  const fieldSchemaStandard =
+    fieldExtractionEffective && fieldSchemaQuery.data?.uses_standard === true;
 
   // 対応形式の宣言(capabilities 正本)は編集展開時のみ取得する。
   const adapterSettingsQuery = useParserAdapterSettings(expanded);
@@ -267,7 +270,13 @@ export function DocumentProcessingConfigPanel({
             disabled={disabled}
             onChange={(value) => update({ [field]: value })}
             // Vision は解析エンジンに関係なく使える(#497)。全体の既定は env だけで決める。
-            hint={field === "vision_enabled" ? t("knowledgeBases.adapter.field.vision.hint") : null}
+            hint={
+              field === "vision_enabled"
+                ? t("knowledgeBases.adapter.field.vision.hint")
+                : field === "field_extraction_enabled" && fieldSchemaStandard
+                  ? t("documents.processingConfig.fieldSchemaStandard")
+                  : null
+            }
             warning={
               field === "field_extraction_enabled" && fieldSchemaEmpty
                 ? t("documents.processingConfig.fieldSchemaEmpty")

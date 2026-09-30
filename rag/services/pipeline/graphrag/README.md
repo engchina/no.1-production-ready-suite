@@ -2,7 +2,7 @@
 
 GraphRAG プロファイル(off/entities/full)+ legacy フラグ → KG 構築フラグへ解決するステージ
 マイクロサービス。解決ロジックは backend と **同一(`rag_pipeline_core.graph`)** で決定論・外部
-依存なし。実 KG 構築(LLM=OCI Enterprise AI / Oracle 26ai)は backend ingestion が担う。
+依存なし。実 KG 構築(LLM=OCI Enterprise AI / Oracle AI Database)は backend ingestion が担う。
 外部グラフ DB は導入しない。
 
 | 項目 | 値 |

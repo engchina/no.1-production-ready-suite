@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """共通 .env（platform/.env）の値だけで ADB Thin + mTLS 接続を検証する単体スクリプト。
 
-Oracle 26ai の接続設定は3製品共通の設定（PLATFORM_ORACLE_*）なので共通 .env から読む（#211）。
+Oracle AI Database の接続設定は3製品共通（PLATFORM_ORACLE_*）なので共通 .env から読む（#211）。
 """
 
 from __future__ import annotations

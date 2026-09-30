@@ -1,6 +1,6 @@
 # backend — production-ready RAG API
 
-FastAPI + OCI Enterprise AI（LLM/VLM）+ OCI Generative AI（埋め込み/リランク）+ Oracle 26ai。
+FastAPI + OCI Enterprise AI（LLM/VLM）+ OCI Generative AI（埋め込み/リランク）+ Oracle AI Database。
 
 ## セットアップ
 
@@ -70,7 +70,7 @@ Backend は常に以下の OCI / Oracle 実装を使います。local / oci の�
 
 - `OciEnterpriseAiClient`: OCI Enterprise AI の VLM / LLM
 - `OciGenAiClient`: OCI Generative AI の Cohere Embed v4 / Rerank v4 fast
-- `OracleClient`: python-oracledb pool + Oracle 26ai AI Vector Search / Oracle Text
+- `OracleClient`: python-oracledb pool + Oracle AI Vector Search / Oracle Text
 - `ObjectStorageClient`: OCI Object Storage SDK による原本ファイル保存 / 取得
 
 設定は、3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース。`PLATFORM_*`）を共通 `.env`（リポジトリの `platform/.env`、場所は `PLATFORM_ENV_FILE` で上書き可）、RAG 固有の設定（`RAG_*`）を `backend/.env` に置きます。環境変数 → 共通 `.env` → `backend/.env` の順に読み、旧名（接頭辞のない名前や `HF_TOKEN` / `HF_ENDPOINT`）は読みません（#211。既存環境の移行は [docs/deployment.md](../docs/deployment.md) の「既存環境の更新手順（#211）」）。システム設定画面（OCI 認証・アップロード保存先・データベース）は共通 `.env` に、RAG 固有の設定画面は `backend/.env` に保存します。
@@ -146,7 +146,7 @@ checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage
 
 ログイン不要の path なので、`detail` には接続先・資格情報・Wallet の path を含めず、ORA / DPY / DPI のコードだけを返します（#320）。
 
-## Oracle 26ai schema
+## Oracle AI Database schema
 
 `app.rag.oracle_schema` は production 初期化用の DDL artifact と監査 manifest を生成します。`oracle_document_schema_sql()` は文書メタデータ、`oracle_vector_schema_sql()` は `VECTOR(1536, FLOAT32)` の chunk/vector table、`oracle_search_audit_schema_sql()` / `oracle_ingestion_audit_schema_sql()` は検索・取込の監査 table を生成します。
 
@@ -186,7 +186,7 @@ Object Storage client の key は保存時に安全な文字へ正規化しま�
 
 ## 取込ステートマシン
 
-`POST /api/documents/{id}/ingestion-jobs` と `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（確認待ちの工程を進める `POST /api/documents/{id}/recipes/{recipe_id}/approve` も同じ）は、HTTP リクエスト内では取込を実行せず、永続化済み `IngestionJob` を返します。`UPLOADED` / `ERROR` は `EXTRACT` job として `QUEUED`、`REVIEW` 承認後は `INDEX` job として `QUEUED`、`INDEXED` は既定で `SKIPPED(already_indexed)`、`force=true` では再取込用の `QUEUED` になります。`INGESTING` / `INDEXING` は二重実行を避けるため 409 を返します。実際の OCR/本文抽出、chunking、embedding、Oracle 26ai 索引は `IngestionQueueWorker` が消費します。
+`POST /api/documents/{id}/ingestion-jobs` と `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（確認待ちの工程を進める `POST /api/documents/{id}/recipes/{recipe_id}/approve` も同じ）は、HTTP リクエスト内では取込を実行せず、永続化済み `IngestionJob` を返します。`UPLOADED` / `ERROR` は `EXTRACT` job として `QUEUED`、`REVIEW` 承認後は `INDEX` job として `QUEUED`、`INDEXED` は既定で `SKIPPED(already_indexed)`、`force=true` では再取込用の `QUEUED` になります。`INGESTING` / `INDEXING` は二重実行を避けるため 409 を返します。実際の OCR/本文抽出、chunking、embedding、Oracle の索引は `IngestionQueueWorker` が消費します。
 
 ローカル開発の既定では `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=true`、`RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED=true` です。API process 内の worker は軽量 dispatcher として動き、job 本体は `python -m app.rag.ingestion_job_runner <job_id>` の subprocess で実行されます。Docling / OCR / CUDA 初期化が API event loop や他画面の設定 API を塞がないようにするためです。本番（#286 以降の systemd の配備）では `production-ready-rag-backend.service`（`RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false`）と `production-ready-rag-ingestion-worker.service` を分け、取込ジョブの consumer は worker の unit だけにします（process isolation は既定の true のまま）。
 
@@ -287,10 +287,10 @@ app/
   main.py            FastAPI エントリ
   config.py          設定（pydantic-settings）
   api/routes/        health / documents / search / evaluation
-  clients/           oci_enterprise_ai(LLM/VLM) / oci_genai(embed,rerank) / oracle(26ai) / object_storage
+  clients/           oci_enterprise_ai(LLM/VLM) / oci_genai(embed,rerank) / oracle(Oracle AI Database) / object_storage
   rag/               chunking / ingestion / pipeline
   schemas/           common / document / search
 tests/
 ```
 
-> ⚠️ LLM/VLM は **OCI Enterprise AI**（OCI Generative AI の chat API は使わない）。埋め込み/リランクは **OCI Generative AI**（Cohere Embed v4 / Rerank v4 fast）。ベクトル検索は **Oracle 26ai**。
+> ⚠️ LLM/VLM は **OCI Enterprise AI**（OCI Generative AI の chat API は使わない）。埋め込み/リランクは **OCI Generative AI**（Cohere Embed v4 / Rerank v4 fast）。ベクトル検索は **Oracle AI Vector Search**。

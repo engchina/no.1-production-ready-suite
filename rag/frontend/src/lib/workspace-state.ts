@@ -34,6 +34,7 @@ export type WorkspaceField =
   | "fileList.view"
   | "knowledgeBases.view"
   | "knowledgeBases.documentsPage"
+  | "knowledgeBases.draft"
   | "businessViews.view"
   | "businessViews.draft"
   | "evaluation.requestJson"

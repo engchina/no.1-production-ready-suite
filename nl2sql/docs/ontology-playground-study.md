@@ -82,7 +82,7 @@
 
 ## 5. 複製方針(本プロジェクトへの取り込み)
 
-確定スタック(OCI Enterprise AI / Oracle 26ai)へ再マップし、**既存の draft → proposal → publish ライフサイクルと proposal 変換パイプ(`OntologyBuildExtraction` → `convert_extraction_to_proposals` → `create_build_proposal`)を再利用**する。新規 DDL・新規依存・スタンドアロンアプリは作らない。Ontology 作成入口は `AI 構築を実行` に統一し、テンプレート適用と RDF/OWL import/export の UI/API は削除済み。
+確定スタック(OCI Enterprise AI / Oracle AI Database)へ再マップし、**既存の draft → proposal → publish ライフサイクルと proposal 変換パイプ(`OntologyBuildExtraction` → `convert_extraction_to_proposals` → `create_build_proposal`)を再利用**する。新規 DDL・新規依存・スタンドアロンアプリは作らない。Ontology 作成入口は `AI 構築を実行` に統一し、テンプレート適用と RDF/OWL import/export の UI/API は削除済み。
 
 - **非採用: 業種テンプレートカタログ** — Playground の `designerTemplates` 相当は、実 DB schema・業務説明・Q/A・構築資料から作る AI 構築と役割が重複するため削除。
 - **非採用: RDF/XML (OWL) export / import** — 外部ファイル連携導線は主用途外のため削除。公開時の local OWL2RL/SHACL は既存の `ontology_semantics.py` / `ontology_reasoning.py` に残す。

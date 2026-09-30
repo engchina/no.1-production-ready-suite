@@ -12,5 +12,5 @@
 
 - **UI/UX 作業では `ui-ux-pro-max` skill を必ず起動する**（設計・実装・レビュー・改善のいずれも）。
 - ドキュメント生成（.docx/.pptx/.xlsx/.pdf）が必要な場合は対応する skill を使う。
-- LLM/VLM = **OCI Enterprise AI**、embedding/rerank = **OCI Generative AI（Cohere Embed v4 / Rerank v4 fast）**、ベクトル DB = **Oracle 26ai** という分担を取り違えないこと。
+- LLM/VLM = **OCI Enterprise AI**、embedding/rerank = **OCI Generative AI（Cohere Embed v4 / Rerank v4 fast）**、ベクトル DB = **Oracle AI Database**（Oracle AI Vector Search）という分担を取り違えないこと。
 - 応答・コミットメッセージ・コメントは日本語（技術用語・識別子は原語のまま）。ユーザーが会話で別の言語を指定した場合は、応答だけその言語に合わせる。

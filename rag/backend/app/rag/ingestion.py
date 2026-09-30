@@ -1,4 +1,4 @@
-"""取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
+"""取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle AI Database へ索引。"""
 
 import asyncio
 import hashlib

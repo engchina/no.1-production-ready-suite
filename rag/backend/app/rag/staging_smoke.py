@@ -289,7 +289,7 @@ def _smoke_document_body(marker: str) -> bytes:
         "文書種別: staging smoke\n"
         f"確認用キーワード: {marker}\n"
         "この文書は RAG staging smoke test のために自動作成されました。\n"
-        "Oracle 26ai vector search と keyword search の疎通確認に使います。"
+        "Oracle AI Vector Search と keyword search の疎通確認に使います。"
     )
     return text.encode("utf-8")
 

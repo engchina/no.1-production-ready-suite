@@ -1,4 +1,4 @@
-"""アプリとしての Oracle 26ai 接続（共通 `.env` の `PLATFORM_ORACLE_*`。Thin mode。#215）。
+"""アプリとしての Oracle AI Database 接続（共通 `.env` の `PLATFORM_ORACLE_*`。Thin mode。#215）。
 
 - システム設定 > データベース の接続テスト（`features/agent/router.py`）と、共通認証の store
   （`security/store.py`）・security migration（`cli/agent_security_migrate.py`）が使う。
