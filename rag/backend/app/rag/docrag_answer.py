@@ -29,6 +29,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import (
     Settings,
+    enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_vision_model_id,
 )
@@ -93,12 +94,20 @@ def build_docrag_settings(
     """backend Settings から docrag Settings を作る(env や .env は読まない)。"""
     from docrag.config import get_settings as docrag_get_settings
 
+    # 回答のモデルと Vision のモデルは、それぞれのモデルの接続で呼ぶ(#533)。
+    answer_model = enterprise_ai_default_model_id(settings)
+    vision_model = enterprise_ai_vision_model_id(settings)
+    answer = enterprise_ai_connection_for_model(settings, answer_model)
+    vision = enterprise_ai_connection_for_model(settings, vision_model)
     environ = {
-        "OCI_ENTERPRISE_AI_ENDPOINT": settings.oci_enterprise_ai_endpoint,
-        "OCI_ENTERPRISE_AI_API_KEY": settings.oci_enterprise_ai_api_key,
-        "OCI_ENTERPRISE_AI_PROJECT_OCID": settings.oci_enterprise_ai_project_ocid,
-        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": enterprise_ai_default_model_id(settings),
-        "OCI_ENTERPRISE_AI_VLM_MODEL": enterprise_ai_vision_model_id(settings),
+        "OCI_ENTERPRISE_AI_ENDPOINT": answer.endpoint,
+        "OCI_ENTERPRISE_AI_API_KEY": answer.api_key,
+        "OCI_ENTERPRISE_AI_PROJECT_OCID": answer.project_ocid,
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": answer_model,
+        "OCI_ENTERPRISE_AI_VLM_MODEL": vision_model,
+        "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.endpoint,
+        "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
+        "OCI_ENTERPRISE_AI_VLM_PROJECT_OCID": vision.project_ocid,
         # docrag は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して
         # 呼ぶが、この 2 値を渡さないと RAG_DOCRAG_RERANK_ENABLED=true でも

@@ -238,13 +238,17 @@ test.describe("Agent Runtime settings", () => {
 
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
+    // OCI Enterprise AI の接続は 2 件まで。登録モデルごとに接続を選ぶ（#533）。
+    await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "接続を追加" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "モデル 1 の接続" })).toContainText("接続 1");
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
     await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
       // 接続情報の節の保存は、既定のモデル 2 つを保存済みの値のまま送る（#499）。
       enterprise_ai: {
-        api_key: "test-api-key",
+        connections: [{ connection_id: "primary", api_key: "test-api-key" }],
         default_text_model_id: "",
         default_vision_model_id: "enterprise-llm",
       },

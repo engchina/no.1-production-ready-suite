@@ -1992,16 +1992,23 @@
   "modelSettings": {
     "settings": {
       "enterprise_ai": {
-        "endpoint": "",
-        "project_ocid": "",
-        "api_key": "",
-        "has_api_key": false,
-        "clear_api_key": false,
+        "connections": [
+          {
+            "connection_id": "primary",
+            "display_name": "",
+            "endpoint": "",
+            "project_ocid": "",
+            "api_key": "",
+            "has_api_key": false,
+            "clear_api_key": false
+          }
+        ],
         "models": [
           {
             "model_id": "enterprise-llm",
             "display_name": "業務 RAG 標準",
-            "vision_enabled": true
+            "vision_enabled": true,
+            "connection_id": "primary"
           }
         ],
         "default_text_model_id": "",

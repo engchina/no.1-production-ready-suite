@@ -47,6 +47,8 @@ from app.config import (
     DOCRAG_CHUNKING_SETTING_FIELDS,
     MODEL_SETTINGS_STORE,
     Settings,
+    enterprise_ai_connection_for_model,
+    enterprise_ai_vision_model_id,
     get_settings,
 )
 from app.rag.agentic_adapter import (
@@ -1036,7 +1038,12 @@ def _persist_huggingface_settings(settings: Settings) -> None:
 def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
     """service 系 parser backend の選択状態と設定可用性を作る。"""
     selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
-    vlm_configured = bool(settings.oci_enterprise_ai_endpoint.strip())
+    # OCI parser は既定の Vision モデルの接続で呼ぶ(#533)。
+    vlm_configured = bool(
+        enterprise_ai_connection_for_model(
+            settings, enterprise_ai_vision_model_id(settings)
+        ).endpoint
+    )
     du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
     return [
         ParserServiceBackendData(

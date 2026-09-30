@@ -430,7 +430,9 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
 
     assert response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["enterprise_ai"]["endpoint"] == "https://existing.example.com"
+    assert (
+        persisted["enterprise_ai"]["connections"][0]["endpoint"] == "https://existing.example.com"
+    )
     # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
@@ -1781,23 +1783,28 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["settings"]["enterprise_ai"]["endpoint"] == "https://enterprise-ai.example"
     assert (
-        body["settings"]["enterprise_ai"]["project_ocid"]
+        body["settings"]["enterprise_ai"]["connections"][0]["endpoint"]
+        == "https://enterprise-ai.example"
+    )
+    assert (
+        body["settings"]["enterprise_ai"]["connections"][0]["project_ocid"]
         == "ocid1.generativeaiproject.oc1..example"
     )
-    assert body["settings"]["enterprise_ai"]["api_key"] == ""
-    assert body["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert body["settings"]["enterprise_ai"]["connections"][0]["api_key"] == ""
+    assert body["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert body["settings"]["enterprise_ai"]["models"] == [
         {
             "model_id": "enterprise-llm",
             "display_name": "enterprise-llm",
             "vision_enabled": False,
+            "connection_id": "primary",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "enterprise-vlm",
             "vision_enabled": True,
+            "connection_id": "primary",
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1869,11 +1876,13 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "model_id": "enterprise-llm",
             "display_name": "標準 LLM",
             "vision_enabled": False,
+            "connection_id": "primary",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "Vision LLM",
             "vision_enabled": True,
+            "connection_id": "primary",
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -2185,7 +2194,7 @@ def test_model_settings_keeps_existing_api_key_when_secret_input_is_blank(
 
     assert resp.status_code == 200
     assert settings.oci_enterprise_ai_api_key == "sk-existing-secret"
-    assert resp.json()["data"]["settings"]["enterprise_ai"]["has_api_key"] is True
+    assert resp.json()["data"]["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert "sk-existing-secret" not in resp.text
 
 
@@ -2201,7 +2210,9 @@ def test_model_settings_clears_existing_api_key(monkeypatch: MonkeyPatch) -> Non
 
     assert resp.status_code == 200
     assert settings.oci_enterprise_ai_api_key == ""
-    assert resp.json()["data"]["settings"]["enterprise_ai"]["has_api_key"] is False
+    assert (
+        resp.json()["data"]["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is False
+    )
     assert "sk-existing-secret" not in resp.text
 
 

@@ -471,11 +471,17 @@ describe("api.request envelope", () => {
   it("updateModelSettings は Enterprise AI payload template を保持して送る", async () => {
     const payload = {
       enterprise_ai: {
-        endpoint: "https://enterprise-ai.example",
-        project_ocid: "ocid1.generativeaiproject.oc1..example",
-        api_key: "",
-        has_api_key: false,
-        clear_api_key: false,
+        connections: [
+          {
+            connection_id: "primary" as const,
+            display_name: "",
+            endpoint: "https://enterprise-ai.example",
+            project_ocid: "ocid1.generativeaiproject.oc1..example",
+            api_key: "",
+            has_api_key: false,
+            clear_api_key: false,
+          },
+        ],
         models: [
           {
             model_id: "enterprise-llm",
@@ -526,11 +532,17 @@ describe("api.request envelope", () => {
     const payload = {
       settings: {
         enterprise_ai: {
-          endpoint: "https://enterprise-ai.example",
-          project_ocid: "ocid1.generativeaiproject.oc1..example",
-          api_key: "",
-          has_api_key: true,
-          clear_api_key: false,
+          connections: [
+            {
+              connection_id: "primary" as const,
+              display_name: "",
+              endpoint: "https://enterprise-ai.example",
+              project_ocid: "ocid1.generativeaiproject.oc1..example",
+              api_key: "",
+              has_api_key: true,
+              clear_api_key: false,
+            },
+          ],
           models: [
             {
               model_id: "enterprise-llm",
