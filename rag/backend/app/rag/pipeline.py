@@ -268,21 +268,27 @@ class RagPipeline:
 
         # 回答エンジンは検索と回答の生成（LLM）を中で行う。
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
-        # 入れ子の工程として出す（#593）。
+        # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は「検索」の工程にする（#649）。
         outcome = await _observe_stage(
             trace_id,
-            "answer",
+            "answer" if request.generate_answer else "retrieval",
             engine.run(request, step_callback=emit_step if progress_callback is not None else None),
             progress_callback=progress_callback,
         )
-        answer_guardrail = await asyncio.to_thread(
-            self._guardrails.validate_answer, outcome.answer, outcome.context_text
-        )
-        record_guardrail_findings(
-            "answer",
-            answer_guardrail.findings,
-            "blocked" if not answer_guardrail.allowed else "warning",
-        )
+        if request.generate_answer:
+            answer_guardrail = await asyncio.to_thread(
+                self._guardrails.validate_answer, outcome.answer, outcome.context_text
+            )
+            record_guardrail_findings(
+                "answer",
+                answer_guardrail.findings,
+                "blocked" if not answer_guardrail.allowed else "warning",
+            )
+        else:
+            # 回答が無い(本文は検索できなかった理由だけ)ので、回答側の安全チェックはしない。
+            answer_guardrail = GuardrailResult(
+                allowed=True, sanitized_text=outcome.answer, findings=[]
+            )
         final_answer = answer_guardrail.sanitized_text
         if token_callback is not None and final_answer:
             await token_callback(SearchTokenDelta(trace_id=trace_id, text=final_answer))
@@ -318,17 +324,19 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
         )
-        await self._save_answer_record(
-            trace_id=trace_id,
-            request=request,
-            question=original_query,
-            rewritten_question=rewritten_query,
-            answer=final_answer,
-            citations=outcome.citations,
-            diagnostics=diagnostics.answer or {},
-            surface="search" if history is None else "chat",
-            evaluation_input=outcome.evaluation_input,
-        )
+        # 回答の記録は回答を作ったときだけ保存する(RAG 検索は回答が無い。#649)。
+        if request.generate_answer:
+            await self._save_answer_record(
+                trace_id=trace_id,
+                request=request,
+                question=original_query,
+                rewritten_question=rewritten_query,
+                answer=final_answer,
+                citations=outcome.citations,
+                diagnostics=diagnostics.answer or {},
+                surface="search" if history is None else "chat",
+                evaluation_input=outcome.evaluation_input,
+            )
         if outcome_label == "success":
             await self._record_query_history(
                 request, query_guardrail.sanitized_text, chat=history is not None

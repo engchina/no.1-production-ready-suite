@@ -319,6 +319,19 @@ def test_resolve_compare_models_caps_and_defaults(monkeypatch: MonkeyPatch) -> N
     assert [c["model_id"] for c in default_only] == ["m1"]
 
 
+def test_compare_models_list_default_first(monkeypatch: MonkeyPatch) -> None:
+    """画面が「未選択なら答えるモデル」として出すので、既定のモデルを先頭にする(#649)。"""
+    catalog = [
+        EnterpriseAiConfiguredModel(model_id="m1", display_name="モデル1"),
+        EnterpriseAiConfiguredModel(model_id="m2", display_name="モデル2"),
+    ]
+    monkeypatch.setattr(chat_route, "enterprise_ai_model_catalog", lambda _s: catalog)
+    monkeypatch.setattr(chat_route, "enterprise_ai_default_model_id", lambda _s: "m2")
+    response = client.get("/api/chat/models")
+    assert response.status_code == 200
+    assert [model["model_id"] for model in response.json()["data"]] == ["m2", "m1"]
+
+
 def test_build_history_takes_first_assistant_per_turn() -> None:
     """同一ユーザーターンに複数モデル回答があっても履歴は先頭 1 件だけ採用。"""
     now = datetime(2026, 1, 1, tzinfo=UTC)

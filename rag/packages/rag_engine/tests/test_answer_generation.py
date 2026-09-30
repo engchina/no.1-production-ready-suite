@@ -621,7 +621,11 @@ class AnswerGenerationTests(unittest.TestCase):
             crop = output_dir / "abcdef" / "docling" / "vision" / "picture.png"
             crop.parent.mkdir(parents=True)
             crop.write_bytes(b"png")
-            settings = replace(get_settings(environ={"RAG_ENGINE_ANSWER_LLM_SUPPORTS_VISION": "1"}, dotenv_path=None), output_dir=output_dir)
+            settings = replace(get_settings(environ={
+                "RAG_ENGINE_ANSWER_IMAGES": "1",
+                "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
+            }, dotenv_path=None), output_dir=output_dir)
             search_result = _hybrid_result(
                 _stored_child(
                     "chunk-docling-c000001",
@@ -665,6 +669,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(result.image_prompt_mode, "vision_attachments")
         self.assertEqual(result.image_evidence[0]["prompt_path"], str(crop))
         self.assertEqual(multimodal.call_args.args[2], [str(crop)])
+        # 画像を添付する生成は既定の Vision モデルで答える（#649）。
+        self.assertEqual(multimodal.call_args.kwargs["provider_id"], settings.default_vision_llm)
+        self.assertEqual(settings.llm_providers[settings.default_vision_llm].model, "vision-model")
         text_parser.assert_not_called()
 
     def test_answer_generation_keeps_image_evidence_text_only_for_nonvisual_questions(self):

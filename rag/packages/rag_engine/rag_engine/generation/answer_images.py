@@ -220,21 +220,20 @@ def _resolve_image_prompt_path(
         return candidates[0][0], candidates[0][1], False
     return output_dir, "missing", False
 
-def _image_prompt_mode(
-    image_evidence: Sequence[dict[str, Any]],
-    settings: Settings,
-    answer_llm_provider: str | None,
-) -> str:
+def _image_prompt_mode(image_evidence: Sequence[dict[str, Any]], settings: Settings) -> str:
+    """根拠の画像を原画像のまま添付するか。添付する回は既定の Vision モデルで答える（#649）。"""
     if not image_evidence:
         return "text_only"
     image_paths = [str(item.get("prompt_path") or "") for item in image_evidence if item.get("prompt_path")]
     if not image_paths:
         return "text_fallback_missing_assets"
+    if not getattr(settings, "answer_images_enabled", False):
+        return "text_fallback_images_disabled"
     try:
-        provider = get_llm_provider(settings, answer_llm_provider or settings.default_answer_llm)
+        provider = get_llm_provider(settings, settings.default_vision_llm)
     except Exception:
         return "text_fallback_unknown_provider"
-    return "vision_attachments" if provider.supports_vision else "text_fallback_llm_without_vision"
+    return "vision_attachments" if provider.supports_vision and provider.model else "text_fallback_llm_without_vision"
 
 def _trim_generated_text(value: Any, max_length: int) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()

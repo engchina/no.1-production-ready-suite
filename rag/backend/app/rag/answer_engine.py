@@ -40,6 +40,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
     enterprise_ai_vision_model_id,
 )
 from app.rag.answer_prompts import prompt_overrides
@@ -129,6 +130,11 @@ class _SearchState:
     loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
 
 
+def answer_images_enabled(settings: Settings) -> bool:
+    """回答で根拠の原画像を Vision モデルへ添付するか(設定が有効で、既定の Vision モデルがある)。"""
+    return settings.rag_answer_vision_enabled and bool(enterprise_ai_vision_model_id(settings))
+
+
 def build_engine_settings(
     settings: Settings,
     *,
@@ -172,9 +178,8 @@ def build_engine_settings(
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
-        "RAG_ENGINE_ANSWER_LLM_SUPPORTS_VISION": (
-            "1" if settings.rag_answer_vision_enabled else "0"
-        ),
+        # 原画像を添付する回だけ既定の Vision モデルで答える(ほかは既定のテキストモデル。#649)。
+        "RAG_ENGINE_ANSWER_IMAGES": "1" if answer_images_enabled(settings) else "0",
         # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
         "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
     }
@@ -241,7 +246,34 @@ class AnswerEngine:
                 business_names,
                 step_callback,
             )
-        return _outcome_from_result(result, state)
+        outcome = _outcome_from_result(result, state)
+        outcome.diagnostics["models"] = self._models_used(
+            vision=getattr(result, "image_prompt_mode", "") == "vision_attachments"
+        )
+        return outcome
+
+    def _models_used(self, *, vision: bool = False) -> dict[str, Any]:
+        """回答フローで使ったモデル(画面に出す。#649)。
+
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張と回答の生成に使う。
+        根拠の原画像を添付して答えたときは、その回答を既定の Vision モデルで作る(``vision``)。
+        rerank は無効なら空。
+        """
+        settings = self._settings
+        labels = {
+            model.model_id: model.display_name or model.model_id
+            for model in enterprise_ai_model_catalog(settings)
+        }
+
+        def model(model_id: str) -> dict[str, str]:
+            return {"model_id": model_id, "label": labels.get(model_id, model_id)}
+
+        return {
+            "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
+            "vision": model(enterprise_ai_vision_model_id(settings)) if vision else None,
+            "embedding": settings.oci_genai_embedding_model,
+            "rerank": settings.oci_genai_rerank_model if settings.rag_rerank_enabled else "",
+        }
 
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
         """回答を作らずに検索だけを行い、候補の chunk を順位順に返す(#593)。
@@ -335,6 +367,8 @@ class AnswerEngine:
                 answer_flow=self._settings.rag_answer_flow,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+                # RAG 検索の画面は回答を作らない(CRAG も使わない。#649)。
+                generate_answer=request.generate_answer,
                 # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
                 # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
                 classification_filter=classification_filter_from_values(
@@ -408,7 +442,7 @@ class AnswerEngine:
         )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
-        if self._settings.rag_answer_vision_enabled:
+        if answer_images_enabled(self._settings):
             for chunk in [*anchors, *siblings]:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
@@ -556,7 +590,7 @@ class AnswerEngine:
         # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if self._settings.rag_answer_vision_enabled:
+        if answer_images_enabled(self._settings):
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]

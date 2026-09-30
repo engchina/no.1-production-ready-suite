@@ -114,6 +114,9 @@ async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
         for model in enterprise_ai_model_catalog(settings)
         if model.model_id
     ]
+    # 画面は先頭を「未選択のときに答える既定のモデル」として出す(#649)。登録順は既定を先頭にしない。
+    default_model = enterprise_ai_default_model_id(settings)
+    models.sort(key=lambda model: model["model_id"] != default_model)
     return ApiResponse(
         data=models,
         warning_messages=(

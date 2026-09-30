@@ -285,7 +285,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /検索結果/ })).toBeVisible();
   // 以前の検索の内訳（診断の詳細メトリクス）は出さない（#595）。
   await expect(page.getByRole("button", { name: "診断" })).toHaveCount(0);
   const citation = page.locator("li").filter({ hasText: "料金表の交通費は 1000 円です。" });

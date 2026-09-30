@@ -161,7 +161,7 @@ class OciGenerator:
                 evidence_tree=bundle.evidence_tree,
             )
             images = answer.answer_image_evidence(records, self.settings.output_dir)
-            mode = answer._image_prompt_mode(images, self.settings, self.settings.default_answer_llm)
+            mode = answer._image_prompt_mode(images, self.settings)
             response = answer.synthesize_grounded_answer(
                 request.question, context, self.settings, image_evidence=images,
                 image_prompt_mode=mode, answer_llm_provider=self.settings.default_answer_llm,

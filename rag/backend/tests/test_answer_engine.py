@@ -2,7 +2,7 @@
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from rag_engine.models.llm import (
@@ -12,7 +12,7 @@ from rag_engine.models.llm import (
     QueryRoutingOutput,
 )
 
-from app.config import Settings
+from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
@@ -558,6 +558,7 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
         return _pdf_with_figure()
 
     images_seen: list[list[str]] = []
+    providers_seen: list[str | None] = []
 
     def fake_multimodal(
         system: str, prompt: str, image_paths: list[Any], settings: Any, schema: type, **kw: Any
@@ -565,6 +566,7 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
         from pathlib import Path
 
         images_seen.append([str(path) for path in image_paths])
+        providers_seen.append(kw.get("provider_id"))
         assert all(Path(path).read_bytes().startswith(b"\x89PNG") for path in image_paths)
         return _fake_llm(system, prompt, settings, schema, **kw)
 
@@ -572,7 +574,11 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     monkeypatch.setattr(engine_oci, "parse_multimodal_response", fake_multimodal)
     engine = AnswerEngine(
-        Settings(rag_answer_vision_enabled=True),
+        Settings(
+            rag_answer_vision_enabled=True,
+            oci_enterprise_ai_default_text_model="text-model",
+            oci_enterprise_ai_default_vision_model="vision-model",
+        ),
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -582,10 +588,24 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
     assert loaded == ["doc-1"]
     assert images_seen and images_seen[0][0].endswith("crops/docling-p1-5.png")
     assert "登録ボタン" in outcome.answer
+    # 画像を添付する回答は既定の Vision モデルで作り、診断にも出す(#649)。
+    assert providers_seen == ["enterprise-ai-vision"]
+    models = outcome.diagnostics["models"]
+    assert models["llm"]["model_id"] == "text-model"
+    assert models["vision"]["model_id"] == "vision-model"
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [
+        Settings(rag_answer_vision_enabled=False, oci_enterprise_ai_default_vision_model="vlm"),
+        # 有効でも既定の Vision モデルが無ければ添付しない(テキストモデルへ画像を送らない。#649)。
+        Settings(rag_answer_vision_enabled=True),
+    ],
+    ids=["disabled", "no-vision-model"],
+)
 async def test_answer_engine_does_not_crop_when_vision_disabled(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
     import rag_engine.adapters.oci as engine_oci
 
@@ -597,7 +617,7 @@ async def test_answer_engine_does_not_crop_when_vision_disabled(
     monkeypatch.setattr(engine_module, "load_parsed_source", fail_source)
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
-        Settings(),
+        settings,
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -1981,3 +2001,74 @@ async def test_retrieval_only_returns_candidates_without_llm(
     assert llm.calls == []
     assert len(audits) == 1
     assert audits[0]["outcome"] == "success"
+
+
+async def test_search_without_answer_skips_crag_and_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RAG 検索(generate_answer=False)は rerank までで止め、CRAG と回答の生成をしない(#649)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    import app.rag.pipeline as pipeline_module
+
+    schemas: list[str] = []
+
+    def record_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        schemas.append(schema.__name__)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", record_llm)
+    oracle = SavingOracle()
+    pipeline = pipeline_module.RagPipeline(
+        settings=Settings(rag_answer_flow="crag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    observed: list[tuple[str, str]] = []
+
+    async def capture(progress: Any) -> None:
+        if not progress.stage.startswith("answer_step:"):
+            observed.append((progress.stage, progress.outcome))
+
+    response = await pipeline.run(
+        SearchRequest(query="受注の登録方法は？", generate_answer=False),
+        progress_callback=capture,
+    )
+
+    assert response.answer == ""
+    assert response.citations
+    # 質問の拡張(自動ルーティング)は LLM を使うが、CRAG の評価と回答の生成・監査は呼ばない。
+    assert schemas == ["QueryRoutingOutput"]
+    assert observed == [("retrieval", "started"), ("retrieval", "success")]
+    answer = response.diagnostics.answer or {}
+    assert answer["answer_flow"] == "standard_rag"
+    models = cast(dict[str, Any], answer["models"])
+    assert set(models) == {"llm", "vision", "embedding", "rerank"}
+    # 回答が無いので回答の記録は保存しない。
+    assert oracle.saved == []
+
+
+async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """回答の診断に、使った LLM(表示名)・embedding・rerank のモデルが入る(#649)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    settings = Settings(
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="model-a", display_name="Model A"),
+        ],
+        rag_rerank_enabled=False,
+    )
+    engine = AnswerEngine(
+        settings,
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        answer_model_id="model-a",
+    )
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+    assert outcome.diagnostics["models"] == {
+        "llm": {"model_id": "model-a", "label": "Model A"},
+        "vision": None,
+        "embedding": settings.oci_genai_embedding_model,
+        "rerank": "",
+    }

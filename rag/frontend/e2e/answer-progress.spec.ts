@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import {
+  enableSearchAnswer,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  selectBusinessView,
+} from "./_helpers";
 
 /**
  * 回答生成の進捗（今の工程と経過時間）と時間切れの表示（#375）。
@@ -197,6 +203,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockSearchPage(page, [slowSearchStream]);
 
+    await enableSearchAnswer(page);
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
@@ -233,6 +240,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockSearchPage(page, [timedOutSearchStream, slowSearchStream]);
 
+    await enableSearchAnswer(page);
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 

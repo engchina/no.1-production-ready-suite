@@ -751,7 +751,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("適用する版を確認してください", result.answer_text)
         self.assertTrue(result.needs_human_review)
 
-    def _run_missing_content_remedy(self, provider_id):
+    def _run_missing_content_remedy(self, images_enabled):
         """要求が partial のまま残り、pool からの根拠追加が使えない状況で是正を走らせる。"""
         import tempfile
         from unittest.mock import patch
@@ -771,21 +771,26 @@ class GroundedAnswerTest(unittest.TestCase):
                 return_value=[{"image_id": "img1", "prompt_path": image.name}]):
             unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))
             with bind_dependencies(AnswerDependencies(unused, unused, text_model, vision, unused)):
-                result = synthesize_grounded_answer(QUESTION, ctx, get_settings(), image_prompt_mode="text_only",
-                                                    answer_llm_provider=provider_id)
+                settings = get_settings(environ={
+                    "RAG_ENGINE_ANSWER_IMAGES": "1" if images_enabled else "0",
+                    "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                    "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
+                }, dotenv_path=None)
+                result = synthesize_grounded_answer(QUESTION, ctx, settings, image_prompt_mode="text_only")
         return result, calls, image.name
 
     def test_missing_content_attaches_source_images_once_for_vision_model(self):
-        result, calls, path = self._run_missing_content_remedy("enterprise-ai-vision")
+        """テキストモデルで答えた後、原画像を添付する是正は既定の Vision モデルで作り直す（#649）。"""
+        result, calls, path = self._run_missing_content_remedy(True)
         self.assertEqual(calls, [([path], "enterprise-ai-vision")])
         self.assertEqual(result.image_prompt_mode, "vision_attachments")
         decision = result.response.generation_trace["image_fallback"]
-        self.assertEqual((decision["reason"], decision["source_provider"]), ("accepted", "enterprise-ai-vision"))
+        self.assertEqual((decision["reason"], decision["source_provider"]), ("accepted", "enterprise-ai"))
         self.assertLessEqual(result.response.generation_trace["llm_calls"], 6)
 
     def test_missing_content_does_not_switch_non_vision_model_to_another_provider(self):
-        """Vision 非対応の provider は画像対応の provider へ切替えず、指摘の反映だけで是正する。"""
-        result, calls, _ = self._run_missing_content_remedy("enterprise-ai")
+        """画像の添付が無効なら Vision モデルへ切替えず、指摘の反映だけで是正する。"""
+        result, calls, _ = self._run_missing_content_remedy(False)
         self.assertEqual(calls, [])
         self.assertEqual(result.image_prompt_mode, "text_only")
         decision = result.response.generation_trace["image_fallback"]

@@ -15,6 +15,12 @@ describe("parseAnswerDiagnostics", () => {
       insufficient_reason: "",
       rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
+      models: {
+        llm: { model_id: "model-a", label: "Model A" },
+        vision: { model_id: "vlm-a", label: "" },
+        embedding: "cohere.embed-v4.0",
+        rerank: "",
+      },
       execution_steps: [
         {
           name: "質問の理解",
@@ -40,6 +46,12 @@ describe("parseAnswerDiagnostics", () => {
       ],
     });
     expect(parsed?.rewrittenQuestion).toBe("受注入力画面での受注の登録方法は？");
+    expect(parsed?.models).toEqual({
+      llm: { modelId: "model-a", label: "Model A" },
+      vision: { modelId: "vlm-a", label: "vlm-a" },
+      embedding: "cohere.embed-v4.0",
+      rerank: "",
+    });
     expect(parsed?.steps[0]).toEqual({
       name: "質問の理解",
       status: "complete",
@@ -56,6 +68,8 @@ describe("parseAnswerDiagnostics", () => {
 
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
     expect(parseAnswerDiagnostics(null)).toBeNull();
+    // モデルを持たない古い回答の記録でも壊れない。
+    expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, vision: null, embedding: "", rerank: "" });
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");
     expect(confidenceVariant("")).toBe("neutral");

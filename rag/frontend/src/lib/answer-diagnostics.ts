@@ -6,6 +6,11 @@ export type AnswerDiagnostics = {
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
   generatedQueries: string[];
+  /**
+   * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
+   * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
+   */
+  models: { llm: ModelRef | null; vision: ModelRef | null; embedding: string; rerank: string };
   steps: {
     name: string;
     status: string;
@@ -54,6 +59,7 @@ export function parseAnswerDiagnostics(
     insufficientReason: String(raw.insufficient_reason ?? ""),
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
+    models: parseModels(raw.models),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
       return {
@@ -80,6 +86,24 @@ export function parseAnswerDiagnostics(
         }),
       };
     }),
+  };
+}
+
+type ModelRef = { modelId: string; label: string };
+
+function parseModelRef(value: unknown): ModelRef | null {
+  const raw = record(value);
+  const modelId = String(raw.model_id ?? "");
+  return modelId ? { modelId, label: String(raw.label ?? "") || modelId } : null;
+}
+
+function parseModels(value: unknown): AnswerDiagnostics["models"] {
+  const raw = record(value);
+  return {
+    llm: parseModelRef(raw.llm),
+    vision: parseModelRef(raw.vision),
+    embedding: String(raw.embedding ?? ""),
+    rerank: String(raw.rerank ?? ""),
   };
 }
 

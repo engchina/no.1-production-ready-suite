@@ -345,3 +345,10 @@ export async function selectBusinessView(page: Page, name: RegExp | string) {
   await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name }).click();
   await expect(page.getByRole("listbox", { name: /対象の業務ビュー/ })).toHaveCount(0);
 }
+
+/** RAG 検索の「LLM で回答を生成する」をオンにする（既定はオフで、検索結果までを出す。#649）。 */
+export async function enableSearchAnswer(page: Page) {
+  const toggle = page.getByRole("switch", { name: "LLM で回答を生成する" });
+  if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+}

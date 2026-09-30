@@ -1230,6 +1230,7 @@ def synthesize_grounded_answer(
             try:
                 current = grounded.run_round(
                     question, spans, settings, prompt=prompt, provider_id=provider,
+                    image_provider_id=settings.default_vision_llm,
                     parse_text=parse_text_response, parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (), known_gaps=known_gaps,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [])
@@ -1267,9 +1268,9 @@ def synthesize_grounded_answer(
         if remedy is None and needs_content and mode != "vision_attachments":
             candidates = tuple(i for i in answer_image_evidence(context.records, settings.output_dir, question=question)
                                if i.get("prompt_path"))
-            # 選択中の provider が Vision 非対応（supports_vision=False）なら別モデルへ切替えず、
-            # 文字の説明で答えられる範囲に留めて次の是正（指摘の反映）へ進む。
-            if candidates and _image_prompt_mode(candidates, settings, source_provider) == "vision_attachments":
+            # 画像の添付が無効（または Vision モデルが無い）なら、文字の説明で答えられる範囲に留めて
+            # 次の是正（指摘の反映）へ進む。添付する回は既定の Vision モデルで答える（#649）。
+            if candidates and _image_prompt_mode(candidates, settings) == "vision_attachments":
                 images, mode = candidates, "vision_attachments"
                 remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
                 image_decision.update(reason="attempted", regeneration_calls=1)
@@ -1894,9 +1895,12 @@ def answer_question_result(
     answer_llm_provider: str | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
+    generate_answer: bool = True,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
 
+    ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
+    その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
     空質問は ValueError、処理失敗は中断記録付きの AnswerExecutionError を送出する。
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
@@ -2062,6 +2066,16 @@ def answer_question_result(
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
 
+    if not generate_answer:
+        return _retrieve_without_answer(
+            normalized_question, run_id, preferred_engine_ids, settings,
+            top_k=chunk_top_k, neighbor_child_count=chunk_neighbor_count, rerank_enabled=effective_rerank_enabled,
+            expansion=expansion, retrieval_queries=retrieval_queries, lexical_queries=lexical_queries,
+            text_search_info=text_search_info, question_plan=question_plan, runtime_knowledge=runtime_knowledge,
+            inquiry_conditions=inquiry_conditions, retrieval_scope=selected_retrieval_scope,
+            classification_filter=selected_classification_filter,
+        )
+
     with _execution_step("回答生成フロー") as flow_step:
         flow_step.add(f"設定: {answer_flow_label(selected_answer_flow)}")
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
@@ -2186,12 +2200,12 @@ def answer_question_result(
                 )
                 else ()
             )
-            image_prompt_mode = _image_prompt_mode(image_evidence, settings, answer_llm_provider)
+            image_prompt_mode = _image_prompt_mode(image_evidence, settings)
             if not image_evidence:
                 image_step.hide()
             image_step.result(f"画像 {len(image_evidence)} 件を" + (
-                "原画像のまま添付します" if image_prompt_mode == "vision_attachments"
-                else "文字の説明として使います（選択中のモデルが画像入力に対応していないか、画像ファイルがありません）"))
+                "原画像のまま添付し、既定の Vision モデルで回答します" if image_prompt_mode == "vision_attachments"
+                else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"))
 
         grounded_answer = synthesize_grounded_answer(
             normalized_question, context, settings,
@@ -2232,6 +2246,73 @@ def answer_question_result(
             crag_rewrites=crag_rewrites,
             retrieval_top_k=chunk_top_k,
         )
+
+
+def _retrieve_without_answer(
+    question: str,
+    run_id: Any,
+    preferred_engine_ids: list[str],
+    settings: Settings,
+    *,
+    top_k: int,
+    neighbor_child_count: int,
+    rerank_enabled: bool,
+    expansion: QueryExpansionResult,
+    retrieval_queries: Sequence[str],
+    lexical_queries: Sequence[str],
+    text_search_info: QuestionTextSearchInfo,
+    question_plan: QuestionPlan,
+    runtime_knowledge: RuntimeKnowledgeContext,
+    inquiry_conditions: InquiryConditionParse,
+    retrieval_scope: str,
+    classification_filter: ClassificationFilter,
+) -> AnswerQuestionResult:
+    """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
+
+    CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
+    """
+    records: Sequence[AnswerRecord] = ()
+    evidence_tree: Sequence[ContextParentEvidence] = ()
+    answer = ""
+    with _execution_step("文書検索", _SEARCH_PURPOSE) as step:
+        try:
+            context = build_adb_hybrid_answer_context(
+                question,
+                run_id,
+                preferred_engine_ids,
+                settings,
+                top_k=top_k,
+                neighbor_child_count=neighbor_child_count,
+                retrieval_queries=retrieval_queries,
+                rerank_enabled=rerank_enabled,
+                inquiry_conditions=inquiry_conditions,
+                retrieval_scope=retrieval_scope,
+                classification_filter=classification_filter,
+                runtime_knowledge=runtime_knowledge,
+                vector_only_queries=expansion.vector_only_queries,
+            )
+        except AdbHybridSearchUnavailable as exc:
+            step.status = "中止"
+            answer = f"ADB hybrid search を使用できません: {exc}"
+        else:
+            records, evidence_tree = context.records, context.evidence_tree
+            step.result(f"検索結果 {len(records)} 件（回答は生成しません）")
+    return _answer_question_result(
+        expansion=expansion,
+        answer=answer,
+        records=records,
+        evidence_tree=evidence_tree,
+        text_search_info=text_search_info,
+        answer_flow=STANDARD_ANSWER_FLOW,
+        question_plan=question_plan,
+        runtime_knowledge=runtime_knowledge,
+        inquiry_conditions=inquiry_conditions,
+        retrieval_scope=retrieval_scope,
+        classification_filter=classification_filter,
+        retrieval_queries=retrieval_queries,
+        lexical_queries=lexical_queries,
+        retrieval_top_k=top_k,
+    )
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:

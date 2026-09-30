@@ -236,6 +236,9 @@ class Settings:
     llm_providers: dict[str, LlmProviderSettings]
     default_vision_llm: str
     default_answer_llm: str
+    # 回答で根拠の原画像を添付するか。添付する回だけ既定の Vision モデル（default_vision_llm）で答え、
+    # それ以外は既定のテキストモデル（default_answer_llm）で答える（#649）。
+    answer_images_enabled: bool = False
 
     # None は保存済み辞書、空 tuple は評価用の辞書無効化を表す。共有ファイルは変更しない。
     domain_keywords_override: tuple[str, ...] | None = None
@@ -302,8 +305,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             project_id=project,
             api_key=api_key,
             model=answer_model,
-            # 回答モデルが画像入力に対応する場合だけ根拠画像を添付する(既定 OFF)。
-            supports_vision=_env_bool(env, "RAG_ENGINE_ANSWER_LLM_SUPPORTS_VISION", False),
             endpoint=endpoint,
         ),
         ENTERPRISE_AI_VISION_LLM_PROVIDER: LlmProviderSettings(
@@ -426,6 +427,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
+        answer_images_enabled=_env_bool(env, "RAG_ENGINE_ANSWER_IMAGES", False),
     )
 
 

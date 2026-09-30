@@ -62,7 +62,6 @@ function searchStreamBody(chunkId: string): string {
         config_fingerprint: "fp-1",
       },
     })}\n\n`,
-    `event: delta\ndata: ${JSON.stringify({ text: "確認しました。" })}\n\n`,
     `event: citations\ndata: ${JSON.stringify([citation])}\n\n`,
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-1" })}\n\n`,
   ].join("");
@@ -99,20 +98,15 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
 
   await page.getByText("詳細条件", { exact: true }).click();
   const topKSelect = page.getByRole("combobox", { name: "候補取得数" });
-  const contentKindSelect = page.getByRole("combobox", { name: "内容種別" });
   await expect(topKSelect).toBeVisible();
-  await expect(contentKindSelect).toBeVisible();
+  // 内容種別と見出しの条件は #649 で外した。
+  await expect(page.getByRole("combobox", { name: "内容種別" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "見出しで絞り込む" })).toHaveCount(0);
   // 検索の方式と Rerank の件数は回答エンジンが使わないため選ばせない（#595）。
   await expect(page.getByRole("combobox", { name: "Rerank 採用数" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);
-  await expect(page.getByLabel("見出し名")).toBeHidden();
   await topKSelect.click();
   await page.getByRole("option", { name: "50", exact: true }).click();
-  await contentKindSelect.click();
-  await page.getByRole("option", { name: "表", exact: true }).click();
-  await page.getByRole("button", { name: "見出しで絞り込む" }).click();
-  await page.getByLabel("見出し名").fill("料金表");
-  await page.getByLabel("見出しの階層").fill("経費申請");
 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
@@ -120,32 +114,23 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile"]) {
     expect(removed in searchRequests[0], removed).toBe(false);
   }
-  expect(searchRequests[0]).toMatchObject({
-    top_k: 50,
-    filters: {
-      content_kind: "table",
-      section_title: "料金表",
-      section_path: "経費申請",
-    },
-  });
+  // 既定は回答を生成しない（検索結果まで。#649）。
+  expect(searchRequests[0]).toMatchObject({ top_k: 50, generate_answer: false });
+  expect("filters" in searchRequests[0]).toBe(false);
 
   const runPanel = page.getByRole("region", { name: "検索実行" });
   await expect(runPanel).toBeVisible();
   await expect(runPanel.getByText("開始")).toBeVisible();
   // 経過時間は共有の ProcessingIndicator で出す（#375）。
-  await expect(runPanel.getByTestId("search-run-progress")).toContainText("回答を生成しています");
+  await expect(runPanel.getByTestId("search-run-progress")).toContainText("検索しています");
   const elapsed = runPanel.getByTestId("search-run-progress-timer");
   await expect(elapsed).toContainText("経過時間");
   const firstElapsed = await elapsed.textContent();
   await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
 
-  await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /検索結果/ })).toBeVisible();
   await expect(runPanel.getByText("文書検索", { exact: true })).toBeVisible();
   await expect(runPanel.getByText("42 ms")).toBeVisible();
-  const appliedFilters = page.locator('[aria-label="適用中の詳細条件"]');
-  await expect(appliedFilters.getByText("内容種別: 表")).toBeVisible();
-  await expect(appliedFilters.getByText("見出し名: 料金表")).toBeVisible();
-  await expect(appliedFilters.getByText("見出しの階層: 経費申請")).toBeVisible();
   // 以前の検索の内訳（検索キーワード・検索フロー・候補の表）は出さない（#595）。
   await expect(page.locator('[aria-label="検索キーワード"]')).toHaveCount(0);
   await expect(page.getByText("検索フロー")).toHaveCount(0);

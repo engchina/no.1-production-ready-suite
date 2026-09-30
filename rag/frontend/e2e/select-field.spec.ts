@@ -132,32 +132,19 @@ test("OCI リージョンの候補を指定順で表示し、選択できる", a
   await expect(page.getByRole("listbox", { name: "リージョン", exact: true })).toBeHidden();
 });
 
-test("検索条件の内容種別も同じドロップダウン UI で選択できる", async ({ page }) => {
+test("検索条件の候補取得数も同じドロップダウン UI で選択できる", async ({ page }) => {
   await page.goto("/search");
 
-  // 内容種別は「詳細条件」ディスクロージャ内にあるため展開してから操作する。
+  // 候補取得数は「詳細条件」ディスクロージャ内にあるため展開してから操作する。
   await page.getByRole("button", { name: "詳細条件" }).click();
-  const contentKind = page.getByRole("combobox", { name: "内容種別" });
-  await contentKind.click();
+  const topK = page.getByRole("combobox", { name: "候補取得数" });
+  await topK.click();
 
-  const listbox = page.getByRole("listbox", { name: "内容種別" });
-  await expect(listbox.getByRole("option")).toHaveText([
-    "すべて",
-    "本文",
-    "箇条書き",
-    "表",
-    "図・画像",
-    "数式",
-    "コード",
-    "メール",
-    "スライド",
-    "シート",
-    "抽出項目",
-    "章節要約",
-  ]);
+  const listbox = page.getByRole("listbox", { name: "候補取得数" });
+  await expect(listbox.getByRole("option")).toHaveText(["5", "10", "20", "50"]);
 
-  await listbox.getByRole("option", { name: "表" }).click();
-  await expect(contentKind).toContainText("表");
+  await listbox.getByRole("option", { name: "50" }).click();
+  await expect(topK).toContainText("50");
 });
 
 test("評価のランキング指標も同じドロップダウン UI で選択できる", async ({ page }) => {

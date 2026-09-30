@@ -15,6 +15,7 @@ export function AnswerProgress({
   finishedAtMs = null,
   finalLabel,
   activityIcon = "spinner",
+  generateAnswer = true,
   testId,
   className,
 }: {
@@ -25,13 +26,15 @@ export function AnswerProgress({
   finalLabel?: string;
   /** 起点のボタンが loading を出しているときは "none"（動くスピナーは 1 つだけ）。 */
   activityIcon?: ProcessingActivityIcon;
+  /** 回答を作らない RAG 検索では false（「検索しています」。#649）。 */
+  generateAnswer?: boolean;
   testId?: string;
   className?: string;
 }) {
   return (
     <ProcessingIndicator
       active={active}
-      label={answerProgressLabel(stages)}
+      label={answerProgressLabel(stages, { generateAnswer })}
       finalLabel={finalLabel}
       operationKey={startedAtMs}
       startedAt={startedAtMs}
