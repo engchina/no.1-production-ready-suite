@@ -91,7 +91,7 @@ test("アップロード保存先は OCI の未設定項目があると保存前
   await expect(
     page.getByText("OCI 認証設定で Object Storage ネームスペースを設定してください。")
   ).toBeVisible();
-  await expect(page.getByText("値を入力してください。")).toBeVisible();
+  await expect(page.getByText("Object Storage バケットを入力してください。")).toBeVisible();
   expect(patchCount).toBe(0);
 });
 

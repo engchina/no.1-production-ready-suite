@@ -1,6 +1,6 @@
 """1文書1〜3レシピの境界・工程状態・検索対象契約。"""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -12,6 +12,7 @@ from app.api.routes.documents import (
     _apply_recipe_review_text_edits,
     _candidate_chunking_settings,
     _enqueue_failed_segment_retry_job_for_document,
+    _mark_layers_rebuild_required,
     _materialize_experiment_candidate,
     _recipe_steps,
 )
@@ -22,7 +23,18 @@ from app.clients.oracle import (
     oracle_ingestion_job_schema_sql,
 )
 from app.config import Settings, get_settings
+from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY
+from app.rag.extraction_field_adapter import (
+    FIELD_SCHEMA_FILE_ENV,
+    FieldDefinition,
+    save_field_schema,
+)
 from app.rag.ingestion import IngestionCancelledError
+from app.rag.layer_fingerprint import (
+    FIELD_SCHEMA_HASH_ARTIFACT_KEY,
+    docrag_chunk_contract_hash,
+    field_schema_hash,
+)
 from app.rag.variant_keys import (
     compute_graph_layer_id,
     compute_metadata_layer_id,
@@ -36,6 +48,7 @@ from app.schemas.document import (
     DocumentProcessingConfig,
     DocumentRecipeStepStatus,
     DocumentReviewEditsRequest,
+    DocumentSummary,
     FileStatus,
     IngestionJob,
     IngestionJobPhase,
@@ -1412,3 +1425,220 @@ async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
     for status in (statuses.metadata, statuses.graph, statuses.navigation):
         assert status.requested is False
         assert status.status == DocumentLayerStatusName.NOT_REQUESTED
+
+
+# --- 作り直しが必要の判定(#550) ---
+
+_FIELDS_V1 = [FieldDefinition(name="請求書番号", description="invoice no")]
+_FIELDS_V2 = [
+    FieldDefinition(name="請求書番号", description="invoice no"),
+    FieldDefinition(name="合計金額", value_type="number"),
+]
+
+
+class _FingerprintRecipeOracle(_CompletingRecipeOracle):
+    """抽出の工程で項目の定義の hash を刻んだ抽出結果を返す fake。"""
+
+    def __init__(self, stamped_fields: list[FieldDefinition]) -> None:
+        super().__init__()
+        self.extraction_json: dict[str, object] = {
+            **_NAVIGATION_EXTRACTION,
+            "fields": [
+                {"name": "請求書番号", "value": "INV-1", "value_type": "string", "confidence": 0.9}
+            ],
+            "parser_artifacts": {FIELD_SCHEMA_HASH_ARTIFACT_KEY: field_schema_hash(stamped_fields)},
+        }
+
+    async def get_document_extraction_artifact(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object]:
+        artifact = await super().get_document_extraction_artifact(
+            document_id=document_id, extraction_recipe_id=extraction_recipe_id
+        )
+        return {**artifact, "extraction_json": self.extraction_json}
+
+
+async def _record_fingerprinted_layers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, settings: Settings
+) -> _FingerprintRecipeOracle:
+    """項目の定義 V1 で抽出・索引したレシピの job を完了させ、レイヤーを記録する。"""
+    monkeypatch.setenv(FIELD_SCHEMA_FILE_ENV, str(tmp_path / "extraction-fields.json"))
+    save_field_schema(_FIELDS_V1)
+    fake = _FingerprintRecipeOracle(_FIELDS_V1)
+    _RecordingRecipePipeline.calls = []
+    monkeypatch.setattr(documents_route, "IngestionPipeline", _RecordingRecipePipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: settings)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
+    job = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+    await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+    return fake
+
+
+async def _layer_statuses(document_id: str = "doc-1") -> Any:
+    response = await documents_route.list_document_chunk_sets(document_id)
+    assert response.data is not None
+    return response.data[0].layer_statuses
+
+
+async def test_layer_needs_rebuild_only_when_recorded_fingerprint_differs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """記録した指紋と今の入力が同じなら出さず、項目の定義が変わると「作り直しが必要」を出す。
+
+    状態(status)は変えず、定義を元に戻すと印も消える(保存しない派生の値)。
+    """
+    settings = _layer_settings(enabled=True).model_copy(
+        update={"rag_chunking_strategy": "structure_aware"}
+    )
+    fake = await _record_fingerprinted_layers(monkeypatch, tmp_path, settings)
+    metadata_id = compute_metadata_layer_id("chunk-set-pending", settings)
+    assert fake.layers[metadata_id]["input_fingerprint"] == {
+        "field_schema_hash": field_schema_hash(_FIELDS_V1)
+    }
+    # ナビ要約の上限数の刻みが無い抽出結果からは、ナビの指紋を作らない(不明)。
+    nav_id = compute_nav_layer_id("chunk-set-pending", settings)
+    assert fake.layers[nav_id]["input_fingerprint"] is None
+
+    statuses = await _layer_statuses()
+    assert statuses.metadata.status == DocumentLayerStatusName.MATERIALIZED
+    assert statuses.metadata.rebuild_required is False
+    assert statuses.metadata.rebuild_inputs == []
+
+    save_field_schema(_FIELDS_V2)
+    statuses = await _layer_statuses()
+    assert statuses.metadata.status == DocumentLayerStatusName.MATERIALIZED
+    assert statuses.metadata.rebuild_required is True
+    assert statuses.metadata.rebuild_inputs == ["field_schema_hash"]
+    assert statuses.navigation.rebuild_required is False
+
+    save_field_schema(_FIELDS_V1)
+    statuses = await _layer_statuses()
+    assert statuses.metadata.rebuild_required is False
+
+
+async def test_layer_without_fingerprint_is_unknown_and_not_flagged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """指紋の無い既存の行(migration 前に作ったレイヤー)は、定義が変わっても警告しない。"""
+    settings = _layer_settings(enabled=True)
+    fake = await _record_fingerprinted_layers(monkeypatch, tmp_path, settings)
+    for layer in fake.layers.values():
+        layer["input_fingerprint"] = None
+    save_field_schema(_FIELDS_V2)
+
+    statuses = await _layer_statuses()
+
+    for status in (statuses.metadata, statuses.graph, statuses.navigation):
+        assert status.rebuild_required is False
+        assert status.rebuild_inputs == []
+
+
+async def test_docrag_chunk_contract_is_part_of_metadata_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """DocRAG の分割では chunk metadata の契約を指紋に入れ、契約が上がると作り直しを出す。"""
+    settings = _layer_settings(enabled=True).model_copy(
+        update={"rag_chunking_strategy": DOCRAG_CHUNKING_STRATEGY}
+    )
+    fake = await _record_fingerprinted_layers(monkeypatch, tmp_path, settings)
+    metadata_id = compute_metadata_layer_id("chunk-set-pending", settings)
+    recorded = fake.layers[metadata_id]["input_fingerprint"]
+    assert isinstance(recorded, dict)
+    assert recorded["docrag_chunk_contract"] == docrag_chunk_contract_hash()
+
+    fake.layers[metadata_id]["input_fingerprint"] = {
+        **recorded,
+        "docrag_chunk_contract": "older-contract",
+    }
+    statuses = await _layer_statuses()
+
+    assert statuses.metadata.rebuild_required is True
+    assert statuses.metadata.rebuild_inputs == ["docrag_chunk_contract"]
+
+
+class _ListFingerprintOracle:
+    def __init__(self, rows: list[dict[str, object]] | Exception) -> None:
+        self.rows = rows
+        self.requested: list[str] = []
+
+    async def list_serving_artifact_layer_fingerprints(
+        self, document_ids: Collection[str]
+    ) -> list[dict[str, object]]:
+        self.requested = list(document_ids)
+        if isinstance(self.rows, Exception):
+            raise self.rows
+        return self.rows
+
+
+def _summary(document_id: str) -> DocumentSummary:
+    return DocumentSummary(
+        id=document_id,
+        file_name=f"{document_id}.pdf",
+        status=FileStatus.INDEXED,
+        uploaded_at=datetime.now(UTC),
+    )
+
+
+def _layer_row(
+    document_id: str,
+    settings: Settings,
+    fingerprint: Mapping[str, object],
+    *,
+    layer_id: str | None = None,
+) -> dict[str, object]:
+    chunk_set_id = f"cs-{document_id}"
+    return {
+        "document_id": document_id,
+        "layer_id": layer_id or compute_metadata_layer_id(chunk_set_id, settings),
+        "layer_kind": "metadata",
+        "parent_chunk_set_id": chunk_set_id,
+        "recipe_id": f"recipe-{document_id}",
+        "recipe_processing_config": {},
+        "document_processing_config": {},
+        "input_fingerprint": fingerprint,
+    }
+
+
+async def test_documents_list_marks_documents_whose_layers_need_rebuild(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """一覧は検索対象の層の指紋を 1 回で読み、今も要求されている層の変化だけを印にする。"""
+    monkeypatch.setenv(FIELD_SCHEMA_FILE_ENV, str(tmp_path / "extraction-fields.json"))
+    save_field_schema(_FIELDS_V2)
+    settings = _layer_settings(enabled=True)
+    stale = {"field_schema_hash": field_schema_hash(_FIELDS_V1)}
+    current = {"field_schema_hash": field_schema_hash(_FIELDS_V2)}
+    oracle = _ListFingerprintOracle(
+        [
+            _layer_row("doc-stale", settings, stale),
+            _layer_row("doc-current", settings, current),
+            # 設定が変わって今は要求されていない層(ID が違う)の古い行は印にしない。
+            _layer_row("doc-orphan", settings, stale, layer_id="md_orphan"),
+        ]
+    )
+    documents = [_summary(name) for name in ("doc-stale", "doc-current", "doc-orphan", "doc-new")]
+
+    await _mark_layers_rebuild_required(oracle, documents, settings)  # type: ignore[arg-type]
+
+    assert oracle.requested == ["doc-stale", "doc-current", "doc-orphan", "doc-new"]
+    assert {document.id: document.layers_rebuild_required for document in documents} == {
+        "doc-stale": True,
+        "doc-current": False,
+        "doc-orphan": False,
+        "doc-new": False,
+    }
+
+
+async def test_documents_list_keeps_rows_when_fingerprint_lookup_fails() -> None:
+    """指紋の読み出しに失敗しても、一覧は印を付けずにそのまま返す。"""
+    documents = [_summary("doc-1")]
+
+    await _mark_layers_rebuild_required(
+        _ListFingerprintOracle(RuntimeError("db down")),  # type: ignore[arg-type]
+        documents,
+        _layer_settings(enabled=True),
+    )
+
+    assert documents[0].layers_rebuild_required is False

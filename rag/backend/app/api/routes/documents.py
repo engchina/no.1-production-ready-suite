@@ -75,6 +75,11 @@ from app.rag.kb_adapter_config import (
     resolve_effective_adapter_config,
     resolve_effective_settings,
 )
+from app.rag.layer_fingerprint import (
+    changed_layer_inputs,
+    current_layer_inputs,
+    recorded_layer_fingerprint,
+)
 from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source
 from app.rag.rate_limit import enforce_rate_limit
@@ -102,6 +107,7 @@ from app.schemas.document import (
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentClassification,
+    DocumentClassificationOptions,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
@@ -513,6 +519,7 @@ async def list_documents(
             offset=offset,
             knowledge_base_id=knowledge_base_id,
         )
+        await _mark_layers_rebuild_required(oracle, documents, settings)
         total = await oracle.count_documents(
             status=status,
             query=q,
@@ -539,6 +546,57 @@ async def list_documents(
         data=page,
         warning_messages=[degraded.message] if degraded else [],
     )
+
+
+async def _mark_layers_rebuild_required(
+    oracle: OracleClient,
+    documents: Sequence[DocumentSummary],
+    global_settings: Settings,
+) -> None:
+    """一覧の文書に、検索対象の派生情報レイヤーの作り直しが必要かの印を付ける(#550)。
+
+    判定は文書詳細(``/chunk-sets``)と同じで、レシピの設定で層 ID を作り直し、今も要求されて
+    いる層の指紋だけを今の入力と比べる。表示の補助なので、読めないときは印を付けずに一覧を返す
+    (一覧そのものを縮退させない)。1 回の問い合わせで一覧の全文書を読む。
+    """
+    if not documents:
+        return
+    try:
+        rows = await oracle.list_serving_artifact_layer_fingerprints(
+            [document.id for document in documents]
+        )
+    except Exception:
+        logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
+        return
+    if not rows:
+        return
+    current_inputs = current_layer_inputs(global_settings)
+    flagged: set[str] = set()
+    for row in rows:
+        document_id = str(row.get("document_id"))
+        if document_id in flagged:
+            continue
+        raw_config = (
+            row.get("recipe_processing_config")
+            if row.get("recipe_id") is not None
+            else row.get("document_processing_config")
+        )
+        try:
+            settings, _effective = _merge_document_processing_config(
+                DocumentProcessingConfig.model_validate(raw_config or {}), global_settings
+            )
+        except (ValueError, KbAdapterConfigError):
+            continue
+        layer = str(row.get("layer_kind"))
+        chunk_set_id = str(row.get("parent_chunk_set_id"))
+        if not _layer_requested(layer, settings) or row.get("layer_id") != _recipe_layer_id(
+            chunk_set_id, settings, layer
+        ):
+            continue
+        if changed_layer_inputs(row.get("input_fingerprint"), current_inputs):
+            flagged.add(document_id)
+    for document in documents:
+        document.layers_rebuild_required = document.id in flagged
 
 
 DELETE_IMPACT_MAX_DOCUMENTS = 100
@@ -579,6 +637,19 @@ async def document_delete_impact(
             if knowledge_base.id not in known
         )
     return ApiResponse(data=list(impacts.values()))
+
+
+@router.get(
+    "/classification-options",
+    response_model=ApiResponse[DocumentClassificationOptions],
+)
+async def document_classification_options() -> ApiResponse[DocumentClassificationOptions]:
+    """分類の入力の候補(利用者が見られる文書の保存済みの分類の値)を返す(#547)。
+
+    語の一覧の管理画面は持たず、保存済みの値を候補にして表記を寄せる。
+    """
+    values = await OracleClient().list_document_classification_values()
+    return ApiResponse(data=DocumentClassificationOptions.from_values(values))
 
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])
@@ -1460,6 +1531,8 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         if any(row.get("recipe_id") is not None for row in rows)
         else {}
     )
+    # 作り直しの判定に使う今の入力(項目の定義は file を読むため、1 回だけ作る。#550)。
+    current_inputs = current_layer_inputs(effective_settings)
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -1483,6 +1556,7 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 chunk_set.chunk_set_id,
                 settings_for_recipe,
                 persisted_layers,
+                current_inputs=current_inputs,
             )
         elif plan is not None:
             chunk_set.layer_statuses = _layer_statuses_for_chunk_set(
@@ -1490,6 +1564,7 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 plan,
                 effective_by_kb,
                 persisted_layers,
+                current_inputs=current_inputs,
             )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
@@ -1761,6 +1836,8 @@ def _layer_statuses_for_chunk_set(
     plan: MaterializationPlan,
     effective_by_kb: Mapping[str, Settings],
     persisted_layers: Mapping[str, Mapping[str, object]] | None = None,
+    *,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentChunkSetLayerStatuses:
     """派生情報レイヤーの現在状態を chunk_set 単位で作る。"""
     return DocumentChunkSetLayerStatuses(
@@ -1771,6 +1848,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="metadata",
             user_label="項目抽出",
+            current_inputs=current_inputs,
         ),
         graph=_layer_status_for_chunk_set(
             chunk_set_id,
@@ -1779,6 +1857,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="graph",
             user_label="関係情報",
+            current_inputs=current_inputs,
         ),
         navigation=_layer_status_for_chunk_set(
             chunk_set_id,
@@ -1787,6 +1866,7 @@ def _layer_statuses_for_chunk_set(
             persisted_layers or {},
             layer="navigation",
             user_label="ナビゲーション",
+            current_inputs=current_inputs,
         ),
     )
 
@@ -1799,6 +1879,7 @@ def _layer_status_for_chunk_set(
     *,
     layer: str,
     user_label: str,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentMaterializationLayerStatus:
     requested_ids = _requested_layer_ids_for_chunk_set(
         chunk_set_id,
@@ -1817,7 +1898,12 @@ def _layer_status_for_chunk_set(
                 "現時点では計画だけを表示しています。"
             ),
         )
-    return _requested_layer_status(requested_ids[0], persisted_layers, user_label=user_label)
+    return _requested_layer_status(
+        requested_ids[0],
+        persisted_layers,
+        user_label=user_label,
+        current_inputs=current_inputs,
+    )
 
 
 def _not_requested_layer_status(user_label: str) -> DocumentMaterializationLayerStatus:
@@ -1833,10 +1919,19 @@ def _requested_layer_status(
     persisted_layers: Mapping[str, Mapping[str, object]],
     *,
     user_label: str,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentMaterializationLayerStatus:
-    """要求された派生層の状態。実体化の記録があればそれを、無ければ計画だけとして返す。"""
+    """要求された派生層の状態。実体化の記録があればそれを、無ければ計画だけとして返す。
+
+    ``current_inputs`` を渡すと、記録した指紋と比べて「作り直しが必要」を付ける(#550)。
+    """
     persisted = persisted_layers.get(layer_id)
     if persisted is not None:
+        changed = (
+            changed_layer_inputs(persisted.get("input_fingerprint"), current_inputs)
+            if current_inputs is not None
+            else []
+        )
         return DocumentMaterializationLayerStatus(
             layer_id=layer_id,
             requested=bool(persisted.get("requested", True)),
@@ -1844,6 +1939,8 @@ def _requested_layer_status(
                 str(persisted.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
             ),
             reason=str(persisted["reason"]) if persisted.get("reason") is not None else None,
+            rebuild_required=bool(changed),
+            rebuild_inputs=changed,
         )
     return DocumentMaterializationLayerStatus(
         layer_id=layer_id,
@@ -1874,6 +1971,8 @@ def _recipe_layer_statuses_for_chunk_set(
     chunk_set_id: str,
     settings: Settings,
     persisted_layers: Mapping[str, Mapping[str, object]],
+    *,
+    current_inputs: Mapping[str, object] | None = None,
 ) -> DocumentChunkSetLayerStatuses:
     """レシピの chunk_set の派生情報レイヤーの状態を、そのレシピの構築設定から作る(#494)。
 
@@ -1887,6 +1986,7 @@ def _recipe_layer_statuses_for_chunk_set(
                 _recipe_layer_id(chunk_set_id, settings, layer),
                 persisted_layers,
                 user_label=user_label,
+                current_inputs=current_inputs,
             )
             if _layer_requested(layer, settings)
             else _not_requested_layer_status(user_label)
@@ -1953,6 +2053,7 @@ async def _record_recipe_artifact_layers(
             status=status.value,
             reason=reason,
             metrics=_layer_metrics(layer, extraction),
+            input_fingerprint=recorded_layer_fingerprint(layer, extraction, settings),
         )
 
 
@@ -3092,6 +3193,9 @@ async def _reconcile_plan_artifact_layers(
                     status=status.value,
                     reason=reason,
                     metrics=_layer_metrics(layer, detail.extraction),
+                    input_fingerprint=recorded_layer_fingerprint(
+                        layer, detail.extraction, effective_settings
+                    ),
                 )
 
 

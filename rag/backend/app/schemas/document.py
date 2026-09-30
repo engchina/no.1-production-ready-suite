@@ -1,9 +1,10 @@
 """ドキュメント関連スキーマ。"""
 
+from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import (
@@ -23,6 +24,11 @@ from app.config import (
     ChunkingStrategy,
 )
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
+from app.schemas.classification import (
+    CLASSIFICATION_CATEGORY_KEYS,
+    category_label,
+    normalize_category_value,
+)
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -128,6 +134,7 @@ class DocumentClassification(BaseModel):
 
     文書のメタデータで、レシピを切り替えても変わらない。ACL に使う category_name とは別に持つ。
     有効期間の終了日は排他的(effective_to の当日は期間外)。
+    分類の値は `normalize_category_value` で表記をそろえて保存する(#547)。
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -138,17 +145,52 @@ class DocumentClassification(BaseModel):
     effective_from: date | None = None
     effective_to: date | None = None
 
+    @field_validator(*CLASSIFICATION_CATEGORY_KEYS, mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category_value(value) if isinstance(value, str) else value
+
     @model_validator(mode="after")
     def _normalize(self) -> "DocumentClassification":
-        for key in ("large_category", "middle_category", "small_category"):
-            if getattr(self, key) == "":
-                setattr(self, key, None)
         if self.effective_from and self.effective_to and self.effective_from >= self.effective_to:
             raise ValueError("有効期間の終了日は開始日より後の日付にしてください。")
         return self
 
     def is_empty(self) -> bool:
         return not any(self.model_dump().values())
+
+
+class DocumentClassificationOptions(BaseModel):
+    """分類の入力の候補(保存済みの文書の分類の値。#547)。"""
+
+    large_categories: list[str] = Field(default_factory=list)
+    middle_categories: list[str] = Field(default_factory=list)
+    small_categories: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_values(
+        cls, values: Iterable[tuple[str, object]], *, limit: int = 500
+    ) -> "DocumentClassificationOptions":
+        """(分類の項目, 保存値) の組から候補を作る。
+
+        表記をそろえて重複を除き、番号の接頭辞だけが違う値(`10_業務A` と `業務A`)は、接頭辞の
+        付いた値だけを出す(新しく入力する値を、番号で並ぶ表記へ寄せる)。項目ごとに `limit` 件まで。
+        """
+        by_label: dict[tuple[str, str], set[str]] = {}
+        for key, raw in values:
+            value = normalize_category_value(raw)
+            if key not in CLASSIFICATION_CATEGORY_KEYS or value is None:
+                continue
+            by_label.setdefault((key, category_label(value)), set()).add(value)
+        options: dict[str, set[str]] = {key: set() for key in CLASSIFICATION_CATEGORY_KEYS}
+        for (key, label), group in by_label.items():
+            prefixed = {value for value in group if value != label}
+            options[key].update(prefixed or group)
+        return cls(
+            large_categories=sorted(options["large_category"])[:limit],
+            middle_categories=sorted(options["middle_category"])[:limit],
+            small_categories=sorted(options["small_category"])[:limit],
+        )
 
 
 class DocumentSummary(BaseModel):
@@ -166,6 +208,9 @@ class DocumentSummary(BaseModel):
     indexed_at: datetime | None = None
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     source_profile: SourceProfile | None = None
+    # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
+    # 一覧の API だけが埋める(詳細はレイヤーごとの ``rebuild_required`` を見る)。
+    layers_rebuild_required: bool = False
 
 
 class DuplicateDocumentRef(BaseModel):
@@ -297,6 +342,11 @@ class DocumentMaterializationLayerStatus(BaseModel):
     requested: bool = False
     status: DocumentLayerStatusName = DocumentLayerStatusName.NOT_REQUESTED
     reason: str | None = None
+    # 作ったときの入力(項目の定義など)が今の設定と違い、作り直しが必要か(#550)。status とは
+    # 別の印で、今の設定との比較で決まる(保存しない)。指紋の無い古い行は False(不明)。
+    rebuild_required: bool = False
+    # 変わった入力の名前(``app.rag.layer_fingerprint`` の *_INPUT)。画面が表示名にする。
+    rebuild_inputs: list[str] = Field(default_factory=list)
 
 
 class DocumentChunkSetLayerStatuses(BaseModel):

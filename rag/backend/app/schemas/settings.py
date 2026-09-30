@@ -70,6 +70,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -831,17 +832,19 @@ class PromptVersionsData(BaseModel):
 class PromptVersionCreate(BaseModel):
     """新しい prompt 版の作成 payload。"""
 
-    name: str = Field(min_length=1, max_length=120)
-    system_prompt: str = Field(min_length=1, max_length=20000)
+    # 空の検証は validator で画面と同じ文言にする（「版名を入力してください。」など。#541）。
+    name: str = Field(max_length=120)
+    system_prompt: str = Field(max_length=20000)
     note: str = Field(default="", max_length=2000)
     activate: bool = True
 
     @field_validator("name", "system_prompt")
     @classmethod
-    def _strip_non_empty(cls, value: str) -> str:
+    def _strip_non_empty(cls, value: str, info: ValidationInfo) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("name と system_prompt は空にできません。")
+            label = "版名" if info.field_name == "name" else "system prompt "
+            raise ValueError(f"{label}を入力してください。")
         return cleaned
 
 

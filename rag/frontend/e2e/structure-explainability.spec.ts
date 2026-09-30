@@ -152,10 +152,18 @@ test("文書詳細で所属ナレッジベースを更新できる", async ({ pa
 });
 
 for (const viewport of [
-  { name: "desktop", width: 1280, height: 900 },
-  { name: "mobile", width: 375, height: 900 },
-]) {
-  test(`文書詳細で分類と有効期間を保存できる (${viewport.name})`, async ({ page }) => {
+  { name: "desktop", width: 1280, height: 900, theme: "light" },
+  { name: "mobile", width: 375, height: 900, theme: "dark" },
+] as const) {
+  test(`文書詳細で分類と有効期間を保存できる (${viewport.name} / ${viewport.theme})`, async ({
+    page,
+  }, testInfo) => {
+    await page.addInitScript((theme) => {
+      window.localStorage.setItem(
+        "production-ready-rag.ui",
+        JSON.stringify({ state: { theme }, version: 0 }),
+      );
+    }, viewport.theme);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const state = await mockDocumentDetail(page);
 
@@ -164,7 +172,21 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
     const save = page.getByRole("button", { name: "分類を保存" });
     await expect(save).toBeDisabled();
-    await page.getByLabel("大分類").fill("経理");
+    // 保存済みの分類の値を候補に出す（datalist の自由入力 = role=combobox。#547）。
+    const large = page.getByRole("combobox", { name: "大分類" });
+    await expect(page.getByText("ほかの文書で使っている分類から選べます。")).toBeVisible();
+    const largeListId = await large.getAttribute("list");
+    expect(largeListId).toBeTruthy();
+    await expect(large).toHaveAttribute("autocomplete", "off");
+    await expect(page.locator(`datalist[id="${largeListId}"] option`)).toHaveCount(2);
+    expect(
+      await page
+        .locator(`datalist[id="${largeListId}"] option`)
+        .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+    ).toEqual(["10_経理", "人事"]);
+    // 候補の無い中分類は datalist を持たない。
+    await expect(page.getByRole("textbox", { name: "中分類" })).not.toHaveAttribute("list");
+    await large.fill("経理");
     await page.getByLabel("小分類").fill("旅費");
     await page.getByLabel("有効期間の開始日").fill("2026-04-01");
     await save.click();
@@ -182,6 +204,10 @@ for (const viewport of [
     await expect(save).toBeDisabled();
     await expect(page.getByLabel("大分類")).toHaveValue("経理");
     await expectNoHorizontalOverflow(page);
+    await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`document-classification-${viewport.name}-${viewport.theme}.png`),
+    });
   });
 }
 
@@ -538,6 +564,19 @@ async function mockDocumentDetail(
       },
       classification: state.classification,
   });
+  await page.route("**/api/documents/classification-options", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          large_categories: ["10_経理", "人事"],
+          middle_categories: [],
+          small_categories: ["旅費"],
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/documents/doc-1/classification", async (route) => {
     state.lastClassificationPayload = route.request().postDataJSON() as Record<string, unknown>;
     state.classification = state.lastClassificationPayload;
@@ -827,3 +866,21 @@ async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
 }
+
+// #541: 所属先を 0 件にして保存を押すと、選択欄の直下に理由を出す（押せないボタンと FormStatus だけにしない）。
+test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ理由を出す", async ({ page }) => {
+  const state = await mockDocumentDetail(page);
+
+  await page.goto("/documents/doc-1");
+  await page.getByLabel("社内規程 を選択から外す").click();
+  const save = page.getByRole("button", { name: "所属先を保存" });
+  await expect(save).toBeEnabled();
+  await save.click();
+
+  await expect(page.locator("#document-knowledge-base-required-error")).toHaveText(
+    "所属先を 1 件以上選択してください。"
+  );
+  await expect(page.getByRole("combobox", { name: "所属先" })).toHaveAttribute("aria-invalid", "true");
+  expect(state.lastReplacePayload).toBeNull();
+  await expectNoHorizontalOverflow(page);
+});

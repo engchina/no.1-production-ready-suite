@@ -65,6 +65,7 @@ import {
   CardHeader,
   CardTitle,
   Disclosure,
+  FieldError,
   FormStatus,
   INFORMATION_LIST_SCROLL_CLASS,
   ListSkeleton,
@@ -87,6 +88,7 @@ import {
   type DocumentChunkPreviewResponse,
   type DocumentChunkView,
   type DocumentClassification,
+  type DocumentClassificationOptions,
   type DocumentExtractionExportFormat,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
@@ -130,6 +132,7 @@ import {
   usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
+  useDocumentClassificationOptions,
   useSaveDocumentClassification,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
@@ -2949,10 +2952,20 @@ function DocumentKnowledgeBaseEditor({
   const isDirty = !isSameIdSet(selectedIds, savedIds);
   // KB 所属の未保存の選択（順序は無視して集合で比べる）があるときだけ離脱を確認する。
   useLeaveGuard(isDirty);
-  const canSave = selectedIds.length > 0 && isDirty && !membership.isPending;
+  // 0 件は押せないボタンだけにせず、保存を押したときに選択欄の直下へ理由を出す（#541）。
+  const canSave = isDirty && !membership.isPending;
+  const [requiredError, setRequiredError] = useState<string | null>(null);
 
   const onSave = () => {
     if (!canSave) return;
+    if (selectedIds.length === 0) {
+      setRequiredError(t("documents.knowledgeBases.required"));
+      document
+        .getElementById(DOCUMENT_KB_PICKER_ID)
+        ?.querySelector<HTMLElement>("input, button")
+        ?.focus();
+      return;
+    }
     replace.mutate(
       {
         id: documentId,
@@ -2983,16 +2996,23 @@ function DocumentKnowledgeBaseEditor({
         </Banner>
       ) : null}
 
-      <KnowledgeBaseScopePicker
-        selectedIds={selectedIds}
-        onChange={setSelectedIds}
-        disabled={replace.isPending || membership.isPending}
-        label={t("documents.knowledgeBases.pickerLabel")}
-        helper={t("documents.knowledgeBases.helper")}
-        // 所属先を 0 件にはできない（保存ボタンが止め、backend も 1 件以上を必須にする）。
-        required
-        emptySelectionText={t("documents.knowledgeBases.noneSelected")}
-      />
+      <div id={DOCUMENT_KB_PICKER_ID}>
+        <KnowledgeBaseScopePicker
+          selectedIds={selectedIds}
+          onChange={(ids) => {
+            setSelectedIds(ids);
+            setRequiredError(null);
+          }}
+          disabled={replace.isPending || membership.isPending}
+          label={t("documents.knowledgeBases.pickerLabel")}
+          helper={t("documents.knowledgeBases.helper")}
+          // 所属先を 0 件にはできない（保存を押すと欄の下に理由を出し、backend も 1 件以上を必須にする）。
+          required
+          errorId={requiredError ? DOCUMENT_KB_REQUIRED_ERROR_ID : undefined}
+          emptySelectionText={t("documents.knowledgeBases.noneSelected")}
+        />
+        <FieldError id={DOCUMENT_KB_REQUIRED_ERROR_ID} message={requiredError} className="mt-1" />
+      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <Button
@@ -3003,9 +3023,6 @@ function DocumentKnowledgeBaseEditor({
           disabled={!canSave} icon={Save}>
           {t("documents.knowledgeBases.save")}
         </Button>
-        {selectedIds.length === 0 ? (
-          <FormStatus tone="warning" message={t("documents.knowledgeBases.required")} />
-        ) : null}
         {replace.isSuccess && !isDirty && selectedIds.length > 0 ? (
           <FormStatus tone="success" message={t("documents.knowledgeBases.saved")} />
         ) : null}
@@ -3020,6 +3037,9 @@ function DocumentKnowledgeBaseEditor({
   );
 }
 
+const DOCUMENT_KB_PICKER_ID = "document-knowledge-base-picker";
+const DOCUMENT_KB_REQUIRED_ERROR_ID = "document-knowledge-base-required-error";
+
 const EMPTY_CLASSIFICATION: DocumentClassification = {
   large_category: null,
   middle_category: null,
@@ -3028,6 +3048,14 @@ const EMPTY_CLASSIFICATION: DocumentClassification = {
   effective_to: null,
 };
 const CLASSIFICATION_TEXT_FIELDS = ["large_category", "middle_category", "small_category"] as const;
+const CLASSIFICATION_OPTION_KEYS = {
+  large_category: "large_categories",
+  middle_category: "middle_categories",
+  small_category: "small_categories",
+} as const satisfies Record<
+  (typeof CLASSIFICATION_TEXT_FIELDS)[number],
+  keyof DocumentClassificationOptions
+>;
 const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
 
 /** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
@@ -3039,6 +3067,11 @@ function DocumentClassificationEditor({
   classification: DocumentClassification | null;
 }) {
   const save = useSaveDocumentClassification();
+  // 保存済みの分類の値を候補に出し、表記の揺れを防ぐ（取得できなくても自由入力はできる。#547）。
+  const options = useDocumentClassificationOptions().data;
+  const hasSuggestions = CLASSIFICATION_TEXT_FIELDS.some(
+    (key) => (options?.[CLASSIFICATION_OPTION_KEYS[key]].length ?? 0) > 0,
+  );
   const saved = { ...EMPTY_CLASSIFICATION, ...classification };
   const savedKey = JSON.stringify(saved);
   const [form, setForm] = useState(saved);
@@ -3059,6 +3092,11 @@ function DocumentClassificationEditor({
       <div>
         <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
         <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
+        {hasSuggestions ? (
+          <p className="mt-1 text-xs text-fg-muted">
+            {t("documents.classification.suggestionsHelper")}
+          </p>
+        ) : null}
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {CLASSIFICATION_TEXT_FIELDS.map((key) => (
@@ -3067,6 +3105,7 @@ function DocumentClassificationEditor({
             id={`document-classification-${key}`}
             label={t(`documents.classification.${key}`)}
             value={form[key] ?? ""}
+            suggestions={options?.[CLASSIFICATION_OPTION_KEYS[key]]}
             maxLength={200}
             disabled={save.isPending}
             onValueChange={(value) => update(key, value)}

@@ -261,3 +261,28 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+// #541: 作成のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出して最初の欄へフォーカスする。
+test("回答プロンプト版の未入力は欄の下に出す", async ({ page }) => {
+  let posts = 0;
+  await page.route("**/api/settings/prompts", async (route) => {
+    if (route.request().method() === "POST") posts += 1;
+    await route.fulfill({ json: promptsEnvelope([]) });
+  });
+
+  await page.goto("/settings/prompts");
+  const create = page.getByRole("button", { name: "版を作成" });
+  await expect(create).toBeEnabled();
+  await create.click();
+
+  await expect(page.locator("#prompt-version-name")).toHaveAccessibleDescription(/版名を入力してください。/);
+  await expect(page.locator("#prompt-version-system-prompt-error")).toHaveText(
+    "system prompt を入力してください。"
+  );
+  await expect(page.locator("#prompt-version-system-prompt")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator("#prompt-version-name")).toBeFocused();
+  await page.getByPlaceholder(/例:/).fill("新規版");
+  await expect(page.locator("#prompt-version-name")).not.toHaveAttribute("aria-invalid", "true");
+  expect(posts).toBe(0);
+  await expectNoPageOverflow(page);
+});

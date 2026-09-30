@@ -522,7 +522,12 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=_default_descriptions_migration_sql(),
         ),
         OracleSchemaSection(
-            name="20260930_002_knowledge_base_extraction_fields",
+            name="20260930_002_artifact_layers_input_fingerprint",
+            table_name="rag_artifact_layers",
+            sql=_artifact_layers_input_fingerprint_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260930_004_knowledge_base_extraction_fields",
             table_name="rag_knowledge_bases",
             sql=_knowledge_base_extraction_fields_migration_sql(),
         ),
@@ -1110,6 +1115,28 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_knowledge_bases ADD (extraction_fields JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _artifact_layers_input_fingerprint_migration_sql() -> str:
+    """rag_artifact_layers に、作ったときの入力の指紋の JSON 列を追加する(冪等。#550)。
+
+    既存の行は NULL のまま(どの定義で作ったか分からない「不明」として、作り直しの警告を出さない)。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND column_name = 'INPUT_FINGERPRINT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_artifact_layers ADD (input_fingerprint JSON)';
     END IF;
 END;
 /

@@ -357,7 +357,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 項目抽出の項目の定義をナレッジベースごとに持てるようにした（KB の詳細の「抽出する項目」）。
 
-1. システムテーブルを更新する（migration `20260930_002_knowledge_base_extraction_fields`。`rag_knowledge_bases` に
+1. システムテーブルを更新する（migration `20260930_004_knowledge_base_extraction_fields`。`rag_knowledge_bases` に
    `extraction_fields JSON` 列を追加するだけで、既存の行は NULL のまま）。NULL の KB は全体の既定の定義
    （`extraction-fields.json`）を使うため、既存環境の抽出の挙動は変わらない。
 2. 更新するまで取込 worker は「システムテーブルの作成・更新が必要」のログを出して待ち、KB の「抽出する項目」の

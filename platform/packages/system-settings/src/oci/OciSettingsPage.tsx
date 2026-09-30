@@ -360,7 +360,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
     if (!draft.objectStorageRegion.trim()) {
       setErrors((current) => ({ ...current, objectStorageRegion: "required" }));
       setNamespaceFetchState("error");
-      setNamespaceFetchMessage(t("settings.oci.validation.required"));
+      setNamespaceFetchMessage(requiredText("objectStorageRegion"));
       return;
     }
 
@@ -424,7 +424,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 id="oci-config-file"
                 label={t("settings.oci.field.configFile")}
                 value={draft.configFile}
-                error={errorText(errors.configFile)}
+                error={errorText(errors.configFile, "configFile")}
                 helper={t("settings.oci.helper.configFile")}
                 placeholder="~/.oci/config"
                 importState={configImportState}
@@ -437,7 +437,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 id="oci-config-profile"
                 label={t("settings.oci.field.configProfile")}
                 value={draft.configProfile}
-                error={errorText(errors.configProfile)}
+                error={errorText(errors.configProfile, "configProfile")}
                 helper={t("settings.oci.helper.configProfile")}
                 placeholder="DEFAULT"
                 readOnly
@@ -448,7 +448,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.userOcid")}
                 value={draft.userOcid}
                 onValueChange={(value) => updateDraft("userOcid", value)}
-                error={errorText(errors.userOcid)}
+                error={errorText(errors.userOcid, "userOcid")}
                 helper={t("settings.oci.helper.userOcid")}
                 placeholder="ocid1.user.oc1.."
                 required
@@ -458,7 +458,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.tenancyOcid")}
                 value={draft.tenancyOcid}
                 onValueChange={(value) => updateDraft("tenancyOcid", value)}
-                error={errorText(errors.tenancyOcid)}
+                error={errorText(errors.tenancyOcid, "tenancyOcid")}
                 helper={t("settings.oci.helper.tenancyOcid")}
                 placeholder="ocid1.tenancy.oc1.."
                 required
@@ -468,7 +468,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.fingerprint")}
                 value={draft.fingerprint}
                 onValueChange={(value) => updateDraft("fingerprint", value)}
-                error={errorText(errors.fingerprint)}
+                error={errorText(errors.fingerprint, "fingerprint")}
                 helper={t("settings.oci.helper.fingerprint")}
                 placeholder="12:34:56:78:90:ab:cd:ef"
                 required
@@ -479,7 +479,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 value={draft.region}
                 options={OCI_REGION_OPTIONS}
                 onValueChange={(value) => updateDraft("region", value)}
-                error={errorText(errors.region)}
+                error={errorText(errors.region, "region")}
                 helper={t("settings.oci.helper.region")}
                 placeholder={t("settings.oci.placeholder.region")}
                 required
@@ -490,7 +490,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               id="oci-key-file"
               label={t("settings.oci.field.keyFile")}
               value={draft.keyFile}
-              error={errorText(errors.keyFile)}
+              error={errorText(errors.keyFile, "keyFile")}
               disabled={busy}
               fileState={keyFileState}
               fileMessage={keyFileMessage}
@@ -527,7 +527,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 id="oci-object-storage-namespace"
                 label={t("settings.oci.field.objectStorageNamespace")}
                 value={draft.objectStorageNamespace}
-                error={errorText(errors.objectStorageNamespace)}
+                error={errorText(errors.objectStorageNamespace, "objectStorageNamespace")}
                 helper={t("settings.oci.helper.objectStorageNamespace")}
                 placeholder="mytenancynamespace"
                 fetchState={namespaceFetchState}
@@ -541,7 +541,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 value={draft.objectStorageRegion}
                 options={OCI_REGION_OPTIONS}
                 onValueChange={(value) => updateDraft("objectStorageRegion", value)}
-                error={errorText(errors.objectStorageRegion)}
+                error={errorText(errors.objectStorageRegion, "objectStorageRegion")}
                 helper={t("settings.oci.helper.objectStorageRegion")}
                 placeholder={t("settings.oci.placeholder.region")}
                 required
@@ -987,12 +987,44 @@ function PrivateKeyDropzoneField({
   );
 }
 
-function errorText(code?: OciValidationCode): string | undefined {
+/** 選んで入れる欄（選択・ファイル）。未入力の文言を「〇〇を選択してください。」にする（messaging.md §3.2.1。#541）。 */
+const OCI_SELECT_FIELDS: ReadonlySet<OciSettingsField> = new Set([
+  "region",
+  "objectStorageRegion",
+  "keyFile",
+]);
+
+const OCI_FIELD_LABEL_KEYS = {
+  configFile: "settings.oci.field.configFile",
+  configProfile: "settings.oci.field.configProfile",
+  userOcid: "settings.oci.field.userOcid",
+  fingerprint: "settings.oci.field.fingerprint",
+  tenancyOcid: "settings.oci.field.tenancyOcid",
+  keyFile: "settings.oci.field.keyFile",
+  region: "settings.oci.field.region",
+  objectStorageRegion: "settings.oci.field.objectStorageRegion",
+  objectStorageNamespace: "settings.oci.field.objectStorageNamespace",
+} as const satisfies Record<OciSettingsField, OciMessageKey>;
+
+/** 未入力の文言（欄のラベルと同じ語で「〇〇を入力してください。」「〇〇を選択してください。」）。 */
+function requiredText(field: OciSettingsField): string {
+  const label = t(OCI_FIELD_LABEL_KEYS[field]);
+  return t(
+    OCI_SELECT_FIELDS.has(field)
+      ? "settings.oci.validation.requiredSelect"
+      : "settings.oci.validation.required",
+    // 英数字で終わるラベル（「ユーザー OCID」）は、ほかの文言と同じく助詞の前に空白を入れる。
+    { field: /[A-Za-z0-9]$/.test(label) ? `${label} ` : label }
+  );
+}
+
+function errorText(code: OciValidationCode | undefined, field: OciSettingsField): string | undefined {
   if (!code) return undefined;
+  if (code === "required") return requiredText(field);
   return t(validationMessageKey(code));
 }
 
-function validationMessageKey(code: OciValidationCode): OciMessageKey {
+function validationMessageKey(code: Exclude<OciValidationCode, "required">): OciMessageKey {
   switch (code) {
     case "invalid_user_ocid":
       return "settings.oci.validation.invalidUserOcid";
@@ -1002,8 +1034,6 @@ function validationMessageKey(code: OciValidationCode): OciMessageKey {
       return "settings.oci.validation.invalidFingerprint";
     case "invalid_profile":
       return "settings.oci.validation.invalidProfile";
-    case "required":
-      return "settings.oci.validation.required";
   }
 }
 
