@@ -351,7 +351,7 @@ function evaluationMetricsWithTimedOutCase() {
         failure_reasons: ["case_error"],
         elapsed_ms: 300000,
         error_type: "TimeoutError",
-        error_stage: "docrag_answer",
+        error_stage: "answer",
         error_message:
           "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。trace_id で監査ログを確認してください。",
       },

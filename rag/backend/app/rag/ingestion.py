@@ -46,16 +46,16 @@ from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings, get_settings
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
-from app.rag.chunking_strategy import resolve_chunking_params
-from app.rag.docrag_chunking import (
-    DOCRAG_CHUNKING_STRATEGY,
-    DOCRAG_FALLBACK_CHUNKING_STRATEGY,
-    DOCRAG_LAYOUT_MISSING_REASON,
-    build_docrag_chunks,
-    docrag_fallback_needed,
-    docrag_search_text,
-    mark_docrag_fallback,
+from app.rag.chunking_small_to_big import (
+    LAYOUT_MISSING_REASON,
+    SMALL_TO_BIG_FALLBACK_STRATEGY,
+    SMALL_TO_BIG_STRATEGY,
+    build_parent_child_chunks,
+    engine_search_text,
+    mark_small_to_big_fallback,
+    small_to_big_fallback_needed,
 )
+from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     extract_fields_from_extraction,
@@ -358,12 +358,12 @@ class IngestionPipeline:
 
     async def _image_retrieval_prompt(self) -> str | None:
         """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
-        from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+        from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 
         try:
-            overrides = await self._oracle.docrag_prompt_overrides()
+            overrides = await self._oracle.answer_prompt_overrides()
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
-            logger.warning("docrag image retrieval prompt load failed", exc_info=True)
+            logger.warning("image retrieval prompt load failed", exc_info=True)
             return None
         return overrides.get(IMAGE_RETRIEVAL_PROMPT_KEY)
 
@@ -1161,16 +1161,17 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        # DocRAG 親子階層は Docling の解析結果(docrag_layout)を入力にする。それがない文書は
-        # 失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に残す(#300)。
-        docrag_fallback = docrag_fallback_needed(chunking_params.strategy, extraction)
-        is_docrag = chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY
+        # 親子階層（small-to-big）は Docling の解析結果(layout_records)を入力にする。
+        # それがない文書は失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に
+        # 残す(#300)。
+        small_to_big_fallback = small_to_big_fallback_needed(chunking_params.strategy, extraction)
+        is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
         effective_strategy = (
-            DOCRAG_FALLBACK_CHUNKING_STRATEGY if docrag_fallback else chunking_params.strategy
+            SMALL_TO_BIG_FALLBACK_STRATEGY if small_to_big_fallback else chunking_params.strategy
         )
-        if docrag_fallback:
+        if small_to_big_fallback:
             logger.info(
-                "docrag_chunking_fallback",
+                "small_to_big_fallback",
                 extra={"trace_id": trace_id, "effective_chunk_strategy": effective_strategy},
             )
 
@@ -1196,29 +1197,31 @@ class IngestionPipeline:
             )
 
         def _run_chunking() -> list[Chunk]:
-            if docrag_fallback:
-                return mark_docrag_fallback(_run_standard_chunking())
-            if is_docrag:
-                # DocRAG 親子階層は docling レイアウトを入力にするため backend 内で行う。
-                return build_docrag_chunks(
-                    extraction, source_name=source_name, params=chunking_params.docrag
+            if small_to_big_fallback:
+                return mark_small_to_big_fallback(_run_standard_chunking())
+            if is_small_to_big:
+                # 親子階層（small-to-big）は docling レイアウトを入力にするため backend 内で行う。
+                return build_parent_child_chunks(
+                    extraction, source_name=source_name, params=chunking_params.small_to_big
                 )
             return _run_standard_chunking()
 
-        docrag_attributes: dict[str, int] = (
+        small_to_big_attributes: dict[str, int] = (
             {
-                "docrag_child_target_chars": chunking_params.docrag.child_target_chars,
-                "docrag_table_child_target_chars": chunking_params.docrag.table_child_target_chars,
-                "docrag_parent_target_chars": chunking_params.docrag.parent_target_chars,
-                "docrag_parent_max_pages": chunking_params.docrag.parent_max_pages,
-                "docrag_parent_max_children": chunking_params.docrag.parent_max_children,
+                "chunk_child_target_chars": chunking_params.small_to_big.child_target_chars,
+                "chunk_table_child_target_chars": (
+                    chunking_params.small_to_big.table_child_target_chars
+                ),
+                "chunk_parent_target_chars": chunking_params.small_to_big.parent_target_chars,
+                "chunk_parent_max_pages": chunking_params.small_to_big.parent_max_pages,
+                "chunk_parent_max_children": chunking_params.small_to_big.parent_max_children,
             }
-            if is_docrag and not docrag_fallback
+            if is_small_to_big and not small_to_big_fallback
             else {}
         )
         fallback_attributes: dict[str, str] = (
-            {"chunk_strategy_fallback_reason": DOCRAG_LAYOUT_MISSING_REASON}
-            if docrag_fallback
+            {"chunk_strategy_fallback_reason": LAYOUT_MISSING_REASON}
+            if small_to_big_fallback
             else {}
         )
         chunks = await _observe_cpu_ingestion_stage(
@@ -1233,7 +1236,7 @@ class IngestionPipeline:
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
                 "chunk_min_chars": chunking_params.min_chars,
-                **docrag_attributes,
+                **small_to_big_attributes,
                 "input_chars": len(text),
                 "parser_profile": parser_profile,
                 "parser_backend": quality_report.parser_backend,
@@ -1316,9 +1319,9 @@ class IngestionPipeline:
         保存される chunk 本文・引用表示は変えず、chunk metadata の context_header を使う。
         """
         if not self._settings.rag_chunk_context_header_enabled:
-            return [docrag_search_text(chunk.metadata) or chunk.text for chunk in chunks]
+            return [engine_search_text(chunk.metadata) or chunk.text for chunk in chunks]
         return [
-            docrag_search_text(chunk.metadata) or _embedding_input_with_context_header(chunk)
+            engine_search_text(chunk.metadata) or _embedding_input_with_context_header(chunk)
             for chunk in chunks
         ]
 
@@ -1757,11 +1760,11 @@ class IngestionPipeline:
         """
         if not self._settings.rag_vision_enabled:
             return extraction
-        from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
-        from docrag.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+        from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
+        from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
 
         from app.clients.oci_enterprise_ai import config_from_settings
-        from app.rag.docrag_prompts import default_prompt
+        from app.rag.answer_prompts import default_prompt
 
         override = await self._image_retrieval_prompt()
         template = refine_image_retrieval_prompt(

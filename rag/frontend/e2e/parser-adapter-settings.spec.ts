@@ -385,7 +385,7 @@ test("図・画像の読み取りプロンプトは Vision の項目の中で編
   });
   await mockExtractionFields(page);
   let saved: unknown = null;
-  await page.route("**/api/settings/docrag-prompts**", async (route) => {
+  await page.route("**/api/settings/answer-prompts**", async (route) => {
     if (route.request().method() === "PUT") saved = route.request().postDataJSON();
     const content = saved ? (saved as { content: string }).content : "既定の指示 {{image_metadata}}";
     await route.fulfill({

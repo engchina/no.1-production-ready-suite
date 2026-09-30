@@ -17,16 +17,16 @@ import { useState } from "react";
 import {
   ApiError,
   type AnsweringSettingsData,
-  type DocragAnswerFlowName,
-  type DocragQueryStrategyName,
+  type AnswerFlowName,
+  type QueryStrategyName,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は業務ビューの上書きの欄と同じ文言を使う（backend の DocragQueryStrategy と同じ順）。
-const QUERY_STRATEGY_OPTIONS: SelectFieldOption<DocragQueryStrategyName>[] = (
+// 選択肢の名前は業務ビューの上書きの欄と同じ文言を使う（backend の QueryStrategy と同じ順）。
+const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
   [
     "auto_routing",
     "simple_retrieval",
@@ -35,12 +35,12 @@ const QUERY_STRATEGY_OPTIONS: SelectFieldOption<DocragQueryStrategyName>[] = (
     "step_back_prompting",
     "hyde",
   ] as const
-).map((value) => ({ value, label: t(`businessViews.docragQueryStrategy.${value}`) }));
-const ANSWER_FLOW_OPTIONS: SelectFieldOption<DocragAnswerFlowName>[] = [
-  { value: "crag", label: t("businessViews.docragAnswerFlow.crag") },
-  { value: "standard_rag", label: t("businessViews.docragAnswerFlow.standard_rag") },
+).map((value) => ({ value, label: t(`businessViews.queryStrategy.${value}`) }));
+const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
+  { value: "crag", label: t("businessViews.answerFlow.crag") },
+  { value: "standard_rag", label: t("businessViews.answerFlow.standard_rag") },
 ];
-// 0〜20（backend の rag_docrag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
+// 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
   label: String(n),

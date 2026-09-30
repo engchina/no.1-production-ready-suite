@@ -141,7 +141,7 @@ async def promote_feedback_to_approved_faq(
 
     「役に立った」は保存した回答、それ以外は修正した回答を登録する。同じ質問の FAQ は置き換える。
     """
-    from docrag.knowledge.approved_faq import (
+    from rag_engine.knowledge.approved_faq import (
         APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT,
         approved_faq_feedback_skip_reason,
         approved_faq_import_row_from_answer_feedback,
@@ -149,7 +149,7 @@ async def promote_feedback_to_approved_faq(
 
     oracle = OracleClient()
     detail = await _promotable_feedback(oracle, feedback_id)
-    record = await _docrag_feedback_record(oracle, detail)
+    record = await _answer_feedback_record(oracle, detail)
     row = approved_faq_import_row_from_answer_feedback(record)
     if row is None:
         raise HTTPException(status_code=409, detail=approved_faq_feedback_skip_reason(record))
@@ -178,7 +178,7 @@ async def feedback_evaluation_case(
     期待語は修正した回答(「役に立った」は保存した回答)から作る。「役に立った」は引用の文書を
     正解の文書にする。
     """
-    from docrag.knowledge.feedback_promotion import _expected_terms
+    from rag_engine.knowledge.feedback_promotion import _expected_terms
 
     detail = await _promotable_feedback(OracleClient(), feedback_id)
     helpful = detail.rating == FeedbackRating.HELPFUL
@@ -235,7 +235,7 @@ async def _promotable_feedback(oracle: OracleClient, feedback_id: str) -> Feedba
     return detail
 
 
-async def _docrag_feedback_record(
+async def _answer_feedback_record(
     oracle: OracleClient, detail: FeedbackDetail
 ) -> dict[str, object]:
     """rag_poc の回答 feedback record の形へ写す(FAQ 昇格の変換・除外規則をそのまま使うため)。"""
@@ -244,7 +244,7 @@ async def _docrag_feedback_record(
         "answer_text": detail.answer or "",
         "retrieval_scope": "knowledge_base",
     }
-    # DocRAG の回答なら、除外規則(根拠不足かつ信頼度 low)に使う値を回答記録から補う。
+    # 回答フローの回答なら、除外規則(根拠不足かつ信頼度 low)に使う値を回答記録から補う。
     answer_record = await oracle.get_answer_record(detail.trace_id)
     diagnostics = answer_record.get("diagnostics_json") if answer_record else None
     if isinstance(diagnostics, Mapping):

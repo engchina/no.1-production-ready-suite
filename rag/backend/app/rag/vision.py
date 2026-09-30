@@ -3,7 +3,7 @@
 文書のレシピの「図・画像を AI で読み取る」(``rag_vision_enabled``)が有効なとき、取込の解析の
 直後に、Docling を含む全ての解析エンジンの図を OCI Enterprise AI の既定の Vision モデルで読み取る。
 
-読み取りの規則は docrag_core の ``describe_layout_pictures``(旧 Docling サービスの Vision)を
+読み取りの規則は rag_engine の ``describe_layout_pictures``(旧 Docling サービスの Vision)を
 そのまま使い、二重に実装しない。
 
 - 対象の図の切り出しと、対象をマゼンタの枠で示したページ全体の 2 枚の画像を渡す。
@@ -11,8 +11,8 @@
 - 装飾画像(ロゴ・帯・小さなアイコン)は読み取らない。
 - prompt に bbox・周辺の record・表の既存 HTML などの metadata を入れる。
 
-Docling は ``parser_artifacts["docrag_layout"]`` の record をそのまま入力にし、結果を record にも
-書き戻す(DocRAG 親子階層の分割と画面の「Vision の読み取り内容」がその record を読む)。
+Docling は ``parser_artifacts["layout_records"]`` の record をそのまま入力にし、結果を record にも
+書き戻す(親子階層（small-to-big）の分割と画面の「Vision の読み取り内容」がその record を読む)。
 ほかの解析エンジンは、要素と図の asset の bbox をページ画像の px へそろえた LayoutRecord を作る。
 bbox の単位は解析エンジンごとに違い、確かでないものは切り出さずに warning を残す
 (``_bbox_scale`` の表)。画像の件数の上限は設けない。
@@ -34,20 +34,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-from docrag.models.layout import LayoutRecord, PageImage
-from docrag.models.llm import PictureDescriptionOutput
-from docrag.parsing.layout_metadata import (
+from pydantic import ValidationError
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.models.llm import PictureDescriptionOutput
+from rag_engine.parsing.layout_metadata import (
     layout_record_element_metadata,
     layout_record_vision_metadata,
     layout_record_vision_summary,
 )
-from docrag.parsing.picture_text import format_docling_picture_ocr_text
-from docrag.parsing.rendering import (
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.rendering import (
     SUPPORTED_SOURCE_FILE_TYPES,
     get_source_page_count,
     prepare_source_for_analysis,
 )
-from pydantic import ValidationError
 from rag_pipeline_core.chunking import table_vision_supplement
 
 from app.schemas.extraction import (
@@ -60,9 +60,9 @@ from app.schemas.extraction import (
 
 logger = logging.getLogger(__name__)
 
-DOCRAG_LAYOUT_ARTIFACT = "docrag_layout"
+LAYOUT_ARTIFACT = "layout_records"
 DOCLING_ENGINE = "docling"
-# Docling 以外のページ画像の解像度。Docling サービスの既定(DOCRAG_RENDER_DPI=300)にそろえる。
+# Docling 以外のページ画像の解像度。Docling サービスの既定(RAG_ENGINE_RENDER_DPI=300)にそろえる。
 VISION_RENDER_DPI = 300
 # 図として読み取る asset の種類(source_image は画像ファイル全体を 1 枚の図として扱う)。
 # picture は Dots.OCR の Picture(本文のない図は asset だけになる。#502)。
@@ -86,7 +86,7 @@ WARNING_TABLE_DETECTION_FAILED = "vision_table_detection_failed"
 WARNING_SOURCE_UNSUPPORTED = "vision_source_unsupported"
 WARNING_FAILED = "vision_failed"
 
-# 共通抽出 schema の要素 kind -> DocRAG の LayoutRecord の category。
+# 共通抽出 schema の要素 kind -> LayoutRecord の category。
 _CATEGORY_BY_KIND = {
     "title": "Section-header",
     "text": "Text",
@@ -151,9 +151,9 @@ def _is_list_annotation(annotation: object) -> bool:
 
 
 class EnterpriseAiPictureDescriber:
-    """docrag の ``PictureDescriber`` を OCI Enterprise AI の既定の Vision モデルで実装する。
+    """rag_engine の ``PictureDescriber`` を OCI Enterprise AI の既定の Vision モデルで実装する。
 
-    docrag の読み取りは同期処理(thread)で動くので、非同期の client は取込の event loop へ
+    rag_engine の読み取りは同期処理(thread)で動くので、非同期の client は取込の event loop へ
     ``run_coroutine_threadsafe`` で投げて待つ。
     """
 
@@ -191,7 +191,7 @@ class EnterpriseAiPictureDescriber:
         target_kind: str,
         rendered_prompt: str,
     ) -> dict[str, Any]:
-        from docrag.adapters.oci import VISION_SYSTEM_PROMPT
+        from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
 
         _ = (metadata, target_kind)  # prompt へ描画済み。送るのは画像と prompt だけ。
         images = [crop_path.read_bytes()]
@@ -257,12 +257,12 @@ def read_figures_with_vision(
     prompt_template: str,
     cancel_check: Callable[[], None] | None = None,
 ) -> StructuredExtraction:
-    """解析結果の図・画像を Vision で読み取り、要素・asset(・docrag_layout)へ反映する。
+    """解析結果の図・画像を Vision で読み取り、要素・asset(・layout_records)へ反映する。
 
     同期処理(ページの描画・VLM 呼び出しを含む)。取込からは ``asyncio.to_thread`` で呼ぶ。
     ``cancel_check`` は対象ごとの前に呼び、例外で中断する(取込の取り消し)。
     """
-    from docrag.parsing.picture_descriptions import describe_layout_pictures
+    from rag_engine.parsing.picture_descriptions import describe_layout_pictures
 
     suffix = _source_suffix(content_type, file_name)
     docling = _docling_layout(extraction) is not None
@@ -355,11 +355,11 @@ def _has_vision_candidates(extraction: StructuredExtraction) -> bool:
     )
 
 
-# --- Docling(docrag_layout の record)-----------------------------------------------------
+# --- Docling(layout_records の record)-----------------------------------------------------
 
 
 def _docling_layout(extraction: StructuredExtraction) -> Mapping[str, Any] | None:
-    layout = extraction.parser_artifacts.get(DOCRAG_LAYOUT_ARTIFACT)
+    layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
     if isinstance(layout, Mapping) and layout.get("records"):
         return layout
     return None
@@ -436,7 +436,7 @@ def _docling_render_dpi(layout_pages: Mapping[int, Mapping[str, Any]]) -> int:
 
 
 def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> StructuredExtraction:
-    """Vision の結果を docrag_layout の record と要素・asset へ書き戻す(旧サービスと同じ形)。"""
+    """Vision の結果を layout_records の record と要素・asset へ書き戻す(旧サービスと同じ形)。"""
     by_id = {record.id: record for record in layout.records}
     elements_by_id = {
         element.element_id: element for element in extraction.elements if element.element_id
@@ -461,7 +461,7 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
             kind="figure",
             text=record.text,
             element_id=record.id,
-            source_parser="docling_docrag",
+            source_parser="docling_layout",
             page_number=record.page,
             bbox=[float(value) for value in record.bbox],
             section_path=section_path,
@@ -498,7 +498,7 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
     artifacts = dict(extraction.parser_artifacts)
     layout_artifact = dict(_docling_layout(extraction) or {})
     layout_artifact["records"] = [_json_value(record.to_dict()) for record in layout.records]
-    artifacts[DOCRAG_LAYOUT_ARTIFACT] = layout_artifact
+    artifacts[LAYOUT_ARTIFACT] = layout_artifact
     return extraction.model_copy(
         update={
             "elements": _renumbered(new_elements),
@@ -758,7 +758,7 @@ def _bbox_scale(
     x と y はそれぞれの寸法で別々に換算する(縦横比は保たない)。原点は左上。ただし座標系が
     左下原点(``_BOTTOM_LEFT_COORDINATE_SYSTEMS``)なら ``_page_px_bbox`` が y を反転する。
     ai-foundations-lab(engchina/ai-foundations-lab、commit 572e9fa の ``20260819/``)の
-    ビューアで、ページ画像に重ねて確かめた換算と同じ(#512。根拠は docs/docrag-port.md)。
+    ビューアで、ページ画像に重ねて確かめた換算と同じ(#512。根拠は docs/rag-engine.md)。
 
     - 値が全て 1 以下: ページに対する割合(0-1。VLM・画像全体の source_image)。
     - Unstructured: coordinates の座標系の寸法(layout_width / height。registry が
@@ -1051,7 +1051,7 @@ def _positive_float(value: object) -> float | None:
 
 
 def _json_value(value: Any) -> Any:
-    """Path など JSON にできない値を文字列へ寄せる(docrag_layout と parser_artifacts 用)。"""
+    """Path など JSON にできない値を文字列へ寄せる(layout_records と parser_artifacts 用)。"""
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, Mapping):

@@ -24,10 +24,10 @@ dependencies = [
     "pymupdf>=1.26,<2",
     "rag-parser-core",
     "rag-pipeline-core",
-    # rag_poc(DocRAG)由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
+    # rag_poc 由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
     # 日本語分割(Sudachi)と FAQ の Excel 取込を使う。docling/torch は入れない。
     # pdf(pypdfium2 / Pillow)は解析後の Vision(図の切り出し・表内画像の検出。#497)で使う。
-    "docrag-core[japanese,excel,pdf]",
+    "rag-engine[japanese,excel,pdf]",
     "production-ready-backend-core",
     "production-ready-system-settings-backend",
 ]
@@ -45,7 +45,7 @@ unstructured = ["unstructured[all-docs]==0.27.8"]
 [tool.uv.sources]
 rag-parser-core = { path = "../packages/rag_parser_core", editable = true }
 rag-pipeline-core = { path = "../packages/rag_pipeline_core", editable = true }
-docrag-core = { path = "../packages/docrag_core", editable = true }
+rag-engine = { path = "../packages/rag_engine", editable = true }
 # 共有 backend インフラ（platform repo の sibling パス）。変更時は uv lock 再生成が必要。
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }

@@ -110,7 +110,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "knowledge_bases",
         "business_views",
         "answer_records",
-        "docrag_prompts",
+        "answer_prompts",
         "query_history",
         "business_view_knowledge",
         "conversations",
@@ -389,14 +389,16 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET '$" not in profile_migration
     assert "DELETE" not in profile_migration
     # 読む経路の無かった claims / community summary の表を消す（#621）。あるときだけ消す。
-    graph_migration = sql.split("-- migration: 20260930_007_retire_graph_claims_community", 1)[1]
+    graph_migration = sql.split("-- migration: 20260930_007_retire_graph_claims_community", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
     for table in ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES"):
         assert f"table_name = '{table}'" in graph_migration
         assert f"'DROP TABLE {table.lower()} CASCADE CONSTRAINTS PURGE'" in graph_migration
     # 関係情報グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
-    assert len(statements) == 83
+    assert len(statements) == 85
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -467,6 +469,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_005_retire_standard_engine_objects",
         "20260930_006_graph_profile_entities",
         "20260930_007_retire_graph_claims_community",
+        "20260930_008_answer_prompts_table",
+        "20260930_009_stored_engine_names",
     ]
 
 

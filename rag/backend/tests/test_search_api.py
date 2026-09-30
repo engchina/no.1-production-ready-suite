@@ -35,7 +35,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     body = response.json()
     assert body["data"] is None
     # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
-    assert body["error_messages"] == [answer_timeout_message("docrag_answer", 0.05)]
+    assert body["error_messages"] == [answer_timeout_message("answer", 0.05)]
     assert "根拠の検索と回答の生成" in body["error_messages"][0]
     assert "もう一度送信してください" in body["error_messages"][0]
 
@@ -63,11 +63,11 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: error" in response.text
-    assert answer_timeout_message("docrag_answer", 0.05) in response.text
+    assert answer_timeout_message("answer", 0.05) in response.text
     # 進捗は時間切れの前に届き、error event は工程と TimeoutError を持つ（画面は 504 相当にする）。
-    assert '"stage": "docrag_answer", "outcome": "started"' in response.text
+    assert '"stage": "answer", "outcome": "started"' in response.text
     assert '"error_type": "TimeoutError"' in response.text
-    assert '"stage": "docrag_answer"}' in response.text
+    assert '"stage": "answer"}' in response.text
 
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
@@ -181,7 +181,7 @@ def test_stream_search_api_buffers_answer_after_answer_check(
     assert response.text.count("event: delta") == 1
     assert '{"text": "承認条件は 120000 円です。"}' in response.text
     assert "event: metadata" in response.text
-    assert '"retrieval_strategy": "docrag"' in response.text
+    assert '"retrieval_strategy": "hybrid"' in response.text
     assert '"confidence": "high"' in response.text
     assert '"retrieval_breakdown"' not in response.text
     assert "event: citations" in response.text
@@ -367,7 +367,7 @@ class SlowPipeline:
         await progress_callback(
             SearchStageProgress(
                 trace_id=trace_id,
-                stage="docrag_answer",
+                stage="answer",
                 outcome="started",
                 elapsed_ms=0.0,
                 attributes={},
@@ -401,8 +401,8 @@ class RealtimeStreamingPipeline:
             diagnostics=build_search_diagnostics(
                 request,
                 settings=get_settings(),
-                retrieval_strategy_adapter="docrag_grounded",
-                docrag={"confidence": "high", "answer_flow": "crag"},
+                retrieval_strategy_adapter="grounded",
+                answer={"confidence": "high", "answer_flow": "crag"},
             ),
         )
 
@@ -430,7 +430,7 @@ class RealtimeMaskingPipeline:
             elapsed_ms=1.0,
             answer_replaced=True,
             diagnostics=build_search_diagnostics(
-                request, settings=get_settings(), retrieval_strategy_adapter="docrag_grounded"
+                request, settings=get_settings(), retrieval_strategy_adapter="grounded"
             ),
         )
 
@@ -451,7 +451,7 @@ class AuditingPipeline:
         _ = progress_callback, token_callback
         assert trace_id
         diagnostics = build_search_diagnostics(
-            request, settings=get_settings(), retrieval_strategy_adapter="docrag_grounded"
+            request, settings=get_settings(), retrieval_strategy_adapter="grounded"
         )
         record_rag_search_audit(
             trace_id=trace_id,

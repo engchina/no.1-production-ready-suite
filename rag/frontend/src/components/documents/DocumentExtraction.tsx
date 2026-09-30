@@ -31,11 +31,11 @@ import {
   summarizeDocumentElements,
 } from "@/lib/extraction";
 import {
-  docragVisionDetails,
+  layoutVisionDetails,
   elementCropUrl,
   elementVision,
   tableHtmlToText,
-} from "@/lib/docrag-element";
+} from "@/lib/layout-element";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -202,7 +202,7 @@ export function DocumentExtraction({
                     elementKey(element) === selectedElementId ? selectedElementRef : undefined
                   }
                   onSelect={onElementSelect}
-                  visionDetails={docragVisionDetails(extraction, elementKey(element))}
+                  visionDetails={layoutVisionDetails(extraction, elementKey(element))}
                   cropUrl={documentId ? elementCropUrl(documentId, element) : null}
                 />
               ))}
@@ -398,7 +398,7 @@ function ElementItem({
   selected: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
   onSelect?: (elementId: string) => void;
-  visionDetails?: ReturnType<typeof docragVisionDetails>;
+  visionDetails?: ReturnType<typeof layoutVisionDetails>;
   cropUrl?: string | null;
 }) {
   const id = elementKey(element);
@@ -618,7 +618,7 @@ function VisionDetails({
   details,
   cropUrl,
 }: {
-  details: NonNullable<ReturnType<typeof docragVisionDetails>>;
+  details: NonNullable<ReturnType<typeof layoutVisionDetails>>;
   cropUrl: string | null;
 }) {
   return (

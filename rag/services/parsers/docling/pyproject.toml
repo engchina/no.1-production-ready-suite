@@ -5,10 +5,10 @@ description = "Docling parser microservice (independent dependency boundary)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "rag-parser-core[service]",
-    # rag_poc(DocRAG)の解析実装(読み順・表補修)。Vision は backend の解析後の段が行う(#497)。
-    "docrag-core[docling]",
+    # rag_poc の解析実装(読み順・表補修)。Vision は backend の解析後の段が行う(#497)。
+    "rag-engine[docling]",
     "docling==2.129.0",
-    # DocRAG 解析は RapidOCR(ONNX)で OCR する。docling は onnxruntime を必須依存に含めない。
+    # Docling の解析は RapidOCR(ONNX)で OCR する。docling は onnxruntime を必須依存に含めない。
     "onnxruntime>=1.20",
     # rapidocr と docling の TableFormer が import する cv2 は、GUI 版ではなく headless 版で入れる
     # (#310)。GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
@@ -22,7 +22,7 @@ exclude-dependencies = ["opencv-python"]
 
 [tool.uv.sources]
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
-docrag-core = { path = "../../../packages/docrag_core", editable = true }
+rag-engine = { path = "../../../packages/rag_engine", editable = true }
 
 [build-system]
 requires = ["hatchling"]

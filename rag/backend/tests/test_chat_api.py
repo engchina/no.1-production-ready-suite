@@ -394,7 +394,7 @@ def test_history_and_query_cannot_close_untrusted_tags() -> None:
 class _FakePipeline:
     """retrieval/generation を行わず回答を即返す pipeline stub。"""
 
-    # 作られた pipeline の回答のモデル(DocRAG へ渡す列のモデル。#593)。
+    # 作られた pipeline の回答のモデル(回答フローへ渡す列のモデル。#593)。
     answer_model_ids: list[object] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -494,9 +494,9 @@ class _SlowPlanningPipeline(_FakePipeline):
     ):
         assert progress_callback is not None
         for stage, outcome in (
-            ("docrag_history_rewrite", "started"),
-            ("docrag_history_rewrite", "success"),
-            ("docrag_answer", "started"),
+            ("history_rewrite", "started"),
+            ("history_rewrite", "success"),
+            ("answer", "started"),
         ):
             await progress_callback(
                 SearchStageProgress(
@@ -550,12 +550,12 @@ def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyP
     assert resp.status_code == 200
     text = resp.text
     # 質問の書き換え・回答フローの進捗は時間切れの前に届く。
-    assert '"stage": "docrag_history_rewrite", "outcome": "started"' in text
-    assert '"stage": "docrag_answer", "outcome": "started"' in text
-    expected = answer_timeout_message("docrag_answer", 0.05)
+    assert '"stage": "history_rewrite", "outcome": "started"' in text
+    assert '"stage": "answer", "outcome": "started"' in text
+    expected = answer_timeout_message("answer", 0.05)
     assert "event: error" in text
     assert expected in text
-    assert '"stage": "docrag_answer"}' in text
+    assert '"stage": "answer"}' in text
     assert "event: all_done" in text
     user, assistant = fake.messages["conv-timeout"]
     assert (user.role, user.status) == ("USER", "COMPLETE")
@@ -708,7 +708,7 @@ def test_stream_message_multi_model_compares_two_columns(monkeypatch: MonkeyPatc
     roles = [m.role for m in fake.messages["conv-y"]]
     assert roles.count("USER") == 1
     assert roles.count("ASSISTANT") == 2
-    # 列ごとのモデルを DocRAG の回答のモデルとしても渡す(#593)。
+    # 列ごとのモデルを回答フローの回答のモデルとしても渡す(#593)。
     assert sorted(str(item) for item in _FakePipeline.answer_model_ids) == ["m1", "m2"]
 
 

@@ -206,7 +206,7 @@ API は 422 で「既定のテキストモデルを選択してください。�
 - env だけを受け取る部品は、使うモデルの接続を渡す。
   - RAG の OCI の parser（`service_runtime_env`）: VLM 抽出だけなので **既定の Vision モデルの接続** を `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`
     / `_API_KEY` / `_PROJECT_OCID` に書く（接続を変えたら「サービス管理」から parser を再起動する）。
-  - RAG の回答フローの回答（`build_docrag_settings`）: 回答は **既定のテキストモデルの接続**（`OCI_ENTERPRISE_AI_*`）、根拠画像の読み取りは
+  - RAG の回答フローの回答（`build_engine_settings`）: 回答は **既定のテキストモデルの接続**（`OCI_ENTERPRISE_AI_*`）、根拠画像の読み取りは
     **既定の Vision モデルの接続**（`OCI_ENTERPRISE_AI_VLM_ENDPOINT` / `_VLM_API_KEY` / `_VLM_PROJECT_OCID`）。
   - RAG の共有 client（`rag_parser_core.OciEnterpriseAiConfig`）: テキストはテキストのモデルの接続、Vision の呼び出し（VLM 抽出・
     図の読み取り・Files API）は `vision_oci_enterprise_ai_*`（`for_vision()`）で既定の Vision モデルの接続を使う。

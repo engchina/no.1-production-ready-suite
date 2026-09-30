@@ -670,7 +670,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
 
 test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const docrag = {
+  const answerDiagnostics = {
     confidence: "high",
     needs_human_review: false,
     insufficient_reason: "",
@@ -683,7 +683,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   const streamBody = [
     sseStart,
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。" })}\n\n`,
-    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], docrag })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
     `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: [] })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
   ].join("");

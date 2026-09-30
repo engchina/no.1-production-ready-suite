@@ -45,17 +45,17 @@ function searchStreamBody(chunkId: string): string {
       attributes: {},
     })}\n\n`;
   return [
-    stage("docrag_answer", "started", 0),
+    stage("answer", "started", 0),
     stage("answer_step:文書検索", "started", 0),
     stage("answer_step:文書検索", "success", 42),
-    stage("docrag_answer", "success", 60),
+    stage("answer", "success", 60),
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-1",
       elapsed_ms: 12,
       guardrail_warnings: [],
       diagnostics: {
-        retrieval_strategy: "docrag",
-        retrieval_strategy_adapter: "docrag_grounded",
+        retrieval_strategy: "hybrid",
+        retrieval_strategy_adapter: "grounded",
         filter_keys: ["content_kind", "section_title", "section_path"],
         knowledge_base_count: 1,
         business_view_applied: "bv-1",

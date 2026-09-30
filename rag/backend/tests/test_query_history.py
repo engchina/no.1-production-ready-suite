@@ -16,7 +16,7 @@ from app.rag.pipeline import RagPipeline
 from app.rag.query_history import query_history_suggestions, record_query_history
 from app.schemas.search import SearchRequest
 from tests.support import AsgiTestClient
-from tests.test_docrag_answer_engine import FakeGenAi, FakeOracle, _fake_llm
+from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 client = AsgiTestClient(app)
 ENABLED = Settings(rag_query_history_enabled=True)
@@ -137,10 +137,10 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
 
 
 async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """回答(DocRAG の回答フロー。#594)に成功した質問を、業務ビューごとに記録する。"""
-    import docrag.adapters.oci as docrag_oci
+    """回答(回答フロー。#594)に成功した質問を、業務ビューごとに記録する。"""
+    import rag_engine.adapters.oci as engine_oci
 
-    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
 
     class RecordingOracle(FakeOracle):
         def __init__(self) -> None:

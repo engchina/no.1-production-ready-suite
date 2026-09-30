@@ -27,7 +27,7 @@ for (const viewport of [
     // 削除した検索モード・検索オプション（#595）は出さない。
     await expect(page.getByRole("radiogroup", { name: "検索モード" })).toHaveCount(0);
     await expect(page.getByRole("switch", { name: "クエリ拡張" })).toHaveCount(0);
-    await expect(page.getByTestId("docrag-unused-note")).toHaveCount(0);
+    await expect(page.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
     // 画面の文言に移植元の呼び名（DocRAG）を出さない。
     await expect(page.locator("main")).not.toContainText("DocRAG");
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。削除した画面はナビに出さない。

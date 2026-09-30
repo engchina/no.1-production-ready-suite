@@ -32,7 +32,7 @@ import {
   type DocumentDetail,
   type DocumentSummary,
   type DocumentClassification,
-  type DocragPromptKey,
+  type AnswerPromptKey,
   type QueryHistorySettingsData,
   type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
@@ -1164,12 +1164,12 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
  * 指定した trace_id のうち、保存された回答があるもの（チャットの会話の回答用。#304）。
  * 開いている会話の回答だけを引き当てる。
  */
-export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: string[]) {
+export function useSavedAnswerTraceIds(businessViewId: string | null, traceIds: string[]) {
   const ids = traceIds.slice(-ANSWER_TRACE_ID_FILTER_MAX);
   return useQuery({
-    queryKey: ["docrag-answers", businessViewId, "trace-ids", ids],
+    queryKey: ["answer-records", businessViewId, "trace-ids", ids],
     queryFn: async () => {
-      const page = await api.listDocragAnswers({
+      const page = await api.listAnswerRecords({
         businessViewId: businessViewId as string,
         limit: ids.length,
         traceIds: ids,
@@ -1181,22 +1181,22 @@ export function useSavedDocragTraceIds(businessViewId: string | null, traceIds: 
 }
 
 /** 保存された回答 1 件。traceId が null の間は取得しない。 */
-export function useDocragAnswer(traceId: string | null) {
+export function useAnswerRecord(traceId: string | null) {
   return useQuery({
-    queryKey: ["docrag-answer", traceId],
-    queryFn: () => api.getDocragAnswer(traceId as string),
+    queryKey: ["answer-record", traceId],
+    queryFn: () => api.getAnswerRecord(traceId as string),
     enabled: Boolean(traceId),
   });
 }
 
 /** 保存された回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
-export function useEvaluateDocragAnswer() {
+export function useEvaluateAnswerRecord() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ traceId, standardAnswer }: { traceId: string; standardAnswer: string }) =>
-      api.evaluateDocragAnswer(traceId, standardAnswer),
+      api.evaluateAnswerRecord(traceId, standardAnswer),
     onSuccess: (detail) => {
-      qc.setQueryData(["docrag-answer", detail.trace_id], detail);
+      qc.setQueryData(["answer-record", detail.trace_id], detail);
     },
   });
 }
@@ -1233,17 +1233,17 @@ export function useQuerySuggestions(
 }
 
 /** 編集できるプロンプトと、回答フローの各段の読み取り専用プロンプト。 */
-export function useDocragPrompts() {
-  return useQuery({ queryKey: ["settings", "docrag-prompts"], queryFn: api.getDocragPrompts });
+export function useAnswerPrompts() {
+  return useQuery({ queryKey: ["settings", "answer-prompts"], queryFn: api.getAnswerPrompts });
 }
 
 /** 編集できるプロンプトの保存(content あり)と既定値への復帰(content なし)。 */
-export function useSaveDocragPrompt() {
+export function useSaveAnswerPrompt() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, content }: { key: DocragPromptKey; content: string | null }) =>
-      content === null ? api.resetDocragPrompt(key) : api.saveDocragPrompt(key, content),
-    onSuccess: (data) => qc.setQueryData(["settings", "docrag-prompts"], data),
+    mutationFn: ({ key, content }: { key: AnswerPromptKey; content: string | null }) =>
+      content === null ? api.resetAnswerPrompt(key) : api.saveAnswerPrompt(key, content),
+    onSuccess: (data) => qc.setQueryData(["settings", "answer-prompts"], data),
   });
 }
 
@@ -1266,13 +1266,13 @@ export function useFeedbackEvaluationCase() {
 }
 
 /** 保存された回答の削除。一覧・詳細のキャッシュを捨てる。 */
-export function useDeleteDocragAnswer() {
+export function useDeleteAnswerRecord() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (traceId: string) => api.deleteDocragAnswer(traceId),
+    mutationFn: (traceId: string) => api.deleteAnswerRecord(traceId),
     onSuccess: (_data, traceId) => {
-      qc.removeQueries({ queryKey: ["docrag-answer", traceId] });
-      qc.invalidateQueries({ queryKey: ["docrag-answers"] });
+      qc.removeQueries({ queryKey: ["answer-record", traceId] });
+      qc.invalidateQueries({ queryKey: ["answer-records"] });
     },
   });
 }
@@ -1313,7 +1313,7 @@ export function useUpdateAnswerRecordSettings() {
       api.updateAnswerRecordSettings({ retention_days: retentionDays }),
     onSuccess: (data) => {
       qc.setQueryData(["settings", "answer-records"], data);
-      qc.invalidateQueries({ queryKey: ["docrag-answers"] });
+      qc.invalidateQueries({ queryKey: ["answer-records"] });
     },
   });
 }

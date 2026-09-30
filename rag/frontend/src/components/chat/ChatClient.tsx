@@ -39,8 +39,8 @@ import { ListPagination } from "@/components/ListPagination";
 import { RunStopButton } from "@/components/RunStopButton";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
-import { SavedDocragAnswer } from "@/components/search/SavedDocragAnswer";
-import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
+import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
+import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
@@ -57,7 +57,7 @@ import {
   useConversation,
   useConversations,
   useCreateConversation,
-  useSavedDocragTraceIds,
+  useSavedAnswerTraceIds,
   useUpdateConversation,
   useDeleteConversation,
 } from "@/lib/queries";
@@ -96,7 +96,7 @@ interface LiveColumn {
   errorMessage: string | null;
   guardrailWarnings: string[];
   /** 回答の根拠・実行記録(無い回答では null)。 */
-  docrag: unknown;
+  answerDiagnostics: unknown;
   /** 回答生成の工程の進捗（#375）。 */
   stages: AnswerStageEvent[];
   startedAtMs: number;
@@ -138,8 +138,8 @@ function AssistantColumn({
   streaming,
   errorMessage,
   guardrailWarnings,
-  docrag = null,
-  savedDocrag = false,
+  answerDiagnostics = null,
+  savedAnswer = false,
   progress = null,
   onRetry,
   showLabel,
@@ -154,9 +154,9 @@ function AssistantColumn({
   streaming: boolean;
   errorMessage: string | null;
   guardrailWarnings: string[];
-  docrag?: unknown;
+  answerDiagnostics?: unknown;
   /** 保存された回答がある(trace_id から根拠と実行記録を開ける)。 */
-  savedDocrag?: boolean;
+  savedAnswer?: boolean;
   /** 生成中の工程と開始時刻（#375）。回答の本文が届くまで経過時間と今の工程を出す。 */
   progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
@@ -226,14 +226,14 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} traceId={traceId} /> : null}
-      {!streaming && !errorMessage && !docrag && savedDocrag && traceId ? (
+      {!streaming && !errorMessage && answerDiagnostics ? <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} /> : null}
+      {!streaming && !errorMessage && !answerDiagnostics && savedAnswer && traceId ? (
         <Disclosure
           variant="plain"
-          summary={t("chat.docrag.open")}
+          summary={t("chat.answerDetails.open")}
           className="border-t border-border px-2 pt-1"
         >
-          <SavedDocragAnswer traceId={traceId} businessViewId={businessViewId} showAnswer={false} />
+          <SavedAnswerRecord traceId={traceId} businessViewId={businessViewId} showAnswer={false} />
         </Disclosure>
       ) : null}
       {!streaming && !errorMessage ? (
@@ -291,8 +291,8 @@ function MessageTurn({
     streaming: boolean;
     errorMessage: string | null;
     guardrailWarnings: string[];
-    docrag?: unknown;
-    savedDocrag?: boolean;
+    answerDiagnostics?: unknown;
+    savedAnswer?: boolean;
     progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
   }[];
 }) {
@@ -332,8 +332,8 @@ function MessageTurn({
             streaming={column.streaming}
             errorMessage={column.errorMessage}
             guardrailWarnings={column.guardrailWarnings}
-            docrag={column.docrag}
-            savedDocrag={column.savedDocrag}
+            answerDiagnostics={column.answerDiagnostics}
+            savedAnswer={column.savedAnswer}
             progress={column.progress}
             onRetry={column.errorMessage ? onRetry : undefined}
             showLabel={compare}
@@ -434,8 +434,8 @@ export function ChatClient() {
         .map((message) => message.trace_id as string),
     [persistedMessages]
   );
-  const savedDocragQuery = useSavedDocragTraceIds(businessViewId, replyTraceIds);
-  const docragTraceIds = savedDocragQuery.data ?? EMPTY_TRACE_IDS;
+  const savedAnswerQuery = useSavedAnswerTraceIds(businessViewId, replyTraceIds);
+  const answerTraceIds = savedAnswerQuery.data ?? EMPTY_TRACE_IDS;
 
   const createConversation = useCreateConversation();
   const updateConversation = useUpdateConversation();
@@ -650,7 +650,7 @@ export function ChatClient() {
                 traceId: null,
                 errorMessage: null,
                 guardrailWarnings: [],
-                docrag: null,
+                answerDiagnostics: null,
                 stages: [],
                 startedAtMs,
               })),
@@ -682,18 +682,18 @@ export function ChatClient() {
               };
             });
           },
-          onMetadata: ({ model_id, trace_id, guardrail_warnings, docrag }) =>
+          onMetadata: ({ model_id, trace_id, guardrail_warnings, answer_diagnostics }) =>
             updateColumn(model_id, {
               traceId: trace_id,
               guardrailWarnings: guardrail_warnings,
-              docrag: docrag ?? null,
+              answerDiagnostics: answer_diagnostics ?? null,
             }),
           onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
           onModelDone: ({ model_id }) => updateColumn(model_id, { status: "done" }),
           onModelError: ({ model_id, message }) =>
             updateColumn(model_id, { status: "error", errorMessage: message }),
           onAllDone: async () => {
-            void queryClient.invalidateQueries({ queryKey: ["docrag-answers"] });
+            void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
             await queryClient.invalidateQueries({ queryKey: ["conversations"] });
             setLiveTurn(null);
           },
@@ -739,7 +739,7 @@ export function ChatClient() {
         streaming: column.status === "streaming",
         errorMessage: column.errorMessage,
         guardrailWarnings: column.guardrailWarnings,
-        docrag: column.docrag,
+        answerDiagnostics: column.answerDiagnostics,
         progress: { stages: column.stages, startedAtMs: column.startedAtMs },
       }))
     : [];
@@ -1043,8 +1043,8 @@ export function ChatClient() {
                         streaming: false,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
-                        savedDocrag: Boolean(
-                          reply.trace_id && docragTraceIds.has(reply.trace_id)
+                        savedAnswer: Boolean(
+                          reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
                       }))}
                     />

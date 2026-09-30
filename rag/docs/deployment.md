@@ -172,6 +172,120 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
+
+#599 で、rag_poc から移したときの名前（`docrag`）を、コードの識別子・設定（環境変数）・API・DB の名前から外し、RAG の標準の名前にした。回答・分割の挙動は変わらない。旧名との互換は持たない（旧名の環境変数は読まず、保存値と表は migration で書き換える）。#599 の migration はデータを削除しないので、承認（`--allow-destructive`）は要らない（#621 の `20260930_007_retire_graph_claims_community` などデータを削除する migration が未適用なら、そちらの承認が要る。下の「既存環境の更新手順（#621）」と上の「共通の注意」）。
+
+### 名前の対照
+
+**backend の環境変数**（`backend/.env`。検索・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
+
+| 旧名 | 新しい名前 |
+|---|---|
+| `RAG_DOCRAG_QUERY_STRATEGY` | `RAG_QUERY_STRATEGY` |
+| `RAG_DOCRAG_ANSWER_FLOW` | `RAG_ANSWER_FLOW` |
+| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `RAG_NEIGHBOR_CHILD_COUNT` |
+| `RAG_DOCRAG_RERANK_ENABLED` | `RAG_RERANK_ENABLED` |
+| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `RAG_SCREEN_LINKING_ENABLED` |
+| `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `RAG_ANSWER_VISION_ENABLED` |
+| `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `RAG_HISTORY_REWRITE_ENABLED` |
+| `RAG_DOCRAG_PROFILE` | `RAG_ANSWER_PROFILE` |
+| `RAG_DOCRAG_CHILD_TARGET_CHARS` | `RAG_CHUNK_CHILD_TARGET_CHARS` |
+| `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS` |
+| `RAG_DOCRAG_PARENT_TARGET_CHARS` | `RAG_CHUNK_PARENT_TARGET_CHARS` |
+| `RAG_DOCRAG_PARENT_MAX_PAGES` | `RAG_CHUNK_PARENT_MAX_PAGES` |
+| `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `RAG_CHUNK_PARENT_MAX_CHILDREN` |
+
+**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（例: `DOCRAG_DOMAIN_PROFILE_FILE` → `RAG_ENGINE_DOMAIN_PROFILE_FILE`、docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
+
+**コード・package**: `rag/packages/docrag_core`（distribution `docrag-core`、import `docrag`）は `rag/packages/rag_engine`（distribution `rag-engine`、import `rag_engine`）。backend の `app/rag/docrag_answer.py` → `answer_engine.py`、`docrag_chunking.py` → `chunking_small_to_big.py`、`docrag_prompts.py` → `answer_prompts.py`、`docrag_verify_cli.py` → `answer_verify_cli.py`（`python -m app.rag.answer_verify_cli`）。CI の job `RAG / DocRAG core` は `RAG / Engine`。
+
+**保存値・API**:
+
+| 対象 | 旧名 | 新しい名前 |
+|---|---|---|
+| 分割方式（`RAG_CHUNKING_STRATEGY`・文書 / レシピの処理設定・KB の構築設定） | `docrag_small_to_big` | `small_to_big` |
+| 分割のパラメータ（処理設定・文書分割の設定の API） | `docrag_child_target_chars` など 5 項目 | `chunk_child_target_chars` など（`docrag_` を `chunk_` に） |
+| 業務ビューの検索・回答設定（`view_config.query`） | `docrag_query_strategy`・`docrag_answer_flow`・`docrag_neighbor_child_count`・`docrag_rerank_enabled`・`docrag_screen_linking_enabled` | `query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`・`screen_linking_enabled` |
+| 回答生成のプロンプトの表・API | `rag_docrag_prompts`・`/api/settings/docrag-prompts` | `rag_answer_prompts`・`/api/settings/answer-prompts` |
+| 検索の応答の `diagnostics` | `retrieval_strategy: "docrag"`・`retrieval_strategy_adapter: "docrag_grounded"` / `"docrag_retrieval_only"`・`docrag`（回答フローの診断） | `"hybrid"`・`"grounded"` / `"retrieval_only"`・`answer` |
+| 回答の記録の詳細の API・チャットの SSE の `metadata` | `docrag` | `answer_diagnostics` |
+| 回答の記録の回答の方式（`rag_answer_records.answer_engine`） | `docrag` | `grounded` |
+| 進捗の stage・metrics の `stage` label・監査の `error_stage` | `docrag_answer`・`docrag_history_rewrite` | `answer`・`history_rewrite` |
+| 親子階層の chunk の metadata | `docrag_parent_text`・`docrag_metadata_json`・`docrag_search_text`・`docrag_chunk_id`・`docrag_chunk_seq`・`docrag_source_record_refs_json`・`docrag_source_seq_ranges_json`・`docrag_first_page_context_json`、`source_parser: docling_docrag`、`chunk_group_kind: docrag_parent` | `parent_text`・`engine_metadata_json`・`engine_search_text`・`engine_chunk_id`・`engine_chunk_seq`・`source_record_refs_json`・`source_seq_ranges_json`・`first_page_context_json`、`docling_layout`、`small_to_big_parent` |
+| Docling の解析結果（`parser_artifacts`）・分割の縮退の理由 | `docrag_layout`・`docrag_layout_missing` | `layout_records`・`layout_missing` |
+| 派生情報レイヤーの指紋の入力 | `docrag_chunk_contract` | `chunk_metadata_contract` |
+
+`chunk_set_id` は改名の前の名前で hash するので変わらない（既存の Chunk・embedding をそのまま使う。作り直しは要らない）。検索の設定の fingerprint（`config_fingerprint`）は入力の名前が変わるので、更新の前と後で値が変わる。Prometheus のダッシュボード・アラートで `stage="docrag_answer"` などを使っている場合は、新しい名前に直す。
+
+### システムテーブルの更新がすること
+
+- migration `20260930_008_answer_prompts_table`: 回答生成のプロンプトの表を `rag_docrag_prompts` から `rag_answer_prompts` へ移す。新しい表が無ければ `ALTER TABLE ... RENAME TO` で改名し、ある（システムテーブルの更新は migration の前に新しい表を作る）ときは旧表の行を新しい表へ写す。写した後、旧表は退役したオブジェクトとして消える（行は新しい表に残る）。主キーの制約と index はシステムの名前（`SYS_C...`）なので改名しない。
+- migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、業務ビューの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
+
+### 手順
+
+1. #599 の版のコードを取得する（`git pull` など）。backend・取込 worker・前処理 / parser は止める（旧 package の venv のままでは起動できない。保存値の書き換えの最中に取込が書き込まないようにする）。
+
+   ```bash
+   sudo systemctl stop 'production-ready-rag-*'
+   ```
+
+2. `backend/.env` の旧名の行を改名する（バックアップを取ってから編集する）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
+
+   ```bash
+   for env_file in /u01/aipoc/no.1-production-ready-suite/rag/backend/.env /u01/aipoc/props/backend.env; do
+     [ -f "${env_file}" ] || continue
+     sudo cp -p "${env_file}" "${env_file}.bak-599"
+     sudo sed -i -E \
+       -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
+       -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
+       -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
+       "${env_file}"
+     sudo grep -nE '^(RAG_DOCRAG_|DOCRAG_)' "${env_file}" || echo "OK: ${env_file}"
+   done
+   ```
+
+   ローカルは `rag/backend/.env` だけを同じ `sed` で直す。
+3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in（`systemctl edit production-ready-rag-backend.service` などで足した `Environment=DOCRAG_DOMAIN_PROFILE_FILE=...`）や、起動する shell の `export` を探して改名する。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
+
+   ```bash
+   sudo grep -rn 'DOCRAG_' /etc/systemd/system/production-ready-rag-* 2>/dev/null
+   ```
+
+4. venv を作り直す（package の名前が変わったので、旧 `docrag-core` を外して `rag-engine` を入れる）。Compute では `init_script.sh` を再実行すれば、venv・unit・frontend の build・システムテーブルの更新（手順 5）までを行う。手で行う場合は、リポジトリの所有者で実行する。
+
+   ```bash
+   # OCI Compute（手で行う場合）
+   cd /u01/aipoc/no.1-production-ready-suite/rag
+   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
+   sudo -u ubuntu bash -c 'cd services/parsers/docling && uv sync --locked --no-dev --python 3.12'
+
+   # ローカル
+   cd rag/backend && uv sync --locked
+   cd ../services/parsers/docling && uv sync --locked
+   ```
+
+5. システムテーブルを更新する（#599 の migration だけが未適用なら承認は要らない）。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」でもよい。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
+   ```
+
+6. backend・worker・前処理 / parser と frontend（`npm run build` の成果物）を起動し直す（`sudo systemctl start 'production-ready-rag-*'`。`init_script.sh` を再実行した場合は起動済み）。
+7. 確かめる。
+   - `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空。
+   - 保存値に旧名が残っていない（0 件）。
+
+     ```sql
+     SELECT COUNT(*) FROM rag_chunks WHERE JSON_SERIALIZE(metadata_json RETURNING CLOB) LIKE '%docrag%';
+     SELECT COUNT(*) FROM rag_business_views WHERE JSON_SERIALIZE(view_config RETURNING CLOB) LIKE '%docrag%';
+     SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
+     ```
+
+   - 検索・回答設定の「検索方法」「文書分割」と業務ビューの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
+
 ## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
 
 #621 で、設定の「関係情報の構築」の選択肢を「構築しない」（`off`。既定）と「構築する」（`entities`）の 2 つにした。構築するのは、文書全体と章・節の見出し（表・図を含む）の「含む」のつながりで、LLM は使わない。ナレッジベースの「関係情報グラフ」で見るためのもので、回答の検索には使わない（#595）。
@@ -343,7 +457,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ## 既存環境の更新手順（#595 標準の回答フローの削除）
 
-#594 で回答を回答フローだけにした後、#595 で標準の回答フロー（`standard`）だけが使っていたコード・画面・API・設定を削除した。回答の挙動は #594 から変わらない。旧名との互換は持たない。一覧は [docrag-port.md の「標準の回答フローの設定の削除」](./docrag-port.md)。
+#594 で回答を回答フローだけにした後、#595 で標準の回答フロー（`standard`）だけが使っていたコード・画面・API・設定を削除した。回答の挙動は #594 から変わらない。旧名との互換は持たない。一覧は [rag-engine.md の「標準の回答フローの設定の削除」](./rag-engine.md)。
 
 - **画面**: 根拠確認（`/settings/grounding`）・回答スタイル（`/settings/generation`）・高度な検索（`/settings/agentic`）を削除した。ブックマークなどの古い URL は検索方法（`/settings/retrieval`）へ移す。検索方法は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カード、回答プロンプトは回答生成のプロンプトだけ（system prompt の版の作成・有効化は削除）。業務ビューの検索モード・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt / 既定の言語）の欄と、RAG 検索の検索モードのチップ・検索の内訳の診断も削除した。
 - **API**: `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate` を削除した。`POST /api/search` などの `mode`・`strategy`・`rerank_top_n`・`generation_profile` と、チャットの送信の `mode` は、送っても 422 にせず読み捨てる。
@@ -365,7 +479,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ## 既存環境の更新手順（#594 回答の方式を 1 つにする）
 
-#594 で回答の方式を、根拠照合・監査付きの回答（質問の振り分けと拡張 → 検索 → CRAG の根拠の判定 → 回答の生成 → 監査）の 1 つにし、回答エンジンの選択（`backend/.env` の `RAG_ANSWER_ENGINE` と、業務ビューの「回答エンジン」）を削除した。旧名との互換は持たない。仕組みと設定は [docrag-port.md](./docrag-port.md) を参照。
+#594 で回答の方式を、根拠照合・監査付きの回答（質問の振り分けと拡張 → 検索 → CRAG の根拠の判定 → 回答の生成 → 監査）の 1 つにし、回答エンジンの選択（`backend/.env` の `RAG_ANSWER_ENGINE` と、業務ビューの「回答エンジン」）を削除した。旧名との互換は持たない。仕組みと設定は [rag-engine.md](./rag-engine.md) を参照。
 
 ### 変わること
 
@@ -416,10 +530,10 @@ SELECT NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)') AS answ
 
 ### 文書分割の既定
 
-新しい回答は、親子で分割した chunk（`docrag_small_to_big`。画面の表示名は「親子階層（small-to-big）」）を前提にする。親の本文（見出しの節）を回答の文脈にし、表は行グループごとに列見出しを付けた子で探し、根拠の元の要素（`source_record_refs`）から図の切り出しと要素ごとの強調を行う。そのため、#594 で `RAG_CHUNKING_STRATEGY` の既定を `structure_aware` から `docrag_small_to_big` に変えた。
+新しい回答は、親子で分割した chunk（`small_to_big`。画面の表示名は「親子階層（small-to-big）」）を前提にする。親の本文（見出しの節）を回答の文脈にし、表は行グループごとに列見出しを付けた子で探し、根拠の元の要素（`source_record_refs`）から図の切り出しと要素ごとの強調を行う。そのため、#594 で `RAG_CHUNKING_STRATEGY` の既定を `structure_aware` から `small_to_big` に変えた。
 
 - `backend/.env` に `RAG_CHUNKING_STRATEGY` を書いていない環境（文書分割の画面で保存したことがない環境）では、レシピで分割方式を上書きしていない文書は、次に Chunk を作るときから親子で分割する。既存の chunk は自動では作り直さない。
-- 親子の分割は Docling の解析結果を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[docrag-port.md の「使い方」2.](./docrag-port.md)）。
+- 親子の分割は Docling の解析結果を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[rag-engine.md の「使い方」2.](./rag-engine.md)）。
 - 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない・根拠の図を切り出せない、ため回答の文脈が粗くなる。回答の品質を上げるには、Docling で解析した文書の Chunk を再作成する（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
 - 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（検索・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
 
@@ -430,7 +544,7 @@ SELECT NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)') AS answ
 - 「検索・回答設定 › 検索方法」と業務ビューの編集の「全文検索の分割方式」の選択は無くなった。
 - `backend/.env` の `RAG_TEXT_SEARCH_TOKENIZER` は読まない。行が残っていても無視するが、混乱を避けるため削除する（`sed -i '/^RAG_TEXT_SEARCH_TOKENIZER=/d' backend/.env`。直前の説明のコメント行も消してよい）。
 - 業務ビューに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
-- docrag_core を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
+- rag_engine を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
 - 索引（`rag_chunks_text_idx` などの `RAG_TEXT_WORLD_LEXER`）は変えていないので、作り直しは要らない。backend を再起動すると新しい分割になる。
 - Sudachi の辞書（`sudachidict_full`。backend の依存に含まれる）が入っていない環境では、自動で文字種の区切りだけで分割し、backend の log に「Sudachi を使えないため、全文検索の語は文字種の区切りだけで作ります」を 1 回出す。
 
@@ -814,15 +928,15 @@ uv run python -m app.rag.file_processing_staging_cli \
   --parser-adapter-contract-strict
 ```
 
-`evaluation/golden-set.example.json`、`evaluation/compare.example.json`、`evaluation/search-load.example.json` は API / CLI request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。複雑文書の case では `expected_content_kind` と `expected_section_paths` を指定し、`content_kind_hit_rate` / `section_coverage` threshold で document-level recall だけでは拾えない表・図・コード・メール・章節 lineage の退化を止める。compare の `experiments[].rag_overrides` では質問の拡張・回答の生成方式・根拠の前後から加える数・rerank の有無・RRF 定数・同じ group から足す child の上限・Oracle vector target accuracy を一時的に上書きし（query expansion・context window などの旧 standard のキーは #591 / #595 で削除した）、staging の golden set で安全に比較できる。評価 CLI は入力 JSON に `experiments` がある場合は compare request とみなし、`--api-base-url` から評価 job の API（compare は `/api/evaluation/jobs/compare`、それ以外は `/api/evaluation/jobs/run`）を自動で選んで投入し、job の完了を待つ（`--api-url` に以前の同期 API の URL を渡しても job の API に読み替える。`app/rag/evaluation_cli.py`）。search load CLI は `cases`、`repeat`、`concurrency`、`thresholds` を受け取り、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.docrag.execution_steps` の工程名で集計。#595 で `diagnostics.stream_stage_timings` から変えた）を query / answer 原文なしで artifact 化する。file-processing golden CLI は local parser / chunk / citation 契約に加えて parser fallback、低信頼文書率、失敗 segment 率などの取込品質 metric を検証し、OCI Enterprise AI / Oracle / Object Storage を伴う確認が残る場合は `passed: true` でも `promotion_ready: false` と `promotion_blockers` を artifact に出す。parser adapter compatibility CLI は Docling / Unstructured がインストール済みの環境だけ実 adapter remap smoke を実行し、未導入・未選択 adapter は status として記録する。artifact は source kind、status、parser backend、schema count、source-kind contract reason code だけを含み、抽出本文は保存しない。PDF/image では page lineage、image では bbox/asset lineage、HTML/email/Office では semantic/header/slide/sheet/table lineage も contract として見るため、単に element が 1 件返っただけでは合格にしない。本番昇格判定では `passed` だけでなく `promotion_ready` を必ず確認し、`pending_staging_checks` や `extraction_page_coverage` などの staging 必須 threshold が残る場合は `rag-file-processing-staging` を実行するか、CI で `fail_on_file_processing_pending=true` を指定して失敗扱いにする。file-processing staging CLI は `report.passed` でも promotion blocker が残る場合は exit `1` を返すため、Object Storage artifact cache などの必須 runtime check が skip された環境を CI で止められる。`file-processing-trend` CLI は保存済みの trend baseline と current trend を比較し、table QA / page hit / bbox / preview addressability / fallback rate / ingestion p95 / blocker count の退化を exit `1` で止める。どの CLI も gate 失敗時は exit `1`、入力不備は exit `2` を返す。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` または `RAG_SEARCH_LOAD_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら evaluation result/trend と search-load result/trend を同じ artifact としてアップロードする。search load だけを外す場合は `workflow_dispatch` の `search_load_path` を空文字にする。
+`evaluation/golden-set.example.json`、`evaluation/compare.example.json`、`evaluation/search-load.example.json` は API / CLI request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。複雑文書の case では `expected_content_kind` と `expected_section_paths` を指定し、`content_kind_hit_rate` / `section_coverage` threshold で document-level recall だけでは拾えない表・図・コード・メール・章節 lineage の退化を止める。compare の `experiments[].rag_overrides` では質問の拡張・回答の生成方式・根拠の前後から加える数・rerank の有無・RRF 定数・同じ group から足す child の上限・Oracle vector target accuracy を一時的に上書きし（query expansion・context window などの旧 standard のキーは #591 / #595 で削除した）、staging の golden set で安全に比較できる。評価 CLI は入力 JSON に `experiments` がある場合は compare request とみなし、`--api-base-url` から評価 job の API（compare は `/api/evaluation/jobs/compare`、それ以外は `/api/evaluation/jobs/run`）を自動で選んで投入し、job の完了を待つ（`--api-url` に以前の同期 API の URL を渡しても job の API に読み替える。`app/rag/evaluation_cli.py`）。search load CLI は `cases`、`repeat`、`concurrency`、`thresholds` を受け取り、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名で集計。#595 で `diagnostics.stream_stage_timings` から変えた）を query / answer 原文なしで artifact 化する。file-processing golden CLI は local parser / chunk / citation 契約に加えて parser fallback、低信頼文書率、失敗 segment 率などの取込品質 metric を検証し、OCI Enterprise AI / Oracle / Object Storage を伴う確認が残る場合は `passed: true` でも `promotion_ready: false` と `promotion_blockers` を artifact に出す。parser adapter compatibility CLI は Docling / Unstructured がインストール済みの環境だけ実 adapter remap smoke を実行し、未導入・未選択 adapter は status として記録する。artifact は source kind、status、parser backend、schema count、source-kind contract reason code だけを含み、抽出本文は保存しない。PDF/image では page lineage、image では bbox/asset lineage、HTML/email/Office では semantic/header/slide/sheet/table lineage も contract として見るため、単に element が 1 件返っただけでは合格にしない。本番昇格判定では `passed` だけでなく `promotion_ready` を必ず確認し、`pending_staging_checks` や `extraction_page_coverage` などの staging 必須 threshold が残る場合は `rag-file-processing-staging` を実行するか、CI で `fail_on_file_processing_pending=true` を指定して失敗扱いにする。file-processing staging CLI は `report.passed` でも promotion blocker が残る場合は exit `1` を返すため、Object Storage artifact cache などの必須 runtime check が skip された環境を CI で止められる。`file-processing-trend` CLI は保存済みの trend baseline と current trend を比較し、table QA / page hit / bbox / preview addressability / fallback rate / ingestion p95 / blocker count の退化を exit `1` で止める。どの CLI も gate 失敗時は exit `1`、入力不備は exit `2` を返す。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` または `RAG_SEARCH_LOAD_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら evaluation result/trend と search-load result/trend を同じ artifact としてアップロードする。search load だけを外す場合は `workflow_dispatch` の `search_load_path` を空文字にする。
 
 `RAG Evaluation Nightly` は API base URL が未設定でも `parser-adapter-compatibility.json` と file-processing artifact を先に作る。adapter の可用性は backend の venv の package ではなく parser サービスの `/health` で判定する(contract CLI と file-processing staging CLI は `RAG_PARSER_READINESS_PROBE_ENABLED` の指定に依らず常に。#343 / #366)。通常実行では parser サービスを起動しないため、選択済み adapter(既定は Docling)が `missing` でも status を記録するだけで gate を失敗にしない(実行環境が見つかった adapter の fallback / schema remap 失敗、選択した adapter の feature flag が OFF の設定矛盾は blocking のまま)が、`run_file_processing_staging=true` かつ `require_real_world_file_processing_manifest=true` の production staging では workflow が strict adapter contract を自動的に有効化する。単独 smoke を厳格化したい場合は `workflow_dispatch` で `parser_adapter_contract_strict=true` を指定して同じ経路を使える。strict では選択済み adapter の parser サービスに到達できる必要があり、未達は blocking failure になる(backend の venv に parser の extra は入れない)。そのため strict のときだけ、workflow は job の中で Docling の parser サービスを起動する(#366): `RAG_SERVICES_TORCH=cpu scripts/rag-services.sh sync parser-docling` で CPU 版 torch の venv を作り、`scripts/rag-services.sh run parser-docling` を背景で動かして `http://127.0.0.1:18020/health` が ok になるまで待ってから gate を実行し、最後に止める。サービスのログは artifact の `parser-docling-service.log` に残す。Docling のモデル(`~/.cache/docling`・`~/.cache/huggingface`)は docling の `uv.lock` を key に `actions/cache` で持ち、uv の cache は setup-uv が backend と docling の `uv.lock` を key に持つ(`uv cache prune --ci` 後)。strict でも Unstructured は選択されない(status は `ignored` で blocking にならない)ため起動しない。ローカルの実測(空のキャッシュ)は、sync とモデルの取得で約 60 秒、`run` の再 sync と起動で約 11 秒、strict gate で約 30〜40 秒(マシンの負荷が高いときは、それぞれ約 160 秒・約 45 秒・約 180 秒)。golden manifest の strict は、Docling の PDF 2 件と画像 1 件の schema remap を検証し、Docling が扱わない Office / HTML / email は `unsupported`(blocking にしない)として記録する。Office / HTML / email の adapter を strict で検証するのは、Unstructured を選んだときの follow-up。strict が有効な場合、workflow は parser adapter contract CLI へ `--manifest ../${file_processing_manifest_path}` と `--strict`、file-processing staging CLI へ `--parser-adapter-contract-strict` を渡す。必要に応じて `parser_adapter_contract_source_kinds=pdf,html,email,office,image` のように対象 source kind を絞る。strict mode は CLI の `--strict` と同じく adapter backend を `auto` 相当にし、Docling / Unstructured の feature flag を有効化した runtime snapshot で、manifest の `fixture_root` と `adapter_schema_remap=true` が付いた `cases[].fixture` を case 単位に実 package へ通して schema remap を検証する。file-processing staging でも同じ strict settings を preflight、実 ingestion/search client、`adapter_contract_coverage` artifact に使うため、runtime が local のままなのに adapter contract だけ合格する状態を避ける。`parser-adapter-compatibility.json` と staging payload の `parser_adapter_contract` は fixture root / fixture file name / case id を hash label に置き換えるため、非機密 real-world manifest を使っても CI artifact から顧客文書名を読めない。`--preflight-only` でも strict 時は同じ manifest fixture contract を実行し、installed/active だけで schema remap 証跡がない adapter を先に止める。production 昇格では synthetic golden manifest だけでなく、`staging_dataset_policy` 付きの非機密 real-world manifest を `file_processing_manifest_path` に指定し、`fixture_kind=real_world`、`data_sensitivity=non_sensitive`、`reviewed_for_public_ci=true`、`staging/` fixture 隔離を manifest validation で通す。workflow の `require_real_world_file_processing_manifest` は既定 true で、staging 実行時に `rag-file-processing-staging --require-real-world-policy` を渡すため、synthetic-only manifest は real OCI / Oracle client 作成前に失敗する。staging payload の `staging_dataset_policy` は manifest 合規件数に加えて `executed_real_world_case_count`、`executed_compliant_real_world_case_count`、`missing_executed_source_kinds`、`missing_executed_scenarios` も返すため、real-world case を宣言しただけで本実行から漏れた場合は promotion blocker になる。`file_processing_trend_baseline_path` / `file_processing_staging_trend_baseline_path` を指定すると、current trend と baseline trend を比較し、`file-processing-trend-regression.json` / `file-processing-staging-trend-regression.json` を artifact に保存する。staging trend 比較では `promotion_ready` だけでなく、adapter contract の scenario set / passed scenario / missing scenario / blocking scenario、backend/source passed pair、backend/scenario passed pair、backend/source/status bad count、backend/source passed count、warning code count、blocking failure reason count、executed real-world case 数、compliant executed case 数、実行済み source kind / scenario 数、missing executed source/scenario、execution error count の退化も blocker にする。package missing、adapter fallback、fixture missing、schema remap empty、trend regression などの blocking failure が残れば workflow を失敗させる。full matrix では Docling/email・Office・HTML のような非 routing 対象 pair は `unsupported` として記録するだけだが(source kind ごとの adapter の候補は、対応形式の正本 `rag_parser_core.capabilities.ADAPTER_CAPABILITIES` が宣言する backend に絞る。Docling は PDF と画像だけ。#366)、CLI で `--strict --backend docling --source-kind email` のように backend/source を明示した場合は虚偽の対応表明として blocking failure にする。
 
 ## 運用パラメータ
 
-- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。親子階層（small-to-big）はこの 2 つを使わず、`RAG_DOCRAG_CHILD_TARGET_CHARS` などの 5 項目で分割する(解析結果が Docling でない文書は構造認識へ縮退し、この 2 つを使う。[rag_poc から移植した機能のガイド](./docrag-port.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
+- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。親子階層（small-to-big）はこの 2 つを使わず、`RAG_CHUNK_CHILD_TARGET_CHARS` などの 5 項目で分割する(解析結果が Docling でない文書は構造認識へ縮退し、この 2 つを使う。[rag_poc から移植した機能のガイド](./rag-engine.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
 - 見出し単位・ページ単位では、見出し/ページを第一境界として保つため 32,000 / 0 を推奨する。32,000 文字は長大な単位だけを同じ境界内で再分割する安全上限であり、chunk を常に大きくする目標値ではない。[Cohere Rerank 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-rerank-4-0.htm) の context は 32,000 token だが、文字数上限と token 上限は同一ではない。
-- `RAG_CONTEXT_GROUP_MAX_CHUNKS`: 回答フローが、根拠の child と同じ `chunk_group_id` の兄弟 chunk を文脈（small-to-big）に足す上限（1〜20、既定 4）。根拠の前後から足す child の数は `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT`（[docrag-port.md の設定一覧](./docrag-port.md#設定一覧)）。旧 standard の context の設定（`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*`）と `RAG_QUERY_EXPANSION_*`・`RAG_STREAM_REALTIME_ENABLED` は #595 で削除した（上の「既存環境の更新手順（#595）」）。
+- `RAG_CONTEXT_GROUP_MAX_CHUNKS`: 回答フローが、根拠の child と同じ `chunk_group_id` の兄弟 chunk を文脈（small-to-big）に足す上限（1〜20、既定 4）。根拠の前後から足す child の数は `RAG_NEIGHBOR_CHILD_COUNT`（[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。旧 standard の context の設定（`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*`）と `RAG_QUERY_EXPANSION_*`・`RAG_STREAM_REALTIME_ENABLED` は #595 で削除した（上の「既存環境の更新手順（#595）」）。
 - `RAG_MIN_SIMILARITY`: recall を落としすぎないよう、評価セットで確認して調整する。
 - `RAG_RRF_K`: hybrid retrieval の Reciprocal Rank Fusion 定数。小さいほど上位 rank を強く優先する。golden set で keyword/vector の寄与と citation 安定性を確認して調整する。
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
@@ -899,5 +1013,5 @@ uv run python -m app.rag.file_processing_staging_cli \
 5. `OciEnterpriseAiClient` は `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`、`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、既定のテキストモデル・既定の Vision モデル（画面の「モデル」、または `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL`・`PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL`。#499）、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH` を使って Enterprise AI endpoint を呼び出す。標準 payload で合わない model deployment / gateway は `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で request shape を差し替え、response envelope が独自の場合は `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` で候補 node を指定する。staging ではまず `uv run python -m app.rag.enterprise_ai_probe --surface both --dry-run` で URL、template 使用有無、response path 使用有無、payload key / shape、JSON byte 数を確認し、その後 `uv run python -m app.rag.enterprise_ai_probe --surface both` で LLM/VLM を直接呼び出す。probe は回答本文や OCR 本文を出さず、text 文字数・element 件数だけを artifact に残す。ここで Bearer 認証、timeout/retry、VLM の MIME type / 構造化抽出 JSON schema、LLM の citation-grounded 生成 payload、response parsing を実 endpoint で確認する。VLM response は `StructuredExtraction` へ検証し、LLM response は空 text を fail fast する。
 6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `RAG_ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加えて `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet が必要。
 7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`PLATFORM_UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
-8. preflight が `ok=true` なら `uv run python -m app.rag.staging_smoke` を実行する。Object Storage put/get、Oracle document 作成、Enterprise AI VLM、chunking、embedding、Oracle indexing、hybrid search、Enterprise AI LLM 生成を 1 回通し、作成した smoke document が citation に含まれることを確認する。既定 query は一意な `SMOKE-...` marker の原文引用を要求し、検索は新規 `document_id` に限定される。既定 query では LLM 回答にも marker が含まれない場合に `stage=rag_answer_marker` で失敗する。JSON 出力の `ok`、`marker`、`query`、`answer_contains_marker`、`trace_id`、`chunk_count`、`citation_count`、`cleanup`、`diagnostics`（`config_fingerprint`、回答フローの実行記録 `diagnostics.docrag.execution_steps` など）を保存し、staging gate の artifact にする。既定では evidence として作成物を保持し、`cleanup` は `skipped` になる。DB/Object Storage を汚したくない一時確認では `uv run python -m app.rag.staging_smoke --cleanup` を使い、成功・失敗どちらでも作成済み Oracle document/chunk と Object Storage object の削除 status を確認する。失敗時は preflight の `checks` または本実行の `stage` / `cause_type` を見て、Object Storage、Oracle、取込（VLM・chunking・embedding・索引）、検索と回答（`rag_search`）、回答の確認（`rag_answer_marker`）のどこで止まったかを切り分ける。回答フローの中の工程は `diagnostics.docrag.execution_steps` で確かめる。query を変える場合は `--query "確認用キーワード {marker} を要約してください"` のように `{marker}` placeholder を残す。
+8. preflight が `ok=true` なら `uv run python -m app.rag.staging_smoke` を実行する。Object Storage put/get、Oracle document 作成、Enterprise AI VLM、chunking、embedding、Oracle indexing、hybrid search、Enterprise AI LLM 生成を 1 回通し、作成した smoke document が citation に含まれることを確認する。既定 query は一意な `SMOKE-...` marker の原文引用を要求し、検索は新規 `document_id` に限定される。既定 query では LLM 回答にも marker が含まれない場合に `stage=rag_answer_marker` で失敗する。JSON 出力の `ok`、`marker`、`query`、`answer_contains_marker`、`trace_id`、`chunk_count`、`citation_count`、`cleanup`、`diagnostics`（`config_fingerprint`、回答フローの実行記録 `diagnostics.answer.execution_steps` など）を保存し、staging gate の artifact にする。既定では evidence として作成物を保持し、`cleanup` は `skipped` になる。DB/Object Storage を汚したくない一時確認では `uv run python -m app.rag.staging_smoke --cleanup` を使い、成功・失敗どちらでも作成済み Oracle document/chunk と Object Storage object の削除 status を確認する。失敗時は preflight の `checks` または本実行の `stage` / `cause_type` を見て、Object Storage、Oracle、取込（VLM・chunking・embedding・索引）、検索と回答（`rag_search`）、回答の確認（`rag_answer_marker`）のどこで止まったかを切り分ける。回答フローの中の工程は `diagnostics.answer.execution_steps` で確かめる。query を変える場合は `--query "確認用キーワード {marker} を要約してください"` のように `{marker}` placeholder を残す。
 9. golden set 評価と負荷試験を通してから production へ昇格する。

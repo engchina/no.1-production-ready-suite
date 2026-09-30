@@ -30,7 +30,7 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
+from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     FieldSchemaStore,
@@ -2286,7 +2286,7 @@ class OracleClient:
         )
 
     async def save_answer_record(self, record: Mapping[str, object]) -> None:
-        """DocRAG 回答を保存する(同じ trace_id は上書き)。"""
+        """回答を保存する(同じ trace_id は上書き)。"""
         binds = {
             "trace_id": record["trace_id"],
             "business_view_id": record.get("business_view_id"),
@@ -2346,7 +2346,7 @@ class OracleClient:
         offset: int = 0,
         trace_ids: Sequence[str] | None = None,
     ) -> list[dict[str, object]]:
-        """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。
+        """保存済み回答を新しい順に返す(本文・JSON は含めない一覧用)。
 
         利用できる業務ビューが制限されているときは、その業務ビューの回答だけを返す（#214）。
         持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件。#304）。
@@ -2387,7 +2387,7 @@ class OracleClient:
         return _row_count_value(row)
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
-        """保存済み DocRAG 回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
+        """保存済み回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -2480,10 +2480,10 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def list_docrag_prompts(self) -> dict[str, dict[str, object]]:
-        """編集した DocRAG プロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
+    async def list_answer_prompts(self) -> dict[str, dict[str, object]]:
+        """編集した回答生成のプロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
         rows = await self._fetch_all(
-            "SELECT prompt_key, content, updated_at FROM rag_docrag_prompts", {}
+            "SELECT prompt_key, content, updated_at FROM rag_answer_prompts", {}
         )
         return {
             str(row["prompt_key"]): {
@@ -2493,14 +2493,14 @@ class OracleClient:
             for row in rows
         }
 
-    async def save_docrag_prompt(self, key: str, content: str) -> None:
-        """DocRAG プロンプトを保存する(同じ key は上書き)。"""
+    async def save_answer_prompt(self, key: str, content: str) -> None:
+        """回答生成のプロンプトを保存する(同じ key は上書き)。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
                 connection,
                 """
-                MERGE INTO rag_docrag_prompts target
+                MERGE INTO rag_answer_prompts target
                 USING (SELECT :prompt_key AS prompt_key FROM dual) source
                 ON (target.prompt_key = source.prompt_key)
                 WHEN MATCHED THEN UPDATE SET
@@ -2514,26 +2514,26 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def delete_docrag_prompt(self, key: str) -> bool:
-        """保存した DocRAG プロンプトを消して既定値へ戻す。消した場合 True。"""
+    async def delete_answer_prompt(self, key: str) -> bool:
+        """保存した回答生成のプロンプトを消して既定値へ戻す。消した場合 True。"""
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
                 connection,
-                "DELETE FROM rag_docrag_prompts WHERE prompt_key = :prompt_key",
+                "DELETE FROM rag_answer_prompts WHERE prompt_key = :prompt_key",
                 {"prompt_key": key},
             )
 
         return await self._run_transaction(operation) > 0
 
-    async def docrag_prompt_overrides(self) -> dict[str, str]:
-        """回答・解析へ渡す DocRAG プロンプトの上書き({key: content})。"""
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        """回答・解析へ渡す回答生成のプロンプトの上書き({key: content})。"""
         return {
-            key: str(value["content"]) for key, value in (await self.list_docrag_prompts()).items()
+            key: str(value["content"]) for key, value in (await self.list_answer_prompts()).items()
         }
 
     async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
-        """保存済み DocRAG 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
+        """保存済み 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
 
         def operation(connection: OracleConnectionProtocol) -> bool:
             if not _fetch_all(
@@ -2561,7 +2561,7 @@ class OracleClient:
         return await self._run_transaction(operation)
 
     async def delete_answer_record(self, trace_id: str) -> bool:
-        """保存済み DocRAG 回答を 1 件削除する。削除した場合 True。"""
+        """保存済み回答を 1 件削除する。削除した場合 True。"""
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
@@ -2576,7 +2576,7 @@ class OracleClient:
         return await self._run_transaction(operation) > 0
 
     async def purge_answer_records(self, retention_days: int) -> int:
-        """保持期間を過ぎた DocRAG 回答を削除し、削除件数を返す。"""
+        """保持期間を過ぎた回答を削除し、削除件数を返す。"""
 
         # ponytail: created_at 単独 index なしの全走査。記録が大量になったら index を足す。
         def operation(connection: OracleConnectionProtocol) -> int:
@@ -8028,7 +8028,7 @@ class OracleClient:
                         **{
                             key: value
                             for key, value in chunk.metadata.items()
-                            if key != DOCRAG_FIRST_PAGE_CONTEXT_KEY
+                            if key != FIRST_PAGE_CONTEXT_KEY
                         },
                     }
                 ),
@@ -8072,16 +8072,16 @@ class OracleClient:
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
 
-        DocRAG の文書の 1 ページ目の本文(先頭の chunk の ``DOCRAG_FIRST_PAGE_CONTEXT_KEY``)は、
+        親子階層で分割した文書の 1 ページ目の本文(先頭の chunk の ``FIRST_PAGE_CONTEXT_KEY``)は、
         chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
         ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
         """
         first_page_context = (
             next(
                 (
-                    json.loads(str(chunk.metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+                    json.loads(str(chunk.metadata[FIRST_PAGE_CONTEXT_KEY]))
                     for chunk in chunks
-                    if chunk.metadata.get(DOCRAG_FIRST_PAGE_CONTEXT_KEY)
+                    if chunk.metadata.get(FIRST_PAGE_CONTEXT_KEY)
                 ),
                 None,
             )
@@ -10375,7 +10375,7 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
     """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
 
     - 分類は指定した項目だけを、番号の接頭辞を除いた名前の一致で絞る(`10_業務A` と `業務A` を
-      同じ分類として扱う。docrag_core の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
+      同じ分類として扱う。rag_engine の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
       保存時と検索の入力で同じ正規化を通すので、SQL では接頭辞だけを外す。
     - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
       ISO 日付の文字列比較は時系列順と一致する。
@@ -11125,8 +11125,9 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
 
 def _chunk_search_text(chunk: Chunk) -> str:
     """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
-    if search_text := docrag_search_text(chunk.metadata):
-        # DocRAG は文書・節・親要約・表/図文脈を前置した rag_poc の search_text を索引する。
+    if search_text := engine_search_text(chunk.metadata):
+        # 親子階層の chunk は、文書・節・親要約・表/図文脈を前置した rag_poc の search_text を
+        # 索引する。
         return search_text
     header = str(chunk.metadata.get("context_header") or "").strip()
     return f"{header}\n{chunk.text}" if header else chunk.text
@@ -11706,7 +11707,7 @@ def oracle_business_view_knowledge_schema_sql(
 ) -> str:
     """業務ビュー単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
 
-    rag_poc(DocRAG)の JSON payload 形式をそのまま 1 行 1 種別で保持する。
+    rag_poc の JSON payload 形式をそのまま 1 行 1 種別で保持する。
     """
 
     return f"""
@@ -11727,7 +11728,7 @@ CREATE TABLE {table_name} (
 def oracle_answer_record_schema_sql(
     table_name: str = "rag_answer_records",
 ) -> str:
-    """DocRAG 回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。
+    """回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。
 
     `user_id_hash` は回答を生成した利用者（持ち主。#304）。一覧・詳細・評価・削除を持ち主へ絞る。
     """
@@ -11776,8 +11777,8 @@ CREATE INDEX {table_name}_view_idx
 """.strip()
 
 
-def oracle_docrag_prompt_schema_sql(table_name: str = "rag_docrag_prompts") -> str:
-    """編集した DocRAG プロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
+def oracle_answer_prompt_schema_sql(table_name: str = "rag_answer_prompts") -> str:
+    """編集した回答生成のプロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
     return f"""
 CREATE TABLE {table_name} (
     prompt_key  VARCHAR2(64) PRIMARY KEY,
@@ -13010,7 +13011,7 @@ def _tokens(text: str) -> list[str]:
 
 def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[str]:
     """全文検索（Oracle Text）の語。検索と同じ分割で、診断に出す（#588）。"""
-    from docrag.retrieval.text_search_tokenizer import tokenize_text_search_query
+    from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
 
     return tokenize_text_search_query(query, domain_keywords=_text_search_domain_keywords(settings))
 
@@ -13018,12 +13019,12 @@ def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[s
 def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str | None:
     """質問文から Oracle Text の CONTAINS の query を作る（#588）。
 
-    分割は docrag の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
+    分割は rag_engine の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
     送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。業務ビューの
     ドメインキーワードは 1 語として優先する。語は重み付きの ``ACCUM`` で結ぶ。
     索引の側（WORLD_LEXER）は変えない。
     """
-    from docrag.retrieval.text_search_tokenizer import oracle_text_query_for_question
+    from rag_engine.retrieval.text_search_tokenizer import oracle_text_query_for_question
 
     return (
         oracle_text_query_for_question(

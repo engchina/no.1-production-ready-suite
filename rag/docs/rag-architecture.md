@@ -2,7 +2,7 @@
 
 このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。Backend は OCI Enterprise AI / OCI Generative AI / Oracle AI Database を直接使い、local / oci の実行モード切り替えは持ちません。
 
-回答は回答フロー（`app/rag/docrag_answer.py`・`packages/docrag_core`。#594）だけが行う。旧 standard の回答エンジン（検索モード・根拠確認・回答スタイル・高度な検索・Agent Memory）は #595 で削除した。Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法と回答フローの対応は [AIDB Memory Engineering](./aidb-memory-engineering.md) を正とする。回答は `依頼 → 安全チェック → 検索範囲の確定 → 質問の理解と質問拡張 → hybrid 検索（RRF）→ Rerank → 根拠の評価と補正検索（CRAG）→ small-to-big → 回答の生成と監査 → 回答側の安全チェック` の順に扱い、単純な vector 類似 chunk 投入に戻さない。
+回答は回答フロー（`app/rag/answer_engine.py`・`packages/rag_engine`。#594）だけが行う。旧 standard の回答エンジン（検索モード・根拠確認・回答スタイル・高度な検索・Agent Memory）は #595 で削除した。Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法と回答フローの対応は [AIDB Memory Engineering](./aidb-memory-engineering.md) を正とする。回答は `依頼 → 安全チェック → 検索範囲の確定 → 質問の理解と質問拡張 → hybrid 検索（RRF）→ Rerank → 根拠の評価と補正検索（CRAG）→ small-to-big → 回答の生成と監査 → 回答側の安全チェック` の順に扱い、単純な vector 類似 chunk 投入に戻さない。
 
 ## パイプライン
 
@@ -64,15 +64,15 @@
    - 外部ベクトル DB は使わない。
 
 6. ハイブリッド検索
-   - API: `POST /api/search`（回答）。検索は回答フローの中で行う（`DocragAnswerEngine._search`）。
+   - API: `POST /api/search`（回答）。検索は回答フローの中で行う（`AnswerEngine._search`）。
    - Oracle AI Vector Search と Oracle Text（keyword）を Reciprocal Rank Fusion で統合する（`OracleClient.hybrid_search`）。RRF 定数は `RAG_RRF_K` で調整する。HyDE の仮説文書など、質問の拡張が vector だけで引く検索文は vector 検索にする。
-   - 質問の拡張（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング。ほかに `simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）が作った複数の検索文は、原質問を主軸にした重み付き RRF で融合する（派生の検索文は合計で原質問 1 本分の重みに抑える）。質問の理解（`inquiry_conditions`）が名指しした文書名・ページ・業務（大分類）は検索条件と profile / business_match のチャネルに加える（`docs/docrag-port.md`）。
+   - 質問の拡張（`RAG_QUERY_STRATEGY`。既定は自動ルーティング。ほかに `simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）が作った複数の検索文は、原質問を主軸にした重み付き RRF で融合する（派生の検索文は合計で原質問 1 本分の重みに抑える）。質問の理解（`inquiry_conditions`）が名指しした文書名・ページ・業務（大分類）は検索条件と profile / business_match のチャネルに加える（`docs/rag-engine.md`）。
    - `SearchRequest` の `mode`・`strategy`・`rerank_top_n`・`generation_profile` は #595 で削除した。旧クライアントが送っても 422 にせず読み捨てる。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。
    - `source_acl` と `document_version` は Oracle chunk metadata に対する完全一致 filter として使い、AIDB RAG の Business Context Pack で tenant / ACL / dataset / version を検索前に固定する。
    - keyword score は重複を除いた query token coverage として 0.0-1.0 に正規化する。
-   - keyword（Oracle Text）の検索語の分割は 1 つだけで、設定では選ばない（#588。`docrag_core` の `retrieval/text_search_tokenizer.py`）。Sudachi の長い単位（C）と短い単位（A）を主の語にし、文字種の区切り（漢字・カタカナ・英数字の連続）・漢字の複合語の先頭 2 字と末尾 2 字・送り仮名を除いた形（「取り消し」→「取消」）を補う語として足す。業務ビューのドメインキーワードは 1 語として優先する。語は `ACCUM` で結び、重みはキーワード 2・主の語 1・補う語と 1 字の語 0.5（多くの語に当たる chunk ほど上にし、補った語だけの一致は軽くする）。語は最大 24 語、query は最大 3,800 文字。Sudachi の辞書が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。索引の側（`RAG_TEXT_WORLD_LEXER` = `WORLD_LEXER`）は変えない。回答の検索とフィードバックの検索は同じ分割を使う。
+   - keyword（Oracle Text）の検索語の分割は 1 つだけで、設定では選ばない（#588。`rag_engine` の `retrieval/text_search_tokenizer.py`）。Sudachi の長い単位（C）と短い単位（A）を主の語にし、文字種の区切り（漢字・カタカナ・英数字の連続）・漢字の複合語の先頭 2 字と末尾 2 字・送り仮名を除いた形（「取り消し」→「取消」）を補う語として足す。業務ビューのドメインキーワードは 1 語として優先する。語は `ACCUM` で結び、重みはキーワード 2・主の語 1・補う語と 1 字の語 0.5（多くの語に当たる chunk ほど上にし、補った語だけの一致は軽くする）。語は最大 24 語、query は最大 3,800 文字。Sudachi の辞書が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。索引の側（`RAG_TEXT_WORLD_LEXER` = `WORLD_LEXER`）は変えない。回答の検索とフィードバックの検索は同じ分割を使う。
    - vector / keyword / hybrid の同点は document id、chunk index、chunk id で安定順にし、評価の再現性を保つ。
    - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
 
@@ -82,26 +82,26 @@
    - GraphRAG/navigation/metadata layer が未 materialize の場合は diagnostics と KB 詳細で `planned_only` / `needs_reingest` を表示し、構築済みと見せない。
 
 8. リランク
-   - 本番は OCI Generative AI Cohere Rerank v4 fast。回答フローは融合した検索候補を rerank で並べ替える（`RAG_DOCRAG_RERANK_ENABLED`。既定は有効）。
+   - 本番は OCI Generative AI Cohere Rerank v4 fast。回答フローは融合した検索候補を rerank で並べ替える（`RAG_RERANK_ENABLED`。既定は有効）。
    - OCI rerank の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
-   - 根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文（`docrag_parent_text`）で親子を復元し（small-to-big）、根拠の child の前後の child（`RAG_DOCRAG_NEIGHBOR_CHILD_COUNT`、既定 3）を文脈に足す。
+   - 根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文（`parent_text`）で親子を復元し（small-to-big）、根拠の child の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`、既定 3）を文脈に足す。
    - 旧 standard の検索後処理（本文 hash の重複除去・MMR の多様化・近傍 / 依存 chunk の追加・圧縮と、`RAG_CONTEXT_WINDOW_CHARS` などの設定）は #595 で削除した。
 
 9. AIDB Memory Engineering
    - 検索 request ごとに Business Context Pack（検索範囲）を作る。tenant/user/role は raw 値を保存せず hash だけを持ち、document/category/knowledge base scope、`source_acl`、`document_version` を検索条件に固定する。
-   - 回答フローの根拠確認（CRAG）は、検索結果の根拠を評価し、足りなければ質問を補正して再検索する（`RAG_DOCRAG_ANSWER_FLOW=crag`。`standard_rag` は補正検索をしない）。回答文の生成後にも根拠との整合を確かめ（監査）、根拠が足りないときは理由（`insufficient_reason`）と人手確認の要否を付ける。
+   - 回答フローの根拠確認（CRAG）は、検索結果の根拠を評価し、足りなければ質問を補正して再検索する（`RAG_ANSWER_FLOW=crag`。`standard_rag` は補正検索をしない）。回答文の生成後にも根拠との整合を確かめ（監査）、根拠が足りないときは理由（`insufficient_reason`）と人手確認の要否を付ける。
    - 関係情報の構築は `rag_graph_profile`(`app/rag/graph_adapter.py`)で選ぶ。`off`(既定。構築しない)/ `entities`(構築する)の 2 つで、`entities` は文書全体と章・節の見出し(表・図を含む)を「含む」でつないだ entity / relationship を LLM を使わずに作る(`app/rag/graph_index.py`)。claims / community summary まで作る `full` と legacy の `RAG_GRAPH_ENABLED` は、読む経路が無かったため #621 で削除した(表 `rag_graph_claims`・`rag_graph_community_summaries` は migration で削除)。ingest の graph gate は `resolve_graph_adapter(...).enabled`。構築判定・文書の実効設定の表示・文書レシピの上書きの正本は `rag_graph_profile` 1 つ。graph の行の `knowledge_base_id` は取込時の所属のスナップショットなので、KB のグラフ表示は今もその KB に所属している文書の行だけを返す。回答の検索は graph を使わない（検索時の graph の検索は #595 で削除した）。設定 API `GET/PATCH /api/settings/graph` と専用設定画面で切替する。変更は次回以降の取込に適用され、既存文書への反映には再取込が必要。外部グラフ DB は導入しない。
    - Memory Router / Retrieval Plan・Resolver / Verifier・Context Builder・Agent Memory（`rag_agent_memories` への検索と writeback）は #595 で削除し、テーブルは #596 で削除した。監査の列は既存の監査の行を変えないため残す。
 
 10. 回答生成
-   - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成のプロンプト（検索・回答設定 > 回答プロンプト。`rag_docrag_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
-   - チャットでは、会話履歴から質問を単独で意味が通る形に書き換えてから回答する（`RAG_DOCRAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。
+   - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成のプロンプト（検索・回答設定 > 回答プロンプト。`rag_answer_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
+   - チャットでは、会話履歴から質問を単独で意味が通る形に書き換えてから回答する（`RAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - 生成後に回答側の安全チェックで secret leakage をブロックし、回答と根拠の文脈の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返す。
    - `/api/search`・`/api/search/stream`・チャットの送信は、回答を LLM で生成するため `RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）で pipeline 実行時間を制限する（#375。品質評価の 1 ケースも同じ上限で打ち切る。#383）。通常検索は timeout 時に 504 を返す。SSE は stream 開始後に timeout した場合、HTTP status は維持して `error` event（`message` に時間切れになった工程と再試行の案内、`stage` に工程名）を返し、どちらも `rag_search_audit.error_stage=timeout` を残す。
-   - 進捗の stage は `docrag_history_rewrite`（会話履歴による質問の書き換え）・`docrag_answer`（回答フロー）と、その中の入れ子の工程 `answer_step:<工程名>`（「質問の理解」「文書検索（1回目）」など）、検索だけの経路の `retrieval` を通知する（#375 / #593）。画面（RAG 検索・チャット）は今の工程と経過時間を出す。
-   - stage は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。回答フローの工程ごとの時間は `diagnostics.docrag.execution_steps` に残る（負荷試験 CLI `search_load_cli` はこれで工程の p95 を集計する）。
+   - 進捗の stage は `history_rewrite`（会話履歴による質問の書き換え）・`answer`（回答フロー）と、その中の入れ子の工程 `answer_step:<工程名>`（「質問の理解」「文書検索（1回目）」など）、検索だけの経路の `retrieval` を通知する（#375 / #593）。画面（RAG 検索・チャット）は今の工程と経過時間を出す。
+   - stage は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。回答フローの工程ごとの時間は `diagnostics.answer.execution_steps` に残る（負荷試験 CLI `search_load_cli` はこれで工程の p95 を集計する）。
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
    - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は工程ごとの `started` / `success` / `error` と低機密 attributes を表す。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。
 

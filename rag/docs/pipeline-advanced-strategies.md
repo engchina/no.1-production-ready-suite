@@ -1,6 +1,6 @@
 # 検索・回答フロー高度戦略の実装計画(段階導入)
 
-> 本ドキュメントは、回答フロー(`app/rag/docrag_answer.py`・`packages/docrag_core`)に追加しうる
+> 本ドキュメントは、回答フロー(`app/rag/answer_engine.py`・`packages/rag_engine`)に追加しうる
 > **実行配線が重い高度な検索・回答方式** の設計メモをまとめる。いずれも確定スタック
 > (OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database)を不変とし、外部ベクトル DB・別
 > LLM provider は導入しない。GPU / 版管理 schema DDL / 実 Oracle を要するものは **本リポジトリの
@@ -10,7 +10,7 @@
 > (`rag_retrieval_strategy`・`app/rag/retrieval_strategy.py`・`retrieval_adapter.py`)、PageIndex-lite の
 > ツリー検索(`app/rag/reasoning_tree.py`)、検索・根拠確認・回答生成の stage サービス
 > (`services/pipeline/{retrieval,grounding,agentic,generation}`)も削除した。以下の戦略を取り入れる場合は、
-> 回答フローの検索(`DocragAnswerEngine._search`。原質問主軸の重み付き RRF)に経路を足す形で設計し直す。
+> 回答フローの検索(`AnswerEngine._search`。原質問主軸の重み付き RRF)に経路を足す形で設計し直す。
 
 最終更新: 2026-09-30
 
@@ -18,7 +18,7 @@
 
 | 戦略 | 種別 | 現状 |
 |---|---|---|
-| `reasoning_tree_search`(PageIndex 型) | 検索方式 | PageIndex-lite の実装(navigation 要約から LLM が section を選ぶ)と検索モードの選択は #595 で削除した。回答フローでは、画面目録で操作画面を探す(`RAG_DOCRAG_SCREEN_LINKING_ENABLED`。番号付きの見出しの目録から LLM が画面を選ぶ)が近い役割を持つ |
+| `reasoning_tree_search`(PageIndex 型) | 検索方式 | PageIndex-lite の実装(navigation 要約から LLM が section を選ぶ)と検索モードの選択は #595 で削除した。回答フローでは、画面目録で操作画面を探す(`RAG_SCREEN_LINKING_ENABLED`。番号付きの見出しの目録から LLM が画面を選ぶ)が近い役割を持つ |
 | `colpali_visual_retrieval`(ColPali 型) | 検索方式 | 戦略の登録ごと #595 で削除した。未着手 |
 | `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローの回答文の生成後の根拠確認(監査)が近い役割を持つ |
 | Temporal GraphRAG | 関係情報の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
@@ -39,7 +39,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
   既存 `navigation` JSON(`app/rag/navigation.py`)を再利用して node を永続化する。
 - **検索時 navigation**: OCI Enterprise AI に「query + 現在 node の title/summary 群」を渡し、各 node
   で yes/no(展開/スキップ)を JSON で判断 → 命中 leaf の chunk を Oracle から取得。踏破 node 列は
-  回答フローの実行記録(`diagnostics.docrag.execution_steps`)に残して監査可能にする。
+  回答フローの実行記録(`diagnostics.answer.execution_steps`)に残して監査可能にする。
 - **融合**: 回答フローの検索の RRF に 1 チャネルとして加える(画面目録の候補と同じく、足すだけで減らさない)。
 - **opt-in / コスト**: query ごとに複数 LLM 呼び出し。深さ・幅の上限を設け、失敗/未設定時は通常の検索だけで回答する。
 

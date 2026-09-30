@@ -1,6 +1,6 @@
 """選んだ文書解析エンジンで扱えない形式を、取込を始める前に止める判定(#286)。
 
-既定の解析エンジン Docling(parser-docling。DocRAG のレイアウト解析)は PDF と画像だけを解析する。
+既定の解析エンジン Docling(parser-docling。Docling のレイアウト解析)は PDF と画像だけを解析する。
 それ以外(テキスト・Markdown・CSV・JSON・XML・HTML・Office・メール など)を既定のまま取り込むと、
 worker が parser サービスを呼んだ後で失敗する。アップロードの結果と、処理レシピの取込の投入の両方で
 この判定を使い、取込を始める前に理由と対処(処理レシピで Unstructured を選ぶ・サービスを

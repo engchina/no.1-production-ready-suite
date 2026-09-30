@@ -119,7 +119,7 @@ describe("api.request envelope", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     let settled = false;
-    const requestPromise = api.evaluateDocragAnswer("trace-1", "標準回答").catch((error: unknown) => {
+    const requestPromise = api.evaluateAnswerRecord("trace-1", "標準回答").catch((error: unknown) => {
       settled = true;
       return error;
     });
@@ -186,7 +186,7 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "POST" }));
   });
 
-  it("listDocragAnswers はページングと trace_id の絞り込みを query string にする", async () => {
+  it("listAnswerRecords はページングと trace_id の絞り込みを query string にする", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: { items: [], total: 0, limit: 10, offset: 20, has_next: false },
@@ -196,8 +196,8 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const page = await api.listDocragAnswers({ businessViewId: "bv-1", limit: 10, offset: 20 });
-    await api.listDocragAnswers({ businessViewId: "bv-1", limit: 2, traceIds: ["t-1", "t-2"] });
+    const page = await api.listAnswerRecords({ businessViewId: "bv-1", limit: 10, offset: 20 });
+    await api.listAnswerRecords({ businessViewId: "bv-1", limit: 2, traceIds: ["t-1", "t-2"] });
 
     expect(page.total).toBe(0);
     expect(fetchMock.mock.calls[0][0]).toBe(

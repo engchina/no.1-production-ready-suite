@@ -7,7 +7,7 @@ from app.config import Settings
 from app.rag.chunking import CHUNKING_STRATEGIES, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import (
     CHUNKING_STRATEGY_ORDER,
-    DocragChunkingParams,
+    SmallToBigParams,
     chunking_runtime_settings,
     normalize_chunking_strategy,
     resolve_chunking_params,
@@ -279,12 +279,12 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.delimiter == "---"
 
 
-def test_chunking_strategy_order_puts_docrag_where_parent_child_was() -> None:
-    """DocRAG 親子階層は、削除した親子階層の位置(再帰文字分割の次)に並ぶ。"""
+def test_chunking_strategy_order_puts_small_to_big_where_parent_child_was() -> None:
+    """親子階層（small-to-big）は、削除した親子階層の位置(再帰文字分割の次)に並ぶ。"""
     assert CHUNKING_STRATEGY_ORDER == (
         "structure_aware",
         "recursive_character",
-        "docrag_small_to_big",
+        "small_to_big",
         "markdown_heading",
         "page_level",
         "fixed_size",
@@ -293,11 +293,11 @@ def test_chunking_strategy_order_puts_docrag_where_parent_child_was() -> None:
     assert "hierarchical_parent_child" not in CHUNKING_STRATEGIES
 
 
-def test_resolve_chunking_params_reads_docrag_params() -> None:
-    """DocRAG 親子階層の 5 項目を Settings から解決する。既定は rag_poc と同じ。"""
-    defaults = resolve_chunking_params(Settings(rag_chunking_strategy="docrag_small_to_big"))
-    assert defaults.strategy == "docrag_small_to_big"
-    assert defaults.docrag == DocragChunkingParams(
+def test_resolve_chunking_params_reads_small_to_big_params() -> None:
+    """親子階層（small-to-big）の 5 項目を Settings から解決する。既定は rag_poc と同じ。"""
+    defaults = resolve_chunking_params(Settings(rag_chunking_strategy="small_to_big"))
+    assert defaults.strategy == "small_to_big"
+    assert defaults.small_to_big == SmallToBigParams(
         child_target_chars=1000,
         table_child_target_chars=3000,
         parent_target_chars=6000,
@@ -306,15 +306,15 @@ def test_resolve_chunking_params_reads_docrag_params() -> None:
     )
     custom = resolve_chunking_params(
         Settings(
-            rag_chunking_strategy="docrag_small_to_big",
-            rag_docrag_child_target_chars=600,
-            rag_docrag_table_child_target_chars=1200,
-            rag_docrag_parent_target_chars=3000,
-            rag_docrag_parent_max_pages=2,
-            rag_docrag_parent_max_children=6,
+            rag_chunking_strategy="small_to_big",
+            rag_chunk_child_target_chars=600,
+            rag_chunk_table_child_target_chars=1200,
+            rag_chunk_parent_target_chars=3000,
+            rag_chunk_parent_max_pages=2,
+            rag_chunk_parent_max_children=6,
         )
     )
-    assert custom.docrag == DocragChunkingParams(600, 1200, 3000, 2, 6)
+    assert custom.small_to_big == SmallToBigParams(600, 1200, 3000, 2, 6)
 
 
 def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
@@ -326,12 +326,12 @@ def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
     assert selected == ["page_level"]
 
 
-def test_normalize_chunking_strategy_defaults_to_docrag_small_to_big() -> None:
-    # 未知の値は既定(DocRAG 親子階層。#594)へ寄せる。
-    assert normalize_chunking_strategy("nope") == "docrag_small_to_big"
+def test_normalize_chunking_strategy_defaults_to_small_to_big() -> None:
+    # 未知の値は既定(親子階層（small-to-big）。#594)へ寄せる。
+    assert normalize_chunking_strategy("nope") == "small_to_big"
     assert normalize_chunking_strategy("page_level") == "page_level"
     # 撤去済み戦略は後継へ読み替える。
     assert normalize_chunking_strategy("sentence_window") == "recursive_character"
-    # 削除した親子階層は DocRAG 親子階層として扱う(#271)。
-    assert normalize_chunking_strategy("hierarchical_parent_child") == "docrag_small_to_big"
-    assert normalize_chunking_strategy("docrag_small_to_big") == "docrag_small_to_big"
+    # 削除した親子階層は親子階層（small-to-big）として扱う(#271)。
+    assert normalize_chunking_strategy("hierarchical_parent_child") == "small_to_big"
+    assert normalize_chunking_strategy("small_to_big") == "small_to_big"

@@ -307,14 +307,14 @@ class SearchDiagnostics(BaseModel):
     """検索・回答の再現と調査に使う非機密の診断。
 
     旧 standard の回答エンジンの診断(検索の内訳・候補・context の件数・回答スタイルなど)は
-    #595 で削除した。回答の中身の診断は ``docrag`` にある。
+    #595 で削除した。回答の中身の診断は ``answer`` にある。
     """
 
-    # 回答の経路は常に DocRAG。保存済みの評価結果などの古い値も読めるよう str のままにする。
-    retrieval_strategy: str = "docrag"
-    # docrag_grounded(根拠付き回答)/ docrag_retrieval_only(検索だけ)/ blocked(質問の安全チェック)
-    retrieval_strategy_adapter: str = "docrag_grounded"
-    docrag: dict[str, JsonValue] | None = None
+    # 回答の経路は常に回答フロー。保存済みの評価結果などの古い値も読めるよう str のままにする。
+    retrieval_strategy: str = "hybrid"
+    # grounded(根拠付き回答)/ retrieval_only(検索だけ)/ blocked(質問の安全チェック)
+    retrieval_strategy_adapter: str = "grounded"
+    answer: dict[str, JsonValue] | None = None
     guardrail_policy: str = "standard"
     guardrail_backend: str = "local"
     guardrail_degraded: bool = False
@@ -530,7 +530,7 @@ class AnswerRecordDetail(AnswerRecordSummary):
 
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
-    docrag: dict[str, JsonValue] = Field(default_factory=dict)
+    answer_diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
     # 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。
     evaluation_available: bool = False
     evaluation: dict[str, JsonValue] | None = None

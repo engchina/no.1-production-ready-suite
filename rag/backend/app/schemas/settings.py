@@ -78,33 +78,33 @@ from pydantic import (
 )
 
 from app.config import (
+    CHUNK_CHILD_TARGET_CHARS_DEFAULT,
+    CHUNK_CHILD_TARGET_CHARS_MAX,
+    CHUNK_CHILD_TARGET_CHARS_MIN,
     CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_PARENT_MAX_CHILDREN_DEFAULT,
+    CHUNK_PARENT_MAX_CHILDREN_MAX,
+    CHUNK_PARENT_MAX_CHILDREN_MIN,
+    CHUNK_PARENT_MAX_PAGES_DEFAULT,
+    CHUNK_PARENT_MAX_PAGES_MAX,
+    CHUNK_PARENT_MAX_PAGES_MIN,
+    CHUNK_PARENT_TARGET_CHARS_DEFAULT,
+    CHUNK_PARENT_TARGET_CHARS_MAX,
+    CHUNK_PARENT_TARGET_CHARS_MIN,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
-    DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
-    DOCRAG_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_CHILD_TARGET_CHARS_MIN,
-    DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
-    DOCRAG_PARENT_MAX_CHILDREN_MAX,
-    DOCRAG_PARENT_MAX_CHILDREN_MIN,
-    DOCRAG_PARENT_MAX_PAGES_DEFAULT,
-    DOCRAG_PARENT_MAX_PAGES_MAX,
-    DOCRAG_PARENT_MAX_PAGES_MIN,
-    DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
-    DOCRAG_PARENT_TARGET_CHARS_MAX,
-    DOCRAG_PARENT_TARGET_CHARS_MIN,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+    AnswerFlow,
     ChunkingStrategy,
-    DocragAnswerFlow,
-    DocragQueryStrategy,
     EvaluationSuite,
     GraphProfile,
     GuardrailBackend,
     GuardrailPolicyName,
     ParserAdapterBackend,
     PreprocessProfile,
+    QueryStrategy,
     VectorIndexProfile,
 )
 from app.schemas.document import DocumentProcessingConfig
@@ -495,12 +495,12 @@ class ChunkingSettingsData(BaseModel):
     min_chars: int
     delimiter: str
     context_header_enabled: bool
-    # DocRAG 親子階層(docrag_small_to_big)の分割パラメータ(rag_poc と同じ 5 項目)。
-    docrag_child_target_chars: int
-    docrag_table_child_target_chars: int
-    docrag_parent_target_chars: int
-    docrag_parent_max_pages: int
-    docrag_parent_max_children: int
+    # 親子階層（small-to-big。`small_to_big`）の分割パラメータ(rag_poc と同じ 5 項目)。
+    chunk_child_target_chars: int
+    chunk_table_child_target_chars: int
+    chunk_parent_target_chars: int
+    chunk_parent_max_pages: int
+    chunk_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -518,30 +518,30 @@ class ChunkingSettingsUpdate(BaseModel):
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
     context_header_enabled: bool = True
-    docrag_child_target_chars: int = Field(
-        default=DOCRAG_CHILD_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_CHILD_TARGET_CHARS_MAX,
+    chunk_child_target_chars: int = Field(
+        default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_CHILD_TARGET_CHARS_MAX,
     )
-    docrag_table_child_target_chars: int = Field(
-        default=DOCRAG_TABLE_CHILD_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+    chunk_table_child_target_chars: int = Field(
+        default=CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     )
-    docrag_parent_target_chars: int = Field(
-        default=DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
-        ge=DOCRAG_PARENT_TARGET_CHARS_MIN,
-        le=DOCRAG_PARENT_TARGET_CHARS_MAX,
+    chunk_parent_target_chars: int = Field(
+        default=CHUNK_PARENT_TARGET_CHARS_DEFAULT,
+        ge=CHUNK_PARENT_TARGET_CHARS_MIN,
+        le=CHUNK_PARENT_TARGET_CHARS_MAX,
     )
-    docrag_parent_max_pages: int = Field(
-        default=DOCRAG_PARENT_MAX_PAGES_DEFAULT,
-        ge=DOCRAG_PARENT_MAX_PAGES_MIN,
-        le=DOCRAG_PARENT_MAX_PAGES_MAX,
+    chunk_parent_max_pages: int = Field(
+        default=CHUNK_PARENT_MAX_PAGES_DEFAULT,
+        ge=CHUNK_PARENT_MAX_PAGES_MIN,
+        le=CHUNK_PARENT_MAX_PAGES_MAX,
     )
-    docrag_parent_max_children: int = Field(
-        default=DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
-        ge=DOCRAG_PARENT_MAX_CHILDREN_MIN,
-        le=DOCRAG_PARENT_MAX_CHILDREN_MAX,
+    chunk_parent_max_children: int = Field(
+        default=CHUNK_PARENT_MAX_CHILDREN_DEFAULT,
+        ge=CHUNK_PARENT_MAX_CHILDREN_MIN,
+        le=CHUNK_PARENT_MAX_CHILDREN_MAX,
     )
 
     @field_validator("delimiter")
@@ -596,7 +596,7 @@ class QueryHistorySettingsUpdate(QueryHistorySettingsData):
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
 
-class DocragPromptView(BaseModel):
+class AnswerPromptView(BaseModel):
     """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 
     key: Literal["vlm_answer", "image_retrieval"]
@@ -607,35 +607,36 @@ class DocragPromptView(BaseModel):
     updated_at: datetime | None = None
 
 
-class DocragPromptPart(BaseModel):
+class AnswerPromptPart(BaseModel):
     id: str
     content: str
 
 
-class DocragPromptStage(BaseModel):
+class AnswerPromptStage(BaseModel):
     """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
 
     id: str
-    prompts: list[DocragPromptPart]
+    prompts: list[AnswerPromptPart]
 
 
-class DocragPromptsData(BaseModel):
-    prompts: list[DocragPromptView]
-    stages: list[DocragPromptStage]
+class AnswerPromptsData(BaseModel):
+    prompts: list[AnswerPromptView]
+    stages: list[AnswerPromptStage]
 
 
-class DocragPromptUpdate(BaseModel):
+class AnswerPromptUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
 
 
 class AnsweringSettingsData(BaseModel):
-    """回答の検索と生成の全体既定(docrag 回答エンジン。#593)。
+    """回答の検索と生成の全体既定(回答エンジン。#593)。
 
-    業務ビューの「検索・回答設定」で上書きできる。値は backend/.env の RAG_DOCRAG_* に保存する。
+    業務ビューの「検索・回答設定」で上書きできる。値は backend/.env の `RAG_*`(回答の設定)に
+    保存する。
     """
 
-    query_strategy: DocragQueryStrategy
-    answer_flow: DocragAnswerFlow
+    query_strategy: QueryStrategy
+    answer_flow: AnswerFlow
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
@@ -645,8 +646,8 @@ class AnsweringSettingsData(BaseModel):
 class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
-    query_strategy: DocragQueryStrategy | None = None
-    answer_flow: DocragAnswerFlow | None = None
+    query_strategy: QueryStrategy | None = None
+    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None

@@ -52,7 +52,7 @@ export const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_
 const CHUNKING_VALUES = [
   "structure_aware",
   "recursive_character",
-  "docrag_small_to_big",
+  "small_to_big",
   "markdown_heading",
   "page_level",
   "fixed_size",

@@ -23,7 +23,7 @@ import { useExtractionFieldsSettings, useUpdateParserAdapterSettings } from "@/l
 import { APP_ROUTES } from "@/lib/routes";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 
-import { DocragPromptPanel } from "./DocragPromptEditor";
+import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
 
 type PostParseField = "vision_enabled" | "field_extraction_enabled" | "navigation_summary_enabled";
@@ -263,10 +263,10 @@ function VisionExtras() {
       {/* 読み取りの指示は Vision を使うときだけ効く。全体で 1 つなので、既定を無効にしていても編集できる（#497）。 */}
       <Disclosure
         summary={t("settings.parserAdapters.postParse.vision.prompt")}
-        description={t("settings.docragPrompts.image_retrieval.description")}
+        description={t("settings.answerPrompts.image_retrieval.description")}
         surface="sunken"
       >
-        <DocragPromptPanel promptKey="image_retrieval" />
+        <AnswerPromptPanel promptKey="image_retrieval" />
       </Disclosure>
     </>
   );

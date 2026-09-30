@@ -218,7 +218,7 @@ async def test_answer_record_is_saved_with_owner() -> None:
             {
                 "trace_id": "trace-1",
                 "surface": "search",
-                "answer_engine": "docrag",
+                "answer_engine": "grounded",
                 "question": "質問",
                 "answer": "回答",
             }

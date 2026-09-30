@@ -1,12 +1,12 @@
-"""DocRAG LayoutRecord → StructuredExtraction 変換と /parse の options 受け渡し。"""
+"""LayoutRecord → StructuredExtraction 変換と /parse の options 受け渡し。"""
 
 from unittest.mock import patch
 
-from docrag.models.layout import LayoutRecord, PageImage
 from fastapi.testclient import TestClient
+from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_parser_core.extraction import StructuredExtraction
 
-from app.extraction import DOCRAG_LAYOUT_ARTIFACT, layout_to_extraction
+from app.extraction import LAYOUT_ARTIFACT, layout_to_extraction
 from app.main import app
 
 
@@ -59,7 +59,7 @@ def test_layout_records_map_to_elements_tables_assets_and_layout_artifact() -> N
     assert extraction.tables[0].metadata["html"].startswith("<table>")
     assert extraction.assets[0].summary == "登録ボタンの画面"
     assert extraction.elements[4].metadata["vision_retrieval_text"] == "登録ボタンの画面"
-    layout = extraction.parser_artifacts[DOCRAG_LAYOUT_ARTIFACT]
+    layout = extraction.parser_artifacts[LAYOUT_ARTIFACT]
     assert isinstance(layout, dict)
     assert [record["id"] for record in layout["records"]] == [r.id for r in records]
     assert "image_path" not in layout["pages"][0]

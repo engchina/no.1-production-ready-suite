@@ -11,9 +11,9 @@ from app.config import Settings, get_settings
 from app.schemas.common import JsonValue
 from app.schemas.search import SearchDiagnostics, SearchRequest
 
-# 回答の経路。docrag_grounded は根拠付き回答、docrag_retrieval_only は検索だけ
+# 回答の経路。grounded は根拠付き回答、retrieval_only は検索だけ
 # (KB の検索テスト・レシピの検索比較。#593)、blocked は質問の安全チェックで止めたもの。
-RetrievalPath = Literal["docrag_grounded", "docrag_retrieval_only", "blocked"]
+RetrievalPath = Literal["grounded", "retrieval_only", "blocked"]
 
 
 def _effective_vector_target_accuracy(settings: Settings) -> int:
@@ -34,12 +34,12 @@ def build_search_diagnostics(
     settings: Settings | None = None,
     retrieval_strategy_adapter: RetrievalPath,
     guardrail_degraded: bool = False,
-    docrag: Mapping[str, JsonValue] | None = None,
+    answer: Mapping[str, JsonValue] | None = None,
 ) -> SearchDiagnostics:
     """検索実行の再現・調査に使う非機密メタデータを作る。"""
     resolved_settings = settings or get_settings()
     return SearchDiagnostics(
-        retrieval_strategy="docrag",
+        retrieval_strategy="hybrid",
         retrieval_strategy_adapter=retrieval_strategy_adapter,
         guardrail_policy=resolved_settings.rag_guardrail_policy,
         guardrail_backend=resolved_settings.rag_guardrail_backend,
@@ -47,7 +47,7 @@ def build_search_diagnostics(
         filter_keys=sorted(request.filters),
         knowledge_base_count=len(request.knowledge_base_ids),
         config_fingerprint=rag_config_fingerprint(resolved_settings),
-        docrag=dict(docrag) if docrag is not None else None,
+        answer=dict(answer) if answer is not None else None,
     )
 
 
@@ -65,11 +65,11 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "rrf_k": resolved_settings.rag_rrf_k,
         "vector_index_profile": resolved_settings.rag_vector_index_profile,
         "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
-        "docrag_query_strategy": resolved_settings.rag_docrag_query_strategy,
-        "docrag_answer_flow": resolved_settings.rag_docrag_answer_flow,
-        "docrag_neighbor_child_count": resolved_settings.rag_docrag_neighbor_child_count,
-        "docrag_rerank_enabled": resolved_settings.rag_docrag_rerank_enabled,
-        "docrag_screen_linking_enabled": resolved_settings.rag_docrag_screen_linking_enabled,
+        "query_strategy": resolved_settings.rag_query_strategy,
+        "answer_flow": resolved_settings.rag_answer_flow,
+        "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
+        "rerank_enabled": resolved_settings.rag_rerank_enabled,
+        "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

@@ -12,7 +12,7 @@ import pytest
 
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY
+from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY
 from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
 from app.schemas.document import DocumentProcessingConfig
 from app.schemas.extraction import StructuredExtraction
@@ -199,7 +199,7 @@ async def test_first_page_context_is_saved_once_per_chunk_set_and_read_back() ->
         "truncated": False,
     }
     chunks = _chunks("P", 2)
-    chunks[0].metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY] = json.dumps(first_page, ensure_ascii=False)
+    chunks[0].metadata[FIRST_PAGE_CONTEXT_KEY] = json.dumps(first_page, ensure_ascii=False)
 
     await client.save_chunk_preview(document_id, extraction, chunks, chunk_set_id=cs)
     await client.upsert_chunk_set(chunk_set_id=cs, document_id=document_id, status="CHUNKED")
@@ -212,7 +212,7 @@ async def test_first_page_context_is_saved_once_per_chunk_set_and_read_back() ->
     }
     views = await client.list_chunk_set_chunks(cs)
     assert len(views) == 2
-    assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in view.metadata for view in views)
+    assert all(FIRST_PAGE_CONTEXT_KEY not in view.metadata for view in views)
 
     await client.save_index(
         document_id, extraction, _chunks("P", 2), [_EMBEDDING] * 2, chunk_set_id=cs

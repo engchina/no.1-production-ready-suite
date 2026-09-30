@@ -618,7 +618,7 @@ export type DocumentLayerStatusName =
 /** レイヤーの作成後に変わると作り直しが必要になる入力（backend の layer_fingerprint。#550）。 */
 export type DocumentLayerRebuildInput =
   | "field_schema_hash"
-  | "docrag_chunk_contract"
+  | "chunk_metadata_contract"
   | "navigation_summary_max_nodes";
 
 export interface DocumentMaterializationLayerStatus {
@@ -666,11 +666,11 @@ export interface DocumentChunkPreviewRequest {
   chunk_overlap?: number;
   chunk_min_chars?: number;
   chunk_delimiter?: string;
-  docrag_child_target_chars?: number;
-  docrag_table_child_target_chars?: number;
-  docrag_parent_target_chars?: number;
-  docrag_parent_max_pages?: number;
-  docrag_parent_max_children?: number;
+  chunk_child_target_chars?: number;
+  chunk_table_child_target_chars?: number;
+  chunk_parent_target_chars?: number;
+  chunk_parent_max_pages?: number;
+  chunk_parent_max_children?: number;
   chunk_context_header_enabled?: boolean;
 }
 
@@ -762,12 +762,12 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_min_chars: number | null;
-  /** 親子階層（small-to-big）の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。 */
-  docrag_child_target_chars?: number | null;
-  docrag_table_child_target_chars?: number | null;
-  docrag_parent_target_chars?: number | null;
-  docrag_parent_max_pages?: number | null;
-  docrag_parent_max_children?: number | null;
+  /** 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。 */
+  chunk_child_target_chars?: number | null;
+  chunk_table_child_target_chars?: number | null;
+  chunk_parent_target_chars?: number | null;
+  chunk_parent_max_pages?: number | null;
+  chunk_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   field_extraction_enabled: boolean | null;
   navigation_summary_enabled: boolean | null;
@@ -782,15 +782,15 @@ export interface KnowledgeBaseQueryConfig {
   guardrail_policy: GuardrailPolicyName | null;
   // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
   /** 回答フローの設定。null / 未指定はグローバル継承。 */
-  docrag_query_strategy?: DocragQueryStrategyName | null;
-  docrag_answer_flow?: DocragAnswerFlowName | null;
-  docrag_neighbor_child_count?: number | null;
-  docrag_rerank_enabled?: boolean | null;
+  query_strategy?: QueryStrategyName | null;
+  answer_flow?: AnswerFlowName | null;
+  neighbor_child_count?: number | null;
+  rerank_enabled?: boolean | null;
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
-  docrag_screen_linking_enabled?: boolean | null;
+  screen_linking_enabled?: boolean | null;
 }
 
-export type DocragQueryStrategyName =
+export type QueryStrategyName =
   | "auto_routing"
   | "simple_retrieval"
   | "rag_fusion"
@@ -798,7 +798,7 @@ export type DocragQueryStrategyName =
   | "step_back_prompting"
   | "hyde";
 
-export type DocragAnswerFlowName = "crag" | "standard_rag";
+export type AnswerFlowName = "crag" | "standard_rag";
 
 
 /** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
@@ -1058,9 +1058,9 @@ export interface CompareModel {
 }
 
 export interface SearchDiagnostics {
-  /** 回答エンジンの名前（"docrag"）。 */
+  /** 回答エンジンの名前（"grounded"）。 */
   retrieval_strategy: string;
-  /** "docrag_grounded"（回答）/ "docrag_retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
+  /** "grounded"（回答）/ "retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
   retrieval_strategy_adapter?: string;
   guardrail_policy?: string;
   guardrail_backend?: GuardrailBackend;
@@ -1070,7 +1070,7 @@ export interface SearchDiagnostics {
   business_view_applied?: string | null;
   config_fingerprint: string;
   /** 回答エンジンの記録（検索の工程・根拠の評価など）。 */
-  docrag?: Record<string, JsonValue> | null;
+  answer?: Record<string, JsonValue> | null;
 }
 
 export interface SearchResponse {
@@ -1194,11 +1194,11 @@ export interface QuerySuggestionsData {
   suggestions: { question: string; count: number }[];
 }
 
-export type DocragPromptKey = "vlm_answer" | "image_retrieval";
+export type AnswerPromptKey = "vlm_answer" | "image_retrieval";
 
 /** 編集できるプロンプト(回答生成 `vlm_answer` / 図・画像の読み取り `image_retrieval`)。 */
-export interface DocragPromptView {
-  key: DocragPromptKey;
+export interface AnswerPromptView {
+  key: AnswerPromptKey;
   content: string;
   default_content: string;
   customized: boolean;
@@ -1206,8 +1206,8 @@ export interface DocragPromptView {
   updated_at: string | null;
 }
 
-export interface DocragPromptsData {
-  prompts: DocragPromptView[];
+export interface AnswerPromptsData {
+  prompts: AnswerPromptView[];
   /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
   stages: { id: string; prompts: { id: string; content: string }[] }[];
 }
@@ -1323,8 +1323,8 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
 
 /** experiment ごとに一時適用する回答設定（#591）。 */
 export interface EvaluationRagOverrides {
-  query_strategy?: DocragQueryStrategyName | null;
-  answer_flow?: DocragAnswerFlowName | null;
+  query_strategy?: QueryStrategyName | null;
+  answer_flow?: AnswerFlowName | null;
   neighbor_child_count?: number | null;
   rerank_enabled?: boolean | null;
   rrf_k?: number | null;
@@ -1639,7 +1639,7 @@ export type PipelineSettingsUpdate = Partial<Record<PipelineAutoAdvanceField, bo
 export type ChunkingStrategyName =
   | "structure_aware"
   | "recursive_character"
-  | "docrag_small_to_big"
+  | "small_to_big"
   | "markdown_heading"
   | "page_level"
   | "fixed_size"
@@ -1766,11 +1766,11 @@ export interface ChunkingSettingsData {
   delimiter: string;
   context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
-  docrag_child_target_chars: number;
-  docrag_table_child_target_chars: number;
-  docrag_parent_target_chars: number;
-  docrag_parent_max_pages: number;
-  docrag_parent_max_children: number;
+  chunk_child_target_chars: number;
+  chunk_table_child_target_chars: number;
+  chunk_parent_target_chars: number;
+  chunk_parent_max_pages: number;
+  chunk_parent_max_children: number;
   strategies: ChunkingStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1783,17 +1783,17 @@ export interface ChunkingSettingsUpdate {
   delimiter: string;
   context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
-  docrag_child_target_chars: number;
-  docrag_table_child_target_chars: number;
-  docrag_parent_target_chars: number;
-  docrag_parent_max_pages: number;
-  docrag_parent_max_children: number;
+  chunk_child_target_chars: number;
+  chunk_table_child_target_chars: number;
+  chunk_parent_target_chars: number;
+  chunk_parent_max_pages: number;
+  chunk_parent_max_children: number;
 }
 
 /** 回答の検索と生成の全体既定(業務ビューで上書きできる。#593)。 */
 export interface AnsweringSettingsData {
-  query_strategy: DocragQueryStrategyName;
-  answer_flow: DocragAnswerFlowName;
+  query_strategy: QueryStrategyName;
+  answer_flow: AnswerFlowName;
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
@@ -2730,7 +2730,7 @@ export const api = {
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query }),
     ),
-  listDocragAnswers: (params: {
+  listAnswerRecords: (params: {
     businessViewId: string;
     limit: number;
     offset?: number;
@@ -2743,19 +2743,19 @@ export const api = {
       offset: String(params.offset ?? 0),
     });
     for (const traceId of params.traceIds ?? []) search.append("trace_id", traceId);
-    return request<Page<DocragAnswerSummary>>(`/api/search/answers?${search.toString()}`);
+    return request<Page<AnswerRecordSummary>>(`/api/search/answers?${search.toString()}`);
   },
-  getDocragAnswer: (traceId: string) =>
-    request<DocragAnswerDetail>(
+  getAnswerRecord: (traceId: string) =>
+    request<AnswerRecordDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
     ),
-  evaluateDocragAnswer: (traceId: string, standardAnswer: string) =>
-    request<DocragAnswerDetail>(
+  evaluateAnswerRecord: (traceId: string, standardAnswer: string) =>
+    request<AnswerRecordDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}/evaluation`,
       jsonBody({ standard_answer: standardAnswer }),
       { timeoutMs: ANSWER_EVALUATION_TIMEOUT_MS },
     ),
-  deleteDocragAnswer: (traceId: string) =>
+  deleteAnswerRecord: (traceId: string) =>
     request<{ trace_id: string }>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
       {
@@ -2863,15 +2863,15 @@ export const api = {
         ...filters,
       }).toString()}`,
     ),
-  getDocragPrompts: () => request<DocragPromptsData>("/api/settings/docrag-prompts"),
-  saveDocragPrompt: (key: DocragPromptKey, content: string) =>
-    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, {
+  getAnswerPrompts: () => request<AnswerPromptsData>("/api/settings/answer-prompts"),
+  saveAnswerPrompt: (key: AnswerPromptKey, content: string) =>
+    request<AnswerPromptsData>(`/api/settings/answer-prompts/${key}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
     }),
-  resetDocragPrompt: (key: DocragPromptKey) =>
-    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, { method: "DELETE" }),
+  resetAnswerPrompt: (key: AnswerPromptKey) =>
+    request<AnswerPromptsData>(`/api/settings/answer-prompts/${key}`, { method: "DELETE" }),
   promoteFeedbackToApprovedFaq: (id: string) =>
     request<FeedbackApprovedFaqPromotion>(
       `/api/feedback/${encodeURIComponent(id)}/approved-faq`,
@@ -3219,7 +3219,7 @@ export interface RuntimeKnowledgePreviewData {
 }
 
 // --- 保存された回答(rag_poc の answer JSON 相当) ---
-export interface DocragAnswerSummary {
+export interface AnswerRecordSummary {
   trace_id: string;
   business_view_id: string | null;
   surface: "search" | "chat";
@@ -3230,10 +3230,10 @@ export interface DocragAnswerSummary {
   created_at: string;
 }
 
-export interface DocragAnswerDetail extends DocragAnswerSummary {
+export interface AnswerRecordDetail extends AnswerRecordSummary {
   answer: string;
   citations: RetrievedChunk[];
-  docrag: Record<string, JsonValue>;
+  answer_diagnostics: Record<string, JsonValue>;
   /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
   evaluation_available?: boolean;
   /** 標準回答による評価の結果(未評価は null)。 */

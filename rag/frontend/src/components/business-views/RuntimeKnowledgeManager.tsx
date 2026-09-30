@@ -106,7 +106,7 @@ const FIELD_IDS: Record<RequiredField, string> = {
 };
 
 /**
- * 保存前の必須の検証（#540）。規則と文言は backend（docrag_core の edit_knowledge）と同じ:
+ * 保存前の必須の検証（#540）。規則と文言は backend（rag_engine の edit_knowledge）と同じ:
  * 用語は「用語」、ルールは「ルール ID」「ルール名」「ルール内容」が必須。
  */
 export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors {

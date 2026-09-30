@@ -223,7 +223,7 @@ def test_service_runtime_env_injects_oci_enterprise_ai_settings() -> None:
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
-    # docling サービスは Vision を呼ばない(#497)。docrag の接頭辞なしの名前は渡さない。
+    # docling サービスは Vision を呼ばない(#497)。rag_engine の接頭辞なしの名前は渡さない。
     assert "OCI_ENTERPRISE_AI_ENDPOINT" not in env
     assert "OCI_ENTERPRISE_AI_API_KEY" not in env
 

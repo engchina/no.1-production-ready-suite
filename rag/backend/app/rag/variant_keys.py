@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from app.config import DOCRAG_CHUNKING_SETTING_FIELDS, Settings
+from app.config import SMALL_TO_BIG_SETTING_FIELDS, Settings
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v5"
@@ -65,7 +65,19 @@ _CHUNK_SET_FIELDS: tuple[str, ...] = (
 # 削除した親子階層(#271)の子 chunk サイズ(rag_chunk_child_size の既定値)。hash 入力から
 # 外すと既存の chunk_set_id がすべて変わるため、固定値で残して ID を保つ。
 _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE = 320
-_DOCRAG_CHUNKING_STRATEGY = "docrag_small_to_big"
+_SMALL_TO_BIG_STRATEGY = "small_to_big"
+# #599 で分割方式の値と親子階層の 5 項目の属性名を改名した。hash の入力は改名の前の名前のまま
+# 計算し、既存の chunk_set_id(chunk・embedding の共有と再処理の対象の特定に使う)を保つ。
+# 名前を変えて ID が変わると、すべての文書の Chunk と embedding を作り直すことになる。
+# 旧名は hash の入力にだけ使い、設定・保存値としては読まない。
+_CHUNK_SET_HASH_NAMES: dict[str, str] = {
+    "rag_chunk_child_target_chars": "rag_docrag_child_target_chars",
+    "rag_chunk_table_child_target_chars": "rag_docrag_table_child_target_chars",
+    "rag_chunk_parent_target_chars": "rag_docrag_parent_target_chars",
+    "rag_chunk_parent_max_pages": "rag_docrag_parent_max_pages",
+    "rag_chunk_parent_max_children": "rag_docrag_parent_max_children",
+}
+_CHUNK_SET_HASH_STRATEGY_VALUES: dict[str, str] = {_SMALL_TO_BIG_STRATEGY: "docrag_small_to_big"}
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
 _METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled",)
@@ -93,15 +105,15 @@ def _fields(settings: Settings, names: tuple[str, ...]) -> dict[str, object]:
 def chunk_set_subset(settings: Settings) -> dict[str, object]:
     """chunk_set_id を決める分割軸を返す。
 
-    DocRAG 親子階層のパラメータは、その方式のときだけ、しかも既定値から変えた項目だけを
+    親子階層（small-to-big）のパラメータは、その方式のときだけ、しかも既定値から変えた項目だけを
     加える。既定値のままなら追加前と同じ ID になり、既存の chunk_set をそのまま使える。
     """
     subset: dict[str, object] = {
         **_fields(settings, _CHUNK_SET_FIELDS),
         "rag_chunk_child_size": _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE,
     }
-    if getattr(settings, "rag_chunking_strategy", None) == _DOCRAG_CHUNKING_STRATEGY:
-        for name in DOCRAG_CHUNKING_SETTING_FIELDS:
+    if getattr(settings, "rag_chunking_strategy", None) == _SMALL_TO_BIG_STRATEGY:
+        for name in SMALL_TO_BIG_SETTING_FIELDS:
             value = getattr(settings, name, None)
             if value != Settings.model_fields[name].default:
                 subset[name] = value
@@ -157,9 +169,18 @@ def compute_chunk_set_id(source_sha256: str, settings: Settings) -> str:
     payload: dict[str, object] = {
         "v": KEY_VERSION,
         "er": extraction_recipe_id,
-        **chunk_set_subset(settings),
+        **_chunk_set_hash_input(chunk_set_subset(settings)),
     }
     return _digest("cs", payload)
+
+
+def _chunk_set_hash_input(subset: dict[str, object]) -> dict[str, object]:
+    """chunk_set_id の hash の入力を、#599 の改名の前の名前にそろえる(既存の ID を保つ)。"""
+    hashed = {_CHUNK_SET_HASH_NAMES.get(name, name): value for name, value in subset.items()}
+    strategy = hashed.get("rag_chunking_strategy")
+    if isinstance(strategy, str):
+        hashed["rag_chunking_strategy"] = _CHUNK_SET_HASH_STRATEGY_VALUES.get(strategy, strategy)
+    return hashed
 
 
 def compute_metadata_layer_id(chunk_set_id: str, settings: Settings) -> str:

@@ -6,13 +6,13 @@ VLM は ``FakeDescriber`` に置き換え、表の中の画像は pymupdf で作
 
 分割の方法ごとの結果(修正前 → 修正後):
 
-- Docling(表の説明文は要素の metadata と ``docrag_layout`` の record にだけある)
-  - docrag_small_to_big: 入る → 入る(record の ``table_vision_text`` を chunk に足す)
+- Docling(表の説明文は要素の metadata と ``layout_records`` の record にだけある)
+  - small_to_big: 入る → 入る(record の ``table_vision_text`` を chunk に足す)
   - structure_aware / page_level: 入らない → 入る(表の要素の本文の後ろに補足を足す)
   - recursive_character / markdown_heading / fixed_size / fixed_delimiter: 入らない → 入る
     (Docling の raw_text は表を含まないため、表の位置に補足だけを入れる)
 - Docling 以外(Vision の段が表の本文と raw_text に補足を足す): 全て入る → 入る(二重に足さない)。
-  docrag_small_to_big は docrag_layout がないので構造認識へ縮退し、同じく入る。
+  small_to_big は layout_records がないので構造認識へ縮退し、同じく入る。
 """
 
 from __future__ import annotations
@@ -34,12 +34,12 @@ from rag_pipeline_core.chunking import (
 )
 
 from app.clients.oracle import _chunk_search_text
-from app.rag.docrag_chunking import (
-    DOCRAG_CHUNKING_STRATEGY,
-    DOCRAG_FALLBACK_CHUNKING_STRATEGY,
-    build_docrag_chunks,
-    docrag_fallback_needed,
-    docrag_search_text,
+from app.rag.chunking_small_to_big import (
+    SMALL_TO_BIG_FALLBACK_STRATEGY,
+    SMALL_TO_BIG_STRATEGY,
+    build_parent_child_chunks,
+    engine_search_text,
+    small_to_big_fallback_needed,
 )
 from app.rag.vision import read_figures_with_vision
 from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
@@ -52,11 +52,11 @@ TEMPLATE = "図を説明してください。\n{{image_metadata}}\n{{image}}"
 VISION_TEXT = "受注画面の登録ボタン"
 TABLE_HTML = "<table><tr><th>品目</th><th>画像</th></tr><tr><td>部品A</td><td></td></tr></table>"
 TABLE_MARKDOWN = "| 品目 | 画像 |\n| --- | --- |\n| 部品A | |"
-ALL_STRATEGIES = (*CHUNKING_STRATEGIES, DOCRAG_CHUNKING_STRATEGY)
+ALL_STRATEGIES = (*CHUNKING_STRATEGIES, SMALL_TO_BIG_STRATEGY)
 
 
 class FakeDescriber:
-    """docrag の PictureDescriber の決定論スタブ。"""
+    """rag_engine の PictureDescriber の決定論スタブ。"""
 
     api_mode = "test"
     max_tokens = 1
@@ -144,7 +144,7 @@ def _docling_extraction() -> StructuredExtraction:
             page_number=1,
             bbox=list(item["bbox"]),
             section_path=["受注入力の手順"],
-            source_parser="docling_docrag",
+            source_parser="docling_layout",
             metadata={"category": str(item["category"])},
         )
         for item in records
@@ -155,7 +155,7 @@ def _docling_extraction() -> StructuredExtraction:
         pages=[ExtractionPage(page_number=1, width=width, height=height)],
         parser_artifacts={
             "external_adapter": "docling",
-            "docrag_layout": {
+            "layout_records": {
                 "version": 1,
                 "pages": [
                     {
@@ -213,12 +213,12 @@ def _read(extraction: StructuredExtraction, backend: str) -> StructuredExtractio
 
 
 def _chunks(extraction: StructuredExtraction, strategy: str) -> list[Chunk]:
-    # 取込(``IngestionPipeline``)と同じく、docrag_layout がない文書の DocRAG 親子階層は
+    # 取込(``IngestionPipeline``)と同じく、layout_records がない文書の親子階層（small-to-big）は
     # 構造認識で分割する(#300)。
-    if docrag_fallback_needed(strategy, extraction):
-        strategy = DOCRAG_FALLBACK_CHUNKING_STRATEGY
-    elif strategy == DOCRAG_CHUNKING_STRATEGY:
-        return build_docrag_chunks(extraction, source_name="manual.pdf")
+    if small_to_big_fallback_needed(strategy, extraction):
+        strategy = SMALL_TO_BIG_FALLBACK_STRATEGY
+    elif strategy == SMALL_TO_BIG_STRATEGY:
+        return build_parent_child_chunks(extraction, source_name="manual.pdf")
     return chunk_extraction_with_strategy(
         extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=0
     )
@@ -226,7 +226,7 @@ def _chunks(extraction: StructuredExtraction, strategy: str) -> list[Chunk]:
 
 def _embedding_input(chunk: Chunk) -> str:
     # ``IngestionPipeline._chunk_embedding_inputs`` と同じ選び方(文脈ヘッダは無効のとき)。
-    return docrag_search_text(chunk.metadata) or chunk.text
+    return engine_search_text(chunk.metadata) or chunk.text
 
 
 @pytest.fixture(scope="module")
@@ -248,7 +248,7 @@ def test_docling_keeps_table_vision_text_out_of_the_element_body(
     assert table.metadata["table_vision_text"]
     assert VISION_TEXT in str(table.metadata["vision_retrieval_text"])
     assert VISION_TEXT not in docling_result.raw_text
-    layout: Any = docling_result.parser_artifacts["docrag_layout"]
+    layout: Any = docling_result.parser_artifacts["layout_records"]
     record = layout["records"][2]
     assert record["text"] == TABLE_HTML
     assert VISION_TEXT in record["raw"]["table_vision_text"]
