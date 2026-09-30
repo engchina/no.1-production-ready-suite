@@ -161,27 +161,6 @@ DOCRAG_CHUNKING_SETTING_FIELDS: tuple[str, ...] = (
     "rag_docrag_parent_max_pages",
     "rag_docrag_parent_max_children",
 )
-# 検索モード(排他選択)。設定 API の保存はこの5値のみ。
-RetrievalMode = Literal[
-    "hybrid_rrf",
-    "vector",
-    "keyword",
-    "graph_augmented",
-    "reasoning_tree_search",
-]
-# 読み取り互換の全戦略。legacy 複合値(business_context_strict / corrective_multi_query)は
-# 既存 .env / Business View JSON の validation を落とさないため残し、解決時に
-# rag_pipeline_core.decompose_retrieval_strategy でモード + トグルへ読み替える。
-RetrievalStrategy = Literal[
-    "hybrid_rrf",
-    "vector",
-    "keyword",
-    "graph_augmented",
-    "business_context_strict",
-    "corrective_multi_query",
-    "reasoning_tree_search",
-    "colpali_visual_retrieval",
-]
 # DocRAG 回答フローの選択肢(docrag.generation.answer_models の ID と一致させる)。
 DocragQueryStrategy = Literal[
     "auto_routing",
@@ -192,27 +171,10 @@ DocragQueryStrategy = Literal[
     "hyde",
 ]
 DocragAnswerFlow = Literal["crag", "standard_rag"]
-PostRetrievalPipeline = Literal[
-    "custom",
-    "lean",
-    "verified_context",
-    "context_enrich",
-    "compact",
-    "full_governed",
-]
 # 配信モード(業務ビュー層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
 # single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
 # source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
 ServingMode = Literal["single", "fused", "routed"]
-GenerationProfile = Literal[
-    "grounded_concise",
-    "detailed_cited",
-    "strict_extractive",
-    "structured_json",
-    "bilingual_ja_en",
-    "inline_cited",
-    "custom",
-]
 GuardrailPolicyName = Literal[
     "standard",
     "strict",
@@ -240,14 +202,6 @@ GraphProfile = Literal[
     "off",
     "entities",
     "full",
-]
-AgenticProfile = Literal[
-    "off",
-    "smart_routing",
-    "query_rewrite",
-    "hyde",
-    "decompose",
-    "multi_hop",
 ]
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -698,60 +652,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"
         ),
     )
-    rag_context_window_chars: int = Field(default=12000, ge=1000, le=100000)
-    rag_context_neighbor_window: int = Field(
-        default=0,
-        ge=0,
-        le=5,
-        description=("rerank 後の anchor chunk の前後から LLM context へ追加する隣接 chunk 数。"),
-    )
-    rag_context_diversity_lambda: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description=("生成 context anchor の MMR 風 diversity 重み。1.0 は rerank 順を維持する。"),
-    )
-    rag_context_group_expansion_enabled: bool = Field(
-        default=False,
-        description=(
-            "rerank 後の anchor chunk と同じ親 chunk group の sibling を LLM context へ追加する。"
-        ),
-    )
     rag_context_group_max_chunks: int = Field(
         default=4,
         ge=1,
         le=20,
         description="同一 chunk group から anchor ごとに追加する sibling chunk 数の上限。",
-    )
-    rag_context_adaptive_expansion_enabled: bool = Field(
-        default=False,
-        description=(
-            "query overlap と section/chunk group lineage で必要な隣接 context だけを追加する。"
-        ),
-    )
-    rag_context_adaptive_neighbor_window: int = Field(
-        default=1,
-        ge=0,
-        le=5,
-        description="adaptive context expansion が確認する anchor 前後 chunk 数。",
-    )
-    rag_context_adaptive_min_overlap: float = Field(
-        default=0.08,
-        ge=0.0,
-        le=1.0,
-        description="adaptive context expansion で query feature overlap による追加を許す下限。",
-    )
-    rag_context_dependency_promotion_enabled: bool = Field(
-        default=False,
-        description=(
-            "rerank 後に parent/child element lineage で関連 chunk を context 候補へ昇格する。"
-        ),
-    )
-    rag_context_dependency_max_chunks: int = Field(
-        default=4,
-        ge=1,
-        le=20,
-        description="dependency-linked context promotion で anchor ごとに追加する chunk 数の上限。",
     )
     rag_navigation_summary_enabled: bool = Field(
         default=False,
@@ -773,58 +678,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 ON。項目の定義が 0 件の"
             "ときは何もしない。#537）。"
         ),
-    )
-    rag_context_compression_enabled: bool = Field(
-        default=False,
-        description=(
-            "LLM context 投入前に query 関連 sentence/line だけを抽出して chunk text を圧縮する。"
-        ),
-    )
-    rag_grounding_crag_confidence_threshold: float = Field(
-        default=0.35,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "CRAG evidence grade の低閾値。rerank 最高スコアがこの値未満なら低 grade"
-            "(棄権 opt-in の対象)。閾値 0.0 は CRAG 全体を実質無効にする(互換)。"
-        ),
-    )
-    rag_crag_high_confidence_threshold: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "CRAG evidence grade の高閾値。rerank 最高スコアがこの値以上なら精緻化再検索を"
-            "行わずそのまま生成する。低閾値との間は中間帯(精緻化 + 再検索)。"
-        ),
-    )
-    rag_crag_max_hops: int = Field(
-        default=1,
-        ge=0,
-        le=3,
-        description=(
-            "CRAG 中間帯・低帯でのクエリ精緻化 + 再検索の hop 上限。1 は従来の 1 回リトライ相当。"
-            "0 は再検索なし(grade 判定と棄権のみ)。"
-        ),
-    )
-    rag_crag_low_evidence_abstain_enabled: bool = Field(
-        default=False,
-        description=(
-            "CRAG 低 grade(再検索後も低閾値未満)のとき回答を棄権する(opt-in)。"
-            "無効時は従来どおり best-effort で生成する。"
-        ),
-    )
-    rag_context_compression_max_sentences: int = Field(
-        default=3,
-        ge=1,
-        le=10,
-        description="context compression で 1 chunk から残す sentence/line 数の上限。",
-    )
-    rag_context_compression_max_chars_per_chunk: int = Field(
-        default=1200,
-        ge=200,
-        le=8000,
-        description="context compression 後の 1 chunk あたり最大文字数。",
     )
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0)
     rag_rrf_k: int = Field(
@@ -929,23 +782,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "全文検索で分割せず 1 語として優先する。"
         ),
     )
-    rag_query_expansion_enabled: bool = Field(
-        default=True,
-        description="retrieval 前に deterministic な業務同義語 query expansion を行う。",
-    )
-    rag_query_expansion_llm_enabled: bool = Field(
-        default=False,
-        description=(
-            "query expansion に OCI Enterprise AI のマルチクエリ生成を使う(opt-in)。"
-            "検索ごとに LLM 呼び出しが 1 回増える。失敗時は決定論の同義語展開へ縮退する。"
-        ),
-    )
-    rag_query_expansion_max_variants: int = Field(
-        default=3,
-        ge=1,
-        le=8,
-        description="query expansion で retrieval に使う query variant 数の上限。",
-    )
     rag_embedding_cache_enabled: bool = Field(
         default=True,
         description=(
@@ -989,39 +825,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "未整備環境では hybrid へ安全に fallback する。"
         ),
     )
-    rag_stream_realtime_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enterprise AI のリアルタイム token stream を使う場合の feature flag。"
-            "無効時も既存 SSE event contract は維持する。"
-        ),
-    )
-    rag_agent_memory_search_enabled: bool = Field(
-        default=True,
-        description=(
-            "Oracle AI Database に保存した Agent Memory を履歴 memory として retrieval に加える。"
-            "user/thread/agent scope がない request では安全側で無効化する。"
-        ),
-    )
-    rag_agent_memory_writeback_enabled: bool = Field(
-        default=True,
-        description=(
-            "根拠付き回答の要約を Oracle AI Database の Agent Memory へ writeback する。"
-            "user/thread/agent scope がない request では保存しない。"
-        ),
-    )
-    rag_agent_memory_top_k: int = Field(
-        default=3,
-        ge=0,
-        le=20,
-        description="Agent Memory retrieval で取得する履歴 memory 数。",
-    )
-    rag_agent_memory_max_chars: int = Field(
-        default=1200,
-        ge=100,
-        le=4000,
-        description="Agent Memory に保存する回答要約 text の最大文字数。",
-    )
     db_read_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,
@@ -1037,80 +840,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_pdf_max_pages_per_segment: int = Field(default=10, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
-    rag_retrieval_strategy: RetrievalStrategy = Field(
-        default="hybrid_rrf",
-        description=(
-            "検索モード。hybrid_rrf は hybrid + RRF、vector/keyword は単一モード、"
-            "graph_augmented は構造寄り。legacy 複合値(business_context_strict / "
-            "corrective_multi_query)は読み取り互換でモード + トグルへ分解する(保存は新形式のみ)。"
-            "per-request の strategy/mode を明示した場合はそちらを優先する。"
-        ),
-    )
-    rag_retrieval_gap_stop_enabled: bool = Field(
-        default=False,
-        description="スコープ未確定(tenant/ACL/KB 等が無指定)のとき検索を停止する gap-stop。",
-    )
-    rag_retrieval_business_fit_weighting_enabled: bool = Field(
-        default=False,
-        description="rerank 後スコアへ業務適合(版状態・ACL・版指定)の加重を掛ける。",
-    )
-    rag_retrieval_corrective_enabled: bool = Field(
-        default=False,
-        description="根拠不足時に条件緩和 + 再検索する補正検索(CRAG)。",
-    )
-    rag_reasoning_tree_max_sections: int = Field(
-        default=3,
-        ge=1,
-        le=8,
-        description=(
-            "ツリー検索(reasoning_tree_search)で LLM が選ぶ section 数の上限。"
-            "選んだ section ごとに section_path フィルタ付き検索を 1 回行う。"
-        ),
-    )
     rag_serving_mode: ServingMode = Field(
         default="fused",
         description="文書内の全 active レシピを RRF 融合し source-span 重複除去する。",
-    )
-    rag_post_retrieval_pipeline: PostRetrievalPipeline = Field(
-        default="custom",
-        description=(
-            "検索後処理の Grounding アダプター。custom は既存 rag_context_* フラグを尊重し、"
-            "lean/verified_context/context_enrich/compact/full_governed は検証・整形段の"
-            "プリセットとして任意段(diversity/expansion/dependency/compression)を束ねる。"
-        ),
-    )
-    rag_generation_profile: GenerationProfile = Field(
-        default="grounded_concise",
-        description=(
-            "回答生成の Generation アダプター。grounded_concise(既定)は根拠に基づく簡潔な回答、"
-            "detailed_cited は段落ごとの出典 ID 明示、strict_extractive は context の文の抜き出し、"
-            "structured_json は JSON 構造化出力、bilingual_ja_en は日本語+英語要約、"
-            "inline_cited は文ごとの出典付与、custom は有効な回答プロンプト版。"
-            "Oracle の GLOBAL 行が未作成のときの初期値としてだけ使う。"
-        ),
-    )
-    rag_generation_system_prompt_override: str | None = Field(
-        default=None,
-        description=(
-            "業務ビュー(Business View)の persona。回答スタイルを置換せず、公共の安全制約・"
-            "言語・profile 形式制約と決定論的に合成する runtime 値。"
-        ),
-    )
-    rag_generation_default_language: str | None = Field(
-        default=None,
-        description="業務ビューの既定回答言語。bilingual_ja_en の形式制約が優先する。",
-    )
-    rag_generation_custom_prompt: str | None = Field(
-        default=None,
-        description="Oracle active Prompt から解決した custom profile 指示。env へ保存しない。",
-    )
-    rag_generation_custom_prompt_version_id: str | None = Field(
-        default=None,
-        description="Oracle active Prompt の version ID。診断用途のみ。",
-    )
-    rag_generation_config_source: Literal["request", "business_view", "global"] = Field(
-        default="global",
-        description="回答スタイルの最終選択元。",
     )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
@@ -1173,20 +905,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "entities は entities+relationships のみ、full は claims+community summary まで構築。"
             "legacy の RAG_GRAPH_ENABLED=true は full 相当として扱う。"
         ),
-    )
-    rag_agentic_profile: AgenticProfile = Field(
-        default="off",
-        description=(
-            "Agentic アダプター(LLM 補助のクエリ計画)。off(既定)は LLM 計画なし、"
-            "query_rewrite は検索向け書き換え、decompose は sub-question 分解、"
-            "multi_hop は分解 + 弱根拠時に 1 回追加分解。off 以外は追加 LLM 呼び出しが発生する。"
-        ),
-    )
-    rag_agentic_max_subqueries: int = Field(
-        default=3,
-        ge=1,
-        le=8,
-        description="Agentic アダプターが query variant へ注入する sub-question の上限。",
     )
     rag_vector_index_profile: VectorIndexProfile = Field(
         default="accurate",
@@ -1427,18 +1145,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://127.0.0.1:18032",
         description="graphrag ステージマイクロサービスの base URL。",
     )
-    rag_generation_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "generation の system prompt 解決の remote 委譲を許可する。サービス未起動・未到達時は "
-            "backend in-process の同一実装へ縮退する。custom/persona override は "
-            "backend 側で上乗せする。"
-        ),
-    )
-    rag_generation_service_url: str = Field(
-        default="http://127.0.0.1:18033",
-        description="generation ステージマイクロサービスの base URL。",
-    )
     rag_guardrail_service_enabled: bool = Field(
         default=True,
         description=(
@@ -1452,31 +1158,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://127.0.0.1:18034",
         description="guardrail ステージマイクロサービスの base URL。",
     )
-    rag_agentic_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "agentic の profile 解決(クエリ計画の挙動フラグ)の remote 委譲を許可する。"
-            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
-            "OFF は常に in-process。"
-            "実 LLM クエリ計画は backend が OCI Enterprise AI で行う。"
-        ),
-    )
-    rag_agentic_service_url: str = Field(
-        default="http://127.0.0.1:18035",
-        description="agentic ステージマイクロサービスの base URL。",
-    )
-    rag_grounding_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "互換用の standalone grounding サービス設定。"
-            "backend の検索経路は preset を常に in-process で解決するため、この値には依存しない。"
-            "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
-        ),
-    )
-    rag_grounding_service_url: str = Field(
-        default="http://127.0.0.1:18036",
-        description="grounding ステージマイクロサービスの base URL。",
-    )
     rag_evaluation_service_enabled: bool = Field(
         default=True,
         description=(
@@ -1487,19 +1168,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_evaluation_service_url: str = Field(
         default="http://127.0.0.1:18037",
         description="evaluation ステージマイクロサービスの base URL。",
-    )
-    rag_retrieval_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "retrieval の strategy 解決(検索挙動フラグ)の remote 委譲を許可する。"
-            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
-            "OFF は常に in-process。"
-            "実 retrieval(Oracle AI Database 経路)は backend が実行する。"
-        ),
-    )
-    rag_retrieval_service_url: str = Field(
-        default="http://127.0.0.1:18038",
-        description="retrieval ステージマイクロサービスの base URL。",
     )
     rag_raptor_enabled: bool = Field(
         default=False,

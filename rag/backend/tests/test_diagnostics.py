@@ -1,89 +1,64 @@
 """RAG 診断情報のテスト。"""
 
+import pytest
+
 from app.config import Settings
 from app.rag.diagnostics import build_search_diagnostics, rag_config_fingerprint
-from app.schemas.search import SearchMode, SearchRequest
+from app.schemas.search import SearchDiagnostics, SearchRequest
 
 
 def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
-    """検索 diagnostics は実行形状を示し、secret 値を含めない。"""
+    """検索 diagnostics は回答の経路と設定の fingerprint を示し、secret 値を含めない。"""
     settings = Settings(
         oracle_password="super-secret-password",
-        rag_context_window_chars=4096,
-        rag_rrf_k=30,
-        oracle_vector_target_accuracy=90,
-        # 設定の accuracy がそのまま出る balanced に固定する（既定は高精度。#272）。
-        rag_vector_index_profile="balanced",
+        rag_guardrail_policy="strict",
     )
     request = SearchRequest(
         query="承認条件",
         top_k=7,
-        rerank_top_n=3,
-        mode=SearchMode.KEYWORD,
         filters={"status": "indexed", "file_name": "policy"},
+        knowledge_base_ids=["kb-1", "kb-2"],
     )
 
     diagnostics = build_search_diagnostics(
         request,
         settings=settings,
-        memory_plan_id="mp-12345678",
-        business_context={"tenant_scoped": True},
-        retrieval_plan={"memory_sequence": ["evidence", "history"]},
-        retrieved_context_pack={"rejection_reasons": ["access_denied"]},
-        context_builder={"included_count": 2},
-        retrieved_count=7,
-        reranked_count=3,
-        deduplicated_count=1,
-        context_diversified_count=1,
-        context_group_expanded_count=2,
-        context_expanded_count=1,
-        context_compressed_count=1,
-        context_compression_saved_chars=1200,
-        agent_memory_retrieved_count=1,
-        agent_memory_writeback_count=1,
-        agent_memory_writeback_status="saved",
-        evidence_count=1,
-        support_count=1,
-        history_count=1,
-        resolver_rejected_count=1,
-        insufficient_context_count=1,
-        citation_count=2,
-        context_chars=812,
+        retrieval_strategy_adapter="docrag_grounded",
+        guardrail_degraded=True,
+        docrag={"confidence": "high"},
     )
 
-    assert diagnostics.mode == "keyword"
-    assert diagnostics.top_k == 7
-    assert diagnostics.rerank_top_n == 3
-    assert diagnostics.memory_plan_id == "mp-12345678"
-    assert diagnostics.business_context == {"tenant_scoped": True}
-    assert diagnostics.retrieval_plan == {"memory_sequence": ["evidence", "history"]}
-    assert diagnostics.retrieved_context_pack == {"rejection_reasons": ["access_denied"]}
-    assert diagnostics.context_builder == {"included_count": 2}
-    assert diagnostics.retrieved_count == 7
-    assert diagnostics.reranked_count == 3
-    assert diagnostics.deduplicated_count == 1
-    assert diagnostics.context_diversified_count == 1
-    assert diagnostics.context_group_expanded_count == 2
-    assert diagnostics.context_expanded_count == 1
-    assert diagnostics.context_compressed_count == 1
-    assert diagnostics.context_compression_saved_chars == 1200
-    assert diagnostics.agent_memory_retrieved_count == 1
-    assert diagnostics.agent_memory_writeback_count == 1
-    assert diagnostics.agent_memory_writeback_status == "saved"
-    assert diagnostics.evidence_count == 1
-    assert diagnostics.support_count == 1
-    assert diagnostics.history_count == 1
-    assert diagnostics.resolver_rejected_count == 1
-    assert diagnostics.insufficient_context_count == 1
-    assert diagnostics.citation_count == 2
-    assert diagnostics.context_chars == 812
-    assert diagnostics.context_window_chars == 4096
-    assert diagnostics.rrf_k == 30
-    assert diagnostics.query_variant_count == 1
-    assert diagnostics.oracle_vector_target_accuracy == 90
-    assert diagnostics.filter_keys == ["file_name", "status"]
+    assert diagnostics.retrieval_strategy == "docrag"
+    assert diagnostics.retrieval_strategy_adapter == "docrag_grounded"
+    assert diagnostics.guardrail_policy == "strict"
+    assert diagnostics.guardrail_backend == "local"
+    assert diagnostics.guardrail_degraded is True
+    assert diagnostics.docrag == {"confidence": "high"}
+    assert diagnostics.filter_keys == ["file_name", "knowledge_base_id", "status"]
+    assert diagnostics.knowledge_base_count == 2
     assert len(diagnostics.config_fingerprint) == 64
     assert "super-secret-password" not in diagnostics.model_dump_json()
+
+
+def test_search_diagnostics_has_no_removed_standard_fields() -> None:
+    """旧 standard の回答エンジンの診断(検索の内訳・context の件数など)は持たない(#595)。"""
+    fields = set(SearchDiagnostics.model_fields)
+    for removed in (
+        "mode",
+        "retrieval_breakdown",
+        "retrieval_candidates",
+        "generation_profile",
+        "context_expanded_count",
+        "agent_memory_retrieved_count",
+        "stream_stage_timings",
+        "crag_evidence_grade",
+    ):
+        assert removed not in fields
+    # 保存済みの評価結果などに残る古い診断も読める(未知の項目は読み捨てる)。
+    legacy = SearchDiagnostics.model_validate(
+        {"mode": "hybrid", "retrieval_strategy": "hybrid", "retrieval_breakdown": {}}
+    )
+    assert legacy.retrieval_strategy == "hybrid"
 
 
 def test_rag_config_fingerprint_changes_when_rag_parameters_change() -> None:
@@ -115,83 +90,32 @@ def test_rag_config_fingerprint_changes_when_rrf_k_changes() -> None:
     assert first != second
 
 
-def test_rag_config_fingerprint_changes_when_query_expansion_changes() -> None:
-    """fingerprint は query expansion 設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_query_expansion_enabled=True))
-    second = rag_config_fingerprint(Settings(rag_query_expansion_enabled=False))
-    third = rag_config_fingerprint(Settings(rag_query_expansion_max_variants=2))
-
-    assert first != second
-    assert first != third
-
-
-def test_rag_config_fingerprint_changes_when_context_neighbor_window_changes() -> None:
-    """fingerprint は隣接 context expansion 設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_context_neighbor_window=0))
-    second = rag_config_fingerprint(Settings(rag_context_neighbor_window=1))
+def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() -> None:
+    """fingerprint は根拠の group から足す sibling 数の変更も反映する。"""
+    first = rag_config_fingerprint(Settings(rag_context_group_max_chunks=4))
+    second = rag_config_fingerprint(Settings(rag_context_group_max_chunks=2))
 
     assert first != second
 
 
-def test_rag_config_fingerprint_changes_when_context_diversity_changes() -> None:
-    """fingerprint は context diversity 設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_context_diversity_lambda=1.0))
-    second = rag_config_fingerprint(Settings(rag_context_diversity_lambda=0.35))
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"rag_docrag_query_strategy": "rag_fusion"},
+        {"rag_docrag_answer_flow": "standard_rag"},
+        {"rag_docrag_neighbor_child_count": 5},
+        {"rag_docrag_rerank_enabled": False},
+        {"rag_docrag_screen_linking_enabled": True},
+    ],
+    ids=["query_strategy", "answer_flow", "neighbor", "rerank", "screen_linking"],
+)
+def test_rag_config_fingerprint_changes_when_answer_settings_change(
+    update: dict[str, object],
+) -> None:
+    """fingerprint は回答の検索と生成の全体既定の変更も反映する。"""
+    base = Settings()
 
-    assert first != second
-
-
-def test_rag_config_fingerprint_changes_when_context_group_expansion_changes() -> None:
-    """fingerprint は同一 group context expansion 設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_context_group_expansion_enabled=False))
-    second = rag_config_fingerprint(Settings(rag_context_group_expansion_enabled=True))
-    third = rag_config_fingerprint(Settings(rag_context_group_max_chunks=2))
-
-    assert first != second
-    assert first != third
-
-
-def test_rag_config_fingerprint_changes_when_context_compression_changes() -> None:
-    """fingerprint は context compression 設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_context_compression_enabled=False))
-    second = rag_config_fingerprint(Settings(rag_context_compression_enabled=True))
-    third = rag_config_fingerprint(Settings(rag_context_compression_max_sentences=2))
-
-    assert first != second
-    assert first != third
-
-
-def test_rag_config_fingerprint_changes_when_agent_memory_changes() -> None:
-    """fingerprint は Agent Memory 検索・保存設定の変更も反映する。"""
-    first = rag_config_fingerprint(Settings(rag_agent_memory_search_enabled=True))
-    second = rag_config_fingerprint(Settings(rag_agent_memory_search_enabled=False))
-    third = rag_config_fingerprint(Settings(rag_agent_memory_top_k=5))
-    fourth = rag_config_fingerprint(Settings(rag_agent_memory_writeback_enabled=False))
-
-    assert first != second
-    assert first != third
-    assert first != fourth
-
-
-def test_search_diagnostics_target_accuracy_follows_vector_index_profile() -> None:
-    """検索診断の target accuracy は選択 profile 解決後の値を返す(95/98/85)。"""
-    request = SearchRequest(query="承認条件", mode=SearchMode.VECTOR)
-    balanced = build_search_diagnostics(
-        request,
-        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="balanced"),
-    )
-    accurate = build_search_diagnostics(
-        request,
-        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="accurate"),
-    )
-    fast = build_search_diagnostics(
-        request,
-        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="fast"),
-    )
-
-    assert balanced.oracle_vector_target_accuracy == 95
-    assert accurate.oracle_vector_target_accuracy == 98
-    assert fast.oracle_vector_target_accuracy == 85
+    assert rag_config_fingerprint(base) != rag_config_fingerprint(base.model_copy(update=update))
 
 
 def test_rag_config_fingerprint_changes_with_vector_index_profile() -> None:

@@ -10,31 +10,19 @@ from collections.abc import Callable
 
 from fastapi import FastAPI
 
-from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.evaluation import resolve_evaluation
-from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
-from rag_pipeline_core.grounding import resolve_grounding
 from rag_pipeline_core.guardrail import resolve_guardrail
-from rag_pipeline_core.retrieval import resolve_retrieval
 from rag_pipeline_core.stage import (
-    AgenticStageRequest,
-    AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
     EvaluationStageRequest,
     EvaluationStageResponse,
-    GenerationStageRequest,
-    GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
-    GroundingStageRequest,
-    GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
-    RetrievalStageRequest,
-    RetrievalStageResponse,
     StageHealth,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
@@ -104,28 +92,6 @@ def create_graph_app(
     return app
 
 
-def create_generation_app(
-    *, health_probe: HealthProbe | None = None, title: str = "pipeline-generation"
-) -> FastAPI:
-    """generation ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
-    probe = health_probe or (
-        lambda: StageHealth(status="ok", stage="generation", package_name="rag_pipeline_core")
-    )
-    _health_routes(app, probe)
-
-    @app.post("/run", response_model=GenerationStageResponse)
-    def run(request: GenerationStageRequest) -> GenerationStageResponse:
-        resolved = resolve_generation(request.profile)
-        return GenerationStageResponse(
-            profile=resolved.profile,
-            system_prompt=resolved.system_prompt,
-            structured_output=resolved.structured_output,
-        )
-
-    return app
-
-
 def create_guardrail_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-guardrail"
 ) -> FastAPI:
@@ -149,57 +115,6 @@ def create_guardrail_app(
     return app
 
 
-def create_agentic_app(
-    *, health_probe: HealthProbe | None = None, title: str = "pipeline-agentic"
-) -> FastAPI:
-    """agentic ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
-    probe = health_probe or (
-        lambda: StageHealth(status="ok", stage="agentic", package_name="rag_pipeline_core")
-    )
-    _health_routes(app, probe)
-
-    @app.post("/run", response_model=AgenticStageResponse)
-    def run(request: AgenticStageRequest) -> AgenticStageResponse:
-        resolved = resolve_agentic(request.profile)
-        return AgenticStageResponse(
-            profile=resolved.profile,
-            enabled=resolved.enabled,
-            rewrite=resolved.rewrite,
-            decompose=resolved.decompose,
-            multi_hop=resolved.multi_hop,
-            smart_routing=resolved.smart_routing,
-            hyde=resolved.hyde,
-        )
-
-    return app
-
-
-def create_grounding_app(
-    *, health_probe: HealthProbe | None = None, title: str = "pipeline-grounding"
-) -> FastAPI:
-    """grounding ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
-    probe = health_probe or (
-        lambda: StageHealth(status="ok", stage="grounding", package_name="rag_pipeline_core")
-    )
-    _health_routes(app, probe)
-
-    @app.post("/run", response_model=GroundingStageResponse)
-    def run(request: GroundingStageRequest) -> GroundingStageResponse:
-        resolved = resolve_grounding(request.pipeline)
-        return GroundingStageResponse(
-            pipeline=resolved.pipeline,
-            dependency_promotion=resolved.dependency_promotion,
-            diversity=resolved.diversity,
-            expansion_mode=resolved.expansion_mode,
-            compression=resolved.compression,
-            corrective=resolved.corrective,
-        )
-
-    return app
-
-
 def create_evaluation_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-evaluation"
 ) -> FastAPI:
@@ -216,32 +131,6 @@ def create_evaluation_app(
         return EvaluationStageResponse(
             suite=resolved.suite,
             thresholds=resolved.thresholds,
-        )
-
-    return app
-
-
-def create_retrieval_app(
-    *, health_probe: HealthProbe | None = None, title: str = "pipeline-retrieval"
-) -> FastAPI:
-    """retrieval ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
-    probe = health_probe or (
-        lambda: StageHealth(status="ok", stage="retrieval", package_name="rag_pipeline_core")
-    )
-    _health_routes(app, probe)
-
-    @app.post("/run", response_model=RetrievalStageResponse)
-    def run(request: RetrievalStageRequest) -> RetrievalStageResponse:
-        resolved = resolve_retrieval(request.strategy, request.settings_query_expansion)
-        return RetrievalStageResponse(
-            strategy=resolved.strategy,
-            mode_override=resolved.mode_override,
-            strategy_bias=resolved.strategy_bias,
-            query_expansion=resolved.query_expansion,
-            gap_stop=resolved.gap_stop,
-            corrective_retrieval=resolved.corrective_retrieval,
-            business_fit_weighting=resolved.business_fit_weighting,
         )
 
     return app

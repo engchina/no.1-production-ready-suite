@@ -28,8 +28,8 @@ def _envelope(data: Any, status: int = 200, errors: list[str] | None = None) -> 
 
 
 class FakeApi:
-    def __init__(self, *, strategy: str = "docrag", fail_ids: set[str] | None = None) -> None:
-        self.strategy = strategy
+    def __init__(self, *, path: str = "docrag_grounded", fail_ids: set[str] | None = None) -> None:
+        self.path = path
         self.fail_ids = fail_ids or set()
         self.requests: list[tuple[str, dict[str, Any], dict[str, str]]] = []
 
@@ -45,7 +45,8 @@ class FakeApi:
                     "answer": ANSWER,
                     "citations": [],
                     "diagnostics": {
-                        "retrieval_strategy": self.strategy,
+                        "retrieval_strategy": "docrag",
+                        "retrieval_strategy_adapter": self.path,
                         "docrag": {"confidence": "high", "needs_human_review": False},
                     },
                 }
@@ -130,7 +131,7 @@ def test_answers_evaluates_resumes_and_summarizes(
 def test_answers_records_error_when_answer_has_no_record(tmp_path: Path) -> None:
     """回答フローを通らなかった回答(安全ポリシーで止めた質問など)は評価せず、エラーにする。"""
     qa = _write(tmp_path / "qa.json", [{"id": "a1", "question": "q", "standard_answer": "s"}])
-    api = FakeApi(strategy="hybrid_rrf")
+    api = FakeApi(path="blocked")
 
     main(
         ["answers", "--qa", str(qa), "--business-view", "bv-1", "--out", str(tmp_path / "out")],

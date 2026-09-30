@@ -251,6 +251,44 @@ async def test_docrag_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPa
     assert audits[0]["outcome"] == "success"
     assert audits[0]["citations"] == response.citations
     assert audits[0]["diagnostics"].docrag is not None
+    assert audits[0]["diagnostics"].retrieval_strategy_adapter == "docrag_grounded"
+
+
+async def test_pipeline_blocked_query_does_not_run_answer_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """質問の安全チェックで止めた質問は回答フローを動かさず、監査に blocked を残す。"""
+    import app.rag.pipeline as pipeline_module
+    from app.rag.guardrails import GuardrailFinding, GuardrailResult
+
+    audits: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        pipeline_module, "record_rag_search_audit", lambda **kwargs: audits.append(kwargs)
+    )
+
+    class NoAnswerEngine:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("止めた質問で回答フローを作らない")
+
+    monkeypatch.setattr(pipeline_module, "DocragAnswerEngine", NoAnswerEngine)
+    pipeline = pipeline_module.RagPipeline(
+        settings=Settings(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    blocked = GuardrailResult(
+        allowed=False,
+        sanitized_text="危険な質問",
+        findings=[GuardrailFinding(code="prompt_injection", severity="error", message="拒否")],
+    )
+
+    response = await pipeline.run(SearchRequest(query="危険な質問"), query_guardrail_result=blocked)
+
+    assert response.citations == []
+    assert "安全ポリシー" in response.answer
+    assert response.diagnostics.retrieval_strategy_adapter == "blocked"
+    assert response.diagnostics.docrag is None
+    assert [audit["outcome"] for audit in audits] == ["blocked"]
 
 
 def test_business_view_ignores_removed_text_search_tokenizer_override() -> None:

@@ -129,8 +129,9 @@ def run_answers(
         try:
             answer = api.search(str(item["question"]), business_view_id)
             record.update(trace_id=answer.get("trace_id"), answer=answer.get("answer", ""))
-            strategy = (answer.get("diagnostics") or {}).get("retrieval_strategy")
-            if strategy != "docrag":
+            # 回答の記録を残すのは根拠付き回答だけ(安全ポリシーで止めた質問は "blocked")。
+            answer_path = (answer.get("diagnostics") or {}).get("retrieval_strategy_adapter")
+            if answer_path != "docrag_grounded":
                 raise VerifyError(
                     "回答の記録が無い回答(安全ポリシーで止めた質問など)のため、"
                     "標準回答で評価できません。"

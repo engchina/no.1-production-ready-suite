@@ -93,33 +93,10 @@ def test_unknown_chunking_strategy_is_rejected() -> None:
         Settings(rag_chunking_strategy="semantic_double_pass")
 
 
-def test_retrieval_and_grounding_defaults_match_current_behavior() -> None:
-    """Retrieval/Grounding アダプターの既定は現行挙動と一致させる。"""
+def test_guardrail_default_matches_current_behavior() -> None:
+    """Guardrail アダプターの既定は現行挙動と一致させる。"""
     settings = Settings()
-    assert settings.rag_retrieval_strategy == "hybrid_rrf"
-    assert settings.rag_post_retrieval_pipeline == "custom"
-
-
-def test_unknown_retrieval_strategy_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Settings(rag_retrieval_strategy="hyde_fusion")
-
-
-def test_unknown_post_retrieval_pipeline_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Settings(rag_post_retrieval_pipeline="agentic_loop")
-
-
-def test_generation_and_guardrail_defaults_match_current_behavior() -> None:
-    """Generation/Guardrail アダプターの既定は現行挙動と一致させる。"""
-    settings = Settings()
-    assert settings.rag_generation_profile == "grounded_concise"
     assert settings.rag_guardrail_policy == "standard"
-
-
-def test_unknown_generation_profile_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Settings(rag_generation_profile="chain_of_thought")
 
 
 def test_unknown_guardrail_policy_is_rejected() -> None:
@@ -164,11 +141,6 @@ def test_unknown_graph_profile_is_rejected() -> None:
         Settings(rag_graph_profile="neo4j")
 
 
-def test_agentic_profile_defaults_to_off() -> None:
-    """Agentic アダプターの既定 off は LLM 計画なし(現行挙動)と一致させる。"""
-    assert Settings(_env_file=None).rag_agentic_profile == "off"
-
-
 def test_oracle_defaults_to_thin_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """既定は Thin mode で、Wallet は PLATFORM_ORACLE_WALLET_DIR（NL2SQL / terraform と同じ）。"""
     monkeypatch.delenv("PLATFORM_ORACLE_CLIENT_LIB_DIR", raising=False)
@@ -183,19 +155,6 @@ def test_oracle_client_lib_dir_switches_to_thick_mode() -> None:
     settings = Settings(_env_file=None, oracle_client_lib_dir="/opt/oracle/instantclient_23_26")
     assert settings.oracle_driver_mode == "thick"
     assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
-
-
-def test_unknown_agentic_profile_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Settings(rag_agentic_profile="react_agent")
-
-
-def test_agentic_max_subqueries_defaults_and_bounds() -> None:
-    assert Settings().rag_agentic_max_subqueries == 3
-    with pytest.raises(ValidationError):
-        Settings(rag_agentic_max_subqueries=0)
-    with pytest.raises(ValidationError):
-        Settings(rag_agentic_max_subqueries=9)
 
 
 def test_embedding_dimension_is_fixed_to_oracle_vector_width() -> None:
@@ -791,19 +750,6 @@ def test_rag_rrf_k_is_bounded() -> None:
         Settings(rag_rrf_k=1001)
 
 
-def test_query_expansion_defaults_and_bounds() -> None:
-    """retrieval query expansion は既定有効で、variant 数を制限する。"""
-    settings = Settings()
-
-    assert settings.rag_query_expansion_enabled is True
-    assert settings.rag_query_expansion_max_variants == 3
-
-    with pytest.raises(ValidationError):
-        Settings(rag_query_expansion_max_variants=0)
-    with pytest.raises(ValidationError):
-        Settings(rag_query_expansion_max_variants=9)
-
-
 def test_genai_cache_defaults_and_bounds() -> None:
     """embedding / rerank cache は既定有効で、容量を安全範囲に制限する。"""
     settings = Settings()
@@ -827,22 +773,10 @@ def test_genai_cache_defaults_and_bounds() -> None:
         Settings(rag_rerank_cache_max_entries=-1)
 
 
-def test_context_diversity_lambda_defaults_to_disabled_and_is_bounded() -> None:
-    """context diversity は既定無効で、MMR 重みは 0-1 に制限する。"""
-    assert Settings().rag_context_diversity_lambda == 1.0
-    assert Settings(rag_context_diversity_lambda=0.35).rag_context_diversity_lambda == 0.35
-
-    with pytest.raises(ValidationError):
-        Settings(rag_context_diversity_lambda=-0.1)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_diversity_lambda=1.1)
-
-
-def test_context_group_expansion_defaults_to_disabled_and_is_bounded() -> None:
-    """context group expansion は既定無効で、追加 sibling 数を制限する。"""
+def test_context_group_max_chunks_is_bounded() -> None:
+    """回答の根拠の group から足す sibling 数(DocRAG の small-to-big)を制限する。"""
     settings = Settings()
 
-    assert settings.rag_context_group_expansion_enabled is False
     assert settings.rag_context_group_max_chunks == 4
     assert Settings(rag_context_group_max_chunks=2).rag_context_group_max_chunks == 2
 
@@ -850,70 +784,6 @@ def test_context_group_expansion_defaults_to_disabled_and_is_bounded() -> None:
         Settings(rag_context_group_max_chunks=0)
     with pytest.raises(ValidationError):
         Settings(rag_context_group_max_chunks=21)
-
-
-def test_context_adaptive_expansion_defaults_to_disabled_and_is_bounded() -> None:
-    """adaptive context expansion は既定無効で、window/overlap を制限する。"""
-    settings = Settings()
-
-    assert settings.rag_context_adaptive_expansion_enabled is False
-    assert settings.rag_context_adaptive_neighbor_window == 1
-    assert settings.rag_context_adaptive_min_overlap == 0.08
-    assert (
-        Settings(
-            rag_context_adaptive_expansion_enabled=True,
-            rag_context_adaptive_neighbor_window=2,
-            rag_context_adaptive_min_overlap=0.2,
-        ).rag_context_adaptive_min_overlap
-        == 0.2
-    )
-
-    with pytest.raises(ValidationError):
-        Settings(rag_context_adaptive_neighbor_window=-1)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_adaptive_neighbor_window=6)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_adaptive_min_overlap=-0.01)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_adaptive_min_overlap=1.01)
-
-
-def test_context_dependency_promotion_defaults_to_disabled_and_is_bounded() -> None:
-    """dependency context promotion は既定無効で、追加 chunk 数を制限する。"""
-    settings = Settings()
-
-    assert settings.rag_context_dependency_promotion_enabled is False
-    assert settings.rag_context_dependency_max_chunks == 4
-    assert (
-        Settings(
-            rag_context_dependency_promotion_enabled=True,
-            rag_context_dependency_max_chunks=2,
-        ).rag_context_dependency_max_chunks
-        == 2
-    )
-
-    with pytest.raises(ValidationError):
-        Settings(rag_context_dependency_max_chunks=0)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_dependency_max_chunks=21)
-
-
-def test_context_compression_defaults_to_disabled_and_is_bounded() -> None:
-    """context compression は既定無効で、sentence/文字数上限を制限する。"""
-    settings = Settings()
-
-    assert settings.rag_context_compression_enabled is False
-    assert settings.rag_context_compression_max_sentences == 3
-    assert settings.rag_context_compression_max_chars_per_chunk == 1200
-
-    with pytest.raises(ValidationError):
-        Settings(rag_context_compression_max_sentences=0)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_compression_max_sentences=11)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_compression_max_chars_per_chunk=199)
-    with pytest.raises(ValidationError):
-        Settings(rag_context_compression_max_chars_per_chunk=8001)
 
 
 def test_rate_limit_defaults_protect_expensive_endpoints() -> None:

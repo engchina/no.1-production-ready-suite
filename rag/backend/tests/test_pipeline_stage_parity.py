@@ -9,43 +9,27 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from rag_parser_core.extraction import StructuredExtraction
-from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 from rag_pipeline_core.evaluation import resolve_evaluation
-from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
-from rag_pipeline_core.grounding import resolve_grounding
 from rag_pipeline_core.guardrail import resolve_guardrail
-from rag_pipeline_core.retrieval import resolve_retrieval
 from rag_pipeline_core.stage import (
-    AgenticStageRequest,
-    AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
     EvaluationStageRequest,
     EvaluationStageResponse,
-    GenerationStageRequest,
-    GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
-    GroundingStageRequest,
-    GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
-    RetrievalStageRequest,
-    RetrievalStageResponse,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
 )
 from rag_pipeline_core.stage_service import (
-    create_agentic_app,
     create_chunking_app,
     create_evaluation_app,
-    create_generation_app,
     create_graph_app,
-    create_grounding_app,
     create_guardrail_app,
-    create_retrieval_app,
     create_vector_index_app,
 )
 from rag_pipeline_core.vector_index import resolve_vector_index
@@ -120,13 +104,6 @@ def test_graph_service_matches_local_core() -> None:
     assert remote == local
 
 
-def test_generation_service_matches_local_core() -> None:
-    request = GenerationStageRequest(profile="inline_cited")
-    remote = _run(create_generation_app(), request, GenerationStageResponse)
-    local = GenerationStageResponse(**resolve_generation(request.profile).__dict__)
-    assert remote == local
-
-
 def test_guardrail_service_matches_local_core() -> None:
     request = GuardrailStageRequest(policy="regulated")
     remote = _run(create_guardrail_app(), request, GuardrailStageResponse)
@@ -134,31 +111,8 @@ def test_guardrail_service_matches_local_core() -> None:
     assert remote == local
 
 
-def test_agentic_service_matches_local_core() -> None:
-    request = AgenticStageRequest(profile="multi_hop")
-    remote = _run(create_agentic_app(), request, AgenticStageResponse)
-    local = AgenticStageResponse(**resolve_agentic(request.profile).__dict__)
-    assert remote == local
-
-
-def test_grounding_service_matches_local_core() -> None:
-    request = GroundingStageRequest(pipeline="verified_context")
-    remote = _run(create_grounding_app(), request, GroundingStageResponse)
-    local = GroundingStageResponse(**resolve_grounding(request.pipeline).__dict__)
-    assert remote == local
-
-
 def test_evaluation_service_matches_local_core() -> None:
     request = EvaluationStageRequest(suite="strict")
     remote = _run(create_evaluation_app(), request, EvaluationStageResponse)
     local = EvaluationStageResponse(**resolve_evaluation(request.suite).__dict__)
-    assert remote == local
-
-
-def test_retrieval_service_matches_local_core() -> None:
-    request = RetrievalStageRequest(strategy="corrective_multi_query")
-    remote = _run(create_retrieval_app(), request, RetrievalStageResponse)
-    local = RetrievalStageResponse(
-        **resolve_retrieval(request.strategy, request.settings_query_expansion).__dict__
-    )
     assert remote == local

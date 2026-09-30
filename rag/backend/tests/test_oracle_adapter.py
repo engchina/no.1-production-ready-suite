@@ -16,7 +16,6 @@ from pr_backend_core.oracle_session import init_oracle_session
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
-    GenerationSettingsRevisionConflictError,
     OracleClient,
     OracleWalletPasswordRequiredError,
     _datetime_value,
@@ -36,7 +35,6 @@ from app.clients.oracle import (
     oracle_search_audit_schema_sql,
     oracle_text_terms,
     oracle_vector_schema_sql,
-    reset_local_store,
 )
 from app.config import Settings
 from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
@@ -66,11 +64,6 @@ from app.schemas.document import (
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION, KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode
-
-
-def setup_function() -> None:
-    """テストごとにテスト補助 store を初期化する。"""
-    reset_local_store()
 
 
 def test_close_oracle_pool_force_closes_busy_shared_pool(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,202 +127,6 @@ async def test_vector_index_build_params_unknown_without_connection_settings(
     assert await client.get_vector_index_build_params() is None
 
 
-@pytest.mark.anyio
-async def test_independent_oracle_clients_read_same_generation_settings() -> None:
-    """process-local cache を介さず、2 client が同じ GLOBAL 行を読む。"""
-    now = datetime.now(UTC)
-    row = {
-        "generation_profile": "detailed_cited",
-        "active_prompt_version_id": "prompt-1",
-        "revision": 8,
-        "updated_at": now,
-        "updated_by_hash": None,
-    }
-    pool = FakeOraclePool(execute_results=[[row], [row]])
-    settings = Settings.model_construct(rag_generation_profile="grounded_concise")
-
-    first = await OracleClient(
-        settings=settings,
-        pool=pool,
-        db_call_runner=_run_inline,
-    ).get_generation_settings()
-    second = await OracleClient(
-        settings=settings,
-        pool=pool,
-        db_call_runner=_run_inline,
-    ).get_generation_settings()
-
-    assert first == second
-    assert first.profile == "detailed_cited"
-    assert first.revision == 8
-    merge_count = sum(
-        "MERGE INTO rag_generation_settings" in call.statement for call in pool.connection.calls
-    )
-    assert merge_count == 2
-
-
-@pytest.mark.anyio
-async def test_generation_settings_row_is_not_initialized_as_custom_without_prompt() -> None:
-    """deploy 既定が custom でも、有効な版のない GLOBAL 行は grounded_concise で作る(#276)。"""
-    row: dict[str, object] = {
-        "generation_profile": "grounded_concise",
-        "active_prompt_version_id": None,
-        "revision": 1,
-        "updated_at": datetime.now(UTC),
-        "updated_by_hash": None,
-    }
-    pool = FakeOraclePool(execute_results=[[row]])
-
-    await OracleClient(
-        settings=Settings.model_construct(rag_generation_profile="custom"),
-        pool=pool,
-        db_call_runner=_run_inline,
-    ).get_generation_settings()
-
-    merge = next(
-        call
-        for call in pool.connection.calls
-        if "MERGE INTO rag_generation_settings" in call.statement
-    )
-    assert merge.parameters["generation_profile"] == "grounded_concise"
-
-
-@pytest.mark.anyio
-async def test_legacy_import_does_not_create_custom_without_active_prompt() -> None:
-    """旧 profile が custom でも取り込める有効版がなければ grounded_concise で作る(#276)。"""
-    row: dict[str, object] = {
-        "generation_profile": "grounded_concise",
-        "active_prompt_version_id": None,
-        "revision": 1,
-        "updated_at": datetime.now(UTC),
-        "updated_by_hash": None,
-    }
-    pool = FakeOraclePool(execute_results=[[], [row], [row], [{"count_value": 0}], []])
-
-    result = await OracleClient(
-        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
-        pool=pool,
-        db_call_runner=_run_inline,
-    ).import_legacy_generation_settings(profile="custom", versions=[], active_version_id=None)
-
-    merges = [
-        call
-        for call in pool.connection.calls
-        if "MERGE INTO rag_generation_settings" in call.statement
-    ]
-    assert merges
-    assert all(call.parameters["generation_profile"] == "grounded_concise" for call in merges)
-    assert result["profile"] == "grounded_concise"
-
-
-@pytest.mark.anyio
-async def test_generation_settings_update_locks_and_increments_revision() -> None:
-    now = datetime.now(UTC)
-    current: dict[str, object] = {
-        "generation_profile": "grounded_concise",
-        "active_prompt_version_id": None,
-        "revision": 3,
-        "updated_at": now,
-        "updated_by_hash": None,
-    }
-    pool = FakeOraclePool(execute_results=[[current], [current]])
-    client = OracleClient(
-        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
-        pool=pool,
-        db_call_runner=_run_inline,
-    )
-
-    updated = await client.update_generation_settings(
-        profile="detailed_cited",
-        expected_revision=3,
-    )
-
-    assert updated.profile == "detailed_cited"
-    assert updated.revision == 4
-    assert pool.connection.commits == 1
-    assert any("FOR UPDATE" in call.statement for call in pool.connection.calls)
-    update = next(
-        call for call in pool.connection.calls if "UPDATE rag_generation_settings" in call.statement
-    )
-    assert update.parameters["generation_profile"] == "detailed_cited"
-
-
-@pytest.mark.anyio
-async def test_generation_settings_revision_conflict_rolls_back() -> None:
-    now = datetime.now(UTC)
-    current: dict[str, object] = {
-        "generation_profile": "grounded_concise",
-        "active_prompt_version_id": None,
-        "revision": 5,
-        "updated_at": now,
-        "updated_by_hash": None,
-    }
-    pool = FakeOraclePool(execute_results=[[current], [current]])
-    client = OracleClient(
-        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
-        pool=pool,
-        db_call_runner=_run_inline,
-    )
-
-    with pytest.raises(GenerationSettingsRevisionConflictError):
-        await client.update_generation_settings(
-            profile="detailed_cited",
-            expected_revision=4,
-        )
-
-    assert pool.connection.rollbacks == 1
-    assert not any(
-        "UPDATE rag_generation_settings" in call.statement for call in pool.connection.calls
-    )
-
-
-@pytest.mark.anyio
-async def test_prompt_creation_activation_and_cleanup_share_one_transaction() -> None:
-    now = datetime.now(UTC)
-    current = {
-        "generation_profile": "grounded_concise",
-        "active_prompt_version_id": "active-old",
-        "revision": 9,
-        "updated_at": now,
-        "updated_by_hash": None,
-    }
-    prompt_row = {
-        "version_id": "active-old",
-        "name": "旧版",
-        "system_prompt": "旧 prompt",
-        "note": "",
-        "created_at": now,
-        "created_by_hash": None,
-    }
-    pool = FakeOraclePool(
-        execute_results=[
-            [current],
-            [current],
-            [{"count_value": 101}],
-            [prompt_row],
-        ]
-    )
-    client = OracleClient(
-        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
-        pool=pool,
-        db_call_runner=_run_inline,
-    )
-
-    settings, _versions = await client.create_prompt_version(
-        name="新版",
-        system_prompt="新 prompt",
-        activate=True,
-    )
-
-    assert settings.revision == 10
-    assert settings.active_prompt_version_id != "active-old"
-    assert pool.connection.commits == 1
-    statements = [call.statement for call in pool.connection.calls]
-    assert any("SELECT generation_profile" in sql and "FOR UPDATE" in sql for sql in statements)
-    assert any("INSERT INTO rag_prompt_versions" in sql for sql in statements)
-    assert any("DELETE FROM rag_prompt_versions" in sql for sql in statements)
-
-
 def test_generation_schema_has_singleton_revision_and_active_pointer() -> None:
     prompt_sql = oracle_prompt_version_schema_sql()
     settings_sql = oracle_generation_settings_schema_sql()
@@ -366,8 +163,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
         view_config=dump_business_view_config(
             BusinessViewConfig(
                 knowledge_base_ids=["kb-old"],
-                query={"generation_profile": "detailed_cited"},
-                system_prompt="全社共通の回答担当です。",
+                query={"docrag_query_strategy": "rag_fusion"},
             )
         ),
         archived_at=now,
@@ -393,8 +189,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     assert detail.status == BusinessViewStatus.ACTIVE
     assert detail.archived_at is None
     assert detail.config.knowledge_base_ids == ["kb-default"]
-    assert detail.config.query.generation_profile == "detailed_cited"
-    assert detail.config.system_prompt == "全社共通の回答担当です。"
+    assert detail.config.query.docrag_query_strategy == "rag_fusion"
     # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
     assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
     assert len(connection.calls) == 1
@@ -1947,102 +1742,6 @@ async def test_oci_vector_search_applies_chunk_metadata_filters() -> None:
     assert call.parameters["filter_section_path"] == "%経費申請%"
 
 
-async def test_oracle_graph_local_search_uses_kg_chunk_links() -> None:
-    """Graph local search は Oracle KG entity-chunk link から citation を作る。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:2",
-                    "chunk_text": "承認条件は 120000 円以上です。",
-                    "metadata_json": '{"chunk_index":2}',
-                    "chunk_index": 2,
-                    "file_name": "policy.txt",
-                    "category_name": "社内規程",
-                    "entity_id": "ent-1",
-                    "canonical_name": "承認条件",
-                    "entity_type": "policy_rule",
-                    "entity_confidence": 0.92,
-                    "entity_chunk_relevance": 0.88,
-                    "score": 0.894,
-                }
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    hits = await client.graph_local_search(
-        "承認条件",
-        top_k=5,
-        filters={"knowledge_base_id": "kb-1"},
-    )
-
-    assert len(hits) == 1
-    assert hits[0].metadata["retrieval_mode"] == "graph_local"
-    assert hits[0].metadata["graph_entity_id"] == "ent-1"
-    assert hits[0].metadata["graph_entity_name"] == "承認条件"
-    call = pool.connection.calls[0]
-    assert "FROM rag_graph_entities e" in call.statement
-    assert "JOIN rag_graph_entity_chunks ec" in call.statement
-    assert "JOIN rag_chunks c" in call.statement
-    assert call.parameters["top_k"] == 5
-    assert call.parameters["filter_knowledge_base_id_0"] == "kb-1"
-    assert call.parameters["graph_local_term_0"] == "%承認条件%"
-
-
-async def test_oracle_graph_global_search_returns_community_summary_chunk() -> None:
-    """Graph global search は community summary を合成 RetrievedChunk として返す。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "community_id": "comm-1",
-                    "knowledge_base_id": "kb-1",
-                    "level_no": 1,
-                    "title": "承認と監査",
-                    "summary_text": "承認条件と監査証跡の関係をまとめた要約です。",
-                    "source_document_ids": '["doc-a","doc-b"]',
-                    "score": 1.75,
-                }
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    hits = await client.graph_global_search("全体の関係", top_k=3)
-
-    assert len(hits) == 1
-    assert hits[0].document_id == "doc-a"
-    assert hits[0].chunk_id == "community:comm-1"
-    assert hits[0].metadata["retrieval_mode"] == "graph_global"
-    assert hits[0].metadata["graph_source_document_count"] == 2
-    call = pool.connection.calls[0]
-    assert "FROM rag_graph_community_summaries g" in call.statement
-    assert call.parameters["top_k"] == 3
-    assert call.parameters["graph_title_exact"] == "%全体の関係%"
-
-
-async def test_oracle_graph_global_search_requires_current_kb_membership() -> None:
-    """community summary の KB は取込時のスナップショットなので、今も所属する文書だけに絞る(#274)。
-
-    KB から外した文書の summary が、その KB の検索・KB 権限の利用者に返らないこと。
-    """
-    pool = FakeOraclePool(execute_results=[[]])
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    await client.graph_global_search("全体の関係", top_k=3, filters={"knowledge_base_id": "kb-1"})
-
-    statement = " ".join(pool.connection.calls[0].statement.split())
-    assert "g.knowledge_base_id IN (:filter_knowledge_base_id_0)" in statement
-    assert (
-        "(g.knowledge_base_id IS NULL OR EXISTS (SELECT 1 FROM rag_document_knowledge_bases "
-        "member_dkb WHERE member_dkb.knowledge_base_id = g.knowledge_base_id "
-        "AND JSON_EXISTS(g.source_document_ids, '$[*]?(@ == $member_document_id)' "
-        'PASSING member_dkb.document_id AS "member_document_id")))'
-    ) in statement
-
-
 async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -> None:
     """KB のグラフ表示も、KB から外した文書の entity / relationship を出さない(#274)。"""
     pool = FakeOraclePool(
@@ -2508,64 +2207,6 @@ async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_m
     assert chunk.metadata["table_header_repeated"] is True
 
 
-async def test_oci_context_neighbors_uses_chunk_index_window_sql() -> None:
-    """OCI mode の隣接 context は chunk_index window を bind 付き SQL で取得する。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:1",
-                    "chunk_text": "前段: 申請条件。",
-                    "metadata_json": "{}",
-                    "chunk_index": 1,
-                    "file_name": "policy.txt",
-                    "category_name": "社内規程",
-                    "score": 0,
-                },
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:3",
-                    "chunk_text": "後段: 証憑要件。",
-                    "metadata_json": "{}",
-                    "chunk_index": 3,
-                    "file_name": "policy.txt",
-                    "category_name": "社内規程",
-                    "score": 0,
-                },
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    anchor = RetrievedChunk(
-        document_id="doc-1",
-        chunk_id="doc-1:2",
-        text="中心: 承認条件。",
-        score=0.91,
-        file_name="policy.txt",
-        metadata={"chunk_index": 2, "chunk_set_id": "set-a", "recipe_id": "recipe-a"},
-    )
-
-    neighbors = await client.context_neighbors([anchor], window=1)
-
-    assert [chunk.chunk_id for chunk in neighbors] == ["doc-1:1", "doc-1:3"]
-    assert [chunk.metadata["chunk_index"] for chunk in neighbors] == [1, 3]
-    assert [chunk.metadata["context_neighbor_distance"] for chunk in neighbors] == [-1, 1]
-    assert all(chunk.score == 0.91 for chunk in neighbors)
-    call = pool.connection.calls[0]
-    assert "c.chunk_index BETWEEN :start_index AND :end_index" in call.statement
-    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
-    assert "ABS(c.chunk_index - :anchor_index)" in call.statement
-    assert "d.status = 'INDEXED'" in call.statement
-    assert "d.document_id = :filter_document_id" in call.statement
-    assert call.parameters["filter_document_id"] == "doc-1"
-    assert call.parameters["filter_chunk_set_id"] == "set-a"
-    assert call.parameters["anchor_index"] == 2
-    assert call.parameters["start_index"] == 1
-    assert call.parameters["end_index"] == 3
-    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
-
-
 async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     """OCI mode の同一 group context は chunk_group_id を bind 付き SQL で取得する。"""
     pool = FakeOraclePool(
@@ -2629,93 +2270,6 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert call.parameters["anchor_index"] == 2
     assert call.parameters["anchor_chunk_id"] == "doc-1:2"
     assert call.parameters["max_chunks_per_group"] == 2
-
-
-async def test_oci_context_dependency_chunks_uses_dependency_metadata_sql() -> None:
-    """OCI mode の dependency context は anchor lineage token で候補を絞り込む。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "document_id": "doc-1",
-                    "chunk_id": "doc-1:3",
-                    "chunk_text": "キャプション: 120000 円以上は部門長承認。",
-                    "metadata_json": json.dumps(
-                        {
-                            "chunk_index": 3,
-                            "element_ids": "fig-1-caption",
-                            "parent_element_ids": "fig-1",
-                            "dependency_edges": [
-                                {"parent_id": "fig-1", "child_id": "fig-1-caption"}
-                            ],
-                        }
-                    ),
-                    "chunk_index": 3,
-                    "file_name": "approval.pdf",
-                    "category_name": "社内規程",
-                    "score": 0,
-                }
-            ]
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    anchor = RetrievedChunk(
-        document_id="doc-1",
-        chunk_id="doc-1:2",
-        text="図: 承認フロー。",
-        score=0.91,
-        file_name="approval.pdf",
-        metadata={
-            "chunk_index": 2,
-            "element_ids": "fig-1",
-            "recipe_id": "recipe-a",
-        },
-    )
-
-    chunks = await client.context_dependency_chunks([anchor], max_chunks_per_anchor=2)
-
-    assert [chunk.chunk_id for chunk in chunks] == ["doc-1:3"]
-    assert chunks[0].score == 0.91
-    assert chunks[0].metadata["parent_element_ids"] == "fig-1"
-    call = pool.connection.calls[0]
-    assert "d.status = 'INDEXED'" in call.statement
-    assert "d.document_id = :filter_document_id" in call.statement
-    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
-    assert "JSON_SERIALIZE(c.metadata_json RETURNING VARCHAR2(32767))" in call.statement
-    assert "LIKE :dependency_token_0 ESCAPE '\\'" in call.statement
-    assert "ROWNUM <= :candidate_limit" in call.statement
-    assert call.parameters["filter_document_id"] == "doc-1"
-    assert call.parameters["anchor_recipe_id"] == "recipe-a"
-    assert "anchor_cs.recipe_id = :anchor_recipe_id" in call.statement
-    assert call.parameters["anchor_index"] == 2
-    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
-    assert call.parameters["candidate_limit"] == 16
-    assert call.parameters["dependency_token_0"] == "%fig-1%"
-
-
-async def test_oci_context_dependency_chunks_falls_back_without_anchor_lineage() -> None:
-    """旧 metadata で anchor lineage がない場合は従来の lineage metadata 候補へ戻す。"""
-    pool = FakeOraclePool(execute_results=[[]])
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    anchor = RetrievedChunk(
-        document_id="doc-1",
-        chunk_id="doc-1:2",
-        text="図: 承認フロー。",
-        score=0.91,
-        file_name="approval.pdf",
-        metadata={"chunk_index": 2},
-    )
-
-    chunks = await client.context_dependency_chunks([anchor], max_chunks_per_anchor=2)
-
-    assert chunks == []
-    call = pool.connection.calls[0]
-    assert "JSON_EXISTS(c.metadata_json, '$.element_ids')" in call.statement
-    assert "JSON_EXISTS(c.metadata_json, '$.parent_element_ids')" in call.statement
-    assert "JSON_EXISTS(c.metadata_json, '$.dependency_edges')" in call.statement
-    assert "dependency_token_0" not in call.parameters
-    assert "c.chunk_set_id IS NULL" in call.statement
-    assert "anchor_legacy_r.document_id = c.document_id" in call.statement
 
 
 async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None:
@@ -2969,44 +2523,6 @@ async def test_oci_hybrid_search_uses_normalized_keyword_query() -> None:
     assert "{社内規程}" in text_query
     assert "{社内}" in text_query
     assert "？" not in text_query
-
-
-async def test_oracle_agent_memory_search_applies_hashed_scope_predicates() -> None:
-    """Agent Memory search SQL は raw ID ではなく hash scope の bind だけで絞り込む。"""
-    pool = FakeOraclePool()
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    token = set_audit_request_context(
-        AuditRequestContext(
-            request_id="request-memory-sql",
-            tenant_id_hash="a" * 64,
-            user_id_hash="b" * 64,
-            role_id_hash="c" * 64,
-            agent_id_hash="d" * 64,
-            thread_id_hash="e" * 64,
-        )
-    )
-    try:
-        hits = await client.agent_memory_search(
-            "承認条件",
-            [1.0, 0.0, 0.0],
-            top_k=3,
-        )
-    finally:
-        reset_audit_request_context(token)
-
-    assert hits == []
-    call = pool.connection.calls[0]
-    assert "FROM rag_agent_memories m" in call.statement
-    assert "m.tenant_id_hash = :agent_memory_tenant_id_hash" in call.statement
-    assert "m.user_id_hash = :agent_memory_user_id_hash" in call.statement
-    assert "m.role_id_hash = :agent_memory_role_id_hash" in call.statement
-    assert "m.agent_id_hash = :agent_memory_agent_id_hash" in call.statement
-    assert "m.thread_id_hash = :agent_memory_thread_id_hash" in call.statement
-    assert call.parameters["agent_memory_tenant_id_hash"] == "a" * 64
-    assert call.parameters["agent_memory_user_id_hash"] == "b" * 64
-    assert call.parameters["agent_memory_role_id_hash"] == "c" * 64
-    assert call.parameters["agent_memory_agent_id_hash"] == "d" * 64
-    assert call.parameters["agent_memory_thread_id_hash"] == "e" * 64
 
 
 def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:

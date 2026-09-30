@@ -1,7 +1,7 @@
 """LLM を呼ぶ回答生成の時間の上限と、時間切れの文言（#375）。
 
-チャット・検索の回答と品質評価の 1 ケース（#383）は、検索の前の計画（agentic）・追加の検索の
-再分解・回答の生成で LLM を何度か呼ぶ。検索だけの上限（旧 `rag_search_timeout_seconds`、
+チャット・検索の回答と品質評価の 1 ケース（#383）は、質問の理解・根拠の評価と補正検索・
+回答の生成と監査で LLM を何度か呼ぶ。検索だけの上限（旧 `rag_search_timeout_seconds`、
 30 秒。#383 で削除）では足りないため、回答生成は `rag_answer_timeout_seconds`（既定 300 秒、
 上限は LLM 1 回の timeout の設定の上限）で打ち切る。時間切れのときは、進捗
 （`SearchStageProgress`）から分かる最後の工程を文言に含める。
@@ -20,27 +20,10 @@ from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 # SSE の error event・MCP の 504）に使う。画面の進捗の表示名は frontend の i18n
 # （`search.stage.*`。`src/lib/answer-progress.ts`）と同じ名前にする。
 ANSWER_STAGE_LABELS: dict[str, str] = {
-    "query_expansion": "検索語の展開",
-    "agentic_planning": "検索の計画",
-    "embedding": "埋め込み",
+    # 検索だけ(KB の検索テスト・レシピの検索比較。#593)
     "retrieval": "検索",
-    "rerank": "並べ替え",
-    "business_fit_weighting": "業務に合わせた並べ替え",
-    "context_adaptive_expansion": "根拠の整理",
-    "context_compression": "根拠の整理",
-    "context_dependency_promotion": "根拠の整理",
-    "context_diversity": "根拠の整理",
-    "context_expansion": "根拠の整理",
-    "context_group_expansion": "根拠の整理",
-    "crag_rewrite": "質問の書き換え",
-    "crag_retrieval": "追加の検索",
-    "corrective_retrieval": "条件を緩めた検索",
-    "agentic_multi_hop": "追加の検索の計画",
-    "agentic_multi_hop_retrieval": "追加の検索",
     "docrag_history_rewrite": "会話を踏まえた質問の書き換え",
     "docrag_answer": "根拠の検索と回答の生成",
-    "generation": "回答の生成",
-    "answer_guardrail": "回答の安全チェック",
 }
 ANSWER_STAGE_BEFORE_START_LABEL = "検索の準備"
 ANSWER_STAGE_UNKNOWN_LABEL = "処理"
