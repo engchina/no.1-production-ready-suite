@@ -984,6 +984,9 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
             "extraction_json": _NAVIGATION_EXTRACTION,
         }
 
+    async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
+        return []
+
     async def upsert_artifact_layer(self, *, layer_id: str, **kwargs: object) -> None:
         self.layers[layer_id] = {"layer_id": layer_id, **kwargs}
 

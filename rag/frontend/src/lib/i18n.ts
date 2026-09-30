@@ -273,7 +273,7 @@ export const ja = {
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
   "settings.parserAdapters.postParse.saveError": "解析後の処理を保存できませんでした。",
   "settings.extractionFields.description":
-    "項目抽出で取り出す項目です。項目名はモデルへの指示と抽出結果の名前に使います。全体で 1 つの定義で、次の取込から使います。",
+    "項目抽出で取り出す項目の全体の既定です。項目名はモデルへの指示と抽出結果の名前に使います。ナレッジベースで項目を定義していない文書に、次の取込から使います。",
   "settings.extractionFields.name": "項目名",
   "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
@@ -1438,6 +1438,22 @@ export const ja = {
   "knowledgeBases.assignment.truncated":
     "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
   "knowledgeBases.documents.title": "所属文書",
+  // ナレッジベースの「抽出する項目」（#548）。
+  "knowledgeBases.extractionFields.title": "抽出する項目",
+  "knowledgeBases.extractionFields.description":
+    "このナレッジベースの文書から項目抽出で取り出す項目です。複数のナレッジベースに属する文書は、それぞれの項目を合わせて抽出します。変更は次の取込から効きます。",
+  "knowledgeBases.extractionFields.loading": "抽出する項目を読み込んでいます",
+  "knowledgeBases.extractionFields.inherited":
+    "全体の既定の項目（{count} 件）を使っています。既定は「検索・回答設定 › 文書解析」で変更できます。",
+  "knowledgeBases.extractionFields.own": "このナレッジベースの項目（{count} 件）を使っています。",
+  "knowledgeBases.extractionFields.ownDescription":
+    "このナレッジベースの項目です。全体の既定は使いません。項目を 0 件にすると、このナレッジベースでは項目を抽出しません。",
+  "knowledgeBases.extractionFields.defineOwn": "既定をもとに項目を定義",
+  "knowledgeBases.extractionFields.reset": "全体の既定に戻す",
+  "knowledgeBases.extractionFields.reset.title": "全体の既定に戻しますか？",
+  "knowledgeBases.extractionFields.reset.description":
+    "このナレッジベースの項目の定義を削除し、全体の既定の項目を使います。抽出済みの値は次の取込まで変わりません。",
+  "knowledgeBases.extractionFields.reset.done": "全体の既定の項目に戻しました。",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
   "knowledgeBases.documents.empty.hint": "上の選択欄から既存文書を追加してください。",
@@ -2214,6 +2230,38 @@ export const ja = {
   "search.filters.appliedContentKind": "内容種別: {value}",
   "search.filters.appliedSectionTitle": "見出し名: {value}",
   "search.filters.appliedSectionPath": "見出しの階層: {value}",
+  // 抽出項目の値で絞り込む（#549）。
+  "search.filters.fields.group": "抽出項目の値で絞り込む",
+  "search.filters.fields.helper":
+    "項目抽出で取り出した値で文書を絞り込みます。項目は選んだ業務ビューのナレッジベースで定義されたものです。値の無い文書と、数値・日付として読めない値の文書は除かれます。条件はすべて満たす文書だけを使います。",
+  "search.filters.fields.loading": "絞り込みに使える項目を読み込んでいます",
+  "search.filters.fields.loadError": "絞り込みに使える項目を取得できませんでした。",
+  "search.filters.fields.none": "選んだ業務ビューのナレッジベースには抽出する項目がありません。",
+  "search.filters.fields.chooseScope": "業務ビューを選ぶと、絞り込みに使える項目が表示されます。",
+  "search.filters.fields.field": "項目",
+  "search.filters.fields.choose": "項目を選ぶ",
+  "search.filters.fields.chooseFirst": "項目を選ぶと、値を入力できます。",
+  "search.filters.fields.equals": "値（一致）",
+  "search.filters.fields.any": "指定しない",
+  "search.filters.fields.true": "はい",
+  "search.filters.fields.false": "いいえ",
+  "search.filters.fields.min": "下限（以上）",
+  "search.filters.fields.max": "上限（以下）",
+  "search.filters.fields.from": "開始日（この日を含む）",
+  "search.filters.fields.to": "終了日（この日を含む）",
+  "search.filters.fields.rowLabel": "項目の条件 {index}",
+  "search.filters.fields.add": "条件を追加",
+  "search.filters.fields.remove": "項目の条件 {index} を削除",
+  "search.filters.fields.limit": "条件は {max} 件まで追加できます。",
+  "search.filters.fields.error.fieldMissing":
+    "この項目は選んだ業務ビューのナレッジベースにありません。項目を選び直すか条件を削除してください。",
+  "search.filters.fields.error.fieldsUnavailable":
+    "項目の定義を読み込めていません。項目の一覧が表示されてから検索してください。",
+  "search.filters.fields.error.numberInvalid": "数値を入力してください（例: 1000000）。",
+  "search.filters.fields.error.rangeInverted": "下限は上限以下にしてください。",
+  "search.filters.fields.applied.eq": "{name}: {value}",
+  "search.filters.fields.applied.gte": "{name} ≥ {value}",
+  "search.filters.fields.applied.lte": "{name} ≤ {value}",
   "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象をナレッジベース単位で絞り込みます。",
   "search.filters.clear": "クリア",
   "search.tuning.topK": "候補取得数",

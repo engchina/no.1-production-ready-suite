@@ -62,6 +62,7 @@ from app.rag.extraction_field_adapter import (
     field_definitions_prompt,
     load_field_schema,
     parse_extraction_fields,
+    resolve_field_definitions,
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
@@ -629,7 +630,9 @@ class IngestionPipeline:
                 fallback_used=parser_result.fallback_used,
             )
             extraction = extraction.model_copy(update={"quality_report": quality_report})
-            extraction = await self._attach_extraction_fields(trace_id, extraction)
+            extraction = await self._attach_extraction_fields(
+                trace_id, extraction, document_id=document_id
+            )
             extraction = await self._attach_navigation_tree(trace_id, extraction)
             checkpoint_segments = await self._mark_segments_succeeded(
                 checkpoint_segments,
@@ -1681,16 +1684,22 @@ class IngestionPipeline:
         self,
         trace_id: str,
         extraction: StructuredExtraction,
+        *,
+        document_id: str,
     ) -> StructuredExtraction:
         """`rag_field_extraction_enabled` が真なら field schema に従い named field を抽出する。
 
         定義済み field を OCI Enterprise AI の structured output で抽出し、`ExtractionField`
-        へ Pydantic 検証して保存する（既定 OFF）。
+        へ Pydantic 検証して保存する（既定 OFF）。項目は文書が属する KB の定義（無ければ全体の
+        既定。複数の KB に属するときは和集合）を使う（#548）。
         """
         if not getattr(self._settings, "rag_field_extraction_enabled", False):
             return extraction
-        schema = load_field_schema()
-        if not schema.fields:
+        field_defs = resolve_field_definitions(
+            await self._oracle.list_document_extraction_field_sets(document_id),
+            load_field_schema().fields,
+        )
+        if not field_defs:
             return extraction
 
         async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
@@ -1698,13 +1707,15 @@ class IngestionPipeline:
                 "次の文書から、指定された field を抽出してください。"
                 '各 field は {"name", "value", "value_type", "confidence"} の '
                 "JSON 配列だけで出力し、見つからない field は省略してください。"
+                "value は、value_type が date なら YYYY-MM-DD、number なら桁区切りと単位の"
+                "ない数字、bool なら true か false で出力してください。"
                 f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
             )
             raw = await self._vlm.generate(prompt, text)
             return parse_extraction_fields(raw, field_defs)
 
         try:
-            return await extract_fields_from_extraction(extraction, schema.fields, _extract)
+            return await extract_fields_from_extraction(extraction, field_defs, _extract)
         except Exception as exc:
             logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
             raise IngestionUserError(

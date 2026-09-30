@@ -7,6 +7,11 @@ from fastapi import APIRouter, HTTPException, Query
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.db_degradation import load_or_degrade
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    load_field_schema,
+    validate_field_schema,
+)
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
     resolve_effective_adapter_config,
@@ -22,6 +27,11 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStatus,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
+)
+from app.schemas.settings import (
+    FieldDefinitionData,
+    KnowledgeBaseExtractionFieldsData,
+    KnowledgeBaseExtractionFieldsUpdate,
 )
 
 router = APIRouter()
@@ -198,6 +208,68 @@ async def update_knowledge_base(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await _refreshed_detail_response(oracle, detail)
+
+
+def _extraction_fields_data(
+    fields: list[FieldDefinition] | None,
+) -> ApiResponse[KnowledgeBaseExtractionFieldsData]:
+    """KB の定義(None なら全体の既定)を API 形にする。"""
+    effective = load_field_schema().fields if fields is None else fields
+    return ApiResponse(
+        data=KnowledgeBaseExtractionFieldsData(
+            inherits_default=fields is None,
+            fields=[FieldDefinitionData.model_validate(field.model_dump()) for field in effective],
+        )
+    )
+
+
+@router.get(
+    "/{knowledge_base_id}/extraction-fields",
+    response_model=ApiResponse[KnowledgeBaseExtractionFieldsData],
+)
+async def get_knowledge_base_extraction_fields(
+    knowledge_base_id: str,
+) -> ApiResponse[KnowledgeBaseExtractionFieldsData]:
+    """ナレッジベースの項目抽出の定義を返す。KB に定義が無ければ全体の既定を返す(#548)。"""
+    oracle = OracleClient()
+    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
+    return _extraction_fields_data(
+        await oracle.get_knowledge_base_extraction_fields(knowledge_base_id)
+    )
+
+
+@router.put(
+    "/{knowledge_base_id}/extraction-fields",
+    response_model=ApiResponse[KnowledgeBaseExtractionFieldsData],
+)
+async def update_knowledge_base_extraction_fields(
+    knowledge_base_id: str,
+    request: KnowledgeBaseExtractionFieldsUpdate,
+) -> ApiResponse[KnowledgeBaseExtractionFieldsData]:
+    """ナレッジベースの項目抽出の定義を保存する。`fields` が null なら全体の既定に戻す(#548)。
+
+    name の重複(大文字小文字を区別しない)は 422、アーカイブ済みの KB は 409。保存した定義は
+    次の取込から効く(既存の文書の抽出値は変えない)。
+    """
+    oracle = OracleClient()
+    detail = await oracle.get_knowledge_base(knowledge_base_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
+    if detail.status != KnowledgeBaseStatus.ACTIVE:
+        raise HTTPException(
+            status_code=409, detail="アーカイブ済みのナレッジベースは変更できません。"
+        )
+    fields: list[FieldDefinition] | None = None
+    if request.fields is not None:
+        try:
+            fields = validate_field_schema(
+                [FieldDefinition.model_validate(field.model_dump()) for field in request.fields]
+            ).fields
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await oracle.update_knowledge_base_extraction_fields(knowledge_base_id, fields)
+    return _extraction_fields_data(fields)
 
 
 @router.post("/{knowledge_base_id}/archive", response_model=ApiResponse[KnowledgeBaseDetail])

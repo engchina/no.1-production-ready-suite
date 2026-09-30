@@ -521,6 +521,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             table_name="rag_business_views",
             sql=_default_descriptions_migration_sql(),
         ),
+        OracleSchemaSection(
+            name="20260930_002_knowledge_base_extraction_fields",
+            table_name="rag_knowledge_bases",
+            sql=_knowledge_base_extraction_fields_migration_sql(),
+        ),
     ]
 
 
@@ -1083,6 +1088,28 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _knowledge_base_extraction_fields_migration_sql() -> str:
+    """rag_knowledge_bases に KB ごとの項目抽出の定義(JSON)列を追加する(冪等。#548)。
+
+    既存の KB は NULL のまま(= 全体の既定の定義に従う)。既存環境の抽出の挙動は変えない。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_KNOWLEDGE_BASES'
+      AND column_name = 'EXTRACTION_FIELDS';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_knowledge_bases ADD (extraction_fields JSON)';
     END IF;
 END;
 /

@@ -2085,6 +2085,12 @@ export interface ExtractionFieldsSettingsData {
   fields: ExtractionFieldDefinition[];
 }
 
+/** ナレッジベースの項目抽出の定義（#548）。inherits_default なら fields は全体の既定。 */
+export interface KnowledgeBaseExtractionFieldsData {
+  inherits_default: boolean;
+  fields: ExtractionFieldDefinition[];
+}
+
 export interface GuardrailSettingsData {
   policy: GuardrailPolicyName;
   block_prompt_injection: boolean;
@@ -2843,6 +2849,26 @@ export const api = {
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     request<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
+    ),
+  // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。
+  getKnowledgeBaseExtractionFields: (id: string) =>
+    request<KnowledgeBaseExtractionFieldsData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/extraction-fields`,
+    ),
+  updateKnowledgeBaseExtractionFields: (
+    id: string,
+    body: { fields: ExtractionFieldDefinition[] | null },
+  ) =>
+    request<KnowledgeBaseExtractionFieldsData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/extraction-fields`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    ),
+  // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
+  getSearchExtractionFields: (businessViewIds: string[]) =>
+    request<ExtractionFieldsSettingsData>(
+      `/api/search/extraction-fields?${new URLSearchParams({
+        business_view_ids: businessViewIds.join(","),
+      }).toString()}`,
     ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
     request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
