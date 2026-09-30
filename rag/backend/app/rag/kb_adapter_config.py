@@ -2,7 +2,7 @@
 
 業界の RAG 製品(Dify / RAGFlow / FastGPT 等)に倣い、Parser / Chunking /
 索引構築系の既定値を **ナレッジベース単位** で上書きできるようにする。
-ただし確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai)は
+ただし確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database)は
 不変で、上書きは既存 preset の選択に限定する。
 
 設計:

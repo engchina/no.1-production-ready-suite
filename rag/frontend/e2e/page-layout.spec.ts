@@ -20,13 +20,16 @@ test.beforeEach(async ({ page }) => {
 
 /**
  * 認証画面（ログイン・パスワード変更・権限なし。AppShell を持たない）以外の全ルート。
- * 詳細画面（戻るリンク + 本文の 2 つの PageBody で構成）は代表 id で開く。
+ * 詳細画面は代表 id で開く（文書詳細は戻るリンク + 本文の 2 つの PageBody、ナレッジベース詳細は
+ * 業務ビューと同じ PageHeader + PageBody。#555）。A 型の作成の画面（`?id=new`）も測る。
  */
 const PATHS = [
   ...Object.entries(APP_ROUTES)
     .filter(([name]) => !["login", "passwordChange", "forbidden", "documents"].includes(name))
     .map(([, path]) => path),
   `${APP_ROUTES.knowledgeBases}/kb-layout`,
+  `${APP_ROUTES.knowledgeBases}?id=new`,
+  `${APP_ROUTES.businessViews}?id=new`,
   `${APP_ROUTES.documents}/doc-layout`,
 ];
 
@@ -66,7 +69,7 @@ async function layoutProblems(page: Page, { wide }: { wide: boolean }) {
 async function openPage(page: Page, path: string) {
   await page.goto(path);
   const main = page.locator("main");
-  if (/^\/(knowledge-bases|documents)\/.+/u.test(path)) {
+  if (/^\/documents\/.+/u.test(path)) {
     await expect(main.getByRole("link").first()).toBeVisible();
   } else {
     await expect(main.getByRole("heading", { level: 1 })).toBeVisible();

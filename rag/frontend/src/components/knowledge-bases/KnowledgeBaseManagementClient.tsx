@@ -5,18 +5,13 @@ import {
   PageHeader,
   Button,
   Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
   DataTable,
   type DataTableColumn,
   type EntityAction,
-  FormStatus,
   ClearActionButton,
   RowActionMenu,
   SearchField,
   TableSkeleton,
-  TextField,
   TimedLoadingState,
   ToggleChip,
   DEFAULT_PAGE_SIZE,
@@ -25,12 +20,14 @@ import {
   offsetForPage,
   offsetPagination,
 } from "@engchina/production-ready-ui";
-import { Database } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { ListPagination } from "@/components/ListPagination";
+import { EditorDraftNotice } from "@/components/layout/EntityLayout";
+import { readEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -38,26 +35,19 @@ import {
   type KnowledgeBaseStatus,
   type KnowledgeBaseSummary,
 } from "@/lib/api";
+import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useLeaveGuard } from "@/lib/leave-guard";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
-import { useCreateKnowledgeBase, useKnowledgeBases } from "@/lib/queries";
-import { firstInvalidFieldId, focusFirstInvalidField } from "@/lib/required-fields";
+import { useKnowledgeBases } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
-import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
+import { isKnowledgeBaseDraft, KnowledgeBaseEditor } from "./KnowledgeBaseEditor";
 import {
   KnowledgeBaseStatusPill,
   knowledgeBaseStatusLabel,
 } from "./KnowledgeBaseStatusPill";
-import {
-  DESCRIPTION_MAX_LENGTH,
-  NAME_MAX_LENGTH,
-  useKnowledgeBaseActions,
-  validateKnowledgeBaseDescription,
-  validateKnowledgeBaseName,
-} from "./knowledge-base-actions";
+import { useKnowledgeBaseActions } from "./knowledge-base-actions";
 
 const LIMIT = DEFAULT_PAGE_SIZE;
 
@@ -81,9 +71,52 @@ function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView
 }
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 
-/** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
+/** ナレッジベースの作成・アーカイブは `rag.knowledge_bases.manage` を持つ利用者だけ（#214）。 */
+function useCanManageKnowledgeBases(): boolean {
+  return useAuth().hasPermission(CAPABILITY_PERMISSIONS.knowledgeBasesManage);
+}
+
+/**
+ * ナレッジベース（`/knowledge-bases`）。業務ビューと同じ A 型（一覧 → 全画面エディタ。#555）。
+ * `?id=` なし = 一覧 / `new` = 作成の画面。詳細（編集）は既存の URL `/knowledge-bases/:id` のまま
+ * （`?id=<id>` で開かれたら詳細の URL へ置き換える）。
+ */
 export function KnowledgeBaseManagementClient() {
+  const editor = useEditorRoute();
   const navigate = useNavigate();
+  const { target } = editor;
+  const canManage = useCanManageKnowledgeBases();
+  const detailPath = (id: string) => `${APP_ROUTES.knowledgeBases}/${encodeURIComponent(id)}`;
+
+  if (target.kind === "edit") return <Navigate to={detailPath(target.id)} replace />;
+  // 作成は管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。業務ビューと同じ）。
+  if (target.kind === "new" && canManage) {
+    return (
+      <KnowledgeBaseEditor
+        key="new"
+        onBack={() => editor.backToList()}
+        // 作成した対象の詳細へ履歴を積まずに移る（戻るで空の作成の画面へ戻さない）。
+        onCreated={(id) => navigate(detailPath(id), { replace: true })}
+      />
+    );
+  }
+  return (
+    <KnowledgeBaseList
+      onOpen={(id) => navigate(detailPath(id))}
+      onCreate={canManage ? editor.openNew : undefined}
+    />
+  );
+}
+
+/** ナレッジベースの一覧。絞り込み・検索・ページ・行の操作（アーカイブ）。名前のリンク・行のクリックで詳細へ。 */
+function KnowledgeBaseList({
+  onOpen,
+  onCreate,
+}: {
+  onOpen: (id: string) => void;
+  /** 作成できない利用者（ナレッジベース管理の権限なし）では undefined。 */
+  onCreate?: () => void;
+}) {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
   const { filter, q, offset } = view;
@@ -98,8 +131,8 @@ export function KnowledgeBaseManagementClient() {
 
   // 行の操作（アーカイブ）は詳細ページの ObjectActionBar と同じ定義を使う。
   const knowledgeBaseActions = useKnowledgeBaseActions();
-  // 作成・アーカイブはナレッジベース管理の権限がある利用者だけ（#214）。
-  const canManage = useAuth().hasPermission(CAPABILITY_PERMISSIONS.knowledgeBasesManage);
+  // 新規作成の下書きは作成の画面を閉じても同じタブに残る。一覧から再開できるようにする。
+  const [newDraft] = useState(() => readEditorDraft("knowledgeBases.draft", "new", isKnowledgeBaseDraft));
 
   const resetView = (fn: () => void) => {
     fn();
@@ -120,18 +153,33 @@ export function KnowledgeBaseManagementClient() {
 
   return (
     <div>
-      <PageHeader wide title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
-      <PageBody wide>
+      <PageHeader
+        wide
+        title={t("nav.knowledgeBases")}
+        subtitle={t("knowledgeBases.subtitle")}
+        actions={
+          onCreate
+            ? [
+                {
+                  id: "create",
+                  kind: "primary",
+                  label: t("knowledgeBases.actions.newKnowledgeBase"),
+                  icon: Plus,
+                  onClick: onCreate,
+                },
+              ]
+            : []
+        }
+      />
+      <PageBody wide className="grid grid-cols-1 gap-5">
         <DegradedBanner
           messages={page?.warning_messages}
           onRetry={() => void query.refetch()}
           isRetrying={query.isFetching}
         />
 
-        {canManage ? (
-          <KnowledgeBaseCreateForm
-            onCreated={(id) => navigate(`${APP_ROUTES.knowledgeBases}/${id}`)}
-          />
+        {newDraft && onCreate ? (
+          <EditorDraftNotice message={t("knowledgeBases.draftPending")} onOpen={onCreate} />
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -186,12 +234,19 @@ export function KnowledgeBaseManagementClient() {
               columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
               rows={items}
               getRowKey={(knowledgeBase) => knowledgeBase.id}
-              rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+              // 行の操作以外の領域のクリックで詳細を開く（page-archetypes.md §0-7。業務ビューと同じ）。
+              // キーボードでは先頭セルの名前のリンクで開く。アーカイブ済みも詳細は閲覧できる。
+              onRowClick={(knowledgeBase) => onOpen(knowledgeBase.id)}
+              rowProps={(knowledgeBase) => ({
+                className: INFORMATION_TABLE_ROW_CLASS,
+                "data-testid": `knowledge-base-row-${knowledgeBase.id}`,
+              })}
               stickyHeader
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               scrollAriaLabel={t("knowledgeBases.scrollLabel")}
               scrollTestId="knowledge-bases-scroll-region"
               tableClassName="w-full min-w-[54.29rem] text-sm"
+              ariaLabel={t("knowledgeBases.list.aria")}
             />
             <ListPagination
               {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
@@ -217,7 +272,15 @@ export function KnowledgeBaseManagementClient() {
               <EmptyState
                 title={t("knowledgeBases.empty.title")}
                 hint={
-                  canManage ? t("knowledgeBases.empty.hint") : t("knowledgeBases.empty.restrictedHint")
+                  onCreate ? t("knowledgeBases.empty.hint") : t("knowledgeBases.empty.restrictedHint")
+                }
+                // 空の一覧から次の行動へ進めるよう、作成の入口を空の状態にも置く（ヘッダーの「新規作成」と同じ）。
+                action={
+                  onCreate ? (
+                    <Button variant="secondary" icon={Plus} onClick={onCreate}>
+                      {t("knowledgeBases.actions.createFirst")}
+                    </Button>
+                  ) : undefined
                 }
               />
             )}
@@ -225,103 +288,6 @@ export function KnowledgeBaseManagementClient() {
         )}
       </PageBody>
     </div>
-  );
-}
-
-function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => void }) {
-  const create = useCreateKnowledgeBase();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  // 欄ごとに、フォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2）。
-  const [touched, setTouched] = useState({ name: false, description: false });
-  // 作成前の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
-  useLeaveGuard(Boolean(name.trim() || description.trim()));
-
-  const nameError = touched.name ? validateKnowledgeBaseName(name) : null;
-  const descriptionError = touched.description ? validateKnowledgeBaseDescription(description) : null;
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setTouched({ name: true, description: true });
-    // 名前と説明は必須（#521）。足りないときは送らず、最初の不正な欄へフォーカスを移す。
-    const errors = [
-      ["knowledge-base-name", validateKnowledgeBaseName(name)],
-      ["knowledge-base-description", validateKnowledgeBaseDescription(description)],
-    ] as const;
-    if (firstInvalidFieldId(errors)) {
-      focusFirstInvalidField(errors);
-      return;
-    }
-    create.mutate(
-      {
-        name: name.trim(),
-        description: description.trim(),
-        default_search_mode: "hybrid",
-        retrieval_config: {},
-      },
-      {
-        onSuccess: (detail) => {
-          setName("");
-          setDescription("");
-          setTouched({ name: false, description: false });
-          onCreated(detail.id);
-          toast.success(t("knowledgeBases.toast.created"));
-        },
-      }
-    );
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("knowledgeBases.create.title")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-            <TextField
-              id="knowledge-base-name"
-              label={t("knowledgeBases.field.name")}
-              required
-              value={name}
-              onValueChange={setName}
-              onBlur={() => setTouched((current) => ({ ...current, name: true }))}
-              error={nameError ?? undefined}
-              maxLength={NAME_MAX_LENGTH}
-            />
-            <TextField
-              id="knowledge-base-description"
-              label={t("knowledgeBases.field.description")}
-              required
-              value={description}
-              onValueChange={setDescription}
-              onBlur={() => setTouched((current) => ({ ...current, description: true }))}
-              placeholder={t("knowledgeBases.field.descriptionPlaceholder")}
-              helper={t("knowledgeBases.field.descriptionHelper")}
-              error={descriptionError ?? undefined}
-              maxLength={DESCRIPTION_MAX_LENGTH}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-            <Button size="lg" loading={create.isPending} type="submit" icon={Database}>
-              {t("knowledgeBases.actions.create")}
-            </Button>
-            <FormStatus
-              tone={create.isError ? "danger" : "success"}
-              message={
-                create.isError
-                  ? create.error instanceof ApiError
-                    ? create.error.message
-                    : t("knowledgeBases.error.create")
-                  : create.isSuccess
-                    ? t("knowledgeBases.toast.created")
-                    : null
-              }
-            />
-          </div>
-        </form>
-      </CardContent>
-    </Card>
   );
 }
 

@@ -17,6 +17,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.approvals",
   "menu.audit",
   "menu.plugin_marketplaces",
+  "menu.security_permissions",
   "menu.settings_connection",
   "menu.settings_external_rag",
   "menu.settings_external_nl2sql",
@@ -24,7 +25,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_runtime_snapshot",
   "menu.security_users",
   "menu.security_roles",
-  "menu.security_permissions",
   "menu.settings_oci",
   "menu.settings_upload_storage",
   "menu.settings_model",
@@ -64,12 +64,13 @@ const ADMIN_MENUS = [
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
   "menu.agents": ["Control Plane", "業務 Agent"],
-  "menu.skills": ["Control Plane", "スキル"],
+  "menu.skills": ["Control Plane", "スキル (Skills)"],
   "menu.runtimes": ["Control Plane", "Runtime"],
   "menu.runs": ["Control Plane", "Run"],
   "menu.approvals": ["Control Plane", "承認・監査"],
   "menu.audit": ["Control Plane", "監査"],
   "menu.plugin_marketplaces": ["Control Plane", "マーケットプレイス"],
+  "menu.security_permissions": ["Agent セキュリティ", "権限管理"],
   "menu.settings_connection": ["運用設定", "Agent 接続設定"],
   "menu.settings_external_rag": ["運用設定", "外部 RAG"],
   "menu.settings_external_nl2sql": ["運用設定", "外部 NL2SQL"],
@@ -77,7 +78,6 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_runtime_snapshot": ["運用設定", "Control Plane バックアップ"],
   "menu.security_users": ["ユーザーとロール", "ユーザー管理"],
   "menu.security_roles": ["ユーザーとロール", "ロール管理"],
-  "menu.security_permissions": ["Agent セキュリティ", "権限管理"],
   "menu.settings_oci": ["システム設定", "OCI 認証"],
   "menu.settings_upload_storage": ["システム設定", "アップロード保存先"],
   "menu.settings_model": ["システム設定", "モデル"],
@@ -91,7 +91,7 @@ const CAPABILITY_GROUP = "実行・承認・管理の権限";
 export const PERMISSION_CATALOG: Json[] = [
   ...MENU_PERMISSION_CODES.map((code) => {
     const [group, label] = MENU_LABELS[code];
-    return { code, group, label, description: `${label}を表示し、関連操作を利用できます。`, implies: [] };
+    return { code, group, label, description: `「${label}」の画面を表示し、関連操作を利用できます。`, implies: [] };
   }),
   {
     code: "agent.runs.view",

@@ -31,7 +31,12 @@ import {
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 
-import { bboxOverlayStyle, PreviewViewer, type PreviewViewerPage } from "./PreviewViewer";
+import {
+  bboxOverlayStyle,
+  PreviewViewer,
+  type PreviewSizing,
+  type PreviewViewerPage,
+} from "./PreviewViewer";
 
 type Kind = SourcePreviewKind;
 type DocumentContentVariant = "original" | "prepared";
@@ -74,7 +79,12 @@ export function isPreparedPdfArtifact(
  * 画像と PDF（Office は変換済み PDF）はページ画像のビューア（PreviewViewer）で表示し、回転・拡大縮小・
  * フィット・パン・ページ送りと bbox の強調を付ける（#349）。PDF のページ画像を描けないときは、
  * 従来どおりブラウザの PDF 表示（iframe）と位置の案内に戻す。
- * 高さは親に合わせる（呼び出し側が 1 画面分などの高さを与える）。
+ *
+ * 高さは `sizing` で決める（#559）。
+ * - `fill`（既定）: 親に合わせる（呼び出し側が 1 画面分などの高さを与える。引用のダイアログ）。
+ * - `page`: 1 ページ全体が幅に合わせて入る高さ（文書詳細）。ページ画像のビューアはページの縦横比から、
+ *   ページの寸法が分からない表示（読み込み中・iframe の PDF・テキスト）は A4 縦の縦横比（CSS の aspect-ratio）で
+ *   領域を取り、読み込みの前後で高さが大きく跳ねないようにする。親が高さを足す（1 画面分の下限など）と伸びて埋める。
  */
 export function DocumentPreview({
   documentId,
@@ -90,6 +100,7 @@ export function DocumentPreview({
   focusBboxUnit = null,
   focusPageSize = null,
   highlights = null,
+  sizing = "fill",
   className,
 }: {
   documentId: string;
@@ -106,6 +117,7 @@ export function DocumentPreview({
   focusPageSize?: BboxPageSize | null;
   /** 強調する領域（DocRAG の表示領域など）。省略時は focusBbox 1 つを強調する。 */
   highlights?: PreviewHighlight[] | null;
+  sizing?: PreviewSizing;
   className?: string;
 }) {
   const contentUrl = (
@@ -124,6 +136,7 @@ export function DocumentPreview({
   });
   const kind = kindOf(fileName, sourceProfile);
   const focus = { focusBbox, focusBboxMode, focusBboxUnit, focusPage, focusPageSize };
+  const viewerClassName = cn(sizing === "page" ? "flex-auto" : "h-full min-h-80", className);
   const effectiveHighlights =
     highlights ??
     buildPreviewHighlights({ focusPage, focusBbox, focusBboxMode, focusBboxUnit, focusPageSize });
@@ -133,7 +146,8 @@ export function DocumentPreview({
       <PreviewViewer
         key={url}
         kind="image"
-        className={cn("h-full min-h-80", className)}
+        sizing={sizing}
+        className={viewerClassName}
         fileName={fileName}
         pages={[{ pageNumber: 1, imageUrl: () => url }]}
         focusPage={1}
@@ -153,6 +167,7 @@ export function DocumentPreview({
         fileName={fileName}
         iframeUrl={pdfPreviewUrl(url, focusPage)}
         highlights={effectiveHighlights}
+        sizing={sizing}
         className={className}
         {...focus}
       />
@@ -161,7 +176,7 @@ export function DocumentPreview({
 
   if (kind === "text" || kind === "html" || kind === "email") {
     return (
-      <PreviewFrame className={className} {...focus}>
+      <PreviewFrame className={className} sizing={sizing} {...focus}>
         <TextPreview url={url} />
       </PreviewFrame>
     );
@@ -181,6 +196,7 @@ export function DocumentPreview({
           fileName={fileName}
           iframeUrl={pdfPreviewUrl(preparedUrl, focusPage)}
           highlights={effectiveHighlights}
+          sizing={sizing}
           className={className}
           {...focus}
         />
@@ -222,6 +238,7 @@ function PdfPagesPreview({
   fileName,
   iframeUrl,
   highlights,
+  sizing,
   className,
   ...focus
 }: FocusProps & {
@@ -231,6 +248,7 @@ function PdfPagesPreview({
   fileName: string;
   iframeUrl: string;
   highlights: PreviewHighlight[];
+  sizing: PreviewSizing;
   className?: string;
 }) {
   const pagesQuery = useDocumentPreviewPages(documentId, { recipeId, variant });
@@ -255,15 +273,25 @@ function PdfPagesPreview({
         label={t("preview.viewer.loading")}
         placement="panel"
         testId="preview-loading"
-        className={cn("h-full min-h-80 grid-rows-[auto_minmax(0,1fr)]", className)}
+        className={cn(
+          sizing === "page" ? "flex-auto" : "h-full min-h-80",
+          "grid-rows-[auto_minmax(0,1fr)]",
+          className
+        )}
       >
-        <Skeleton className="h-full min-h-60 w-full" />
+        {/* `page` はページの寸法が届く前なので A4 縦で領域を取る（届いた後のビューアとほぼ同じ高さ。#559）。 */}
+        <Skeleton
+          className={cn(
+            "w-full",
+            sizing === "page" ? PAGE_SIZED_FRAME_CLASS : "h-full min-h-60"
+          )}
+        />
       </TimedLoadingState>
     );
   }
   if (pagesQuery.isError || pages.length === 0) {
     return (
-      <PreviewFrame className={className} {...focus}>
+      <PreviewFrame className={className} sizing={sizing} {...focus}>
         <iframe
           src={iframeUrl}
           title={fileName}
@@ -275,7 +303,8 @@ function PdfPagesPreview({
   return (
     <PreviewViewer
       kind="pdf"
-      className={cn("h-full min-h-80", className)}
+      sizing={sizing}
+      className={cn(sizing === "page" ? "flex-auto" : "h-full min-h-80", className)}
       fileName={fileName}
       pages={pages}
       focusPage={focus.focusPage ?? null}
@@ -283,6 +312,12 @@ function PdfPagesPreview({
     />
   );
 }
+
+/**
+ * ページの寸法が分からない表示（読み込み中・iframe の PDF・テキスト）の `page` の高さ（#559）。
+ * A4 縦（210 : 297）の縦横比で幅から高さを決め、上限はページ画像のビューアと同じ 2 画面分にする。
+ */
+const PAGE_SIZED_FRAME_CLASS = "aspect-[210/297] max-h-[calc(200dvh-10rem)]";
 
 /** ページ画像で表示できないとき（iframe の PDF・テキスト）に、位置の案内を上に添える。 */
 function PreviewFrame({
@@ -292,8 +327,9 @@ function PreviewFrame({
   focusBboxUnit = null,
   focusPage = null,
   focusPageSize = null,
+  sizing = "fill",
   className,
-}: FocusProps & { children: ReactNode; className?: string }) {
+}: FocusProps & { children: ReactNode; sizing?: PreviewSizing; className?: string }) {
   const overlayRect = normalizeBboxForPreview(
     focusBbox,
     focusPageSize,
@@ -301,7 +337,13 @@ function PreviewFrame({
     focusBboxUnit
   );
   return (
-    <div className={cn("flex h-full min-h-0 flex-col gap-2", className)}>
+    <div
+      className={cn(
+        "flex flex-col gap-2",
+        sizing === "page" ? "flex-auto" : "h-full min-h-0",
+        className
+      )}
+    >
       {focusBbox && overlayRect ? (
         <BboxLocator
           overlayRect={overlayRect}
@@ -316,7 +358,14 @@ function PreviewFrame({
           focusPageSize={focusPageSize}
         />
       ) : null}
-      <div className="relative min-h-0 flex-1">{children}</div>
+      {sizing === "page" ? (
+        // A4 縦の縦横比で領域を取り、中身（iframe・テキスト）はその中いっぱいに置く（テキストは中でスクロールする）。
+        <div className={cn("relative w-full flex-auto", PAGE_SIZED_FRAME_CLASS)}>
+          <div className="absolute inset-0 flex flex-col">{children}</div>
+        </div>
+      ) : (
+        <div className="relative min-h-0 flex-1">{children}</div>
+      )}
     </div>
   );
 }

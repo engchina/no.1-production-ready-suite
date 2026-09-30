@@ -2094,7 +2094,14 @@ export interface ExtractionFieldDefinition {
   value_type: ExtractionFieldValueType;
 }
 
+/** 全体の既定の項目の定義。uses_standard なら一度も保存しておらず、fields は標準の項目（#556）。 */
 export interface ExtractionFieldsSettingsData {
+  fields: ExtractionFieldDefinition[];
+  uses_standard: boolean;
+}
+
+/** 検索の絞り込みに使える項目（#549）。 */
+export interface SearchExtractionFieldsData {
   fields: ExtractionFieldDefinition[];
 }
 
@@ -2901,7 +2908,7 @@ export const api = {
     ),
   // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
   getSearchExtractionFields: (businessViewIds: string[]) =>
-    request<ExtractionFieldsSettingsData>(
+    request<SearchExtractionFieldsData>(
       `/api/search/extraction-fields?${new URLSearchParams({
         business_view_ids: businessViewIds.join(","),
       }).toString()}`,
@@ -3389,6 +3396,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  // 保存した全体の既定を消し、標準の項目に戻す（#556）。
+  resetExtractionFieldsSettings: () =>
+    request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields", { method: "DELETE" }),
   getPipelineSettings: () => request<PipelineSettingsData>("/api/settings/pipeline"),
   updatePipelineSettings: (body: PipelineSettingsUpdate) =>
     request<PipelineSettingsData>("/api/settings/pipeline", {

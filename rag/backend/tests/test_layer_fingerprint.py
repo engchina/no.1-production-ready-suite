@@ -84,6 +84,22 @@ def test_recorded_fingerprint_adds_docrag_contract_only_for_docrag_chunking() ->
     assert recorded_layer_fingerprint("navigation", None, other) is None
 
 
+def test_standard_fields_are_the_current_definitions_until_saved() -> None:
+    """未保存の環境の今の定義は標準の項目。保存すれば作り直しが必要、戻せば消える(#556)。"""
+    settings = Settings()
+    standard = fields_mod.standard_field_definitions()
+    assert _current_fields() == standard
+    recorded = {FIELD_SCHEMA_INPUT: field_schema_hash(standard)}
+    assert changed_layer_inputs(recorded, current_layer_inputs(settings, _current_fields())) == []
+
+    save_field_schema(_DEFS)
+    changed = changed_layer_inputs(recorded, current_layer_inputs(settings, _current_fields()))
+    assert changed == [FIELD_SCHEMA_INPUT]
+
+    fields_mod.reset_field_schema()
+    assert changed_layer_inputs(recorded, current_layer_inputs(settings, _current_fields())) == []
+
+
 def test_changed_inputs_compares_recorded_inputs_with_current() -> None:
     save_field_schema(_DEFS)
     settings = Settings(rag_navigation_summary_max_nodes=24)
@@ -163,6 +179,8 @@ async def test_field_extraction_stamps_the_definitions_it_used() -> None:
 
 
 async def test_field_extraction_without_definitions_does_not_stamp() -> None:
+    # 空の全体の既定を保存した環境(未保存なら標準の項目で抽出する。#556)。
+    save_field_schema([])
     pipeline = _pipeline(Settings(rag_field_extraction_enabled=True), "[]")
 
     result = await pipeline._attach_extraction_fields(

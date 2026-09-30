@@ -1,6 +1,6 @@
 # RAG アーキテクチャ
 
-このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。Backend は OCI Enterprise AI / OCI Generative AI / Oracle 26ai を直接使い、local / oci の実行モード切り替えは持ちません。
+このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。Backend は OCI Enterprise AI / OCI Generative AI / Oracle AI Database を直接使い、local / oci の実行モード切り替えは持ちません。
 
 Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memory Engineering](./aidb-memory-engineering.md) を正とする。検索 runtime は `依頼 → Business Context Pack → Retrieval Plan → AIDB Retrieval → Resolver / Verifier → Context Builder → Agent Memory Loop` の順に扱い、単純な vector 類似 chunk 投入に戻さない。
 
@@ -52,7 +52,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 
 5. 索引
    - 実装: `backend/app/clients/oracle.py`
-   - 本番は Oracle 26ai AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
+   - 本番は Oracle AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
    - スキーマ成果物は HNSW 索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)を作成する。
    - ベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `RAG_ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
    - 検索精度は **Vector Index アダプター(`rag_vector_index_profile`)** で手動選択する。`app/rag/vector_index_adapter.py` が profile を解決し、`balanced`(`RAG_ORACLE_VECTOR_TARGET_ACCURACY` をそのまま使用)/ `accurate`(98、既定。#272)/ `fast`(85)で検索時 target accuracy を runtime 即時に切り替える([oracle.py](backend/app/clients/oracle.py) の vector fetch clause へ反映)。推奨 HNSW ビルドパラメータ(neighbors/efconstruction/distance)は `GET/PATCH /api/settings/vector-index` と専用設定画面に参考表示し、適用には索引再作成(`requires_reprovision`)が必要。版管理された schema DDL artifact は自動変更しない。`SearchDiagnostics.vector_index_profile` に残す。
@@ -79,7 +79,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 
 7. 構造化・関係検索境界
    - RAG repo では SQL 生成 endpoint を公開しない。SQL 専用の自然言語問い合わせは 同じ monorepo の `nl2sql/` の責務とする。
-   - 集計・関係・横断要約のような query は、GraphRAG-lite と Oracle 26ai hybrid retrieval の範囲で扱う。
+   - 集計・関係・横断要約のような query は、GraphRAG-lite と Oracle AI Database hybrid retrieval の範囲で扱う。
    - GraphRAG/navigation/metadata layer が未 materialize の場合は diagnostics と KB 詳細で `planned_only` / `needs_reingest` を表示し、構築済みと見せない。
 
 8. リランク
@@ -97,7 +97,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 9. AIDB Memory Engineering
    - 検索 request ごとに `BusinessContextPack` を作る。tenant/user/role は raw 値を保存せず hash の有無だけを診断し、document/category/knowledge base scope、`source_acl`、`document_version` を非機密 metadata として固定する。
    - `Memory Router / Plan Builder` は `RetrievalPlan` を作り、`evidence -> similar -> structure -> history` の `memory_sequence`、Oracle backend、scope key、evidence rule、termination criteria、gap handling を `SearchDiagnostics` と監査へ残す。Agent は plan 外の自由検索をしない。
-   - `AIDB Retrieval` は既存の Oracle 26ai Hybrid Vector Search / Oracle Text / GraphRAG-lite 境界へ再マップする。`structure` は GraphRAG-lite、`history` は Oracle 26ai の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
+   - `AIDB Retrieval` は既存の Oracle AI Vector Search（hybrid search） / Oracle Text / GraphRAG-lite 境界へ再マップする。`structure` は GraphRAG-lite、`history` は Oracle AI Database の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
    - GraphRAG-lite の構築深度は **GraphRAG アダプター(`rag_graph_profile`)** で手動選択する。`app/rag/graph_adapter.py` が取込側 profile を解決し、`off`(既定・KG 非構築=現行挙動)/ `entities`(entities+relationships のみ)/ `full`(claims + community summary まで)で `build_graph_index` の `build_claims` / `build_community_summaries` を切り替える(entities は軽量)。ingest の graph gate は `resolve_graph_adapter(...).enabled`、legacy `RAG_GRAPH_ENABLED=true` は起動時に `RAG_GRAPH_PROFILE=full` 相当へ読み替え(profile を明示していればそれを優先)、構築判定・文書の実効設定の表示・文書レシピの上書きの正本を `rag_graph_profile` 1 つにそろえる。graph の行の `knowledge_base_id` は取込時の所属のスナップショットなので、`graph_global` 検索と KB のグラフ表示は今もその KB に所属している文書の行だけを返す。検索側 routing は Retrieval アダプターの `graph_augmented`(query-time)が担い、両者は合成する。`SearchDiagnostics.graph_profile` に残し、設定 API `GET/PATCH /api/settings/graph` と専用設定画面で切替する。profile 変更は次回以降の取込に適用され、既存文書への反映には再取込が必要。外部グラフ DB は導入しない。
    - Agent Memory は `X-User-ID` / `X-RAG-Role-ID` / `X-RAG-Agent-ID` / `X-RAG-Thread-ID` を hash 化した scope がある request でのみ検索・保存する。`memory_text` は `VECTOR(1536, FLOAT32)` に保存し、HNSW + Oracle Text index を持つ。
    - 回答後の Memory Loop は、guardrail 通過済み回答について query 原文ではなく「回答要約 + 根拠 ID」を `rag_agent_memories` へ writeback する。helpful / not helpful は `usefulness_score` の移動平均として評価できる。
@@ -129,7 +129,7 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 - ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）、`rag_chat_send_message`（`menu.chat`。既定のモデル 1 系統で回答し、USER / ASSISTANT を保存。会話がなければ業務ビューで作る）、`rag_chat_get_conversation`（`menu.chat`）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットの送信は SSE（`POST /api/chat/conversations/{id}/messages/stream`）と MCP で同じ関数（`_prepare_chat_turn` → `_generate_chat_answer`）を使う。
 
-## Oracle 26ai DDL 例
+## Oracle AI Database DDL 例
 
 `app.clients.oracle` の `oracle_document_schema_sql()` / `oracle_vector_schema_sql()` / `oracle_search_audit_schema_sql()` / `oracle_ingestion_audit_schema_sql()` が返す DDL をベースにする。
 
@@ -277,7 +277,7 @@ CREATE TABLE rag_ingestion_audit (
 );
 ```
 
-document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と業務ビュー / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
+document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と業務ビュー / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle AI Vector Search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
 監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context 文字数、RAG 設定 fingerprint を保存する。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 

@@ -3,7 +3,7 @@
 > 本ドキュメントは、Production Ready RAG に「ナレッジベース管理」を追加するための設計メモである。
 > Dify / RAGFlow / AnythingLLM / FastGPT / MaxKB / R2R などのプロダクト級 RAG が持つ
 > dataset / knowledge base / collection の考え方を参考にしつつ、実装は本プロジェクトの確定スタック
-> (OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Vite + React Router) へ再マッピングする。
+> (OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database / Vite + React Router) へ再マッピングする。
 
 最終更新: 2026-06-28
 
@@ -582,6 +582,10 @@ UX 要件:
 
 - KB に定義が無い（NULL）ときは、全体の既定（「検索・回答設定 › 文書解析」の「解析後の処理」の項目の定義、
   `extraction-fields.json`）を使う。既存の KB はすべて NULL のため、既存環境の抽出は変わらない。
+  全体の既定を一度も保存していない（ファイルが無い）環境は、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・
+  発行元・作成部署。`STANDARD_FIELD_DEFINITIONS`）を全体の既定にする（#556）。保存した定義は 0 件でもそのまま使い、
+  `GET /api/settings/extraction-fields` の `uses_standard` が「未保存で標準の項目を使っている」を示す。
+  `DELETE /api/settings/extraction-fields`（画面の「標準の項目に戻す」）は保存した定義のファイルを消し、標準の項目に戻す。
   `PUT` の `fields: null` で全体の既定に戻す。空の定義（`fields: []`）は「この KB では項目を抽出しない」。
 - 取込は、文書が属する有効な KB の定義を使う。**複数の KB に属する文書は、各 KB の定義（無ければ全体の既定）の
   和集合**で抽出する。同じ項目名（大文字小文字を区別しない）は、作成の古い KB の定義（説明・型）を使う。

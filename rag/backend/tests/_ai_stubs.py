@@ -1,4 +1,4 @@
-"""実 Oracle 26ai と組み合わせて使う決定論的な AI クライアントスタブ。
+"""実 Oracle AI Database と組み合わせて使う決定論的な AI クライアントスタブ。
 
 Oracle はテストでも実 DB を使うが、VLM / embedding / rerank / LLM 回答は
 非決定的かつ課金対象のため、エンドポイント経由のテストではこれらの

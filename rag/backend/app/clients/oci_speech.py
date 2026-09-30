@@ -5,7 +5,7 @@ OCI AI Speech(`oci.ai_speech`)の **非同期 transcription job** で音声/動�
 payload を返す。入出力は Object Storage を経由する(Document Understanding と同型)。
 
 これは確定スタックに無い **追加 OCI サービス**(LLM/VLM=Enterprise AI、embedding/rerank=
-OCI GenAI、ベクトル DB=Oracle 26ai は不変)で、**ユーザ明示要望による**音声モダリティ拡張。
+OCI GenAI、ベクトル DB=Oracle AI Database は不変)で、**ユーザ明示要望による**音声モダリティ拡張。
 別 LLM provider・外部ベクトル DB は導入しない。未設定・SDK/通信失敗・job 失敗・timeout 時は
 ``None`` を返し、呼び出し側でローカル faster-whisper(parser-asr)へ安全に縮退する。
 """

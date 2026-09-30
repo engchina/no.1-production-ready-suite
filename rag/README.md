@@ -12,7 +12,7 @@ A production-ready RAG reference implementation covering data ingestion, chunkin
 |---|---|
 | LLM / VLM | **OCI Enterprise AI**（OCI Generative AI の chat API は使わない） |
 | 埋め込み / リランク | **OCI Generative AI**（Cohere Embed v4 = 1536次元 / Rerank v4 fast） |
-| ベクトル検索 / DB | **Oracle 26ai** AI Vector Search（`VECTOR(1536, FLOAT32)`）+ Oracle Text |
+| ベクトル検索 / DB | **Oracle AI Database** / Oracle AI Vector Search（`VECTOR(1536, FLOAT32)`）+ Oracle Text |
 | バックエンド | Python 3.12 + **FastAPI** + Pydantic v2 + uv |
 | フロントエンド | **Vite + React Router** + TypeScript + Tailwind v4 + shadcn/ui + TanStack Query + Zustand |
 | ストレージ | OCI Object Storage |
@@ -69,19 +69,19 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 ## 実装済みの参照フロー
 
 - `POST /api/documents/upload`: 原本を Object Storage 境界へ保存し、SHA-256 / サイズ / 重複元を記録してドキュメント行を作成。
-- `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle 26ai 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
-- `POST /api/search`: Business Context Pack、Retrieval Plan、hybrid/vector/keyword 検索、Oracle 26ai Agent Memory Search、rerank、Resolver / Verifier、Evidence / Support / History 分離、citation-grounded 回答、Agent Memory writeback、trace ID、guardrail warning を返却。
+- `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle AI Database 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
+- `POST /api/search`: Business Context Pack、Retrieval Plan、hybrid/vector/keyword 検索、Oracle AI Database の Agent Memory Search、rerank、Resolver / Verifier、Evidence / Support / History 分離、citation-grounded 回答、Agent Memory writeback、trace ID、guardrail warning を返却。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
 - `POST /api/evaluation/compare`: 同じ golden set で複数の検索設定を比較し、ranking metric に基づく best experiment を返却。
 - `/metrics`: Prometheus metrics を公開。
 
 `evaluation/golden-set.example.json` は評価 API のテンプレートです。実データ投入後に `evaluation/golden-set.json` へコピーして document id と期待キーワードを調整し、CI / staging gate で使います。
 
-Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を共通 `.env`（リポジトリの `platform/.env`、`PLATFORM_*`）または設定画面から注入してください。RAG 固有の設定は `backend/.env`（`RAG_*`）に置きます（#211。詳細と既存環境の移行は [docs/deployment.md](docs/deployment.md)）。
+Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle AI Database を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を共通 `.env`（リポジトリの `platform/.env`、`PLATFORM_*`）または設定画面から注入してください。RAG 固有の設定は `backend/.env`（`RAG_*`）に置きます（#211。詳細と既存環境の移行は [docs/deployment.md](docs/deployment.md)）。
 
 ## OCI への配備（Resource Manager）
 
-3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Autonomous AI Database 26ai は NL2SQL / Agent と共有し、
+3製品共通の Terraform stack（monorepo root の `terraform/stack/`）で配備します。Oracle Autonomous AI Database は NL2SQL / Agent と共有し、
 RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。Docker は使わない。#286）を作ります
 （CPU の parser だけを配備する）。以前の Docker Compose で配備した環境の移行は [docs/deployment.md](./docs/deployment.md) を参照してください。
 「配備する製品」で RAG を選び、入力・配備方式・instance 上の構成・制約は [terraform/README.md](../terraform/README.md) を参照してください。

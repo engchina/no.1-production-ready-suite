@@ -90,7 +90,8 @@ test("参照 KB がすべて検索されない業務ビューは、結果が 0 �
   ).toBeVisible();
 });
 
-test("ナレッジベースの詳細から名前と説明を編集でき、同名は名前の欄に理由を出す", async ({ page }) => {
+// #555: 名前・説明は詳細の「基本情報」の欄でそのまま編集し、PageHeader の「保存する」で保存する（業務ビューと同じ）。
+test("ナレッジベースの詳細で名前と説明を編集でき、同名は名前の欄に理由を出す", async ({ page }) => {
   const knowledgeBases = defaultKnowledgeBases();
   const patches: Record<string, unknown>[] = [];
   await mockKnowledgeBases(page, knowledgeBases, patches);
@@ -99,16 +100,14 @@ test("ナレッジベースの詳細から名前と説明を編集でき、同�
   await page.goto("/knowledge-bases/kb-1");
   await expect(page.getByRole("heading", { name: "社内規程", level: 1 })).toBeVisible();
 
-  const actions = page.getByTestId("knowledge-base-detail-actions");
-  await actions.getByRole("button", { name: "編集" }).click();
-  const form = page.getByTestId("knowledge-base-edit-form");
+  const form = page.getByTestId("knowledge-base-form");
   const name = form.getByLabel("名前");
-  await expect(name).toBeFocused();
+  await expect(name).toHaveValue("社内規程");
   await expectNoPageOverflow(page);
 
   // 同じ名前の KB があるときは 409 の理由を名前の欄に出し、編集を続けられる。
   await name.fill("製品 FAQ");
-  await form.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存する" }).click();
   await expect(
     form.getByText("同じ名前のナレッジベース（アーカイブ済みを含む）がすでにあります。", {
       exact: false,
@@ -118,14 +117,17 @@ test("ナレッジベースの詳細から名前と説明を編集でき、同�
 
   await name.fill("就業規則");
   await form.getByLabel("説明").fill("人事・経費の規程");
-  await form.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存する" }).click();
 
   await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
   await expect(page.getByRole("heading", { name: "就業規則", level: 1 })).toBeVisible();
-  await expect(page.getByText("人事・経費の規程")).toBeVisible();
+  await expect(page.locator("header[data-page-header]").getByText("人事・経費の規程")).toBeVisible();
   expect(patches.at(-1)).toEqual({ name: "就業規則", description: "人事・経費の規程" });
   // 取込で使わない構築設定は送らない（adapter_config は 422 で拒否される）。
   expect(patches.every((patch) => !("adapter_config" in patch))).toBe(true);
+  // 保存した値が基準になり、確認なしで一覧へ戻れる。
+  await page.getByRole("navigation", { name: "パンくず" }).getByRole("link", { name: "ナレッジベース" }).click();
+  await expect(page).toHaveURL(/\/knowledge-bases$/);
 });
 
 test("DEFAULT は名前を変えられず、説明だけを保存する", async ({ page }) => {
@@ -134,13 +136,11 @@ test("DEFAULT は名前を変えられず、説明だけを保存する", async 
   await mockDocuments(page);
 
   await page.goto("/knowledge-bases/kb-default");
-  await page.getByTestId("knowledge-base-detail-actions").getByRole("button", { name: "編集" }).click();
-
-  const form = page.getByTestId("knowledge-base-edit-form");
+  const form = page.getByTestId("knowledge-base-form");
   await expect(form.getByLabel("名前")).toHaveAttribute("readonly", "");
   await expect(form.getByText("DEFAULT の名前は変更できません。説明だけを編集できます。")).toBeVisible();
   await form.getByLabel("説明").fill("未分類の文書");
-  await form.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存する" }).click();
 
   await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
   expect(patches.at(-1)).toEqual({ description: "未分類の文書" });
@@ -161,39 +161,40 @@ for (const viewport of [
     // 説明が必須になる前に作った KB（説明なし）も読み込める（#521）。
     await page.goto("/knowledge-bases/kb-2");
     await expect(page.getByRole("heading", { name: "製品 FAQ", level: 1 })).toBeVisible();
-    await page.getByTestId("knowledge-base-detail-actions").getByRole("button", { name: "編集" }).click();
 
-    const form = page.getByTestId("knowledge-base-edit-form");
+    const form = page.getByTestId("knowledge-base-form");
     const description = form.getByLabel("説明");
+    const save = page.getByRole("button", { name: "保存する" });
     await expect(description).toHaveAttribute("aria-required", "true");
-    // 変更しなくても、説明が空なら閉じずに入力を求める。
-    await form.getByRole("button", { name: "保存" }).click();
+    // 変更しなくても、説明が空なら送らずに入力を求める。
+    await save.click();
     await expect(form.getByText("説明を入力してください。")).toBeVisible();
     await expect(description).toHaveAttribute("aria-invalid", "true");
     await expect(description).toBeFocused();
 
     await description.fill("  ");
-    await form.getByRole("button", { name: "保存" }).click();
+    await save.click();
     await expect(form.getByText("説明を入力してください。")).toBeVisible();
     expect(patches).toEqual([]);
 
     await description.fill(" 製品の問い合わせ ");
-    await form.getByRole("button", { name: "保存" }).click();
+    await save.click();
     await expect(page.getByText("ナレッジベースを更新しました。")).toBeVisible();
     expect(patches.at(-1)).toEqual({ name: "製品 FAQ", description: "製品の問い合わせ" });
     await expectNoPageOverflow(page);
   });
 }
 
-test("アーカイブ済みのナレッジベースには編集を出さない", async ({ page }) => {
+test("アーカイブ済みのナレッジベースは名前・説明を読み取り専用にし、保存できない", async ({ page }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   await mockDocuments(page);
 
   await page.goto("/knowledge-bases/kb-old");
   await expect(page.getByRole("heading", { name: "旧規程", level: 1 })).toBeVisible();
-  await expect(
-    page.getByTestId("knowledge-base-detail-actions").getByRole("button", { name: "編集" })
-  ).toHaveCount(0);
+  const form = page.getByTestId("knowledge-base-form");
+  await expect(form.getByLabel("名前")).toHaveAttribute("readonly", "");
+  await expect(form.getByLabel("説明")).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("button", { name: "保存する" })).toBeDisabled();
 });
 
 function defaultKnowledgeBases(): KnowledgeBaseFixture[] {

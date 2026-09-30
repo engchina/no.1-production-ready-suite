@@ -2,7 +2,7 @@
   "data": {
     "status": "failed",
     "readiness": "error",
-    "message": "Oracle 26ai への接続に失敗しました。",
+    "message": "Oracle AI Database への接続に失敗しました。",
     "elapsed_ms": 1200,
     "troubleshooting": [
       "DSN が tnsnames.ora の service 名と一致していることを確認してください。",

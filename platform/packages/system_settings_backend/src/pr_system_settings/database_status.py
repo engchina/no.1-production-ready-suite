@@ -49,7 +49,7 @@ SCHEMA_CHECK_FAILED = "schema_check_failed"
 
 
 class DatabaseStatusData(BaseModel):
-    """データベース（Oracle 26ai）の利用可否（`GET /ready/database` の応答）。"""
+    """データベース（Oracle AI Database）の利用可否（`GET /ready/database` の応答）。"""
 
     status: DatabaseAvailability
     # 設定の判定（`database_readiness`）の値。製品の準備状態の確認が上書きすることがある

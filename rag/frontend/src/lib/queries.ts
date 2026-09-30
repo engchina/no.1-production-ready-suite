@@ -77,6 +77,7 @@ import {
   type ExtractionFieldDefinition,
   type ExtractionFieldsSettingsData,
   type KnowledgeBaseExtractionFieldsData,
+  type SearchExtractionFieldsData,
   type PipelineSettingsData,
   type PipelineSettingsUpdate,
   type GuardrailSettingsData,
@@ -872,6 +873,8 @@ export function useKnowledgeBase(id: string | null) {
     queryKey: queryKeys.knowledgeBase(id ?? ""),
     queryFn: () => api.getKnowledgeBase(id as string),
     enabled: id != null,
+    // URL の対象が無い（404）ときは再試行せず、すぐ「対象が見つかりません」を出す（業務ビューと同じ。#555）。
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -913,7 +916,7 @@ function useKnowledgeBaseExtractionFieldsSaved(id: string) {
 
 /** 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。 */
 export function useSearchExtractionFields(businessViewIds: string[], enabled = true) {
-  return useQuery<ExtractionFieldsSettingsData>({
+  return useQuery<SearchExtractionFieldsData>({
     queryKey: queryKeys.searchExtractionFields(businessViewIds),
     queryFn: () => api.getSearchExtractionFields(businessViewIds),
     enabled: enabled && businessViewIds.length > 0,
@@ -1033,8 +1036,7 @@ export function useBusinessView(id: string | null) {
     queryFn: () => api.getBusinessView(id as string),
     enabled: id != null,
     // URL の `?id=` の対象が無い（404）ときは再試行せず、すぐ「見つかりません」を出す。
-    retry: (failureCount, error) =>
-      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -1986,18 +1988,29 @@ export function useUpdatePipelineSettings() {
 
 /** 抽出項目の定義を保存する（文書解析の「解析後の処理」。#528）。 */
 export function useUpdateExtractionFieldsSettings() {
-  const qc = useQueryClient();
+  const onSuccess = useExtractionFieldsSettingsSaved();
   return useMutation({
     mutationFn: (fields: ExtractionFieldDefinition[]) =>
       api.updateExtractionFieldsSettings({ fields }),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.extractionFieldsSettings, data);
-      // 全体の既定は、定義を持たない KB と検索の項目の候補にも効く（#548）。
-      void qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "knowledge-bases" && query.queryKey[2] === "extraction-fields",
-      });
-      void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
-    },
+    onSuccess,
   });
+}
+
+/** 保存した全体の既定を消し、標準の項目に戻す（#556）。 */
+export function useResetExtractionFieldsSettings() {
+  const onSuccess = useExtractionFieldsSettingsSaved();
+  return useMutation({ mutationFn: () => api.resetExtractionFieldsSettings(), onSuccess });
+}
+
+function useExtractionFieldsSettingsSaved() {
+  const qc = useQueryClient();
+  return (data: ExtractionFieldsSettingsData) => {
+    qc.setQueryData(queryKeys.extractionFieldsSettings, data);
+    // 全体の既定は、定義を持たない KB と検索の項目の候補にも効く（#548）。
+    void qc.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "knowledge-bases" && query.queryKey[2] === "extraction-fields",
+    });
+    void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
+  };
 }

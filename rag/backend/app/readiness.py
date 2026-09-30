@@ -153,7 +153,7 @@ def _enterprise_ai_check(settings: Settings) -> str:
 
 
 def _oracle_check(settings: Settings) -> str:
-    """Oracle 26ai の接続設定を確認する。
+    """Oracle AI Database の接続設定を確認する。
 
     システム設定画面・DB の状態 API（`/api/ready/database`）と同じ platform の判定を使う（#325）。
     Wallet mTLS では DB パスワードがあっても、Wallet のファイル・Wallet パスワード・

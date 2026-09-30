@@ -45,7 +45,7 @@
 > LLM/VLM と embedding/rerank で **使用サービスが異なる**点に注意。実装は両者を別クライアントとして抽象化する。
 
 ### データ層(Oracle 集約)
-- **Oracle 26ai** — AI Vector Search でベクトル検索を DB 内に一体化。**外部ベクトル DB(pgvector/Qdrant 等)は提案・導入しない。** ベクトル列は埋め込みに合わせ **`VECTOR(1536, FLOAT32)`**。
+- **Oracle AI Database** — Oracle AI Vector Search でベクトル検索を DB 内に一体化。**外部ベクトル DB(pgvector/Qdrant 等)は提案・導入しない。** ベクトル列は埋め込みに合わせ **`VECTOR(1536, FLOAT32)`**。
 - **OCI Object Storage** — 原本ファイル保管(処理状態別バケット)。
 
 ### バックエンド
@@ -136,7 +136,7 @@ backend/                  FastAPI アプリ
     logging_config.py     JSON 構造化ログ
     api/routes/           health / dashboard / documents / search / evaluation
     clients/              oci_enterprise_ai(LLM/VLM) / oci_genai(embed,rerank)
-                          / oracle(26ai) / object_storage / parser_service(HTTP委譲)
+                          / oracle(Oracle AI Database) / object_storage / parser_service(HTTP委譲)
     rag/                  chunking / ingestion / pipeline
     schemas/              common / document / search
   tests/                  pytest
@@ -179,7 +179,7 @@ frontend/                 Vite + React Router + Tailwind v4 + shadcn/ui
   **glm_ocr は専用 pip package を持たず HuggingFace `zai-org/GLM-OCR` を transformers でロード**する
   (`GLM_OCR_MODEL_ID` で上書き可)。別 LLM provider・外部ベクトル DB は導入しない確定スタックは不変。
 - 確定スタックは不変: embedding/rerank=OCI GenAI、回答/構造化 LLM・通常 VLM=Enterprise AI、
-  ベクトル DB=Oracle 26ai。**外部ベクトル DB・別 LLM provider は導入しない。**
+  ベクトル DB=Oracle AI Database。**外部ベクトル DB・別 LLM provider は導入しない。**
 - monorepo の path 依存(`rag-parser-core`)を使うため、依存追加時は **`uv lock` の再生成が必要**
   (lock はサービスごと)。
 
@@ -258,7 +258,7 @@ npm run lint && npm run build
 
 1. **LLM/VLM 呼び出しは OCI Enterprise AI 経由のみ**。OCI Generative AI の chat API を LLM/VLM に使わない。
 2. **embedding/rerank は OCI Generative AI(Cohere)経由**。
-3. **ベクトル検索は Oracle 26ai AI Vector Search**。外部ベクトル DB を導入しない。
+3. **ベクトル検索は Oracle AI Vector Search**。外部ベクトル DB を導入しない。
 4. **chunks 段階の分割は Chunking アダプター(`rag_chunking_strategy`)で手動選択**する。業界の代表的 chunking 手法(structure_aware / recursive_character / sentence_window / hierarchical_parent_child / markdown_heading / page_level)を外部依存なし・決定論で `StructuredExtraction` へ再マップする。`Parser アダプター` と対の概念で、設定 API `GET/PATCH /api/settings/chunking` と専用設定画面から切り替える。新戦略を追加するときも外部ベクトル DB / 別 LLM provider を導入しない。
 5. **検索段階は Retrieval アダプター(`rag_retrieval_strategy`)、検索後処理は Grounding アダプター(`rag_post_retrieval_pipeline`)で手動選択**する。検索戦略は hybrid_rrf(既定)/ vector / keyword / graph_augmented / select_ai_structured / business_context_strict / corrective_multi_query。検索後処理は custom(既定・既存 `rag_context_*` フラグを尊重)/ lean / verified_context / context_enrich / compact / full_governed。gap-stop・corrective retrieval・business-fit 加重などの決定論的手法は preset から有効化し、設定 API `GET/PATCH /api/settings/retrieval` `…/grounding` と専用設定画面で切り替える。既定 preset は現行挙動と一致させる。
 6. **回答生成は Generation アダプター(`rag_generation_profile`)、安全は Guardrail アダプター(`rag_guardrail_policy`)で手動選択**する。回答生成は grounded_concise(既定・現行 system prompt)/ detailed_cited / strict_extractive / structured_json / bilingual_ja_en で、OCI Enterprise AI へ渡す system prompt 変種を決定論で束ねる(追加 LLM 呼び出しなし)。安全は standard(既定・現行)/ strict / lenient / regulated で、prompt injection・PII マスク・groundedness 閾値の厳格度を束ねる。設定 API `GET/PATCH /api/settings/generation` `…/guardrail` と専用設定画面で切り替え、既定 preset は現行挙動と一致させる。外部 LLM provider / 外部安全 SaaS は導入しない。

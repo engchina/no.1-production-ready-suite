@@ -81,7 +81,7 @@ class InMemorySecurityStore(InMemoryAuthStore):
 
 
 class OracleSecurityStore(OracleAuthStore):
-    """Oracle 26ai の store。Agent のロールのデータを hook で同じトランザクションに読み書きする。"""
+    """Oracle の store。Agent のロールのデータを hook で同じトランザクションに読み書きする。"""
 
     role_class = RoleRecord
     schema_object_names = SECURITY_SCHEMA_OBJECT_NAMES

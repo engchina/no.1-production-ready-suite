@@ -3143,7 +3143,7 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
 
 
 def test_oracle_agent_memory_schema_uses_vector_and_hashed_scope() -> None:
-    """Agent Memory は Oracle 26ai 内の vector table と hash scope で保持する。"""
+    """Agent Memory は Oracle AI Database 内の vector table と hash scope で保持する。"""
     ddl = oracle_agent_memory_schema_sql()
     normalized = ddl.lower()
 

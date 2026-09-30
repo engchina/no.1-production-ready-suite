@@ -25,7 +25,7 @@ export const ja = {
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
   "dbGate.setupRequired.message":
-    "Oracle 26ai には接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
+    "データベースには接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
   "dbGate.openSystemTables": "システムテーブルを開く",
   "dbGate.settingsHint":
@@ -47,6 +47,13 @@ export const ja = {
   "common.breadcrumbs": "パンくず",
   "editor.notFoundTitle": "対象が見つかりません",
   "editor.notFoundHint": "「{id}」は削除されたか、存在しません。一覧から選び直してください。",
+  // A 型のエディタの下書きと離脱の確認（業務ビュー・ナレッジベースで共通。#555）
+  "editor.leaveGuard.title": "保存していない変更があります",
+  "editor.leaveGuard.confirm": "移動する",
+  "editor.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
+  "editor.actions.discard": "変更を元に戻す",
+  "editor.actions.openDraft": "下書きを開く",
+  "editor.meta.updated": "更新 {date}",
   "split.separator": "一覧と詳細の表示比率",
   "split.hint": "ドラッグまたは ← → キーで調整・ダブルクリックまたは Enter で表示比率を切替",
   "split.equal": "左右 1:1",
@@ -262,18 +269,27 @@ export const ja = {
   "settings.parserAdapters.postParse.vision.openModel": "モデル設定を開く",
   "settings.parserAdapters.postParse.vision.prompt": "図・画像の読み取りプロンプト",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
-    "解析した本文から、下で定義した項目（請求書番号・日付など）を OCI Enterprise AI で抽出し、検索に使える項目にします。文書ごとにモデルの呼び出しがかかります。",
+    "解析した本文から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。",
   "settings.parserAdapters.postParse.fieldExtraction.definitions": "抽出する項目の定義",
   "settings.parserAdapters.postParse.fieldExtraction.count": "{count} 件",
+  "settings.parserAdapters.postParse.fieldExtraction.standard": "標準の項目",
   "settings.parserAdapters.postParse.fieldExtraction.empty":
-    "項目の定義がないため、有効にしても何も抽出しません。下の項目の定義で、抽出する項目を追加してください。",
+    "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
     "解析した文書の見出しの階層から章節の木を作り、章節ごとの要約を OCI Enterprise AI で作ります。章節をたどる検索と段階的な表示に使います。章節ごとにモデルの呼び出しがかかります（上限あり）。",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
   "settings.parserAdapters.postParse.saveError": "解析後の処理を保存できませんでした。",
   "settings.extractionFields.description":
-    "項目抽出で取り出す項目の全体の既定です。項目名はモデルへの指示と抽出結果の名前に使います。ナレッジベースで項目を定義していない文書に、次の取込から使います。",
+    "項目抽出で取り出す項目の全体の既定です。項目名と説明はモデルへの指示に、項目名は抽出結果の名前に使います。ナレッジベースで項目を定義していない文書に、次の取込から使います。",
+  "settings.extractionFields.usingStandard":
+    "標準の項目を使っています（まだ保存していません）。編集して保存すると、保存した項目を使います。",
+  "settings.extractionFields.resetStandard": "標準の項目に戻す",
+  "settings.extractionFields.resetStandard.title": "標準の項目に戻しますか？",
+  "settings.extractionFields.resetStandard.description":
+    "保存した項目の定義を削除し、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を使います。編集中の変更も破棄します。抽出済みの値は次の取込まで変わりません。",
+  "settings.extractionFields.resetStandard.done": "標準の項目に戻しました。",
+  "settings.extractionFields.resetStandard.error": "標準の項目に戻せませんでした。",
   "settings.extractionFields.name": "項目名",
   "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
@@ -880,7 +896,7 @@ export const ja = {
     "検索時の精度とレイテンシのバランスを選択します。",
   "settings.vectorIndex.overview.title": "検索インデックス",
   "settings.vectorIndex.overview.description":
-    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現在の索引の値と比べ、違うときは下に生成される再作成 SQL を DBA が適用すると反映されます。",
+    "Oracle AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現在の索引の値と比べ、違うときは下に生成される再作成 SQL を DBA が適用すると反映されます。",
   "settings.vectorIndex.profile": "検索精度",
   "settings.vectorIndex.targetAccuracy": "検索時 target accuracy",
   "settings.vectorIndex.neighbors": "NEIGHBORS",
@@ -943,7 +959,7 @@ export const ja = {
     "取込時に文書内の関係情報をどこまで構築するかを選択します。検索側の関係検索は検索方法で制御します。",
   "settings.graph.overview.title": "関係情報の構築",
   "settings.graph.overview.description":
-    "Oracle 26ai 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
+    "Oracle AI Database 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
   "settings.graph.profile": "構築方式",
   "settings.graph.claims": "claims 抽出",
   "settings.graph.community": "community summary",
@@ -1048,7 +1064,7 @@ export const ja = {
     "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。起動中のサービスは再起動で反映されます。",
   "settings.huggingface.hintCache":
     "モデルは各 parser の実行ユーザーのキャッシュ(~/.cache)へ保存します。本番は配備時にモデルを取得済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
-  "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
+  "settings.database.subtitle": "Oracle AI Database への接続を設定します。",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
   "settings.database.systemTables.title": "RAG システムテーブル",
@@ -1083,7 +1099,7 @@ export const ja = {
   "settings.database.systemTables.confirm.description":
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
-  "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
+  "fileList.subtitle": "取込、chunking、embedding、Oracle の索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",
@@ -1282,11 +1298,8 @@ export const ja = {
   "businessViews.domainKeywords.suggestError": "キーワード候補を生成できませんでした。",
   "businessViews.domainKeywords.noCandidates": "追加できる候補はありません。",
   "businessViews.domainKeywords.candidateStats": "出現 {frequency} 回 / {documents} 文書",
-  "businessViews.leaveGuard.title": "保存していない変更があります",
   "businessViews.leaveGuard.description":
     "移動しても、このタブで業務ビューに戻れば下書きから再開できます。保存するまで検索・回答には反映されません。",
-  "businessViews.leaveGuard.confirm": "移動する",
-  "businessViews.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
   "businessViews.draftPending": "作成中の業務ビューに保存していない下書きがあります。",
   "businessViews.archivedReadonly": "アーカイブ済みの業務ビューは編集・保存できません。",
   "businessViews.knowledgeBaseIssues.title": "参照するナレッジベースの一部が検索対象になっていません",
@@ -1310,6 +1323,8 @@ export const ja = {
   "businessViews.subtitle":
     "複数のナレッジベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
   "businessViews.create.title": "業務ビューを作成",
+  "businessViews.meta.knowledgeBases": "参照 KB {count} 件",
+  "businessViews.actions.createFirst": "最初の業務ビューを作成",
   "businessViews.field.name": "名前",
   "businessViews.field.namePlaceholder": "例: 経理規程ビュー",
   "businessViews.field.description": "説明",
@@ -1341,8 +1356,6 @@ export const ja = {
   "businessViews.actions.editNamed": "{name} を編集",
   "businessViews.actions.archive": "アーカイブ",
   "businessViews.actions.newView": "新規作成",
-  "businessViews.actions.openDraft": "下書きを開く",
-  "businessViews.actions.discard": "変更を元に戻す",
   "businessViews.list.aria": "業務ビューの一覧",
   "businessViews.faq.loading": "承認済み FAQ を読み込んでいます",
   "businessViews.faq.listAria": "承認済み FAQ の一覧",
@@ -1412,16 +1425,27 @@ export const ja = {
   "businessViewPicker.primary": "代表方針",
   "knowledgeBases.subtitle": "文書の所属先を管理し、検索スコープごとに整理します。",
   "knowledgeBases.create.title": "ナレッジベースを作成",
+  // 一覧 → 作成 / 詳細の構成を業務ビューにそろえる（#555）
+  "knowledgeBases.form.title": "基本情報",
+  "knowledgeBases.actions.newKnowledgeBase": "新規作成",
+  "knowledgeBases.actions.createFirst": "最初のナレッジベースを作成",
+  "knowledgeBases.leaveGuard.description":
+    "移動しても、このタブでナレッジベースに戻れば下書きから再開できます。保存するまで名前・説明は変わりません。",
+  "knowledgeBases.draftPending": "作成中のナレッジベースに保存していない下書きがあります。",
+  "knowledgeBases.archivedReadonly":
+    "アーカイブ済みのナレッジベースは、名前・説明の変更と文書の追加・解除ができません。",
+  "knowledgeBases.meta.documents": "文書 {count} 件",
+  "knowledgeBases.meta.indexed": "索引済み {count} 件",
+  "knowledgeBases.meta.errors": "エラー {count} 件",
+  "knowledgeBases.list.aria": "ナレッジベース一覧",
   "knowledgeBases.field.name": "名前",
   "knowledgeBases.field.description": "説明",
   "knowledgeBases.field.descriptionPlaceholder": "例: 就業規則と社内規程の文書",
   "knowledgeBases.field.descriptionHelper":
     "ナレッジベースの一覧・権限管理・業務ビューの選択で、用途を見分けるために表示します。",
-  "knowledgeBases.actions.create": "作成",
+  "knowledgeBases.actions.create": "作成する",
   "knowledgeBases.actions.archive": "アーカイブ",
-  "knowledgeBases.actions.edit": "編集",
-  "knowledgeBases.actions.save": "保存",
-  "knowledgeBases.actions.cancel": "キャンセル",
+  "knowledgeBases.actions.save": "保存する",
   "knowledgeBases.actions.assign": "追加",
   "knowledgeBases.actions.remove": "外す",
   "knowledgeBases.filter.aria": "ナレッジベース状態フィルター",
@@ -1437,9 +1461,6 @@ export const ja = {
   "knowledgeBases.col.indexed": "索引済み",
   "knowledgeBases.col.updated": "更新日時",
   "knowledgeBases.col.actions": "操作",
-  "knowledgeBases.metric.documents": "文書",
-  "knowledgeBases.metric.indexed": "索引済み",
-  "knowledgeBases.metric.errors": "エラー",
   "knowledgeBases.detail.archivedHint":
     "アーカイブ済みのナレッジベースは文書の追加・解除を行えません。",
   "knowledgeBases.assignment.title": "文書を追加",
@@ -1477,7 +1498,7 @@ export const ja = {
   "knowledgeBases.variant.layerStatus.needs_reingest": "再取込",
   "knowledgeBases.variant.layerStatus.error": "エラー",
   "knowledgeBases.empty.title": "ナレッジベースがありません。",
-  "knowledgeBases.empty.hint": "名前を入力して、最初のナレッジベースを作成してください。",
+  "knowledgeBases.empty.hint": "文書をまとめる最初のナレッジベースを作成しましょう。",
   "knowledgeBases.empty.restrictedHint":
     "利用できるナレッジベースがありません。必要な場合は管理者に利用権限を依頼してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",
@@ -1503,7 +1524,6 @@ export const ja = {
     "ナレッジベースのアーカイブに失敗しました。状態を確認して再試行してください。",
   "knowledgeBases.error.update":
     "ナレッジベースの更新に失敗しました。名前を確認して再試行してください。",
-  "knowledgeBases.edit.title": "名前と説明を編集",
   "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
@@ -1567,7 +1587,6 @@ export const ja = {
   "knowledgeBases.adapter.ribbon.overrideBadge": "上書き",
   "knowledgeBases.adapter.actions.save": "構築設定を保存",
   "knowledgeBases.adapter.actions.reset": "変更を取り消す",
-  "knowledgeBases.detail.back": "ナレッジベース一覧へ戻る",
   "knowledgeBases.detail.loading": "ナレッジベース詳細を読み込んでいます",
   "knowledgeBases.loading": "ナレッジベースを読み込んでいます",
   "knowledgeBases.scrollLabel": "ナレッジベース一覧。スクロールできます。",
@@ -1819,7 +1838,9 @@ export const ja = {
   "flow.extraction.tableCellPosition": "r{row} c{col}",
   "flow.extraction.tableCellAria": "{table} {cell} {text}",
   "documents.processingConfig.fieldSchemaEmpty":
-    "抽出する項目定義が未設定のため、項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目の定義を登録してください。",
+    "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目を追加するか、標準の項目に戻してください。",
+  "documents.processingConfig.fieldSchemaStandard":
+    "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "flow.extraction.assets.title": "図表の要約",
   "flow.extraction.fields.title": "抽出項目",
@@ -2673,7 +2694,7 @@ export const ja = {
   "search.meta.group": "同一グループ",
   "search.meta.neighbor": "隣接",
   "search.meta.compressed": "圧縮",
-  "search.pipeline": "埋め込み → Oracle 26ai ベクトル検索 → Cohere Rerank v4 fast → LLM 回答",
+  "search.pipeline": "埋め込み → Oracle AI Vector Search → Cohere Rerank v4 fast → LLM 回答",
 
   "evaluation.subtitle": "Golden set で RAG 品質を検証します。",
   "evaluation.suite.title": "品質評価",
