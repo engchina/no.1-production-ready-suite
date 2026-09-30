@@ -1892,8 +1892,6 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         execute_results=[
             [_oracle_document_row()],
             [{"entity_id": "ent-doc"}, {"entity_id": "ent-old"}, {"entity_id": "ent-stale"}],
-            # #621 で廃止した rag_graph_claims が、migration の適用前でまだ残っている。
-            [{"table_count": 1}],
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -1910,19 +1908,10 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
     assert any("source_entity_id IN" in statement for statement in statements)
     assert any("target_entity_id IN" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
-    # 残っている claims は、消す entity を FK で参照する行だけを entity より先に消す(#621)。
-    claim_delete = next(
-        index
-        for index, statement in enumerate(statements)
-        if "DELETE FROM rag_graph_claims" in statement
-    )
-    assert "entity_id IN" in statements[claim_delete]
-    entity_delete = next(
-        index
-        for index, statement in enumerate(statements)
-        if "DELETE FROM rag_graph_entities" in statement
-    )
-    assert claim_delete < entity_delete
+    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
+    # claims / community summary は #621 で廃止し、表は migration 007 で消した。
+    assert not any("rag_graph_claims" in statement for statement in statements)
+    assert not any("FROM user_tables" in statement for statement in statements)
     assert not any("rag_graph_community_summaries" in statement for statement in statements)
     many_statements = [call.statement for call in pool.connection.many_calls]
     assert any("INSERT INTO rag_graph_entities" in statement for statement in many_statements)
@@ -1936,25 +1925,6 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         if "INSERT INTO rag_graph_entities" in call.statement
     )
     assert json.loads(str(entity_insert.rows[0]["source_document_ids"])) == ["doc-1"]
-
-
-async def test_oracle_replace_document_graph_index_skips_retired_claims_table() -> None:
-    """rag_graph_claims を消す migration の適用後(表が無い)は、claims に触らない(#621)。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [_oracle_document_row()],
-            [{"entity_id": "ent-doc"}],
-            [{"table_count": 0}],
-        ]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    await client.replace_document_graph_index("doc-1", GraphIndex())
-
-    statements = [call.statement for call in pool.connection.calls]
-    assert any("FROM user_tables" in statement for statement in statements)
-    assert not any("DELETE FROM rag_graph_claims" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
 
 
 async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:
