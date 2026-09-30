@@ -65,3 +65,60 @@ def test_reserve_moves_only_the_best_child_of_each_linked_screen_up_to_the_rank(
 
     assert [r.id for r in ordered][:4] == ["r0", "r1", "s1", "r2"]  # 1 件だけを 3 位へ、ほかの順は保つ
     assert [r.id for r in ordered].index("s2") == 7
+
+
+def test_catalog_from_section_paths_matches_chunk_catalog():
+    """DB で集計した（文書名、見出しの列、chunk 数）からも、chunk から作るのと同じ目録になる。"""
+    from docrag.retrieval.screen_catalog import catalog_from_section_paths
+    rows = [("架空管理.pdf", ["架空管理", "（３）出力様式設定"], 1),
+            ("架空管理.pdf", ["架空管理", "（２）伝票印刷設定", "A 【画面説明】"], 2),
+            ("架空仕入.pdf", ["架空仕入", "（２）伝票印刷設定"], 1),
+            ("", ["（１）文書名なし"], 1)]
+
+    assert catalog_from_section_paths(rows) == {"架空管理.pdf": ["（２）伝票印刷設定", "（３）出力様式設定"],
+                                                "架空仕入.pdf": ["（２）伝票印刷設定"]}
+
+
+def _stored(uid, source, path, *, level="child", seq=1):
+    from docrag.models.storage import StoredChunk
+    return StoredChunk(chunk_uid=uid, chunk_id=uid, chunk_level=level, chunk_seq=seq,
+                       parent_chunk_uid="" if level == "parent" else f"{source}:p", parent_chunk_id="",
+                       child_chunk_ids=(), text=uid, retrieval_text=uid, source_run_id="run", source_file_name=source,
+                       source_engine_id="docling", source_engine_label="Docling", page_start=1, page_end=1,
+                       source_seq_ranges=(), source_record_refs=(), metadata={"section_path": list(path)})
+
+
+def test_linked_screen_children_reads_catalog_and_chunks_from_injected_dependencies():
+    """目録と画面の chunk を注入したら、検索結果（pool）に無い画面も選んで候補に加え、親を展開用に返す。"""
+    from docrag.dependencies import AnswerDependencies, bind_dependencies
+    from docrag.generation import answering
+
+    calls = []
+    screen = ("架空管理.pdf", "（２）伝票印刷設定")
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    def screen_chunks(*, links, existing, settings):
+        calls.append(("chunks", list(links), set(existing)))
+        return [_stored("s1", screen[0], ["架空管理", screen[1]]),
+                _stored(f"{screen[0]}:p", screen[0], ["架空管理", screen[1]], level="parent")]
+
+    dependencies = AnswerDependencies(
+        search=unused, check_ready=unused, rerank=unused, parse_images=unused,
+        parse_text=lambda system, prompt, settings, schema, **kwargs: ScreenLinks(
+            candidates=[LinkedScreen(document=screen[0], screen=screen[1])]),
+        screen_catalog=lambda *, settings: calls.append(("catalog",)) or {screen[0]: [screen[1]]},
+        screen_chunks=screen_chunks,
+    )
+    pool = [_stored("h1", "別文書.pdf", ["（１）受注入力"])]
+    ranked = [answering._stored_chunk_answer_record(pool[0])]
+    answering._SCREEN_LINK_CACHE.clear()
+
+    with bind_dependencies(dependencies):
+        added, links, expansion = answering._linked_screen_children("印字されない", pool, ranked, settings=None)
+
+    assert links == [screen]
+    assert [record.chunk_uid for record in added] == ["s1"]
+    assert [record.chunk_uid for record in expansion] == ["s1", f"{screen[0]}:p"]
+    assert calls == [("catalog",), ("chunks", [screen], {"h1"})]

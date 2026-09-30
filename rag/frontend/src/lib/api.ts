@@ -792,6 +792,8 @@ export interface KnowledgeBaseQueryConfig {
   docrag_answer_flow?: DocragAnswerFlowName | null;
   docrag_neighbor_child_count?: number | null;
   docrag_rerank_enabled?: boolean | null;
+  // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
+  docrag_screen_linking_enabled?: boolean | null;
 }
 
 export type DocragQueryStrategyName =
@@ -2133,6 +2135,8 @@ export type GuardrailBackend = "local" | "oci_guardrails";
 
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
+/** 実際の索引と推奨ビルドの比較結果(backend の判定。#562)。unknown = 実際の値を確認できない。 */
+export type VectorIndexBuildStatus = "match" | "reprovision" | "unknown";
 
 export interface VectorIndexProfileStatusData {
   name: VectorIndexProfileName;
@@ -2143,6 +2147,7 @@ export interface VectorIndexProfileStatusData {
   neighbors: number;
   efconstruction: number;
   distance: string;
+  index_status: VectorIndexBuildStatus;
 }
 
 export interface VectorIndexSettingsData {
@@ -2152,6 +2157,10 @@ export interface VectorIndexSettingsData {
   efconstruction: number;
   distance: string;
   requires_reprovision: boolean;
+  index_status: VectorIndexBuildStatus;
+  /** 実際の索引の値。確認できないときは null。 */
+  actual_neighbors: number | null;
+  actual_efconstruction: number | null;
   profiles: VectorIndexProfileStatusData[];
   reindex_sql: string;
   config_source: "runtime";
@@ -2623,6 +2632,20 @@ export const api = {
         recipeId,
       )}/extraction-export?${search.toString()}`,
     );
+  },
+  /**
+   * 抽出エクスポートのダウンロード URL（`download=true` で `Content-Disposition: attachment` の
+   * ファイルを返す。ファイル名は backend が文書名とレシピから決める。#561）。
+   */
+  documentRecipeExtractionExportUrl: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat,
+  ) => {
+    const search = new URLSearchParams({ format, download: "true" });
+    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+      recipeId,
+    )}/extraction-export?${search.toString()}`;
   },
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(

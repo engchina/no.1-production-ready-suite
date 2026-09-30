@@ -1401,8 +1401,13 @@ async def export_document_recipe_extraction(
     format: Annotated[DocumentExtractionExportFormat, Query()] = (
         DocumentExtractionExportFormat.MARKDOWN
     ),
-) -> ApiResponse[DocumentExtractionExport]:
-    """選択レシピの抽出・active chunks を監査用に返す。"""
+    download: Annotated[bool, Query()] = False,
+) -> ApiResponse[DocumentExtractionExport] | Response:
+    """選択レシピの抽出・active chunks を返す。
+
+    `download=true` のときは、同じ内容をファイルとして返す(`Content-Disposition: attachment`。
+    文書の詳細の「抽出エクスポート」「Chunk / Citation」のダウンロード。#561)。
+    """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     row = await oracle.get_document_recipe(document_id, recipe_id)
@@ -1427,6 +1432,13 @@ async def export_document_recipe_extraction(
         chunks = await oracle.list_chunk_set_chunks(str(chunk_set_id)) if chunk_set_id else []
         payload = {"chunks": [chunk.model_dump(mode="json") for chunk in chunks]}
     content = _document_extraction_export_content(format, extraction, payload)
+    if download:
+        return _document_extraction_export_download_response(
+            format,
+            content,
+            file_name=detail.file_name,
+            slot_no=row.get("slot_no"),
+        )
     return ApiResponse(
         data=DocumentExtractionExport(
             document_id=document_id,
@@ -4089,6 +4101,62 @@ def _document_extraction_export_content_type(
     if export_format == DocumentExtractionExportFormat.HTML:
         return "text/html; charset=utf-8"
     return "application/json; charset=utf-8"
+
+
+_EXTRACTION_EXPORT_FILE_SUFFIXES: dict[DocumentExtractionExportFormat, str] = {
+    DocumentExtractionExportFormat.MARKDOWN: ".md",
+    DocumentExtractionExportFormat.HTML: ".html",
+    DocumentExtractionExportFormat.JSON: ".json",
+    DocumentExtractionExportFormat.CHUNKS: "_chunks.json",
+}
+
+
+def _document_extraction_export_file_name(
+    export_format: DocumentExtractionExportFormat,
+    *,
+    file_name: str | None,
+    slot_no: object,
+) -> str:
+    """ダウンロードのファイル名(元の文書名の拡張子を除いた部分 + レシピ + 形式の拡張子)。
+
+    例: `契約書.pdf` のレシピ1の Markdown は `契約書_レシピ1.md`、
+    chunk は `契約書_レシピ1_chunks.json`。
+    """
+    safe_name = _safe_display_filename(file_name)
+    stem = PurePath(safe_name).stem.strip(" .") or "document"
+    slot = slot_no if isinstance(slot_no, int) and slot_no > 0 else 1
+    return _truncate_file_name(
+        f"{stem}_レシピ{slot}{_EXTRACTION_EXPORT_FILE_SUFFIXES[export_format]}"
+    )
+
+
+def _document_extraction_export_download_response(
+    export_format: DocumentExtractionExportFormat,
+    content: str,
+    *,
+    file_name: str | None,
+    slot_no: object,
+) -> Response:
+    """抽出エクスポートをファイルとして返す(原本のダウンロードと同じヘッダーにそろえる)。"""
+    download_name = _document_extraction_export_file_name(
+        export_format, file_name=file_name, slot_no=slot_no
+    )
+    headers = {
+        # 非 ASCII ファイル名は RFC 5987 でエンコードする
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(download_name)}",
+        # MIME sniffing による取り違えを防ぐ
+        "X-Content-Type-Options": "nosniff",
+        # 抽出のやり直しで内容が変わるため、ブラウザに残さない
+        "Cache-Control": "private, no-store",
+    }
+    if export_format == DocumentExtractionExportFormat.HTML:
+        # 同じ origin で開かれてもスクリプトを動かさない(#281 と同じ扱い)。
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=_document_extraction_export_content_type(export_format),
+        headers=headers,
+    )
 
 
 def _extraction_parser_backend(extraction: StructuredExtraction) -> str | None:

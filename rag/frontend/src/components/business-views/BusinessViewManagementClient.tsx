@@ -1118,6 +1118,16 @@ function BusinessViewEditor({
                             disabled={pending}
                             onChange={(value) => updateQuery({ docrag_rerank_enabled: value })}
                           />
+                          <QueryToggleRow
+                            label={t("businessViews.field.docragScreenLinking")}
+                            description={t("businessViews.field.docragScreenLinkingHelper")}
+                            descriptionId="business-view-docrag-screen-linking-helper"
+                            value={config.query.docrag_screen_linking_enabled ?? null}
+                            disabled={pending}
+                            onChange={(value) =>
+                              updateQuery({ docrag_screen_linking_enabled: value })
+                            }
+                          />
                         </div>
                       </div>
                     </>
@@ -1377,19 +1387,30 @@ function QuerySelectRow<T extends string>({
 /** 検索オプションの三値行(グローバル継承 / ON / OFF)。null は継承。 */
 function QueryToggleRow({
   label,
+  description,
+  descriptionId,
   value,
   disabled,
   onChange,
 }: {
   label: string;
+  /** 行の下に出す説明(費用・向く質問など)。選択肢のグループの説明として読み上げる。 */
+  description?: string;
+  descriptionId?: string;
   value: boolean | null;
   disabled: boolean;
   onChange: (value: boolean | null) => void;
 }) {
+  const describedBy = description ? descriptionId : undefined;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <span className="text-sm text-fg">{label}</span>
-      <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
+      <div
+        className="flex flex-wrap gap-1"
+        role="group"
+        aria-label={label}
+        aria-describedby={describedBy}
+      >
         <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
           {t("businessViews.inherit")}
         </ToggleChip>
@@ -1400,6 +1421,11 @@ function QueryToggleRow({
           OFF
         </ToggleChip>
       </div>
+      {description ? (
+        <p id={describedBy} className="basis-full text-xs text-fg-muted">
+          {description}
+        </p>
+      ) : null}
     </div>
   );
 }

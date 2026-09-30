@@ -959,6 +959,8 @@ class GuardrailSettingsUpdate(BaseModel):
 
 
 VectorIndexProfileName = VectorIndexProfile
+# 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
+VectorIndexBuildStatus = Literal["match", "reprovision", "unknown"]
 
 
 class VectorIndexProfileStatusData(BaseModel):
@@ -972,6 +974,7 @@ class VectorIndexProfileStatusData(BaseModel):
     neighbors: int
     efconstruction: int
     distance: str
+    index_status: VectorIndexBuildStatus
 
 
 class VectorIndexSettingsData(BaseModel):
@@ -983,6 +986,10 @@ class VectorIndexSettingsData(BaseModel):
     efconstruction: int
     distance: str
     requires_reprovision: bool
+    index_status: VectorIndexBuildStatus
+    # 実際の索引の値。確認できないときは None。
+    actual_neighbors: int | None = None
+    actual_efconstruction: int | None = None
     profiles: list[VectorIndexProfileStatusData] = Field(default_factory=list)
     reindex_sql: str = ""
     config_source: Literal["runtime"]

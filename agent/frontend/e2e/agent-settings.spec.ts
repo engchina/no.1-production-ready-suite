@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 
@@ -37,6 +37,16 @@ async function expectElementAbove(page: Page, upperSelector: string, lowerSelect
   expect(upperBox).not.toBeNull();
   expect(lowerBox).not.toBeNull();
   expect(upperBox!.y).toBeLessThan(lowerBox!.y);
+}
+
+/** テキストの欄が Vision の欄より先（同じ行なら左、縦積みなら上）にある（#566）。 */
+async function expectTextBeforeVision(text: Locator, vision: Locator) {
+  const textBox = await text.boundingBox();
+  const visionBox = await vision.boundingBox();
+  expect(textBox).not.toBeNull();
+  expect(visionBox).not.toBeNull();
+  const sameRow = Math.abs(textBox!.y - visionBox!.y) < 1;
+  expect(sameRow ? textBox!.x < visionBox!.x : textBox!.y < visionBox!.y).toBe(true);
 }
 
 async function fillOrSelectDsn(page: Page, value: string) {
@@ -257,16 +267,18 @@ test.describe("Agent Runtime settings", () => {
       // 接続情報の節の保存は、既定のモデル 2 つを保存済みの値のまま送る（#499）。
       enterprise_ai: {
         connections: [{ connection_id: "primary", api_key: "test-api-key" }],
-        default_text_model_id: "",
+        default_text_model_id: "enterprise-llm",
         default_vision_model_id: "enterprise-llm",
       },
     });
-    await expect(page.getByRole("combobox", { name: "既定の Vision モデル" })).toContainText(
-      "業務 RAG 標準"
-    );
-    await expect(page.getByRole("combobox", { name: "既定のテキストモデル" })).toContainText(
-      "既定の Vision モデルを使う"
-    );
+    const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    await expect(visionDefault).toContainText("業務 RAG 標準");
+    await expect(textDefault).toContainText("業務 RAG 標準");
+    // 並びはテキスト → Vision で、2 つとも必須（#566）。
+    await expectTextBeforeVision(textDefault, visionDefault);
+    await expect(textDefault).toHaveAttribute("aria-required", "true");
+    await expect(visionDefault).toHaveAttribute("aria-required", "true");
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/database");
@@ -290,6 +302,13 @@ test.describe("Agent Runtime settings", () => {
     ]) {
       await page.goto(route);
       await expectNoHorizontalOverflow(page);
+      if (route === "/settings/model") {
+        // 375px の縦積みでもテキスト → Vision の順（#566）。
+        await expectTextBeforeVision(
+          page.getByRole("combobox", { name: "既定のテキストモデル" }),
+          page.getByRole("combobox", { name: "既定の Vision モデル" })
+        );
+      }
     }
   });
 
