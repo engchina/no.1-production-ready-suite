@@ -1,4 +1,4 @@
-"""Oracle 26ai 接続クライアント境界。
+"""Oracle AI Database の接続クライアント境界。
 
 settings API は RAG と同じ `test_oracle_connection` / `close_oracle_pool` を使う。
 NL2SQL 側では既存の `OracleNl2SqlAdapter` を最小接続テストに再利用する。
@@ -42,7 +42,7 @@ async def test_oracle_connection(
         )
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
-            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
 

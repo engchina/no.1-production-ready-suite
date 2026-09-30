@@ -2,7 +2,7 @@
 
 > 本ドキュメントは、処理フローの内部基盤(`rag_pipeline_core` + `services/pipeline/*`)の上に
 > 追加する **実行配線が重い高度な検索・回答方式** の設計と段階導入計画をまとめる。いずれも確定スタック
-> (OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai)を不変とし、外部ベクトル DB・別
+> (OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database)を不変とし、外部ベクトル DB・別
 > LLM provider は導入しない。GPU / 版管理 schema DDL / 実 Oracle を要するものは **本リポジトリの
 > CI(GPU・実 DB なし)では検証不能** のため、scaffold(safe-degrade)→ 実環境配線 → 検証の順で導入する。
 
@@ -34,7 +34,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 - **tree 構築(取込時 or 検索時キャッシュ)**: 既存の `DocumentElement.section_path` /
   `parent_id` 階層から、文書ごとに `section tree`(node = {title, summary, page_range,
   child_ids})を構築。要約は OCI Enterprise AI(RAPTOR と共用可)。
-  Oracle 26ai に `rag_document_nav_tree`(または既存 `navigation` JSON、`app/rag/navigation.py`)を
+  Oracle AI Database に `rag_document_nav_tree`(または既存 `navigation` JSON、`app/rag/navigation.py`)を
   再利用して node を永続化。
 - **検索時 navigation**: OCI Enterprise AI に「query + 現在 node の title/summary 群」を渡し、各 node
   で yes/no(展開/スキップ)を JSON で判断 → 命中 leaf の chunk を Oracle から取得。`SearchDiagnostics`
@@ -67,7 +67,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 - **取込時**: 既存 `pdf_to_page_images` 前処理でページ画像化 → **GPU サービス** `services/parsers`
   または新 `services/pipeline/colpali`(ColQwen/ColPali を transformers でロード)で **multi-vector
   embedding** を生成。OCI Enterprise AI VLM 経路でも近似可能だが multi-vector が要点。
-- **索引(schema 変更)**: Oracle 26ai に視覚 embedding 列/表(`rag_page_visual_vectors`、
+- **索引(schema 変更)**: Oracle AI Database に視覚 embedding 列/表(`rag_page_visual_vectors`、
   `VECTOR` 複数 or per-patch 行)を追加。**版管理された schema DDL artifact の変更が必要**
   (`requires_reprovision`、自動変更しない)。
 - **検索時**: query を同モデルで embedding 化し、**late interaction(MaxSim)** スコアで page を

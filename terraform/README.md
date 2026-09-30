@@ -5,7 +5,7 @@
 
 作成・設定するもの:
 
-- Oracle Autonomous AI Database 26ai を **1つ**（新規作成、または既存 ADB の選択）と、その Wallet。選んだ製品すべてで共有する
+- Oracle Autonomous AI Database を **1つ**（新規作成、または既存 ADB の選択）と、その Wallet。選んだ製品すべてで共有する
 - 選んだ製品ごとに OCI Compute を **1台ずつ**（Ubuntu。shape / image / subnet / SSH 鍵は共通、OCPU / メモリ / boot volume は製品ごと）
 - 各 Compute の cloud-init。suite monorepo を1回 clone し、その製品の `init_script.sh`（[`rag/`](../rag/init_script.sh) / [`nl2sql/`](../nl2sql/init_script.sh) / [`agent/`](../agent/init_script.sh)）で配備する
 - 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
@@ -33,6 +33,9 @@ Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql`
 
 ## Autonomous AI Database（全製品で共有）
 
+- **対応バージョン**: 3製品とも Oracle AI Database 26ai 以降が前提です（`VECTOR` 型と Oracle AI Vector Search を使うため）。`adb_db_version` は既定の `26ai` のまま使ってください。
+  NL2SQL の SQL ドメインと annotation は旧 Oracle Database 23ai で入った機能で、それより前のバージョンでは NL2SQL がその機能を使いません。
+  リポジトリの文書・画面・コメントでは製品名にバージョンを入れず（#564）、対応バージョンはここだけに書きます。
 - `adb_deployment_mode` で「新規 Autonomous AI Database の作成」か「既存の Autonomous AI Database を選択」を選びます。
   - 新規: 既定の DB 名は `SUITEADB`、workload は `OLTP`（RAG の取込・Agent の Runtime checkpoint が継続して書き込むため）、ECPU は `2`。
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。

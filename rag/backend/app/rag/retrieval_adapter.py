@@ -5,7 +5,7 @@ strategy→検索挙動の静的解決は共有パッケージ ``rag_pipeline_co
 真のとき静的解決を pipeline-retrieval サービスへ委譲する。無効時は in-process(同一ロジック)、
 サービス未起動・未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
 処理停止。mode/strategy は wire 中立の文字列で受け渡し backend で
-SearchMode/SearchStrategy へ写す。実 retrieval は Oracle 26ai 経路を backend が実行する。
+SearchMode/SearchStrategy へ写す。実 retrieval は Oracle AI Database 経路を backend が実行する。
 外部検索エンジンは導入しない。
 """
 

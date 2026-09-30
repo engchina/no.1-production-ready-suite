@@ -170,7 +170,9 @@ test("ファイル準備確認待ちで絞り込める", async ({ page }) => {
   await mockFileListApi(page, documents, {}, (url) => requested.push(url.searchParams.get("status")));
 
   await page.goto("/file-list");
-  await page.getByRole("button", { name: "ファイル準備確認待ち" }).click();
+  // 状態の絞り込みは選択の欄（#578）。
+  await page.getByRole("combobox", { name: "状態" }).click();
+  await page.getByRole("option", { name: "ファイル準備確認待ち" }).click();
 
   await expect(page.getByRole("link", { name: "prepared.pdf" })).toBeVisible();
   await expect(page.getByRole("link", { name: "indexed.pdf" })).toHaveCount(0);

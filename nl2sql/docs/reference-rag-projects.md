@@ -20,7 +20,7 @@
 - Microsoft GraphRAG / LightRAG 系
   - 参考点: entity/relation 抽出、graph traversal、query-focused subgraph selection。
   - 本プロジェクトでの採用: profile scope 内の承認済み edge だけを有界探索し、SQL 生成 context に渡す。
-  - 導入しないもの: Neo4j などの外部 graph DB。永続化は Oracle 26ai に集約する。
+  - 導入しないもの: Neo4j などの外部 graph DB。永続化は Oracle AI Database に集約する。
 
 ## Vector Search
 

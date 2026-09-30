@@ -1220,9 +1220,9 @@ class OracleNl2SqlAdapter:
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """対象表の列に付いた SQL ドメインの定義と schema 内の関連付け列を集める。
 
-        23ai 以降の ALL_TAB_COLS.DOMAIN_NAME / ALL_DOMAINS / ALL_DOMAIN_COLS /
-        ALL_DOMAIN_CONSTRAINTS / ALL_ANNOTATIONS_USAGE を使う。dictionary 列が無い版
-        (ORA-00904)では warning を付けて空を返し、作成フローを壊さない。
+        SQL ドメインに対応したバージョンの ALL_TAB_COLS.DOMAIN_NAME / ALL_DOMAINS /
+        ALL_DOMAIN_COLS / ALL_DOMAIN_CONSTRAINTS / ALL_ANNOTATIONS_USAGE を使う。
+        dictionary 列が無い版(ORA-00904)では warning を付けて空を返し、作成フローを壊さない。
         """
         warnings: list[str] = []
         domain_keys: list[tuple[str, str]] = []
@@ -1715,7 +1715,7 @@ class OracleNl2SqlAdapter:
                     domain_names[str(column_name or "")] = _domain_display_name(
                         str(domain_owner or ""), str(domain_name or "")
                     )
-            except Exception:  # nosec B110 - 23ai 未満は DOMAIN_NAME 列が無い(ORA-00904)
+            except Exception:  # nosec B110 - SQL ドメイン非対応のバージョンは DOMAIN_NAME 列が無い(ORA-00904)
                 domain_names = {}
             cursor.execute(
                 """
@@ -3336,7 +3336,7 @@ class OracleNl2SqlAdapter:
         include_bad: bool,
         limit: int,
     ) -> list[dict[str, Any]]:
-        """Search feedback history with Oracle 26ai vector similarity."""
+        """Search feedback history with Oracle AI Vector Search similarity."""
         safe_table = _strict_sql_name(table_name)
         quoted_table = _quote_identifier(safe_table)
         filters = ["1 = 1"]

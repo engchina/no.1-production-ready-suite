@@ -1,4 +1,4 @@
-"""実 Oracle 23ai/26ai でドメイン管理(作成 → 把握 → 更新 → 再作成 → 削除)を確認する (#669)。
+"""実 Oracle AI Database でドメイン管理(作成 → 把握 → 更新 → 再作成 → 削除)を確認する (#669)。
 
 通常 CI では実行しない。`NL2SQL_RUN_ORACLE_INTEGRATION=1` の明示指定時だけ、現在の schema に
 一意な接頭辞の検証表 2 つを作成し、生成 SQL を `domain_sql` policy で実行して dictionary
@@ -155,7 +155,7 @@ def test_domain_management_lifecycle_on_oracle(live_settings: Any) -> None:
         cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
         owner = str(cursor.fetchone()[0])
     if int(version.split(".")[0]) < 23:
-        pytest.skip(f"SQL ドメインは 23ai 以降が必要です(接続先: {version})")
+        pytest.skip(f"SQL ドメインに対応していないバージョンです(接続先: {version})")
     print(f"\nOracle {version} / schema {owner}")
 
     suffix = uuid.uuid4().hex[:6].upper()

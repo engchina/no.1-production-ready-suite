@@ -75,7 +75,7 @@ describe("DatabaseSettingsPage", () => {
     // 主カードは独自の余白・区切り線・大きい見出しを持たない。
     expect(html).not.toMatch(/[\s"]p-6[\s"]/);
     expect(html).not.toContain("border-b border-border pb-5");
-    expect(html).toContain("アプリが Oracle 26ai へ接続するユーザー・パスワード・Wallet・サービス名を設定します。");
+    expect(html).toContain("アプリが Oracle AI Database へ接続するユーザー・パスワード・Wallet・サービス名を設定します。");
     // DB パスワードは保存済み、Wallet パスワードは未設定のバッジ。削除の指定は保存済みの値だけに出す。
     expect(html).toMatch(/<input[^>]*id="oracle-password"[^>]*type="password"|<input[^>]*type="password"[^>]*id="oracle-password"/);
     expect(html).toMatch(/data-status-variant="success"[^>]*>.*?保存済み<\/span>/);

@@ -36,7 +36,6 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "検索方法",
       "検索オプション",
-      "全文検索の分割方式",
       "根拠確認",
       "回答エンジン",
       "DocRAG の質問拡張戦略",
@@ -50,10 +49,13 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は業務ビューで上書きしない(評価はグローバル設定だけで決まる。#301)。
     await expect(settings.getByRole("heading", { name: "品質評価" })).toHaveCount(0);
-    // 継承 chip: セレクト9行(分割方式・回答エンジン・DocRAG 3 行を含む)
+    // 全文検索の分割方式は 1 つにまとめ、選択を削除した(#588)。
+    await expect(settings.getByRole("heading", { name: "全文検索の分割方式" })).toHaveCount(0);
+    await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
+    // 継承 chip: セレクト8行(回答エンジン・DocRAG 3 行を含む)
     // + 三値トグル7行(検索オプション5行 + DocRAG の Rerank・画面目録)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
-    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(9);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
+    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(8);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     // 回答エンジンを継承しているあいだは、DocRAG が読まない欄に条件付きの説明を出す(#300)。
     const notes = settings.getByTestId("docrag-unused-note");

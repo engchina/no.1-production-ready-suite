@@ -132,7 +132,10 @@ class SchemaColumn(BaseModel):
     comment: str = ""
     sample_values: list[str] = Field(default_factory=list)
     domain_name: str = ""
-    """列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。"""
+    """列に関連付いた SQL ドメイン(OWNER.NAME)。無ければ空。
+
+    SQL ドメインに対応したバージョンの dictionary から取得する。
+    """
 
 
 class SchemaConstraintDetail(BaseModel):
@@ -2303,7 +2306,7 @@ class CommentApplyData(BaseModel):
 
 
 class AnnotationSuggestion(BaseModel):
-    """Oracle 23ai annotation suggestion for a table/view/column."""
+    """Oracle annotation suggestion for a table/view/column."""
 
     object_name: str
     object_type: str = "table"

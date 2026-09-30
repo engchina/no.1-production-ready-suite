@@ -451,7 +451,7 @@ ConnectionFactory = Callable[[], AbstractContextManager[Any]]
 
 
 class OracleAuthStore:
-    """Oracle 26ai の PLATFORM_* テーブルを使う store。
+    """Oracle AI Database の PLATFORM_* テーブルを使う store。
 
     `connection_factory` は、未コミットの変更を持たない接続の context manager を返すこと。
     製品は継承して `_role_details` / `_replace_role_details` / `_before_delete_role` を実装する。

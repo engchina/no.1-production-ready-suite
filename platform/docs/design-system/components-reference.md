@@ -1447,7 +1447,7 @@ export type TextFieldProps = {
 | 候補があるときだけ `list` と `autoComplete="off"`（呼び出し側の `autoComplete` が優先） | ブラウザの入力履歴を候補に混ぜない。候補が無いときは従来と同じ入力欄 |
 | `list` 属性は props で受け取らない（`TextFieldProps` から除く） | datalist の id は `useId` で作り、ほかの入力欄の候補と取り違えない |
 
-- 候補の一覧の見た目（ポップアップ）はブラウザが描くため、トークンの色・角丸にはなりません（日付選択と同じ）。候補を絞り込む・複数選ぶ・候補に無い値を拒む入力は、この部品ではなく `SelectField` や RAG の `MultiSelectCombobox` の型です。
+- 候補の一覧の見た目（ポップアップ）はブラウザが描くため、トークンの色・角丸にはなりません（日付選択と同じ）。候補を絞り込む・複数選ぶ・候補に無い値を拒む入力は、この部品ではなく `SelectField` や `SearchableSelectField` / `SearchableMultiSelect`（#578）の型です。
 - テストは `packages/ui/tests/text-field-slots.test.tsx`（datalist との結び付き・`autocomplete`）、実ブラウザは RAG の `e2e/structure-explainability.spec.ts`（文書詳細の分類、desktop / 375px、light / dark）。
 
 ## Tabs — 変更（#374）
@@ -1871,6 +1871,54 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 - 単体テストは `packages/ui/tests/search-field.test.tsx`（debounce・Enter・trim・正規化・`formatInput`・IME の `compositionstart` 〜 `compositionend` と確定の Enter・消去・外からの変更・外れるときの確定・件数の読み上げ。fake timers）。
 - 実ブラウザは RAG `e2e/list-search.spec.ts`（業務ビュー・ナレッジベース。ボタンなし・入力に合わせた問い合わせ・IME・0 件の「検索語をクリア」、desktop / 375px、ライト / ダーク）、Agent `e2e/list-search.spec.ts`（メモリ）、NL2SQL `tests/e2e/nl2sql-workflows.spec.ts`（学習候補・アプリ内フィードバック）。IME は `compositionstart` → `isComposing` の `input` → `compositionend` の DOM event を出して確かめる（Playwright の keyboard は IME を通さない）。
 - 製品の置き換え: RAG（ナレッジベース・業務ビュー・文書・フィードバック・ナレッジベース詳細の追加する文書）、NL2SQL（`DbManagementSearchField` / `DbOwnerPrefixFilterField` を使う全一覧・DB 管理のオブジェクト一覧・スキーマ参照・アプリ内フィードバック・学習候補）、Agent（メモリ）、system-settings（`SecuritySearchField`: ユーザー・ロール・権限管理・権限の対象。NL2SQL の Deep Data Security も使う）。
+
+## SearchableSelectField / SearchableMultiSelect — **新規**（#578）
+
+数十〜数百件の選択肢から検索して選ぶ部品（単一・複数）。十数件までの固定の選択肢は `SelectField`、大量の候補から一覧で見比べて選ぶもの（表・ビューの選択など）は別の一覧型の部品にする。見た目の変更は README §7 の 50。
+
+```tsx
+import { SearchableMultiSelect, SearchableSelectField } from "@engchina/production-ready-ui";
+
+// 複数選択: 検索欄（combobox）＋ 候補の一覧（開いている間だけ）＋ 選択済みの chip
+<SearchableMultiSelect
+  id="kb-scope"
+  label="参照するナレッジベース"
+  required
+  options={options}                 // { value, label, description?, meta?, badge?, searchText?, hideable? }[]
+  value={selectedIds}
+  onValueChange={setSelectedIds}
+  selectedOptions={chips}           // 候補のページに無い選択済みの名前・状態（任意）
+  onQueryChange={setQ}              // 確定した検索語（300ms・Enter・IME の確定後）
+  remote={many ? { total, hasMore, loadingMore, searching, onLoadMore } : undefined}
+  labels={{ searchPlaceholder: "ナレッジベースを検索して追加…" /* ほか */ }}
+/>
+
+// 単一選択: ボタン（選択中の名前を折り返して全体を出す）→ 検索欄と候補の一覧を重ねて開く
+<SearchableSelectField
+  id="kb-filter"
+  label="ナレッジベース"
+  value={value}
+  options={options}
+  selectedOption={current}          // 候補のページに無い選択中の名前（任意）
+  onValueChange={setValue}
+  onQueryChange={setQ}
+  remote={many ? { total, hasMore, loadingMore, searching, onLoadMore } : undefined}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 検索欄は `SearchField`（debounce 300ms・Enter はすぐ・IME の変換中は絞らない・× と Esc で消す）を role=combobox で使う。親で遅延させない | #535 の規則を 1 か所で守る。変換の途中の読みで問い合わせない |
+| `remote` を渡さなければ `options` を画面側で絞る（全角半角・大文字小文字を区別しない部分一致、空白区切りはすべて含む）。渡すと絞らず、`onQueryChange` の検索語で呼び出し側が問い合わせる | 件数の少ないときは 1 文字ごとに問い合わせない。多いときは全件を読まない（切り替えの基準は製品が決める。RAG の KB は 201 件以上） |
+| ↑↓ で強調（`aria-activedescendant`）、Enter で選ぶ。IME の変換中の矢印・Enter は候補の操作に使わない。複数選択は選んでも閉じず、「完了」・Esc で閉じて検索欄へ戻る。閉じた後の Esc で検索語を消す | APG の Combobox。続けて複数を選べる。Esc 1 回で入力まで消えない |
+| 単一選択の開いた層は `role="dialog"`（非モーダル）。開くと検索欄へ、選ぶ・Esc・Tab で閉じてボタンへ戻る（Shift+Tab はボタンに止まる）。ボタンの名前はラベルと選択中の名前（`aria-labelledby`） | Portal の層に Tab で入れない問題を避け、フォーカスの行き先を 1 つにする。読み上げで今の値が分かる |
+| 続きのページは、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ | 単一選択の層の中に Tab で届くボタンを置かない |
+| 選択済みは chip（`<ul aria-label="選択中の…">`）で、名前を省略せず折り返す。`badge` で状態（アーカイブ済み・見つかりません）を文字で添える | 長い名前を最後まで読める。色だけに頼らない |
+| 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
+
+- 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
+- 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・業務ビュー、desktop / 375px、ライト / ダーク）。
+- 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、業務ビューの参照 KB、品質評価、文書詳細の所属先、RAG 検索の対象の業務ビュー）。RAG 固有の `MultiSelectCombobox` は削除した。
 
 ---
 
