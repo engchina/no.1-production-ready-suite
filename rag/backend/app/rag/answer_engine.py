@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -812,6 +813,14 @@ def _chunk_headings(chunk: RetrievedChunk) -> list[str]:
     return _section_headings(str(chunk.metadata.get("section_path") or ""))
 
 
+def _finite_float(value: object) -> float | None:
+    """有限の数値なら float、それ以外(None・bool・NaN・文字列など)は None。"""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def _int(value: object, default: int = 0) -> int:
     try:
         return int(value)  # type: ignore[call-overload,no-any-return]
@@ -971,11 +980,19 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
     tree: list[dict[str, Any]] = []
     ordered: list[tuple[int, str, dict[str, Any]]] = []
+    # rerank の結果(chunk_id → (順位, 関連度))。rag_engine は rerank した候補の record に
+    # ``metadata["rerank"]`` を載せ、根拠の child に ``rerank_rank`` / ``rerank_score`` として出す。
+    # 引用へ写さないと、rerank を実行しても画面は「Rerank 未実行」になる(#662)。
+    reranked: dict[str, tuple[int | None, float]] = {}
     for position, parent in enumerate(result.evidence_items or ()):
         children = []
         for child in parent.get("children") or []:
             chunk_id = str(child.get("chunk_id") or child.get("id") or "")
             used = bool(child.get("is_model_used"))
+            rerank_score = _finite_float(child.get("rerank_score"))
+            if rerank_score is not None and chunk_id not in reranked:
+                position_rank = _int(child.get("rerank_rank"))
+                reranked[chunk_id] = (position_rank if position_rank > 0 else None, rerank_score)
             children.append(
                 {
                     "chunk_id": chunk_id,
@@ -1003,17 +1020,18 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if chunk is None or chunk_id in seen:
             continue
         seen.add(chunk_id)
-        citations.append(
-            chunk.model_copy(
-                update={
-                    "metadata": {
-                        **chunk.metadata,
-                        "evidence_role": evidence["role"],
-                        "evidence_model_used": evidence["is_model_used"],
-                    }
-                }
-            )
-        )
+        metadata: dict[str, Any] = {
+            **chunk.metadata,
+            "evidence_role": evidence["role"],
+            "evidence_model_used": evidence["is_model_used"],
+        }
+        update: dict[str, Any] = {"metadata": metadata}
+        if chunk_id in reranked:
+            rerank_rank, rerank_score = reranked[chunk_id]
+            update["rerank_score"] = rerank_score
+            if rerank_rank is not None:
+                metadata["rerank_rank"] = rerank_rank
+        citations.append(chunk.model_copy(update=update))
     steps = [
         {
             "name": str(step.get("name") or ""),

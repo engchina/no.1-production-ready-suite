@@ -284,6 +284,8 @@ def test_manifest_key_assignments() -> None:
     assert _perm("GET", "/feedback/{feedback_id}/evaluation-case") == {"menu.feedback"}
     assert _perm("POST", "/feedback/{feedback_id}/approved-faq") == {"rag.feedback.manage"}
     assert _perm("POST", "/feedback") == {"menu.search", "menu.chat"}
+    # システムテーブルは運用設定の専用の画面（#658）。データベース設定の権限では開けない。
+    assert _perm("GET", "/settings/database/system-tables") == {"menu.settings_system_tables"}
     assert _perm("POST", "/settings/database/system-tables/initialize") == {
         "rag.system_tables.manage"
     }
@@ -320,7 +322,7 @@ def test_capabilities_imply_their_menu() -> None:
     assert "menu.business_views" in expand_permissions({"rag.business_views.manage"})
     assert "menu.knowledge_bases" in expand_permissions({"rag.knowledge_bases.manage"})
     assert "menu.feedback" in expand_permissions({"rag.feedback.manage"})
-    assert "menu.settings_database" in expand_permissions({"rag.system_tables.manage"})
+    assert "menu.settings_system_tables" in expand_permissions({"rag.system_tables.manage"})
     # メニュー権限は capability を暗黙に含まない（昇格しない）。
     assert expand_permissions({"menu.business_views"}) == {"menu.business_views"}
     assert expand_permissions({"unknown.code"}) == set()
@@ -610,7 +612,8 @@ def test_permission_catalog_requires_permission_management(auth: ProductionAuth)
     items = response.json()["data"]
     assert [item["code"] for item in items] == [item.code for item in PERMISSION_CATALOG]
     by_code = {item["code"]: item for item in items}
-    assert by_code["menu.security_permissions"]["group"] == "RAG セキュリティ"
+    assert by_code["menu.security_permissions"]["group"] == "セキュリティ設定"
+    assert by_code["menu.settings_system_tables"]["group"] == "運用設定"
     assert by_code["menu.security_users"]["group"] == "ユーザーとロール"
     assert by_code["menu.settings_oci"]["group"] == "システム設定"
     assert by_code["rag.business_views.manage"]["implies"] == ["menu.business_views"]

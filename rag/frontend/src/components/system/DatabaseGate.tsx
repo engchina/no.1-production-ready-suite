@@ -13,11 +13,11 @@ import { APP_ROUTES } from "@/lib/routes";
 
 /**
  * DB ゲートの導線。ADB の起動はデータベース設定の ADB 管理、システムテーブルの作成・更新は
- * データベース設定の中のシステムテーブル（RAG は独立した画面を持たない）。
+ * 運用設定のシステムテーブル（NL2SQL と同じ。#658）。システムテーブルの画面は未初期化でも開ける。
  */
 export const DATABASE_GATE_ROUTES: DatabaseGateRoutes = {
   databaseSettings: `${APP_ROUTES.settingsDatabase}#adb-management`,
-  systemTables: `${APP_ROUTES.settingsDatabase}#system-tables`,
+  systemTables: APP_ROUTES.settingsSystemTables,
 };
 
 /**

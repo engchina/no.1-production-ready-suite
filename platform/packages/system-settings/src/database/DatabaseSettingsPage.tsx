@@ -707,11 +707,13 @@ interface AdbOperationLogEntry {
   timestamp: string;
 }
 
-/** OCI 認証設定と揃えたリージョン候補（NL2SQL と同じ）。 */
+/**
+ * Autonomous Database をサポートするリージョン（Terraform の stack の `region` の validation と同じ。#660）。
+ * us-chicago-1 はサポートしない。OCI 認証設定・Select AI のリージョンの候補とは別の一覧。
+ */
 const ADB_REGION_OPTIONS = [
   { value: "ap-tokyo-1", label: "ap-tokyo-1" },
   { value: "ap-osaka-1", label: "ap-osaka-1" },
-  { value: "us-chicago-1", label: "us-chicago-1" },
 ] satisfies SelectFieldOption<string>[];
 
 const ADB_DEFAULT_REGION = "ap-osaka-1";
@@ -772,6 +774,9 @@ function AdbManagementCard({
     setRefreshAttemptedWallet(false);
   }, [settings.region]);
 
+  const regionSupported = ADB_REGION_OPTIONS.some(
+    (option) => option.value === region,
+  );
   const info = infoQuery.data;
   const lifecycle = info?.lifecycle_state ?? null;
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
@@ -936,6 +941,12 @@ function AdbManagementCard({
             value={region}
             options={ADB_REGION_OPTIONS}
             onValueChange={setRegion}
+            helper={
+              // 候補に無い保存値（以前の候補の us-chicago-1 など）はそのまま出し、選び直すよう案内する（#660）。
+              regionSupported
+                ? undefined
+                : t("settings.adb.helper.regionUnsupported", { region })
+            }
           />
           <TextField
             id="adb-ocid"

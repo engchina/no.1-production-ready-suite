@@ -83,8 +83,8 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限 / Command Policy / Runtime Safety はナビに出さない（Control Plane 化で外した方針を維持）。
-- ログインと権限（#215）: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「Agent セキュリティ」
-  （権限管理）、3製品共通の「ユーザーとロール」（ユーザー管理 / ロール管理）と「システム設定」はナビの末尾にそろえる。
+- ログインと権限（#215）: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」
+  （権限管理）。並びは 3 製品で同じ「セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」（#658）。
   メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` /
   `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は
   `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。

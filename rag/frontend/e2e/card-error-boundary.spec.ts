@@ -5,9 +5,9 @@ import { SYSTEM_TABLES_STATUS_OK, mockLocalAuth } from "./_helpers";
 /**
  * カード単位 error boundary の隔離検証(#67)。
  *
- * 設定ページは独立した API と責務を持つカードを兄弟として並べているため、boundary が無いと
- * 1 枚の描画例外でページ全体が unmount される(実例: #63)。ここでは system table カードだけを
- * 意図的に throw させ、**同じページの他カードが生き残ること**を検証する。
+ * boundary が無いと 1 枚の描画例外でページ全体が unmount される(実例: #63)。ここでは
+ * system table カード（運用設定の専用の画面。#658）だけを意図的に throw させ、
+ * **画面の見出しが生き残ること**を検証する。
  */
 
 const databaseSettings = {
@@ -59,19 +59,12 @@ const systemTablesThrowingPayload = {
   warning_messages: [],
 };
 
-test("system table カードが throw しても ADB 管理カードは表示され続ける", async ({
+test("データベース設定の画面にはシステムテーブルのカードを出さない（運用設定の専用の画面。#658）", async ({
   page,
 }) => {
-  // 描画例外による console.error は想定内。テスト失敗の材料にしない。
-  page.on("pageerror", () => {});
-
   await mockLocalAuth(page);
   await page.route("**/api/settings/database**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/settings/database/system-tables") {
-      await route.fulfill({ json: systemTablesThrowingPayload });
-      return;
-    }
     if (url.pathname.startsWith("/api/settings/database/adb")) {
       await route.fulfill({ json: adbInfo });
       return;
@@ -83,20 +76,26 @@ test("system table カードが throw しても ADB 管理カードは表示さ�
 
   await page.goto("/settings/database");
 
-  // 例外を起こしたカードは、そのカードだけがエラー表示へ差し替わる。
-  await expect(page.getByText("「RAG システムテーブル」を表示できません")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Autonomous Database 管理" })).toBeVisible();
+  await expect(page.locator("#system-tables")).toHaveCount(0);
+});
 
-  // 兄弟カード(ADB 管理)はページから消えず、値も描画されている。
-  await expect(
-    page.getByRole("heading", { name: "Autonomous Database 管理" })
-  ).toBeVisible();
-  await expect(page.getByLabel("ADB OCID")).toHaveValue(
-    "ocid1.autonomousdatabase.oc1..rag"
+test("system table カードが throw しても、見出しは残りカードだけがエラー表示になる", async ({
+  page,
+}) => {
+  // 描画例外による console.error は想定内。テスト失敗の材料にしない。
+  page.on("pageerror", () => {});
+
+  await mockLocalAuth(page);
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    route.fulfill({ json: systemTablesThrowingPayload })
   );
-  await expect(page.getByText("OCI ADB: 停止済み")).toBeVisible();
 
-  // データベース接続設定フォームも残る(ページ見出しとカード見出しの 2 箇所)。
-  await expect(
-    page.getByRole("heading", { name: "データベース設定" }).first()
-  ).toBeVisible();
+  await page.goto("/settings/system-tables");
+
+  // 例外を起こしたカードは、そのカードだけがエラー表示へ差し替わる。
+  await expect(page.getByText("「システムテーブル」を表示できません")).toBeVisible();
+  // 画面の見出しは残り、カードの中から再試行できる。
+  await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });

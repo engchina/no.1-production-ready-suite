@@ -2438,6 +2438,18 @@ def test_route_permissions_match_legacy_prefix_rules(
     assert permission_for_route(method, route_path) == frozenset(expected)
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_select_ai_credential_uses_its_own_menu_permission(method: str) -> None:
+    """Select AI Credential は運用設定の専用の画面の権限で操作する（#658）。"""
+
+    assert permission_for_route(method, "/settings/database/select-ai-credential") == frozenset(
+        {"menu.settings_select_ai_credential"}
+    )
+    catalog = {item.code: item for item in PERMISSION_CATALOG}
+    assert catalog["menu.settings_select_ai_credential"].group == "運用設定"
+    assert catalog["menu.security_permissions"].group == "セキュリティ設定"
+
+
 @pytest.mark.parametrize(
     ("method", "route_path"),
     [

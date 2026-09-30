@@ -2,6 +2,12 @@ variable "region" {
   description = "OCI region used by Resource Manager and runtime clients."
   type        = string
   default     = "ap-osaka-1"
+
+  # Compute の image（schema.yaml の instance_image_source_id）を用意しているリージョンだけを許す（#660）。
+  validation {
+    condition     = contains(["ap-tokyo-1", "ap-osaka-1"], var.region)
+    error_message = "region must be ap-tokyo-1 or ap-osaka-1. Create the stack in one of these regions."
+  }
 }
 
 variable "availability_domain" {

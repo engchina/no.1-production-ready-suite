@@ -2,11 +2,14 @@ import {
   BookA,
   Boxes,
   BrainCircuit,
+  BriefcaseBusiness,
   Eye,
   FileCode2,
+  FileKey,
   FileSpreadsheet,
   FlaskConical,
   History,
+  LockKeyhole,
   MessageSquareCode,
   MessageSquareText,
   Network,
@@ -19,8 +22,6 @@ import {
   TableProperties,
   Tags,
   ThumbsUp,
-  UserCog,
-  LockKeyhole,
   type LucideIcon,
 } from "lucide-react";
 
@@ -66,7 +67,10 @@ const USER_ROLE_MENU_PERMISSIONS = {
   roles: MENU_PERMISSIONS.securityRoles,
 } satisfies Record<UserRoleKey, string>;
 
-/** NL2SQL コンソールのサイドナビ構成（共有 Sidebar が消費する）。 */
+/**
+ * NL2SQL コンソールのサイドナビ構成（共有 Sidebar が消費する）。下部の並びは 3 製品で同じ
+ * （改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 → 共通のシステム設定。#658）。
+ */
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.use",
@@ -108,7 +112,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.improve",
     initiallyCollapsed: true,
     items: [
-      { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: UserCog, permission: MENU_PERMISSIONS.profiles },
+      { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: BriefcaseBusiness, permission: MENU_PERMISSIONS.profiles },
       { href: APP_ROUTES.ontologyBuild, labelKey: "nav.ontologyBuild", icon: Network, permission: MENU_PERMISSIONS.ontologyBuild },
       { href: APP_ROUTES.feedbackManagement, labelKey: "nav.feedbackManagement", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedbackManagement },
       { href: APP_ROUTES.questionClassifierModels, labelKey: "nav.questionClassifierModels", icon: BrainCircuit, permission: MENU_PERMISSIONS.questionClassifierModels },
@@ -125,6 +129,15 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
+    titleKey: "nav.section.userRoles",
+    initiallyCollapsed: true,
+    items: USER_ROLE_NAV_ITEMS.map((item) => ({
+      ...item,
+      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+    })),
+  },
+  {
     // NL2SQL 固有の運用設定（#81）。
     titleKey: "nav.section.operations",
     initiallyCollapsed: true,
@@ -136,16 +149,15 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: TableProperties,
         permission: MENU_PERMISSIONS.settingsSystemTables,
       },
+      // Select AI Credential はデータベース設定から分けた運用の操作（#658）。
+      {
+        href: APP_ROUTES.settingsSelectAiCredential,
+        labelKey: "nav.settingsSelectAiCredential",
+        sidebarLabelKey: "nav.settingsSelectAiCredential.sidebar",
+        icon: FileKey,
+        permission: MENU_PERMISSIONS.settingsSelectAiCredential,
+      },
     ],
-  },
-  {
-    // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
-    titleKey: "nav.section.userRoles",
-    initiallyCollapsed: true,
-    items: USER_ROLE_NAV_ITEMS.map((item) => ({
-      ...item,
-      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
-    })),
   },
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。

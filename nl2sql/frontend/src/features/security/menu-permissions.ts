@@ -29,6 +29,7 @@ export const MENU_PERMISSIONS = {
   settingsModel: "menu.settings_model",
   settingsDatabase: "menu.settings_database",
   settingsSystemTables: "menu.settings_system_tables",
+  settingsSelectAiCredential: "menu.settings_select_ai_credential",
   settingsAppearance: "menu.settings_appearance",
 } as const;
 
@@ -235,7 +236,10 @@ const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
     MENU_PERMISSIONS.settingsDatabase,
     MENU_PERMISSIONS.settingsSystemTables,
   ],
-  "settings.database.manage": [MENU_PERMISSIONS.settingsDatabase],
+  "settings.database.manage": [
+    MENU_PERMISSIONS.settingsDatabase,
+    MENU_PERMISSIONS.settingsSelectAiCredential,
+  ],
   "settings.database.sql_execute": [
     MENU_PERMISSIONS.adminSql,
     MENU_PERMISSIONS.settingsSystemTables,

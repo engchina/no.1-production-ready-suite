@@ -10,7 +10,7 @@ import { securityApi } from "@/lib/security-api";
 import { useAuth } from "./AuthProvider";
 
 /**
- * 権限管理（「RAG セキュリティ」のメニュー。#214）。画面の実体は platform の共通 RolePermissionsPage（#220）。
+ * 権限管理（「セキュリティ設定」のメニュー。#214 / #658）。画面の実体は platform の共通 RolePermissionsPage（#220）。
  * ロールごとの機能権限と、利用できる業務ビュー・ナレッジベースを設定する。
  */
 export function SecurityPermissionsPage() {

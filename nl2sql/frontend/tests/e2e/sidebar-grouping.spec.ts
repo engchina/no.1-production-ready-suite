@@ -91,7 +91,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     "aria-expanded",
     "true"
   );
-  for (const section of ["データ準備", "改善・運用", "NL2SQL セキュリティ", "運用設定", "ユーザーとロール", "システム設定"]) {
+  for (const section of ["データ準備", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
     await expect(sidebar.getByRole("button", { name: `${section} を展開` })).toHaveAttribute(
       "aria-expanded",
       "false"
@@ -115,16 +115,16 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
-  expect(menuIconSignatures).toHaveLength(29);
+  expect(menuIconSignatures).toHaveLength(30);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
-  for (const section of ["データ準備", "AI 活用", "改善・運用", "NL2SQL セキュリティ", "運用設定", "ユーザーとロール", "システム設定"]) {
+  for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toBeVisible();
   }
 
   const aiUseBox = await sidebar.getByText("AI 活用", { exact: true }).boundingBox();
   const dataPrepareBox = await sidebar.getByText("データ準備", { exact: true }).boundingBox();
-  const securityBox = await sidebar.getByText("NL2SQL セキュリティ", { exact: true }).boundingBox();
+  const securityBox = await sidebar.getByText("セキュリティ設定", { exact: true }).boundingBox();
   const operationsBox = await sidebar.getByText("運用設定", { exact: true }).boundingBox();
   const userRolesBox = await sidebar.getByText("ユーザーとロール", { exact: true }).boundingBox();
   const settingsBox = await sidebar.getByText("システム設定", { exact: true }).boundingBox();
@@ -132,12 +132,12 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     throw new Error("セクション見出しの位置を取得できませんでした。");
   }
   expect(aiUseBox.y).toBeLessThan(dataPrepareBox.y);
-  // 固有の「NL2SQL セキュリティ → 運用設定」の後に、3製品共通の「ユーザーとロール → システム設定」が並ぶ（#81 / #206）。
-  expect(securityBox.y).toBeLessThan(operationsBox.y);
-  expect(operationsBox.y).toBeLessThan(userRolesBox.y);
-  expect(userRolesBox.y).toBeLessThan(settingsBox.y);
+  // 下部は 3 製品で同じ「セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」（#81 / #206 / #658）。
+  expect(securityBox.y).toBeLessThan(userRolesBox.y);
+  expect(userRolesBox.y).toBeLessThan(operationsBox.y);
+  expect(operationsBox.y).toBeLessThan(settingsBox.y);
 
-  for (const section of ["データ準備", "改善・運用", "NL2SQL セキュリティ", "運用設定", "ユーザーとロール", "システム設定"]) {
+  for (const section of ["データ準備", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
     await sidebar.getByRole("button", { name: `${section} を展開` }).click();
   }
 
@@ -182,6 +182,13 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース"]) {
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
+  // 運用設定は「システムテーブル → Select AI Credential」（#658）。
+  const systemTablesBox = await sidebar.getByText("システムテーブル", { exact: true }).boundingBox();
+  const credentialBox = await sidebar.getByText("Select AI Credential", { exact: true }).boundingBox();
+  if (!systemTablesBox || !credentialBox) {
+    throw new Error("運用設定のメニュー位置を取得できませんでした。");
+  }
+  expect(systemTablesBox.y).toBeLessThan(credentialBox.y);
 
   const securityLabels = ["権限管理", "Deep Data Security", "ユーザー管理", "ロール管理"];
   const securityItemBoxes = await Promise.all(
@@ -334,7 +341,7 @@ test("セクション折りたたみで所属項目だけを隠し、他セク�
   await expect(sidebar.getByText("質問分類モデル管理", { exact: true })).toBeHidden();
   await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeHidden();
 
-  await sidebar.getByRole("button", { name: "NL2SQL セキュリティ を展開" }).click();
+  await sidebar.getByRole("button", { name: "セキュリティ設定 を展開" }).click();
   await expect(sidebar.getByText("権限管理", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("Deep Data Security", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
@@ -384,7 +391,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
   await expect(page).not.toHaveURL(/\/$/);
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  const toggle = sidebar.getByRole("button", { name: "NL2SQL セキュリティ を展開" });
+  const toggle = sidebar.getByRole("button", { name: "セキュリティ設定 を展開" });
   // 共有 Sidebar の disclosure は折りたたみ時 ChevronDown を -90deg(右向き)、展開時 0deg(下向き)にする
   // (docs/design-system/components-reference.md の Sidebar 参照実装)。旧 NL2SQL は globals.css で
   // 折りたたみ時だけ 90deg(左向き)に上書きしていたが、業務 repo で見た目を持たない規約により撤去済み。
@@ -393,11 +400,11 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
 
   await expect(sidebar.getByText("権限管理", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
-  await expect(sidebar.getByRole("button", { name: "NL2SQL セキュリティ を折りたたむ" })).toHaveAttribute(
+  await expect(sidebar.getByRole("button", { name: "セキュリティ設定 を折りたたむ" })).toHaveAttribute(
     "aria-expanded",
     "true"
   );
-  const expandedToggle = sidebar.getByRole("button", { name: "NL2SQL セキュリティ を折りたたむ" });
+  const expandedToggle = sidebar.getByRole("button", { name: "セキュリティ設定 を折りたたむ" });
   await expect.poll(() => expandedToggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
 
   await expandedToggle.press(" ");
@@ -488,7 +495,7 @@ test("375px 幅ではナビがドロワーになり、開くと主要リンク�
   // ドロワーの中は展開した幅で描くため、desktop と同じくセクションの開閉ボタンがある。
   await expect(sidebar.getByRole("button", { name: "AI 活用 を折りたたむ" })).toBeVisible();
   // 既定で畳むセクション（nav-config の initiallyCollapsed）を開く。
-  for (const section of ["データ準備", "改善・運用", "NL2SQL セキュリティ", "運用設定", "ユーザーとロール", "システム設定"]) {
+  for (const section of ["データ準備", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
     await sidebar.getByRole("button", { name: `${section} を展開`, exact: true }).click();
     await expect(sidebar.getByRole("button", { name: `${section} を折りたたむ`, exact: true })).toBeVisible();
   }

@@ -1724,8 +1724,10 @@ test("Credential 不足からデータベース設定で作成し、履歴 job �
   const failedStatus = page.getByTestId("profile-save-progress");
   await expect(failedStatus).toContainText("現在の Oracle schema に OCI_CRED がありません");
   await expect(failedStatus).not.toContainText("ORA-06512");
-  const settingsLink = failedStatus.getByRole("link", { name: "データベース設定を開く" });
+  const settingsLink = failedStatus.getByRole("link", { name: "Select AI Credential を開く" });
   await settingsLink.click();
+  // Select AI Credential は運用設定の専用の画面（#658）。
+  await expect(page).toHaveURL(/\/settings\/select-ai-credential\?/);
 
   const card = page.getByTestId("select-ai-credential-card");
   await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(

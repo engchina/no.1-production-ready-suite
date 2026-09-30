@@ -70,7 +70,7 @@ test("権限のある画面だけをナビに出し、空のセクションは�
     await expect(sidebar.getByRole("link", { name })).toBeVisible();
   }
   await expect(sidebar.getByRole("link")).toHaveCount(4);
-  for (const section of ["検索・回答設定", "RAG セキュリティ", "運用設定", "システム設定"]) {
+  for (const section of ["検索・回答設定", "セキュリティ設定", "運用設定", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toHaveCount(0);
   }
   await expectNoPageOverflow(page);

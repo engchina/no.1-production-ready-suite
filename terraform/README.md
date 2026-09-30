@@ -21,6 +21,12 @@
   systemd + Nginx         systemd + Nginx            systemd + Nginx
 ```
 
+## 対応リージョン
+
+- **stack は `ap-tokyo-1`（東京）と `ap-osaka-1`（大阪）だけをサポートします（#660）。** Compute の image（`instance_image_source_id`）は、この 2 つのリージョンの Ubuntu image だけを選択肢にしています。
+  `us-chicago-1` など他のリージョンで stack を作ると、`region` の validation で plan が失敗します。
+- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も同じ 2 つです。
+
 ## 配備する製品の選択
 
 Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql` / `deploy_agent` を選びます（複数選択可、既定はすべて）。
@@ -71,7 +77,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
 詳細と既存環境（Docker Compose で配備した Compute）からの移行は [rag/docs/deployment.md](../rag/docs/deployment.md) を参照してください。
 
 - ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
-  「ユーザーとロール」でユーザーとロールを作り、「RAG セキュリティ > 権限管理」でロールごとのメニュー・業務ビュー・ナレッジベースを設定します。
+  「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・業務ビュー・ナレッジベースを設定します。
   `rag_app_auth_cookie_secure`（→ `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
 - 前処理 7 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（ASR・MinerU / Dots.OCR）は含めず、
   MinerU / Dots.OCR は起動後に「検索・回答設定 > 文書解析」で外部 API として指定します。
@@ -118,7 +124,7 @@ sudo systemctl restart production-ready-rag-backend.service
 ### Agent Control Plane（`deploy_agent`）
 
 - ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
-  ログインし、「ユーザーとロール」でユーザーとロールを作り、「Agent セキュリティ > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
+  ログインし、「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
   エージェント・業務ビューを設定します。`init_script.sh` が `python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
   Nginx の Basic 認証は廃止しました。Binding MCP（`/api/mcp/`）は従来どおり Binding 固有 token で認証し、ログインは不要です。
   `agent_app_auth_cookie_secure`（非表示の入力。既定 `false` → `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。
