@@ -12481,6 +12481,8 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
 });
 
 test("sample data and data management run imported workflows", async ({ page }) => {
+  // 1 回に 21〜28 秒かかり、既定の 30 秒に近い。並列で負荷が高いと時間切れになるため延ばす。
+  test.slow();
   const api = await mockNl2SqlApi(page);
   const currentPreviewDataPayload = () => api.previewDataPayload;
   const dbAdminObjectOwnerPrefixRequests: string[] = [];
