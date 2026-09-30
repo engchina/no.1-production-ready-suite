@@ -170,7 +170,7 @@ async def test_docrag_engine_answers_with_backend_search_and_evidence(
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     oracle = FakeOracle()
     engine = DocragAnswerEngine(
-        Settings(rag_answer_engine="docrag", rag_domain_keywords=["受注番号"]),
+        Settings(rag_domain_keywords=["受注番号"]),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -196,7 +196,7 @@ async def test_pipeline_delegates_to_docrag_engine(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -240,7 +240,7 @@ async def test_docrag_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPa
         pipeline_module, "record_rag_search_audit", lambda **kwargs: audits.append(kwargs)
     )
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -534,7 +534,7 @@ async def test_docrag_attaches_cropped_evidence_images_when_vision_enabled(
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     monkeypatch.setattr(docrag_oci, "parse_multimodal_response", fake_multimodal)
     engine = DocragAnswerEngine(
-        Settings(rag_answer_engine="docrag", rag_docrag_answer_vision_enabled=True),
+        Settings(rag_docrag_answer_vision_enabled=True),
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -557,7 +557,7 @@ async def test_docrag_does_not_crop_when_vision_disabled(monkeypatch: pytest.Mon
     monkeypatch.setattr(engine_module, "load_parsed_source", fail_source)
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     engine = DocragAnswerEngine(
-        Settings(rag_answer_engine="docrag"),
+        Settings(),
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -613,7 +613,7 @@ async def _run_chat(
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     oracle = QueryRecordingOracle()
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         llm=llm,  # type: ignore[arg-type]
@@ -687,7 +687,7 @@ async def test_docrag_answer_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     oracle = SavingOracle()
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -723,7 +723,7 @@ async def test_docrag_answer_purge_skipped_when_retention_unlimited(
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     oracle = SavingOracle()
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag", rag_answer_record_retention_days=0),
+        settings=Settings(rag_answer_record_retention_days=0),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -743,7 +743,7 @@ async def test_docrag_answer_save_failure_still_returns_answer(
 
     monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=SavingOracle(fail=True),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -876,7 +876,7 @@ async def test_docrag_uses_masked_question_for_search_llm_and_saved_record(
     monkeypatch.setattr(docrag_oci, "parse_text_response", recording_llm)
     oracle = SavingQueryOracle()
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_engine="docrag", rag_guardrail_backend="local"),
+        settings=Settings(rag_guardrail_backend="local"),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -1233,7 +1233,7 @@ async def test_docrag_answer_passes_first_page_context_as_document_background(
     oracle.first_page_contexts = {"cs-1": _first_page_context()}
     genai = RecordingEmbedGenAi()
     engine = DocragAnswerEngine(
-        Settings(rag_answer_engine="docrag"),
+        Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=genai,  # type: ignore[arg-type]
     )
@@ -1865,7 +1865,7 @@ async def test_pipeline_passes_answer_model_id_to_docrag(monkeypatch: pytest.Mon
     monkeypatch.setattr(docrag_answer, "build_docrag_settings", capture)
     for model_id in ("model-a", None):
         pipeline = RagPipeline(
-            settings=Settings(rag_answer_engine="docrag"),
+            settings=Settings(),
             oracle=FakeOracle(),  # type: ignore[arg-type]
             genai=FakeGenAi(),  # type: ignore[arg-type]
             answer_model_id=model_id,
@@ -1901,7 +1901,7 @@ async def test_docrag_retrieval_only_returns_candidates_without_llm(
     oracle = SavingOracle()
     llm = RewriteLlm(AssertionError("検索だけの経路は LLM を呼ばない"))
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_answer_engine="docrag"),
+        settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=NoRerankGenAi(),  # type: ignore[arg-type]
         llm=llm,  # type: ignore[arg-type]

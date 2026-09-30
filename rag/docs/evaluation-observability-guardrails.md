@@ -33,7 +33,7 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 }
 ```
 
-`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、業務ビューを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。回答エンジンの全体の既定が別のエンジンでも、評価は根拠付き回答で行う。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
+`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、業務ビューを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。#594 で回答はこの方式だけになった（#591 では評価だけ回答エンジンを固定していた）。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
 
 ### 評価の指標（#591）
 
@@ -132,7 +132,7 @@ uv run python -m app.rag.docrag_verify_cli regression --cases cases.json --busin
 uv run python -m app.rag.docrag_verify_cli crag-goldset crag_goldset.json
 ```
 
-- `answers` は回答エンジンが DocRAG の業務ビューでだけ評価できる（それ以外はその件をエラーとして記録する）。
+- `answers` は回答の記録がある回答だけ評価できる（安全ポリシーで止めた質問など、回答フローを通らなかった件はエラーとして記録する。#594 で回答はすべて同じ回答フローになった）。
 - `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（業務ビューの KB が検索範囲になる）。
 - `crag-goldset` の終了コードも rag_poc と同じ（CRAG が通常 RAG より劣れば 1）。
 - rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。
@@ -198,7 +198,7 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 - 長すぎる query を拒否する。
 - system prompt や過去指示の無視を求める prompt injection を拒否する。判定は NFKC・ゼロ幅空白やソフトハイフンなど表示されない書式文字(Unicode Cf)の除去・大小文字の正規化をした文字列で行い、`system_prompt` / `system-prompt` のような区切りの違いも同じ対象として扱う。
 - `drop/delete/update/insert` などの SQL 変更文らしさは警告し、検索のみ実行する。
-- query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。全角英数字・全角記号(`＠` `－`)・長音記号の区切り・不可視文字を挟んだ値もマスクする(その場合、マスク後の文字列は NFKC 正規化した表記になる)。マスク後の query を embedding / retrieval / 回答生成に使い(標準の回答エンジンと DocRAG の両方。DocRAG の回答記録に保存する質問もマスク後)、raw 値を監査ログや metrics へ出さない。
+- query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。全角英数字・全角記号(`＠` `－`)・長音記号の区切り・不可視文字を挟んだ値もマスクする(その場合、マスク後の文字列は NFKC 正規化した表記になる)。マスク後の query を embedding / retrieval / 回答生成に使い(回答の記録に保存する質問もマスク後)、raw 値を監査ログや metrics へ出さない。
 - チャットの会話履歴と今回の質問は、未信頼データとしてタグで囲んで回答生成へ渡す。囲む前に `&` `<` `>` を実体参照へ置き換え、発話に閉じタグを書いて囲みの外へ指示を置けないようにする。DocRAG が履歴から書き換えた質問も、元の質問と同じ安全チェックに通し、拒否されたら書き換えを使わない。
 - citation がない場合は LLM を呼び出さず、no-results 回答に短絡する。
 - 回答に secret らしき文字列が含まれる場合は表示を止める。

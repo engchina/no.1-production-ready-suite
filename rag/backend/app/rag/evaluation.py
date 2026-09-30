@@ -37,7 +37,7 @@ from app.rag.answer_timeout import (
 )
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.docrag_answer import DOCRAG_ANSWER_ENGINE, evaluate_answer_record
+from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.generation_config import resolve_oracle_generation_settings
 from app.rag.guardrails import evaluate_groundedness
@@ -75,7 +75,7 @@ EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX = "ケースを減らすか、分けて評
 # 標準回答による評価 1 件の時間の上限(保存済みの回答の評価の API と同じ。#304)。
 ANSWER_JUDGE_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
 ANSWER_JUDGE_UNAVAILABLE_MESSAGE = (
-    "この回答には標準回答で評価するための記録がありません(回答エンジンの設定を確認してください)。"
+    "この回答には標準回答で評価するための記録がありません(安全ポリシーで止めた質問など)。"
 )
 ANSWER_JUDGE_TIMEOUT_MESSAGE = "標準回答による評価が時間内に終わりませんでした。"
 ANSWER_JUDGE_ERROR_MESSAGE = "標準回答による評価を完了できませんでした。"
@@ -502,12 +502,12 @@ def evaluation_settings(
     settings: Settings,
     overrides: EvaluationRagOverrides | None,
 ) -> Settings:
-    """評価に使う設定。回答エンジンを根拠付き回答にし、experiment の上書きを一時適用する。
+    """評価に使う設定。experiment の上書きを一時適用する。
 
-    評価は業務ビューを受け取らず、全体の既定で動く(#301)。回答エンジンの全体の既定が
-    別のエンジンでも、評価は根拠付き回答(回答の記録を残すエンジン)で行う(#591)。
+    評価は業務ビューを受け取らず、全体の既定で動く(#301)。回答は根拠付き回答(回答の記録を
+    残す回答フロー)だけなので(#594)、回答エンジンの指定は要らない(#591 では固定していた)。
     """
-    update: dict[str, object] = {"rag_answer_engine": DOCRAG_ANSWER_ENGINE}
+    update: dict[str, object] = {}
     if overrides is not None:
         mapping = {
             "query_strategy": "rag_docrag_query_strategy",

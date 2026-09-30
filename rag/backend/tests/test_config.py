@@ -18,10 +18,10 @@ from app.config import (
 )
 
 
-def test_chunking_strategy_defaults_to_structure_aware() -> None:
-    """Chunking アダプターの既定戦略は structure_aware。"""
+def test_chunking_strategy_defaults_to_docrag_small_to_big() -> None:
+    """Chunking アダプターの既定戦略は DocRAG 親子階層(#594。回答が親子の文脈を前提にする)。"""
     settings = Settings()
-    assert settings.rag_chunking_strategy == "structure_aware"
+    assert settings.rag_chunking_strategy == "docrag_small_to_big"
     assert settings.rag_chunk_min_chars == 120
     assert settings.rag_chunk_delimiter == "\\n\\n"
 
@@ -29,7 +29,11 @@ def test_chunking_strategy_defaults_to_structure_aware() -> None:
 def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:
     """適用 strategy では min_chars の誤設定を起動時に拒否する。"""
     with pytest.raises(ValidationError):
-        Settings(rag_chunk_size=300, rag_chunk_min_chars=300)
+        Settings(
+            rag_chunking_strategy="structure_aware",
+            rag_chunk_size=300,
+            rag_chunk_min_chars=300,
+        )
     assert Settings(
         rag_chunking_strategy="fixed_size",
         rag_chunk_size=800,

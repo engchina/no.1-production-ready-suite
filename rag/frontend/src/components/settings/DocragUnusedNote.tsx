@@ -3,7 +3,7 @@ import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
- * 「回答エンジンが DocRAG のときは使われない」ことを欄の近くに示す補足(#300)。
+ * 現在の回答(DocRAG の回答フロー。#594)では使われない設定であることを、欄の近くに示す補足(#300)。
  * 入力は残したまま、色だけに頼らずアイコンと文で伝える。`id` は欄の aria-describedby から参照する。
  */
 export function DocragUnusedNote({

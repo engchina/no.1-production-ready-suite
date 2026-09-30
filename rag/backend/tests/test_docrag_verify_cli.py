@@ -127,7 +127,8 @@ def test_answers_evaluates_resumes_and_summarizes(
     assert "合格率 50%" in capsys.readouterr().out
 
 
-def test_answers_records_error_when_view_is_not_docrag(tmp_path: Path) -> None:
+def test_answers_records_error_when_answer_has_no_record(tmp_path: Path) -> None:
+    """回答フローを通らなかった回答(安全ポリシーで止めた質問など)は評価せず、エラーにする。"""
     qa = _write(tmp_path / "qa.json", [{"id": "a1", "question": "q", "standard_answer": "s"}])
     api = FakeApi(strategy="hybrid_rrf")
 
@@ -137,7 +138,7 @@ def test_answers_records_error_when_view_is_not_docrag(tmp_path: Path) -> None:
     )
 
     record = json.loads((tmp_path / "out" / "a1.json").read_text(encoding="utf-8"))
-    assert "DocRAG ではない" in record["error"]
+    assert "回答の記録が無い" in record["error"]
     assert [path for path, _, _ in api.requests] == ["/api/search"]
 
 

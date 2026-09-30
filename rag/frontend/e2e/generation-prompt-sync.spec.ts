@@ -131,7 +131,7 @@ function docragPromptsEnvelope(content: string) {
   };
 }
 
-test("DocRAG の回答生成テンプレートは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
+test("回答生成テンプレートは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/settings/prompts", (route) =>
     route.fulfill({

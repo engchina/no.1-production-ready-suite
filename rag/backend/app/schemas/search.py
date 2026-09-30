@@ -231,7 +231,7 @@ class SearchRequest(BaseModel):
         default=False,
         description=(
             "回答を作らずに検索だけを行う(LLM を呼ばない)。KB の検索テストとレシピの検索比較が"
-            "使う。回答エンジンが docrag のときだけ効き、standard は従来どおり回答する(#593)。"
+            "使う(#593)。"
         ),
     )
 

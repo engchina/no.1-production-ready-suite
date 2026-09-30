@@ -7,7 +7,6 @@ from app.api.routes import business_view_knowledge as knowledge_route
 from app.api.routes import search as search_route
 from app.main import app
 from app.rag.business_view_config import BusinessViewConfig
-from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from tests import test_search_business_view as search_tests
 from tests.support import AsgiTestClient
 from tests.test_business_view_domain_keywords import FakeKnowledgeOracle
@@ -102,9 +101,7 @@ def test_search_context_carries_business_view_runtime_knowledge(monkeypatch: Mon
         ) -> dict[str, object] | None:
             return payload if kind == "runtime_knowledge" else None
 
-    config = BusinessViewConfig(
-        knowledge_base_ids=["kb-1"], query=KnowledgeBaseQueryConfig(answer_engine="docrag")
-    )
+    config = BusinessViewConfig(knowledge_base_ids=["kb-1"])
     search_tests._install(monkeypatch, {"bv-1": config})
     monkeypatch.setattr(
         search_route,
@@ -118,4 +115,3 @@ def test_search_context_carries_business_view_runtime_knowledge(monkeypatch: Mon
     settings = search_tests.RecordingPipeline.captured_settings
     assert settings is not None
     assert settings.rag_runtime_knowledge == payload
-    assert settings.rag_answer_engine == "docrag"

@@ -1,6 +1,6 @@
 """DocRAG の回答品質をまとめて確かめる検証 CLI(rag_poc の検証スクリプトの移植)。
 
-- ``answers``: QA を業務ビュー(回答エンジン DocRAG)で回答し、標準回答で 4 軸評価する
+- ``answers``: QA を業務ビューで回答し、標準回答で 4 軸評価する
   (rag_poc の ``scripts/run_answer_eval.py``)。
 - ``regression``: rag_poc の ``cases.json`` の質問に回答し、文字列の規則で判定する
   (rag_poc の ``scripts/regression/run_regression.py``)。
@@ -132,7 +132,8 @@ def run_answers(
             strategy = (answer.get("diagnostics") or {}).get("retrieval_strategy")
             if strategy != "docrag":
                 raise VerifyError(
-                    "業務ビューの回答エンジンが DocRAG ではないため、標準回答で評価できません。"
+                    "回答の記録が無い回答(安全ポリシーで止めた質問など)のため、"
+                    "標準回答で評価できません。"
                 )
             detail = api.evaluate(str(answer["trace_id"]), str(item["standard_answer"]))
             record["evaluation"] = detail.get("evaluation") or {}

@@ -35,12 +35,12 @@ for (const viewport of [
     await expect(page.getByRole("switch", { name: "補正検索" })).toBeVisible();
     // 推奨用途チップは英語生トークンではなく日本語 i18n ラベルで表示する。
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toHaveAccessibleName(/一般/);
-    // 回答エンジンが DocRAG の業務ビューでは使われない欄に説明を出す。入力は残す(#300)。
+    // 現在の回答(#594)では使われない欄に説明を出す。入力は残す(#300)。
     await expect(page.getByRole("radiogroup", { name: "検索モード" })).toHaveAccessibleDescription(
-      /回答エンジンが DocRAG の業務ビューでは使われません/
+      /現在の回答では使われません/
     );
     await expect(page.getByRole("group", { name: "検索オプション" })).toHaveAccessibleDescription(
-      /回答エンジンが DocRAG の業務ビューでは使われません/
+      /現在の回答では使われません/
     );
     await expect(page.getByTestId("docrag-unused-note")).toHaveCount(2);
     await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeEnabled();
@@ -67,9 +67,9 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /リーン/ })).toHaveAccessibleName(/低遅延/);
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toHaveAccessibleName(/補正\(CRAG\)/);
     await expect(page.getByRole("radio", { name: /リーン/ })).not.toHaveAccessibleName(/low_latency/);
-    // この画面の設定は回答エンジンが DocRAG の業務ビューでは使われない(#300)。
+    // この画面の設定は現在の回答では使われない(#300 / #594)。
     await expect(page.getByRole("radiogroup", { name: "処理方式" })).toHaveAccessibleDescription(
-      /回答エンジンが DocRAG の業務ビューでは使われません/
+      /現在の回答では使われません/
     );
     await expect(page.getByRole("radio", { name: /リーン/ })).toBeEnabled();
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
