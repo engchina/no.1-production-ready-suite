@@ -17,9 +17,9 @@ interface ServiceRow {
     | "parser"
     | "chunking"
     | "vector_index"
+    | "graphrag"
     | "guardrail"
-    | "evaluation"
-    | "graphrag";
+    | "evaluation";
   profile: "cpu" | "gpu" | "oci";
   label_key: string;
   execution_policy:
@@ -87,10 +87,28 @@ function defaultServices(): ServiceRow[] {
       configured: true,
     },
     {
+      service_id: "pipeline-graphrag",
+      category: "graphrag",
+      profile: "cpu",
+      label_key: "settings.services.item.pipelineGraphrag",
+      execution_policy: "in_process_when_disabled",
+      status: "stopped",
+      configured: true,
+    },
+    {
       service_id: "pipeline-guardrail",
       category: "guardrail",
       profile: "cpu",
       label_key: "settings.services.item.pipelineGuardrail",
+      execution_policy: "in_process_when_disabled",
+      status: "stopped",
+      configured: true,
+    },
+    {
+      service_id: "pipeline-evaluation",
+      category: "evaluation",
+      profile: "cpu",
+      label_key: "settings.services.item.pipelineEvaluation",
       execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
@@ -220,44 +238,55 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    // セクション見出しは検索・回答フロー順(前処理→解析→分割→…)で表示。
-    // ラベルはサイドナビと統一しているため heading role で限定する。
+    // 工程の見出しはサイドナビ（検索・回答設定）と同じ並び・名前（#638）。
+    // ナビのリンクと区別するため heading role で限定する。
+    const stageHeadings = [
+      "ファイル準備",
+      "文書解析(CPU)",
+      "文書解析(GPU)",
+      "文書解析(OCI)",
+      "文書分割",
+      "関係情報の構築",
+      "安全チェック",
+      "評価の基準",
+    ];
+    for (const name of stageHeadings) {
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
+    const headingTops = await Promise.all(
+      stageHeadings.map(async (name) => {
+        const box = await page.getByRole("heading", { name, exact: true }).boundingBox();
+        return box?.y ?? -1;
+      })
+    );
+    expect(headingTops).toEqual([...headingTops].sort((a, b) => a - b));
+    for (const removed of ["前処理 (Preprocess)", "解析 (Parser)(CPU)", "品質評価", "関係情報"]) {
+      await expect(page.getByRole("heading", { name: removed, exact: true })).toHaveCount(0);
+    }
+    // 工程の説明は、対応する設定画面の説明と同じ文（複数のグループに分かれる工程は最初のグループにだけ出す）。
     await expect(
-      page.getByRole("heading", { name: "前処理 (Preprocess)", exact: true })
-    ).toBeVisible();
-    // 解析は CPU/GPU 両方あるため Parser と同様に分割。
-    await expect(
-      page.getByRole("heading", { name: "解析 (Parser)(CPU)", exact: true })
+      page.getByText("文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。", { exact: true })
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "解析 (Parser)(GPU)", exact: true })
-    ).toBeVisible();
+      page.getByText("文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。", { exact: true })
+    ).toHaveCount(1);
     await expect(page.getByText("ASR(音声文字起こし)", { exact: true })).toBeVisible();
     for (const removed of ["Marker", "Unlimited-OCR", "MinerU", "Dots.OCR", "GLM-OCR"]) {
       await expect(page.getByText(removed, { exact: true })).toHaveCount(0);
     }
-    // OCI クラウド parser は第 3 グループ「解析 (Parser)(OCI)」として表示。
-    await expect(
-      page.getByRole("heading", { name: "解析 (Parser)(OCI)", exact: true })
-    ).toBeVisible();
+    // OCI クラウド parser は第 3 グループ「文書解析(OCI)」として表示。
     await expect(
       page.getByText("OCI Generative AI (Vision)", { exact: true })
     ).toBeVisible();
     await expect(page.getByText("OCI 認証はメイン設定を継承", { exact: false })).toBeVisible();
-    // 単一プロファイルのステージは接尾辞なし。
-    await expect(
-      page.getByRole("heading", { name: "文書分割", exact: true })
-    ).toBeVisible();
+    // 単一プロファイルの工程は接尾辞なし（上の見出しの確認に含む）。
     await expect(page.getByText("選択時のみ使用").first()).toBeVisible();
     await expect(page.getByText("既定は backend 内処理").first()).toBeVisible();
     await expect(
       page.getByText("停止中です。backend 内処理で継続します", { exact: false }).first()
     ).toBeVisible();
     await expect(
-      page.getByText("取込/解析設定でこのサービスを選択した場合のみ", { exact: false }).first()
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "安全チェック", exact: true })
+      page.getByText("ファイル準備・文書解析の設定か処理レシピでこのサービスを選んだ場合だけ", { exact: false }).first()
     ).toBeVisible();
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();

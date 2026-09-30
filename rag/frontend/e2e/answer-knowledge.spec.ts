@@ -124,14 +124,21 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "業務ビューの知識" });
     await expect(panel).toBeVisible();
+    // 先頭・既定のタブは Approved FAQ（#636）。
+    const tabs = page.getByRole("tablist", { name: "業務ビューの知識" }).getByRole("tab");
+    await expect(tabs).toHaveText(["Approved FAQ（類似問）", "ドメインキーワード", "用語・ルール"]);
+    await expect(page.getByRole("tab", { name: "Approved FAQ（類似問）" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    await expect(page.getByRole("rowheader", { name: faqSuggestion.question })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
+
+    await page.getByRole("tab", { name: "ドメインキーワード" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号");
     await page.getByRole("button", { name: "候補を生成" }).click();
     await page.getByRole("button", { name: "伝票区分" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号\n伝票区分");
-
-    await page.getByRole("tab", { name: "Approved FAQ（類似問）" }).click();
-    await expect(page.getByRole("rowheader", { name: faqSuggestion.question })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
 
     await page.getByRole("tab", { name: "用語・ルール" }).click();
     await expect(page.getByRole("rowheader", { name: "受注" })).toBeVisible();
@@ -371,7 +378,11 @@ test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に�
   await page.getByRole("option", { name: "ルール" }).click();
   await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
   await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  // ヘッダーの「保存」（業務ビューの設定。#618）と区別し、用語・ルールのタブの中の保存を押す。
+  await page
+    .getByRole("tabpanel", { name: "用語・ルール" })
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
   await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
   await expect(page.locator("#runtime-knowledge-content")).toHaveAccessibleDescription(/ルール内容を入力してください。/);
