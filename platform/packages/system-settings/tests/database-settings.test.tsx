@@ -90,5 +90,36 @@ describe("DatabaseSettingsPage", () => {
     );
     expect(save).toBeDefined();
     expect(html).not.toContain("保存中");
+    // サポートするリージョンの保存値では案内を出さない（#660）。
+    expect(html).not.toContain("はサポートしていません");
+  });
+
+  it("ADB のリージョンの保存値が候補に無い us-chicago-1 のときは、値をそのまま出して選び直しを案内する（#660）", () => {
+    const settings: DatabaseSettingsData = {
+      user: "app",
+      dsn: "db_high",
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      client_lib_dir: "",
+      wallet_dir: "/wallet",
+      wallet_uploaded: true,
+      available_services: ["db_high"],
+      has_password: true,
+      has_wallet_password: false,
+      readiness: "ok",
+      embedding_dimension: 1536,
+      vector_column: "EMBEDDING",
+      adb_ocid: "ocid1.autonomousdatabase.oc1.us-chicago-1.example",
+      region: "us-chicago-1",
+      config_source: "runtime",
+    };
+    const client = new QueryClient();
+    client.setQueryData(DATABASE_SETTINGS_QUERY_KEY, settings);
+    const html = render(<DatabaseSettingsPage api={api} />, client);
+
+    expect(html).toMatch(/<button\b[^>]*id="adb-region"[^>]*>[\s\S]*?us-chicago-1/);
+    expect(html).toContain(
+      "保存済みのリージョン us-chicago-1 はサポートしていません。ap-tokyo-1 または ap-osaka-1 を選んで保存してください。",
+    );
   });
 });
