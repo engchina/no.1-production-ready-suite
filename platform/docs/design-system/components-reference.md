@@ -1871,3 +1871,43 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 - 単体テストは `packages/ui/tests/search-field.test.tsx`（debounce・Enter・trim・正規化・`formatInput`・IME の `compositionstart` 〜 `compositionend` と確定の Enter・消去・外からの変更・外れるときの確定・件数の読み上げ。fake timers）。
 - 実ブラウザは RAG `e2e/list-search.spec.ts`（業務ビュー・ナレッジベース。ボタンなし・入力に合わせた問い合わせ・IME・0 件の「検索語をクリア」、desktop / 375px、ライト / ダーク）、Agent `e2e/list-search.spec.ts`（メモリ）、NL2SQL `tests/e2e/nl2sql-workflows.spec.ts`（学習候補・アプリ内フィードバック）。IME は `compositionstart` → `isComposing` の `input` → `compositionend` の DOM event を出して確かめる（Playwright の keyboard は IME を通さない）。
 - 製品の置き換え: RAG（ナレッジベース・業務ビュー・文書・フィードバック・ナレッジベース詳細の追加する文書）、NL2SQL（`DbManagementSearchField` / `DbOwnerPrefixFilterField` を使う全一覧・DB 管理のオブジェクト一覧・スキーマ参照・アプリ内フィードバック・学習候補）、Agent（メモリ）、system-settings（`SecuritySearchField`: ユーザー・ロール・権限管理・権限の対象。NL2SQL の Deep Data Security も使う）。
+
+---
+
+## SaveErrorBanner — **新規**（#585）
+
+ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
+
+```tsx
+<PageBody wide>
+  <SaveErrorBanner
+    message={mutation.isError ? (mutation.error instanceof ApiError ? mutation.error.message : t("…error.save")) : null}
+    attemptKey={mutation.submittedAt}
+    testId="business-view-save-error"
+  />
+  {/* 対象の状態の警告 Banner・本文の節 */}
+</PageBody>
+```
+
+### SaveErrorBanner の props
+
+```ts
+type SaveErrorBannerProps = {
+  /** 失敗の文言（原因 + 次の行動）。空・null なら何も描かない。 */
+  message?: string | null;
+  /** 保存を試みるたびに変わる値（mutation.submittedAt など）。同じ文言の失敗でも画面に入れ直す。 */
+  attemptKey?: string | number;
+  title?: string;
+  testId?: string;
+  className?: string;
+};
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 見た目は danger の `Banner`（アイコン付き・`role="alert"`）。閉じる × は付けない | 状態を色だけで示さない。次の保存まで残し、失敗を消して保存し直したように見せない |
+| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | lg 以上のヘッダーは sticky で、長いフォームを下までスクロールしてから保存すると、本文の先頭の Banner は画面の外にある。中央へ寄せると本文の先頭の Banner はページの先頭まで戻り、sticky のヘッダーに隠れない |
+| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（業務ビューなど）。フォームの下はヘッダーの保存ボタンから遠く、気づけない |
+
+- 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
+- 使う画面: RAG（業務ビュー・ナレッジベースのエディタ）、Agent（Agent・Skill・外部 MCP サーバー・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。

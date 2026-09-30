@@ -56,6 +56,7 @@ import {
   PageHeader,
   ProcessingIndicator,
   RowActionMenu,
+  SaveErrorBanner,
   Section,
   StatusBadge,
   Switch,
@@ -2941,6 +2942,12 @@ function McpServerEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
+        {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+        <SaveErrorBanner
+          message={saveMutation.error ? (saveMutation.error as Error).message : null}
+          attemptKey={saveMutation.submittedAt}
+          testId="mcp-server-save-error"
+        />
         {server ? (
           <Section
             title={t("editor.overview")}
@@ -2967,7 +2974,6 @@ function McpServerEditor({
             </div>
           </Section>
         ) : null}
-        {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
             <Card className="min-w-0">
@@ -3474,6 +3480,12 @@ function SkillEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
+        {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+        <SaveErrorBanner
+          message={saveMutation.error ? (saveMutation.error as Error).message : null}
+          attemptKey={saveMutation.submittedAt}
+          testId="skill-save-error"
+        />
         {skill ? (
           <Section
             title={t("editor.overview")}
@@ -3501,7 +3513,6 @@ function SkillEditor({
           <SkillReadOnlyDetail skill={skill} />
         ) : (
           <>
-            {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
                 <CardContent className="space-y-4 pt-5">
@@ -3937,7 +3948,12 @@ function PluginInstallEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {installMutation.error ? <Banner severity="danger">{(installMutation.error as Error).message}</Banner> : null}
+        {/* 導入の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+        <SaveErrorBanner
+          message={installMutation.error ? (installMutation.error as Error).message : null}
+          attemptKey={installMutation.submittedAt}
+          testId="plugin-install-error"
+        />
         {installMutation.isPending ? (
           // manifest の検証と Skill / MCP の登録を行うため数秒かかる。スピナーはヘッダーの install ボタンが担う。
           <ProcessingIndicator
@@ -4364,7 +4380,12 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {addMutation.error ? <Banner severity="danger">{(addMutation.error as Error).message}</Banner> : null}
+        {/* 追加の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+        <SaveErrorBanner
+          message={addMutation.error ? (addMutation.error as Error).message : null}
+          attemptKey={addMutation.submittedAt}
+          testId="marketplace-add-error"
+        />
         <Section title={t("marketplaces.overview")}>
           <Card className="min-w-0">
             <CardContent className="space-y-4 pt-5">
@@ -5800,6 +5821,7 @@ function AgentEditorView({
   const fieldId = agent?.id ?? "new";
   const title = agent ? agent.name : t("agent.create");
   const error = createAgent.error ?? patchAgent.error;
+  const saveAttemptKey = Math.max(createAgent.submittedAt, patchAgent.submittedAt);
 
   return (
     <>
@@ -5826,6 +5848,12 @@ function AgentEditorView({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
+        {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+        <SaveErrorBanner
+          message={error?.message ?? null}
+          attemptKey={saveAttemptKey}
+          testId="agent-save-error"
+        />
         {agent ? (
           <Section
             title={t("editor.overview")}
@@ -5848,7 +5876,6 @@ function AgentEditorView({
             {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
           </Section>
         ) : null}
-        {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section title={t("agent.basic")}>
             <Card className="min-w-0">

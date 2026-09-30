@@ -152,6 +152,10 @@ export {
   ActionResultRegion,
   type ActionResultRegionProps,
 } from "./components/feedback/action-result-region";
+export {
+  SaveErrorBanner,
+  type SaveErrorBannerProps,
+} from "./components/feedback/save-error-banner";
 
 // --- data ---
 export {

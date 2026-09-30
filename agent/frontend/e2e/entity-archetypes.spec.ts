@@ -71,6 +71,35 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
+    // #585: ヘッダーに保存がある全画面のエディタは、欄に結び付かない保存の失敗をヘッダーの直下の 1 か所だけに出す。
+    test("保存に失敗すると理由をヘッダーの直下だけに出し、Toast に重ねない", async ({ page }) => {
+      const message = "同じ名前の業務 Agent があります。別の名前にしてください。";
+      await page.route("**/api/agents", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await route.fulfill({
+          status: 409,
+          json: { data: null, error_messages: [message], warning_messages: [] },
+        });
+      });
+      await page.goto("/agents?id=new");
+      await page.locator("#new-agent-name").fill("重複する Agent");
+      await page.getByRole("button", { name: "作成", exact: true }).click();
+
+      const banner = page.getByTestId("agent-save-error");
+      await expect(banner.getByRole("alert")).toHaveText(message);
+      await expect(banner).toBeInViewport();
+      await expect(page.getByText(message)).toHaveCount(1);
+      // 見出しの直下（本文の最初の要素）に置く。
+      const [bannerTop, headerBottom] = await Promise.all([
+        banner.evaluate((element) => element.getBoundingClientRect().top),
+        page.locator("header[data-page-header]").evaluate((element) => element.getBoundingClientRect().bottom),
+      ]);
+      expect(bannerTop).toBeGreaterThanOrEqual(headerBottom);
+      expect(bannerTop - headerBottom).toBeLessThan(64);
+      await expect(page).toHaveURL(/\/agents\?id=new$/);
+      await expectNoHorizontalOverflow(page);
+    });
+
     test("編集対象は URL で開き、再読込・戻る / 進む・パンくずで行き来できる", async ({ page }) => {
       await page.goto("/skills");
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();

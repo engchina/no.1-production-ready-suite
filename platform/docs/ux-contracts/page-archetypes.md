@@ -27,6 +27,7 @@
 - URL の検索パラメータ（`?id=` など）を**唯一の情報源**とし、`null` = 一覧 / `"new"` = 新規 / `<id>` = 編集。
 - 一覧：共有 `DataTable`（検索 / ソート / `Pagination`）+「新規」ボタン + 必要なら状態バー。
 - エディタ：全幅で `Section` を**縦に積む**。上部に 戻る / 保存（primary）/ 削除（danger）。
+- **保存の失敗**：欄に結び付く失敗は欄の直下、それ以外はヘッダーの直下の `SaveErrorBanner` の 1 か所だけ（Toast・フォームの下の `FormStatus` に重ねない。[messaging.md §3.3.1](./messaging.md#331-全画面のエディタの保存の失敗585)）。
 - **離脱ガード**：未保存のまま離れるときは破棄を確認する（[workspace-state.md](./workspace-state.md#未保存変更の離脱ガード)）。
 - **パンくず**：一覧 › 対象名 を出す。
 - 古いタブ（list / create / import など）は、**一覧上の操作** か **エディタ内の節** に平らにする。破壊的な操作は `useConfirm` に集める。
