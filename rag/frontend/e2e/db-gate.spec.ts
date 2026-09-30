@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { SYSTEM_TABLES_STATUS_OK, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 /**
  * DB ゲート（3製品共通の部品。#325）: システム設定の 5 画面以外は、DB 接続不可/未設定のとき
@@ -33,7 +33,8 @@ async function expectGate(
     title,
     actionName = "データベース設定を開く",
     actionHref = "/settings/database#adb-management",
-  }: { title: string; actionName?: string; actionHref?: string }
+    settingsHint = SETTINGS_HINT,
+  }: { title: string; actionName?: string; actionHref?: string; settingsHint?: string }
 ) {
   const card = page.locator('section[aria-labelledby="database-unavailable-title"]');
   await expect(card.getByRole("heading", { level: 1, name: title })).toBeVisible();
@@ -41,7 +42,7 @@ async function expectGate(
   await expect(link).toHaveAttribute("href", actionHref);
   // 全状態で再試行を出す（NL2SQL と同じ）。
   await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
-  await expect(card.getByText(SETTINGS_HINT, { exact: true })).toBeVisible();
+  await expect(card.getByText(settingsHint, { exact: true })).toBeVisible();
   // 接続先に関わる ORA コードは出さない（#320）。
   await expect(page.getByText(/ORA-12514/)).toHaveCount(0);
   await expectNoPageOverflow(page);
@@ -56,11 +57,22 @@ test("DB 接続済みでも schema 未作成ならシステムテーブルへ案
 
   await page.goto("/file-list");
 
-  await expectGate(page, {
+  const link = await expectGate(page, {
     title: "RAG システムテーブルの準備が必要です",
     actionName: "システムテーブルを開く",
-    actionHref: "/settings/database#system-tables",
+    actionHref: "/settings/system-tables",
+    settingsHint:
+      "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
   });
+
+  // システムテーブルの画面（運用設定。#658）は未初期化でもゲートに塞がれずに開ける。
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    route.fulfill({ json: SYSTEM_TABLES_STATUS_OK })
+  );
+  await link.click();
+  await expect(page).toHaveURL(/\/settings\/system-tables$/);
+  await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="database-unavailable-title"]')).toHaveCount(0);
 });
 
 test("DB 接続不可時、機能ページはエラーではなく起動の案内を表示する", async ({ page }) => {

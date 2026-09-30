@@ -2490,7 +2490,7 @@ test("Select AI Credential を明示確認で作成し、成功状態だけを�
     await fulfillJson(route, credential);
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   await expect(card.getByRole("heading", { name: "Select AI Credential" })).toBeVisible();
   await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
@@ -2540,7 +2540,7 @@ test("既存 Select AI Credential の再作成は確認語だけで直接実行�
     await fulfillJson(route, existing);
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   await expect(card.getByText("作成済み", { exact: true })).toBeVisible();
   await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
@@ -2574,7 +2574,7 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
     });
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   const readinessStatus = card
     .getByRole("status")
@@ -2617,7 +2617,7 @@ test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で�
     });
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   const alert = card.getByRole("alert");
   await expect(alert).toHaveCount(1);
@@ -2666,7 +2666,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
     });
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
@@ -2715,7 +2715,7 @@ test("Select AI Credential API 失敗は固定 alert だけに表示し Toast �
     });
   });
 
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
     "ADMIN_EXECUTE"
@@ -2964,7 +2964,7 @@ test("Credential 確認は region 変更と実行失敗で解除し、処理中�
     } else await fulfillJson(route, { credential_name: "OCI_CRED", schema_name: "ADMIN", exists: false,
       region: "us-chicago-1", oci_auth_ready: true, missing_fields: [], operation: null });
   });
-  await page.goto("/settings/database#select-ai-credential");
+  await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   const field = card.getByRole("textbox", { name: "実行確認語" });
   const region = card.getByRole("combobox", { name: "Select AI 既定リージョン" });

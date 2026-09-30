@@ -234,7 +234,7 @@ async function mockSettings(
 
 test("状態取得中は loading feedback を表示する", async ({ page }) => {
   await mockSettings(page, { statusDelayMs: 600 });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   // 3 製品共通のカード（#325）: 経過時間付きの読み込み表示と Skeleton。
   await expect(
     page.getByRole("region", { name: "システムテーブルの状態を読み込んでいます" })
@@ -252,7 +252,7 @@ const statusLabels: Record<SchemaStatus, string> = {
 for (const status of Object.keys(statusLabels) as SchemaStatus[]) {
   test(`schema 状態 ${status} を表示する`, async ({ page }) => {
     await mockSettings(page, { initialStatus: status });
-    await page.goto("/settings/database#system-tables");
+    await page.goto("/settings/system-tables");
     const card = page.locator("#system-tables");
     await expect(
       card.getByText(statusLabels[status], { exact: true }).first()
@@ -262,7 +262,7 @@ for (const status of Object.keys(statusLabels) as SchemaStatus[]) {
 
 test("作成・更新で missing から ready になる", async ({ page }) => {
   const mock = await mockSettings(page, { initialStatus: "missing" });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await card.getByRole("button", { name: "作成・更新" }).click();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
@@ -273,9 +273,9 @@ test("システムテーブル管理の権限が無い利用者は状態だけ�
   page,
 }) => {
   const mock = await mockSettings(page, { initialStatus: "missing" });
-  // データベース設定の画面権限だけを持つ DB ユーザー（rag.system_tables.manage なし。#214）。
-  await mockAuthUser(page, { permissions: ["menu.settings_database"] });
-  await page.goto("/settings/database#system-tables");
+  // システムテーブルの画面権限だけを持つ DB ユーザー（rag.system_tables.manage なし。#214 / #658）。
+  await mockAuthUser(page, { permissions: ["menu.settings_system_tables"] });
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await expect(card.getByText("未初期化", { exact: true }).first()).toBeVisible();
   await expect(
@@ -293,7 +293,7 @@ test("全再作成は確認語と ConfirmDialog の二段階で保護する", as
   page,
 }) => {
   const mock = await mockSettings(page, { initialStatus: "ready" });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   const recreate = card.getByRole("button", { name: "すべて再作成" });
   await expect(recreate).toBeDisabled();
@@ -322,7 +322,7 @@ test("操作失敗後にエラーへフォーカスし、375px でページ横�
     initialStatus: "partial",
     initializeFails: true,
   });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await card.getByRole("button", { name: "作成・更新" }).click();
 
@@ -335,7 +335,7 @@ test("操作失敗後にエラーへフォーカスし、375px でページ横�
   );
   expect(pageOverflow).toBeLessThanOrEqual(1);
 
-  await card.getByText("テーブルと migration の詳細").click();
+  await card.getByText("管理オブジェクトの詳細").click();
   await card.getByTestId("system-tables-scroll-region").focus();
   await expect(card.getByTestId("system-tables-scroll-region")).toBeFocused();
 });
@@ -344,7 +344,7 @@ test("不足している外部キーを更新必要として並べ、更新後�
   page,
 }) => {
   const mock = await mockSettings(page, { initialStatus: "outdated", foreignKeyDrift: true });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
   const missing = card.getByTestId("system-tables-missing-foreign-keys");
@@ -477,7 +477,7 @@ for (const theme of ["light", "dark"] as const) {
         ],
       },
     });
-    await page.goto("/settings/database#system-tables");
+    await page.goto("/settings/system-tables");
     await expect
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");
@@ -538,7 +538,7 @@ test("参照先のない行の削除は確認ダイアログで表・外部キ�
     statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
     orphanDeletionDelayMs: 300,
   });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   const orphaned = card.getByTestId("system-tables-orphaned-foreign-keys");
   await expect(orphaned).toContainText("「参照先のない行を削除」で削除できます");
@@ -581,7 +581,7 @@ test("参照先のない行が確認時より増えていたら削除せず、�
     statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
     orphanDeletion: "conflict",
   });
-  await page.goto("/settings/database#system-tables");
+  await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
   await card
     .getByRole("button", { name: "参照先のない行を削除 RAG_CHUNK_SETS_DOCUMENT_FK" })
@@ -601,8 +601,8 @@ test("システムテーブル管理の権限が無い利用者には参照先�
     initialStatus: "ready",
     statusExtra: { orphaned_foreign_keys: [orphanedForeignKey] },
   });
-  await mockAuthUser(page, { permissions: ["menu.settings_database"] });
-  await page.goto("/settings/database#system-tables");
+  await mockAuthUser(page, { permissions: ["menu.settings_system_tables"] });
+  await page.goto("/settings/system-tables");
   const orphaned = page.locator("#system-tables").getByTestId("system-tables-orphaned-foreign-keys");
   await expect(orphaned).toContainText("参照先のない行 240 件");
   await expect(orphaned.getByRole("button")).toHaveCount(0);
@@ -627,7 +627,7 @@ for (const theme of ["light", "dark"] as const) {
         pending_destructive_migrations: [destructiveMigration],
       },
     });
-    await page.goto("/settings/database#system-tables");
+    await page.goto("/settings/system-tables");
     await expect
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");

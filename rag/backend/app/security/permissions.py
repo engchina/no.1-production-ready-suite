@@ -6,7 +6,8 @@
   を返し、認可で 403 にする。公開 API とログインだけで使える API は None を返す。
 
 システム設定・ユーザーとロールの共通メニューは NL2SQL と同じコード・グループ名を使う
-（3 製品共通の画面。#206）。権限管理は「RAG セキュリティ」の製品固有メニュー。
+（3 製品共通の画面。#206）。権限管理は「セキュリティ設定」の製品固有メニュー
+（セクション名は 3 製品で同じ。#658）。
 """
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
 MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
 MENU_SETTINGS_EVALUATION = "menu.settings_evaluation"
 MENU_SETTINGS_GRAPH = "menu.settings_graph"
+MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_SETTINGS_HUGGINGFACE = "menu.settings_huggingface"
 MENU_SETTINGS_SERVICES = "menu.settings_services"
 MENU_SETTINGS_OCI = "menu.settings_oci"
@@ -91,7 +93,7 @@ _GROUP_BUSINESS = "業務ビュー"
 _GROUP_INGESTION = "ナレッジ構築"
 _GROUP_PIPELINE = "検索・回答設定"
 _GROUP_IMPROVE = "改善・運用"
-_GROUP_SECURITY = "RAG セキュリティ"
+_GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
 _GROUP_USERS_ROLES = "ユーザーとロール"
 _GROUP_SETTINGS = "システム設定"
@@ -126,10 +128,13 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     ),
     # 権限管理は RAG 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
-    _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace"),
-    _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス"),
+    # 並びはサイドナビと同じ
+    # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
+    _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
+    _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace"),
+    _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
@@ -165,8 +170,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         SYSTEM_TABLES_MANAGE,
         _GROUP_MANAGE,
         "システムテーブル管理",
-        "「データベース」の画面で、RAG のシステムテーブルの初期化・全再作成ができます。",
-        implies=(MENU_SETTINGS_DATABASE,),
+        "「システムテーブル」の画面で、RAG のシステムテーブルの初期化・全再作成ができます。",
+        implies=(MENU_SETTINGS_SYSTEM_TABLES,),
     ),
 )
 
@@ -405,7 +410,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
-    ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_DATABASE),
+    # システムテーブルは運用設定の専用の画面（#658）。
+    ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     ("POST", "/settings/database/system-tables/initialize"): _any(SYSTEM_TABLES_MANAGE),
     # 参照先のない行の削除（#511）は、作成・更新と同じ権限にする。
     ("POST", "/settings/database/system-tables/orphaned-rows/delete"): _any(SYSTEM_TABLES_MANAGE),
@@ -486,7 +492,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/archive"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
-    # ---- RAG セキュリティ: 権限管理 ----
+    # ---- セキュリティ設定: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/business-views"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/knowledge-bases"): _any(MENU_SECURITY_PERMISSIONS),

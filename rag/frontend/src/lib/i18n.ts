@@ -25,13 +25,13 @@ export const ja = {
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
   "dbGate.setupRequired.message":
-    "データベースには接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
+    "データベースには接続できましたが、RAG に必要なテーブルまたは索引が不足しています。運用設定の「システムテーブル」で「作成・更新」を実行してください。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
   "dbGate.openSystemTables": "システムテーブルを開く",
   "dbGate.settingsHint":
     "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
   "dbGate.setupRequired.settingsHint":
-    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
+    "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",
   "dbGate.checkFailed.message":
     "バックエンドの起動状態を確認して再試行してください。",
@@ -80,7 +80,7 @@ export const ja = {
   // ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品（AUTH_MESSAGES）が持つ（#214）。
 
   // RAG セキュリティ（権限管理）とユーザーとロール（#214）
-  "nav.section.security": "RAG セキュリティ",
+  "nav.section.security": "セキュリティ設定",
   "nav.section.userRoles": "ユーザーとロール",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
@@ -180,6 +180,8 @@ export const ja = {
   "nav.settingsModel.sidebar": "モデル",
   "nav.settingsDatabase": "データベース設定",
   "nav.settingsDatabase.sidebar": "データベース",
+  "nav.settingsSystemTables": "システムテーブル管理",
+  "nav.settingsSystemTables.sidebar": "システムテーブル",
   "nav.settingsHuggingface": "HuggingFace 設定",
   "nav.settingsHuggingface.sidebar": "HuggingFace",
   "nav.settingsServices": "サービス管理",
@@ -767,9 +769,12 @@ export const ja = {
   "settings.huggingface.hintCache":
     "モデルは各 parser の実行ユーザーのキャッシュ(~/.cache)へ保存します。本番は配備時にモデルを取得済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
   "settings.database.subtitle": "Oracle AI Database への接続を設定します。",
+  "settings.systemTables.subtitle":
+    "RAG の内部 schema、migration、索引の状態を確認・初期化します。",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
-  "settings.database.systemTables.title": "RAG システムテーブル",
+  // 見出しは NL2SQL と同じ（#658）。画面の中の境界（CardErrorBoundary）の名前にも使う。
+  "settings.database.systemTables.title": "システムテーブル",
   "settings.database.systemTables.description":
     "RAG が使用する Oracle テーブル、ベクトル索引、Oracle Text 索引、migration の状態を確認し、管理者の明示操作で準備します。",
   "settings.database.systemTables.readOnly":
@@ -789,10 +794,6 @@ export const ja = {
     "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。取込処理を停止してから、状態を再取得して再試行してください。",
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、取込ジョブや Oracle のロック状態を確認して再試行してください。",
-  "settings.database.systemTables.details.title":
-    "テーブルと migration の詳細を表示（存在 {existing} / 必須 {expected}）",
-  "settings.database.systemTables.table.scrollLabel":
-    "RAG システムテーブル一覧（存在 {existing} / 必須 {expected}）。必要に応じて縦方向または横方向にスクロールできます。",
   "settings.database.systemTables.recreate.sectionDescription":
     "文書、chunk、ナレッジベース、業務ビュー、会話、監査、評価など RAG の DB データを削除して再作成します。元に戻せません。同じ Oracle schema の非 RAG オブジェクトと Object Storage の原本は削除しません。",
   "settings.database.systemTables.confirmation.helper":

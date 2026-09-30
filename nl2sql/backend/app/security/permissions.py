@@ -203,8 +203,13 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         implies=(PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION),
     ),
     # 権限管理と DeepSec は NL2SQL 固有。ユーザー管理・ロール管理は3製品共通の画面（#206）。
-    _menu_permission("menu.security_permissions", "NL2SQL セキュリティ", "権限管理"),
-    _menu_permission("menu.security_deepsec", "NL2SQL セキュリティ", "Deep Data Security"),
+    # セクション名「セキュリティ設定」は 3 製品で同じ（#658）。
+    _menu_permission("menu.security_permissions", "セキュリティ設定", "権限管理"),
+    _menu_permission("menu.security_deepsec", "セキュリティ設定", "Deep Data Security"),
+    # 並びはサイドナビと同じ
+    # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
+    _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
+    _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
     _menu_permission(
         "menu.settings_system_tables",
         "運用設定",
@@ -216,8 +221,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             PERSISTENCE_RECOVER_PERMISSION,
         ),
     ),
-    _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
-    _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
+    # データベース設定から分けた運用の操作（#658）。
+    _menu_permission("menu.settings_select_ai_credential", "運用設定", "Select AI Credential"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
     _menu_permission("menu.settings_upload_storage", "システム設定", "アップロード保存先"),
     _menu_permission("menu.settings_model", "システム設定", "モデル"),
@@ -452,7 +457,10 @@ LEGACY_PERMISSION_ALIASES: dict[str, tuple[str, ...]] = {
         "menu.settings_database",
         "menu.settings_system_tables",
     ),
-    "settings.database.manage": ("menu.settings_database",),
+    "settings.database.manage": (
+        "menu.settings_database",
+        "menu.settings_select_ai_credential",
+    ),
     "settings.database.sql_execute": (
         "menu.admin_sql",
         "menu.settings_system_tables",
@@ -615,6 +623,7 @@ _SELECT_AI_ASSETS_MANAGE = _allowed(SELECT_AI_ASSETS_MANAGE_PERMISSION)
 _SELECT_AI_ASSETS_READ = _allowed(SELECT_AI_ASSETS_READ_PERMISSION)
 _SELECT_AI_ASSETS_REFRESH = _allowed(SELECT_AI_ASSETS_REFRESH_PERMISSION)
 _SETTINGS_DATABASE = _allowed("menu.settings_database")
+_SETTINGS_SELECT_AI_CREDENTIAL = _allowed("menu.settings_select_ai_credential")
 _SETTINGS_MODEL = _allowed("menu.settings_model")
 _SETTINGS_OCI = _allowed("menu.settings_oci")
 _SQL_EXECUTE = _allowed(SQL_EXECUTE_PERMISSION)
@@ -668,10 +677,10 @@ _SELECT_AI_FEEDBACK = _allowed(FEEDBACK_MANAGE_PERMISSION, SELECT_AI_ASSETS_MANA
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- ユーザーとロール（platform の共通 router。#503） ----
     **SECURITY_USER_ROLE_ROUTE_PERMISSIONS,
-    # ---- NL2SQL セキュリティ: 権限管理・業務プロファイル利用権限 ----
+    # ---- セキュリティ設定: 権限管理・業務プロファイル利用権限 ----
     ("GET", "/security/permissions"): _SECURITY_PERMISSIONS,
     ("GET", "/security/profile-access/profiles"): _SECURITY_PERMISSIONS,
-    # ---- NL2SQL セキュリティ: Deep Data Security ----
+    # ---- セキュリティ設定: Deep Data Security ----
     ("PATCH", "/security/deepsec/config"): _SECURITY_DEEPSEC,
     ("POST", "/security/deepsec/config/sync-password"): _SECURITY_DEEPSEC,
     ("GET", "/security/deepsec/data-entitlements"): _SECURITY_DEEPSEC,
@@ -715,8 +724,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/start"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/adb/stop"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/password/reveal"): _SETTINGS_DATABASE,
-    ("GET", "/settings/database/select-ai-credential"): _SETTINGS_DATABASE,
-    ("POST", "/settings/database/select-ai-credential"): _SETTINGS_DATABASE,
+    # Select AI Credential は運用設定の専用の画面（#658）。
+    ("GET", "/settings/database/select-ai-credential"): _SETTINGS_SELECT_AI_CREDENTIAL,
+    ("POST", "/settings/database/select-ai-credential"): _SETTINGS_SELECT_AI_CREDENTIAL,
     ("POST", "/settings/database/test"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/wallet"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/wallet/download"): _SETTINGS_DATABASE,

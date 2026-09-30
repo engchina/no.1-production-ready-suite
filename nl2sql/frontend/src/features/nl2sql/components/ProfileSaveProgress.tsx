@@ -66,7 +66,8 @@ function credentialSettingsHref(job: ProfileSyncJobData | null) {
   if (job?.job_id) returnParams.set("syncJobId", job.job_id);
   const returnTo = `${APP_ROUTES.profiles}?${returnParams.toString()}`;
   const settingsParams = new URLSearchParams({ returnTo });
-  return `${APP_ROUTES.settingsDatabase}?${settingsParams.toString()}#select-ai-credential`;
+  // Select AI Credential は運用設定の専用の画面（#658）。
+  return `${APP_ROUTES.settingsSelectAiCredential}?${settingsParams.toString()}`;
 }
 
 function AgentAssetDetails({ result }: { result: AssetRefreshData }) {

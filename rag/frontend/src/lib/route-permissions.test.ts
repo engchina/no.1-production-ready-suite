@@ -54,18 +54,27 @@ describe("権限コードの対応表", () => {
       APP_ROUTES.businessViews,
     ]);
     expect(hrefs("nav.section.improve")).toEqual([APP_ROUTES.evaluation, APP_ROUTES.feedback]);
-    // NL2SQL と同じ位置: 検索・回答設定（準備）の後、RAG セキュリティの前。
+    // NL2SQL と同じ位置: 検索・回答設定（準備）の後、セキュリティ設定の前。
     const keys = NAV_SECTIONS.map((section) => section.titleKey);
     expect(keys.indexOf("nav.section.improve")).toBe(keys.indexOf("nav.section.pipeline") + 1);
     expect(keys.indexOf("nav.section.security")).toBe(keys.indexOf("nav.section.improve") + 1);
   });
 
-  it("ナビの並びは NL2SQL と同じ（RAG セキュリティ → 運用設定 → ユーザーとロール → システム設定）", () => {
-    expect(NAV_SECTIONS.map((section) => section.titleKey).slice(-4)).toEqual([
+  // Issue 658: 下部の並びとセクション名を 3 製品でそろえた（Issue 番号は hex 色の lint に掛かるので名前に書かない）。
+  it("ナビの下部は 3 製品で同じ（改善・運用 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定）", () => {
+    expect(NAV_SECTIONS.map((section) => section.titleKey).slice(-5)).toEqual([
+      "nav.section.improve",
       "nav.section.security",
-      "nav.section.operations",
       "nav.section.userRoles",
+      "nav.section.operations",
       "nav.section.settings",
+    ]);
+    // システムテーブルは NL2SQL と同じく運用設定の先頭（#658）。
+    const operations = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.operations");
+    expect(operations?.items.map((item) => [item.href, item.permission])).toEqual([
+      [APP_ROUTES.settingsSystemTables, MENU_PERMISSIONS.settingsSystemTables],
+      [APP_ROUTES.settingsHuggingface, MENU_PERMISSIONS.settingsHuggingface],
+      [APP_ROUTES.settingsServices, MENU_PERMISSIONS.settingsServices],
     ]);
     const security = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.security");
     expect(security?.items.map((item) => item.href)).toEqual([APP_ROUTES.securityPermissions]);
@@ -74,6 +83,14 @@ describe("権限コードの対応表", () => {
       [APP_ROUTES.securityUsers, MENU_PERMISSIONS.securityUsers],
       [APP_ROUTES.securityRoles, MENU_PERMISSIONS.securityRoles],
     ]);
+  });
+});
+
+describe("ナビのアイコン", () => {
+  // Issue 658: 3 製品で同じ機能は同じアイコン、違う機能は違うアイコン。
+  it("機能ごとに違うアイコンを使う（同じアイコンを 2 つの項目に使わない）", () => {
+    const items = NAV_SECTIONS.flatMap((section) => section.items);
+    expect(new Set(items.map((item) => item.icon)).size).toBe(items.length);
   });
 });
 

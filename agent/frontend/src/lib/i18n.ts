@@ -44,7 +44,7 @@ const agentJa = {
   "nav.settingsRuntimeSnapshot": "Control Plane バックアップ",
 
   // 認証と権限（#215）。ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品が持つ。
-  "nav.section.security": "Agent セキュリティ",
+  "nav.section.security": "セキュリティ設定",
   "nav.section.userRoles": "ユーザーとロール",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",

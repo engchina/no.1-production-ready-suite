@@ -1,25 +1,26 @@
 import {
-  FlaskConical,
-  FileSearch,
-  HardDriveDownload,
-  History,
-  FileStack,
-  LockKeyhole,
-  Library,
-  MessagesSquare,
-  MessageSquareHeart,
-  LayoutGrid,
-  Boxes,
+  BriefcaseBusiness,
   ClipboardCheck,
-  Plug,
+  FileCog,
+  FileSearch,
+  FileStack,
+  FlaskConical,
+  HardDriveDownload,
+  Layers3,
+  LayoutGrid,
+  Library,
+  LockKeyhole,
+  MessagesSquare,
+  NotebookPen,
+  ScanText,
   Scissors,
   Search,
-  Shuffle,
   Server,
-  Share2,
   ShieldAlert,
-  UserCog,
+  TableProperties,
+  ThumbsUp,
   Upload,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -71,7 +72,7 @@ const USER_ROLE_MENU_PERMISSIONS = {
 
 /**
  * RAG コンソールのサイドナビ構成。並び方は NL2SQL と同じ
- * （製品のセクション → 製品固有のセキュリティ → 運用設定 → 共通のユーザーとロール → 共通のシステム設定）。
+ * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 → 共通のシステム設定。#658）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
@@ -99,7 +100,7 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.businessViews,
         labelKey: "nav.businessViews",
         sidebarLabelKey: "nav.businessViews.sidebar",
-        icon: UserCog,
+        icon: BriefcaseBusiness,
         permission: MENU_PERMISSIONS.businessViews,
       },
     ],
@@ -119,14 +120,14 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.settingsPreprocess,
         labelKey: "nav.settingsPreprocess",
         sidebarLabelKey: "nav.settingsPreprocess.sidebar",
-        icon: Shuffle,
+        icon: FileCog,
         permission: MENU_PERMISSIONS.settingsPreprocess,
       },
       {
         href: APP_ROUTES.settingsParserAdapters,
         labelKey: "nav.settingsParserAdapters",
         sidebarLabelKey: "nav.settingsParserAdapters.sidebar",
-        icon: Plug,
+        icon: ScanText,
         permission: MENU_PERMISSIONS.settingsParserAdapters,
       },
       {
@@ -140,13 +141,13 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.settingsVectorIndex,
         labelKey: "nav.settingsVectorIndex",
         sidebarLabelKey: "nav.settingsVectorIndex.sidebar",
-        icon: Boxes,
+        icon: Layers3,
         permission: MENU_PERMISSIONS.settingsVectorIndex,
       },
       {
         href: APP_ROUTES.settingsGraph,
         labelKey: "nav.settingsGraph",
-        icon: Share2,
+        icon: Waypoints,
         permission: MENU_PERMISSIONS.settingsGraph,
       },
       {
@@ -160,7 +161,7 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.settingsPrompts,
         labelKey: "nav.settingsPrompts",
         sidebarLabelKey: "nav.settingsPrompts.sidebar",
-        icon: History,
+        icon: NotebookPen,
         permission: MENU_PERMISSIONS.settingsPrompts,
       },
       {
@@ -181,11 +182,11 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     // 回答の品質を確かめて直す画面。NL2SQL の「改善・運用」（nav.section.improve）と同じ名前・同じ位置
-    // （利用 → 準備 → 改善 → セキュリティ → 運用設定）にする（#409）。
+    // （利用 → 準備 → 改善 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定）にする（#409 / #658）。
     titleKey: "nav.section.improve",
     items: [
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical, permission: MENU_PERMISSIONS.evaluation },
-      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: MessageSquareHeart, permission: MENU_PERMISSIONS.feedback },
+      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
     ],
   },
   {
@@ -201,9 +202,28 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // RAG 固有の運用設定（モデルの取得先、parser などのサービスの起動・停止）。
+    // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
+    titleKey: "nav.section.userRoles",
+    // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ RAG の型へそろえる
+    // （実体は同じ lucide-react のコンポーネント）。
+    items: USER_ROLE_NAV_ITEMS.map((item) => ({
+      ...item,
+      icon: item.icon as LucideIcon,
+      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+    })),
+  },
+  {
+    // RAG 固有の運用設定（システムテーブル、モデルの取得先、parser などのサービスの起動・停止）。
+    // システムテーブルは NL2SQL と同じく先頭に置く（#658）。
     titleKey: "nav.section.operations",
     items: [
+      {
+        href: APP_ROUTES.settingsSystemTables,
+        labelKey: "nav.settingsSystemTables",
+        sidebarLabelKey: "nav.settingsSystemTables.sidebar",
+        icon: TableProperties,
+        permission: MENU_PERMISSIONS.settingsSystemTables,
+      },
       {
         href: APP_ROUTES.settingsHuggingface,
         labelKey: "nav.settingsHuggingface",
@@ -219,17 +239,6 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.settingsServices,
       },
     ],
-  },
-  {
-    // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
-    titleKey: "nav.section.userRoles",
-    // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ RAG の型へそろえる
-    // （実体は同じ lucide-react のコンポーネント）。
-    items: USER_ROLE_NAV_ITEMS.map((item) => ({
-      ...item,
-      icon: item.icon as LucideIcon,
-      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
-    })),
   },
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。

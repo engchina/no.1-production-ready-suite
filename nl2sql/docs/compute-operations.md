@@ -68,7 +68,7 @@ Select AI region:
 - `NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED`
 - `NL2SQL_SELECT_AI_REGION=us-chicago-1`
 
-After deployment, open `システム設定 > データベース設定 > Select AI Credential`.
+After deployment, open `運用設定 > Select AI Credential`.
 The administrator explicitly creates `OCI_CRED` for the current Oracle schema
 from the server-side OCI config signing key. The private key is passed to
 `DBMS_CLOUD.CREATE_CREDENTIAL` only as an Oracle bind variable; Terraform,

@@ -135,7 +135,7 @@ ai-foundations-lab の検証との照合（#512）:
 
 - **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
-- **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
+- **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「運用設定 > システムテーブル」から、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`parent_text`）、検索用テキスト（`engine_search_text`）、metadata v4（`engine_metadata_json`）は子の metadata に持つ。
 - **回答の記録**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・回答フローの診断情報・持ち主 `user_id_hash`）。持ち主は回答を生成した利用者（監査 context の `user_id_hash`）で、migration `20260928_002_answer_record_owner` が列と index（`rag_answer_records_owner_idx`）を足す。既存の行（持ち主なし）は、同じ trace_id のチャットの回答（`rag_messages`）か検索の監査（`rag_search_audit`。監査を Oracle に保存している環境だけ）から利用者が 1 人に決まるものだけ持ち主を補い、補えなかった行は持ち主なしのまま SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが扱える（一般の利用者のチャットからは開けない）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。

@@ -57,7 +57,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サイドナビは Agent セキュリティ → 運用設定 → ユーザーとロール → システム設定の順に並べる (${viewport.name})`, async ({ page }) => {
+  test(`サイドナビはセキュリティ設定 → ユーザーとロール → 運用設定 → システム設定の順に並べる (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/appearance");
     // 375px ではナビがドロワー（#367）。開いてから並びを読む。
@@ -65,19 +65,19 @@ for (const viewport of [
     // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
     await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
 
-    // 並びは NL2SQL / RAG と同じ「… → 製品固有のセキュリティ → 運用設定 → ユーザーとロール → システム設定」（#87 / #215）。
+    // 並びは NL2SQL / RAG と同じ「… → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」（#87 / #215 / #658）。
     const sectionIds = await sidebar
       .locator('[id^="nav-section-nav-section-"]')
       .evaluateAll((elements) => elements.map((element) => element.id));
     expect(sectionIds).toEqual([
       "nav-section-nav-section-controlPlane",
       "nav-section-nav-section-security",
-      "nav-section-nav-section-operations",
       "nav-section-nav-section-userRoles",
+      "nav-section-nav-section-operations",
       "nav-section-nav-section-settings",
     ]);
 
-    // Agent セキュリティは権限管理、運用設定は Agent 固有の5項目、ユーザーとロール・システム設定は3製品共通。
+    // セキュリティ設定は権限管理、運用設定は Agent 固有の5項目、ユーザーとロール・システム設定は3製品共通。
     const security = sidebar.locator("#nav-section-nav-section-security");
     const operations = sidebar.locator("#nav-section-nav-section-operations");
     const userRoles = sidebar.locator("#nav-section-nav-section-userRoles");
@@ -99,6 +99,12 @@ for (const viewport of [
     for (const href of ["/settings/security/users", "/settings/security/roles"]) {
       await expect(userRoles.locator(`a[href="${href}"]`)).toHaveCount(1);
     }
+    await expect(sidebar.getByText("セキュリティ設定", { exact: true })).toBeVisible();
+    // 同じアイコンを 2 つの項目に使わない（機能ごとに違うアイコン。#658）。
+    const iconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
+      icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
+    );
+    expect(new Set(iconSignatures).size).toBe(iconSignatures.length);
     for (const href of [
       "/settings/oci",
       "/settings/upload-storage",

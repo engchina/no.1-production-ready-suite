@@ -32,6 +32,7 @@ export const APP_ROUTES = {
   settingsModel: SYSTEM_SETTINGS_PATHS.model,
   settingsDatabase: SYSTEM_SETTINGS_PATHS.database,
   settingsSystemTables: "/settings/system-tables",
+  settingsSelectAiCredential: "/settings/select-ai-credential",
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
   // ユーザー管理・ロール管理は3製品共通（platform の共有パッケージ。#206）。
   securityUsers: USER_ROLE_PATHS.users,

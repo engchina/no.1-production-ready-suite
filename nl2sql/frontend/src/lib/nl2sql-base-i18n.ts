@@ -67,6 +67,8 @@ export const ja = {
   "nav.settingsDatabase.sidebar": "データベース",
   "nav.settingsSystemTables": "システムテーブル管理",
   "nav.settingsSystemTables.sidebar": "システムテーブル",
+  "nav.settingsSelectAiCredential": "Select AI Credential 管理",
+  "nav.settingsSelectAiCredential.sidebar": "Select AI Credential",
   "command.count": "{count} 件",
 
   "settings.oci.subtitle": "OCI API キー認証情報を設定します。",
@@ -79,6 +81,8 @@ export const ja = {
   "settings.database.subtitle": "Oracle AI Database への接続を設定します。",
   "settings.systemTables.subtitle":
     "NL2SQL 内部 schema、migration、保存領域の状態を確認・初期化します。",
+  "settings.selectAiCredential.subtitle":
+    "Select AI（DBMS_CLOUD_AI）が OCI を呼び出すための Credential を、データベースに作成・更新します。",
   "settings.database.loading": "データベース設定を読み込んでいます。",
   "settings.database.selectAiCredential.title": "Select AI Credential",
   "settings.database.selectAiCredential.description":

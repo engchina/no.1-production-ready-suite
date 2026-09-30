@@ -46,23 +46,23 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     await expect(pipelineSection.getByText(removed, { exact: true })).toHaveCount(0);
   }
 
-  // セクションは NL2SQL と同じ並び方で「… → 検索・回答設定 → 改善・運用 → RAG セキュリティ → 運用設定 →
-  // ユーザーとロール → システム設定」の順に並ぶ（#80 / #214）。
+  // セクションは 3 製品で同じ並び方で「… → 検索・回答設定 → 改善・運用 → セキュリティ設定 →
+  // ユーザーとロール → 運用設定 → システム設定」の順に並ぶ（#80 / #214 / #658）。
   const sectionIds = await sidebar
     .locator('[id^="nav-section-nav-section-"]')
     .evaluateAll((elements) => elements.map((element) => element.id));
-  // 「改善・運用」（品質評価・フィードバック）は検索・回答設定の後、RAG セキュリティの前（#409）。
+  // 「改善・運用」（品質評価・フィードバック）は検索・回答設定の後、セキュリティ設定の前（#409）。
   expect(sectionIds.slice(-6)).toEqual([
     "nav-section-nav-section-pipeline",
     "nav-section-nav-section-improve",
     "nav-section-nav-section-security",
-    "nav-section-nav-section-operations",
     "nav-section-nav-section-userRoles",
+    "nav-section-nav-section-operations",
     "nav-section-nav-section-settings",
   ]);
 
-  // RAG セキュリティは権限管理だけ、ユーザーとロールは3製品共通の2項目を持つ。
-  await expect(sidebar.getByText("RAG セキュリティ", { exact: true })).toBeVisible();
+  // セキュリティ設定は権限管理だけ、ユーザーとロールは3製品共通の2項目を持つ。
+  await expect(sidebar.getByText("セキュリティ設定", { exact: true })).toBeVisible();
   await expect(sidebar.locator("#nav-section-nav-section-security").getByRole("link")).toHaveCount(1);
   const userRolesSection = sidebar.locator("#nav-section-nav-section-userRoles");
   await expect(userRolesSection.getByRole("link")).toHaveCount(2);
@@ -70,10 +70,11 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     await expect(userRolesSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // 運用設定は RAG 固有の項目だけを持つ。
+  // 運用設定は RAG 固有の項目だけを持ち、NL2SQL と同じくシステムテーブルが先頭（#658）。
   const operationsSection = sidebar.locator("#nav-section-nav-section-operations");
   await expect(sidebar.getByText("運用設定", { exact: true })).toBeVisible();
-  await expect(operationsSection.getByRole("link")).toHaveCount(2);
+  await expect(operationsSection.getByRole("link")).toHaveCount(3);
+  await expect(operationsSection.getByRole("link").first()).toHaveAccessibleName(/システムテーブル/);
   await expect(operationsSection.getByRole("link", { name: /HuggingFace/ })).toBeVisible();
   await expect(operationsSection.getByRole("link", { name: /サービス管理/ })).toBeVisible();
 

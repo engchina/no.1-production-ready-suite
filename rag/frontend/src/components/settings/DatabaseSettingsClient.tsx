@@ -1,14 +1,14 @@
 import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { CardErrorBoundary } from "@/components/CardErrorBoundary";
-import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import { ApiError, api } from "@/lib/api";
 import { draftGuardMessages } from "@/lib/leave-guard";
-import { t } from "@/lib/i18n";
 import { queryKeys } from "@/lib/queries";
 
-/** データベース設定。画面の実体は platform の共有パッケージ（#108）。 */
+/**
+ * データベース設定。画面の実体は platform の共有パッケージ（#108）。
+ * システムテーブルは運用設定の専用の画面（`/settings/system-tables`。#658）。
+ */
 export function DatabaseSettingsClient() {
   const queryClient = useQueryClient();
   return (
@@ -19,11 +19,6 @@ export function DatabaseSettingsClient() {
       onDatabaseChanged={async () => {
         await queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });
       }}
-    >
-      {/* カードごとに描画例外を閉じ込め、1 枚の失敗で他カードが消えないようにする(#67)。 */}
-      <CardErrorBoundary label={t("settings.database.systemTables.title")}>
-        <SystemTablesCard />
-      </CardErrorBoundary>
-    </DatabaseSettingsPage>
+    />
   );
 }

@@ -978,3 +978,24 @@ def test_delete_orphaned_rows_rejects_unknown_and_busy() -> None:
         manager.delete_orphaned_rows(
             constraint_name="RAG_CHUNK_SETS_DOCUMENT_FK", expected_orphan_rows=0
         )
+
+
+def test_status_lists_every_managed_object_with_the_summary_counts() -> None:
+    """詳細の一覧（objects）は全管理 object で、概要の object の件数と一致する（#658）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+
+    status = manager.status()
+    objects = status["objects"]
+
+    assert [(item["name"], item["object_type"]) for item in objects] == list(MANAGED_OBJECTS)
+    assert len(objects) == status["expected_object_count"]
+    assert sum(item["exists"] for item in objects) == status["existing_object_count"]
+    # テーブル以外（索引・Oracle Text の設定）は行数・統計日時を持たない。
+    assert all(
+        item["estimated_rows"] is None and item["last_analyzed_at"] is None
+        for item in objects
+        if item["object_type"] != "TABLE"
+    )
+    assert {item["object_type"] for item in objects} >= {"TABLE", "INDEX", "TEXT_PREFERENCE"}

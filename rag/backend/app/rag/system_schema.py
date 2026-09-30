@@ -25,6 +25,7 @@ from pr_system_settings.system_schema import (
     SystemSchemaStatus,
     bind_list,
     foreign_keys_from_create_table,
+    iso_timestamp,
     oracle_error_code,
 )
 from pr_system_settings.system_schema import (
@@ -462,6 +463,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             if applied.get(migration.name) != migration.checksum
         ]
         foreign_keys = self._foreign_key_drift(connection)
+        table_metadata = self._load_table_metadata(connection, objects)
         status = classify_system_schema_status(
             set(objects),
             applied,
@@ -493,9 +495,35 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             # 既存の表に無い FK（更新で足す）と、既存の行を検査していない FK の孤立した行（#505）。
             # 削除規則が正本と違う FK と、無効化された FK（更新で直す。#511）。
             **foreign_keys.status_fields(),
-            "tables": self._load_table_metadata(connection, objects),
+            "tables": table_metadata,
+            # 全管理 object（テーブル・索引・Oracle Text の設定）。詳細の一覧を概要の
+            # 「存在オブジェクト / 必須オブジェクト」と同じ件数にそろえる（NL2SQL と同じ。#658）。
+            "objects": self._build_object_metadata(objects, table_metadata),
             "operation_state": self._operation_payload(connection, objects),
         }
+
+    @staticmethod
+    def _build_object_metadata(
+        objects: dict[tuple[str, str], Any],
+        table_metadata: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """USER_OBJECTS の snapshot とテーブルの統計を、全管理 object の行へ展開する。"""
+
+        tables_by_name = {str(item["name"]): item for item in table_metadata}
+        result: list[dict[str, Any]] = []
+        for name, object_type in MANAGED_OBJECTS:
+            table = tables_by_name.get(name) if object_type == "TABLE" else None
+            result.append(
+                {
+                    "name": name,
+                    "object_type": object_type,
+                    "exists": (name, object_type) in objects,
+                    "estimated_rows": table.get("estimated_rows") if table else None,
+                    "created_at": iso_timestamp(objects.get((name, object_type))),
+                    "last_analyzed_at": table.get("last_analyzed_at") if table else None,
+                }
+            )
+        return result
 
     def _load_objects(self, connection: Any) -> dict[tuple[str, str], Any]:
         inspected = tuple(dict.fromkeys((*MANAGED_OBJECTS, *RETIRED_MANAGED_OBJECTS)))

@@ -109,11 +109,13 @@ export function Sidebar({
           aria-hidden={collapsed}
           title={title.full}
         >
-          {/* 見出しは 14px。16px にすると長いブランド名が折りたたみボタンに重なる。 */}
-          <span className="block truncate whitespace-nowrap text-sm font-bold leading-5">
+          {/* 見出しは 14px。16px にすると長いブランド名が折りたたみボタンに重なる。
+              truncate は行の高さで切り取るため、行の高さは Noto Sans JP の字面（約 1.45em）以上にし、
+              g / y の下端を切らない（#658）。 */}
+          <span className="block truncate whitespace-nowrap text-sm font-bold leading-6">
             {title.line1}
           </span>
-          <span className="block truncate whitespace-nowrap text-xs font-semibold leading-4 text-fg-muted">
+          <span className="block truncate whitespace-nowrap text-xs font-semibold leading-5 text-fg-muted">
             {title.line2}
           </span>
         </div>
@@ -263,7 +265,8 @@ function NavRowContent({ icon: Icon, label, collapsed, active }: { icon: LucideI
       {/* 左アクセントバー: 現在地を背景色だけに頼らず位置でも示す（color-not-only）。 */}
       {active ? <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg" aria-hidden /> : null}
       <Icon className="shrink-0" size={20} aria-hidden />
-      <span className={cn("sidebar-reveal min-w-0 truncate whitespace-nowrap leading-5", collapsed && "w-0")} aria-hidden={collapsed}>
+      {/* 行の高さは字面より高くする（leading-5 では「HuggingFace」の g の下端が切れた。#658）。 */}
+      <span className={cn("sidebar-reveal min-w-0 truncate whitespace-nowrap leading-6", collapsed && "w-0")} aria-hidden={collapsed}>
         {label}
       </span>
     </>
