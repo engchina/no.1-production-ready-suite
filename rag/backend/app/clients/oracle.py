@@ -2410,8 +2410,13 @@ class OracleClient:
             "evaluation_input_json",
             "evaluation_json",
         ):
-            if isinstance(row.get(key), str):
-                row[key] = json.loads(str(row[key]))
+            value = row.get(key)
+            if isinstance(value, str):
+                row[key] = json.loads(value)
+            elif value is not None:
+                # Oracle の JSON 列は数値を Decimal で返す。評価の入力は json.dumps へ渡すので
+                # int / float に戻す（#678）。
+                row[key] = json.loads(_json_dumps(value))
         return row
 
     async def append_query_history(self, record: Mapping[str, object]) -> None:

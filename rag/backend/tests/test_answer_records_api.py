@@ -1,5 +1,6 @@
 """保存済み回答の一覧・詳細 API。"""
 
+import json
 import threading
 import time
 from datetime import UTC, datetime
@@ -282,3 +283,33 @@ async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
         assert row is not None and row["evaluation_json"] is None
     finally:
         await oracle.delete_answer_record(trace_id)
+
+
+@pytest.mark.anyio
+async def test_get_answer_record_turns_oracle_json_decimals_into_numbers() -> None:
+    """Oracle の JSON 列の Decimal を int / float に戻す。評価の入力は json.dumps へ渡す(#678)。"""
+    from decimal import Decimal
+
+    from app.clients.oracle import OracleClient
+
+    oracle = OracleClient.__new__(OracleClient)
+
+    async def fetch_one(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "trace_id": "t",
+            "evaluation_input_json": {
+                "evidence_items": [{"score": Decimal("0.5"), "rank": Decimal(2)}]
+            },
+            "evaluation_json": '{"status": "completed"}',
+            "citations_json": None,
+            "diagnostics_json": None,
+        }
+
+    oracle._fetch_one = fetch_one  # type: ignore[method-assign]
+    row = await oracle.get_answer_record("t")
+    assert row is not None
+    item = row["evaluation_input_json"]["evidence_items"][0]  # type: ignore[index]
+    assert item == {"score": 0.5, "rank": 2}
+    assert type(item["rank"]) is int
+    assert row["evaluation_json"] == {"status": "completed"}
+    json.dumps(row["evaluation_input_json"])
