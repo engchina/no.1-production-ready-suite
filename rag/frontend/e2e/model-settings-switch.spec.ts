@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 const SECONDARY_CONNECTION = {
@@ -10,7 +10,12 @@ const SECONDARY_CONNECTION = {
   clear_api_key: false,
 };
 
-function createModelSettings({ secondary = false }: { secondary?: boolean } = {}) {
+type ModelSettingsOptions = { secondary?: boolean; textModel?: string };
+
+function createModelSettings({
+  secondary = false,
+  textModel = "enterprise-llm",
+}: ModelSettingsOptions = {}) {
   return {
     settings: {
       enterprise_ai: {
@@ -39,7 +44,7 @@ function createModelSettings({ secondary = false }: { secondary?: boolean } = {}
             connection_id: secondary ? "secondary" : "primary",
           },
         ],
-        default_text_model_id: "enterprise-llm",
+        default_text_model_id: textModel,
         default_vision_model_id: "enterprise-vision",
         api_path: "/responses",
         vlm_input_mode: "files_api",
@@ -109,12 +114,19 @@ for (const viewport of [
       "true"
     );
     await expect(page.getByRole("heading", { name: "既定のモデル" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "既定の Vision モデル" })).toContainText(
-      "Vision LLM"
-    );
-    await expect(page.getByRole("combobox", { name: "既定のテキストモデル" })).toContainText(
-      "標準 LLM"
-    );
+    const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    await expect(visionDefault).toContainText("Vision LLM");
+    await expect(textDefault).toContainText("標準 LLM");
+    // 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順）で、2 つとも必須（#566）。
+    await expectTextBeforeVision(textDefault, visionDefault);
+    for (const [field, id] of [
+      [textDefault, "enterprise-default-text-model"],
+      [visionDefault, "enterprise-default-vision-model"],
+    ] as const) {
+      await expect(field).toHaveAttribute("aria-required", "true");
+      await expect(page.locator(`label[for="${id}"]`)).toContainText("必須");
+    }
     // 共有画面（NL2SQL と同じ。#103）は詳細項目・構成状態・プレビューを表示しない。
     await expect(page.getByLabel("API パス")).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "VLM 入力方式" })).toHaveCount(0);
@@ -223,7 +235,7 @@ for (const scheme of ["light", "dark"] as const) {
     const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
     await expect(vision).toContainText("Vision LLM");
 
-    // 選択肢: Vision は Vision 対応のモデルだけ、テキストは未選択 + 全モデル。
+    // 選択肢: Vision は Vision 対応のモデルだけ、テキストは全モデル（未選択に戻す選択肢はない。#566）。
     await vision.click();
     const visionOptions = page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option");
     await expect(visionOptions).toHaveCount(1);
@@ -231,9 +243,11 @@ for (const scheme of ["light", "dark"] as const) {
     await page.keyboard.press("Escape");
     await text.click();
     const textListbox = page.getByRole("listbox", { name: "既定のテキストモデル" });
-    await expect(textListbox.getByRole("option")).toHaveCount(3);
-    await textListbox.getByRole("option", { name: "既定の Vision モデルを使う" }).click();
-    await expect(text).toContainText("既定の Vision モデルを使う");
+    await expect(textListbox.getByRole("option")).toHaveCount(2);
+    await expect(textListbox.getByRole("option", { name: "既定の Vision モデルを使う" })).toHaveCount(0);
+    // テキストに Vision 対応のモデルを選んでもよい。
+    await textListbox.getByRole("option", { name: /Vision LLM/ }).click();
+    await expect(text).toContainText("Vision LLM");
 
     // 選んでいたモデルの Vision 対応を外すと、保存前にフィールドのエラーを出す。
     await page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }).click();
@@ -253,7 +267,58 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
     expect(patches[0]).toMatchObject({
-      enterprise_ai: { default_text_model_id: "", default_vision_model_id: "enterprise-vision" },
+      enterprise_ai: {
+        default_text_model_id: "enterprise-vision",
+        default_vision_model_id: "enterprise-vision",
+      },
+    });
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  // desktop（1440px）と mobile（375px）は playwright.config の project で回す。
+  test(`既定のテキストモデルが未設定なら欄の直下にエラーを出し、選ぶまで保存しない (#566, ${scheme})`, async ({
+    page,
+  }) => {
+    await page.addInitScript((theme) => {
+      window.localStorage.setItem(
+        "production-ready-rag.ui",
+        JSON.stringify({ state: { theme }, version: 0 })
+      );
+    }, scheme);
+    const patches: unknown[] = [];
+    // 以前の画面で「既定の Vision モデルを使う」のまま保存した既存環境。
+    await mockModelSettings(page, (payload) => patches.push(payload), { textModel: "" });
+    await page.goto("/settings/model");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(scheme === "dark");
+
+    const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    await expect(text).toContainText("モデルを選んでください");
+    await expect(text).toHaveAttribute("aria-invalid", "true");
+    await expectFieldErrorBelow(text, "既定のテキストモデルを選択してください。");
+
+    // 保存は送信せず、テキストの欄へフォーカスする。
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(text).toBeFocused();
+    expect(patches).toHaveLength(0);
+
+    await text.click();
+    await page
+      .getByRole("listbox", { name: "既定のテキストモデル" })
+      .getByRole("option", { name: /標準 LLM/ })
+      .click();
+    await expect(text).toHaveAttribute("aria-invalid", "false");
+    await expect(page.getByText("既定のテキストモデルを選択してください。")).toHaveCount(0);
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(patches[0]).toMatchObject({
+      enterprise_ai: {
+        default_text_model_id: "enterprise-llm",
+        default_vision_model_id: "enterprise-vision",
+      },
     });
     await expectNoPageOverflow(page);
   });
@@ -475,10 +540,10 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
 async function mockModelSettings(
   page: Page,
   onPatch?: (payload: unknown) => void,
-  { secondary = false }: { secondary?: boolean } = {}
+  options: ModelSettingsOptions = {}
 ) {
   // 保存した内容を次の取得で返す（接続の保存の後に登録モデルを保存する流れ。#533）。
-  let current = createModelSettings({ secondary });
+  let current = createModelSettings(options);
   await page.route("**/api/settings/model", async (route) => {
     const request = route.request();
     if (request.method() === "PATCH") {
@@ -523,6 +588,31 @@ async function mockModelSettings(
       },
     });
   });
+}
+
+/** テキストの欄が Vision の欄より先（同じ行なら左、縦積みなら上）にある（#566）。 */
+async function expectTextBeforeVision(text: Locator, vision: Locator) {
+  const textBox = await text.boundingBox();
+  const visionBox = await vision.boundingBox();
+  expect(textBox).not.toBeNull();
+  expect(visionBox).not.toBeNull();
+  const sameRow = Math.abs(textBox!.y - visionBox!.y) < 1;
+  expect(sameRow ? textBox!.x < visionBox!.x : textBox!.y < visionBox!.y).toBe(true);
+}
+
+/** 欄の直下（aria-describedby で結ばれた FieldError）にエラーが出ている。 */
+async function expectFieldErrorBelow(field: Locator, message: string) {
+  const describedBy = (await field.getAttribute("aria-describedby")) ?? "";
+  const errorId = describedBy.split(" ").find((id) => id.endsWith("-error"));
+  expect(errorId).toBeTruthy();
+  const error = field.page().locator(`[id="${errorId}"]`);
+  await expect(error).toHaveText(message);
+  const fieldBox = await field.boundingBox();
+  const errorBox = await error.boundingBox();
+  expect(fieldBox).not.toBeNull();
+  expect(errorBox).not.toBeNull();
+  expect(errorBox!.y).toBeGreaterThanOrEqual(fieldBox!.y + fieldBox!.height - 1);
+  expect(Math.abs(errorBox!.x - fieldBox!.x)).toBeLessThan(1);
 }
 
 async function expectActionInsideCard(

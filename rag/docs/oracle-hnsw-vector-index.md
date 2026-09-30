@@ -124,14 +124,15 @@ RAG の主な失敗は、検索が少し遅いことよりも、重要な根拠�
 
 この調整を UI から選べるよう、**Vector Index アダプター(`rag_vector_index_profile`)** に束ねる。`app/rag/vector_index_adapter.py` が profile を解決し、検索時 target accuracy を runtime 即時に切り替える(`GET/PATCH /api/settings/vector-index` と専用設定画面)。
 
-| profile | 検索時 target accuracy | 推奨 HNSW ビルド(参考表示) | 索引再作成 |
-|---|---|---|---|
-| `balanced`(既定) | `RAG_ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(現行) | 不要 |
-| `accurate` | 98 | NEIGHBORS 48 / EFCONSTRUCTION 800 / COSINE | 要 |
-| `fast` | 85 | NEIGHBORS 16 / EFCONSTRUCTION 300 / COSINE | 要 |
+| profile | 検索時 target accuracy | 推奨 HNSW ビルド(参考表示) |
+|---|---|---|
+| `balanced`(既定) | `RAG_ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(初期 DDL) |
+| `accurate` | 98 | NEIGHBORS 48 / EFCONSTRUCTION 800 / COSINE |
+| `fast` | 85 | NEIGHBORS 16 / EFCONSTRUCTION 300 / COSINE |
 
 - 機能レバーは **検索時 target accuracy**(runtime 即時反映)。`balanced` は既存設定値を尊重し挙動不変。
-- 推奨ビルドパラメータは参考値で、適用には索引の再作成(再プロビジョニング)が必要(`requires_reprovision`)。本ドキュメントの推奨 DDL を `accurate` / `fast` のパラメータへ調整して再作成する。版管理された schema DDL artifact は自動変更しない。
+- 推奨ビルドパラメータは参考値で、適用には索引の再作成(再プロビジョニング)が必要。本ドキュメントの推奨 DDL を `accurate` / `fast` のパラメータへ調整して再作成する。版管理された schema DDL artifact は自動変更しない。
+- 再作成の要否は、backend が実際の索引の値(`v$vector_graph_index` の `num_neighbors` / `ef_construction`)を読んで推奨値と比べる(#562)。API の `index_status` は `match`(一致。再作成不要)/ `reprovision`(再作成が必要)/ `unknown`(確認できない)で、実際の値は `actual_neighbors` / `actual_efconstruction`。アプリのユーザーが V$ を読めない(権限なし)・索引がない・接続できないときは `unknown` になり、画面は再作成 SQL を出したまま「確認できない」と表示する。
 
 ### `NEIGHBORS 32`
 

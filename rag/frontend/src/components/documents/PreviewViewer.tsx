@@ -39,6 +39,7 @@ import {
   clampZoom,
   normalizeViewRotation,
   previewDpiFor,
+  previewHeightAspect,
   previewKeyAction,
   previewLayout,
   steppedZoom,
@@ -63,10 +64,34 @@ type Anchor = {
 };
 
 /**
+ * プレビューの高さの決め方（#559）。
+ *
+ * - `fill`: 親が与える高さに合わせる（引用のダイアログなど。ページは内部でスクロールする）。
+ * - `page`: 表示領域（ビューポート）の高さを、幅と文書のページの縦横比から決める。幅に合わせたときに
+ *   1 ページ全体が縦スクロールなしで入る（文書詳細）。ツールバーと強調の状態の行は、その上に足される。
+ */
+export type PreviewSizing = "fill" | "page";
+
+/**
+ * `page` のビューポートの高さ（#559）。CSS だけで決める（幅が変わっても JS の計測を待たずに追従し、
+ * ResizeObserver との往復で高さが揺れない）。
+ *
+ * - `100cqw` はビューア（`@container`）の内側の幅 = ビューポートの幅。ステージの左右・上下の余白（p-3 = 0.75rem × 2）を
+ *   引いて縦横比で割り、上下の余白を足し戻す。さらに 0.25rem の遊びを足し、幅の端数の丸めで 1px はみ出して
+ *   スクロールバーが出るのを防ぐ（余白はページの上下に等分されるので見えない）。
+ * - 下限 15rem: 横に極端に長いページ（パノラマ画像など）でも、ツールバーの操作と強調が見える高さを残す。
+ * - 上限 2 画面分（200dvh からペインの見出し・タブ・ツールバー・状態の行のおよそ 10rem を引く）: レシートのような
+ *   極端に縦長の画像でペインが際限なく伸びないようにする。上限にかかったときだけ、幅に合わせた表示で内部スクロールになる。
+ */
+const PAGE_SIZED_VIEWPORT_CLASS =
+  "flex-auto h-[calc((100cqw-1.5rem)/var(--preview-page-aspect)+1.75rem)] min-h-60 max-h-[calc(200dvh-10rem)]";
+
+/**
  * 文書のプレビュー（ページ画像）に、回転・拡大縮小・フィット・パン・ページ送りと bbox の強調を付ける（#349）。
  *
  * - 画像と強調を同じ層に置いて一緒に回転・拡大するので、強調は常に対応する位置に重なる。
- * - 高さは親に合わせる（親が 1 画面分の高さを与え、ページは内部でスクロールする）。
+ * - 高さは `sizing` で決める（`fill` は親に合わせ、`page` は 1 ページ全体が入る高さ。#559）。
+ *   どちらも拡大するとページは内部でスクロールし、ビューアの高さは変わらない。
  * - 倍率・回転は表示中の間だけ保持し、文書・レシピ・処理前後を切り替えると親の key で初期化する。
  */
 export function PreviewViewer({
@@ -75,6 +100,7 @@ export function PreviewViewer({
   focusPage = null,
   highlights = [],
   kind,
+  sizing = "fill",
   className,
 }: {
   pages: PreviewViewerPage[];
@@ -83,6 +109,7 @@ export function PreviewViewer({
   highlights?: PreviewHighlight[];
   /** image は画像ファイルそのもの（強調の基準寸法が無いときは画像の実寸 px を使う）。 */
   kind: "image" | "pdf";
+  sizing?: PreviewSizing;
   className?: string;
 }) {
   const hintId = useId();
@@ -134,6 +161,12 @@ export function PreviewViewer({
       : natural?.width && natural?.height
         ? natural.width / natural.height
         : null;
+
+  // `page` の高さに使う縦横比。文書で最も縦長のページ（画像は読み込み後の実寸）。分かるまでは A4 縦（#559）。
+  const heightAspect = useMemo(
+    () => previewHeightAspect(pages.map((item) => item.points ?? naturalSizes[item.pageNumber])),
+    [naturalSizes, pages]
+  );
 
   const stagePadding = useStagePadding(stageRef);
   const layout = viewportSize
@@ -204,7 +237,7 @@ export function PreviewViewer({
     viewport.scrollTop = next.top;
   }, [frameWidth, frameHeight]);
 
-  const scrollToHighlight = useCallback(() => {
+  const scrollToHighlight = useCallback((options: { revealInPage?: boolean } = {}) => {
     const viewport = viewportRef.current;
     const target = viewport?.querySelector<HTMLElement>("[data-highlight-tone='primary']");
     if (!viewport || !target) return;
@@ -213,6 +246,10 @@ export function PreviewViewer({
     // 強調の中心をビューポートの中央付近へ（rag_poc の scrollPaneToElement と同じ考え方）。
     viewport.scrollLeft += targetBox.left + targetBox.width / 2 - (viewportBox.left + viewportBox.width / 2);
     viewport.scrollTop += targetBox.top + targetBox.height / 2 - (viewportBox.top + viewportBox.height / 2);
+    // 「強調した位置へ移動」（ボタン・H）を明示したときだけ、画面の外にある強調をページごと最小の移動で見せる（#559）。
+    // `page` のビューアは 1 画面より高くなり、強調がページの下の方だと画面の外に出るため。
+    // chunk の選択などで自動で強調が変わるときはページを動かさない（右ペインの選択が画面から逃げないように）。
+    if (options.revealInPage) target.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, []);
 
   const hasLayout = layout != null;
@@ -326,7 +363,7 @@ export function PreviewViewer({
         goToPage(pageNumbers[pageNumbers.length - 1] ?? pageNumber);
         break;
       case "focus-highlight":
-        scrollToHighlight();
+        scrollToHighlight({ revealInPage: true });
         break;
     }
   }
@@ -377,8 +414,11 @@ export function PreviewViewer({
   return (
     <div
       data-testid="preview-viewer"
+      data-sizing={sizing}
       className={cn(
         "flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-surface",
+        // `page` はビューポートの高さを自分の幅（100cqw）から求めるため、ビューアを container にする。
+        sizing === "page" && "@container",
         className
       )}
     >
@@ -511,7 +551,7 @@ export function PreviewViewer({
               aria-label={t("preview.viewer.focusHighlight")}
               tooltip={`${t("preview.viewer.focusHighlight")} (H)`}
               disabled={rects.length === 0}
-              onClick={scrollToHighlight}
+              onClick={() => scrollToHighlight({ revealInPage: true })}
             />
           ) : null}
         </div>
@@ -521,7 +561,13 @@ export function PreviewViewer({
           className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface-sunken px-3 py-1 text-xs text-fg-muted"
           data-testid="preview-highlight-status"
         >
-          <span role="status" aria-live="polite">
+          {/* 文だけの行も、強調のあるページへのボタン（sm）が並ぶ行と同じ高さにする。
+              ページ送りでボタンが出入りしても、ビューアの高さが跳ねないように（#559）。 */}
+          <span
+            role="status"
+            aria-live="polite"
+            className="inline-flex min-h-[var(--button-height-sm)] items-center"
+          >
             {rects.length > 0
               ? t("preview.viewer.highlightStatus", { page: pageNumber, count: rects.length })
               : t("preview.viewer.highlightElsewhere")}
@@ -557,8 +603,14 @@ export function PreviewViewer({
         data-fit-mode={mode}
         data-rotation={rotation}
         data-page={pageNumber}
+        style={
+          sizing === "page"
+            ? ({ "--preview-page-aspect": String(heightAspect) } as CSSProperties)
+            : undefined
+        }
         className={cn(
-          "relative min-h-0 flex-1 overflow-auto bg-surface-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
+          "relative overflow-auto bg-surface-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
+          sizing === "page" ? PAGE_SIZED_VIEWPORT_CLASS : "min-h-0 flex-1",
           overflow && (dragging ? "cursor-grabbing select-none" : "cursor-grab")
         )}
         onKeyDown={onKeyDown}
@@ -567,6 +619,7 @@ export function PreviewViewer({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
+        {/* 余白 p-3 は PAGE_SIZED_VIEWPORT_CLASS の 1.5rem（上下・左右の合計）と合わせる。 */}
         <div ref={stageRef} className="flex min-h-full w-max min-w-full p-3">
           {layout && page ? (
             <div

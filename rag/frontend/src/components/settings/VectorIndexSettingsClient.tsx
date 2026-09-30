@@ -19,8 +19,10 @@ import { ErrorState } from "@/components/StateViews";
 import { SettingsPreviewCard } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
+  type VectorIndexBuildStatus,
   type VectorIndexProfileName,
   type VectorIndexProfileStatusData,
+  type VectorIndexSettingsData,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -110,7 +112,8 @@ export function VectorIndexSettingsClient() {
     );
   }
 
-  const showReprovision = requiresReprovision(selectedProfile);
+  // 再作成の要否は backend が実際の索引と比べた判定(#562)をそのまま使う。
+  const reprovision = reprovisionStatus(selectedProfile?.index_status);
 
   return (
     <PageBody wide>
@@ -175,7 +178,7 @@ export function VectorIndexSettingsClient() {
               })}
             </div>
           </div>
-          <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <dl className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <RuntimeFact
               label={t("settings.vectorIndex.targetAccuracy")}
               value={String(settings.target_accuracy)}
@@ -187,10 +190,12 @@ export function VectorIndexSettingsClient() {
               )} ${settings.efconstruction}`}
             />
             <RuntimeFact label={t("settings.vectorIndex.distance")} value={settings.distance} />
+            <RuntimeFact
+              label={t("settings.vectorIndex.currentIndex")}
+              value={currentIndexLabel(settings)}
+            />
           </dl>
-          {showReprovision ? (
-            <FormStatus tone="warning" message={t("settings.vectorIndex.reprovision")} />
-          ) : null}
+          {reprovision ? <FormStatus tone={reprovision.tone} message={t(reprovision.key)} /> : null}
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
               {dirty ? (
@@ -220,7 +225,7 @@ export function VectorIndexSettingsClient() {
           </div>
         </CardContent>
       </Card>
-      {settings.requires_reprovision && settings.reindex_sql ? (
+      {showReindexSql(settings) ? (
         <SettingsPreviewCard
           icon={Database}
           title={t("settings.vectorIndex.reindexSql.title")}
@@ -269,10 +274,28 @@ function orderedProfiles(
   return ordered.length ? ordered : profiles;
 }
 
-function requiresReprovision(profile: VectorIndexProfileStatusData | undefined) {
-  if (!profile) return false;
-  const balanced = PROFILE_ORDER[0];
-  return profile.name !== balanced;
+/** 選択中の検索精度の判定から、出す案内を決める。一致(match)なら何も出さない。 */
+export function reprovisionStatus(
+  status: VectorIndexBuildStatus | undefined
+): { tone: "warning" | "info"; key: I18nKey } | null {
+  if (status === "reprovision") return { tone: "warning", key: "settings.vectorIndex.reprovision" };
+  if (status === "unknown") return { tone: "info", key: "settings.vectorIndex.reprovisionUnknown" };
+  return null;
+}
+
+/** 保存済みの検索精度が実際の索引と一致するときは、再作成 SQL を出さない。 */
+export function showReindexSql(settings: VectorIndexSettingsData) {
+  return settings.index_status !== "match" && Boolean(settings.reindex_sql);
+}
+
+/** 現在の索引の値。確認できないときはその旨を出す。 */
+export function currentIndexLabel(settings: VectorIndexSettingsData) {
+  if (settings.actual_neighbors == null || settings.actual_efconstruction == null) {
+    return t("settings.vectorIndex.currentIndex.unknown");
+  }
+  return `${t("settings.vectorIndex.neighbors")} ${settings.actual_neighbors} / ${t(
+    "settings.vectorIndex.efconstruction"
+  )} ${settings.actual_efconstruction}`;
 }
 
 function profileLabel(name: VectorIndexProfileName) {

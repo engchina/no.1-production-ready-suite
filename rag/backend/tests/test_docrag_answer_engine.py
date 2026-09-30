@@ -61,7 +61,16 @@ class FakeOracle:
         ]
         self.classifications: dict[str, dict[str, object]] = {}
         self.classification_calls: list[list[str]] = []
+        self.first_page_contexts: dict[str, dict[str, object]] = {}
+        self.first_page_calls: list[list[str]] = []
         self.probes: list[dict[str, str]] = []
+        # 検索範囲の文書に保存済みの大分類(#553)。
+        self.large_categories: list[str] = []
+        self.large_category_calls: list[dict[str, str]] = []
+
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        self.large_category_calls.append(dict(filters))
+        return list(self.large_categories)
 
     async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
         self.probes.append(dict(filters))
@@ -76,6 +85,16 @@ class FakeOracle:
             document_id: self.classifications[document_id]
             for document_id in document_ids
             if document_id in self.classifications
+        }
+
+    async def chunk_set_first_page_contexts(
+        self, chunk_set_ids: list[str]
+    ) -> dict[str, dict[str, object]]:
+        self.first_page_calls.append(list(chunk_set_ids))
+        return {
+            chunk_set_id: self.first_page_contexts[chunk_set_id]
+            for chunk_set_id in chunk_set_ids
+            if chunk_set_id in self.first_page_contexts
         }
 
     async def hybrid_search(
@@ -883,10 +902,9 @@ async def test_docrag_rewrite_is_rechecked_by_guardrail(monkeypatch: pytest.Monk
 
 @pytest.fixture
 def business_profile(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """質問の業務名(business_domains)を取れる domain profile に差し替える。
+    """業務名の規則(business_patterns)を持つ domain profile に差し替える。
 
-    本製品の既定(DOCRAG_DOMAIN_PROFILE_FILE 未指定)では業務名の規則が空で、業務の絞り込みは
-    効かない。ここでは規則を持つ profile で、分類が渡れば絞り込みが効くことを確かめる。
+    質問の業務名は検索範囲の大分類の語の一覧から照合し、この規則は使わない(#553)ことを確かめる。
     """
     from docrag.profiles import load_profile
 
@@ -958,7 +976,10 @@ class TwoDocumentOracle(FakeOracle):
 
 
 async def _answer_two_documents(
-    monkeypatch: pytest.MonkeyPatch, oracle: TwoDocumentOracle, question: str
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: TwoDocumentOracle,
+    question: str,
+    filters: dict[str, str] | None = None,
 ) -> Any:
     import docrag.adapters.oci as docrag_oci
 
@@ -972,50 +993,152 @@ async def _answer_two_documents(
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
-    return await engine.run(SearchRequest(query=question))
+    return await engine.run(SearchRequest(query=question, filters=filters or {}))
 
 
+@pytest.mark.parametrize(
+    ("stored", "question"),
+    [
+        ("10_業務A", "業務Aの受注の登録方法は？"),
+        ("業務A", "業務Ａの受注の登録方法は？"),
+        ("10_業務Ａ", "業務Aで受注を登録する方法は？"),
+    ],
+    ids=["code-prefix", "full-width-question", "full-width-stored"],
+)
 async def test_docrag_keeps_only_candidates_of_named_business(
-    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+    monkeypatch: pytest.MonkeyPatch, stored: str, question: str
 ) -> None:
-    """質問が業務を名指ししたら、その業務の文書の候補だけが根拠に残る(#545)。"""
+    """質問が検索範囲の大分類を名指ししたら、その業務の文書の候補だけが根拠に残る(#545 / #553)。
+
+    番号の接頭辞・全角半角の違いは #547 の正規化で吸収する。
+    """
     oracle = TwoDocumentOracle()
     oracle.classifications = {
-        "doc-a": {"large_category": "10_業務A"},
+        "doc-a": {"large_category": stored},
         "doc-b": {"large_category": "20_業務B"},
     }
+    oracle.large_categories = [stored, "20_業務B"]
 
-    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+    outcome = await _answer_two_documents(
+        monkeypatch, oracle, question, filters={"knowledge_base_id": "kb-1"}
+    )
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
     # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
     assert oracle.classification_calls == [["doc-a", "doc-b"]]
+    # 大分類の語の一覧は、検索と同じ範囲で 1 回の回答に 1 回だけ読む(#553)。
+    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1"}]
 
 
 @pytest.mark.parametrize(
-    ("classifications", "question"),
+    ("classifications", "large_categories", "question"),
     [
-        ({}, "業務Aの受注の登録方法は？"),
+        ({}, ["業務A", "業務B"], "業務Aの受注の登録方法は？"),
         (
             {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "業務Cの受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B", "業務C"],
             "業務Cの受注の登録方法は？",
         ),
     ],
-    ids=["no-classification", "no-matching-business"],
+    ids=["no-classification", "no-business-named", "out-of-scope", "no-matching-candidate"],
 )
 async def test_docrag_business_filter_keeps_candidates_without_match(
     monkeypatch: pytest.MonkeyPatch,
-    business_profile: Any,
     classifications: dict[str, dict[str, object]],
+    large_categories: list[str],
     question: str,
 ) -> None:
-    """分類の無い文書、名指しした業務の候補が無いときは、候補を落とさない(#545)。"""
+    """名指しが無い・範囲外の大分類・一致する候補が無いときは、候補を落とさない(#545 / #553)。"""
     oracle = TwoDocumentOracle()
     oracle.classifications = classifications
+    oracle.large_categories = large_categories
 
     outcome = await _answer_two_documents(monkeypatch, oracle, question)
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_docrag_business_names_do_not_come_from_domain_profile(
+    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+) -> None:
+    """domain profile の business_patterns は質問の業務名に使わない(#553)。
+
+    profile の規則が「業務A」に一致しても、検索範囲の大分類に無ければ絞らない。
+    """
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_docrag_answers_without_business_names_when_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧を読めなくても、絞らずに回答を続ける(#553)。"""
+
+    class FailingOracle(TwoDocumentOracle):
+        async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+            raise RuntimeError("db down")
+
+    oracle = FailingOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+@pytest.mark.parametrize(
+    ("question", "large_categories", "expected"),
+    [
+        ("業務Aの登録は？", ["10_業務A", "20_業務B"], ["10_業務A"]),
+        ("ｇｙｏｍｕ-Xの登録は？", ["gyomu-x"], ["gyomu-x"]),
+        ("業務Aと業務Bの違いは？", ["業務A", "業務B"], ["業務A", "業務B"]),
+        # 長い名前から照合し、「業務A」の中の「業務」は拾わない。
+        ("業務Aの登録は？", ["業務", "業務A"], ["業務A"]),
+        ("業務の登録は？", ["業務", "業務A"], ["業務"]),
+        # 同じ名前の保存値(番号の接頭辞の有無)はどちらも返す。
+        ("業務Aの登録は？", ["10_業務A", "業務A"], ["10_業務A", "業務A"]),
+        # 1 文字の名前は質問の別の語に偶然含まれるため照合しない。
+        ("Aの登録は？", ["A"], []),
+        ("登録は？", ["業務A"], []),
+    ],
+    ids=[
+        "code-prefix",
+        "width-and-case",
+        "two-businesses",
+        "longest-first",
+        "short-name-alone",
+        "same-label-values",
+        "single-char",
+        "no-name",
+    ],
+)
+def test_question_business_domains_matches_scope_vocabulary(
+    question: str, large_categories: list[str], expected: list[str]
+) -> None:
+    """質問の業務名は、検索範囲の大分類を #547 の正規化で照合して保存どおりの値で返す(#553)。"""
+    from app.rag.docrag_answer import question_business_domains
+
+    assert question_business_domains(question, large_categories) == expected
 
 
 async def test_docrag_search_puts_document_classification_on_child_and_parent() -> None:
@@ -1041,10 +1164,177 @@ async def test_docrag_search_puts_document_classification_on_child_and_parent() 
     assert "業務A" not in child.retrieval_text
 
 
-def _inquiry(question: str) -> Any:
+FIRST_PAGE_TEXT = "受注管理規程 第3版 営業本部 2025年4月1日"
+
+
+def _first_page_context(text: str = FIRST_PAGE_TEXT) -> dict[str, object]:
+    return {
+        "page": 1,
+        "status": "available",
+        "text": text,
+        "engine": "docling",
+        "record_ids": ["docling-p1-1"],
+        "truncated": False,
+    }
+
+
+def _chunk_in_chunk_set(chunk: RetrievedChunk, *, page: int = 2) -> RetrievedChunk:
+    return chunk.model_copy(
+        update={
+            "metadata": {
+                **chunk.metadata,
+                "chunk_set_id": "cs-1",
+                "page_start": page,
+                "page_end": page,
+            }
+        }
+    )
+
+
+class RecordingEmbedGenAi(FakeGenAi):
+    def __init__(self) -> None:
+        self.embedded: list[str] = []
+
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        self.embedded.extend(texts)
+        return await super().embed(texts, input_type=input_type)
+
+
+async def test_docrag_answer_passes_first_page_context_as_document_background(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """chunk set の 1 ページ目の本文を「文書の背景」として回答の LLM に渡す(#557)。
+
+    ヒットした chunk set の分を 1 回の回答で 1 回だけ読み、検索の文には入れない。
+    """
+    import docrag.adapters.oci as docrag_oci
+
+    prompts: list[str] = []
+
+    def recording_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        prompts.append(prompt)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", recording_llm)
+    oracle = FakeOracle()
+    oracle.chunks = [_chunk_in_chunk_set(chunk) for chunk in oracle.chunks]
+    oracle.first_page_contexts = {"cs-1": _first_page_context()}
+    genai = RecordingEmbedGenAi()
+    engine = DocragAnswerEngine(
+        Settings(rag_answer_engine="docrag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in outcome.answer
+    assert oracle.first_page_calls == [["cs-1"]]
+    background = [prompt for prompt in prompts if FIRST_PAGE_TEXT in prompt]
+    assert background
+    assert all("First-page background" in prompt for prompt in background)
+    # 検索の文(embedding・全文検索の入力)には入れない。
+    assert genai.embedded
+    assert all(FIRST_PAGE_TEXT not in text for text in genai.embedded)
+
+
+async def test_docrag_search_puts_first_page_context_on_child_and_parent() -> None:
+    """子・親の chunk の document に first_page_context を載せ、検索用テキストには入れない(#557)。
+
+    #557 より前に保存した chunk(自身が持つ値)は、そちらを使う。
+    """
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = FakeOracle()
+    legacy = _chunk_in_chunk_set(oracle.chunks[1])
+    legacy_metadata = json.loads(str(legacy.metadata["docrag_metadata_json"]))
+    legacy_metadata["document"] = {"first_page_context": _first_page_context("旧い表紙")}
+    oracle.chunks = [
+        _chunk_in_chunk_set(oracle.chunks[0]),
+        legacy.model_copy(
+            update={
+                "metadata": {
+                    **legacy.metadata,
+                    "docrag_metadata_json": json.dumps(legacy_metadata, ensure_ascii=False),
+                }
+            }
+        ),
+    ]
+    oracle.first_page_contexts = {"cs-1": _first_page_context()}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+
+    result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["受注"])
+    await engine._search(SearchRequest(query="q"), state, retrieval_queries=["受注の登録"])
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
+    assert documents["doc-1:c1"] == {"first_page_context": _first_page_context()}
+    assert documents["doc-1:chunk-docling-p000001"] == documents["doc-1:c1"]
+    assert documents["doc-1:c2"] == {"first_page_context": _first_page_context("旧い表紙")}
+    child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-1:c1")
+    assert FIRST_PAGE_TEXT not in child.retrieval_text
+    # CRAG の 2 回目の検索でも、読んだ chunk set は読み直さない。
+    assert oracle.first_page_calls == [["cs-1"]]
+
+
+async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 ページ目の本文はヒットした chunk set の IN で 1 回だけ読む(#557)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [
+            {"chunk_set_id": "cs-a", "first_page_context": json.dumps(_first_page_context())},
+            {"chunk_set_id": "cs-b", "first_page_context": None},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.chunk_set_first_page_contexts([]) == {}
+    assert calls == []
+    result = await client.chunk_set_first_page_contexts(["cs-a", "cs-b", "cs-a"])
+
+    assert result == {"cs-a": _first_page_context()}
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "FROM rag_chunk_sets cs" in statement
+    # 文書の参照範囲(tenant・許可された文書)で絞る。
+    assert "JOIN rag_documents d" in statement
+    chunk_set_binds = [
+        value for key, value in binds.items() if key.startswith("first_page_chunk_set")
+    ]
+    assert chunk_set_binds == ["cs-a", "cs-b"]
+
+
+def _inquiry(question: str, business_names: tuple[str, ...] = ()) -> Any:
+    """回答フローと同じく、業務名の照合(検索範囲の大分類。#553)を注入して質問を理解する。"""
+    from docrag.dependencies import AnswerDependencies, bind_dependencies
     from docrag.retrieval.inquiry_conditions import parse_inquiry_conditions
 
-    return parse_inquiry_conditions(question)
+    from app.rag.docrag_answer import question_business_domains
+
+    def unused(*args: object, **kwargs: object) -> Any:
+        raise AssertionError("質問の理解では I/O を呼ばない")
+
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        parse_text=unused,
+        parse_images=unused,
+        rerank=unused,
+        business_domains=lambda text: question_business_domains(text, business_names),
+    )
+    with bind_dependencies(dependencies):
+        return parse_inquiry_conditions(question)
 
 
 async def _search_filters(
@@ -1113,10 +1403,8 @@ def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
 
 
-async def test_business_match_channel_raises_candidate_of_named_business(
-    business_profile: Any,
-) -> None:
-    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546)。"""
+async def test_business_match_channel_raises_candidate_of_named_business() -> None:
+    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546 / #553)。"""
     from app.rag.docrag_answer import _SearchState
 
     oracle = TwoDocumentOracle()
@@ -1131,7 +1419,7 @@ async def test_business_match_channel_raises_candidate_of_named_business(
         SearchRequest(query=question),
         _SearchState(),
         retrieval_queries=[question],
-        inquiry_conditions=_inquiry(question),
+        inquiry_conditions=_inquiry(question, ("業務A", "業務B")),
     )
 
     assert _order(baseline) == ["doc-b:c1", "doc-a:c1"]
@@ -1233,3 +1521,300 @@ async def test_oracle_has_retrieval_chunks_uses_search_scope(
     assert "LOWER(d.file_name) LIKE :filter_file_name" in statement
     assert binds["filter_file_name"] == "%manual.pdf%"
     assert "kb-1" in binds.values()
+
+
+async def test_oracle_retrieval_large_categories_uses_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧は、検索と同じ条件の文書の大分類を DISTINCT で 1 回だけ読む(#553)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [{"large_category": "10_業務A"}, {"large_category": "業務B"}]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    result = await client.retrieval_large_categories({"knowledge_base_id": "kb-1"})
+
+    assert result == ["10_業務A", "業務B"]
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "SELECT DISTINCT" in statement
+    assert "JSON_VALUE(d.classification, '$.large_category')" in statement
+    assert "d.status = 'INDEXED'" in statement
+    assert "kb-1" in binds.values()
+
+
+# --- 画面目録の連携(#554) ---
+
+_SCREEN_FILE = "setting.pdf"
+_SCREEN_HEADING = "（２）帳票印字設定"
+
+
+def _screen_chunk(chunk_id: str, text: str, section_path: list[str]) -> RetrievedChunk:
+    chunk = _chunk(chunk_id, text, 1)
+    metadata = json.loads(str(chunk.metadata["docrag_metadata_json"]))
+    metadata["section_path"] = section_path
+    return chunk.model_copy(
+        update={
+            "document_id": "doc-setting",
+            "file_name": _SCREEN_FILE,
+            "metadata": {
+                **chunk.metadata,
+                "chunk_group_id": "setting-p1",
+                "docrag_parent_text": text,
+                "docrag_search_text": f"Source file: {_SCREEN_FILE}\nChild text: {text}",
+                "section_path": " > ".join(section_path),
+                "chunk_set_id": "cs-setting",
+                "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False),
+            },
+        }
+    )
+
+
+class ScreenOracle(FakeOracle):
+    """検索では出ない設定画面を、検索範囲の目録と画面の chunk として返すスタブ(#554)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.state = "1:100"
+        self.state_calls: list[dict[str, str]] = []
+        self.section_calls: list[dict[str, str]] = []
+        self.screen_calls: list[tuple[str, str]] = []
+        self.screen_rows = [
+            _screen_chunk(
+                "setting:c1",
+                "帳票の印字の有無は帳票印字設定で切り替えます。",
+                ["設定", _SCREEN_HEADING],
+            ),
+            # 見出しの部分一致だけの chunk(別の画面)は加えない。
+            _screen_chunk("setting:c2", "別画面の説明です。", ["設定", f"{_SCREEN_HEADING}の履歴"]),
+        ]
+
+    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
+        self.state_calls.append(dict(filters))
+        return self.state
+
+    async def retrieval_screen_sections(
+        self, filters: dict[str, str]
+    ) -> list[tuple[str, str, int]]:
+        self.section_calls.append(dict(filters))
+        return [
+            (_SCREEN_FILE, f"設定 > {_SCREEN_HEADING}", 3),
+            ("manual.pdf", "受注入力画面", 2),
+        ]
+
+    async def retrieval_screen_chunks(
+        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
+    ) -> list[RetrievedChunk]:
+        self.screen_calls.append((file_name, heading))
+        return list(self.screen_rows)
+
+
+def _screen_llm(calls: list[str]) -> Any:
+    from docrag.retrieval.screen_catalog import LinkedScreen, ScreenLinks
+
+    def parse(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        calls.append(schema.__name__)
+        if schema is ScreenLinks:
+            assert _SCREEN_HEADING in prompt  # 目録に検索結果に無い画面が載る
+            return ScreenLinks(
+                candidates=[LinkedScreen(document=_SCREEN_FILE, screen=_SCREEN_HEADING)]
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    return parse
+
+
+async def _answer_with_screens(
+    monkeypatch: pytest.MonkeyPatch, oracle: ScreenOracle, *, enabled: bool
+) -> tuple[Any, list[str]]:
+    import docrag.adapters.oci as docrag_oci
+    from docrag.generation import answering
+
+    from app.rag import docrag_answer
+
+    calls: list[str] = []
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _screen_llm(calls))
+    monkeypatch.setattr(docrag_answer, "_SCREEN_CATALOG_CACHE", {})
+    answering._SCREEN_LINK_CACHE.clear()
+    engine = DocragAnswerEngine(
+        Settings(
+            rag_docrag_query_strategy="simple_retrieval",
+            rag_docrag_answer_flow="standard_rag",
+            rag_docrag_rerank_enabled=False,
+            rag_docrag_screen_linking_enabled=enabled,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    outcome = await engine.run(
+        SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
+    )
+    return outcome, calls
+
+
+def _evidence_ids(outcome: Any) -> set[str]:
+    return {
+        child["chunk_id"]
+        for parent in outcome.diagnostics["evidence_tree"]
+        for child in parent["children"]
+    }
+
+
+async def test_screen_linking_disabled_does_not_call_llm_or_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """画面目録の連携が無効(既定)なら、画面の選択の LLM も目録の SQL も呼ばない(#554)。"""
+    oracle = ScreenOracle()
+
+    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=False)
+
+    assert "ScreenLinks" not in calls
+    assert oracle.state_calls == [] and oracle.section_calls == [] and oracle.screen_calls == []
+    assert "setting:c1" not in _evidence_ids(outcome)
+    assert all(step["name"] != "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_linking_adds_screen_missing_from_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有効なら、検索で出なかった画面が範囲の目録に載り、その画面の chunk が候補に加わる(#554)。"""
+    oracle = ScreenOracle()
+
+    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=True)
+
+    assert calls.count("ScreenLinks") == 1
+    # 目録と画面の chunk は検索と同じ範囲(filters)で読む。
+    assert oracle.section_calls == [{"knowledge_base_id": "kb-1"}]
+    assert oracle.screen_calls == [(_SCREEN_FILE, _SCREEN_HEADING)]
+    evidence = _evidence_ids(outcome)
+    assert "setting:c1" in evidence
+    assert "setting:c2" not in evidence
+    assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_chunks_carry_classification_and_first_page_context() -> None:
+    """画面目録から加える chunk にも分類と 1 ページ目の本文を載せる(1 回で読む。#554 / #557)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = ScreenOracle()
+    oracle.classifications = {"doc-setting": {"large_category": "業務A"}}
+    oracle.first_page_contexts = {"cs-setting": _first_page_context()}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+
+    stored = await engine._screen_chunks(
+        SearchRequest(query="q"), state, [(_SCREEN_FILE, _SCREEN_HEADING)], set()
+    )
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
+    expected = {
+        "classification": {"large_category": "業務A"},
+        "first_page_context": _first_page_context(),
+    }
+    assert documents["setting:c1"] == expected
+    assert documents["doc-setting:setting-p1"] == expected
+    assert "setting:c2" not in documents
+    assert oracle.classification_calls == [["doc-setting"]]
+    assert oracle.first_page_calls == [["cs-setting"]]
+    # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
+    assert "setting:c1" in state.chunks
+
+
+async def test_screen_catalog_is_cached_by_scope_and_index_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目録は(検索条件、索引の状態)ごとに cache し、再索引などで状態が変わったら作り直す(#554)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    monkeypatch.setattr("app.rag.docrag_answer._SCREEN_CATALOG_CACHE", {})
+    oracle = ScreenOracle()
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    request = SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"})
+
+    first = await engine._screen_catalog(request, _SearchState())
+    state = _SearchState()
+    await engine._screen_catalog(request, state)
+    await engine._screen_catalog(request, state)  # 同じ回答の 2 回目は状態も読まない
+    oracle.state = "2:200"
+    await engine._screen_catalog(request, _SearchState())
+
+    assert first == {_SCREEN_FILE: [_SCREEN_HEADING]}
+    assert len(oracle.state_calls) == 3
+    assert len(oracle.section_calls) == 2
+
+
+def test_build_docrag_settings_passes_screen_linking(tmp_path: Any) -> None:
+    """検索・回答設定の画面目録の連携を docrag の設定へ渡す(#554)。"""
+    from app.rag.docrag_answer import build_docrag_settings
+
+    disabled = build_docrag_settings(Settings(), output_dir=tmp_path)
+    enabled = build_docrag_settings(
+        Settings(rag_docrag_screen_linking_enabled=True), output_dir=tmp_path
+    )
+
+    assert disabled.screen_linking_enabled is False
+    assert enabled.screen_linking_enabled is True
+
+
+def test_business_view_overrides_screen_linking() -> None:
+    """業務ビューで画面目録の連携を上書きできる(#554)。"""
+    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(docrag_screen_linking_enabled=True),
+    )
+
+    settings, _ = resolve_business_view_settings(Settings(), config)
+
+    assert settings.rag_docrag_screen_linking_enabled is True
+    assert Settings().rag_docrag_screen_linking_enabled is False
+
+
+async def test_oracle_screen_catalog_queries_use_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目録・状態・画面の chunk の SQL は、検索と同じ条件(KB など)で読む(#554)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        if "GROUP BY" in statement:
+            return [{"file_name": "a.pdf", "section_path": "設定 > （１）画面", "chunk_count": 2}]
+        if "chunk_count" in statement:
+            return [{"chunk_count": 5, "chunk_hash": 123}]
+        return []
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+    filters = {"knowledge_base_id": "kb-1"}
+
+    assert await client.retrieval_scope_state(filters) == "5:123"
+    assert await client.retrieval_screen_sections(filters) == [("a.pdf", "設定 > （１）画面", 2)]
+    assert (
+        await client.retrieval_screen_chunks(
+            filters, file_name="a.pdf", heading="（１）画面", limit=7
+        )
+        == []
+    )
+    assert len(calls) == 3
+    for _statement, binds in calls:
+        assert "kb-1" in binds.values()
+    assert "GROUP BY d.file_name" in calls[1][0]
+    screen_sql, screen_binds = calls[2]
+    assert "d.file_name = :screen_file_name" in screen_sql
+    assert screen_binds["screen_heading"] == "（１）画面"
+    assert screen_binds["screen_limit"] == 7

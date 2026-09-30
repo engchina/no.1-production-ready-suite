@@ -21,6 +21,7 @@ from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.docrag_answer import evaluate_answer_record
+from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.generation_config import (
     apply_generation_profile,
     resolve_oracle_generation_settings,
@@ -39,7 +40,9 @@ from app.schemas.search import (
     AnswerRecordSummary,
     SearchRequest,
     SearchResponse,
+    parse_search_id_filter,
 )
+from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
 
 router = APIRouter()
@@ -509,6 +512,37 @@ def _sse_event(event: str, data: object) -> str:
     """SSE イベント文字列を生成する。"""
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+@router.get("/extraction-fields", response_model=ApiResponse[SearchExtractionFieldsData])
+async def list_search_extraction_fields(
+    business_view_ids: Annotated[str, Query(min_length=1, max_length=4000)],
+) -> ApiResponse[SearchExtractionFieldsData]:
+    """検索の絞り込みに使える項目を返す(#549)。
+
+    選んだ業務ビューの参照 KB のうち利用者が使える有効な KB の定義(KB に無ければ全体の既定)の
+    和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない業務ビューは 404。
+    """
+    oracle = OracleClient()
+    knowledge_base_id_sets: list[list[str]] = []
+    for business_view_id in parse_search_id_filter(business_view_ids):
+        view = await oracle.get_business_view(business_view_id)
+        if view is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"指定した業務ビューが見つかりません: {business_view_id}",
+            )
+        knowledge_base_id_sets.append(view.config.normalized_knowledge_base_ids())
+    # 利用者が使えない KB とアーカイブ済みの KB は Oracle の条件で除く。
+    field_sets = await oracle.list_knowledge_base_extraction_field_sets(
+        _merge_business_view_knowledge_base_ids(knowledge_base_id_sets)
+    )
+    fields = resolve_field_definitions(field_sets, load_field_schema().fields) if field_sets else []
+    return ApiResponse(
+        data=SearchExtractionFieldsData(
+            fields=[FieldDefinitionData.model_validate(field.model_dump()) for field in fields]
+        )
+    )
 
 
 # チャットが会話の回答を引き当てるときに一度に渡せる trace_id の上限。

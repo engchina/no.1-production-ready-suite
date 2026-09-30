@@ -46,7 +46,8 @@ def _permission(
 
 
 def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
-    return _permission(code, group, label, f"{label}を表示し、関連操作を利用できます。")
+    # 説明はナビの名前（label）と同じ用語で書く（#580）。
+    return _permission(code, group, label, f"「{label}」の画面を表示し、関連操作を利用できます。")
 
 
 # ---- メニュー権限（agent/frontend の nav-config.ts と同じ並び） ----
@@ -58,19 +59,19 @@ MENU_RUNS = "menu.runs"
 MENU_APPROVALS = "menu.approvals"
 MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
+MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_CONNECTION = "menu.settings_connection"
 MENU_SETTINGS_EXTERNAL_RAG = "menu.settings_external_rag"
 MENU_SETTINGS_EXTERNAL_NL2SQL = "menu.settings_external_nl2sql"
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
+MENU_SECURITY_USERS = "menu.security_users"
+MENU_SECURITY_ROLES = "menu.security_roles"
 MENU_SETTINGS_OCI = "menu.settings_oci"
 MENU_SETTINGS_UPLOAD_STORAGE = "menu.settings_upload_storage"
 MENU_SETTINGS_MODEL = "menu.settings_model"
 MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
-MENU_SECURITY_USERS = "menu.security_users"
-MENU_SECURITY_ROLES = "menu.security_roles"
-MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 
 # ---- capability（従来の 5 ロールに対応） ----
 
@@ -90,11 +91,14 @@ CAPABILITY_ROLES: dict[str, str] = {
 }
 ROLE_CAPABILITIES: dict[str, str] = {role: code for code, role in CAPABILITY_ROLES.items()}
 
+# グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
+# サイドナビの表示名）と同じにする（#567 / #580。一致は
+# tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_CONTROL_PLANE = "Control Plane"
-_GROUP_OPERATIONS = "運用設定"
-_GROUP_SETTINGS = "システム設定"
-_GROUP_USERS_ROLES = "ユーザーとロール"
 _GROUP_SECURITY = "Agent セキュリティ"
+_GROUP_OPERATIONS = "運用設定"
+_GROUP_USERS_ROLES = "ユーザーとロール"
+_GROUP_SETTINGS = "システム設定"
 _GROUP_CAPABILITIES = "実行・承認・管理の権限"
 
 _SYSTEM_SETTINGS_MENUS = (
@@ -124,12 +128,14 @@ _ADMIN_MENUS = (
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_AGENTS, _GROUP_CONTROL_PLANE, "業務 Agent"),
-    _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル"),
+    _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル (Skills)"),
     _menu_permission(MENU_RUNTIMES, _GROUP_CONTROL_PLANE, "Runtime"),
     _menu_permission(MENU_RUNS, _GROUP_CONTROL_PLANE, "Run"),
     _menu_permission(MENU_APPROVALS, _GROUP_CONTROL_PLANE, "承認・監査"),
     _menu_permission(MENU_AUDIT, _GROUP_CONTROL_PLANE, "監査"),
     _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
+    # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
+    _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     _menu_permission(MENU_SETTINGS_CONNECTION, _GROUP_OPERATIONS, "Agent 接続設定"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_RAG, _GROUP_OPERATIONS, "外部 RAG"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_NL2SQL, _GROUP_OPERATIONS, "外部 NL2SQL"),
@@ -137,10 +143,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(
         MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
     ),
-    # ユーザー管理・ロール管理は 3 製品共通の画面（#206）。権限管理は Agent 固有。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
-    _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),

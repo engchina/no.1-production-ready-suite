@@ -42,7 +42,8 @@ def _permission(
 
 
 def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
-    return _permission(code, group, label, f"{label}を表示し、関連操作を利用できます。")
+    # 説明はナビの名前（label）と同じ用語で書く（#580）。
+    return _permission(code, group, label, f"「{label}」の画面を表示し、関連操作を利用できます。")
 
 
 # ---- メニュー権限 ----
@@ -86,51 +87,55 @@ KNOWLEDGE_BASES_MANAGE = "rag.knowledge_bases.manage"
 FEEDBACK_MANAGE = "rag.feedback.manage"
 SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
 
+# グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
+# サイドナビの表示名）と同じにする（#567 / #580。一致は
+# tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_BUSINESS = "業務ビュー"
 _GROUP_INGESTION = "ナレッジ構築"
 _GROUP_PIPELINE = "検索・回答設定"
-_GROUP_OPERATIONS = "運用設定"
-_GROUP_SETTINGS = "システム設定"
-_GROUP_USERS_ROLES = "ユーザーとロール"
+_GROUP_IMPROVE = "改善・運用"
 _GROUP_SECURITY = "RAG セキュリティ"
+_GROUP_OPERATIONS = "運用設定"
+_GROUP_USERS_ROLES = "ユーザーとロール"
+_GROUP_SETTINGS = "システム設定"
 _GROUP_MANAGE = "管理権限"
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _menu_permission(MENU_SEARCH, _GROUP_BUSINESS, "RAG 検索"),
     _menu_permission(MENU_CHAT, _GROUP_BUSINESS, "チャット"),
-    _menu_permission(MENU_BUSINESS_VIEWS, _GROUP_BUSINESS, "業務ビュー"),
-    _menu_permission(MENU_EVALUATION, _GROUP_BUSINESS, "品質評価"),
-    _permission(
-        MENU_FEEDBACK,
-        _GROUP_BUSINESS,
-        "フィードバック",
-        "フィードバックの一覧・詳細を表示し、評価ケースを作成できます"
-        "（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
-        "見られるのは SYSTEM_ADMIN だけ）。",
-    ),
-    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
+    _menu_permission(MENU_SEARCH, _GROUP_BUSINESS, "RAG 検索"),
+    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
+    _menu_permission(MENU_BUSINESS_VIEWS, _GROUP_INGESTION, "業務ビュー"),
     _menu_permission(MENU_SETTINGS_PIPELINE, _GROUP_PIPELINE, "設定の概要"),
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
     _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
+    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
     _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
     _menu_permission(MENU_SETTINGS_GROUNDING, _GROUP_PIPELINE, "根拠確認"),
     _menu_permission(MENU_SETTINGS_GENERATION, _GROUP_PIPELINE, "回答スタイル"),
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
     _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
-    _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "品質評価の設定"),
-    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
+    _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "評価の基準"),
     _menu_permission(MENU_SETTINGS_AGENTIC, _GROUP_PIPELINE, "高度な検索"),
-    _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace 設定"),
-    _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス管理"),
-    # ユーザー管理・ロール管理は 3 製品共通の画面（#206）。権限管理は RAG 固有。
+    _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
+    _permission(
+        MENU_FEEDBACK,
+        _GROUP_IMPROVE,
+        "フィードバック",
+        "「フィードバック」の画面を表示し、フィードバックの一覧・詳細の表示と評価ケースの作成が"
+        "できます（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
+        "見られるのは SYSTEM_ADMIN だけ）。",
+    ),
+    # 権限管理は RAG 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
+    _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
+    _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace"),
+    _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス"),
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
-    _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
@@ -166,7 +171,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         SYSTEM_TABLES_MANAGE,
         _GROUP_MANAGE,
         "システムテーブル管理",
-        "RAG のシステムテーブルの初期化・全再作成ができます。",
+        "「データベース」の画面で、RAG のシステムテーブルの初期化・全再作成ができます。",
         implies=(MENU_SETTINGS_DATABASE,),
     ),
 )
@@ -315,6 +320,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", _KB): _KNOWLEDGE_BASE_READ,
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph"): _any(MENU_KNOWLEDGE_BASES),
+    # KB ごとの項目抽出の定義（#548）。
+    ("GET", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
+    ("PUT", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/archive"): _any(KNOWLEDGE_BASES_MANAGE),
     ("POST", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
     ("DELETE", f"{_KB}/documents/{{document_id}}"): _any(MENU_KNOWLEDGE_BASES),
@@ -351,6 +359,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
     # KB 詳細の検索テストもストリーム検索を使う。
     ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
+    # 検索の絞り込みに使える項目（業務ビューの KB の項目抽出の定義。#549）。
+    ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,
@@ -459,6 +469,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ),
     # 抽出項目の定義は文書解析の「解析後の処理」で編集する（#528）。
     ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    # 「標準の項目に戻す」（#556）。
+    ("DELETE", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),

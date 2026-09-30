@@ -1,0 +1,125 @@
+import type { ExtractionFieldDefinition, ExtractionFieldValueType } from "@/lib/api";
+
+/**
+ * 検索の「抽出項目の値で絞り込む」（#549）。backend の `filters.extraction_fields`
+ * （`app/schemas/search.py` の `ExtractionFieldCondition`）へ渡す条件を作る。
+ */
+
+/** 1 行で最大 2 条件（以上・以下）になるため、backend の上限（10 条件）に収まる行数にする。 */
+export const MAX_EXTRACTION_FIELD_FILTER_ROWS = 5;
+export const EXTRACTION_FIELD_FILTER_KEY = "extraction_fields";
+
+export type ExtractionFieldOperator = "eq" | "gte" | "lte";
+
+export interface ExtractionFieldCondition {
+  name: string;
+  value_type: ExtractionFieldValueType;
+  op: ExtractionFieldOperator;
+  value: string;
+}
+
+/** 編集中の 1 行。string / bool は `value`、number / date は `min`（以上）と `max`（以下）を使う。 */
+export interface ExtractionFieldFilterRow {
+  key: string;
+  name: string;
+  value: string;
+  min: string;
+  max: string;
+}
+
+export type ExtractionFieldFilterError =
+  | "fieldMissing"
+  | "fieldsUnavailable"
+  | "numberInvalid"
+  | "rangeInverted";
+
+let rowSequence = 0;
+
+export function newExtractionFieldFilterRow(): ExtractionFieldFilterRow {
+  rowSequence += 1;
+  // 作業状態として保存し再読込後も残るため、読み込み直しても重ならない key にする。
+  return { key: `efr-${Date.now().toString(36)}-${rowSequence}`, name: "", value: "", min: "", max: "" };
+}
+
+export function isExtractionFieldFilterRows(value: unknown): value is ExtractionFieldFilterRow[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (row) =>
+        typeof row === "object" &&
+        row !== null &&
+        ["key", "name", "value", "min", "max"].every(
+          (field) => typeof (row as Record<string, unknown>)[field] === "string"
+        )
+    )
+  );
+}
+
+/** 値が入っている行（項目を選び、値か範囲のどちらかがある）。 */
+export function isActiveExtractionFieldFilterRow(row: ExtractionFieldFilterRow): boolean {
+  return Boolean(row.name && (row.value.trim() || row.min.trim() || row.max.trim()));
+}
+
+function isNumber(value: string): boolean {
+  return value.trim() !== "" && Number.isFinite(Number(value.trim()));
+}
+
+/**
+ * 行を backend の条件にする。誤りのある行は条件に入れず、行の key ごとの誤りを返す。
+ * `fields` は選んだ業務ビューで使える項目（未取得なら undefined）。
+ */
+export function extractionFieldConditions(
+  rows: readonly ExtractionFieldFilterRow[],
+  fields: readonly ExtractionFieldDefinition[] | undefined
+): { conditions: ExtractionFieldCondition[]; errors: Record<string, ExtractionFieldFilterError> } {
+  const conditions: ExtractionFieldCondition[] = [];
+  const errors: Record<string, ExtractionFieldFilterError> = {};
+  for (const row of rows) {
+    if (!isActiveExtractionFieldFilterRow(row)) continue;
+    if (!fields) {
+      errors[row.key] = "fieldsUnavailable";
+      continue;
+    }
+    const field = fields.find((item) => item.name === row.name);
+    if (!field) {
+      errors[row.key] = "fieldMissing";
+      continue;
+    }
+    const base = { name: field.name, value_type: field.value_type };
+    if (field.value_type === "string" || field.value_type === "bool") {
+      if (row.value.trim()) conditions.push({ ...base, op: "eq", value: row.value.trim() });
+      continue;
+    }
+    const min = row.min.trim();
+    const max = row.max.trim();
+    if (field.value_type === "number" && ((min && !isNumber(min)) || (max && !isNumber(max)))) {
+      errors[row.key] = "numberInvalid";
+      continue;
+    }
+    const inverted =
+      min && max && (field.value_type === "number" ? Number(min) > Number(max) : min > max);
+    if (inverted) {
+      errors[row.key] = "rangeInverted";
+      continue;
+    }
+    if (min) conditions.push({ ...base, op: "gte", value: min });
+    if (max) conditions.push({ ...base, op: "lte", value: max });
+  }
+  return { conditions, errors };
+}
+
+/** `filters.extraction_fields` の値（条件が無ければ空文字）。 */
+export function extractionFieldFilterValue(conditions: readonly ExtractionFieldCondition[]): string {
+  return conditions.length ? JSON.stringify(conditions) : "";
+}
+
+/** 適用中の条件の表示用に `filters.extraction_fields` を読む（壊れた値は空）。 */
+export function parseExtractionFieldFilterValue(raw: string | undefined): ExtractionFieldCondition[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ExtractionFieldCondition[]) : [];
+  } catch {
+    return [];
+  }
+}

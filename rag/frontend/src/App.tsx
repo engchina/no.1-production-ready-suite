@@ -355,24 +355,9 @@ function KnowledgeBaseDetailRoute() {
   const { id } = useParams<{ id: string }>();
   if (!id) return <Navigate to={APP_ROUTES.knowledgeBases} replace />;
 
-  return (
-    <div>
-      <div className="border-b border-border bg-surface">
-        <PageBody wide className="py-4">
-        <Link
-          to={APP_ROUTES.knowledgeBases}
-          className="inline-flex items-center gap-1 text-sm text-fg-muted transition-colors hover:text-fg"
-        >
-          <ChevronLeft size={16} aria-hidden />
-          {t("knowledgeBases.detail.back")}
-        </Link>
-        </PageBody>
-      </div>
-      <PageBody wide>
-        <KnowledgeBaseDetailClient knowledgeBaseId={id} />
-      </PageBody>
-    </div>
-  );
+  // 見出し・パンくず・一覧へ戻る・保存は詳細の PageHeader が持つ（業務ビューと同じ構成。#555）。
+  // 対象が変わったら下書きと入力の状態を持ち越さない。
+  return <KnowledgeBaseDetailClient key={id} knowledgeBaseId={id} />;
 }
 
 function SettingsPipelineRoute() {

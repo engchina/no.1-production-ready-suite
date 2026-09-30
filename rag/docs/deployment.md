@@ -239,9 +239,15 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
+## 既存環境の更新手順（#566 既定のテキストモデルの必須化）
+
+#566 で「システム設定 › モデル」の既定のテキストモデルを必須にした（並びはテキスト → Vision）。既定のテキストモデルが未設定の環境は、
+「システム設定 › モデル」で既定のテキストモデルを選んで保存する（以前と同じ動きにするなら、既定の Vision モデルと同じモデル）。
+保存し直すまでは、従来どおり既定の Vision モデルを使う。詳細は [platform/README.md の「既存環境の更新手順（#566）」](../../platform/README.md#既存環境の更新手順566-既定のテキストモデルの必須化)を参照。
+
 ## 既存環境の更新手順（#499 既定のモデルの変数名）
 
-#499 で既定のモデルを「既定の Vision モデル」（必須）と「既定のテキストモデル」（任意。未設定なら既定の Vision モデル）の 2 つに分け、
+#499 で既定のモデルを「既定のテキストモデル」と「既定の Vision モデル」の 2 つに分け（#566 で 2 つとも必須にした）、
 共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_MODEL` / `_LLM_MODEL` / `_VLM_MODEL` を
 `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL` / `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL` に改名した（旧名は読まない）。
 `platform/.env` に既定のモデルを書いている環境は、backend と worker を止めてから
@@ -353,6 +359,40 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. migration の前でも画面は動く。レシピ行の無い文書は、一覧・詳細でレシピ1を仮の行として返し、最初の書き込み
    （設定の保存・処理の開始など）で行を作る。
 
+## 既存環境の更新手順（#556 項目抽出の標準の項目）
+
+項目抽出の全体の既定に、どの文書にも通じる標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を用意した。
+定義は `backend/app/rag/extraction_field_adapter.py` の `STANDARD_FIELD_DEFINITIONS`。
+
+- **標準の項目が有効になる条件**: 全体の既定の定義のファイル（`backend/extraction-fields.json`、`RAG_FIELD_SCHEMA_FILE` で
+  場所を変えている環境はそのファイル）が**無い**環境だけ。一度も「項目の定義を保存」していない環境が当たる。
+  項目抽出（`RAG_FIELD_EXTRACTION_ENABLED`、#537 から既定で有効）が有効なら、更新後の次の取込から
+  **文書ごとに OCI Enterprise AI の呼び出しが 1 回増える**。
+- 定義を保存したことのある環境（0 件で保存した場合を含む）は、ファイルがあるため何も変わらない。
+  ナレッジベースで項目を定義している文書も、今までどおりその定義を使う（KB に定義が無い文書だけが全体の既定を使う）。
+- 既存の文書の抽出値は変わらない。標準の項目で抽出するのは、次に解析（再処理）したときから。
+  以前に定義 0 件で取り込んだ文書は、どの定義で作ったかの記録が無いため「作り直しが必要」（#550）の印は出ない。
+  標準の項目で抽出し直したい文書は、文書のレシピから再処理する。
+- **標準の項目を使わない方法**（どれか 1 つ）:
+  - 項目抽出そのものを止める: `backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=false`、または「検索・回答設定 › 文書解析」の
+    「解析後の処理」で「メタデータ/項目抽出」を無効にして保存する。
+  - 項目抽出は有効のまま、全体の既定を空にする: 「抽出する項目の定義」ですべての項目を削除して「項目の定義を保存」する
+    （0 件の定義を保存したファイルができ、標準の項目は使わない。KB で定義した項目は今までどおり抽出する）。
+  - 自分の項目に置き換える: 項目を編集して保存する。
+- 保存した定義を消して標準の項目に戻すときは、同じ画面の「標準の項目に戻す」（`DELETE /api/settings/extraction-fields`）を使う
+  （定義のファイルを消す。以後は、その版の標準の項目を使う）。
+- データの移行（migration）と `.env` の変更は不要。
+
+## 既存環境の更新手順（#548 ナレッジベースごとの項目抽出の定義）
+
+項目抽出の項目の定義をナレッジベースごとに持てるようにした（KB の詳細の「抽出する項目」）。
+
+1. システムテーブルを更新する（migration `20260930_004_knowledge_base_extraction_fields`。`rag_knowledge_bases` に
+   `extraction_fields JSON` 列を追加するだけで、既存の行は NULL のまま）。NULL の KB は全体の既定の定義
+   （`extraction-fields.json`）を使うため、既存環境の抽出の挙動は変わらない。
+2. 更新するまで取込 worker は「システムテーブルの作成・更新が必要」のログを出して待ち、KB の「抽出する項目」の
+   読み書きは列が無いためエラーになる。backend を更新したら、システムテーブルを更新する。
+
 ## 既存環境の更新手順（#537 Vision と項目抽出を既定で有効にする）
 
 「図・画像を AI で読み取る（Vision）」（`RAG_VISION_ENABLED`）と「メタデータ/項目抽出」（`RAG_FIELD_EXTRACTION_ENABLED`）の
@@ -361,6 +401,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 - `backend/.env` で値を明示していない環境は、更新後に両方が有効になる。
   - Vision は、画像 1 枚ごとにモデル設定の既定の Vision モデルを呼ぶ。そのため、取込の時間と呼び出しが増える。
   - 項目抽出は、項目の定義（「検索・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
+    #556 から、定義を一度も保存していない環境は標準の項目を使う（上の「#556 項目抽出の標準の項目」）。
 - 無効のままにしたい環境は、`backend/.env` に `RAG_VISION_ENABLED=false` / `RAG_FIELD_EXTRACTION_ENABLED=false` を書くか、
   文書解析の画面の「解析後の処理」で無効にして保存する。文書のレシピの上書きは、今までどおり優先される。
 - データの移行（migration）は不要。既存の文書は、再解析したときに新しい既定で処理される。
@@ -618,7 +659,7 @@ uv run python -m app.rag.file_processing_staging_cli \
   - 外部 adapter の `Formula` / `Equation` block は `latex` / `formula` / `mathml` などの metadata から本文を復元し、`DocumentElement(content_kind=equation)` と chunk metadata の `equation_format` に残す。公式 block が `text` を持たない場合でも検索・citation から落とさない。
   - 外部 adapter の bbox は `x/y/width/height`、`x/y/w/h`、`left/top/right/bottom`、`xmin/ymin/xmax/ymax` などを `DocumentElement.bbox` / `ExtractionTableCell.bbox` / `ExtractionAsset.bbox` の `xyxy` へ正規化し、要素 chunk では `bbox_coordinate_mode` / `bbox_unit` も metadata に残す。preview overlay / citation jump / table cell review は adapter 固有の座標 key に依存しない。
   - 外部 adapter の `Image` / `Picture` / `Figure` block は `DocumentElement(content_kind=figure)` だけでなく `ExtractionAsset` にも昇格し、chunk metadata へ `asset_id` を残す。figure citation から asset export / preview audit へ辿れるようにする。
-- `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks`: レシピの保存済み extraction を JSON / Markdown / escaped HTML / chunk view として返す監査用 API。`chunks` は embedding を含めず、HTML は原本 HTML を実行せず escaped review source として返す。DocumentPreviewWorkspace の抽出エクスポート panel、CI artifact、parser adapter 比較の確認に使う。原本再解析や外部 parser の直接呼び出しは行わない。
+- `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks`: レシピの保存済み extraction を JSON / Markdown / escaped HTML / chunk view として返す API。`chunks` は embedding を含めず、HTML は原本 HTML を実行せず escaped review source として返す。`download=true` を付けると同じ本文を `Content-Disposition: attachment`（ファイル名は `<文書名>_レシピ<N>.md|.html|.json`、chunk は `<文書名>_レシピ<N>_chunks.json`）で返す（#561）。文書の詳細の「抽出エクスポート」（Markdown / HTML / JSON のダウンロード・コピー）と「Chunk / Citation」（chunk の JSON のダウンロード）、CI artifact、parser adapter 比較の確認に使う。原本再解析や外部 parser の直接呼び出しは行わない。
   - `tables[].cells` がある表は safe `<table>` として再構成し、`data-table-id` / row / col / bbox lineage を保持する。cells がない旧 extraction は escaped `<pre>` に fallback する。
   - `assets[]` は Markdown / HTML 監査 view に `asset_id` / kind / page / bbox / alt text として表示する。HTML export では asset 実体や Object Storage path を埋め込まず、escaped text と `data-asset-id` / `data-kind` / `data-page` / `data-bbox` のみを返す。
   - `DocumentChunkView.metadata` と `RetrievedChunk.metadata` は recursive JSON metadata を保持できる。`element_ids`、`dependency_edges`、table row group、bbox などの lineage は配列/オブジェクトのまま返せるため、chunk preview / citation jump / CI artifact が文字列 split に依存しない。

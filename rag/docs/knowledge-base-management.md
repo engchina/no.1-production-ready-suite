@@ -365,6 +365,27 @@ WHERE d.status = 'INDEXED'
 検索レスポンスの citation には、可能な場合だけ `knowledge_bases` または `knowledge_base_ids` を低機密 metadata として含める。
 監査ログには ID のみ保存し、名前・説明は保存しない。
 
+項目抽出の値による絞り込み（#549）は `filters.extraction_fields` に条件の JSON 配列（文字列）で渡す。
+
+```json
+{
+  "filters": {
+    "extraction_fields": "[{\"name\":\"金額\",\"value_type\":\"number\",\"op\":\"gte\",\"value\":\"1000000\"},{\"name\":\"契約日\",\"value_type\":\"date\",\"op\":\"gte\",\"value\":\"2025-01-01\"}]"
+  }
+}
+```
+
+- 演算子は `eq`（一致）・`gte`（以上）・`lte`（以下）。`string` / `bool` は `eq` だけ、`number` / `date` は 3 つとも使える。
+  範囲は `gte` と `lte` の 2 つの条件で指定し、条件どうしは AND。値は `number` が数値、`date` が `YYYY-MM-DD`、
+  `bool` が `true` / `false`。条件は 10 件まで。検証は `app/schemas/search.py` の `ExtractionFieldCondition`。
+- 絞り込みは文書単位の `EXISTS` で、文書の採用中の抽出（active な chunk_set が参照する `rag_document_extractions` の行）の
+  `extraction_json.fields` を `JSON_TABLE` で行にして、項目名と値を比べる（`app/clients/oracle.py` の
+  `_extraction_field_where`）。項目名と値は bind で渡し、SQL に埋めるのは演算子と列の許可リストの値だけ。
+- 項目の無い文書、`number` / `date` に変換できない値（例: 「約100万円」）は一致しない（除かれる）。取込は抽出値を
+  型に寄せて保存する（`normalize_field_value`。桁区切りを除いた数字・`YYYY-MM-DD`・`true` / `false`）。
+- 関数索引は作っていない。実データの件数で実行計画を確かめ、必要なら検討する。
+- 画面の候補は `GET /api/search/extraction-fields?business_view_ids=` が返す（選んだ業務ビューの KB の定義の和集合）。
+
 ### 6.6 評価 API
 
 `/api/evaluation/run` と `/api/evaluation/compare` の case / experiment に `knowledge_base_ids` を追加する。
@@ -553,6 +574,27 @@ UX 要件:
 チップに添える（色だけに頼らない）。候補の並びはサーバーの順（DEFAULT → 更新の新しい順）で、全件を持たないため
 「最多」の目印と「空の KB を隠す」は出さない。文書インデックスの絞り込み（`SelectField`）は、有効な KB を
 200 件ずつたどってすべて取る（`useAllKnowledgeBases`。アップロードの KB 選択も同じ取得。#280）。
+
+### 8.4.1a 項目抽出の定義（#548）
+
+項目抽出（「メタデータ/項目抽出」）で取り出す項目の定義は、KB ごとに持てる（`rag_knowledge_bases.extraction_fields`、
+`GET` / `PUT /api/knowledge-bases/{id}/extraction-fields`）。KB の詳細の「抽出する項目」で編集する。
+
+- KB に定義が無い（NULL）ときは、全体の既定（「検索・回答設定 › 文書解析」の「解析後の処理」の項目の定義、
+  `extraction-fields.json`）を使う。既存の KB はすべて NULL のため、既存環境の抽出は変わらない。
+  全体の既定を一度も保存していない（ファイルが無い）環境は、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・
+  発行元・作成部署。`STANDARD_FIELD_DEFINITIONS`）を全体の既定にする（#556）。保存した定義は 0 件でもそのまま使い、
+  `GET /api/settings/extraction-fields` の `uses_standard` が「未保存で標準の項目を使っている」を示す。
+  `DELETE /api/settings/extraction-fields`（画面の「標準の項目に戻す」）は保存した定義のファイルを消し、標準の項目に戻す。
+  `PUT` の `fields: null` で全体の既定に戻す。空の定義（`fields: []`）は「この KB では項目を抽出しない」。
+- 取込は、文書が属する有効な KB の定義を使う。**複数の KB に属する文書は、各 KB の定義（無ければ全体の既定）の
+  和集合**で抽出する。同じ項目名（大文字小文字を区別しない）は、作成の古い KB の定義（説明・型）を使う。
+  所属する有効な KB が無い文書は全体の既定を使う（`resolve_field_definitions`）。
+- 定義の検証は全体の既定と同じ（項目名は必須・重複不可・50 項目まで）。アーカイブ済みの KB は変更できない（409）。
+- 定義を変えても既存の文書の抽出値は変わらない。次の取込（再解析）から効く（既存文書の再抽出は #550）。
+  項目抽出のレイヤーの「作り直しが必要」（#550）は、文書ごとの今の定義（上と同じ解決。
+  `layer_fingerprint.current_field_definitions`）と比べる。文書一覧では、層のある文書の所属 KB の定義を
+  1 回の問い合わせ（`list_documents_extraction_field_sets`）で読む。
 
 ### 8.4.2 アーカイブした KB と業務ビューの参照（#302）
 

@@ -51,8 +51,8 @@ for (const viewport of [
     // 品質評価は業務ビューで上書きしない(評価はグローバル設定だけで決まる。#301)。
     await expect(settings.getByRole("heading", { name: "品質評価" })).toHaveCount(0);
     // 継承 chip: セレクト9行(分割方式・回答エンジン・DocRAG 3 行を含む)
-    // + 三値トグル6行(検索オプション5行 + DocRAG の Rerank)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
+    // + 三値トグル7行(検索オプション5行 + DocRAG の Rerank・画面目録)。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
     await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(9);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     // 回答エンジンを継承しているあいだは、DocRAG が読まない欄に条件付きの説明を出す(#300)。
@@ -179,6 +179,14 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
     .getByRole("group", { name: "Rerank で検索候補を並べ替える" })
     .getByRole("button", { name: "OFF" })
     .click();
+  // 画面目録の連携は既定 無効(継承)。LLM の呼び出しが増えることを説明に出す(#554)。
+  const screenLinking = page.getByRole("group", { name: "画面目録で操作画面を探す" });
+  await expect(screenLinking.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  await expect(screenLinking).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
+  await screenLinking.getByRole("button", { name: "ON" }).click();
   await page.getByRole("button", { name: "作成する" }).click();
 
   await expect.poll(() => createBody?.name).toBe("DocRAG ビュー");
@@ -187,6 +195,7 @@ test("DocRAG の回答設定は標準エンジンを明示すると隠れ、上�
   expect(query.docrag_query_strategy).toBe("hyde");
   expect(query.docrag_neighbor_child_count).toBe(3);
   expect(query.docrag_rerank_enabled).toBe(false);
+  expect(query.docrag_screen_linking_enabled).toBe(true);
   expect(query.docrag_answer_flow ?? null).toBeNull();
 });
 
@@ -573,6 +582,37 @@ test("エディタからアーカイブすると確認のうえ一覧へ置き�
   // アーカイブ後は replace で一覧へ戻るため、戻るで消えた対象のエディタへ戻らない。
   await page.goBack();
   await expect(page).toHaveURL(/\/business-views$/);
+});
+
+// #555: エディタの PageHeader に状態と件数・更新日時を出し、アーカイブ済みは入力できないようにする。
+test("エディタの見出しに状態と参照 KB の件数を出し、アーカイブ済みは読み取り専用で保存できない", async ({
+  page,
+}) => {
+  await mockBusinessViews(page, [
+    accountingView,
+    { ...accountingView, id: "bv-old", name: "旧ビュー", status: "ARCHIVED" },
+  ]);
+  await page.goto("/business-views?id=bv-1");
+  const header = page.locator("header[data-page-header]");
+  await expect(header.getByText("有効")).toBeVisible();
+  await expect(page.getByTestId("business-view-meta")).toContainText("参照 KB 1 件");
+
+  await page.goto("/business-views?id=bv-old");
+  await expect(header.getByText("アーカイブ済み")).toBeVisible();
+  await expect(page.getByText("アーカイブ済みの業務ビューは編集・保存できません。")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("button", { name: "保存する" })).toBeDisabled();
+  await expect(page.getByLabel("回答の役割・口調")).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
+test("業務ビューが無いときは、空の状態から作成エディタへ進める", async ({ page }) => {
+  await mockBusinessViews(page, []);
+  await page.goto("/business-views");
+  await expect(page.getByText("業務ビューがありません")).toBeVisible();
+  await page.getByRole("button", { name: "最初の業務ビューを作成" }).click();
+  await expect(page).toHaveURL(/\/business-views\?id=new$/);
 });
 
 /** エディタの「一覧へ戻る」。375px ではページ操作の「その他の操作」に入る（主操作 1 つ + その他）。 */

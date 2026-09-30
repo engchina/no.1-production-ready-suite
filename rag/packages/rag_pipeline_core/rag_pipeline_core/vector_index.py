@@ -12,7 +12,8 @@ from dataclasses import dataclass
 VECTOR_INDEX_PROFILES: tuple[str, ...] = ("balanced", "accurate", "fast")
 DEFAULT_VECTOR_INDEX_PROFILE = "accurate"
 
-# 現行 schema DDL のビルドパラメータ(balanced 基準)。
+# 初期 schema DDL のビルドパラメータ(balanced の推奨値)。DB の実際の索引の値ではない。
+# 設定画面の再作成の要否は backend が v$vector_graph_index の実際の値と比べて決める(#562)。
 CURRENT_NEIGHBORS = 32
 CURRENT_EFCONSTRUCTION = 500
 DISTANCE = "COSINE"
@@ -68,6 +69,7 @@ class VectorIndexResolved:
     neighbors: int
     efconstruction: int
     distance: str
+    # 推奨値が初期 DDL の値と違うか(実際の索引は見ていない。#562)。
     requires_reprovision: bool
 
 

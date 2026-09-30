@@ -865,9 +865,13 @@ class FieldDefinitionData(BaseModel):
 
 
 class ExtractionFieldsSettingsData(BaseModel):
-    """field 抽出 schema 定義の snapshot。"""
+    """field 抽出 schema 定義の snapshot。
+
+    `uses_standard` が真なら全体の既定を一度も保存しておらず、`fields` は標準の項目(#556)。
+    """
 
     fields: list[FieldDefinitionData] = Field(default_factory=list)
+    uses_standard: bool = False
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -875,6 +879,28 @@ class ExtractionFieldsSettingsUpdate(BaseModel):
     """field 抽出 schema 定義の更新 payload（文書解析の「解析後の処理」で編集する。#528）。"""
 
     fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
+
+
+class KnowledgeBaseExtractionFieldsData(BaseModel):
+    """ナレッジベースの項目抽出の定義(#548)。
+
+    `inherits_default` が真なら KB の定義は無く、`fields` は全体の既定(文書解析の設定)。
+    """
+
+    inherits_default: bool
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
+
+
+class KnowledgeBaseExtractionFieldsUpdate(BaseModel):
+    """ナレッジベースの項目抽出の定義の更新 payload。`fields` が null なら全体の既定に戻す。"""
+
+    fields: list[FieldDefinitionData] | None = Field(default=None, max_length=50)
+
+
+class SearchExtractionFieldsData(BaseModel):
+    """検索の絞り込みに使える項目(検索対象の KB の定義の和集合。#549)。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
 
 
 class PipelineSettingsData(BaseModel):
@@ -937,6 +963,8 @@ class GuardrailSettingsUpdate(BaseModel):
 
 
 VectorIndexProfileName = VectorIndexProfile
+# 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
+VectorIndexBuildStatus = Literal["match", "reprovision", "unknown"]
 
 
 class VectorIndexProfileStatusData(BaseModel):
@@ -950,6 +978,7 @@ class VectorIndexProfileStatusData(BaseModel):
     neighbors: int
     efconstruction: int
     distance: str
+    index_status: VectorIndexBuildStatus
 
 
 class VectorIndexSettingsData(BaseModel):
@@ -961,6 +990,10 @@ class VectorIndexSettingsData(BaseModel):
     efconstruction: int
     distance: str
     requires_reprovision: bool
+    index_status: VectorIndexBuildStatus
+    # 実際の索引の値。確認できないときは None。
+    actual_neighbors: int | None = None
+    actual_efconstruction: int | None = None
     profiles: list[VectorIndexProfileStatusData] = Field(default_factory=list)
     reindex_sql: str = ""
     config_source: Literal["runtime"]

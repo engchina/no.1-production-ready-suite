@@ -236,8 +236,9 @@ async function mockWorkspace(
       json: ok({
         document_id: "doc-1",
         file_name: "policy.pdf",
-        format: "markdown",
-        content_type: "text/markdown",
+        // 文書の詳細は抽出結果を JSON で 1 回だけ取得する（Markdown / HTML はコピー・ダウンロードのときだけ。#561）。
+        format: "json",
+        content_type: "application/json; charset=utf-8",
         content: "",
         payload: documentDetail.extraction,
         chunks: [],
@@ -555,7 +556,7 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("MinerU");
 });
 
-test("派生レイヤー状態チップ・項目定義未設定の警告・抽出セクションを表示する", async ({ page }) => {
+test("派生レイヤー状態チップ・項目の定義が 0 件の警告・抽出セクションを表示する", async ({ page }) => {
   await mockWorkspace(page);
   // 後着 route が優先される。派生 layer 状態と抽出 payload を上書きする。
   await page.route("**/api/documents/doc-1/chunk-sets", (route) =>
@@ -627,8 +628,9 @@ test("派生レイヤー状態チップ・項目定義未設定の警告・抽�
       }),
     })
   );
+  // 全体の既定を 0 件で保存した環境（未保存なら標準の項目を使う。#556）。
   await page.route("**/api/settings/extraction-fields", (route) =>
-    route.fulfill({ json: ok({ fields: [] }) })
+    route.fulfill({ json: ok({ fields: [], uses_standard: false }) })
   );
 
   await page.goto("/documents/doc-1");
@@ -653,7 +655,7 @@ test("派生レイヤー状態チップ・項目定義未設定の警告・抽�
   await expect(fieldsSection).toContainText("請求書番号");
   await expect(fieldsSection).toContainText("INV-1");
 
-  // 項目抽出を上書きで有効にすると、スキーマ未設定の警告を出す。
+  // 項目抽出を上書きで有効にすると、項目の定義が 0 件の警告を出す。
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const fieldGroup = panel
@@ -661,9 +663,56 @@ test("派生レイヤー状態チップ・項目定義未設定の警告・抽�
     .locator("../..");
   await fieldGroup.getByText("上書き", { exact: true }).click();
   await fieldGroup.getByText("有効", { exact: true }).click();
-  await expect(panel).toContainText("抽出する項目定義が未設定のため、項目抽出は実行されません");
+  await expect(panel).toContainText(
+    "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません"
+  );
+  await expect(panel).not.toContainText("標準の項目（");
   await expectNoPageOverflow(page);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`項目抽出を有効にすると、標準の項目で抽出することを案内する (${theme})`, async ({
+    page,
+  }, testInfo) => {
+    // #556: 全体の既定を保存していない環境は標準の項目で動くため、警告ではなく案内を出す。
+    await setTheme(page, theme);
+    await mockWorkspace(page);
+    await page.route("**/api/settings/extraction-fields", (route) =>
+      route.fulfill({
+        json: ok({
+          fields: [
+            { name: "文書の種類", description: "", value_type: "string" },
+            { name: "文書タイトル", description: "", value_type: "string" },
+            { name: "発行日・作成日", description: "", value_type: "date" },
+            { name: "発行元・作成部署", description: "", value_type: "string" },
+          ],
+          uses_standard: true,
+        }),
+      })
+    );
+
+    await page.goto("/documents/doc-1");
+
+    const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+    await panel.getByRole("button", { name: "処理設定を編集" }).click();
+    const fieldGroup = panel.getByText("メタデータ/項目抽出", { exact: true }).locator("../..");
+    await fieldGroup.getByText("上書き", { exact: true }).click();
+    await fieldGroup.getByText("有効", { exact: true }).click();
+    // 編集欄の行（要約の一覧にも同じ data-config-field の行があるため、最後の 1 つ）。
+    const fieldRow = panel.locator('[data-config-field="field_extraction_enabled"]').last();
+    await expect(fieldRow).toContainText(
+      "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。"
+    );
+    await expect(panel).not.toContainText("0 件で保存されているため");
+    await expect(panel).not.toContainText("未設定のため");
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+      await fieldRow.screenshot({
+        path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/recipe-field-standard-${testInfo.project.name}-${theme}.png`,
+      });
+    }
+    await expectNoPageOverflow(page);
+  });
+}
 
 async function setTheme(page: Page, theme: "light" | "dark") {
   // 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。

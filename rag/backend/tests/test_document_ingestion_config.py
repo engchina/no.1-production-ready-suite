@@ -91,12 +91,14 @@ def _isolated_field_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 def _metadata_state(extraction: Mapping[str, object], *, field: bool) -> tuple[str, str]:
     from app.config import Settings
+    from app.rag import extraction_field_adapter as fields_mod
     from app.schemas.document import DocumentLayerStatusName
 
     status, reason = documents_route._metadata_layer_state(
         "項目抽出",
         extraction,
         Settings.model_construct(rag_field_extraction_enabled=field),
+        bool(fields_mod.load_field_schema().fields),
     )
     assert isinstance(status, DocumentLayerStatusName)
     return status.value, reason
@@ -104,10 +106,23 @@ def _metadata_state(extraction: Mapping[str, object], *, field: bool) -> tuple[s
 
 @pytest.mark.usefixtures("_isolated_field_schema")
 def test_metadata_layer_planned_only_with_empty_field_schema() -> None:
-    """項目抽出 有効 + スキーマ未設定は planned_only になり理由で案内する。"""
+    """項目抽出 有効 + 項目の定義が 0 件は planned_only になり理由で案内する。"""
+    from app.rag import extraction_field_adapter as fields_mod
+
+    # 未保存の環境は標準の項目を使う(#556)。0 件になるのは空の定義を保存したときだけ。
+    fields_mod.save_field_schema([])
     status, reason = _metadata_state({}, field=True)
     assert status == "planned_only"
-    assert "項目定義" in reason
+    assert "項目の定義が 0 件" in reason
+    assert "標準の項目に戻す" in reason
+
+
+@pytest.mark.usefixtures("_isolated_field_schema")
+def test_metadata_layer_uses_standard_fields_until_saved() -> None:
+    """未保存の環境は標準の項目があるため、成果物が無ければ「まだありません」で案内する。"""
+    status, reason = _metadata_state({}, field=True)
+    assert status == "planned_only"
+    assert reason == "項目抽出の成果物がまだありません。"
 
 
 @pytest.mark.usefixtures("_isolated_field_schema")

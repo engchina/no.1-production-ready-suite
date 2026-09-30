@@ -40,22 +40,23 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.error.noVisionModel":
     "画像入力（Vision）に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力（Vision）に対応」をオンにしてください。",
   "settings.model.defaults.error.textRemoved":
-    "「{model}」は登録モデルにありません。登録モデルから選び直すか、「既定の Vision モデルを使う」を選んでください。",
+    "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
+  "settings.model.defaults.error.textRequired":
+    "既定のテキストモデルを選択してください。",
   "settings.model.defaults.error.visionNotCapable":
     "「{model}」は画像入力（Vision）に対応していません。対応をオンにするか、別のモデルを選んでください。",
   "settings.model.defaults.error.visionRemoved":
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.visionRequired":
     "既定の Vision モデルを選択してください。",
+  "settings.model.defaults.placeholder": "モデルを選んでください",
   "settings.model.defaults.text": "既定のテキストモデル",
   "settings.model.defaults.textHelp":
-    "画像を扱わない処理（回答生成・要約・SQL 生成など）で使います。未設定のときは既定の Vision モデルを使います。",
+    "画像を扱わない処理（回答生成・要約・SQL 生成など）で使います。",
   "settings.model.defaults.title": "既定のモデル",
-  "settings.model.defaults.useVisionModel": "既定の Vision モデルを使う",
   "settings.model.defaults.vision": "既定の Vision モデル",
   "settings.model.defaults.visionHelp":
     "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
-  "settings.model.defaults.visionPlaceholder": "モデルを選んでください",
   "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",

@@ -356,8 +356,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
     oci_enterprise_ai_secondary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    # 既定のテキストモデル（任意）と既定の Vision モデル（#499）。呼び出しに使う ID は
-    # enterprise_ai_default_model_id / enterprise_ai_vision_model_id で解決する。
+    # 既定のテキストモデルと既定の Vision モデル（#499。画面・API では 2 つとも必須。#566）。
+    # 呼び出しに使う ID は enterprise_ai_default_model_id / enterprise_ai_vision_model_id
+    # で解決する。
     oci_enterprise_ai_default_text_model: str = Field(default="")
     oci_enterprise_ai_default_vision_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
@@ -877,6 +878,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_docrag_rerank_enabled: bool = Field(
         default=True,
         description="DocRAG 回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
+    )
+    rag_docrag_screen_linking_enabled: bool = Field(
+        default=False,
+        description=(
+            "DocRAG 回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
+            "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
+            "(LLM の呼び出しが 1 回増える。#554)。"
+            "業務ビューで上書きできる。"
+        ),
     )
     rag_answer_record_retention_days: int = Field(
         default=90,

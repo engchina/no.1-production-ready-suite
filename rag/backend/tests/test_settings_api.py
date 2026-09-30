@@ -29,6 +29,7 @@ from app.api.routes import settings as settings_routes
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     GenerationSettingsRevisionConflictError,
+    OracleClient,
     OracleConnectionTimeoutError,
     OracleWalletPasswordRequiredError,
     StoredGenerationSettings,
@@ -1495,12 +1496,22 @@ def test_update_guardrail_settings_rejects_unknown_policy() -> None:
     assert resp.status_code == 422
 
 
+def _stub_vector_index_build(monkeypatch: MonkeyPatch, actual: tuple[int, int] | None) -> None:
+    """実際の索引の値(v$vector_graph_index)の読み取りを差し替える。"""
+
+    async def fake_build_params(_self: object) -> tuple[int, int] | None:
+        return actual
+
+    monkeypatch.setattr(OracleClient, "get_vector_index_build_params", fake_build_params)
+
+
 def test_vector_index_settings_reports_runtime_profile(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_vector_index_profile", "accurate")
     monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 95)
+    _stub_vector_index_build(monkeypatch, (32, 500))
 
     resp = client.get("/api/settings/vector-index")
 
@@ -1509,6 +1520,9 @@ def test_vector_index_settings_reports_runtime_profile(
     assert body["profile"] == "accurate"
     assert body["target_accuracy"] == 98
     assert body["requires_reprovision"] is True
+    assert body["index_status"] == "reprovision"
+    assert (body["actual_neighbors"], body["actual_efconstruction"]) == (32, 500)
+    assert "NEIGHBORS 48" in body["reindex_sql"]
     names = [item["name"] for item in body["profiles"]]
     assert names[0] == "balanced"
     selected = [item["name"] for item in body["profiles"] if item["selected"]]
@@ -1521,6 +1535,7 @@ def test_vector_index_balanced_reports_existing_accuracy(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
     monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 92)
+    _stub_vector_index_build(monkeypatch, (32, 500))
 
     resp = client.get("/api/settings/vector-index")
 
@@ -1530,6 +1545,32 @@ def test_vector_index_balanced_reports_existing_accuracy(
     assert body["requires_reprovision"] is False
 
 
+@pytest.mark.parametrize(
+    ("actual", "status", "requires"),
+    [((48, 800), "match", False), (None, "unknown", False)],
+    ids=["match", "unknown"],
+)
+def test_vector_index_settings_judges_against_actual_index(
+    monkeypatch: MonkeyPatch,
+    actual: tuple[int, int] | None,
+    status: str,
+    requires: bool,
+) -> None:
+    """推奨値と実際の索引が同じなら再作成不要、読めないなら確認できない(#562)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_vector_index_profile", "accurate")
+    _stub_vector_index_build(monkeypatch, actual)
+
+    body = client.get("/api/settings/vector-index").json()["data"]
+
+    assert body["index_status"] == status
+    assert body["requires_reprovision"] is requires
+    assert body["actual_neighbors"] == (actual[0] if actual else None)
+    assert body["actual_efconstruction"] == (actual[1] if actual else None)
+    by_name = {item["name"]: item["index_status"] for item in body["profiles"]}
+    assert by_name["accurate"] == status
+
+
 def test_update_vector_index_settings_persists_env_and_mutates_runtime(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -1537,6 +1578,7 @@ def test_update_vector_index_settings_persists_env_and_mutates_runtime(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
     env_file = _settings_env_file(monkeypatch, tmp_path)
+    _stub_vector_index_build(monkeypatch, None)
 
     resp = client.patch("/api/settings/vector-index", json={"profile": "fast"})
 
