@@ -457,8 +457,8 @@ class DocragAnswerEngine:
     ) -> list[Any]:
         """選ばれた画面の child(画面ごとに上限まで)と、その親を検索範囲から読む(#554)。
 
-        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。分類・根拠画像は
-        検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
+        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。分類・1 ページ目の
+        本文(#557)・根拠画像は検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
         """
         from docrag.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
 
@@ -487,14 +487,19 @@ class DocragAnswerEngine:
         if not added:
             return []
         chunks = list(added.values())
+        # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
         await self._load_classifications(chunks, state)
+        await self._load_first_page_contexts(chunks, state)
         if self._settings.rag_docrag_answer_vision_enabled:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
         children = [
             _stored_child(
-                chunk, rrf_score=0.0, classification=state.classifications.get(chunk.document_id)
+                chunk,
+                rrf_score=0.0,
+                classification=state.classifications.get(chunk.document_id),
+                first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
         ]

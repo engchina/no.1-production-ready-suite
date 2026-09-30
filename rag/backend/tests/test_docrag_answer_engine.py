@@ -1571,6 +1571,7 @@ def _screen_chunk(chunk_id: str, text: str, section_path: list[str]) -> Retrieve
                 "docrag_parent_text": text,
                 "docrag_search_text": f"Source file: {_SCREEN_FILE}\nChild text: {text}",
                 "section_path": " > ".join(section_path),
+                "chunk_set_id": "cs-setting",
                 "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False),
             },
         }
@@ -1697,6 +1698,34 @@ async def test_screen_linking_adds_screen_missing_from_search_results(
     assert "setting:c1" in evidence
     assert "setting:c2" not in evidence
     assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_chunks_carry_classification_and_first_page_context() -> None:
+    """画面目録から加える chunk にも分類と 1 ページ目の本文を載せる(1 回で読む。#554 / #557)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = ScreenOracle()
+    oracle.classifications = {"doc-setting": {"large_category": "業務A"}}
+    oracle.first_page_contexts = {"cs-setting": _first_page_context()}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+
+    stored = await engine._screen_chunks(
+        SearchRequest(query="q"), state, [(_SCREEN_FILE, _SCREEN_HEADING)], set()
+    )
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
+    expected = {
+        "classification": {"large_category": "業務A"},
+        "first_page_context": _first_page_context(),
+    }
+    assert documents["setting:c1"] == expected
+    assert documents["doc-setting:setting-p1"] == expected
+    assert "setting:c2" not in documents
+    assert oracle.classification_calls == [["doc-setting"]]
+    assert oracle.first_page_calls == [["cs-setting"]]
+    # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
+    assert "setting:c1" in state.chunks
 
 
 async def test_screen_catalog_is_cached_by_scope_and_index_state(
