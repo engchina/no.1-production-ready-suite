@@ -72,11 +72,16 @@ describe("Tooltip の開閉（createTooltipController）", () => {
   let changes: Array<[boolean, string | null]>;
   // 偽のタイマーの時計はテストごとに実時間から始まるため、前のテストより十分に先へ進めておく。
   let clock = Date.now();
-  const make = (options: { coarse?: boolean } = {}) =>
-    createTooltipController({
+  // 開いている吹き出しは全 Tooltip で 1 つだけなので、テストの終わりに破棄して次のテストへ持ち越さない。
+  let made: Array<ReturnType<typeof createTooltipController>> = [];
+  const make = (options: { coarse?: boolean } = {}) => {
+    const controller = createTooltipController({
       onOpenChange: (open, reason) => changes.push([open, reason]),
       isCoarsePointer: () => Boolean(options.coarse),
     });
+    made.push(controller);
+    return controller;
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -86,6 +91,8 @@ describe("Tooltip の開閉（createTooltipController）", () => {
     changes = [];
   });
   afterEach(() => {
+    for (const controller of made) controller.dispose();
+    made = [];
     vi.useRealTimers();
   });
 
@@ -204,6 +211,30 @@ describe("Tooltip の開閉（createTooltipController）", () => {
     const third = make();
     third.pointerEnterTrigger("mouse");
     expect(third.isOpen()).toBe(false);
+  });
+
+  it("吹き出しは 1 つだけ出し、別の Tooltip が開いたら先に開いていたものを閉じる", () => {
+    // ポインタを置いたままのボタンの吹き出しは、キーボードで別のボタンへ移ったら閉じる（#655）。
+    const hovered = make();
+    hovered.pointerEnterTrigger("mouse");
+    vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+    expect(hovered.isOpen()).toBe(true);
+
+    const focused = make();
+    focused.focus(true);
+    expect(focused.isOpen()).toBe(true);
+    expect(hovered.isOpen()).toBe(false);
+    expect(changes).toEqual([
+      [true, "hover"],
+      [false, null],
+      [true, "focus"],
+    ]);
+
+    // 閉じた側は、ポインタが入り直せばまた出せる。そのときはフォーカスの吹き出しを閉じる。
+    hovered.pointerLeaveTrigger();
+    hovered.pointerEnterTrigger("mouse");
+    expect(hovered.isOpen()).toBe(true);
+    expect(focused.isOpen()).toBe(false);
   });
 });
 
