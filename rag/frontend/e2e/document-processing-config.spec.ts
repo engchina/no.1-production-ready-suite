@@ -236,8 +236,9 @@ async function mockWorkspace(
       json: ok({
         document_id: "doc-1",
         file_name: "policy.pdf",
-        format: "markdown",
-        content_type: "text/markdown",
+        // 文書の詳細は抽出結果を JSON で 1 回だけ取得する（Markdown / HTML はコピー・ダウンロードのときだけ。#561）。
+        format: "json",
+        content_type: "application/json; charset=utf-8",
         content: "",
         payload: documentDetail.extraction,
         chunks: [],
