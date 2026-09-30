@@ -13,6 +13,10 @@ describe("parseAnswerDiagnostics", () => {
       confidence: "high",
       needs_human_review: false,
       insufficient_reason: "",
+      reasoning_summary: "引用照合済みの説明 2 件。",
+      external_data_required: true,
+      external_data_items: ["対象の受注の登録状態", ""],
+      question_type: ["操作方法"],
       rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
       models: {
@@ -46,6 +50,10 @@ describe("parseAnswerDiagnostics", () => {
       ],
     });
     expect(parsed?.rewrittenQuestion).toBe("受注入力画面での受注の登録方法は？");
+    expect(parsed?.reasoningSummary).toBe("引用照合済みの説明 2 件。");
+    expect(parsed?.externalDataRequired).toBe(true);
+    expect(parsed?.externalDataItems).toEqual(["対象の受注の登録状態"]);
+    expect(parsed?.questionType).toEqual(["操作方法"]);
     expect(parsed?.models).toEqual({
       llm: { modelId: "model-a", label: "Model A" },
       vision: { modelId: "vlm-a", label: "vlm-a" },
