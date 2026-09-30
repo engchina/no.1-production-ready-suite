@@ -2322,8 +2322,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "GraphRAG 索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "GraphRAG 設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_embeddings_for_chunk_set(
@@ -2369,8 +2369,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "GraphRAG 索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "GraphRAG 設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_graph_index(
@@ -2381,8 +2381,7 @@ class IngestionPipeline:
         *,
         chunk_set_id: str | None = None,
     ) -> GraphIndex:
-        """構造化抽出から GraphRAG-lite index を作り Oracle へ保存する。"""
-        graph_params = resolve_graph_adapter(self._settings)
+        """構造化抽出から関係情報(文書と章・節の見出しのつながり)を作り Oracle へ保存する。"""
         knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
         graph_index = await asyncio.to_thread(
             build_graph_index,
@@ -2391,8 +2390,6 @@ class IngestionPipeline:
             extraction=extraction,
             chunks=chunks,
             chunk_set_id=chunk_set_id,
-            build_claims=graph_params.build_claims,
-            build_community_summaries=graph_params.build_community_summaries,
         )
         await self._oracle.replace_document_graph_index(
             document_id,
@@ -3309,12 +3306,10 @@ def _record_ingestion_stage(
 
 
 def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, object]:
-    """GraphRAG-lite index 結果から件数だけを trace attribute にする。"""
+    """関係情報の構築結果から件数だけを trace attribute にする。"""
     return {
         "graph_entity_count": len(graph_index.entities),
         "graph_relationship_count": len(graph_index.relationships),
-        "graph_claim_count": len(graph_index.claims),
-        "graph_community_summary_count": len(graph_index.community_summaries),
         "graph_entity_chunk_link_count": len(graph_index.entity_chunk_links),
     }
 

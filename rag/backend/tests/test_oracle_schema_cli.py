@@ -292,7 +292,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260928_003_default_document_recipes" in sql
     assert "SELECT 1 FROM rag_document_recipes existing" in sql
     # 取込 worker の lease 列（#357）。既存の行は NULL のまま（heartbeat の無い行は従来の判定）。
-    lease_migration = sql.split("-- migration: 20260928_004_ingestion_jobs_lease", 1)[1]
+    lease_migration = sql.split("-- migration: 20260928_004_ingestion_jobs_lease", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
     assert "column_name = 'LEASE_OWNER'" in lease_migration
     assert "ALTER TABLE rag_ingestion_jobs ADD (lease_owner VARCHAR2(128))" in lease_migration
     assert "column_name = 'HEARTBEAT_AT'" in lease_migration
@@ -367,7 +369,36 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_answer_records" not in retire_migration
     assert "rag_graph_" not in retire_migration
     assert "rag_search_audit" not in retire_migration
-    assert len(statements) == 77
+    # 関係情報の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
+    profile_migration = sql.split("-- migration: 20260930_006_graph_profile_entities", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
+    for table, column, path in (
+        ("rag_documents", "processing_config", "$.graph_profile"),
+        ("rag_document_recipes", "processing_config", "$.graph_profile"),
+        ("rag_knowledge_bases", "retrieval_config", "$.ingestion.graph_profile"),
+        ("rag_ingestion_jobs", "settings_overrides", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.effective_processing_config.graph_profile"),
+    ):
+        assert (
+            f"UPDATE {table}\nSET {column} = JSON_TRANSFORM({column}, "
+            f"REPLACE '{path}' = 'entities')\nWHERE JSON_VALUE({column}, '{path}') = 'full'"
+        ) in profile_migration
+    # SET は欄が無いと足してしまう（継承の欄を上書きに変える）ため使わない。
+    assert "SET '$" not in profile_migration
+    assert "DELETE" not in profile_migration
+    # 読む経路の無かった claims / community summary の表を消す（#621）。あるときだけ消す。
+    graph_migration = sql.split("-- migration: 20260930_007_retire_graph_claims_community", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
+    for table in ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES"):
+        assert f"table_name = '{table}'" in graph_migration
+        assert f"'DROP TABLE {table.lower()} CASCADE CONSTRAINTS PURGE'" in graph_migration
+    # 関係情報グラフが読む表は残す。
+    for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
+        assert table not in graph_migration
+    assert len(statements) == 85
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -436,6 +467,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_003_chunk_sets_first_page_context",
         "20260930_004_knowledge_base_extraction_fields",
         "20260930_005_retire_standard_engine_objects",
+        "20260930_006_graph_profile_entities",
+        "20260930_007_retire_graph_claims_community",
         "20260930_008_answer_prompts_table",
         "20260930_009_stored_engine_names",
     ]

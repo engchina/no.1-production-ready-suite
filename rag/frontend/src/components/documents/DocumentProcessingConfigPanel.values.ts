@@ -62,7 +62,7 @@ export const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = CHUNK
   (value) => ({ value, label: t(`settings.chunking.strategy.${value}` as I18nKey) })
 );
 
-const GRAPH_VALUES = ["off", "entities", "full"] as const;
+const GRAPH_VALUES = ["off", "entities"] as const;
 export const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES.map(
   (value) => ({ value, label: t(`settings.graph.profile.${value}` as I18nKey) })
 );

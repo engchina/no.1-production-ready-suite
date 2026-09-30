@@ -172,6 +172,150 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
+
+#599 で、rag_poc から移したときの名前（`docrag`）を、コードの識別子・設定（環境変数）・API・DB の名前から外し、RAG の標準の名前にした。回答・分割の挙動は変わらない。旧名との互換は持たない（旧名の環境変数は読まず、保存値と表は migration で書き換える）。#599 の migration はデータを削除しないので、承認（`--allow-destructive`）は要らない（#621 の `20260930_007_retire_graph_claims_community` などデータを削除する migration が未適用なら、そちらの承認が要る。下の「既存環境の更新手順（#621）」と上の「共通の注意」）。
+
+### 名前の対照
+
+**backend の環境変数**（`backend/.env`。検索・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
+
+| 旧名 | 新しい名前 |
+|---|---|
+| `RAG_DOCRAG_QUERY_STRATEGY` | `RAG_QUERY_STRATEGY` |
+| `RAG_DOCRAG_ANSWER_FLOW` | `RAG_ANSWER_FLOW` |
+| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `RAG_NEIGHBOR_CHILD_COUNT` |
+| `RAG_DOCRAG_RERANK_ENABLED` | `RAG_RERANK_ENABLED` |
+| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `RAG_SCREEN_LINKING_ENABLED` |
+| `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `RAG_ANSWER_VISION_ENABLED` |
+| `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `RAG_HISTORY_REWRITE_ENABLED` |
+| `RAG_DOCRAG_PROFILE` | `RAG_ANSWER_PROFILE` |
+| `RAG_DOCRAG_CHILD_TARGET_CHARS` | `RAG_CHUNK_CHILD_TARGET_CHARS` |
+| `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS` |
+| `RAG_DOCRAG_PARENT_TARGET_CHARS` | `RAG_CHUNK_PARENT_TARGET_CHARS` |
+| `RAG_DOCRAG_PARENT_MAX_PAGES` | `RAG_CHUNK_PARENT_MAX_PAGES` |
+| `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `RAG_CHUNK_PARENT_MAX_CHILDREN` |
+
+**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（例: `DOCRAG_DOMAIN_PROFILE_FILE` → `RAG_ENGINE_DOMAIN_PROFILE_FILE`、docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
+
+**コード・package**: `rag/packages/docrag_core`（distribution `docrag-core`、import `docrag`）は `rag/packages/rag_engine`（distribution `rag-engine`、import `rag_engine`）。backend の `app/rag/docrag_answer.py` → `answer_engine.py`、`docrag_chunking.py` → `chunking_small_to_big.py`、`docrag_prompts.py` → `answer_prompts.py`、`docrag_verify_cli.py` → `answer_verify_cli.py`（`python -m app.rag.answer_verify_cli`）。CI の job `RAG / DocRAG core` は `RAG / Engine`。
+
+**保存値・API**:
+
+| 対象 | 旧名 | 新しい名前 |
+|---|---|---|
+| 分割方式（`RAG_CHUNKING_STRATEGY`・文書 / レシピの処理設定・KB の構築設定） | `docrag_small_to_big` | `small_to_big` |
+| 分割のパラメータ（処理設定・文書分割の設定の API） | `docrag_child_target_chars` など 5 項目 | `chunk_child_target_chars` など（`docrag_` を `chunk_` に） |
+| 業務ビューの検索・回答設定（`view_config.query`） | `docrag_query_strategy`・`docrag_answer_flow`・`docrag_neighbor_child_count`・`docrag_rerank_enabled`・`docrag_screen_linking_enabled` | `query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`・`screen_linking_enabled` |
+| 回答生成のプロンプトの表・API | `rag_docrag_prompts`・`/api/settings/docrag-prompts` | `rag_answer_prompts`・`/api/settings/answer-prompts` |
+| 検索の応答の `diagnostics` | `retrieval_strategy: "docrag"`・`retrieval_strategy_adapter: "docrag_grounded"` / `"docrag_retrieval_only"`・`docrag`（回答フローの診断） | `"hybrid"`・`"grounded"` / `"retrieval_only"`・`answer` |
+| 回答の記録の詳細の API・チャットの SSE の `metadata` | `docrag` | `answer_diagnostics` |
+| 回答の記録の回答の方式（`rag_answer_records.answer_engine`） | `docrag` | `grounded` |
+| 進捗の stage・metrics の `stage` label・監査の `error_stage` | `docrag_answer`・`docrag_history_rewrite` | `answer`・`history_rewrite` |
+| 親子階層の chunk の metadata | `docrag_parent_text`・`docrag_metadata_json`・`docrag_search_text`・`docrag_chunk_id`・`docrag_chunk_seq`・`docrag_source_record_refs_json`・`docrag_source_seq_ranges_json`・`docrag_first_page_context_json`、`source_parser: docling_docrag`、`chunk_group_kind: docrag_parent` | `parent_text`・`engine_metadata_json`・`engine_search_text`・`engine_chunk_id`・`engine_chunk_seq`・`source_record_refs_json`・`source_seq_ranges_json`・`first_page_context_json`、`docling_layout`、`small_to_big_parent` |
+| Docling の解析結果（`parser_artifacts`）・分割の縮退の理由 | `docrag_layout`・`docrag_layout_missing` | `layout_records`・`layout_missing` |
+| 派生情報レイヤーの指紋の入力 | `docrag_chunk_contract` | `chunk_metadata_contract` |
+
+`chunk_set_id` は改名の前の名前で hash するので変わらない（既存の Chunk・embedding をそのまま使う。作り直しは要らない）。検索の設定の fingerprint（`config_fingerprint`）は入力の名前が変わるので、更新の前と後で値が変わる。Prometheus のダッシュボード・アラートで `stage="docrag_answer"` などを使っている場合は、新しい名前に直す。
+
+### システムテーブルの更新がすること
+
+- migration `20260930_008_answer_prompts_table`: 回答生成のプロンプトの表を `rag_docrag_prompts` から `rag_answer_prompts` へ移す。新しい表が無ければ `ALTER TABLE ... RENAME TO` で改名し、ある（システムテーブルの更新は migration の前に新しい表を作る）ときは旧表の行を新しい表へ写す。写した後、旧表は退役したオブジェクトとして消える（行は新しい表に残る）。主キーの制約と index はシステムの名前（`SYS_C...`）なので改名しない。
+- migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、業務ビューの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
+
+### 手順
+
+1. #599 の版のコードを取得する（`git pull` など）。backend・取込 worker・前処理 / parser は止める（旧 package の venv のままでは起動できない。保存値の書き換えの最中に取込が書き込まないようにする）。
+
+   ```bash
+   sudo systemctl stop 'production-ready-rag-*'
+   ```
+
+2. `backend/.env` の旧名の行を改名する（バックアップを取ってから編集する）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
+
+   ```bash
+   for env_file in /u01/aipoc/no.1-production-ready-suite/rag/backend/.env /u01/aipoc/props/backend.env; do
+     [ -f "${env_file}" ] || continue
+     sudo cp -p "${env_file}" "${env_file}.bak-599"
+     sudo sed -i -E \
+       -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
+       -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
+       -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
+       "${env_file}"
+     sudo grep -nE '^(RAG_DOCRAG_|DOCRAG_)' "${env_file}" || echo "OK: ${env_file}"
+   done
+   ```
+
+   ローカルは `rag/backend/.env` だけを同じ `sed` で直す。
+3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in（`systemctl edit production-ready-rag-backend.service` などで足した `Environment=DOCRAG_DOMAIN_PROFILE_FILE=...`）や、起動する shell の `export` を探して改名する。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
+
+   ```bash
+   sudo grep -rn 'DOCRAG_' /etc/systemd/system/production-ready-rag-* 2>/dev/null
+   ```
+
+4. venv を作り直す（package の名前が変わったので、旧 `docrag-core` を外して `rag-engine` を入れる）。Compute では `init_script.sh` を再実行すれば、venv・unit・frontend の build・システムテーブルの更新（手順 5）までを行う。手で行う場合は、リポジトリの所有者で実行する。
+
+   ```bash
+   # OCI Compute（手で行う場合）
+   cd /u01/aipoc/no.1-production-ready-suite/rag
+   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
+   sudo -u ubuntu bash -c 'cd services/parsers/docling && uv sync --locked --no-dev --python 3.12'
+
+   # ローカル
+   cd rag/backend && uv sync --locked
+   cd ../services/parsers/docling && uv sync --locked
+   ```
+
+5. システムテーブルを更新する（#599 の migration だけが未適用なら承認は要らない）。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」でもよい。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
+   ```
+
+6. backend・worker・前処理 / parser と frontend（`npm run build` の成果物）を起動し直す（`sudo systemctl start 'production-ready-rag-*'`。`init_script.sh` を再実行した場合は起動済み）。
+7. 確かめる。
+   - `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空。
+   - 保存値に旧名が残っていない（0 件）。
+
+     ```sql
+     SELECT COUNT(*) FROM rag_chunks WHERE JSON_SERIALIZE(metadata_json RETURNING CLOB) LIKE '%docrag%';
+     SELECT COUNT(*) FROM rag_business_views WHERE JSON_SERIALIZE(view_config RETURNING CLOB) LIKE '%docrag%';
+     SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
+     ```
+
+   - 検索・回答設定の「検索方法」「文書分割」と業務ビューの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
+
+## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
+
+#621 で、設定の「関係情報の構築」の選択肢を「構築しない」（`off`。既定）と「構築する」（`entities`）の 2 つにした。構築するのは、文書全体と章・節の見出し（表・図を含む）の「含む」のつながりで、LLM は使わない。ナレッジベースの「関係情報グラフ」で見るためのもので、回答の検索には使わない（#595）。
+
+- **`full` を削除した。** `full` が追加で作っていた claims（`rag_graph_claims`）と community summary（`rag_graph_community_summaries`）は、どの画面・API・検索も読んでいなかった。`full` と `entities` が作る関係情報グラフの中身（`rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks`）は同じ。
+- **legacy の `RAG_GRAPH_ENABLED` を削除した。** 読まない（`true` でも `full` に読み替えない）。設定画面の保存も書かない。
+- **backend/.env の `RAG_GRAPH_PROFILE=full` は起動を止める。** 読み替えず、書き換え先（`entities` か `off`）を示すエラーで止まる。
+- **保存済みの上書きの `full` は、migration `20260930_006_graph_profile_entities` が `entities` に書き換える**（文書・文書レシピの `processing_config`、ナレッジベースの `retrieval_config.ingestion`、取込ジョブの `settings_overrides.processing_config`、chunk_set に刻んだレシピ `recipe_subset`）。データを削除しない migration。
+- **migration `20260930_007_retire_graph_claims_community` が `rag_graph_claims`・`rag_graph_community_summaries` を削除する。** データを削除する migration なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。どちらも文書から作り直せる派生データで、読む経路が無かったため、書き出しは要らない。
+- 2 つの migration は同時に未適用になるので、承認するまではどちらも当たらない。その間も backend は動く。保存済みの `full` は `entities` として読み（上書きの設定全体を失わないため）、旧 `full` で構築した文書を再取込・削除するときは、残っている `rag_graph_claims` の行（関係情報の entity を参照する）を先に消す。
+
+### 手順
+
+1. #621 の版のコードを取得する（`git pull` など）。
+2. `backend/.env` に `RAG_GRAPH_PROFILE=full` があれば `RAG_GRAPH_PROFILE=entities` に書き換える（構築しない場合は `off`）。`RAG_GRAPH_ENABLED` の行があれば消す（残っても読まないが、`true` だった環境は、以前は `full` で構築していた。同じものを作り続けるなら `RAG_GRAPH_PROFILE=entities` にする）。
+3. backend と ingestion-worker を再起動する（`init_script.sh` の再実行でもよい。`init_script.sh` は承認を付けずに更新するので、この 2 つの migration は WARNING を出して当てずに進む）。
+4. システムテーブルを承認付きで更新する。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」の確認ダイアログで「削除して更新」を押すか、CLI で実行する。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+5. `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空であることを確かめる。
+
+### 旧 `full` で構築した文書
+
+- ナレッジベースの「関係情報グラフ」は、再取込しなくても今までどおり表示される（残す表の中身は `entities` と同じ）。
+- 文書詳細の関係情報の層は、再取込するまで「構築計画に含まれていますが、まだ実体化していません」と出る。層の ID は構築の設定値から作るため、`full` で記録した層と `entities` の層が別の ID になる。気になる文書は再取込する。`off` と `entities` の文書の層・chunk_set・索引は変わらない（層の ID の算法 `KEY_VERSION` は変えていない）。
+
 ## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
 
 #286 で、RAG の backend・ingestion-worker・前処理・parser を Docker Compose から、サービスごとの uv の venv と
@@ -268,120 +412,6 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
-## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
-
-#599 で、rag_poc から移したときの名前（`docrag`）を、コードの識別子・設定（環境変数）・API・DB の名前から外し、RAG の標準の名前にした。回答・分割の挙動は変わらない。旧名との互換は持たない（旧名の環境変数は読まず、保存値と表は migration で書き換える）。この migration はデータを削除しないので、システムテーブルの更新に承認（`--allow-destructive`）は要らない。
-
-### 名前の対照
-
-**backend の環境変数**（`backend/.env`。検索・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
-
-| 旧名 | 新しい名前 |
-|---|---|
-| `RAG_DOCRAG_QUERY_STRATEGY` | `RAG_QUERY_STRATEGY` |
-| `RAG_DOCRAG_ANSWER_FLOW` | `RAG_ANSWER_FLOW` |
-| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `RAG_NEIGHBOR_CHILD_COUNT` |
-| `RAG_DOCRAG_RERANK_ENABLED` | `RAG_RERANK_ENABLED` |
-| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `RAG_SCREEN_LINKING_ENABLED` |
-| `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `RAG_ANSWER_VISION_ENABLED` |
-| `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `RAG_HISTORY_REWRITE_ENABLED` |
-| `RAG_DOCRAG_PROFILE` | `RAG_ANSWER_PROFILE` |
-| `RAG_DOCRAG_CHILD_TARGET_CHARS` | `RAG_CHUNK_CHILD_TARGET_CHARS` |
-| `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS` |
-| `RAG_DOCRAG_PARENT_TARGET_CHARS` | `RAG_CHUNK_PARENT_TARGET_CHARS` |
-| `RAG_DOCRAG_PARENT_MAX_PAGES` | `RAG_CHUNK_PARENT_MAX_PAGES` |
-| `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `RAG_CHUNK_PARENT_MAX_CHILDREN` |
-
-**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（例: `DOCRAG_DOMAIN_PROFILE_FILE` → `RAG_ENGINE_DOMAIN_PROFILE_FILE`、docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
-
-**コード・package**: `rag/packages/docrag_core`（distribution `docrag-core`、import `docrag`）は `rag/packages/rag_engine`（distribution `rag-engine`、import `rag_engine`）。backend の `app/rag/docrag_answer.py` → `answer_engine.py`、`docrag_chunking.py` → `chunking_small_to_big.py`、`docrag_prompts.py` → `answer_prompts.py`、`docrag_verify_cli.py` → `answer_verify_cli.py`（`python -m app.rag.answer_verify_cli`）。CI の job `RAG / DocRAG core` は `RAG / Engine`。
-
-**保存値・API**:
-
-| 対象 | 旧名 | 新しい名前 |
-|---|---|---|
-| 分割方式（`RAG_CHUNKING_STRATEGY`・文書 / レシピの処理設定・KB の構築設定） | `docrag_small_to_big` | `small_to_big` |
-| 分割のパラメータ（処理設定・文書分割の設定の API） | `docrag_child_target_chars` など 5 項目 | `chunk_child_target_chars` など（`docrag_` を `chunk_` に） |
-| 業務ビューの検索・回答設定（`view_config.query`） | `docrag_query_strategy`・`docrag_answer_flow`・`docrag_neighbor_child_count`・`docrag_rerank_enabled`・`docrag_screen_linking_enabled` | `query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`・`screen_linking_enabled` |
-| 回答生成のプロンプトの表・API | `rag_docrag_prompts`・`/api/settings/docrag-prompts` | `rag_answer_prompts`・`/api/settings/answer-prompts` |
-| 検索の応答の `diagnostics` | `retrieval_strategy: "docrag"`・`retrieval_strategy_adapter: "docrag_grounded"` / `"docrag_retrieval_only"`・`docrag`（回答フローの診断） | `"hybrid"`・`"grounded"` / `"retrieval_only"`・`answer` |
-| 回答の記録の詳細の API・チャットの SSE の `metadata` | `docrag` | `answer_diagnostics` |
-| 回答の記録の回答の方式（`rag_answer_records.answer_engine`） | `docrag` | `grounded` |
-| 進捗の stage・metrics の `stage` label・監査の `error_stage` | `docrag_answer`・`docrag_history_rewrite` | `answer`・`history_rewrite` |
-| 親子階層の chunk の metadata | `docrag_parent_text`・`docrag_metadata_json`・`docrag_search_text`・`docrag_chunk_id`・`docrag_chunk_seq`・`docrag_source_record_refs_json`・`docrag_source_seq_ranges_json`・`docrag_first_page_context_json`、`source_parser: docling_docrag`、`chunk_group_kind: docrag_parent` | `parent_text`・`engine_metadata_json`・`engine_search_text`・`engine_chunk_id`・`engine_chunk_seq`・`source_record_refs_json`・`source_seq_ranges_json`・`first_page_context_json`、`docling_layout`、`small_to_big_parent` |
-| Docling の解析結果（`parser_artifacts`）・分割の縮退の理由 | `docrag_layout`・`docrag_layout_missing` | `layout_records`・`layout_missing` |
-| 派生情報レイヤーの指紋の入力 | `docrag_chunk_contract` | `chunk_metadata_contract` |
-
-`chunk_set_id` は改名の前の名前で hash するので変わらない（既存の Chunk・embedding をそのまま使う。作り直しは要らない）。検索の設定の fingerprint（`config_fingerprint`）は入力の名前が変わるので、更新の前と後で値が変わる。Prometheus のダッシュボード・アラートで `stage="docrag_answer"` などを使っている場合は、新しい名前に直す。
-
-### システムテーブルの更新がすること
-
-- migration `20260930_008_answer_prompts_table`: 回答生成のプロンプトの表を `rag_docrag_prompts` から `rag_answer_prompts` へ移す。新しい表が無ければ `ALTER TABLE ... RENAME TO` で改名し、ある（システムテーブルの更新は migration の前に新しい表を作る）ときは旧表の行を新しい表へ写す。写した後、旧表は退役したオブジェクトとして消える（行は新しい表に残る）。主キーの制約と index はシステムの名前（`SYS_C...`）なので改名しない。
-- migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、業務ビューの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
-
-### 手順
-
-1. #599 の版のコードを取得する（`git pull` など）。backend・取込 worker・前処理 / parser は止める（旧 package の venv のままでは起動できない。保存値の書き換えの最中に取込が書き込まないようにする）。
-
-   ```bash
-   sudo systemctl stop 'production-ready-rag-*'
-   ```
-
-2. `backend/.env` の旧名の行を改名する（バックアップを取ってから編集する）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
-
-   ```bash
-   for env_file in /u01/aipoc/no.1-production-ready-suite/rag/backend/.env /u01/aipoc/props/backend.env; do
-     [ -f "${env_file}" ] || continue
-     sudo cp -p "${env_file}" "${env_file}.bak-599"
-     sudo sed -i -E \
-       -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
-       -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
-       -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
-       "${env_file}"
-     sudo grep -nE '^(RAG_DOCRAG_|DOCRAG_)' "${env_file}" || echo "OK: ${env_file}"
-   done
-   ```
-
-   ローカルは `rag/backend/.env` だけを同じ `sed` で直す。
-3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in（`systemctl edit production-ready-rag-backend.service` などで足した `Environment=DOCRAG_DOMAIN_PROFILE_FILE=...`）や、起動する shell の `export` を探して改名する。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
-
-   ```bash
-   sudo grep -rn 'DOCRAG_' /etc/systemd/system/production-ready-rag-* 2>/dev/null
-   ```
-
-4. venv を作り直す（package の名前が変わったので、旧 `docrag-core` を外して `rag-engine` を入れる）。Compute では `init_script.sh` を再実行すれば、venv・unit・frontend の build・システムテーブルの更新（手順 5）までを行う。手で行う場合は、リポジトリの所有者で実行する。
-
-   ```bash
-   # OCI Compute（手で行う場合）
-   cd /u01/aipoc/no.1-production-ready-suite/rag
-   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
-   sudo -u ubuntu bash -c 'cd services/parsers/docling && uv sync --locked --no-dev --python 3.12'
-
-   # ローカル
-   cd rag/backend && uv sync --locked
-   cd ../services/parsers/docling && uv sync --locked
-   ```
-
-5. システムテーブルを更新する（承認は要らない）。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」でもよい。
-
-   ```bash
-   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
-   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
-   ```
-
-6. backend・worker・前処理 / parser と frontend（`npm run build` の成果物）を起動し直す（`sudo systemctl start 'production-ready-rag-*'`。`init_script.sh` を再実行した場合は起動済み）。
-7. 確かめる。
-   - `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空。
-   - 保存値に旧名が残っていない（0 件）。
-
-     ```sql
-     SELECT COUNT(*) FROM rag_chunks WHERE JSON_SERIALIZE(metadata_json RETURNING CLOB) LIKE '%docrag%';
-     SELECT COUNT(*) FROM rag_business_views WHERE JSON_SERIALIZE(view_config RETURNING CLOB) LIKE '%docrag%';
-     SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
-     ```
-
-   - 検索・回答設定の「検索方法」「文書分割」と業務ビューの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
-
 ## 既存環境の更新手順（#596 標準の回答フローのテーブルの削除）
 
 #595 で標準の回答フロー（`standard`）のコードを削除した後、#596 で、それだけが使っていたデータベースのオブジェクトを片付けた。システムテーブルの更新（migration `20260930_005_retire_standard_engine_objects`）が次を行う。あるものだけを消し、無ければ何もしない（冪等）。
@@ -393,7 +423,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **関係情報の構築（知識グラフ。`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う。
+- **関係情報の構築（`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 

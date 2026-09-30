@@ -119,8 +119,6 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_INGESTION_AUDIT",
     "RAG_GRAPH_ENTITIES",
     "RAG_GRAPH_RELATIONSHIPS",
-    "RAG_GRAPH_CLAIMS",
-    "RAG_GRAPH_COMMUNITY_SUMMARIES",
     "RAG_GRAPH_ENTITY_CHUNKS",
     "RAG_CITATION_FEEDBACK",
     "RAG_FEEDBACK_DETAILS",
@@ -189,9 +187,6 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_GRAPH_ENTITIES_TENANT_NAME_IDX",
     "RAG_GRAPH_REL_SOURCE_IDX",
     "RAG_GRAPH_REL_TARGET_IDX",
-    "RAG_GRAPH_CLAIM_ENTITY_IDX",
-    "RAG_GRAPH_COMMUNITY_TENANT_IDX",
-    "RAG_GRAPH_COMMUNITY_CHUNK_SET_IDX",
     "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_IDX",
     "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_SET_IDX",
     "RAG_CITATION_FEEDBACK_TRACE_IDX",
@@ -235,6 +230,10 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     ("RAG_PROMPT_VERSIONS", "TABLE"),
     ("RAG_GENERATION_SETTINGS", "TABLE"),
     ("RAG_AGENT_MEMORIES", "TABLE"),
+    # 関係情報の claims / community summary の表（#621。読む経路が無かった）。更新では migration
+    # `20260930_007_retire_graph_claims_community` が消す。全再作成のためにここにも載せる。
+    ("RAG_GRAPH_CLAIMS", "TABLE"),
+    ("RAG_GRAPH_COMMUNITY_SUMMARIES", "TABLE"),
     # 回答生成のプロンプトの表の旧名（#599）。更新では migration
     # `20260930_008_answer_prompts_table` が改名するか、行を `RAG_ANSWER_PROMPTS` へ写してから、
     # ここで消す（行は消えない）。

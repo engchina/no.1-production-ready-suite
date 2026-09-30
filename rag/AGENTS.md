@@ -136,7 +136,7 @@ Business View は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-GraphRAG の構築深度は文書レシピで選ぶ(回答の検索では使わない。検索時のグラフ拡張は #595 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
+関係情報の構築(構築する / しない。文書と章・節の見出しのつながり)は文書レシピで選ぶ(ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張は #595、claims / community summary の構築は #621 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
 
 検索時の解決順は **request 明示 > Published Business View > global defaults**。KB の legacy query override は使わない。
 

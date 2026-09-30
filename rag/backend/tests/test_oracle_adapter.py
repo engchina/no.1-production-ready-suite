@@ -37,8 +37,6 @@ from app.config import Settings
 from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
-    GraphClaim,
-    GraphCommunitySummary,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -1881,28 +1879,6 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
                 source_document_ids=["doc-1"],
             )
         ],
-        claims=[
-            GraphClaim(
-                claim_id="claim-1",
-                knowledge_base_id="kb-1",
-                entity_id="ent-section",
-                claim_text="12万円以上は部門長承認です。",
-                confidence=0.88,
-                source_document_id="doc-1",
-                source_chunk_id="doc-1:0",
-            )
-        ],
-        community_summaries=[
-            GraphCommunitySummary(
-                community_id="comm-1",
-                knowledge_base_id="kb-1",
-                level_no=0,
-                title="社内規程 の全体要約",
-                summary_text="承認条件の関係をまとめた要約です。",
-                entity_ids=["ent-doc", "ent-section"],
-                source_document_ids=["doc-1"],
-            )
-        ],
         entity_chunk_links=[
             GraphEntityChunkLink(
                 entity_id="ent-section",
@@ -1916,6 +1892,8 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         execute_results=[
             [_oracle_document_row()],
             [{"entity_id": "ent-doc"}, {"entity_id": "ent-old"}, {"entity_id": "ent-stale"}],
+            # #621 で廃止した rag_graph_claims が、migration の適用前でまだ残っている。
+            [{"table_count": 1}],
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -1932,19 +1910,25 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
     assert any("source_entity_id IN" in statement for statement in statements)
     assert any("target_entity_id IN" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
-    assert any(
-        "DELETE FROM rag_graph_community_summaries" in statement and "JSON_EXISTS" in statement
-        for statement in statements
+    # 残っている claims は、消す entity を FK で参照する行だけを entity より先に消す(#621)。
+    claim_delete = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_graph_claims" in statement
     )
-    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
+    assert "entity_id IN" in statements[claim_delete]
+    entity_delete = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_graph_entities" in statement
+    )
+    assert claim_delete < entity_delete
+    assert not any("rag_graph_community_summaries" in statement for statement in statements)
     many_statements = [call.statement for call in pool.connection.many_calls]
     assert any("INSERT INTO rag_graph_entities" in statement for statement in many_statements)
     assert any("INSERT INTO rag_graph_relationships" in statement for statement in many_statements)
-    assert any("INSERT INTO rag_graph_claims" in statement for statement in many_statements)
-    assert any(
-        "INSERT INTO rag_graph_community_summaries" in statement for statement in many_statements
-    )
+    assert not any("rag_graph_claims" in statement for statement in many_statements)
+    assert not any("rag_graph_community_summaries" in statement for statement in many_statements)
     assert any("INSERT INTO rag_graph_entity_chunks" in statement for statement in many_statements)
     entity_insert = next(
         call
@@ -1952,12 +1936,25 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         if "INSERT INTO rag_graph_entities" in call.statement
     )
     assert json.loads(str(entity_insert.rows[0]["source_document_ids"])) == ["doc-1"]
-    claim_insert = next(
-        call
-        for call in pool.connection.many_calls
-        if "INSERT INTO rag_graph_claims" in call.statement
+
+
+async def test_oracle_replace_document_graph_index_skips_retired_claims_table() -> None:
+    """rag_graph_claims を消す migration の適用後(表が無い)は、claims に触らない(#621)。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_document_row()],
+            [{"entity_id": "ent-doc"}],
+            [{"table_count": 0}],
+        ]
     )
-    assert claim_insert.rows[0]["source_chunk_id"] == "doc-1:0"
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.replace_document_graph_index("doc-1", GraphIndex())
+
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("FROM user_tables" in statement for statement in statements)
+    assert not any("DELETE FROM rag_graph_claims" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
 
 
 async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:
@@ -2299,8 +2296,9 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
     assert "document_id IN (:access_document_id_0)" in statements[0]
     assert any("FROM rag_graph_entity_chunks" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_community_summaries" in statement for statement in statements)
+    # 関係情報の entity が無い文書は、#621 で廃止した表を見に行かない。
+    assert not any("rag_graph_claims" in statement for statement in statements)
+    assert not any("rag_graph_community_summaries" in statement for statement in statements)
     duplicate_clear = next(
         call
         for call in pool.connection.calls
@@ -2725,8 +2723,9 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
 
     assert "CREATE TABLE rag_graph_entities" in graph_ddl
     assert "CREATE TABLE rag_graph_relationships" in graph_ddl
-    assert "CREATE TABLE rag_graph_claims" in graph_ddl
-    assert "CREATE TABLE rag_graph_community_summaries" in graph_ddl
+    # claims / community summary は #621 で廃止した(読む経路が無かった)。
+    assert "rag_graph_claims" not in graph_ddl
+    assert "rag_graph_community_summaries" not in graph_ddl
     assert "CREATE TABLE rag_graph_entity_chunks" in graph_ddl
     assert "CREATE TABLE rag_citation_feedback" in feedback_ddl
     assert "target_type       VARCHAR2(16)" in feedback_ddl

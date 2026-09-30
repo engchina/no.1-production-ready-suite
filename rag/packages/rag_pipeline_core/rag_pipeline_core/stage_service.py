@@ -80,13 +80,11 @@ def create_graph_app(
 
     @app.post("/run", response_model=GraphStageResponse)
     def run(request: GraphStageRequest) -> GraphStageResponse:
-        resolved = resolve_graph_profile(request.profile, legacy_enabled=request.legacy_enabled)
+        resolved = resolve_graph_profile(request.profile)
         return GraphStageResponse(
             profile=resolved.profile,
             build_entities=resolved.build_entities,
             build_relationships=resolved.build_relationships,
-            build_claims=resolved.build_claims,
-            build_community_summary=resolved.build_community_summary,
         )
 
     return app

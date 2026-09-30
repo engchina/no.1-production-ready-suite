@@ -548,6 +548,24 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
                 "書き出してください。"
             ),
         ),
+        # 関係情報の構築の保存値 full を entities へ書き換える（#621。full は削除した）。
+        OracleSchemaSection(
+            name="20260930_006_graph_profile_entities",
+            table_name="rag_document_recipes",
+            sql=_graph_profile_entities_migration_sql(),
+        ),
+        # 読む経路の無かった関係情報の claims / community summary の表を片付ける（#621）。
+        OracleSchemaSection(
+            name="20260930_007_retire_graph_claims_community",
+            table_name="rag_graph_entities",
+            sql=_retire_graph_claims_community_migration_sql(),
+            destructive_note=(
+                "関係情報の追加の表 rag_graph_claims・rag_graph_community_summaries を削除します"
+                "（PURGE のため復元できません）。どの画面・API・検索も読んでいなかった、文書から"
+                "作り直せる派生データです。関係情報グラフの表（rag_graph_entities など）は"
+                "残ります。"
+            ),
+        ),
         # rag_poc から移したときの名前を、RAG の標準の名前にする（#599）。行は消さない。
         OracleSchemaSection(
             name="20260930_008_answer_prompts_table",
@@ -1374,6 +1392,63 @@ BEGIN
     SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_AGENT_MEMORIES';
     IF v_count > 0 THEN
         EXECUTE IMMEDIATE 'DROP TABLE rag_agent_memories CASCADE CONSTRAINTS PURGE';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _graph_profile_entities_migration_sql() -> str:
+    """関係情報の構築の保存値 full を entities へ書き換える(冪等。#621)。
+
+    full(claims / community summary まで作る)は削除した。entities が作る関係情報
+    (文書と章・節の見出しのつながり)は full と同じなので、上書きの意味を保ったまま
+    entities にする。`REPLACE` は値があるときだけ置き換える(継承の欄に値を足さない)。
+
+    - 文書・文書レシピの上書き(`processing_config.graph_profile`)
+    - ナレッジベースの構築設定(`retrieval_config.ingestion.graph_profile`)
+    - 取込ジョブの上書き(`settings_overrides.processing_config.graph_profile`)
+    - chunk_set に刻んだレシピ(`recipe_subset` の `processing_config` と
+      `effective_processing_config`)。残すと、今の設定との差(再処理の案内)に出るため。
+    """
+    targets = (
+        ("rag_documents", "processing_config", "$.graph_profile"),
+        ("rag_document_recipes", "processing_config", "$.graph_profile"),
+        ("rag_knowledge_bases", "retrieval_config", "$.ingestion.graph_profile"),
+        ("rag_ingestion_jobs", "settings_overrides", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.effective_processing_config.graph_profile"),
+    )
+    statements = [
+        f"UPDATE {table}\n"
+        f"SET {column} = JSON_TRANSFORM({column}, REPLACE '{path}' = 'entities')\n"
+        f"WHERE JSON_VALUE({column}, '{path}') = 'full';"
+        for table, column, path in targets
+    ]
+    return "\n\n".join([*statements, "COMMIT;"])
+
+
+def _retire_graph_claims_community_migration_sql() -> str:
+    """関係情報の claims / community summary の表を片付ける(冪等。#621)。
+
+    どちらも旧 full の構築だけが書き、読む画面・API・検索が無かった(削除のために読むだけ)。
+    `rag_graph_claims` は `rag_graph_entities` を参照するが、参照する側なので先に消す必要は
+    無い。index・制約は表と一緒に消える。表が無い環境では何もしない。関係情報グラフが読む
+    `rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks` は残す。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GRAPH_CLAIMS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_graph_claims CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tables
+    WHERE table_name = 'RAG_GRAPH_COMMUNITY_SUMMARIES';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_graph_community_summaries CASCADE CONSTRAINTS PURGE';
     END IF;
 END;
 /
