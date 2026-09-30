@@ -18,17 +18,37 @@ from pr_system_settings.users_roles import (
 
 
 def test_login_user_id_is_trimmed_and_validated() -> None:
-    assert UserCreateRequest(login_user_id=" a.b-c_1 ", display_name="x").login_user_id == "a.b-c_1"
+    created = UserCreateRequest(login_user_id=" a.b-c_1 ", display_name="x", role_ids=["r"])
+    assert created.login_user_id == "a.b-c_1"
     with pytest.raises(ValidationError):
-        UserCreateRequest(login_user_id="._-", display_name="x")
+        UserCreateRequest(login_user_id="._-", display_name="x", role_ids=["r"])
     with pytest.raises(ValidationError):
-        UserCreateRequest(login_user_id="has space", display_name="x")
+        UserCreateRequest(login_user_id="has space", display_name="x", role_ids=["r"])
 
 
 def test_user_status_is_normalized() -> None:
-    assert UserUpdateRequest(version=1, display_name="x", status=" disabled ").status == "DISABLED"
+    updated = UserUpdateRequest(version=1, display_name="x", status=" disabled ", role_ids=["r"])
+    assert updated.status == "DISABLED"
     with pytest.raises(ValidationError):
-        UserUpdateRequest(version=1, display_name="x", status="LOCKED")
+        UserUpdateRequest(version=1, display_name="x", status="LOCKED", role_ids=["r"])
+
+
+@pytest.mark.parametrize("role_ids", [None, [], ["", "  "]], ids=["missing", "empty", "blank"])
+def test_user_requests_require_a_role(role_ids: list[str] | None) -> None:
+    """ユーザーのロールは画面と同じく必須（#540）。省略・空・空白だけは 422 の日本語の文言。"""
+    extra = {} if role_ids is None else {"role_ids": role_ids}
+    for model, payload in (
+        (UserCreateRequest, {"login_user_id": "alice", "display_name": "x"}),
+        (UserUpdateRequest, {"version": 1, "display_name": "x", "status": "ACTIVE"}),
+    ):
+        with pytest.raises(ValidationError) as exc:
+            model.model_validate({**payload, **extra})
+        errors = exc.value.errors()
+        assert [error["loc"] for error in errors] == [("role_ids",)]
+        assert "ロールを選択してください。" in errors[0]["msg"]
+    assert UserCreateRequest(
+        login_user_id="alice", display_name="x", role_ids=[" r1 ", ""]
+    ).role_ids == ["r1"]
 
 
 def test_role_code_is_uppercased_and_role_requests_carry_no_permissions() -> None:
@@ -36,6 +56,25 @@ def test_role_code_is_uppercased_and_role_requests_carry_no_permissions() -> Non
     assert created.role_code == "SALES_VIEWER"
     with pytest.raises(ValidationError):
         RoleCreateRequest(role_code="1ROLE", display_name="x")
+
+
+@pytest.mark.parametrize(
+    ("role_code", "message"),
+    [
+        ("", "ロールコードを入力してください。"),
+        ("  ", "ロールコードを入力してください。"),
+        ("a", "ロールコードは 2 文字以上で入力してください。"),
+        (" a ", "ロールコードは 2 文字以上で入力してください。"),
+        ("1ROLE", "ロールコードは英大文字で始め"),
+        ("A" * 65, "String should have at most 64 characters"),
+    ],
+    ids=["empty", "blank", "one-char", "one-char-padded", "digit-first", "too-long"],
+)
+def test_role_code_errors_match_the_screen(role_code: str, message: str) -> None:
+    """ロールコードの文言は画面の検証（system-settings の validation.ts）と同じ（#540）。"""
+    with pytest.raises(ValidationError) as exc:
+        RoleCreateRequest(role_code=role_code, display_name="x")
+    assert message in exc.value.errors()[0]["msg"]
     # 権限は製品の権限管理 API で扱う。旧 client が送っても共通契約は受け取らない。
     assert "permissions" not in RoleCreateRequest.model_fields
     assert "permissions" not in RoleUpdateRequest.model_fields

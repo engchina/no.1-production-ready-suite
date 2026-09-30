@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from pr_backend_core.oracle_session import init_oracle_session
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.planner import PlannerDecision, PlannerMode, plan_next_step, plan_run_goal
@@ -194,6 +194,15 @@ class RunCreateRequest(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
     planner_mode: PlannerMode = PlannerMode.AUTO
+
+    @field_validator("goal")
+    @classmethod
+    def _require_goal(cls, value: str) -> str:
+        # ゴールは画面と同じく必須（#540）。空白だけも未入力として扱う
+        # Oracle の goal 列は NOT NULL。。
+        if not value.strip():
+            raise ValueError("ゴールを入力してください。")
+        return value
 
 
 class RunState(BaseModel):

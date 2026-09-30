@@ -12,6 +12,7 @@ import {
   type SecurityRole,
   type UserManagementApi,
 } from "../src";
+import { roleCodeValidationError } from "../src/users-roles/validation";
 
 // #531: 必須の欄は共有の「必須」タグと aria-required で示し、未入力は送信前に欄の下へ
 // 「〇〇を入力してください。」を出して、最初のエラーの欄へフォーカスする（ブラウザの検証の吹き出しに任せない）。
@@ -66,6 +67,13 @@ function buttonByText(text: string): HTMLButtonElement {
   return button;
 }
 
+/** React の制御された input に値を入れる（value の setter を経由して onChange を起こす）。 */
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function submitForm(labelledBy: string) {
   const form = host.querySelector<HTMLFormElement>(`form[aria-labelledby="${labelledBy}"]`);
   if (!form) throw new Error(`form not found: ${labelledBy}`);
@@ -112,6 +120,48 @@ describe("RoleManagementPage の必須の欄", () => {
   });
 });
 
+describe("ロールコードの検証（#540）", () => {
+  it("backend と同じ規則（英大文字で始まる 2〜64 文字）で検証する", () => {
+    expect(roleCodeValidationError("")).toBe("security.roles.codeRequired");
+    expect(roleCodeValidationError("A")).toBe("security.roles.codeTooShort");
+    expect(roleCodeValidationError("1A")).toBe("security.roles.codeInvalid");
+    expect(roleCodeValidationError("SALES-1")).toBe("security.roles.codeInvalid");
+    expect(roleCodeValidationError("AB")).toBeNull();
+    expect(roleCodeValidationError(`A${"B".repeat(63)}`)).toBeNull();
+    expect(roleCodeValidationError(`A${"B".repeat(64)}`)).toBe("security.roles.codeInvalid");
+  });
+
+  it("1 文字のロールコードは送信前に欄の下へエラーを出し、ロールコードへフォーカスする", async () => {
+    const createRole = vi.fn(pending);
+    const api: RoleManagementApi = {
+      roles: async () => [],
+      createRole,
+      updateRole: pending,
+      archiveRole: pending,
+      restoreRole: pending,
+      deleteRole: pending,
+    };
+    await renderPage(<RoleManagementPage api={api} canManage />);
+    await act(async () => buttonByText("新規作成").click());
+    const code = host.querySelector<HTMLInputElement>("#security-role-code");
+    const name = host.querySelector<HTMLInputElement>("#security-role-name");
+    if (!code || !name) throw new Error("role inputs not found");
+    await act(async () => {
+      setInputValue(code, "a");
+      setInputValue(name, "営業");
+    });
+
+    await submitForm("security-roles-form-heading");
+
+    expect(host.querySelector("#security-role-code-error")?.textContent).toContain(
+      "ロールコードは 2 文字以上で入力してください。",
+    );
+    expect(host.querySelector("#security-role-name-error")).toBeNull();
+    expect(document.activeElement?.id).toBe("security-role-code");
+    expect(createRole).not.toHaveBeenCalled();
+  });
+});
+
 describe("UserManagementPage の必須の欄", () => {
   it("未入力で送信すると欄の下にエラーを出し、ログインユーザーIDへフォーカスする", async () => {
     const createUser = vi.fn(pending);
@@ -150,7 +200,7 @@ describe("UserManagementPage の必須の欄", () => {
       "表示名を入力してください。",
     );
     expect(host.querySelector("#security-users-role-error")?.textContent).toContain(
-      "ロールを1つ選択してください。",
+      "ロールを選択してください。",
     );
     expect(document.activeElement?.id).toBe("security-user-login-user-id");
     expect(createUser).not.toHaveBeenCalled();

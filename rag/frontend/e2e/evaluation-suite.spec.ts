@@ -340,3 +340,38 @@ function evaluationMetricsWithTimedOutCase() {
     ],
   };
 }
+
+// #541: JSON の未入力・形式のエラーは、押せないボタンと Banner ではなく欄の直下に出し、その欄へフォーカスする。
+test("評価の JSON のエラーは欄の直下に出し、その欄へフォーカスする", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, {
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    autoComplete: true,
+  });
+
+  await page.goto("/evaluation");
+  const request = page.getByLabel("Golden set JSON");
+  await request.fill("{");
+  const run = page.getByRole("button", { name: "評価実行" });
+  await expect(run).toBeEnabled();
+  await run.click();
+  await expect(page.locator("#evaluation-request-json-error")).toHaveText(
+    "Golden set JSON は有効な JSON で入力してください。"
+  );
+  await expect(request).toHaveAttribute("aria-invalid", "true");
+  await expect(request).toBeFocused();
+  await request.fill('{"cases": []}');
+  await expect(page.locator("#evaluation-request-json-error")).toHaveCount(0);
+  await run.click();
+  await expect(page.locator("#evaluation-request-json-error")).toHaveText(
+    "Golden set JSON の cases を 1 件以上入力してください。"
+  );
+
+  await page.getByRole("button", { name: "サンプルを読み込む" }).click();
+  const experiments = page.getByLabel("Experiments JSON");
+  await experiments.fill("");
+  await page.getByRole("button", { name: "比較実行" }).click();
+  await expect(page.locator("#evaluation-experiments-json-error")).toHaveText("Experiments JSON を入力してください。");
+  await expect(experiments).toBeFocused();
+  expect(jobs.runPayloads).toHaveLength(0);
+  await expectNoPageOverflow(page);
+});

@@ -88,7 +88,7 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
 
   await page.locator('input[type="file"]').setInputFiles(uploadFile());
   await expect(
-    picker.getByRole("alert").filter({ hasText: "アップロードする前に、登録先のナレッジベースを 1 件以上選択してください。" })
+    picker.getByRole("alert").filter({ hasText: "所属させるナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
   expect(uploads).toHaveLength(0);
   await expectNoPageOverflow(page);

@@ -8,6 +8,7 @@ import {
   Banner,
   PageBody,
   ActionResultRegion,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 
@@ -72,15 +73,24 @@ function ExecutableDirectSqlPage() {
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [sqlError, setSqlError] = useState("");
   const rowLimit = parseSqlRowLimit(rowLimitInput);
   const rowLimitError =
     rowLimit === null ? t("queryResults.rowLimit.error") : "";
-  const canExecute = Boolean(sqlText.trim()) && !loading && rowLimit !== null;
+  // SQL の未入力は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。
+  // 取得件数上限は欄の直下に理由を出したうえで押せなくする（UX 契約 messaging.md §3.2.1）。
+  const canExecute = !loading && rowLimit !== null;
   const canClear = Boolean(sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || results || executionRun);
 
   const execute = async () => {
     const trimmedSql = sqlText.trim();
-    if (!trimmedSql || loading || rowLimit === null) return;
+    if (loading || rowLimit === null) return;
+    if (!trimmedSql) {
+      setSqlError(t("nl2sql.sqlRunner.error.required"));
+      document.getElementById("direct-sql-input")?.focus();
+      return;
+    }
+    setSqlError("");
     const startedAt = Date.now();
     setLoading(true);
     setError("");
@@ -125,6 +135,7 @@ function ExecutableDirectSqlPage() {
     setExecutionRun(null);
     setRowLimitInput(String(DEFAULT_SQL_ROW_LIMIT));
     setError("");
+    setSqlError("");
     setSqlFileResetSignal((value) => value + 1);
   };
 
@@ -145,20 +156,27 @@ function ExecutableDirectSqlPage() {
               onChange={(event) => {
                 setSqlFileResetSignal((current) => current + 1);
                 setSqlText(event.currentTarget.value);
+                setSqlError("");
               }}
               disabled={loading}
               rows={12}
               required
               aria-required="true"
-              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
+              aria-invalid={sqlError ? "true" : undefined}
+              aria-describedby={sqlError ? "direct-sql-input-error" : undefined}
+              className={`min-h-64 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
+                sqlError ? "border-danger-fg" : "border-border-control"
+              }`}
               placeholder={t("nl2sql.sqlRunner.placeholder")}
             />
+            <FieldError id="direct-sql-input-error" message={sqlError} />
           </div>
           <SqlFileInput
             resetSignal={sqlFileResetSignal}
             disabled={loading}
             onLoad={(text) => {
               setSqlText(text);
+              setSqlError("");
               setResults(null);
               setExecutedRowLimit(null);
               setExecutionRun(null);
