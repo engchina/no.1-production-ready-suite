@@ -640,6 +640,7 @@ class AnsweringSettingsData(BaseModel):
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
+    auto_field_filter_enabled: bool
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -651,6 +652,7 @@ class AnsweringSettingsUpdate(BaseModel):
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None
+    auto_field_filter_enabled: bool | None = None
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

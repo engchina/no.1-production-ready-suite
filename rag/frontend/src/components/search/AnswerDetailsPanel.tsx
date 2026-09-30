@@ -3,6 +3,7 @@ import { Banner, Disclosure, StatusBadge } from "@engchina/production-ready-ui";
 import { confidenceVariant, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
+import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
  * 回答の根拠の構成と実行記録(信頼度・人手確認・根拠木・工程)。
@@ -13,12 +14,15 @@ export function AnswerDetailsPanel({
   traceId,
   evaluation,
   title = t("search.answerDetails.title"),
+  showAutoFieldFilter = true,
 }: {
   diagnostics: unknown;
   traceId?: string | null;
   evaluation?: unknown;
   /** 回答を作らない RAG 検索では「検索の〜」にする（#649）。 */
   title?: string;
+  /** 質問から読み取った条件（#652）を出すか。RAG 検索は外せるチップで出すので出さない。 */
+  showAutoFieldFilter?: boolean;
 }) {
   const data = parseAnswerDiagnostics(diagnostics);
   if (!data) return null;
@@ -91,6 +95,18 @@ export function AnswerDetailsPanel({
               </div>
             ))}
           </dl>
+        </div>
+      ) : null}
+      {showAutoFieldFilter && data.autoFieldFilter ? (
+        // 質問から読み取って検索に足した条件（#652）。
+        <div className="space-y-0.5 text-xs leading-relaxed text-fg-muted" data-testid="auto-field-filter">
+          <p className="break-words">
+            {t("search.answerDetails.autoFieldFilter")}:{" "}
+            {data.autoFieldFilter.conditions.map(extractionFieldConditionLabel).join(" / ")}
+          </p>
+          {data.autoFieldFilter.relaxed ? (
+            <p>{t("search.answerDetails.autoFieldFilterRelaxed")}</p>
+          ) : null}
         </div>
       ) : null}
       {data.rewrittenQuestion ? (

@@ -46,8 +46,14 @@ from app.config import (
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
+from app.rag.field_filter_reader import merge_field_conditions
 from app.schemas.classification import category_label, normalize_category_value
-from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from app.schemas.search import (
+    ExtractionFieldCondition,
+    RetrievedChunk,
+    SearchMode,
+    SearchRequest,
+)
 
 T = TypeVar("T")
 
@@ -125,6 +131,11 @@ class _SearchState:
     loaded_classification_ids: set[str] = field(default_factory=set)
     # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
+    # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)と、それを外した検索条件。
+    # 読み取った条件で 0 件なら、外した条件で 1 回だけ検索し直す(auto_field_relaxed)。
+    auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
+    filters_without_auto: dict[str, str] | None = None
+    auto_field_relaxed: bool = False
     # 文書の 1 ページ目の本文(rag_chunk_sets.first_page_context)を chunk_set_id ごとに持つ(#557)。
     first_page_contexts: dict[str, dict[str, object]] = field(default_factory=dict)
     loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
@@ -200,6 +211,7 @@ class AnswerEngine:
         genai: OciGenAiClient,
         runtime_knowledge_payload: Mapping[str, object] | None = None,
         answer_model_id: str | None = None,
+        auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
     ) -> None:
         self._settings = settings
         self._oracle = oracle
@@ -207,6 +219,8 @@ class AnswerEngine:
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
         self._answer_model_id = answer_model_id or None
+        # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
+        self._auto_field_conditions = list(auto_field_conditions)
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -250,6 +264,11 @@ class AnswerEngine:
         outcome.diagnostics["models"] = self._models_used(
             vision=getattr(result, "image_prompt_mode", "") == "vision_attachments"
         )
+        if state.auto_field_conditions:
+            outcome.diagnostics["auto_field_filter"] = {
+                "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
+                "relaxed": state.auto_field_relaxed,
+            }
         return outcome
 
     def _models_used(self, *, vision: bool = False) -> dict[str, Any]:
@@ -397,24 +416,36 @@ class AnswerEngine:
         if not queries:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         if state.filters is None:
-            state.filters = await self._question_filters(dict(request.filters), inquiry_conditions)
+            filters = await self._question_filters(dict(request.filters), inquiry_conditions)
+            state.filters, state.auto_field_conditions = merge_field_conditions(
+                filters, self._auto_field_conditions
+            )
+            if state.auto_field_conditions:
+                state.filters_without_auto = filters
         vector_only = {query.strip() for query in vector_only_queries}
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
-        fused: dict[str, float] = {}
-        rankings: list[list[str]] = []
         k = float(self._settings.rag_rrf_k)
         derived_weight = 1.0 / max(1, len(queries) - 1)
-        for index, (query, embedding) in enumerate(zip(queries, embeddings, strict=False)):
-            mode = SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID
-            hits = await self._oracle.hybrid_search(
-                query, embedding, candidate_limit, mode=mode, filters=dict(state.filters)
-            )
-            rankings.append([hit.chunk_id for hit in hits])
-            # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
-            weight = 1.0 if index == 0 else derived_weight
-            for rank, hit in enumerate(hits, start=1):
-                state.chunks.setdefault(hit.chunk_id, hit)
-                fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
+        while True:
+            fused: dict[str, float] = {}
+            rankings: list[list[str]] = []
+            for index, (query, embedding) in enumerate(zip(queries, embeddings, strict=False)):
+                mode = SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID
+                hits = await self._oracle.hybrid_search(
+                    query, embedding, candidate_limit, mode=mode, filters=dict(state.filters)
+                )
+                rankings.append([hit.chunk_id for hit in hits])
+                # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
+                weight = 1.0 if index == 0 else derived_weight
+                for rank, hit in enumerate(hits, start=1):
+                    state.chunks.setdefault(hit.chunk_id, hit)
+                    fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
+            # 質問から読み取った条件(#652)で 0 件なら、その条件を外して 1 回だけ検索し直す
+            # (以降の検索(CRAG の補正検索など)も外したまま)。
+            if fused or state.filters_without_auto is None or state.auto_field_relaxed:
+                break
+            state.filters = state.filters_without_auto
+            state.auto_field_relaxed = True
         await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
         if inquiry_conditions is not None:
             pool = [

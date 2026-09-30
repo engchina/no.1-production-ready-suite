@@ -1,4 +1,5 @@
 import type { ExtractionFieldDefinition, ExtractionFieldValueType } from "@/lib/api";
+import { t } from "@/lib/i18n";
 
 /**
  * 検索の「抽出項目の値で絞り込む」（#549）。backend の `filters.extraction_fields`
@@ -111,6 +112,15 @@ export function extractionFieldConditions(
 /** `filters.extraction_fields` の値（条件が無ければ空文字）。 */
 export function extractionFieldFilterValue(conditions: readonly ExtractionFieldCondition[]): string {
   return conditions.length ? JSON.stringify(conditions) : "";
+}
+
+/** 条件の表示（「金額 ≥ 100000」など）。検索の適用中の条件と、質問から読み取った条件（#652）で使う。 */
+export function extractionFieldConditionLabel(condition: ExtractionFieldCondition): string {
+  const value =
+    condition.value_type === "bool"
+      ? t(condition.value === "true" ? "search.filters.fields.true" : "search.filters.fields.false")
+      : condition.value;
+  return t(`search.filters.fields.applied.${condition.op}`, { name: condition.name, value });
 }
 
 /** 適用中の条件の表示用に `filters.extraction_fields` を読む（壊れた値は空）。 */

@@ -788,6 +788,8 @@ export interface KnowledgeBaseQueryConfig {
   rerank_enabled?: boolean | null;
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
   screen_linking_enabled?: boolean | null;
+  // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
+  auto_field_filter_enabled?: boolean | null;
 }
 
 export type QueryStrategyName =
@@ -993,6 +995,8 @@ export interface SearchRequestBody {
   retrieval_only?: boolean;
   /** false なら回答を生成しない（RAG 検索の画面。CRAG と回答の LLM を使わない。#649）。 */
   generate_answer?: boolean;
+  /** 質問から読み取った条件のうち、利用者が外した項目の名前（#652）。 */
+  auto_field_filter_excluded?: string[];
 }
 
 export interface RetrievedChunk {
@@ -1800,6 +1804,7 @@ export interface AnsweringSettingsData {
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
+  auto_field_filter_enabled: boolean;
   config_source: "runtime";
 }
 

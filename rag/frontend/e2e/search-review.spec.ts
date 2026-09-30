@@ -264,6 +264,58 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
 });
 
+test("質問から読み取った条件を「自動」のチップで出し、外して検索し直せる（#652）", async ({ page }) => {
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/search/stream", (route) => {
+    requests.push(route.request().postDataJSON() as Record<string, unknown>);
+    const first = requests.length === 1;
+    const answer = {
+      execution_steps: [],
+      evidence_tree: [],
+      ...(first
+        ? {
+            auto_field_filter: {
+              conditions: [
+                { name: "契約日", value_type: "date", op: "gte", value: "2025-01-01" },
+                { name: "金額", value_type: "number", op: "gte", value: "100000" },
+              ],
+              relaxed: true,
+            },
+          }
+        : {}),
+    };
+    return fulfillStream(
+      route,
+      sse([
+        ["metadata", { trace_id: `t${requests.length}`, elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer } }],
+        ["citations", []],
+        ["done", { trace_id: `t${requests.length}` }],
+      ])
+    );
+  });
+
+  await page.goto("/search");
+  await selectBusinessView(page, /経理ビュー/);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("2025年以降の10万円以上の契約");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+
+  const chips = page.getByTestId("auto-field-filter-chips");
+  await expect(chips.getByText("自動: 契約日 ≥ 2025-01-01")).toBeVisible();
+  await expect(chips.getByText("自動: 金額 ≥ 100000")).toBeVisible();
+  // 読み取った条件で見つからず、外して検索したことを示す。
+  await expect(chips.getByRole("status")).toContainText("条件を外して検索しました");
+  await expectNoPageOverflow(page);
+
+  await chips.getByRole("button", { name: "金額 ≥ 100000 を外して検索し直す" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toMatchObject({
+    query: "2025年以降の10万円以上の契約",
+    auto_field_filter_excluded: ["金額"],
+  });
+  expect("auto_field_filter_excluded" in requests[0]).toBe(false);
+  await expect(page.getByTestId("auto-field-filter-chips")).toHaveCount(0);
+});
+
 test("業務ビューの読み込み中は読み込み中の状態として読み上げる", async ({ page }) => {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));

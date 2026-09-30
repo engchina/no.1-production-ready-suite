@@ -960,6 +960,16 @@ function BusinessViewEditor({
                           updateQuery({ screen_linking_enabled: value })
                         }
                       />
+                      <QueryToggleRow
+                        label={t("businessViews.field.autoFieldFilter")}
+                        description={t("businessViews.field.autoFieldFilterHelper")}
+                        descriptionId="business-view-auto-field-filter-helper"
+                        value={config.query.auto_field_filter_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ auto_field_filter_enabled: value })
+                        }
+                      />
                     </div>
                   </div>
                   <QuerySelectRow

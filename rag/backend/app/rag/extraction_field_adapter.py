@@ -246,7 +246,7 @@ def normalize_field_value(value_type: FieldValueType, raw: str) -> str:
     return raw
 
 
-def _extract_json_array(raw: str) -> str:
+def extract_json_array(raw: str) -> str:
     """LLM 出力から JSON 配列部分だけを取り出す(code fence・前後説明文に強い)。"""
     text = raw.strip()
     if text.startswith("```"):
@@ -280,7 +280,7 @@ def parse_extraction_fields(raw: str, field_defs: list[FieldDefinition]) -> list
     """
     allowed = {definition.name.casefold(): definition for definition in field_defs}
     try:
-        data = json.loads(_extract_json_array(raw))
+        data = json.loads(extract_json_array(raw))
     except (ValueError, TypeError):
         return []
     if not isinstance(data, list):

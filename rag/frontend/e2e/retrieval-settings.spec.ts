@@ -156,6 +156,7 @@ const ANSWERING_SETTINGS = {
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
+  auto_field_filter_enabled: false,
   config_source: "runtime",
 };
 
@@ -206,6 +207,8 @@ for (const viewport of [
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
       const screenLinking = page.getByRole("switch", { name: "画面目録で操作画面を探す" });
       await expect(screenLinking).not.toBeChecked();
+      const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
+      await expect(autoFieldFilter).not.toBeChecked();
       const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
       await expect(save).toBeDisabled();
 
@@ -214,6 +217,7 @@ for (const viewport of [
       await page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true }).click();
       await page.getByRole("option", { name: "5", exact: true }).click();
       await screenLinking.click();
+      await autoFieldFilter.click();
       await expect(save).toBeEnabled();
       await save.click();
 
@@ -225,6 +229,7 @@ for (const viewport of [
           neighbor_child_count: 5,
           rerank_enabled: true,
           screen_linking_enabled: true,
+          auto_field_filter_enabled: true,
         },
       ]);
       await expect(save).toBeDisabled();
