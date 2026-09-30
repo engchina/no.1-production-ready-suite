@@ -2,6 +2,8 @@
 
 from dataclasses import fields
 
+import pytest
+from pydantic import ValidationError
 from pytest import MonkeyPatch
 from rag_pipeline_core.graph import GraphResolved
 from rag_pipeline_core.stage import GraphStageResponse
@@ -58,18 +60,21 @@ def test_document_recipe_off_overrides_global_entities() -> None:
     assert effective.rag_graph_profile == "off"
 
 
-def test_stored_full_override_is_read_as_entities_until_migration() -> None:
-    """migration の適用前に残る保存値 full は、同じ関係情報を作る entities として読む(#621)。
+def test_stored_full_override_is_rejected_like_other_invalid_values() -> None:
+    """保存値 full(#621 で削除)は読み替えず、他の不正な値と同じく検証エラーにする(#629)。
 
-    KB・文書・レシピ・取込ジョブの上書き全体を検証エラーで失わないため。
+    保存済みの値は migration `20260930_006_graph_profile_entities` が entities へ書き換える。
     """
+    with pytest.raises(ValidationError):
+        DocumentProcessingConfig.model_validate({"graph_profile": "full"})
+    with pytest.raises(ValidationError):
+        KnowledgeBaseIngestionConfig.model_validate({"graph_profile": "full"})
+    # KB の構築設定は、壊れた保存値と同じく空設定(全項目を継承)へ縮退する。
     kb_config = parse_adapter_config(
         {"version": 2, "ingestion": {"graph_profile": "full", "chunk_size": 900}}
     )
-    assert kb_config.ingestion.graph_profile == "entities"
-    assert kb_config.ingestion.chunk_size == 900
-    recipe = DocumentProcessingConfig.model_validate({"graph_profile": "FULL"})
-    assert recipe.graph_profile == "entities"
+    assert kb_config.ingestion.graph_profile is None
+    assert kb_config.ingestion.chunk_size is None
 
 
 def test_graph_temporal_setting_is_removed(monkeypatch: MonkeyPatch) -> None:

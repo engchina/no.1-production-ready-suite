@@ -8658,47 +8658,6 @@ def _select_graph_entity_ids_for_document(
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
 
 
-def _delete_retired_graph_claims(
-    connection: OracleConnectionProtocol,
-    *,
-    entity_ids: Sequence[str],
-) -> None:
-    """#621 で廃止した rag_graph_claims が残っていれば、消す entity を参照する行を先に消す。
-
-    rag_graph_claims は rag_graph_entities を FK(ON DELETE CASCADE なし)で参照する。表を消す
-    migration(`20260930_007_retire_graph_claims_community`)はデータを削除するため承認が要り、
-    適用前も backend は動く。その間に旧 full で構築した文書を再取込・削除すると、entity の
-    DELETE が FK で失敗するので、表があるときだけ参照する行を消す。migration の適用後
-    (表が無い)は何もしない。rag_graph_community_summaries は FK を持たないので触らない。
-    """
-    unique_entity_ids = _unique_optional_sequence(entity_ids)
-    if not unique_entity_ids:
-        return
-    row = _fetch_one(
-        connection,
-        "SELECT COUNT(*) AS table_count FROM user_tables WHERE table_name = 'RAG_GRAPH_CLAIMS'",
-        {},
-    )
-    if not row or not int(cast(int, row.get("table_count") or 0)):
-        return
-    entity_sql, entity_binds = _oracle_in_predicate(
-        "entity_id",
-        "graph_entity_id",
-        unique_entity_ids,
-    )
-    _execute(
-        connection,
-        _render_sql(
-            """
-            DELETE FROM rag_graph_claims
-            WHERE {entity_sql}
-            """,
-            entity_sql=entity_sql,
-        ),
-        entity_binds,
-    )
-
-
 def _delete_graph_rows_for_chunk_set(
     connection: OracleConnectionProtocol,
     *,
@@ -8707,7 +8666,6 @@ def _delete_graph_rows_for_chunk_set(
 ) -> None:
     """指定 chunk_set の関係情報の行だけを FK 順に削除する。"""
     binds = _with_tenant_bind({"chunk_set_id": chunk_set_id})
-    _delete_retired_graph_claims(connection, entity_ids=entity_ids)
     for table in (
         "rag_graph_relationships",
         "rag_graph_entity_chunks",
@@ -8756,7 +8714,6 @@ def _delete_graph_rows_for_document(
 ) -> None:
     """指定 document の関係情報の行を FK 順に削除する。"""
     unique_entity_ids = _unique_optional_sequence(entity_ids)
-    _delete_retired_graph_claims(connection, entity_ids=unique_entity_ids)
     if unique_entity_ids:
         source_sql, source_binds = _oracle_in_predicate(
             "source_entity_id",
