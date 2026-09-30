@@ -10,7 +10,7 @@ from app.rag.business_view_knowledge import import_approved_faq
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.schemas.common import ApiResponse, Page
-from app.schemas.evaluation import EvaluationCase
+from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS, EvaluationCase
 from app.schemas.feedback import (
     CurrentFeedbackItem,
     FeedbackApprovedFaqPromotion,
@@ -199,6 +199,9 @@ async def feedback_evaluation_case(
             query=detail.question,
             relevant_document_ids=relevant_document_ids,
             expected_answer_keywords=_expected_terms(expected_answer),
+            # 修正した回答(「役に立った」は保存した回答)を標準回答にし、品質評価で LLM による
+            # 比較(4 軸の採点・主張の監査・必要な項目の網羅)もできるようにする(#591)。
+            standard_answer=expected_answer[:STANDARD_ANSWER_MAX_CHARS],
         )
     )
 

@@ -105,8 +105,10 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
       await expect(breadcrumbs(page)).toHaveCount(0);
 
-      // 先頭セルの対象名のボタンで開く。
-      await page.getByRole("button", { name: /業務 RAG 調査/ }).click();
+      // 先頭セルの対象名のリンクで開く（URL を持つので新しいタブでも開ける。#583）。
+      const skillLink = page.getByRole("link", { name: /業務 RAG 調査/ });
+      await expect(skillLink).toHaveAttribute("href", "/skills?id=business_rag_research");
+      await skillLink.click();
       await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
       await expect(breadcrumbs(page).getByRole("link", { name: "スキル" })).toBeVisible();
@@ -212,7 +214,7 @@ for (const viewport of VIEWPORTS) {
         updated_at: MOCK_NOW,
       });
       await page.goto("/skills");
-      await page.getByRole("button", { name: "E2E 実行時スキル e2e_runtime", exact: true }).click();
+      await page.getByRole("link", { name: "E2E 実行時スキル e2e_runtime", exact: true }).click();
       await expect(page).toHaveURL(/\/skills\?id=e2e_runtime$/);
 
       // 行と同じ定義。危険な操作は「その他の操作」メニューに入る。
@@ -225,7 +227,7 @@ for (const viewport of VIEWPORTS) {
       await dialog.getByRole("button", { name: "削除", exact: true }).click();
       await expect(page.getByText("スキルを削除しました")).toBeVisible();
       await expect(page).toHaveURL(/\/skills$/);
-      await expect(page.getByRole("button", { name: "E2E 実行時スキル e2e_runtime", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "E2E 実行時スキル e2e_runtime", exact: true })).toHaveCount(0);
     });
   });
 

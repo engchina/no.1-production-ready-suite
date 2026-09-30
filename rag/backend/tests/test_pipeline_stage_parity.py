@@ -149,7 +149,7 @@ def test_grounding_service_matches_local_core() -> None:
 
 
 def test_evaluation_service_matches_local_core() -> None:
-    request = EvaluationStageRequest(suite="strict_ci")
+    request = EvaluationStageRequest(suite="strict")
     remote = _run(create_evaluation_app(), request, EvaluationStageResponse)
     local = EvaluationStageResponse(**resolve_evaluation(request.suite).__dict__)
     assert remote == local

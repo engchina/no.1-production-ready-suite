@@ -34,6 +34,7 @@ import {
   type DocumentClassification,
   type DocragPromptKey,
   type QueryHistorySettingsData,
+  type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
@@ -1271,7 +1272,27 @@ export function useDeleteDocragAnswer() {
   });
 }
 
-/** DocRAG 回答記録の保持日数。 */
+/** 回答の検索と生成の全体既定(#593)。 */
+export function useAnsweringSettings() {
+  return useQuery({
+    queryKey: ["settings", "answering"],
+    queryFn: api.getAnsweringSettings,
+    retry: false,
+  });
+}
+
+/** 回答の検索と生成の全体既定を保存する(送った項目だけを変える)。 */
+export function useUpdateAnsweringSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AnsweringSettingsUpdate) => api.updateAnsweringSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "answering"], data);
+    },
+  });
+}
+
+/** 回答の記録の保持日数。 */
 export function useAnswerRecordSettings() {
   return useQuery({
     queryKey: ["settings", "answer-records"],
@@ -1279,7 +1300,7 @@ export function useAnswerRecordSettings() {
   });
 }
 
-/** DocRAG 回答記録の保持日数を保存する(期限切れは backend が削除する)。 */
+/** 回答の記録の保持日数を保存する(期限切れは backend が削除する)。 */
 export function useUpdateAnswerRecordSettings() {
   const qc = useQueryClient();
   return useMutation({
@@ -1726,7 +1747,7 @@ export function useUpdateAgenticSettings() {
   });
 }
 
-/** Evaluation アダプター(評価スイート/閾値)の runtime 設定。 */
+/** Evaluation アダプター(評価の基準 = 閾値のプリセット)の runtime 設定。 */
 export function useEvaluationSettings() {
   return useQuery<EvaluationSettingsData>({
     queryKey: queryKeys.evaluationSettings,

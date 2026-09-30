@@ -122,6 +122,8 @@ describe("FormActionBar", () => {
     expect(html.indexOf(">保存<")).toBeLessThan(html.indexOf(">キャンセル<"));
     // danger は閉じたメニューの中にあり、赤いボタンとして直置きしない。
     expect(html).toContain(">その他の操作<");
+    // 読み上げ名に対象（ariaLabel）を足す（#582）。
+    expect(html).toContain('aria-label="その他の操作（ロール編集操作）"');
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).not.toContain(">削除<");
   });

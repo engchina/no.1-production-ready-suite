@@ -4,14 +4,13 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
-  FieldError,
-  FieldLabel,
   FormStatus,
   RowTitleButton,
   SelectField,
   StatusBadge,
   Switch,
   TableSkeleton,
+  TextareaField,
   TextField,
   TimedLoadingState,
   toast,
@@ -367,36 +366,25 @@ export function RuntimeKnowledgeManager({
             // ルール内容だけが必須（用語の説明・別名・照合キーワードは任意。backend と同じ）。
             const required = field === "content" && form.kind === "rules";
             const error = field === "content" ? errors.content : null;
-            const errorId = `runtime-knowledge-${field}-error`;
             return (
-              <div key={field}>
-                <FieldLabel
-                  htmlFor={`runtime-knowledge-${field}`}
-                  required={required}
-                  label={t(
-                    field === "labels"
-                      ? form.kind === "terms"
-                        ? "businessViews.runtime.aliasesInput"
-                        : "businessViews.runtime.triggersInput"
-                      : form.kind === "terms"
-                        ? "businessViews.runtime.description"
-                        : "businessViews.runtime.content",
-                  )}
-                />
-                <textarea
-                  id={`runtime-knowledge-${field}`}
-                  value={form[field]}
-                  onChange={(event) => update({ [field]: event.target.value })}
-                  rows={field === "labels" ? 3 : 4}
-                  aria-required={required || undefined}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? errorId : undefined}
-                  className={`mt-1 w-full rounded-md border bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring ${
-                    error ? "border-danger-fg" : "border-border-control"
-                  }`}
-                />
-                <FieldError id={errorId} message={error} className="mt-1" />
-              </div>
+              <TextareaField
+                key={field}
+                id={`runtime-knowledge-${field}`}
+                required={required}
+                label={t(
+                  field === "labels"
+                    ? form.kind === "terms"
+                      ? "businessViews.runtime.aliasesInput"
+                      : "businessViews.runtime.triggersInput"
+                    : form.kind === "terms"
+                      ? "businessViews.runtime.description"
+                      : "businessViews.runtime.content",
+                )}
+                error={error ?? undefined}
+                value={form[field]}
+                onChange={(event) => update({ [field]: event.target.value })}
+                rows={field === "labels" ? 3 : 4}
+              />
             );
           })}
           <div className="flex items-center justify-between gap-3">

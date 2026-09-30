@@ -6,7 +6,7 @@ import {
   FileText,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   toast,
   Button,
@@ -17,11 +17,11 @@ import {
   CardTitle,
   FormStatus,
   ContentActionBar,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 
 type CopyState = "idle" | "error";
 
@@ -117,6 +117,7 @@ function SettingsPreviewCard({
   previewHeightClassName,
 }: PreviewCardProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const previewId = useId();
 
   async function handleCopy() {
     try {
@@ -147,14 +148,15 @@ function SettingsPreviewCard({
         </ContentActionBar>
       </CardHeader>
       <CardContent className="space-y-3">
-        <textarea
+        <TextareaField
+          id={previewId}
+          label={ariaLabel ?? title}
+          labelHidden
           readOnly
           value={value}
-          aria-label={ariaLabel ?? title}
-          className={cn(
-            "w-full resize-none rounded-md border border-border-control bg-surface-sunken p-3 font-mono text-xs leading-relaxed text-fg outline-none focus-visible:border-focus-ring",
-            previewHeightClassName
-          )}
+          monospace
+          resize="none"
+          textareaClassName={previewHeightClassName}
         />
         {copyState === "error" ? (
           <FormStatus

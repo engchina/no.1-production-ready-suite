@@ -4,7 +4,7 @@ import {
   Button,
   Disclosure,
   StatusBadge,
-  FieldError,
+  TextareaField,
   useConfirm,
   ContentActionBar,
   ProcessingIndicator,
@@ -157,12 +157,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
       {value.status === "ready" && <>
         <Disclosure data-testid="ontology-publication-data-validation" summary={t("markdownOntology.dataValidation")} icon={ShieldCheck}
           summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">
-            <div className="space-y-2">
-              <label htmlFor="markdown-acceptance" className="block text-sm font-medium text-fg">{t("markdownOntology.acceptance")}</label>
-              <textarea id="markdown-acceptance" rows={5} className="min-h-32 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg focus:border-focus-ring" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
-              <p id="markdown-acceptance-hint" className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.acceptanceHint")}</p>
-              <FieldError id="markdown-acceptance-error" message={acceptanceError} />
-            </div>
+            <TextareaField id="markdown-acceptance" label={t("markdownOntology.acceptance")} rows={5} monospace textareaClassName="min-h-32" value={acceptance} helper={t("markdownOntology.acceptanceHint")} error={acceptanceError || undefined} onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
             <ContentActionBar ariaLabel={t("markdownOntology.dataValidation")}>
               <Button icon={ShieldCheck} type="button" variant="secondary" size="md" disabled={Boolean(busy)} loading={busy === "data"} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
             </ContentActionBar>

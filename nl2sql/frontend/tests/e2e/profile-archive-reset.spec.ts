@@ -340,22 +340,24 @@ test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻�
   await backButton.click();
   await expect(page).not.toHaveURL(/profile=/);
   await expect(listPanel.getByRole("heading", { name: "プロファイル" })).toBeVisible();
-  await page.getByRole("button", { name: /^経理プロファイル/ }).click();
+  await page.getByRole("link", { name: /^経理プロファイル/ }).click();
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
   await expect(page.getByLabel("名称")).toHaveValue("経理プロファイル");
 });
 
-test("プロファイル名のボタン（共有 RowTitleButton）は Tab で届き、Enter / Space でエディタを開く", async ({ page }, testInfo) => {
+test("プロファイル名のリンク（共有 RowTitleButton の href）は Tab で届き、Enter でエディタを開き、Ctrl / ⌘ + クリックで新しいタブに開ける", async ({ page }, testInfo) => {
   // #421: 一覧の行の題名のボタンを packages/ui の共有部品にそろえた（NL2SQL の手書きを置き換え）。
+  // #583: URL（?profile=）で開くので、題名はリンクの形にして新しいタブでも開けるようにした。
   await mockProfileManagement(page);
   await page.goto("/profiles");
 
-  const salesButton = page.getByRole("button", { name: "営業プロファイル を編集", exact: true });
-  await expect(salesButton).toHaveAttribute("data-row-title-button", "");
+  const salesLink = page.getByRole("link", { name: "営業プロファイル を編集", exact: true });
+  await expect(salesLink).toHaveAttribute("data-row-title-button", "");
+  await expect(salesLink).toHaveAttribute("href", "/profiles?profile=sales");
   // 題名の色は 3 製品で共通の本文色（押せることは行の hover と下線で示す）。
-  const titleColor = await salesButton.evaluate((node) => getComputedStyle(node.querySelector("span")!).color);
+  const titleColor = await salesLink.evaluate((node) => getComputedStyle(node.querySelector("span")!).color);
   const fgColor = await page.evaluate(() => {
     const probe = document.createElement("span");
     probe.className = "text-fg";
@@ -366,20 +368,28 @@ test("プロファイル名のボタン（共有 RowTitleButton）は Tab で届
   });
   expect(titleColor).toBe(fgColor);
 
-  await salesButton.focus();
+  await salesLink.focus();
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
-  await expect(salesButton).toBeFocused();
-  await expect(salesButton).toHaveCSS("outline-style", "solid");
+  await expect(salesLink).toBeFocused();
+  await expect(salesLink).toHaveCSS("outline-style", "solid");
   await expectProfileListNoHorizontalOverflow(page);
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/profiles\?profile=sales$/);
   await expect(page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })).toBeVisible();
 
   await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
-  const financeButton = page.getByRole("button", { name: /^経理プロファイル を編集/ });
-  await financeButton.focus();
-  await page.keyboard.press("Space");
+  const financeLink = page.getByRole("link", { name: /^経理プロファイル を編集/ });
+  // 修飾キー付きのクリックはブラウザの既定（新しいタブ）に任せ、この画面では開かない。
+  const [popup] = await Promise.all([
+    page.context().waitForEvent("page"),
+    financeLink.click({ modifiers: ["ControlOrMeta"] }),
+  ]);
+  await expect(popup).toHaveURL(/\/profiles\?profile=accounting$/);
+  await popup.close();
+  await expect(page).not.toHaveURL(/profile=/);
+  await financeLink.focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath(`profile-row-title-${testInfo.project.name}.png`), fullPage: true });
 });
@@ -567,7 +577,7 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   ).toBeVisible();
   await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   const editorActions = editor.getByTestId("profile-editor-actions");
-  const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作", exact: true });
+  const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作" });
   const deleteMenuChevron = deleteMenuButton.locator('svg[data-state]');
   await expect(deleteMenuButton).toBeVisible();
   await expect(deleteMenuChevron).toHaveAttribute("data-state", "collapsed");
@@ -616,7 +626,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expectUnifiedConfirmDialogSurface(dialog);
@@ -630,7 +640,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   expect(api.deleteRequests()).toBe(0);
   await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
 
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
@@ -645,7 +655,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
@@ -675,7 +685,7 @@ test("プロファイル削除時に Oracle 資産 cleanup の警告を表示す
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })

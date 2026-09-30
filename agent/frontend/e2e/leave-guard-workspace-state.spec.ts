@@ -196,7 +196,7 @@ for (const viewport of VIEWPORTS) {
 
     test("Skill の編集対象は URL が唯一の情報源で、消えた対象は説明して一覧へ戻す", async ({ page }) => {
       await page.goto("/skills");
-      await page.getByRole("button", { name: /業務 RAG 調査/ }).click();
+      await page.getByRole("link", { name: /業務 RAG 調査/ }).click();
       await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
       // 詳細だけが出す読み取り専用の案内で、対象が開いていることを確かめる。
       const detail = page.getByText("このスキルは読み取り専用です", { exact: false });

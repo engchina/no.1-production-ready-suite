@@ -32,6 +32,7 @@ import {
   RowTitleButton,
   ClearActionButton,
   SearchField,
+  TextareaField,
   TextField,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
@@ -286,6 +287,7 @@ export function BusinessViewManagementClient() {
     return (
       <BusinessViewList
         onOpen={(id) => editor.openItem(id)}
+        itemHref={editor.itemHref}
         onCreate={canManage ? editor.openNew : undefined}
       />
     );
@@ -364,9 +366,12 @@ function useBusinessViewActions(onArchived?: (id: string) => void) {
 
 function BusinessViewList({
   onOpen,
+  itemHref,
   onCreate,
 }: {
   onOpen: (id: string) => void;
+  /** 業務ビューのエディタの URL（名前のリンク。新しいタブで開ける。#583）。 */
+  itemHref: (id: string) => string;
   /** 作成できない利用者（業務ビュー管理の権限なし）では undefined。 */
   onCreate?: () => void;
 }) {
@@ -515,7 +520,7 @@ function BusinessViewList({
         ) : (
           <div className="grid gap-2">
             <DataTable<BusinessViewSummary>
-              columns={businessViewColumns({ onOpen, actionsFor })}
+              columns={businessViewColumns({ onOpen, itemHref, actionsFor })}
               rows={items}
               getRowKey={(item) => item.id}
               // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。
@@ -553,9 +558,11 @@ function BusinessViewList({
 /** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
 function businessViewColumns({
   onOpen,
+  itemHref,
   actionsFor,
 }: {
   onOpen: (id: string) => void;
+  itemHref: (id: string) => string;
   actionsFor: (view: BusinessViewSummary) => EntityAction[];
 }): DataTableColumn<BusinessViewSummary>[] {
   return [
@@ -577,6 +584,7 @@ function businessViewColumns({
             title={view.name}
             subtitle={view.description ?? undefined}
             aria-label={t("businessViews.actions.editNamed", { name: view.name })}
+            href={itemHref(view.id)}
             onClick={() => onOpen(view.id)}
           />
         ),
@@ -1117,34 +1125,24 @@ function BusinessViewEditor({
                           {docragUnusedNote}
                         </DocragUnusedNote>
                       ) : null}
-                      <div>
-                        <label
-                          htmlFor="business-view-system-prompt"
-                          className="text-sm font-medium text-fg"
-                        >
-                          {t("businessViews.field.systemPrompt")}
-                        </label>
-                        <textarea
-                          id="business-view-system-prompt"
-                          value={config.system_prompt ?? ""}
-                          onChange={(event) =>
-                            setConfig((current) => ({
-                              ...current,
-                              system_prompt: event.target.value || null,
-                            }))
-                          }
-                          placeholder={t("businessViews.field.systemPromptPlaceholder")}
-                          aria-describedby={
-                            docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
-                          }
-                          rows={3}
-                          disabled={locked}
-                          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                        <p className="mt-1 text-xs text-fg-muted">
-                          {t("businessViews.field.systemPromptHelper")}
-                        </p>
-                      </div>
+                      <TextareaField
+                        id="business-view-system-prompt"
+                        label={t("businessViews.field.systemPrompt")}
+                        helper={t("businessViews.field.systemPromptHelper")}
+                        value={config.system_prompt ?? ""}
+                        onChange={(event) =>
+                          setConfig((current) => ({
+                            ...current,
+                            system_prompt: event.target.value || null,
+                          }))
+                        }
+                        placeholder={t("businessViews.field.systemPromptPlaceholder")}
+                        aria-describedby={
+                          docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
+                        }
+                        rows={3}
+                        disabled={locked}
+                      />
                       <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
                         <TextField
                           id="business-view-language"

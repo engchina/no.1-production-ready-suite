@@ -133,9 +133,9 @@ def test_unknown_vector_index_profile_is_rejected() -> None:
         Settings(rag_vector_index_profile="ivf_flat")
 
 
-def test_evaluation_suite_defaults_to_request_only() -> None:
-    """Evaluation アダプターの既定 request_only は現行挙動と一致させる。"""
-    assert Settings().rag_evaluation_suite == "request_only"
+def test_evaluation_suite_defaults_to_standard() -> None:
+    """評価の基準の既定は標準(#591)。"""
+    assert Settings().rag_evaluation_suite == "standard"
 
 
 def test_unknown_evaluation_suite_is_rejected() -> None:

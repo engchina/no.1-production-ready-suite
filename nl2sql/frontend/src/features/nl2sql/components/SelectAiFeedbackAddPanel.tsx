@@ -10,8 +10,7 @@ import {
   toast,
   StatusBadge,
   FormStatus,
-  FieldError,
-  FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { apiPost } from "@/lib/api";
@@ -131,43 +130,34 @@ export function SelectAiFeedbackAddPanel({
         )}
       </CardHeader>
       <CardContent className="grid gap-4">
-        <label className="grid gap-1 text-sm font-medium text-fg">
-          <span>{t("nl2sql.selectAiFeedbackAdd.response")}</span>
-          <textarea data-surface="code"
-            value={generatedSql}
-            readOnly
-            rows={12}
-            className="min-h-72 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
-            placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
-          />
-        </label>
-        <div className="grid gap-1">
-          {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
-          <FieldLabel
-            htmlFor="nl2sql-select-ai-feedback-content"
-            label={t("nl2sql.selectAiFeedbackAdd.content")}
-            required
-            requiredLabel={t("nl2sql.selectAiFeedbackAdd.contentRequiredWhenBad")}
-            requiredAnnouncedByControl={false}
-          />
-          <textarea
-            id="nl2sql-select-ai-feedback-content"
-            disabled={savingRating !== null}
-            value={feedbackContent}
-            onChange={(event) => {
-              setFeedbackContent(event.currentTarget.value);
-              setContentError("");
-            }}
-            rows={3}
-            aria-invalid={contentError ? "true" : undefined}
-            aria-describedby={contentError ? "nl2sql-select-ai-feedback-content-error" : undefined}
-            className={`min-h-24 rounded-md border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring ${
-              contentError ? "border-danger-fg" : "border-border-control"
-            }`}
-            placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
-          />
-          <FieldError id="nl2sql-select-ai-feedback-content-error" message={contentError} />
-        </div>
+        <TextareaField
+          id="nl2sql-select-ai-feedback-response"
+          label={t("nl2sql.selectAiFeedbackAdd.response")}
+          surface="code"
+          value={generatedSql}
+          readOnly
+          rows={12}
+          textareaClassName="min-h-72"
+          placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
+        />
+        {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
+        <TextareaField
+          id="nl2sql-select-ai-feedback-content"
+          label={t("nl2sql.selectAiFeedbackAdd.content")}
+          required
+          requiredLabel={t("nl2sql.selectAiFeedbackAdd.contentRequiredWhenBad")}
+          requiredAnnouncedByControl={false}
+          disabled={savingRating !== null}
+          value={feedbackContent}
+          onChange={(event) => {
+            setFeedbackContent(event.currentTarget.value);
+            setContentError("");
+          }}
+          rows={3}
+          error={contentError || undefined}
+          textareaClassName="min-h-24"
+          placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
+        />
         <div className="flex flex-wrap items-center justify-end gap-3">
           <FormStatus
             tone="danger"

@@ -408,8 +408,12 @@ def test_history_and_query_cannot_close_untrusted_tags() -> None:
 class _FakePipeline:
     """retrieval/generation を行わず回答を即返す pipeline stub。"""
 
+    # 作られた pipeline の回答のモデル(DocRAG へ渡す列のモデル。#593)。
+    answer_model_ids: list[object] = []
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
+        _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -705,6 +709,7 @@ def test_stream_message_multi_model_compares_two_columns(monkeypatch: MonkeyPatc
     )
     fake.messages["conv-y"] = []
     _stub_stream(monkeypatch, fake, ["m1", "m2"])
+    monkeypatch.setattr(_FakePipeline, "answer_model_ids", [])
 
     resp = client.post(
         "/api/chat/conversations/conv-y/messages/stream",
@@ -717,6 +722,8 @@ def test_stream_message_multi_model_compares_two_columns(monkeypatch: MonkeyPatc
     roles = [m.role for m in fake.messages["conv-y"]]
     assert roles.count("USER") == 1
     assert roles.count("ASSISTANT") == 2
+    # 列ごとのモデルを DocRAG の回答のモデルとしても渡す(#593)。
+    assert sorted(str(item) for item in _FakePipeline.answer_model_ids) == ["m1", "m2"]
 
 
 def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) -> None:

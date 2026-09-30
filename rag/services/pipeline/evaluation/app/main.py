@@ -1,8 +1,8 @@
 """Evaluation ステージマイクロサービス。
 
-suite(request_only/retrieval_focused/balanced/strict_ci/ragas_like)→ CI gate 用閾値 + focus
-metrics を解決して返す。解決ロジックは backend と同一(rag_pipeline_core.evaluation)で決定論・
-外部依存なし。実評価(決定論指標)は backend が担う。外部評価 SaaS / LLM-as-judge は導入しない。
+評価の基準(standard / strict。#591)→ CI gate 用閾値を解決して返す。解決ロジックは backend と
+同一(rag_pipeline_core.evaluation)で決定論・外部依存なし。評価の実行(指標の計算と、標準回答が
+あるケースの LLM による比較)は backend が担う。
 """
 
 from rag_pipeline_core.stage_service import create_evaluation_app

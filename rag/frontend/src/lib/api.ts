@@ -158,32 +158,31 @@ export type SourcePreviewKind =
   "pdf" | "image" | "text" | "html" | "email" | "office" | "unsupported";
 export type IngestionJobStatus =
   "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED" | "CANCELLED";
+/** 評価の失敗理由（#591）。保存済みの結果には削除した理由が残るため、表示は string で受ける。 */
 export type EvaluationFailureReason =
   | "retrieval_miss"
   | "partial_recall"
-  | "unexpected_retrieval"
+  | "unexpected_answer"
+  | "unexpected_refusal"
   | "answer_keyword_miss"
   | "low_groundedness"
+  | "unsupported_claim"
+  | "missing_content"
+  | "answer_failed"
+  | "answer_evaluation_error"
   | "guardrail_warning"
-  | "content_kind_miss"
-  | "section_miss"
   | "case_error";
+/** 評価の指標（#591）。検索・根拠・回答の 3 つの観点に整理した 9 つ。 */
 export type EvaluationMetricName =
-  | "precision_at_k"
-  | "recall_at_k"
-  | "mrr"
-  | "answer_keyword_hit_rate"
-  | "groundedness_pass_rate"
-  | "citation_traceability_coverage"
-  | "bbox_citation_coverage"
-  | "element_lineage_coverage"
-  | "content_kind_hit_rate"
-  | "section_coverage"
-  | "faithfulness"
-  | "context_precision"
   | "context_recall"
-  | "response_relevancy"
-  | "noise_sensitivity";
+  | "mrr"
+  | "faithfulness"
+  | "citation_traceability_coverage"
+  | "claim_support_rate"
+  | "answer_keyword_hit_rate"
+  | "refusal_accuracy"
+  | "requirement_coverage"
+  | "answer_pass_rate";
 
 export type ParserAdapterBackend =
   | "local"
@@ -998,6 +997,8 @@ export interface SearchRequestBody {
   business_view_id?: string | null;
   business_view_ids?: string[];
   generation_profile?: GenerationProfileName | null;
+  /** 回答を作らずに検索だけを行う(LLM を呼ばない。回答エンジンが docrag のときだけ効く。#593)。 */
+  retrieval_only?: boolean;
 }
 
 export interface RetrievedChunk {
@@ -1311,35 +1312,19 @@ export interface FeedbackListParams {
 export interface EvaluationCase {
   id: string;
   query: string;
-  relevant_document_ids: string[];
-  expected_answer_keywords: string[];
-  expected_content_kind?: string | null;
-  expected_section_paths?: string[];
+  relevant_document_ids?: string[];
+  expected_answer_keywords?: string[];
+  /** 標準回答。あるケースは回答を標準回答と LLM で比較する（#591）。 */
+  standard_answer?: string | null;
+  /** false は答えるべきでない質問。省略時は期待値（文書・語・標準回答）の有無で決まる。 */
+  answerable?: boolean | null;
 }
 
-export interface EvaluationThresholds {
-  precision_at_k?: number | null;
-  recall_at_k?: number | null;
-  mrr?: number | null;
-  answer_keyword_hit_rate?: number | null;
-  groundedness_pass_rate?: number | null;
-  citation_traceability_coverage?: number | null;
-  bbox_citation_coverage?: number | null;
-  element_lineage_coverage?: number | null;
-  content_kind_hit_rate?: number | null;
-  section_coverage?: number | null;
-  faithfulness?: number | null;
-  context_precision?: number | null;
-  context_recall?: number | null;
-  response_relevancy?: number | null;
-  noise_sensitivity?: number | null;
-}
+export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
 
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
   top_k?: number;
-  rerank_top_n?: number;
-  mode?: SearchMode;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   thresholds?: EvaluationThresholds | null;
@@ -1347,6 +1332,21 @@ export interface EvaluationRunRequestBody {
   rag_overrides?: EvaluationRagOverrides | null;
 }
 
+/** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
+export interface EvaluationAnswerJudgement {
+  /** completed / error / input_too_large / timeout / unavailable */
+  status: string;
+  total_score: number | null;
+  max_score: number;
+  passed: boolean | null;
+  claims_supported: boolean | null;
+  requirement_coverage: number | null;
+  missing_content: boolean | null;
+  goal_alignment: string | null;
+  message: string | null;
+}
+
+/** 1 ケースの結果。測れない指標は null（保存済みの古い結果では欄が無いことがある）。 */
 export interface EvaluationCaseResult {
   case_id: string;
   trace_id: string;
@@ -1354,26 +1354,16 @@ export interface EvaluationCaseResult {
   retrieved_document_ids: string[];
   relevant_document_ids: string[];
   hit_document_ids: string[];
-  precision_at_k: number;
-  recall_at_k: number;
-  reciprocal_rank: number;
-  answer_keyword_hit: boolean;
-  groundedness_passed: boolean;
-  groundedness_score: number;
-  grounding_overlap_count: number;
-  grounding_answer_feature_count: number;
-  faithfulness: number;
-  context_precision: number;
-  context_recall: number;
-  response_relevancy: number;
-  noise_sensitivity: number;
-  citation_traceability_coverage: number;
-  bbox_citation_coverage: number;
-  element_lineage_coverage: number;
-  content_kind_hit_rate: number;
-  section_coverage: number;
+  context_recall?: number | null;
+  reciprocal_rank?: number | null;
+  faithfulness?: number | null;
+  citation_traceability_coverage?: number | null;
+  answer_keyword_hit?: boolean | null;
+  abstained?: boolean | null;
+  refusal_correct?: boolean | null;
+  answer_evaluation?: EvaluationAnswerJudgement | null;
   guardrail_warnings: string[];
-  failure_reasons: EvaluationFailureReason[];
+  failure_reasons: string[];
   diagnostics: SearchDiagnostics;
   elapsed_ms: number;
   error_type: string | null;
@@ -1383,80 +1373,40 @@ export interface EvaluationCaseResult {
 }
 
 export interface EvaluationThresholdFailure {
-  metric: EvaluationMetricName;
+  /** 保存済みの結果には削除した指標の名前が残ることがある。 */
+  metric: string;
   actual: number;
   threshold: number;
 }
 
-export interface EvaluationMetrics {
+/** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
+export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
   case_count: number;
   error_count: number;
-  evaluation_suite: EvaluationSuiteName;
-  evaluated_k: number;
-  precision_at_k: number;
-  recall_at_k: number;
-  mrr: number;
-  answer_keyword_hit_rate: number;
-  groundedness_pass_rate: number;
-  faithfulness: number;
-  context_precision: number;
-  context_recall: number;
-  response_relevancy: number;
-  noise_sensitivity: number;
-  citation_traceability_coverage: number;
-  bbox_citation_coverage: number;
-  element_lineage_coverage: number;
-  content_kind_hit_rate: number;
-  section_coverage: number;
+  /** 保存済みの結果には削除した基準の名前が残ることがある。 */
+  evaluation_suite: string;
+  metric_case_counts?: Partial<Record<string, number>>;
   passed: boolean;
   threshold_failures: EvaluationThresholdFailure[];
-  failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
+  failure_reason_counts: Partial<Record<string, number>>;
   case_results: EvaluationCaseResult[];
-  ingestion_quality: EvaluationIngestionQualitySummary;
-}
+};
 
-export interface EvaluationIngestionQualitySummary {
-  document_count: number;
-  table_document_count: number;
-  figure_document_count: number;
-  formula_document_count: number;
-  low_confidence_document_count: number;
-  fallback_document_count: number;
-  failed_segment_document_count: number;
-  segment_artifact_cache_miss_document_count: number;
-  long_document_count: number;
-  average_page_coverage: number;
-  warning_counts: Record<string, number>;
-  risk_counts: Record<string, number>;
-  parser_profile_counts: Record<string, number>;
-}
-
+/** experiment ごとに一時適用する回答設定（#591）。 */
 export interface EvaluationRagOverrides {
+  query_strategy?: DocragQueryStrategyName | null;
+  answer_flow?: DocragAnswerFlowName | null;
+  neighbor_child_count?: number | null;
+  rerank_enabled?: boolean | null;
   rrf_k?: number | null;
-  query_expansion_enabled?: boolean | null;
-  query_expansion_max_variants?: number | null;
-  context_window_chars?: number | null;
-  context_neighbor_window?: number | null;
-  context_diversity_lambda?: number | null;
-  context_adaptive_expansion_enabled?: boolean | null;
-  context_adaptive_neighbor_window?: number | null;
-  context_adaptive_min_overlap?: number | null;
-  context_group_expansion_enabled?: boolean | null;
   context_group_max_chunks?: number | null;
-  context_dependency_promotion_enabled?: boolean | null;
-  context_dependency_max_chunks?: number | null;
-  context_compression_enabled?: boolean | null;
-  context_compression_max_sentences?: number | null;
-  context_compression_max_chars_per_chunk?: number | null;
   oracle_vector_target_accuracy?: number | null;
 }
 
 export interface EvaluationExperiment {
   id: string;
-  top_k: number;
-  rerank_top_n: number;
-  mode: SearchMode;
-  filters: Record<string, string>;
+  top_k?: number;
+  filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   rag_overrides?: EvaluationRagOverrides | null;
 }
@@ -1471,13 +1421,15 @@ export interface EvaluationCompareRequestBody {
 
 export interface EvaluationExperimentResult {
   rank: number;
-  ranking_score: number;
+  /** 順位の指標を測れなかったときは null。 */
+  ranking_score: number | null;
   experiment: EvaluationExperiment;
   metrics: EvaluationMetrics;
 }
 
 export interface EvaluationCompareResponse {
-  ranking_metric: EvaluationMetricName;
+  /** 保存済みの結果には削除した指標の名前が残ることがある。 */
+  ranking_metric: string;
   best_experiment_id: string | null;
   results: EvaluationExperimentResult[];
 }
@@ -2036,7 +1988,19 @@ export interface GenerationSettingsData {
   custom_prompt_configured: boolean;
 }
 
-/** DocRAG 回答記録の保持日数(0 は無期限)。 */
+/** 回答の検索と生成の全体既定(業務ビューで上書きできる。#593)。 */
+export interface AnsweringSettingsData {
+  query_strategy: DocragQueryStrategyName;
+  answer_flow: DocragAnswerFlowName;
+  neighbor_child_count: number;
+  rerank_enabled: boolean;
+  screen_linking_enabled: boolean;
+  config_source: "runtime";
+}
+
+export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source">>;
+
+/** 回答の記録の保持日数(0 は無期限)。 */
 export interface AnswerRecordSettingsData {
   retention_days: number;
   config_source: "runtime";
@@ -2171,12 +2135,8 @@ export interface VectorIndexSettingsUpdate {
 }
 
 // --- 設定: Evaluation アダプター ---
-export type EvaluationSuiteName =
-  | "request_only"
-  | "retrieval_focused"
-  | "balanced"
-  | "strict_ci"
-  | "ragas_like";
+/** 評価の基準（閾値のプリセット。#591）。 */
+export type EvaluationSuiteName = "standard" | "strict";
 
 export interface EvaluationSuiteStatusData {
   name: EvaluationSuiteName;
@@ -3358,6 +3318,13 @@ export const api = {
   // 設定: Generation アダプター
   getGenerationSettings: () =>
     request<GenerationSettingsData>("/api/settings/generation"),
+  getAnsweringSettings: () => request<AnsweringSettingsData>("/api/settings/answering"),
+  updateAnsweringSettings: (body: AnsweringSettingsUpdate) =>
+    request<AnsweringSettingsData>("/api/settings/answering", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getAnswerRecordSettings: () =>
     request<AnswerRecordSettingsData>("/api/settings/answer-records"),
   updateAnswerRecordSettings: (body: { retention_days: number }) =>

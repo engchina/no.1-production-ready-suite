@@ -497,6 +497,8 @@ test("レシピ比較で空の引用を理由付きの状態として表示す�
       .map((request) => (request.filters as Record<string, string>).chunk_set_id)
       .sort()
   ).toEqual(["chunk-set-recipe-1", "chunk-set-recipe-2"]);
+  // 引用の候補を比べるので、回答は作らずに検索だけを頼む（#593）。
+  expect(searchRequests.map((request) => request.retrieval_only)).toEqual([true, true]);
   await expectNoPageOverflow(page);
 });
 

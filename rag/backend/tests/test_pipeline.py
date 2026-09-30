@@ -4272,3 +4272,25 @@ async def test_pipeline_hyde_keeps_question_as_primary_graph_query() -> None:
     # 仮説文書は埋め込み検索の variant として使う。
     assert genai.embedded_texts == ["請求書 保管", hypothetical]
     assert response.diagnostics.hyde_generated is True
+
+
+async def test_standard_pipeline_ignores_retrieval_only() -> None:
+    """standard の挙動は変えない。retrieval_only は DocRAG のときだけ効く(#593)。"""
+    llm = ExplodingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=EmptyOracleClient(),
+        llm=llm,
+        settings=Settings(rag_answer_engine="standard"),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="存在しない社内規程",
+            knowledge_base_ids=["kb-pipeline-no-results"],
+            retrieval_only=True,
+        )
+    )
+
+    assert response.answer == NO_RESULTS_ANSWER
+    assert response.diagnostics.retrieval_strategy_adapter != "docrag_retrieval_only"
