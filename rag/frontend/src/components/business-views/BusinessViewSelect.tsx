@@ -19,6 +19,7 @@ import { t } from "@/lib/i18n";
  * 後ろに並べる（選んだときの理由の表示と送信の抑止は画面側）。
  *
  * 幅は全幅にする。RAG 検索では直下の質問欄（全幅）と左右の端をそろえ、チャットでも同じ見た目にする。
+ * 欄の下に説明文（helper）は出さない（毎回読む情報ではなく、縦の面積を取るため。#664）。
  */
 export function BusinessViewSelect({
   id,
@@ -59,7 +60,6 @@ export function BusinessViewSelect({
       }}
       placeholder={t("businessViewSelect.placeholder")}
       leadingIcon={Search}
-      helper={error ? undefined : t("businessViews.scope.helper")}
       error={error || undefined}
       disabled={disabled}
       width="full"
@@ -74,13 +74,12 @@ export function BusinessViewSelect({
   );
 }
 
-/** 業務ビューを読み込んでいる間の欄の形（ラベル・欄・説明文）。RAG 検索とチャットで同じにする。 */
+/** 業務ビューを読み込んでいる間の欄の形（ラベル・欄）。RAG 検索とチャットで同じにする。 */
 export function BusinessViewSelectSkeleton() {
   return (
     <div className="space-y-1.5" aria-hidden>
       <Skeleton className="h-4 w-32" />
       <Skeleton className="h-[var(--button-height-md)] w-full" />
-      <Skeleton className="h-3 w-2/3" />
     </div>
   );
 }

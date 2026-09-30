@@ -352,3 +352,16 @@ export async function enableSearchAnswer(page: Page) {
   if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 }
+
+/**
+ * チャットの会話の履歴を開き、その領域を返す（#664）。履歴は既定で閉じている。
+ * lg 以上はチャットの左のパネル（`complementary`）、lg 未満はモーダルの side sheet（`dialog`）。
+ */
+export async function openChatHistory(page: Page) {
+  const toggle = page.getByTestId("chat-history-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const history = page.getByTestId("chat-history");
+  await expect(history).toBeVisible();
+  return history;
+}

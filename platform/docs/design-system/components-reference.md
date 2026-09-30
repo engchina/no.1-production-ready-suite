@@ -2176,3 +2176,65 @@ export function fieldWidthClass(width?: FieldWidth): string | undefined;
 
 - 単体テストは `packages/ui/tests/control-size.test.tsx`（段のクラス・各部品の `size` / `width`・`fieldControlClassName`・`FieldActionRow`）と `tokens-css.test.ts`（トークンと `pointer: coarse` の 44px）。
 - 実ブラウザの高さは、e2e の helper `expectedControlHeight(page, size)`（RAG `e2e/_helpers.ts`、NL2SQL `tests/e2e/_helpers/control-height.ts`）で入力方式から期待値を出して確かめる（タッチ端末 44px、それ以外は 32 / 36 / 40px）。
+
+---
+
+## SideSheet — **新規**（#664）
+
+画面の中の補助的な一覧・詳細（RAG のチャットの会話の履歴など）を、狭い画面で本文の上に重ねて出すモーダルの side sheet です。振る舞いの表は README §4「`SideSheet`」。広い画面では製品が同じ中身を本文の横にインラインで置き、狭い画面だけ `SideSheet` で開きます（どちらか一方だけを描く）。
+
+```tsx
+import { Button, SideSheet } from "@engchina/production-ready-ui";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+
+const inline = useMediaQuery("(min-width: 1024px)"); // 製品が決める
+const [sheetOpen, setSheetOpen] = useState(false);
+const toggleRef = useRef<HTMLButtonElement>(null);
+const historyId = useId();
+
+<Button ref={toggleRef} variant="ghost" size="sm" iconOnly
+  icon={open ? PanelLeftClose : PanelLeftOpen} aria-label={t("chat.sessions.title")}
+  aria-expanded={open} aria-controls={historyId} onClick={toggle} />
+
+{inline ? (
+  <aside id={historyId} className={open ? "flex" : "hidden"}>{history}</aside>
+) : (
+  <SideSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
+    title={t("chat.sessions.title")} closeLabel={t("chat.sessions.close")}
+    id={historyId} returnFocusRef={toggleRef} data-testid="chat-history">
+    {history}   {/* 項目を選んだら製品が setSheetOpen(false) */}
+  </SideSheet>
+)}
+```
+
+### SideSheet の props
+
+```ts
+export interface SideSheetProps {
+  open: boolean;
+  /** 閉じる要求（閉じるボタン・Escape・scrim のタップ）。製品が open を false にする。 */
+  onClose: () => void;
+  /** 見出しとダイアログの名前（翻訳済み）。 */
+  title: string;
+  /** 閉じるボタンの名前（翻訳済み。Tooltip にも出る）。 */
+  closeLabel: string;
+  /** 出す側（既定は左）。 */
+  side?: "left" | "right";
+  /** シートの要素の id（開くボタンの aria-controls に渡す）。 */
+  id?: string;
+  /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
+  /** 見出しの行の右（閉じるボタンの左）に置く操作。 */
+  headerActions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  /** 本文（flex の縦並び・中でスクロール・p-3）への追加のクラス。 */
+  bodyClassName?: string;
+  /** シートの data-testid。scrim は `<testId>-scrim`。 */
+  "data-testid"?: string;
+}
+```
+
+- 閉じている間も描いたまま（`inert`・`data-state="closed"`）。開いている間は `data-state="open"`。
+- キー操作はナビのドロワーと同じ helper（`focusableIn` / `navDrawerKeyAction`）。閉じるボタンの Tooltip が出ている間の 1 回目の Escape は吹き出しだけを閉じる（README §4「`Tooltip`」）。
+- 単体テストは `packages/ui/tests/side-sheet.test.tsx`、実ブラウザは RAG の `e2e/chat.spec.ts`（375px の開閉・Esc・外側・フォーカスの戻り）。

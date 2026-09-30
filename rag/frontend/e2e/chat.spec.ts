@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import {
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  openChatHistory,
+  selectBusinessView,
+} from "./_helpers";
 
 const businessView = {
   id: "bv-1",
@@ -255,26 +261,22 @@ async function mockChat(
   return releaseConversationList;
 }
 
+/** 会話の履歴は既定で閉じ、チャットが本文の幅いっぱいに出る（#664）。 */
 async function expectChatWorkspaceLayout(page: Page, mode: "desktop" | "mobile") {
   const main = page.getByRole("main");
-  const sessions = page.getByRole("complementary", { name: "会話" });
   const chat = page.getByRole("region", { name: "チャット" });
-  const [mainBox, sessionsBox, chatBox] = await Promise.all([
-    main.boundingBox(),
-    sessions.boundingBox(),
-    chat.boundingBox(),
-  ]);
+  await expect(page.getByTestId("chat-history-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("chat-history")).toBeHidden();
+  const [mainBox, chatBox] = await Promise.all([main.boundingBox(), chat.boundingBox()]);
 
-  if (!mainBox || !sessionsBox || !chatBox) throw new Error("チャットレイアウトを計測できません。");
+  if (!mainBox || !chatBox) throw new Error("チャットレイアウトを計測できません。");
 
-  expect(sessionsBox.x - mainBox.x).toBeGreaterThanOrEqual(mode === "desktop" ? 24 : 12);
-  expect(chatBox.x + chatBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 1);
-  if (mode === "desktop") {
-    expect(Math.abs(sessionsBox.y - chatBox.y)).toBeLessThanOrEqual(1);
-    expect(chatBox.x).toBeGreaterThan(sessionsBox.x + sessionsBox.width);
-  } else {
-    expect(chatBox.y).toBeGreaterThan(sessionsBox.y + sessionsBox.height);
-  }
+  const leftGutter = chatBox.x - mainBox.x;
+  const rightGutter = mainBox.x + mainBox.width - (chatBox.x + chatBox.width);
+  expect(leftGutter).toBeGreaterThanOrEqual(mode === "desktop" ? 24 : 12);
+  expect(rightGutter).toBeGreaterThanOrEqual(0);
+  // 履歴の分の幅を取らない（左右の余白の差はスクロールバーの幅まで）。
+  expect(Math.abs(leftGutter - rightGutter)).toBeLessThanOrEqual(20);
 }
 
 async function openPersistedConversation(page: Page, width: number, messages: object[]) {
@@ -282,11 +284,8 @@ async function openPersistedConversation(page: Page, width: number, messages: ob
   await mockChat(page, "ready", messages);
   await page.goto("/chat");
   await selectBusinessView(page, "経理アシスタント");
-  await page
-    .getByRole("list", { name: "会話" })
-    .getByRole("button")
-    .filter({ hasText: "件・" })
-    .click();
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
 }
 
 async function modelCardBox(page: Page, model: string) {
@@ -325,9 +324,15 @@ for (const viewport of [
 
     // ストリーミング → 永続化後も根拠は既定で閉じ、キーボードで展開できる。
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
-    const sessions = page.getByRole("complementary", { name: "会話" });
+    // 会話の名前はチャットの上端に出る。履歴を開くと一覧にもある（#664）。
+    await expect(page.getByTestId("chat-conversation-title")).toHaveText("経費の上限は？");
+    const sessions = await openChatHistory(page);
     await expect(sessions.getByText("経費の上限は？", { exact: true })).toBeVisible();
     await expect(sessions.getByText(/^2件・\d{2}\/\d{2} \d{2}:\d{2}$/)).toBeVisible();
+    if (viewport.name === "mobile") {
+      await sessions.getByRole("button", { name: "会話の履歴を閉じる" }).click();
+      await expect(sessions).toBeHidden();
+    }
     const citationSummary = page
       .locator("summary")
       .filter({ hasText: "根拠（引用） 1 件" })
@@ -362,7 +367,8 @@ for (const viewport of [
 
     await page.goto("/chat");
     await selectBusinessView(page, "経理アシスタント");
-    await page.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+    const history = await openChatHistory(page);
+    await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
 
     await expect(page.getByText(/機微情報をマスクしました/)).toBeVisible();
     await expect(page.getByText(/根拠を確認してください/)).toBeVisible();
@@ -515,6 +521,8 @@ test("会話一覧の読み込み中状態をカード内に表示する", async
 
   await page.goto("/chat");
   await selectBusinessView(page, "経理アシスタント");
+  await expectChatWorkspaceLayout(page, "mobile");
+  await openChatHistory(page);
 
   // 読み込み中は文言と経過時間（TimedLoadingState）と行の形の Skeleton を出す（#265）。
   const loading = page.getByTestId("chat-conversations-loading");
@@ -522,7 +530,6 @@ test("会話一覧の読み込み中状態をカード内に表示する", async
   await expect(loading).toContainText("会話を読み込んでいます");
   await expect(loading.getByRole("timer")).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: "会話を読み込んでいます" })).toHaveCount(1);
-  await expectChatWorkspaceLayout(page, "mobile");
   await expectNoPageOverflow(page);
 
   releaseConversationList();
@@ -534,6 +541,7 @@ test("会話一覧の読み込み失敗時に再試行可能なエラーを表�
 
   await page.goto("/chat");
   await selectBusinessView(page, "経理アシスタント");
+  await openChatHistory(page);
 
   const error = page.getByRole("alert").filter({ hasText: "会話一覧を読み込めませんでした。" });
   await expect(error).toBeVisible({ timeout: 10_000 });
@@ -551,7 +559,7 @@ for (const viewport of [
     await page.goto("/chat");
     await selectBusinessView(page, "経理アシスタント");
 
-    const sessions = page.getByRole("complementary", { name: "会話" });
+    const sessions = await openChatHistory(page);
     const rename = sessions.getByRole("button", { name: "「経費の上限は？」の名前を変更" });
     if (viewport.name === "desktop") await sessions.getByRole("listitem").hover();
     await rename.click();
@@ -581,7 +589,7 @@ for (const viewport of [
     await page.goto("/chat");
     await selectBusinessView(page, "経理アシスタント");
 
-    const sessions = page.getByRole("complementary", { name: "会話" });
+    const sessions = await openChatHistory(page);
     const remove = sessions.getByRole("button", { name: "「経費の上限は？」を削除" });
     if (viewport.name === "desktop") await sessions.getByRole("listitem").hover();
 
@@ -607,7 +615,7 @@ test("会話名変更の失敗を入力欄直下へ表示する", async ({ page 
   await page.goto("/chat");
   await selectBusinessView(page, "経理アシスタント");
 
-  const sessions = page.getByRole("complementary", { name: "会話" });
+  const sessions = await openChatHistory(page);
   await sessions.getByRole("listitem").hover();
   await sessions.getByRole("button", { name: "「経費の上限は？」の名前を変更" }).click();
   const input = sessions.getByRole("textbox", { name: "会話名" });
@@ -636,11 +644,12 @@ test("未送信の会話があれば新しい会話を増やさず再利用す�
 
   const newConversation = page.getByRole("button", { name: "新しい会話", exact: true });
   await newConversation.click();
+  const history = await openChatHistory(page);
   await expect(
-    page
-      .getByRole("list", { name: "会話" })
-      .getByText("新しい会話", { exact: true })
+    history.getByRole("list", { name: "会話の履歴" }).getByText("新しい会話", { exact: true })
   ).toBeVisible();
+  await history.getByRole("button", { name: "会話の履歴を閉じる" }).click();
+  await expect(history).toBeHidden();
   await newConversation.click();
   await expect(page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" })).toBeFocused();
   expect(createRequests).toBe(1);
@@ -654,6 +663,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
   });
   await page.goto("/chat");
   await selectBusinessView(page, "経理アシスタント");
+  await openChatHistory(page);
   await expectNoPageOverflow(page);
 });
 
@@ -825,4 +835,111 @@ test("送信と停止は同じボタンで、生成中の Enter では停止し�
   await expect.poll(() => calls).toBe(2);
   await expect(button).toHaveAccessibleName("停止");
   await expectNoPageOverflow(page);
+});
+
+test("会話の履歴は既定で閉じ、開くとチャットの左に並び、開閉の状態が再読込で残る（#664）", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockChat(page, "ready", [userMessage, assistantMessage]);
+  await page.goto("/chat");
+  await selectBusinessView(page, "経理アシスタント");
+
+  await expectChatWorkspaceLayout(page, "desktop");
+  const toggle = page.getByTestId("chat-history-toggle");
+  await expect(toggle).toHaveAccessibleName("会話の履歴");
+  // 新しい会話は履歴を開かなくても押せる。
+  await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeVisible();
+
+  const history = await openChatHistory(page);
+  await expect(page.getByRole("complementary", { name: "会話の履歴" })).toBeVisible();
+  const chat = page.getByRole("region", { name: "チャット" });
+  const [historyBox, chatBox] = await Promise.all([history.boundingBox(), chat.boundingBox()]);
+  if (!historyBox || !chatBox) throw new Error("レイアウトを計測できません。");
+  expect(Math.abs(historyBox.y - chatBox.y)).toBeLessThanOrEqual(1);
+  expect(chatBox.x).toBeGreaterThan(historyBox.x + historyBox.width);
+
+  // 会話を選んでもインラインのパネルは開いたまま。今の会話の名前は上端に出る。
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("経費の上限は？");
+  await expect(history).toBeVisible();
+
+  // 開閉の状態は作業状態として残る（workspace-state.md）。
+  await page.reload();
+  await expect(page.getByTestId("chat-history")).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expectChatWorkspaceLayout(page, "desktop");
+  await page.reload();
+  await expectChatWorkspaceLayout(page, "desktop");
+  await expectNoPageOverflow(page);
+});
+
+test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す（#664）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockChat(page, "ready", [userMessage, assistantMessage]);
+  await page.goto("/chat");
+  await selectBusinessView(page, "経理アシスタント");
+  await expectChatWorkspaceLayout(page, "mobile");
+
+  const toggle = page.getByTestId("chat-history-toggle");
+  const sheet = page.getByRole("dialog", { name: "会話の履歴" });
+
+  // キーボードで開く → 閉じるボタンへフォーカス → Tab は中で回る → Esc で閉じてボタンへ戻る。
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sheet).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(sheet.getByRole("button", { name: "会話の履歴を閉じる" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: /^経費の上限は？ 2件/ })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toBeFocused();
+
+  // シートの外側（scrim）を押すと閉じる。
+  await toggle.click();
+  await expect(sheet).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.getByTestId("chat-history-scrim").click({ position: { x: 360, y: 400 } });
+  await expect(sheet).toBeHidden();
+
+  // 会話を選ぶと閉じ、今の会話の名前が上端に出る。
+  await toggle.click();
+  await sheet.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  await expect(sheet).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("経費の上限は？");
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+
+  // モーダルのシートの開閉は残さない（再読込で画面を塞がない）。
+  await toggle.click();
+  await expect(sheet).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("chat-history-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(sheet).toBeHidden();
+});
+
+test("会話を選ばずに送信すると会話を作って回答する（#664）", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockChat(page);
+  await page.goto("/chat");
+  await selectBusinessView(page, "経理アシスタント");
+
+  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  // 会話を選んでいない間は、上端に会話の名前を出さない。
+  await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
+  const created = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/chat/conversations"
+  );
+  const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+  await expect(composer).toBeEnabled();
+  await composer.fill("経費の上限は？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await created;
+
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("経費の上限は？");
 });

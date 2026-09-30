@@ -106,6 +106,7 @@ export {
   type ConfirmOptions,
   type ConfirmDefaultLabels,
 } from "./components/ui/confirm-dialog";
+export { SideSheet, type SideSheetProps } from "./components/ui/side-sheet";
 export { ContentActionBar } from "./components/ui/content-action-bar";
 export {
   FormActionBar,

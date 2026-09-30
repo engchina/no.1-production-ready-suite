@@ -13,9 +13,9 @@ import {
   TimedLoadingState,
   Skeleton,
   ListSkeleton,
+  SideSheet,
   DEFAULT_PAGE_SIZE,
   INFORMATION_LIST_ROW_CLASS,
-  INFORMATION_LIST_SCROLL_CLASS,
   offsetForPage,
   offsetPagination,
   toast,
@@ -23,6 +23,8 @@ import {
 } from "@engchina/production-ready-ui";
 import {
   Check,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   RotateCcw,
@@ -30,7 +32,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
@@ -61,6 +63,7 @@ import {
   useSavedAnswerTraceIds,
   useUpdateConversation,
   useDeleteConversation,
+  queryKeys,
 } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
@@ -69,6 +72,21 @@ import { cn } from "@/lib/utils";
 
 const COMPARE_MAX = 3;
 const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
+
+/** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（#664）。 */
+const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
+
+function useHistoryInline(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(HISTORY_INLINE_QUERY);
+      query.addEventListener("change", onChange);
+      return () => query.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(HISTORY_INLINE_QUERY).matches,
+    () => true
+  );
+}
 
 /** 会話一覧のページ（業務ビューごと。#403）。別の業務ビューに移ったら 1 ページ目から。 */
 interface ConversationsPage {
@@ -446,6 +464,21 @@ export function ChatClient() {
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
+  // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
+  // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
+  // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
+  const historyInline = useHistoryInline();
+  const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat.historyOpen", false);
+  const [historySheetOpen, setHistorySheetOpen] = useState(false);
+  // lg 以上に広げたらモーダルのシートを閉じる（インラインのパネルは作業状態のまま）。
+  const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
+  if (previousHistoryInline !== historyInline) {
+    setPreviousHistoryInline(historyInline);
+    if (historyInline) setHistorySheetOpen(false);
+  }
+  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
+  const historyId = useId();
+  const historyToggleRef = useRef<HTMLButtonElement>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [sending, setSending] = useState(false);
@@ -504,7 +537,14 @@ export function ChatClient() {
     [persistedMessages, liveUserMessageId]
   );
 
+  function toggleHistory() {
+    if (historyInline) setHistoryPanelOpen(!historyPanelOpen);
+    else setHistorySheetOpen((open) => !open);
+  }
+
   function selectConversation(id: string) {
+    // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
+    setHistorySheetOpen(false);
     if (id === activeId) return;
     abortRef.current?.abort();
     setLiveTurn(null);
@@ -622,7 +662,7 @@ export function ChatClient() {
   /** 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。 */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !activeId || sending || businessViewWithoutKnowledgeBases) return;
+    if (!content || !businessViewId || sending || businessViewWithoutKnowledgeBases) return;
     setSending(true);
     setErrorText("");
     if (retryContent === undefined) setComposer("");
@@ -630,8 +670,19 @@ export function ChatClient() {
     abortRef.current = controller;
     let started = false;
     try {
+      let conversationId = activeId;
+      if (!conversationId) {
+        // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
+        const created = await createConversation.mutateAsync({ business_view_id: businessViewId });
+        conversationId = created.id;
+        // 作った会話の内容（空）を先に入れ、読み込み中の表示で送信中の質問を隠さない。
+        queryClient.setQueryData(queryKeys.conversation(created.id), created);
+        setConversationOffset(0);
+        setActiveId(created.id);
+        if (controller.signal.aborted) return;
+      }
       await streamChatMessage(
-        activeId,
+        conversationId,
         { content, model_ids: selectedModelIds },
         {
           onStart: ({ user_message, columns }) => {
@@ -742,6 +793,164 @@ export function ChatClient() {
     : [];
   const lastTurnId = turns.length ? turns[turns.length - 1].user.message_id : null;
 
+  // 会話の履歴の中身（読み込み中・失敗・0 件・一覧・ページ送り）。lg 以上はインラインのパネル、
+  // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
+  const historyContent = (
+    <>
+      {conversationsQuery.isLoading ? (
+        <TimedLoadingState
+          label={t("chat.sessions.loading")}
+          operationKey="chat-conversations-load"
+          framed={false}
+          testId="chat-conversations-loading"
+        >
+          <ListSkeleton rows={3} rowClassName="h-12" />
+        </TimedLoadingState>
+      ) : conversationsQuery.isError ? (
+        <ErrorState
+          message={t("chat.sessions.error")}
+          onRetry={() => void conversationsQuery.refetch()}
+        />
+      ) : conversations.length === 0 ? (
+        <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
+      ) : (
+        <>
+        <ul
+          // パネル（lg 以上）・シート（lg 未満）の高さまで伸ばし、超えたら中をスクロールする。
+          // ページ送りは一覧の下に常に見せる（#403 / #664）。
+          className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
+          aria-label={t("chat.sessions.title")}
+          data-testid="chat-conversation-list"
+        >
+          {conversations.map((conversation) => {
+            const title = conversation.title ?? t("chat.sessions.untitled");
+            return (
+              <li key={conversation.id} className="group">
+                {editingId === conversation.id ? (
+                  <div className="rounded-md bg-accent-subtle p-2">
+                    <div className="flex items-start gap-1">
+                      <TextField
+                        ref={titleInputRef}
+                        id={`conversation-title-${conversation.id}`}
+                        label={t("chat.sessions.renameLabel")}
+                        labelHidden
+                        className="min-w-0 flex-1"
+                        value={titleDraft}
+                        maxLength={80}
+                        required
+                        disabled={updateConversation.isPending}
+                        error={titleError || undefined}
+                        onValueChange={setTitleDraft}
+                        onKeyDown={(event) => {
+                          if (isSubmitEnter(event)) {
+                            event.preventDefault();
+                            void saveRename();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="md"
+                        iconOnly
+                        disabled={updateConversation.isPending}
+                        aria-label={t("chat.sessions.renameSave")}
+                        onClick={() => void saveRename()} icon={Check}>
+                        </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="md"
+                        iconOnly
+                        disabled={updateConversation.isPending}
+                        aria-label={t("chat.sessions.renameCancel")}
+                        onClick={cancelRename} icon={X}>
+                        </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className={cn(
+                      "grid grid-cols-[minmax(0,1fr)_auto_auto] rounded-md transition-colors",
+                      INFORMATION_LIST_ROW_CLASS,
+                      conversation.id === activeId
+                        ? "bg-accent-subtle text-fg"
+                        : "text-fg-muted hover:bg-surface-hover hover:text-fg"
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => selectConversation(conversation.id)}
+                      aria-current={conversation.id === activeId}
+                      className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
+                    >
+                      <span className="truncate font-medium" title={title}>
+                        {title}
+                      </span>
+                      <span className="text-xs tabular-nums text-fg-muted">
+                        {t("chat.sessions.metadata", {
+                          count: conversation.message_count,
+                          updatedAt: formatDateTime(conversation.updated_at),
+                        })}
+                      </span>
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="md"
+                      iconOnly
+                      className={cn(
+                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                        conversation.id === activeId && "sm:opacity-100"
+                      )}
+                      aria-label={t("chat.sessions.rename", { title })}
+                      onClick={() => startRename(conversation)} icon={Pencil}>
+                      </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="md"
+                      tone="danger"
+                      iconOnly
+                      className={cn(
+                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                        conversation.id === activeId && "sm:opacity-100"
+                      )}
+                      disabled={deleteConversation.isPending}
+                      aria-label={t("chat.sessions.delete", { title })}
+                      onClick={() => void removeConversation(conversation)} icon={Trash2}>
+                      </Button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        {conversationsData ? (
+          <ListPagination
+            {...offsetPagination({
+              // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
+              offset: conversationsData.offset,
+              limit: DEFAULT_PAGE_SIZE,
+              total: conversationsData.total,
+              count: conversations.length,
+            })}
+            onPageChange={(next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
+            ariaLabel={t("chat.sessions.pagination")}
+            testId="chat-conversations-pagination"
+          />
+        ) : null}
+        </>
+      )}
+    </>
+  );
+  const activeConversation =
+    conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
+  const activeTitle = activeConversation?.title ?? t("chat.sessions.untitled");
+
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
@@ -811,188 +1020,93 @@ export function ChatClient() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-            {/* 会話一覧サイドバー */}
-            <aside
-              aria-label={t("chat.sessions.title")}
-              className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 shadow-sm lg:min-h-0"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-fg">
+          <div
+            className={cn(
+              "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1",
+              historyInline && historyPanelOpen && "lg:grid-cols-[280px_minmax(0,1fr)]"
+            )}
+          >
+            {historyInline ? (
+              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
+              <aside
+                id={historyId}
+                aria-label={t("chat.sessions.title")}
+                data-testid="chat-history"
+                className={cn(
+                  "min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm",
+                  historyPanelOpen ? "flex" : "hidden"
+                )}
+              >
+                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
+                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
                   {t("chat.sessions.title")}
-                </span>
-                <Button
-                  size="sm"
-                  onClick={() => void startNewConversation()}
-                  disabled={createConversation.isPending} icon={Plus}>
-                  {t("chat.sessions.new")}
-                </Button>
-              </div>
-              {conversationsQuery.isLoading ? (
-                <TimedLoadingState
-                  label={t("chat.sessions.loading")}
-                  operationKey="chat-conversations-load"
-                  framed={false}
-                  testId="chat-conversations-loading"
-                >
-                  <ListSkeleton rows={3} rowClassName="h-12" />
-                </TimedLoadingState>
-              ) : conversationsQuery.isError ? (
-                <ErrorState
-                  message={t("chat.sessions.error")}
-                  onRetry={() => void conversationsQuery.refetch()}
-                />
-              ) : conversations.length === 0 ? (
-                <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
-              ) : (
-                <>
-                <ul
-                  // lg 未満は 5 / 8 行の高さで中をスクロールし、lg 以上は会話エリアの高さまで伸ばす（#403）。
-                  className={cn(
-                    "min-h-0 flex-1 space-y-1",
-                    INFORMATION_LIST_SCROLL_CLASS,
-                    "lg:max-h-none"
-                  )}
-                  aria-label={t("chat.sessions.title")}
-                  data-testid="chat-conversation-list"
-                >
-                  {conversations.map((conversation) => {
-                    const title = conversation.title ?? t("chat.sessions.untitled");
-                    return (
-                      <li key={conversation.id} className="group">
-                        {editingId === conversation.id ? (
-                          <div className="rounded-md bg-accent-subtle p-2">
-                            <div className="flex items-start gap-1">
-                              <TextField
-                                ref={titleInputRef}
-                                id={`conversation-title-${conversation.id}`}
-                                label={t("chat.sessions.renameLabel")}
-                                labelHidden
-                                className="min-w-0 flex-1"
-                                value={titleDraft}
-                                maxLength={80}
-                                required
-                                disabled={updateConversation.isPending}
-                                error={titleError || undefined}
-                                onValueChange={setTitleDraft}
-                                onKeyDown={(event) => {
-                                  if (isSubmitEnter(event)) {
-                                    event.preventDefault();
-                                    void saveRename();
-                                  } else if (event.key === "Escape") {
-                                    event.preventDefault();
-                                    cancelRename();
-                                  }
-                                }}
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="md"
-                                iconOnly
-                                disabled={updateConversation.isPending}
-                                aria-label={t("chat.sessions.renameSave")}
-                                onClick={() => void saveRename()} icon={Check}>
-                                </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="md"
-                                iconOnly
-                                disabled={updateConversation.isPending}
-                                aria-label={t("chat.sessions.renameCancel")}
-                                onClick={cancelRename} icon={X}>
-                                </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div
-                            className={cn(
-                              "grid grid-cols-[minmax(0,1fr)_auto_auto] rounded-md transition-colors",
-                              INFORMATION_LIST_ROW_CLASS,
-                              conversation.id === activeId
-                                ? "bg-accent-subtle text-fg"
-                                : "text-fg-muted hover:bg-surface-hover hover:text-fg"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => selectConversation(conversation.id)}
-                              aria-current={conversation.id === activeId}
-                              className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
-                            >
-                              <span className="truncate font-medium" title={title}>
-                                {title}
-                              </span>
-                              <span className="text-xs tabular-nums text-fg-muted">
-                                {t("chat.sessions.metadata", {
-                                  count: conversation.message_count,
-                                  updatedAt: formatDateTime(conversation.updated_at),
-                                })}
-                              </span>
-                            </button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="md"
-                              iconOnly
-                              className={cn(
-                                "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                                conversation.id === activeId && "sm:opacity-100"
-                              )}
-                              aria-label={t("chat.sessions.rename", { title })}
-                              onClick={() => startRename(conversation)} icon={Pencil}>
-                              </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="md"
-                              tone="danger"
-                              iconOnly
-                              className={cn(
-                                "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                                conversation.id === activeId && "sm:opacity-100"
-                              )}
-                              disabled={deleteConversation.isPending}
-                              aria-label={t("chat.sessions.delete", { title })}
-                              onClick={() => void removeConversation(conversation)} icon={Trash2}>
-                              </Button>
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-                {conversationsData ? (
-                  <ListPagination
-                    {...offsetPagination({
-                      // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
-                      offset: conversationsData.offset,
-                      limit: DEFAULT_PAGE_SIZE,
-                      total: conversationsData.total,
-                      count: conversations.length,
-                    })}
-                    onPageChange={(next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
-                    ariaLabel={t("chat.sessions.pagination")}
-                    testId="chat-conversations-pagination"
-                  />
-                ) : null}
-                </>
-              )}
-            </aside>
+                </h2>
+                {historyContent}
+              </aside>
+            ) : (
+              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
+              <SideSheet
+                open={historySheetOpen}
+                onClose={() => setHistorySheetOpen(false)}
+                title={t("chat.sessions.title")}
+                closeLabel={t("chat.sessions.close")}
+                id={historyId}
+                returnFocusRef={historyToggleRef}
+                bodyClassName="gap-3"
+                data-testid="chat-history"
+              >
+                {historyContent}
+              </SideSheet>
+            )}
 
             {/* 会話エリア */}
             <section
               aria-label={t("chat.title")}
               className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
             >
+            {/* 上端の行: 会話の履歴の開閉・今の会話の名前・新しい会話（履歴を閉じていても使える。#664）。 */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+              <Button
+                ref={historyToggleRef}
+                type="button"
+                variant="ghost"
+                size="sm"
+                iconOnly
+                icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
+                aria-label={t("chat.sessions.title")}
+                aria-expanded={historyOpen}
+                aria-controls={historyId}
+                data-testid="chat-history-toggle"
+                onClick={toggleHistory}
+              />
+              {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
+              <div className="min-w-0 flex-1">
+                {!activeId ? null : activeConversation ? (
+                  <h2
+                    className="truncate text-sm font-medium text-fg"
+                    title={activeTitle}
+                    data-testid="chat-conversation-title"
+                  >
+                    {activeTitle}
+                  </h2>
+                ) : (
+                  <Skeleton className="h-4 w-40" />
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={Plus}
+                onClick={() => void startNewConversation()}
+                disabled={createConversation.isPending}
+              >
+                {t("chat.sessions.new")}
+              </Button>
+            </div>
             <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-              {!activeId ? (
-                <EmptyState
-                  title={t("chat.composer.selectConversation")}
-                  hint={t("chat.messages.empty")}
-                />
-              ) : conversationQuery.isLoading ? (
+              {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
+              {activeId && conversationQuery.isLoading && !liveTurn ? (
                 <TimedLoadingState
                   label={t("chat.messages.loading")}
                   operationKey="chat-conversation-load"
@@ -1004,7 +1118,7 @@ export function ChatClient() {
                   <Skeleton className="h-32 w-5/6" />
                   <Skeleton className="ml-auto h-12 w-1/2" />
                 </TimedLoadingState>
-              ) : conversationQuery.isError ? (
+              ) : activeId && conversationQuery.isError ? (
                 <ErrorState
                   message={t("chat.messages.error")}
                   onRetry={() => void conversationQuery.refetch()}
@@ -1089,9 +1203,7 @@ export function ChatClient() {
                     runLabel={t("chat.composer.send")}
                     stopLabel={t("chat.composer.stop")}
                     runIcon={SendHorizontal}
-                    runDisabled={
-                      !activeId || composer.trim().length === 0 || businessViewWithoutKnowledgeBases
-                    }
+                    runDisabled={composer.trim().length === 0 || businessViewWithoutKnowledgeBases}
                     size="lg"
                     testId="chat-run-stop"
                   />
@@ -1112,12 +1224,9 @@ export function ChatClient() {
                     }
                   }}
                   rows={2}
-                  placeholder={
-                    activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
-                  }
+                  placeholder={t("chat.composer.placeholder")}
                   // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
-                  // 生成中に disabled にすると、Enter で送った直後にフォーカスが body へ外れる。
-                  disabled={!activeId}
+                  // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
                   // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
                   className="space-y-0"
                 />
