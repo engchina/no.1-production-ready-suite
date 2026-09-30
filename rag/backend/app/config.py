@@ -356,8 +356,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
     oci_enterprise_ai_secondary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    # 既定のテキストモデル（任意）と既定の Vision モデル（#499）。呼び出しに使う ID は
-    # enterprise_ai_default_model_id / enterprise_ai_vision_model_id で解決する。
+    # 既定のテキストモデルと既定の Vision モデル（#499。画面・API では 2 つとも必須。#566）。
+    # 呼び出しに使う ID は enterprise_ai_default_model_id / enterprise_ai_vision_model_id
+    # で解決する。
     oci_enterprise_ai_default_text_model: str = Field(default="")
     oci_enterprise_ai_default_vision_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")

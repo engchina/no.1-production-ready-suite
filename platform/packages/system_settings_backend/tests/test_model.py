@@ -338,7 +338,8 @@ def test_resolution_uses_text_model_and_falls_back_to_vision_model() -> None:
     assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
 
     settings.oci_enterprise_ai_default_text_model = ""
-    # 既定のテキストモデルが未設定なら、画像を扱わない呼び出しも既定の Vision モデルを使う。
+    # 画面・API では必須だが（#566）、未設定の既存環境では画像を扱わない呼び出しも
+    # 既定の Vision モデルを使う（安全策）。
     assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
     assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
 
@@ -365,9 +366,17 @@ def test_vision_model_is_derived_when_not_set_explicitly() -> None:
             "default_vision_model_id",
             "画像入力（Vision）に対応していません",
         ),
+        ({"default_text_model_id": ""}, "default_text_model_id", "既定のテキストモデルを選択"),
         ({"default_text_model_id": "gone"}, "default_text_model_id", "登録モデルにありません"),
     ],
-    ids=["no-vision-model", "vision-empty", "vision-removed", "vision-not-capable", "text-removed"],
+    ids=[
+        "no-vision-model",
+        "vision-empty",
+        "vision-removed",
+        "vision-not-capable",
+        "text-empty",
+        "text-removed",
+    ],
 )
 def test_patch_rejects_invalid_default_models(
     tmp_path: Path, update: dict[str, Any], field: str, message: str
@@ -390,16 +399,24 @@ def test_patch_rejects_invalid_default_models(
     assert not (tmp_path / "model-settings.json").exists()
 
 
-def test_patch_accepts_empty_text_model_and_vision_capable_text_model(tmp_path: Path) -> None:
+def test_default_model_errors_follow_screen_order() -> None:
+    """2 つとも空なら、画面の並び順（テキスト → Vision）でエラーを返す（#566）。"""
+    enterprise = {
+        **PAYLOAD["enterprise_ai"],
+        "default_text_model_id": "",
+        "default_vision_model_id": "",
+    }
+    errors = shared_model.validate_default_models(
+        shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
+    )
+    assert [error.field for error in errors] == ["default_text_model_id", "default_vision_model_id"]
+
+
+def test_patch_accepts_vision_capable_text_model(tmp_path: Path) -> None:
     settings = FakeSettings()
     store = make_store(tmp_path)
     store.load(settings)
     client = make_client(settings, store)
-
-    empty_text = {**PAYLOAD["enterprise_ai"], "default_text_model_id": ""}
-    response = client.patch("/api/settings/model", json={**PAYLOAD, "enterprise_ai": empty_text})
-    assert response.status_code == 200
-    assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
 
     vision_text = {**PAYLOAD["enterprise_ai"], "default_text_model_id": "vlm-b"}
     response = client.patch("/api/settings/model", json={**PAYLOAD, "enterprise_ai": vision_text})

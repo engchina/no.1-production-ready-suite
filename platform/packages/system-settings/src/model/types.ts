@@ -44,7 +44,7 @@ export interface EnterpriseAiModelSettings {
   /** 1 件目（プライマリ接続）が既定。2 件目はセカンダリ接続（任意。#533）。 */
   connections: EnterpriseAiConnectionSettings[];
   models: EnterpriseAiConfiguredModel[];
-  /** 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。 */
+  /** 画像を扱わない処理の既定。モデルを 1 つ以上登録したら必須（#499 / #566）。 */
   default_text_model_id: string;
   /** 画像を読む処理の既定。モデルを登録したら必須で、Vision 対応のモデルに限る（#499）。 */
   default_vision_model_id: string;
