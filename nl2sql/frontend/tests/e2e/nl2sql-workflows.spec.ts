@@ -538,7 +538,7 @@ const schemaCatalog = {
           data_type: "VARCHAR2(120)",
           nullable: false,
           comment: "取引先名",
-          sample_values: ["青山商事"],
+          sample_values: ["架空商事"],
         },
         {
           column_name: "TOTAL_AMOUNT",
@@ -1205,7 +1205,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       hint: "",
       executed,
       runtime: "deterministic",
-      sample_rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: "1200000", UNKNOWN_COLUMN: "x" }],
+      sample_rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: "1200000", UNKNOWN_COLUMN: "x" }],
       warnings: [],
       timing,
     });
@@ -1232,13 +1232,13 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       ddl: `CREATE TABLE ${tableName} (ORDER_ID NUMBER, ORDER_NAME VARCHAR2(4 CHAR))`,
       insert_sql: `INSERT INTO ${tableName} (ORDER_ID, ORDER_NAME) VALUES (:1, :2)`,
       warnings: [],
-      sample_rows: [{ ORDER_ID: "1", ORDER_NAME: "青山商事" }],
+      sample_rows: [{ ORDER_ID: "1", ORDER_NAME: "架空商事" }],
       timing,
     });
   });
   await page.route("**/api/nl2sql/db-admin/statements", (route) => {
     state.statementsPayload = route.request().postDataJSON() as Record<string, unknown>;
-    const sql = String(state.statementsPayload.sql ?? "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('青山商事')");
+    const sql = String(state.statementsPayload.sql ?? "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('架空商事')");
     const policy = String(state.statementsPayload.policy ?? "data_dml");
     const executed = true;
     const invalidAnnotationName =
@@ -1339,7 +1339,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       select_result: isSelect
         ? {
             columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-            rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+            rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
             total: 1,
           }
         : null,
@@ -2472,7 +2472,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.metadataSamplesPayload = route.request().postDataJSON() as Record<string, unknown>;
     const sampleLimit = state.metadataSamplesPayload.sample_limit;
     return fulfillJson(route, {
-      sample_text: sampleLimit === 0 ? "" : "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 青山商事, 鈴木商店",
+      sample_text: sampleLimit === 0 ? "" : "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 架空商事, 見本商店",
       sample_count: sampleLimit === 0 ? 0 : 2,
       runtime: "oracle",
       warnings: [],
@@ -2633,7 +2633,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     state.executePayload = route.request().postDataJSON() as Record<string, unknown>;
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-      rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+      rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
       total: 1,
     });
   });
@@ -2687,7 +2687,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         optimization_hints: ["TOTAL_AMOUNT に索引を検討できます。"],
         results: {
           columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
           total: 1,
         },
         timing,
@@ -2781,7 +2781,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           elapsed_ms: 18,
           results: {
             columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-            rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+            rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
             total: 1,
           },
         },
@@ -4284,7 +4284,7 @@ test("query workbench generates SQL through the job flow and shows results", asy
   );
 
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "1200000" })).toBeVisible();
   // 生成 SQL の pre(role=region「生成 SQL コード」)と区別するため textbox を明示する。
   const feedbackResponse = page.getByRole("textbox", { name: "生成 SQL" });
@@ -4827,7 +4827,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
         optimization_hints: [],
         results: {
           columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
           total: 1,
         },
         timing,
@@ -5399,7 +5399,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
         optimization_hints: [],
         results: {
           columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
           total: 1,
         },
         timing: finishedTiming,
@@ -5520,7 +5520,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
   // danger toast は自動消滅しない(duration 0)。mobile 幅で後続の「良い」クリックを遮るため閉じる。
   await copyFailedToast.getByRole("button", { name: "閉じる" }).click();
   await expect(copyFailedToast).toHaveCount(0);
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
 
   // 実行結果の「良い」は利用者からの評価としてアプリ DB に保存する。
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
@@ -5682,7 +5682,7 @@ test("保存警告がある完了 job は結果を表示し、赤エラーでは
         optimization_hints: [],
         results: {
           columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-          rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+          rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
           total: 1,
         },
         timing,
@@ -5705,7 +5705,7 @@ test("保存警告がある完了 job は結果を表示し、赤エラーでは
   await expect(progress).toHaveAttribute("data-job-status", "done");
   await expect(progress.getByRole("status").filter({ hasText: warningMessage })).toBeVisible();
   await expect(progress).not.toContainText("処理を完了できませんでした");
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -7371,7 +7371,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
     }
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-      rows: [{ CUSTOMER_NAME: "青山商事", TOTAL_AMOUNT: 1200000 }],
+      rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
       total: 1,
     });
   });
@@ -7426,7 +7426,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
   await expect(directSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
   await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   expect(api.executePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
     allowed_objects: { table_names: [], columns: {} },
@@ -7513,7 +7513,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
     await directGate.promise;
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME"],
-      rows: [{ CUSTOMER_NAME: "青山商事" }],
+      rows: [{ CUSTOMER_NAME: "架空商事" }],
       total: 1,
     });
   });
@@ -7553,7 +7553,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
       runtime: "oracle",
       select_result: {
         columns: ["CUSTOMER_NAME"],
-        rows: [{ CUSTOMER_NAME: "青山商事" }],
+        rows: [{ CUSTOMER_NAME: "架空商事" }],
         total: 1,
       },
       statements: [
@@ -7608,7 +7608,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   await mockNl2SqlApi(page);
 
   const rows = Array.from({ length: 16 }, (_, index) => ({
-    CUSTOMER_NAME: `青山商事 ${String(index + 1).padStart(2, "0")}`,
+    CUSTOMER_NAME: `架空商事 ${String(index + 1).padStart(2, "0")}`,
     TOTAL_AMOUNT: 1_200_000 + index,
   }));
 
@@ -7723,7 +7723,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expect(adminSql.getByTestId("query-results-table")).toBeVisible();
   await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
   await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
-  await expect(adminSql.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(adminSql.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(
     adminSql.locator("code").filter({ hasText: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" })
   ).toHaveCount(0);
@@ -7848,7 +7848,7 @@ test("管理 SQL の純 DML バッチは部分成功を警告し、成功文だ�
   const adminSql = page.getByTestId("nl2sql-admin-sql");
   const sqlInput = adminSqlInput(adminSql);
   const partialSql =
-    "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('青山商事'); " +
+    "INSERT INTO INVOICES (CUSTOMER_NAME) VALUES ('架空商事'); " +
     "UPDATE MISSING_TABLE SET STATUS = 'REVIEWED' WHERE ID = 1";
   await sqlInput.fill(partialSql);
   await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
@@ -10902,7 +10902,7 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await page.route("**/api/nl2sql/metadata-samples", async (route) => {
     await commentGenerateGate.promise;
     return fulfillJson(route, {
-      sample_text: "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 青山商事",
+      sample_text: "OBJECT: APP.INVOICES\nCUSTOMER_NAME: 架空商事",
       sample_count: 1,
       runtime: "oracle",
       warnings: [],
@@ -13663,7 +13663,7 @@ test("Excel/CSV取込の列幅エラーは取込フォーム内に表示して�
     {
       name: "oversized.csv",
       type: "text/csv",
-      content: "ID,NAME\n1,株式会社青山\n",
+      content: "ID,NAME\n1,株式会社架空\n",
     },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
@@ -13852,7 +13852,7 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
       insert_sql: `INSERT INTO "${tableName}" ("ORDER_ID", "ORDER_NAME") VALUES (:c0, :c1)`,
       schema_refresh_job_id: "table-import-refresh-pending",
       warnings: [],
-      sample_rows: [{ ORDER_ID: "1", ORDER_NAME: "青山商事" }],
+      sample_rows: [{ ORDER_ID: "1", ORDER_NAME: "架空商事" }],
       timing,
     });
   });
@@ -13889,7 +13889,7 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
   const executeButton = importPanel.getByRole("button", { name: "取込を実行" });
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");
   await dropFiles(page, importPanel.getByTestId("table-import-file-field-dropzone"), [
-    { name: "orders.csv", type: "text/csv", content: "ORDER_ID,ORDER_NAME\n1,青山商事\n" },
+    { name: "orders.csv", type: "text/csv", content: "ORDER_ID,ORDER_NAME\n1,架空商事\n" },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await executeButton.click();
@@ -14358,7 +14358,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(columnsPanel.getByRole("columnheader", { name: "コメント" })).toBeVisible();
   await expect(columnsPanel.getByRole("cell", { name: "取引先名" }).first()).toBeVisible();
   await expect(columnsPanel.getByRole("cell", { name: "税込請求金額" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(page.getByText("2 列")).toBeVisible();
   await expect(page.getByRole("button", { name: /XLSX ダウンロード/ })).toBeVisible();
   const columnsDownloadPromise = page.waitForEvent("download");
@@ -14486,7 +14486,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await importPanel.getByLabel("CSV/XLSX/XLS 選択", { exact: true }).setInputFiles({
     name: "orders.csv",
     mimeType: "text/csv",
-    buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,青山商事\n"),
+    buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,架空商事\n"),
   });
   await expect(importPanel.getByText("選択中: orders.csv")).toBeVisible();
   await expect(importPanel.locator("#table-import-sheet-name")).not.toHaveAttribute("aria-required", "true");
@@ -14551,7 +14551,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(10);
   await expect.poll(() => api.commentGeneratePayload?.sample_text).toContain(
-    "CUSTOMER_NAME: 青山商事, 鈴木商店"
+    "CUSTOMER_NAME: 架空商事, 見本商店"
   );
   const commentExecutePanel = page.locator("#comment-management-panel-execute");
   await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(
@@ -17097,7 +17097,7 @@ test("query recovery: 2.5秒より遅い状態取得を中断せず結果を表�
   await run.focus();
   await run.press("Enter");
   await expect(run).toBeDisabled();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible({ timeout: 12_000 });
   await expect(run).toBeEnabled();
   expect(reads).toBe(1);
   expect(creates).toBe(1);
@@ -17152,7 +17152,7 @@ for (const failure of ["get", "set", "remove"] as const) {
       await page.screenshot({ path: testInfo.outputPath(`query-storage-${failure}.png`) });
     }
     release();
-    await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
     await expect(run).toBeEnabled();
     await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
     await expect(page.getByText(/実行中のジョブをブラウザに保存できません/)).toHaveCount(0);
@@ -17180,12 +17180,12 @@ test("query recovery: Profile 切替で旧 SQL・進捗・結果を破棄し草�
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("Profile A の請求を確認");
   await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   api.jobPayload = null;
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "other");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "生成 SQL", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("cell", { name: "青山商事" })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "架空商事" })).toHaveCount(0);
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
   await nl2sqlQuestionInput(page).fill("Profile B の草稿");
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
@@ -17228,7 +17228,7 @@ test("query recovery: すべての生成条件変更で前回結果と未実行�
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   api.jobPayload = null;
   const changed = page.getByText(/入力が変更されています。現在の入力は未実行です。/);
   await page.getByRole("button", { name: /実行オプション/ }).click();
@@ -17256,7 +17256,7 @@ test("query recovery: すべての生成条件変更で前回結果と未実行�
   await page.getByRole("textbox", { name: "アシスタントロール", exact: true }).fill("");
   await expect(changed).toHaveCount(0);
   expect(api.jobPayload).toBeNull();
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
 });
 
 test("query recovery: 初回 Profile 選択でも保存された進行中 job を復元する", async ({ page }) => {
@@ -17272,7 +17272,7 @@ test("query recovery: 初回 Profile 選択でも保存された進行中 job �
   });
   await page.goto("/query");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
-  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   expect(creates).toBe(0);
 });
 
@@ -17385,7 +17385,7 @@ test.describe("query snapshot ownership", () => {
     const snapshot = await readSnapshot(other);
     expect(snapshot.jobId).toBe("job-other-tab");
     release();
-    await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
     expect(await readSnapshot(page)).toEqual({ jobId: null, startedAt: null });
     expect(await readSnapshot(other)).toEqual(snapshot);
     await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "other");

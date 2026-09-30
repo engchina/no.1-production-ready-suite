@@ -49,7 +49,7 @@ def test_sample_data_info_returns_owner_and_qualified_object_refs() -> None:
 
 def test_tabular_import_returns_owner_and_qualified_table_name() -> None:
     service = _service("APP")
-    content = base64.b64encode("ID,NAME\n1,青山商事\n".encode()).decode()
+    content = base64.b64encode("ID,NAME\n1,架空商事\n".encode()).decode()
 
     imported = service.import_db_admin_tabular(
         DbAdminImportTabularRequest(
