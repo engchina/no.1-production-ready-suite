@@ -65,7 +65,11 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /focus:border-focus-ring/u);
   // フォーカスの表示は outline に一本化（ring を使わない。#355）
   assert.doesNotMatch(dbObjectFilterFieldsSource, /focus(?:-visible)?:ring-/u);
-  assert.match(dbObjectFilterFieldsSource, /event\.currentTarget\.value\.toUpperCase\(\)/u);
+  // 検索・所有者の接頭辞は共有の SearchField（debounce・IME 対応）。接頭辞は確定した値を大文字にする（#535）。
+  assert.match(dbObjectFilterFieldsSource, /<SearchField/u);
+  assert.doesNotMatch(dbObjectFilterFieldsSource, /<TextField/u);
+  assert.match(dbObjectFilterFieldsSource, /value\.trim\(\)\.toUpperCase\(\)/u);
+  assert.match(dbObjectFilterFieldsSource, /normalize=\{normalizeOwnerPrefix\}/u);
   assert.match(dbObjectSharedSource, /from "@\/components\/DbObjectFilterFields"/u);
   assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields/u);
   assert.match(dbObjectSharedSource, /ownerPrefixField && children/u);
@@ -81,16 +85,16 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
 test("テーブル・ビュー管理は所有者前方一致入力と名前・コメント検索を使う", () => {
   assert.doesNotMatch(tableManagementSource, /useSchemaOwners/u);
   assert.doesNotMatch(viewManagementSource, /useSchemaOwners/u);
-  assert.match(tableManagementSource, /debouncedTableOwnerPrefix/u);
-  assert.match(viewManagementSource, /debouncedViewOwnerPrefix/u);
-  assert.match(tableManagementSource, /useDbAdminObjects\([\s\S]{0,120}debouncedTableOwnerPrefix/u);
-  assert.match(viewManagementSource, /useDbAdminObjects\([\s\S]{0,120}debouncedViewOwnerPrefix/u);
+  assert.match(tableManagementSource, /tableOwnerPrefix/u);
+  assert.match(viewManagementSource, /viewOwnerPrefix/u);
+  assert.match(tableManagementSource, /useDbAdminObjects\([\s\S]{0,120}tableOwnerPrefix/u);
+  assert.match(viewManagementSource, /useDbAdminObjects\([\s\S]{0,120}viewOwnerPrefix/u);
   assert.match(dbObjectSharedSource, /ownerPrefix: DbObjectOwnerPrefix/u);
   assert.doesNotMatch(dbObjectSharedSource, /ownerOptions/u);
   assert.doesNotMatch(dbObjectSharedSource, /ownerFilterAll/u);
   assert.doesNotMatch(dbObjectSharedSource, /ownerFilter: string/u);
-  assert.match(tableManagementSource, /debouncedTableOwnerPrefix,\s*"name_comment"/u);
-  assert.match(viewManagementSource, /debouncedViewOwnerPrefix,\s*"name_comment"/u);
+  assert.match(tableManagementSource, /tableOwnerPrefix,\s*"name_comment"/u);
+  assert.match(viewManagementSource, /viewOwnerPrefix,\s*"name_comment"/u);
   assert.match(
     incrementalQueriesSource,
     /params\.set\("owner_prefix", ownerPrefix\.trim\(\)\)/u
@@ -117,14 +121,14 @@ test("コメント・アノテーション管理は共通所有者入力を種�
   assert.match(metadataSqlManagementSource, /targetOwnerPrefix/u);
   assert.match(
     metadataSqlManagementSource,
-    /useDbAdminObjects\([\s\S]{0,140}debouncedTargetOwnerPrefix/u,
+    /useDbAdminObjects\([\s\S]{0,140}targetOwnerPrefix/u,
   );
-  assert.match(metadataSqlManagementSource, /debouncedTargetOwnerPrefix,\s*"name_comment"/u);
+  assert.match(metadataSqlManagementSource, /targetOwnerPrefix,\s*"name_comment"/u);
 });
 
 test("データプレビューと COMMENT/ANNOTATION は name_comment scope を送る", () => {
-  assert.match(dataManagementSource, /debouncedObjectOwnerPrefix,\s*"name_comment"/u);
-  assert.match(metadataSqlManagementSource, /debouncedTargetOwnerPrefix,\s*"name_comment"/u);
+  assert.match(dataManagementSource, /previewObjectOwnerPrefix,\s*"name_comment"/u);
+  assert.match(metadataSqlManagementSource, /targetOwnerPrefix,\s*"name_comment"/u);
 });
 
 test("データ管理プレビューは取得件数上限を指定でき、詳細条件入力を出さない", () => {

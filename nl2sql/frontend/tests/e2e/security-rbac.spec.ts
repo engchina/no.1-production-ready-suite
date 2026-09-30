@@ -3213,6 +3213,8 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
   await page.getByRole("checkbox", { name: /財務プロファイル/ }).check();
   await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
   await profileSearch.fill("");
+  // 検索語は入力が止まってから適用する（debounce。#535）。一覧が戻るのを待ってから測る。
+  await expect(page.getByRole("checkbox", { name: /標準プロファイル/ })).toHaveCount(1);
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
   const mobileScrollState = await readProfileAccessScrollState();

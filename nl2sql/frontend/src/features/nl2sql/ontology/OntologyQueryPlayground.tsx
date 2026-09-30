@@ -27,6 +27,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   FieldLabel,
+  isImeComposing,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 
@@ -954,6 +955,10 @@ export function OntologyQueryPlayground({
                 aria-required="true"
                 value={question}
                 onChange={(event) => handleQuestionChange(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  // IME の変換を確定する Enter でフォームを送信しない（重い問い合わせは明示的に実行する。#535）。
+                  if (event.key === "Enter" && isImeComposing(event)) event.preventDefault();
+                }}
                 placeholder={t("ontologyPlayground.questionPlaceholder")}
                 data-testid="ontology-playground-question"
                 className="h-11 min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"

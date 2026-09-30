@@ -14,7 +14,8 @@ import {
   type SelectFieldOption,
   ToggleChip,
   TableSkeleton,
-  TextField,
+  ClearActionButton,
+  SearchField,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
@@ -23,7 +24,7 @@ import {
   offsetPagination,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
-import { RotateCcw, Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
+import { RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -47,11 +48,10 @@ import {
   useEnqueueDocumentIngestionJob,
   useAllKnowledgeBases,
 } from "@/lib/queries";
-import { isSubmitEnter } from "@/lib/keyboard";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
@@ -79,7 +79,6 @@ export function FileListClient() {
   // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
   const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
   const { filter, q, knowledgeBaseId, offset } = view;
-  const [search, setSearch] = useState(q);
   const setFilter = (next: FileStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setKnowledgeBaseId = (next: string) =>
@@ -174,17 +173,11 @@ export function FileListClient() {
     selection.clear();
   };
 
-  // 検索語が変わったときだけ先頭ページへ戻し選択を解除する。入力欄から focus を外しただけで
-  // ページ位置と選択を失わない（一括操作のボタンを押す直前の blur で選択が消えていた。#281）。
-  const commitSearch = () => {
-    const next = search.trim();
+  // 検索語は入力に合わせて適用する（SearchField の debounce・IME 対応。#535）。検索語が変わったときだけ
+  // 先頭ページへ戻し選択を解除する（フォーカスを外しただけではページ位置と選択を失わない。#281）。
+  const applySearch = (next: string) => {
     if (next === q) return;
     resetView(() => setQ(next));
-  };
-  // クリアは入力と適用中の検索語の両方を消す（blur を待たずに一覧を戻す）。
-  const clearSearch = () => {
-    setSearch("");
-    if (q !== "") resetView(() => setQ(""));
   };
 
   const runRowIngest = (doc: DocumentSummary) => {
@@ -371,21 +364,18 @@ export function FileListClient() {
               className="w-60 [&_label]:text-xs"
               buttonClassName="bg-surface"
             />
-            <TextField
+            <SearchField
               id="file-list-search"
               label={t("fileList.searchPlaceholder")}
               labelHidden
-              value={search}
-              onValueChange={setSearch}
-              onKeyDown={(e) => {
-                if (isSubmitEnter(e)) commitSearch();
-              }}
-              onBlur={commitSearch}
-              onClear={clearSearch}
+              value={q}
+              onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
               maxLength={FILE_LIST_QUERY_MAX_LENGTH}
               placeholder={t("fileList.searchPlaceholder")}
-              leadingIcon={SearchIcon}
               className="w-56"
             />
           </div>
@@ -493,7 +483,18 @@ export function FileListClient() {
         ) : (
           <Card>
             <div className="p-5">
-              <EmptyState title={t("fileList.empty")} />
+              <EmptyState
+                title={t("fileList.empty")}
+                action={
+                  q ? (
+                    <ClearActionButton
+                      label={t("common.clearSearch")}
+                      matchButtonHeight
+                      onClick={() => applySearch("")}
+                    />
+                  ) : undefined
+                }
+              />
             </div>
           </Card>
         )}

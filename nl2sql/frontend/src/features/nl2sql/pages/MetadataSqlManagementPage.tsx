@@ -31,7 +31,6 @@ import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
-import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DB_OBJECT_GRID_ROW_CLASS,
@@ -236,13 +235,13 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [targetOwnerPrefix, setTargetOwnerPrefix] = useWorkspaceState("targetOwnerPrefix", "");
   const [targetFilter, setTargetFilter] = useWorkspaceState<TargetFilter>("targetFilter", "all");
   const [targetSort, setTargetSort] = useWorkspaceState<TargetSortState>("targetSort", { key: "name", direction: "asc" });
-  const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
-  const debouncedTargetOwnerPrefix = useDebouncedValue(targetOwnerPrefix, 250);
+  // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
+  // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
   const objectsQuery = useDbAdminObjects(
-    debouncedTargetSearch,
+    targetSearch,
     targetFilter,
     "all",
-    debouncedTargetOwnerPrefix,
+    targetOwnerPrefix,
     "name_comment"
   );
   const objectItems = useMemo(

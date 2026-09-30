@@ -69,6 +69,8 @@ import {
   type StatusVariant,
   PageBody,
   RowTitleButton,
+  isSubmitEnter,
+  SearchField,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -1611,6 +1613,10 @@ export function AuditPage() {
                   id="audit-run-id"
                   value={runId}
                   onChange={(event) => setFilter("runId", event.target.value)}
+                  // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
+                  onKeyDown={(event) => {
+                    if (isSubmitEnter(event)) applyFilters();
+                  }}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
@@ -1664,6 +1670,10 @@ export function AuditPage() {
                   id="audit-error-code"
                   value={errorCode}
                   onChange={(event) => setFilter("errorCode", event.target.value)}
+                  // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
+                  onKeyDown={(event) => {
+                    if (isSubmitEnter(event)) applyFilters();
+                  }}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
@@ -2101,14 +2111,18 @@ export function MemoryPage() {
           splitId="memory-list"
           left={
             <Section title={t("memory.list")}>
-              <Field label={t("common.search")} htmlFor="memory-search">
-                <input
-                  id="memory-search"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
+              {/* 一覧の絞り込みは共有の SearchField（入力に合わせて適用・debounce・IME 対応・消去。#535）。 */}
+              <SearchField
+                id="memory-search"
+                label={t("common.search")}
+                value={query}
+                onSearch={setQuery}
+                clearLabel={t("common.clearSearch")}
+                resultCountLabel={
+                  memory.data ? t("common.searchResultCount", { count: memory.data.entries.length }) : ""
+                }
+                placeholder={t("memory.searchPlaceholder")}
+              />
               <p className="text-xs leading-5 text-fg-muted">{t("memory.limitHint", { limit: MEMORY_SEARCH_LIMIT })}</p>
               <QueryState query={memory} loadingLabel={t("loading.memory")} skeleton={<TableSkeleton columns={2} />}>
                 <PagedDataTable

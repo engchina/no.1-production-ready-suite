@@ -155,6 +155,9 @@ const agentJa = {
   "common.result": "結果",
   "common.error": "エラー",
   "common.search": "検索",
+  "common.clearSearch": "検索語をクリア",
+  // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
+  "common.searchResultCount": "{count} 件が一致しました",
   "common.notConfigured": "未設定",
   "common.configured": "設定済み",
   "common.saved": "設定を保存しました",
@@ -618,6 +621,7 @@ const agentJa = {
   "tool.list": "ツール一覧",
   "tool.selectHint": "一覧からツールを選ぶと、schema と監査タグを表示します。",
   "memory.list": "メモリ一覧",
+  "memory.searchPlaceholder": "内容・メタデータで検索",
   "memory.detail": "メモリの詳細",
   "memory.selectHint": "一覧からメモリを選ぶと、内容とメタデータを表示します。",
   "run.selectHint": "実行履歴から Run を選ぶと、イベントと成果物を表示します。",
