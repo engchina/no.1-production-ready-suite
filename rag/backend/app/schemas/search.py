@@ -238,6 +238,14 @@ class SearchRequest(BaseModel):
             "まではチャットと同じ工程で行い、CRAG と回答の生成(LLM)はしない。"
         ),
     )
+    model_id: str | None = Field(
+        default=None,
+        max_length=256,
+        description=(
+            "回答のモデル(RAG 検索の画面で選ぶ既定のテキストモデルか既定の Vision モデル。#675)。"
+            "候補外・未指定なら既定のテキストモデル。"
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

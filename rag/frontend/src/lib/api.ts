@@ -997,6 +997,8 @@ export interface SearchRequestBody {
   generate_answer?: boolean;
   /** 質問から読み取った条件のうち、利用者が外した項目の名前（#652）。 */
   auto_field_filter_excluded?: string[];
+  /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
+  model_id?: string;
 }
 
 export interface RetrievedChunk {
@@ -1058,9 +1060,11 @@ export interface ChatMessageRequestBody {
   top_k?: number;
 }
 
+/** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
 export interface CompareModel {
   model_id: string;
   display_name: string;
+  kind: "text" | "vision";
 }
 
 export interface SearchDiagnostics {
@@ -2824,6 +2828,7 @@ export const api = {
       method: "DELETE",
     }),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
+  listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
 
   // 検索
   // 業務ビュー / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。

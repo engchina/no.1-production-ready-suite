@@ -12,6 +12,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import chat as chat_route
+from app.api.routes import search as search_route
 from app.clients.oracle import (
     StoredConversation,
     StoredMessage,
@@ -297,39 +298,38 @@ def test_chat_endpoints_return_404_when_disabled(
 
 
 def test_resolve_compare_models_caps_and_defaults(monkeypatch: MonkeyPatch) -> None:
-    """指定モデルを catalog で絞り、上限を超えない。未指定なら既定 1 系統。"""
+    """テキストと Vision の既定モデルだけを受け付け、上限を超えない。未指定なら既定 1 系統。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_chat_max_compare_models", 2)
-    catalog = [
-        EnterpriseAiConfiguredModel(model_id="m1", display_name="モデル1"),
-        EnterpriseAiConfiguredModel(model_id="m2", display_name="モデル2"),
-        EnterpriseAiConfiguredModel(model_id="m3", display_name="モデル3"),
-    ]
-    monkeypatch.setattr(chat_route, "enterprise_ai_model_catalog", lambda _s: catalog)
-    monkeypatch.setattr(chat_route, "enterprise_ai_default_model_id", lambda _s: "m1")
+    monkeypatch.setattr(settings, "rag_chat_max_compare_models", 1)
+    _stub_answer_models(monkeypatch, ["m1", "m2", "m3"], text="m1", vision=["m2"])
 
     from app.schemas.chat import ChatMessageRequest
 
     selected = chat_route._resolve_compare_models(
-        ChatMessageRequest(content="質問", model_ids=["m1", "m2", "m3"]), settings
+        ChatMessageRequest(content="質問", model_ids=["m3", "m2", "m1"]), settings
     )
-    assert [c["model_id"] for c in selected] == ["m1", "m2"]
+    # m3 は候補外なので無視し、上限 1 で先頭の m2 だけ。
+    assert [c["model_id"] for c in selected] == ["m2"]
 
     default_only = chat_route._resolve_compare_models(ChatMessageRequest(content="質問"), settings)
     assert [c["model_id"] for c in default_only] == ["m1"]
 
 
-def test_compare_models_list_default_first(monkeypatch: MonkeyPatch) -> None:
-    """画面が「未選択なら答えるモデル」として出すので、既定のモデルを先頭にする(#649)。"""
-    catalog = [
-        EnterpriseAiConfiguredModel(model_id="m1", display_name="モデル1"),
-        EnterpriseAiConfiguredModel(model_id="m2", display_name="モデル2"),
-    ]
-    monkeypatch.setattr(chat_route, "enterprise_ai_model_catalog", lambda _s: catalog)
-    monkeypatch.setattr(chat_route, "enterprise_ai_default_model_id", lambda _s: "m2")
+def test_compare_models_list_only_default_text_and_vision(monkeypatch: MonkeyPatch) -> None:
+    """候補は既定のテキストモデル(先頭)と既定の Vision モデルだけ(#649 / #675)。"""
+    _stub_answer_models(monkeypatch, ["m1", "m2", "m3"], text="m2", vision=["m3"])
     response = client.get("/api/chat/models")
     assert response.status_code == 200
-    assert [model["model_id"] for model in response.json()["data"]] == ["m2", "m1"]
+    assert response.json()["data"] == [
+        {"model_id": "m2", "display_name": "M2", "kind": "text"},
+        {"model_id": "m3", "display_name": "M3", "kind": "vision"},
+    ]
+
+    # Vision が未設定か、テキストと同じモデルならテキストの 1 件だけ。
+    for vision in ([], ["m2"]):
+        _stub_answer_models(monkeypatch, ["m1", "m2"], text="m2", vision=vision)
+        data = client.get("/api/chat/models").json()["data"]
+        assert [(m["model_id"], m["kind"]) for m in data] == [("m2", "text")]
 
 
 def test_build_history_takes_first_assistant_per_turn() -> None:
@@ -441,9 +441,18 @@ def _stub_stream(monkeypatch: MonkeyPatch, fake: FakeChatOracle, models: list[st
         return request, settings, None, None
 
     monkeypatch.setattr(chat_route, "_resolve_query_context", fake_resolve)
+    # 候補は既定のテキストモデル(models[0])と既定の Vision モデル(models[1])だけ(#675)。
+    _stub_answer_models(monkeypatch, models, text=models[0], vision=models[1:2])
+
+
+def _stub_answer_models(
+    monkeypatch: MonkeyPatch, models: list[str], *, text: str, vision: list[str]
+) -> None:
     catalog = [EnterpriseAiConfiguredModel(model_id=m, display_name=m.upper()) for m in models]
-    monkeypatch.setattr(chat_route, "enterprise_ai_model_catalog", lambda _s: catalog)
-    monkeypatch.setattr(chat_route, "enterprise_ai_default_model_id", lambda _s: models[0])
+    monkeypatch.setattr(search_route, "enterprise_ai_model_catalog", lambda _s: catalog)
+    monkeypatch.setattr(search_route, "enterprise_ai_default_model_id", lambda _s: text)
+    monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "".join(vision))
+    monkeypatch.setattr(chat_route, "enterprise_ai_default_model_id", lambda _s: text)
 
 
 def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPatch) -> None:

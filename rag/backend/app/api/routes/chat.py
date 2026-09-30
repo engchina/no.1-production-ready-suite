@@ -20,6 +20,7 @@ from app.api.routes.search import (
     _answer_chunks,
     _resolve_query_context,
     _sse_event,
+    answer_model_choices,
     ensure_business_view_has_knowledge_bases,
     ensure_business_view_knowledge_bases_permitted,
 )
@@ -28,7 +29,6 @@ from app.clients.oracle import OracleClient, StoredConversation, StoredMessage
 from app.config import (
     Settings,
     enterprise_ai_default_model_id,
-    enterprise_ai_model_catalog,
     get_settings,
 )
 from app.db_degradation import load_or_degrade
@@ -106,17 +106,10 @@ def _to_chat_message(message: StoredMessage) -> ChatMessage:
 
 @router.get("/models", response_model=ApiResponse[list[dict[str, str]]])
 async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
-    """マルチモデル比較で選べる設定済み OCI モデルを返す(先頭が既定モデル)。"""
+    """比較で選べるモデル(既定のテキストモデルと既定の Vision モデル。先頭が既定。#675)。"""
     settings = get_settings()
     _require_chat_enabled(settings)
-    models = [
-        {"model_id": model.model_id, "display_name": model.display_name or model.model_id}
-        for model in enterprise_ai_model_catalog(settings)
-        if model.model_id
-    ]
-    # 画面は先頭を「未選択のときに答える既定のモデル」として出す(#649)。登録順は既定を先頭にしない。
-    default_model = enterprise_ai_default_model_id(settings)
-    models.sort(key=lambda model: model["model_id"] != default_model)
+    models = answer_model_choices(settings)
     return ApiResponse(
         data=models,
         warning_messages=(
@@ -287,9 +280,7 @@ def _resolve_compare_models(
 ) -> list[dict[str, str]]:
     """比較対象の OCI モデル(model_id + label)を解決する。上限は設定値で抑える。"""
     catalog = {
-        model.model_id: (model.display_name or model.model_id)
-        for model in enterprise_ai_model_catalog(settings)
-        if model.model_id
+        choice["model_id"]: choice["display_name"] for choice in answer_model_choices(settings)
     }
     default_model = enterprise_ai_default_model_id(settings)
     if request.model_ids:
