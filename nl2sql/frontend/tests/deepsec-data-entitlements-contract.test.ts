@@ -167,12 +167,17 @@ test("DeepSec object picker は総件数未取得時に loaded 件数のみ表�
   );
 });
 
-test("DeepSec Data Grant editor は必須表示を共有の FieldLabel / FieldLegend で統一する (#531)", () => {
-  assert.match(pageSource, /FieldLabel,\s*FieldLegend,\s*\} from "@engchina\/production-ready-ui"/u);
+test("DeepSec Data Grant editor は必須表示を共有の SelectField / FieldLegend で統一する (#531 / #631)", () => {
+  assert.match(pageSource, /SelectField,\s*TextField,\s*FieldLegend,\s*\} from "@engchina\/production-ready-ui"/u);
   assert.doesNotMatch(pageSource, /required-field"|<RequiredBadge\b/u);
   // 対象 object は検索できる選択欄（Issue 608）。「必須」は選択欄の required（ラベルの印と aria-required）で出す。
   assert.match(objectPicker, /<SearchableSelectField[\s\S]*\brequired\b/u);
-  assert.match(entitlementsPanel, /<FieldLabel[\s\S]*security\.deepsec\.entitlements\.scopeMode[\s\S]*required/u);
+  // 行 scope はネイティブの select ではなく共有の SelectField（#631）。「必須」は required（ラベルの印と aria-required）で出す。
+  assert.match(
+    entitlementsPanel,
+    /<SelectField\s+id=\{`deepsec-entitlement-scope-mode-\$\{index\}`\}\s+label=\{t\("security\.deepsec\.entitlements\.scopeMode"\)\}\s+required/u
+  );
+  assert.doesNotMatch(pageSource, /<select\b|<input\s+id="deepsec-data-user-password"/u);
   assert.match(entitlementsPanel, /<FieldLegend[\s\S]*required[\s\S]*security\.deepsec\.entitlements\.columns/u);
   assert.match(entitlementsPanel, /<fieldset className="grid gap-2"/u);
 });

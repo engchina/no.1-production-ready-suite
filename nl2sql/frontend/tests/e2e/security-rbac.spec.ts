@@ -11,6 +11,7 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, profileAccessPage, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -92,6 +93,23 @@ async function expectNoElementHorizontalOverflow(locator: Locator) {
       locator.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)
     )
     .toBeTruthy();
+}
+
+/**
+ * SelectField（select-only combobox）の選択肢の表示名（#631）。一覧を開いて読み、Escape で閉じる。
+ * ネイティブの select の `toContainText` / `option` の数え方の代わり（ボタンは選択中の表示名だけを持つ）。
+ */
+async function selectFieldOptionLabels(combobox: Locator) {
+  const listbox = combobox.page().locator(`[id="${await combobox.getAttribute("aria-controls")}"]`);
+  // 選択肢が 0 件の間は開かない（候補の取得中）ので、開けるまで押し直す。
+  await expect(async () => {
+    if (!(await listbox.isVisible())) await combobox.click();
+    await expect(listbox).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  const labels = await listbox.getByRole("option").allInnerTexts();
+  await combobox.press("Escape");
+  await expect(listbox).toBeHidden();
+  return labels.map((label) => label.trim());
 }
 
 async function expectScopeFilterControlsInsideRow(locator: Locator) {
@@ -4961,11 +4979,12 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expect(objectButton).toHaveAttribute("aria-required", "true");
   await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
-  const scopeModeLabelText = entitlementForm.getByTestId("security-deepsec-scope-mode-label-text-0");
+  const scopeModeLabelText = entitlementForm.locator("label[for='deepsec-entitlement-scope-mode-0']");
   const scopeModeRequired = entitlementForm.locator(
     "label[for='deepsec-entitlement-scope-mode-0'] [aria-hidden='true']"
   );
-  await expect(scopeModeLabelText).toHaveText("行 scope");
+  await expect(scopeModeLabelText).toHaveText("行 scope必須");
+  await expect(scopeModeSelect).toHaveAttribute("aria-required", "true");
   await expect(scopeModeRequired).toHaveText("必須");
   // legend には aria-required が無いので、必須バッジは読み上げ対象のまま。
   await expect(columnsFieldset.locator("legend")).toContainText("必須");
@@ -5035,20 +5054,20 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       scopeRequiredAboveSelect: true,
       scopeRequiredInlineWithLabel: true,
     });
-  await expect(scopeModeSelect).not.toContainText("列値で制限");
-  await scopeModeSelect.selectOption("FILTERS");
+  expect(await selectFieldOptionLabels(scopeModeSelect)).toEqual(["全行", "条件で制限"]);
+  await chooseSelectFieldOption(scopeModeSelect, "FILTERS");
   const filterRow = entitlementForm.getByTestId("security-deepsec-scope-filter-0-0");
-  await expect(filterRow.locator("#deepsec-scope-filter-column-0-0")).toContainText(
+  expect(await selectFieldOptionLabels(filterRow.locator("#deepsec-scope-filter-column-0-0"))).toContain(
     "REGION_CODE · VARCHAR2(32)"
   );
-  await filterRow.locator("#deepsec-scope-filter-column-0-0").selectOption("REGION_CODE");
+  await chooseSelectFieldOption(filterRow.locator("#deepsec-scope-filter-column-0-0"), "REGION_CODE");
   const valueSourceSelect = filterRow.locator("#deepsec-scope-filter-value-source-0-0");
-  await expect(valueSourceSelect).toContainText("ログインユーザーID");
-  await valueSourceSelect.selectOption("LOGIN_USER_ID");
+  expect(await selectFieldOptionLabels(valueSourceSelect)).toContain("ログインユーザーID");
+  await chooseSelectFieldOption(valueSourceSelect, "LOGIN_USER_ID");
   await expect(
     filterRow.getByTestId("security-deepsec-scope-filter-login-user-id-0-0")
   ).toBeVisible();
-  await valueSourceSelect.selectOption("LITERAL");
+  await chooseSelectFieldOption(valueSourceSelect, "LITERAL");
   await expect
     .poll(async () => {
       const columnSelect = filterRow.locator("#deepsec-scope-filter-column-0-0");
@@ -5108,23 +5127,23 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       valueDeleteSeparated: true,
       removeInsideRow: true,
     });
-  await filterRow.locator("#deepsec-scope-filter-operator-0-0").selectOption("IN");
+  await chooseSelectFieldOption(filterRow.locator("#deepsec-scope-filter-operator-0-0"), "IN");
   await filterRow.locator("#deepsec-scope-filter-values-0-0").fill("SALES, HR");
   await entitlementForm.getByRole("button", { name: "条件を追加", exact: true }).click();
   const numberFilterRow = entitlementForm.getByTestId("security-deepsec-scope-filter-0-1");
-  await expect(numberFilterRow.locator("#deepsec-scope-filter-column-0-1")).toContainText(
+  expect(await selectFieldOptionLabels(numberFilterRow.locator("#deepsec-scope-filter-column-0-1"))).toContain(
     "ORDER_ID · NUMBER"
   );
-  await numberFilterRow.locator("#deepsec-scope-filter-column-0-1").selectOption("ORDER_ID");
+  await chooseSelectFieldOption(numberFilterRow.locator("#deepsec-scope-filter-column-0-1"), "ORDER_ID");
   const numberValueSourceSelect = numberFilterRow.locator(
     "#deepsec-scope-filter-value-source-0-1"
   );
-  await expect(numberValueSourceSelect).toContainText("ログインユーザーID");
+  expect(await selectFieldOptionLabels(numberValueSourceSelect)).toContain("ログインユーザーID");
   await expect(numberFilterRow.locator("#deepsec-scope-filter-value-0-1")).toHaveAttribute(
     "inputmode",
     "numeric"
   );
-  await numberValueSourceSelect.selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(numberValueSourceSelect, "LOGIN_USER_ID");
   await expect(
     numberFilterRow.getByTestId("security-deepsec-scope-filter-login-user-id-0-1")
   ).toBeVisible();
@@ -6357,23 +6376,23 @@ test("DeepSec 条件グループ: OR・括弧・関連条件・草稿復元と�
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
   const root = page.getByTestId("scope-group-0");
-  await root.getByLabel("条件の組み合わせ").selectOption("OR");
+  await chooseSelectFieldOption(root.getByLabel("条件の組み合わせ"), "OR");
   const first = page.getByTestId("security-deepsec-scope-filter-0-0");
-  await first.getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(first.getByLabel("値の種類"), "LOGIN_USER_ID");
   await root.getByRole("button", { name: "グループを追加", exact: true }).click();
   const nested = page.getByTestId("scope-group-0-1");
-  await nested.getByLabel("列", { exact: true }).selectOption("DEPARTMENT_CODE");
+  await chooseSelectFieldOption(nested.getByLabel("列", { exact: true }), "DEPARTMENT_CODE");
   await nested.getByLabel("値", { exact: true }).fill("SALES");
   await nested.getByRole("button", { name: "関連テーブル条件を追加" }).click();
   const related = page.getByTestId("scope-related-0-1-1");
-  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
-  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
-  await related.getByLabel("関連キーの設定方法").selectOption("HR.FK_DEPT");
-  await expect(related.getByLabel("対象テーブルの列")).toHaveValue("DEPARTMENT_CODE");
-  await expect(related.getByLabel("関連テーブルの列")).toHaveValue("CODE");
-  await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
+  await chooseSelectFieldOption(related.getByLabel("関連キーの設定方法"), "HR.FK_DEPT");
+  await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+  await expectSelectFieldValue(related.getByLabel("関連テーブルの列"), "CODE");
+  await chooseSelectFieldOption(related.getByLabel("列", { exact: true }), "LOCATION");
   await related.getByLabel("値", { exact: true }).fill("東京");
   await expect(page.getByTestId("scope-expression-summary")).toContainText("OR");
   await expect(page.getByTestId("scope-expression-summary")).toContainText("AND");
@@ -6394,7 +6413,7 @@ test("DeepSec 条件グループ: OR・括弧・関連条件・草稿復元と�
   await page.reload();
   await expect(page.getByTestId("scope-expression-summary")).toContainText("大阪");
   await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
-  await expect(page.getByTestId("scope-group-0").getByLabel("条件の組み合わせ").first()).toHaveValue("OR");
+  await expectSelectFieldValue(page.getByTestId("scope-group-0").getByLabel("条件の組み合わせ").first(), "OR");
   await page.getByTestId("security-deepsec-scope-filter-0-0").getByRole("button", { name: "条件を削除" }).click();
   await page.getByTestId("scope-group-0").getByRole("button", { name: "グループを削除" }).last().click();
   await page.getByRole("alertdialog").getByRole("button", { name: "グループを削除" }).click();
@@ -6422,8 +6441,8 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
-  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   const addRelated = page.getByRole("button", { name: "関連テーブル条件を追加", exact: true });
   await addRelated.focus();
   await addRelated.press("Enter");
@@ -6433,15 +6452,15 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   await fulfill(pending!, "関連候補を取得できませんでした", 503);
   await expect(related.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
   await related.getByRole("button", { name: "再試行", exact: true }).click();
-  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
-  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
-  await expect(related.getByLabel("関連キーの設定方法")).toHaveValue("");
-  await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
-  await related.getByLabel("関連テーブルの列").selectOption("CODE");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
+  await expectSelectFieldValue(related.getByLabel("関連キーの設定方法"), "");
+  await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブルの列"), "CODE");
   await related.getByRole("button", { name: "関連キーを追加", exact: true }).click();
-  await related.getByLabel("対象テーブルの列").nth(1).selectOption("DISPLAY_NAME");
-  await related.getByLabel("関連テーブルの列").nth(1).selectOption("TENANT");
-  await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+  await chooseSelectFieldOption(related.getByLabel("対象テーブルの列").nth(1), "DISPLAY_NAME");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブルの列").nth(1), "TENANT");
+  await chooseSelectFieldOption(related.getByLabel("列", { exact: true }), "LOCATION");
   await related.getByLabel("値", { exact: true }).fill("東京");
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await page.getByTestId("security-deepsec-sql-preview-generate").click();
@@ -6559,16 +6578,16 @@ test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
-  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
-  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
   for (const target of objects) {
-    await related.getByLabel("関連テーブル", { exact: true }).selectOption(target);
-    await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
-    await related.getByLabel("関連テーブルの列").selectOption("CODE");
-    await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+    await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), target);
+    await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+    await chooseSelectFieldOption(related.getByLabel("関連テーブルの列"), "CODE");
+    await chooseSelectFieldOption(related.getByLabel("列", { exact: true }), "LOCATION");
     await related.getByLabel("値", { exact: true }).fill("東京");
     await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
     await page.getByTestId("security-deepsec-sql-preview-generate").click();
@@ -6582,15 +6601,15 @@ test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内
 async function openReviewedRelatedCondition(page: Page) {
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
-  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
-  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
-  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
-  await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
-  await related.getByLabel("関連テーブルの列").selectOption("CODE");
-  await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
+  await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブルの列"), "CODE");
+  await chooseSelectFieldOption(related.getByLabel("列", { exact: true }), "LOCATION");
   await related.getByLabel("値", { exact: true }).fill("東京");
   return related;
 }
@@ -6630,18 +6649,18 @@ test("DeepSec 再取得修正: 関連メタデータを更新し草稿保持と�
   await page.getByRole("button", { name: "表示を更新", exact: true }).click();
   await expect.poll(() => state.reads).toEqual({ profiles: 2, relations: 2, columns: 2 });
   await expect(related.getByLabel("値", { exact: true })).toHaveValue("東京");
-  await expect(related.getByLabel("対象テーブルの列")).toHaveValue("DEPARTMENT_CODE");
-  await expect(related.getByLabel("列", { exact: true }).locator('option[value="REGION"]')).toHaveCount(1);
+  await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+  await expect.poll(() => selectFieldOptionLabels(related.getByLabel("列", { exact: true }))).toContain("REGION · VARCHAR2");
   await expect(related.getByText("Profile または対象が変更されました。関連条件を再選択してください。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await page.getByTestId("security-deepsec-sql-preview-generate").click();
   await expect.poll(() => versions).toEqual([1]);
   await expect(page.getByText("Profile の対象範囲が変更されました。", { exact: true })).toBeVisible();
-  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
-  await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
-  await related.getByLabel("関連テーブルの列").selectOption("CODE");
-  await related.getByLabel("列", { exact: true }).selectOption("REGION");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
+  await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
+  await chooseSelectFieldOption(related.getByLabel("関連テーブルの列"), "CODE");
+  await chooseSelectFieldOption(related.getByLabel("列", { exact: true }), "REGION");
   await related.getByLabel("値", { exact: true }).fill("東日本");
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await page.getByTestId("security-deepsec-sql-preview-generate").click();
@@ -6676,7 +6695,7 @@ test("DeepSec フォーカス修正: 条件・入れ子グループ・関連カ�
   await mockRefreshableRelatedMetadata(page);
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
   const root = page.getByTestId("scope-group-0");
   const actions = root.locator(":scope > div").last();
   const add = async (container: Locator, name: string) => {
@@ -7036,33 +7055,42 @@ test("DeepSec 関連テーブル条件は引用名の表を Profile の候補か
 
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
-  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
   const profileSelect = related.getByLabel("候補を選ぶ Profile");
   // 大文字の同名表だけを含む Profile は、引用名の表の関連候補に出さない。
-  await expect(profileSelect.getByRole("option", { name: "営業（引用名）", exact: true })).toHaveCount(1);
-  await expect(profileSelect.getByRole("option", { name: "営業（大文字）", exact: true })).toHaveCount(0);
-  await profileSelect.selectOption("sales-quoted");
+  await expect.poll(() => selectFieldOptionLabels(profileSelect)).toContain("営業（引用名）");
+  const profileLabels = await selectFieldOptionLabels(profileSelect);
+  expect(profileLabels.filter((label) => label === "営業（引用名）")).toHaveLength(1);
+  expect(profileLabels).not.toContain("営業（大文字）");
+  await chooseSelectFieldOption(profileSelect, "sales-quoted");
   await expect.poll(() => relationRequests.at(-1)?.get("object_name")).toBe('"Mixed_Case"');
   expect(relationRequests.at(-1)?.get("owner")).toBe("SALES");
 
   const relatedTable = related.getByLabel("関連テーブル", { exact: true });
-  await expect(relatedTable.getByRole("option", { name: 'SALES."Regions"', exact: true })).toHaveCount(1);
-  await expect(relatedTable.getByRole("option", { name: "SALES.REGIONS", exact: true })).toHaveCount(1);
-  await relatedTable.selectOption('SALES."Regions"');
-  await expect(relatedTable).toHaveValue('SALES."Regions"');
+  await expect(relatedTable).toBeEnabled();
+  const relatedTableLabels = await selectFieldOptionLabels(relatedTable);
+  expect(relatedTableLabels.filter((label) => label === 'SALES."Regions"')).toHaveLength(1);
+  expect(relatedTableLabels.filter((label) => label === "SALES.REGIONS")).toHaveLength(1);
+  await chooseSelectFieldOption(relatedTable, { label: 'SALES."Regions"' });
+  await expectSelectFieldValue(relatedTable, 'SALES."Regions"');
   // 関連表の列は引用付き token で取得し、大文字の同名表 REGIONS の詳細を読まない。
   await expect.poll(() => detailRequests).toContain('"Regions"');
   expect(detailRequests).not.toContain("REGIONS");
   expect(detailRequests).not.toContain("Regions");
 
   const relationSelect = related.getByLabel("関連キーの設定方法");
-  await relationSelect.selectOption('SALES."FK_Region"');
-  await expect(related.getByLabel("対象テーブルの列")).toHaveValue('"Region"');
-  await expect(related.getByLabel("関連テーブルの列")).toHaveValue('"Id"');
-  await related.getByLabel("列", { exact: true }).selectOption('"Name"');
+  await chooseSelectFieldOption(relationSelect, { label: 'FOREIGN_KEY · SALES."FK_Region"' });
+  await expectSelectFieldValue(relationSelect, 'SALES."FK_Region"');
+  await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), '"Region"');
+  await expectSelectFieldValue(related.getByLabel("関連テーブルの列"), '"Id"');
+  const relatedColumn = related.getByLabel("列", { exact: true });
+  const nameLabel = (await selectFieldOptionLabels(relatedColumn)).find((label) => label.startsWith('"Name" · '));
+  expect(nameLabel).toBeTruthy();
+  await chooseSelectFieldOption(relatedColumn, { label: nameLabel! });
+  await expectSelectFieldValue(relatedColumn, '"Name"');
   await related.getByLabel("値", { exact: true }).fill("関東");
   await expect(related.getByText("Profile または対象が変更されました。", { exact: false })).toHaveCount(0);
 

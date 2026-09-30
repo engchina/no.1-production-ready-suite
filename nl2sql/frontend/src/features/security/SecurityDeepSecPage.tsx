@@ -22,8 +22,8 @@ import {
   TimedLoadingState,
   SearchableSelectField,
   type SearchableSelectOption,
-  fieldControlClassName,
-  FieldLabel,
+  SelectField,
+  TextField,
   FieldLegend,
 } from "@engchina/production-ready-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -111,8 +111,6 @@ type ScrollPositionSnapshot = {
   left: number;
 };
 
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const INPUT_CLASS = fieldControlClassName({ className: "min-w-0" });
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;
@@ -1729,22 +1727,19 @@ export function SecurityDeepSecPage() {
                   </dd>
                 </dl>
                 <div className="space-y-2">
-                  {/* 未保存のときは DeepSec の適用にパスワードの保存が必要。保存済みなら変更時だけ入力する（#531）。 */}
-                  <FieldLabel
-                    htmlFor="deepsec-data-user-password"
-                    label={t("security.deepsec.config.password")}
-                    required={!hasSavedDataUserPassword}
-                    className="block"
-                  />
-                  <input
+                  {/* 未保存のときは DeepSec の適用にパスワードの保存が必要。保存済みなら変更時だけ入力する（#531）。
+                      保存済みの状態は入力欄の補足（aria-describedby）で伝える。SecretField は表示の切り替えの文言キーが
+                      この画面に無いため、同じ見た目の TextField（type="password"）にする（#631）。 */}
+                  <TextField
                     id="deepsec-data-user-password"
                     type="password"
-                    aria-required={!hasSavedDataUserPassword}
+                    label={t("security.deepsec.config.password")}
+                    required={!hasSavedDataUserPassword}
                     autoComplete="new-password"
-                    className={INPUT_CLASS}
+                    className="min-w-0"
                     value={dataUserPassword}
-                    onChange={(event) => {
-                      setDataUserPassword(event.target.value);
+                    onValueChange={(value) => {
+                      setDataUserPassword(value);
                       setConfigError("");
                     }}
                     placeholder={
@@ -1752,14 +1747,13 @@ export function SecurityDeepSecPage() {
                         ? t("security.deepsec.config.passwordPlaceholderSaved")
                         : t("security.deepsec.config.passwordPlaceholderNew")
                     }
-                    aria-describedby="deepsec-data-user-password-state"
+                    helper={
+                      hasSavedDataUserPassword
+                        ? t("security.deepsec.config.secretSaved")
+                        : t("security.deepsec.config.secretMissing")
+                    }
                     aria-invalid={Boolean(configError)}
                   />
-                  <p id="deepsec-data-user-password-state" className="text-xs text-fg-muted">
-                    {hasSavedDataUserPassword
-                      ? t("security.deepsec.config.secretSaved")
-                      : t("security.deepsec.config.secretMissing")}
-                  </p>
                   {configError ? <FormStatus tone="danger" message={configError} /> : null}
                 </div>
               </div>
@@ -2411,24 +2405,19 @@ export function SecurityDeepSecPage() {
                                           </p>
                                         )}
                                       </fieldset>
-                                    <FieldLabel
-                                      className="block text-xs font-medium"
-                                      htmlFor={`deepsec-entitlement-scope-mode-${index}`}
-                                      label={
-                                        <span data-testid={`security-deepsec-scope-mode-label-text-${index}`}>
-                                          {t("security.deepsec.entitlements.scopeMode")}
-                                        </span>
-                                      }
+                                    <SelectField
+                                      id={`deepsec-entitlement-scope-mode-${index}`}
+                                      label={t("security.deepsec.entitlements.scopeMode")}
                                       required
-                                    >
-                                      <select
-                                        id={`deepsec-entitlement-scope-mode-${index}`}
-                                        className={cn(INPUT_CLASS, "mt-1 block")}
-                                        aria-required="true"
-                                        disabled={entitlementReadOnly}
-                                        value={entitlement.scope_mode === "EXPRESSION" ? "FILTERS" : entitlement.scope_mode ?? "ALL"}
-                                        onChange={(event) => {
-                                          const nextMode = event.target.value;
+                                      width="sm"
+                                      className="min-w-0"
+                                      disabled={entitlementReadOnly}
+                                      value={entitlement.scope_mode === "EXPRESSION" ? "FILTERS" : entitlement.scope_mode ?? "ALL"}
+                                      options={[
+                                        { value: "ALL", label: t("security.deepsec.entitlements.scopeAll") },
+                                        { value: "FILTERS", label: t("security.deepsec.entitlements.scopeFilters") },
+                                      ]}
+                                      onValueChange={(nextMode) => {
                                           patchEntitlement(index, {
                                             scope_mode: nextMode === "ALL" ? "ALL" : "EXPRESSION",
                                             ...(entitlement.scope_mode === "EXPRESSION" && nextMode === "ALL" ? { scope_expression_version: 1 } : {}),
@@ -2438,15 +2427,7 @@ export function SecurityDeepSecPage() {
                                             scope_filters: [],
                                           });
                                         }}
-                                      >
-                                        <option value="ALL">
-                                          {t("security.deepsec.entitlements.scopeAll")}
-                                        </option>
-                                        <option value="FILTERS">
-                                          {t("security.deepsec.entitlements.scopeFilters")}
-                                        </option>
-                                      </select>
-                                    </FieldLabel>
+                                    />
                                     {["FILTERS", "EXPRESSION"].includes(entitlement.scope_mode ?? "") ? (
                                       <ScopeExpressionEditor
                                         expression={entitlementExpression(entitlement)}
