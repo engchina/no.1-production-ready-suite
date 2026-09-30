@@ -321,13 +321,13 @@ export const ja = {
   "settings.chunking.source": "設定元",
   "settings.chunking.strategy.structure_aware": "構造認識",
   "settings.chunking.strategy.structure_aware.description":
-    "element / section / table を認識して分割(既定)",
+    "element / section / table を認識して分割",
   "settings.chunking.strategy.recursive_character": "再帰文字分割",
   "settings.chunking.strategy.recursive_character.description":
     "章節→文→文字の順に固定長で分割(LangChain 風)",
   "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子階層",
   "settings.chunking.strategy.docrag_small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書は構造認識で分割します）",
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書は構造認識で分割します。既定）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -627,9 +627,9 @@ export const ja = {
   "settings.retrieval.toggles.description":
     "選択した検索モードに合成できるオプションです。組み合わせは自由です。",
   "settings.retrieval.docragUnused.mode":
-    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は質問拡張戦略で作った検索文ごとにハイブリッド検索します。",
+    "現在の回答では使われません。回答は「質問の拡張」で作った検索文ごとにハイブリッド検索します。",
   "settings.retrieval.docragUnused.toggles":
-    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の質問拡張と補正は、業務ビューの「DocRAG の質問拡張戦略」「DocRAG の回答生成フロー」で選びます。",
+    "現在の回答では使われません。質問の拡張と補正は、この画面の「回答の検索と生成」（業務ビューで上書きできます）の「質問の拡張」「回答の生成方式」で選びます。",
   "settings.retrieval.queryExpansion": "クエリ拡張",
   "settings.retrieval.gapStop": "gap-stop",
   "settings.retrieval.corrective": "補正検索",
@@ -693,7 +693,7 @@ export const ja = {
     "取得候補をスコアとメタデータ(ACL・版・矛盾状態)で利用可否判定し、根拠・補助に分けて Context Builder へ渡します。",
   "settings.grounding.pipeline": "処理方式",
   "settings.grounding.docragUnused":
-    "この画面の設定は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG の根拠確認は、業務ビューの「DocRAG の回答生成フロー」（補正 RAG / 通常 RAG）で選びます。",
+    "この画面の設定は、現在の回答では使われません。根拠の確認は、検索方法の画面の「回答の検索と生成」（業務ビューで上書きできます）の「回答の生成方式」（補正 RAG / 通常 RAG）で選びます。",
   "settings.grounding.dependency": "依存昇格",
   "settings.grounding.diversity": "多様化(MMR)",
   "settings.grounding.expansion": "context 拡張",
@@ -757,7 +757,7 @@ export const ja = {
     "検索根拠だけを使う回答スタイルを OCI Enterprise AI へ決定論で再マップし、手動選択できます。",
   "settings.generation.profile": "回答スタイル",
   "settings.generation.docragUnused":
-    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は「回答プロンプト」画面の「DocRAG の回答生成テンプレート」で回答します。",
+    "現在の回答では使われません。回答は「回答プロンプト」画面の「回答生成テンプレート」で作ります。",
   "settings.generation.source": "設定元",
   "settings.generation.source.oracle": "Oracle グローバル設定",
   "settings.generation.structuredOutput": "構造化出力",
@@ -819,7 +819,7 @@ export const ja = {
   "settings.prompts.overview.description":
     "新しい system prompt 版を追加します。有効化した版がカスタム回答スタイルに適用されます。",
   "settings.prompts.docragUnused":
-    "ここで作る system prompt の版（カスタム回答スタイル）は、回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は下の「DocRAG の回答生成テンプレート」で回答します。",
+    "ここで作る system prompt の版（カスタム回答スタイル）は、現在の回答では使われません。回答は下の「回答生成テンプレート」で作ります。",
   "settings.prompts.form.name": "版名",
   "settings.prompts.form.nameRequired": "版名を入力してください。",
   "settings.prompts.form.namePlaceholder": "例: 監査向け厳密版 v2",
@@ -1185,20 +1185,17 @@ export const ja = {
   "pager.page": "{page} / {total} ページ",
   "pager.label": "ページ送り",
 
-  "businessViews.field.answerEngine": "回答エンジン",
-  "businessViews.answerEngine.standard": "標準",
-  "businessViews.answerEngine.docrag": "DocRAG（根拠照合・監査付き）",
-  "businessViews.field.docragQueryStrategy": "DocRAG の質問拡張戦略",
-  "businessViews.field.docragAnswerFlow": "DocRAG の回答生成フロー",
-  "businessViews.field.docragNeighborChildCount": "DocRAG の前後の近傍 child 数",
-  "businessViews.field.docragOptions": "DocRAG のオプション",
+  "businessViews.field.docragQueryStrategy": "質問の拡張",
+  "businessViews.field.docragAnswerFlow": "回答の生成方式",
+  "businessViews.field.docragNeighborChildCount": "根拠の前後から加える数",
+  "businessViews.field.docragOptions": "回答の検索のオプション",
   "businessViews.field.docragRerank": "Rerank で検索候補を並べ替える",
   "businessViews.field.docragScreenLinking": "画面目録で操作画面を探す",
   "businessViews.field.docragScreenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
-  "businessViews.docrag.helper": "回答エンジンが DocRAG のときだけ使います。",
-  "businessViews.docragUnused.docrag": "回答エンジンが DocRAG のため、この設定は使われません。",
-  "businessViews.docragUnused.inherit": "回答エンジンが DocRAG のときは、この設定は使われません。",
+  "businessViews.docrag.helper":
+    "回答の検索と生成の設定です。上書きしない項目は、検索方法の画面の「回答の検索と生成」（全体の既定）を使います。",
+  "businessViews.answerUnused": "現在の回答では、この設定は使われません。",
   "businessViews.docragQueryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "businessViews.docragQueryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "businessViews.docragQueryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
@@ -1272,7 +1269,7 @@ export const ja = {
   "businessViews.runtime.editTitle": "編集中: {name}",
   "businessViews.runtime.previewTitle": "照合テスト",
   "businessViews.runtime.previewHelp":
-    "質問を入力すると、一致する用語・ルールと、別名で拡張した検索文を確認できます（DocRAG 回答エンジンで使われます）。",
+    "質問を入力すると、一致する用語・ルールと、別名で拡張した検索文を確認できます（回答で使われます）。",
   "businessViews.runtime.previewQuestion": "テストする質問",
   "businessViews.runtime.previewRun": "照合する",
   "businessViews.runtime.previewError": "照合できませんでした。",
@@ -2383,9 +2380,9 @@ export const ja = {
   "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
   "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
   "search.history.deleted": "保存された回答を削除しました。",
-  "settings.docragPrompts.vlm_answer.title": "DocRAG の回答生成テンプレート",
+  "settings.docragPrompts.vlm_answer.title": "回答生成テンプレート",
   "settings.docragPrompts.vlm_answer.description":
-    "回答エンジンが DocRAG のとき、根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
+    "根拠と質問を回答モデルへ渡す指示のテンプレートです（rag_poc の vlm_answer.txt）。全体で 1 つの設定で、保存した内容は次の回答から使います。",
   "settings.docragPrompts.vlm_answer.field": "テンプレート",
   "settings.docragPrompts.image_retrieval.title": "図・画像の読み取りプロンプト",
   "settings.docragPrompts.image_retrieval.description":
@@ -2434,10 +2431,10 @@ export const ja = {
   "search.querySuggestions.count": "{count} 回聞かれています",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
-    "根拠照合・監査付きの回答エンジンで回答した質問・回答・根拠・実行記録を保存する期間です。期限を過ぎた回答は、次の回答の保存時とこの設定の保存時に削除します。",
+    "回答した質問・回答・根拠・実行記録を保存する期間です。期限を過ぎた回答は、次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
-    "根拠照合・監査付きの回答エンジンで使う全体の既定です。公開済みの業務ビューの「検索・回答設定」で上書きできます。回答エンジンが「標準」の業務ビューでは使われません。",
+    "回答の検索と生成の全体の既定です。業務ビューを指定しない呼び出し（MCP など）もこの値を使います。公開済みの業務ビューの「検索・回答設定」で上書きできます。",
   "settings.answering.queryStrategy": "質問の拡張",
   "settings.answering.queryStrategyHint":
     "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",

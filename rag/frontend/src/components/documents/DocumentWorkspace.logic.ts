@@ -22,7 +22,8 @@ export type ChunkPreviewForm = Required<DocumentChunkPreviewRequest>;
 export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPreviewForm {
   const config = recipe?.effective_processing_config;
   return {
-    chunking_strategy: config?.chunking_strategy ?? "structure_aware",
+    // 既定は DocRAG 親子階層(backend の RAG_CHUNKING_STRATEGY の既定と同じ。#594)。
+    chunking_strategy: config?.chunking_strategy ?? "docrag_small_to_big",
     chunk_size: config?.chunk_size ?? 800,
     chunk_overlap: config?.chunk_overlap ?? 120,
     chunk_min_chars: config?.chunk_min_chars ?? 120,

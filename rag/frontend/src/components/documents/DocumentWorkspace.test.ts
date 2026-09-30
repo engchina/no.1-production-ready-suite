@@ -27,7 +27,7 @@ import type { FileStatus, IngestionJobPhase } from "@/lib/api";
 describe("分割プレビュー設定", () => {
   it("レシピ未指定時は現行の既定値を使う", () => {
     expect(chunkPreviewForm(null)).toEqual({
-      chunking_strategy: "structure_aware",
+      chunking_strategy: "docrag_small_to_big",
       chunk_size: 800,
       chunk_overlap: 120,
       chunk_min_chars: 120,
@@ -56,7 +56,7 @@ describe("分割プレビュー設定", () => {
   });
 
   it("overlap・最小文字数・分割符の不正値を実行前に止める", () => {
-    const base = chunkPreviewForm(null);
+    const base = { ...chunkPreviewForm(null), chunking_strategy: "structure_aware" as const };
     expect(chunkPreviewValidationError({ ...base, chunk_overlap: 800 })).toContain("overlap");
     expect(chunkPreviewValidationError({ ...base, chunk_min_chars: 800 })).toContain(
       "最小 chunk"
@@ -72,7 +72,7 @@ describe("分割プレビュー設定", () => {
   });
 
   it("chunk size と overlap の製品上限を検証する", () => {
-    const base = chunkPreviewForm(null);
+    const base = { ...chunkPreviewForm(null), chunking_strategy: "structure_aware" as const };
     expect(
       chunkPreviewValidationError({
         ...base,

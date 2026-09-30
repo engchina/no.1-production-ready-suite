@@ -131,7 +131,7 @@ uv run python -m app.rag.docrag_verify_cli regression --cases cases.json --busin
 uv run python -m app.rag.docrag_verify_cli crag-goldset crag_goldset.json
 ```
 
-- `answers` は回答エンジンが DocRAG の業務ビューでだけ評価できる（それ以外はその件をエラーとして記録する）。
+- `answers` は回答の記録がある回答だけ評価できる（安全ポリシーで止めた質問など、回答フローを通らなかった件はエラーとして記録する。#594 で回答はすべて同じ回答フローになった）。
 - `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（業務ビューの KB が検索範囲になる）。
 - `crag-goldset` の終了コードも rag_poc と同じ（CRAG が通常 RAG より劣れば 1）。
 - rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。

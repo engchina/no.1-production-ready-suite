@@ -58,7 +58,6 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   DEFAULT_BUSINESS_VIEW_NAME,
-  type AnswerEngineName,
   type DocragAnswerFlowName,
   type DocragQueryStrategyName,
   type BusinessViewConfig,
@@ -73,7 +72,6 @@ import {
   type RetrievalStrategyName,
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
-import { docragUnusedNoteKey } from "@/lib/docrag-unused";
 import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -215,10 +213,6 @@ const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
   { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
   { value: "inline_cited", label: t("settings.generation.profile.inline_cited") },
   { value: "custom", label: t("settings.generation.profile.custom") },
-];
-const ANSWER_ENGINE_OPTIONS: SelectFieldOption<AnswerEngineName>[] = [
-  { value: "standard", label: t("businessViews.answerEngine.standard") },
-  { value: "docrag", label: t("businessViews.answerEngine.docrag") },
 ];
 const DOCRAG_QUERY_STRATEGY_OPTIONS: SelectFieldOption<DocragQueryStrategyName>[] = (
   [
@@ -754,9 +748,8 @@ function BusinessViewEditor({
       ? t("businessViews.knowledgeBasesRequired")
       : null;
 
-  // 回答エンジンが DocRAG(または継承)のとき、DocRAG が読まない欄に付ける補足(#300)。
-  const docragUnusedKey = docragUnusedNoteKey(config.query.answer_engine);
-  const docragUnusedNote = docragUnusedKey ? t(docragUnusedKey) : null;
+  // 回答(DocRAG の回答フロー。#594)が読まない欄に付ける補足(#300)。欄は #595 で削除する。
+  const docragUnusedNote = t("businessViews.answerUnused");
 
   const updateQuery = (patch: Partial<KnowledgeBaseQueryConfig>) =>
     setConfig((current) => ({ ...current, query: { ...current.query, ...patch } }));
@@ -1018,78 +1011,65 @@ function BusinessViewEditor({
                     disabled={locked}
                     onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
                   />
+                  <p className="text-xs text-fg-muted">{t("businessViews.docrag.helper")}</p>
                   <QuerySelectRow
-                    id="business-view-answer-engine"
-                    label={t("businessViews.field.answerEngine")}
-                    value={config.query.answer_engine ?? null}
-                    options={ANSWER_ENGINE_OPTIONS}
-                    defaultOnOverride="docrag"
+                    id="business-view-docrag-query-strategy"
+                    label={t("businessViews.field.docragQueryStrategy")}
+                    value={config.query.docrag_query_strategy ?? null}
+                    options={DOCRAG_QUERY_STRATEGY_OPTIONS}
+                    defaultOnOverride="simple_retrieval"
                     disabled={locked}
-                    onChange={(value) => updateQuery({ answer_engine: value })}
+                    onChange={(value) => updateQuery({ docrag_query_strategy: value })}
                   />
-                  {config.query.answer_engine !== "standard" ? (
-                    <>
-                      <p className="text-xs text-fg-muted">{t("businessViews.docrag.helper")}</p>
-                      <QuerySelectRow
-                        id="business-view-docrag-query-strategy"
-                        label={t("businessViews.field.docragQueryStrategy")}
-                        value={config.query.docrag_query_strategy ?? null}
-                        options={DOCRAG_QUERY_STRATEGY_OPTIONS}
-                        defaultOnOverride="simple_retrieval"
+                  <QuerySelectRow
+                    id="business-view-docrag-answer-flow"
+                    label={t("businessViews.field.docragAnswerFlow")}
+                    value={config.query.docrag_answer_flow ?? null}
+                    options={DOCRAG_ANSWER_FLOW_OPTIONS}
+                    defaultOnOverride="standard_rag"
+                    disabled={locked}
+                    onChange={(value) => updateQuery({ docrag_answer_flow: value })}
+                  />
+                  <QuerySelectRow
+                    id="business-view-docrag-neighbor"
+                    label={t("businessViews.field.docragNeighborChildCount")}
+                    value={
+                      config.query.docrag_neighbor_child_count == null
+                        ? null
+                        : String(config.query.docrag_neighbor_child_count)
+                    }
+                    options={DOCRAG_NEIGHBOR_OPTIONS}
+                    defaultOnOverride="3"
+                    disabled={locked}
+                    onChange={(value) =>
+                      updateQuery({
+                        docrag_neighbor_child_count: value === null ? null : Number(value),
+                      })
+                    }
+                  />
+                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                    <h3 className="text-sm font-medium text-fg">
+                      {t("businessViews.field.docragOptions")}
+                    </h3>
+                    <div className="min-w-0 space-y-2">
+                      <QueryToggleRow
+                        label={t("businessViews.field.docragRerank")}
+                        value={config.query.docrag_rerank_enabled ?? null}
                         disabled={locked}
-                        onChange={(value) => updateQuery({ docrag_query_strategy: value })}
+                        onChange={(value) => updateQuery({ docrag_rerank_enabled: value })}
                       />
-                      <QuerySelectRow
-                        id="business-view-docrag-answer-flow"
-                        label={t("businessViews.field.docragAnswerFlow")}
-                        value={config.query.docrag_answer_flow ?? null}
-                        options={DOCRAG_ANSWER_FLOW_OPTIONS}
-                        defaultOnOverride="standard_rag"
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ docrag_answer_flow: value })}
-                      />
-                      <QuerySelectRow
-                        id="business-view-docrag-neighbor"
-                        label={t("businessViews.field.docragNeighborChildCount")}
-                        value={
-                          config.query.docrag_neighbor_child_count == null
-                            ? null
-                            : String(config.query.docrag_neighbor_child_count)
-                        }
-                        options={DOCRAG_NEIGHBOR_OPTIONS}
-                        defaultOnOverride="3"
+                      <QueryToggleRow
+                        label={t("businessViews.field.docragScreenLinking")}
+                        description={t("businessViews.field.docragScreenLinkingHelper")}
+                        descriptionId="business-view-docrag-screen-linking-helper"
+                        value={config.query.docrag_screen_linking_enabled ?? null}
                         disabled={locked}
                         onChange={(value) =>
-                          updateQuery({
-                            docrag_neighbor_child_count: value === null ? null : Number(value),
-                          })
+                          updateQuery({ docrag_screen_linking_enabled: value })
                         }
                       />
-                      <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                        <h3 className="text-sm font-medium text-fg">
-                          {t("businessViews.field.docragOptions")}
-                        </h3>
-                        <div className="min-w-0 space-y-2">
-                          <QueryToggleRow
-                            label={t("businessViews.field.docragRerank")}
-                            value={config.query.docrag_rerank_enabled ?? null}
-                            disabled={locked}
-                            onChange={(value) => updateQuery({ docrag_rerank_enabled: value })}
-                          />
-                          <QueryToggleRow
-                            label={t("businessViews.field.docragScreenLinking")}
-                            description={t("businessViews.field.docragScreenLinkingHelper")}
-                            descriptionId="business-view-docrag-screen-linking-helper"
-                            value={config.query.docrag_screen_linking_enabled ?? null}
-                            disabled={locked}
-                            onChange={(value) =>
-                              updateQuery({ docrag_screen_linking_enabled: value })
-                            }
-                          />
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
+                    </div>
+                  </div>
                   <QuerySelectRow
                     id="business-view-generation"
                     note={docragUnusedNote}
@@ -1297,7 +1277,7 @@ function QuerySelectRow<T extends string>({
   options: readonly SelectFieldOption<T>[];
   defaultOnOverride: T;
   disabled?: boolean;
-  /** 欄の補足(例: 回答エンジンが DocRAG のときは使われない)。入力は残す。 */
+  /** 欄の補足(例: 現在の回答では使われない)。入力は残す。 */
   note?: string | null;
   onChange: (value: T | null) => void;
 }) {

@@ -102,7 +102,6 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "post_retrieval_pipeline": "rag_post_retrieval_pipeline",
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
-    "answer_engine": "rag_answer_engine",
     "docrag_query_strategy": "rag_docrag_query_strategy",
     "docrag_answer_flow": "rag_docrag_answer_flow",
     "docrag_neighbor_child_count": "rag_docrag_neighbor_child_count",
@@ -272,9 +271,9 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # グローバル設定と request の suite だけで決まるため(#301)。保存済みの
     # ``evaluation_suite`` は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
 
-    # 回答エンジン(standard / docrag)。None はグローバル継承。
-    answer_engine: Literal["standard", "docrag"] | None = None
-    # DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。None はグローバル継承。
+    # 回答エンジンの選択(``answer_engine``)は #594 で削除した(回答は DocRAG だけ)。保存済みの
+    # 値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
+    # DocRAG 回答フローの設定。None はグローバル継承。
     docrag_query_strategy: DocragQueryStrategy | None = None
     docrag_answer_flow: DocragAnswerFlow | None = None
     docrag_neighbor_child_count: int | None = Field(default=None, ge=0, le=20)

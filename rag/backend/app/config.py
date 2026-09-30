@@ -628,12 +628,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_chunk_overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     rag_chunking_strategy: ChunkingStrategy = Field(
-        default="structure_aware",
+        default="docrag_small_to_big",
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
-            "structure_aware は element/section/table 認識、recursive_character は固定長、"
-            "docrag_small_to_big は DocRAG 親子階層(Docling の解析結果を使う。"
+            "docrag_small_to_big(既定)は DocRAG 親子階層(Docling の解析結果を使う。"
             "解析結果が Docling でない文書は structure_aware で分割する)、"
+            "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"
             "fixed_delimiter は指定文字列での固定分割。"
@@ -840,13 +840,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
         ),
     )
-    rag_answer_engine: Literal["standard", "docrag"] = Field(
-        default="standard",
-        description=(
-            "回答エンジン。docrag は rag_poc(DocRAG)の根拠付き回答"
-            "(質問ルーティング / CRAG / 生成 + 監査ラウンド)を使う。"
-        ),
-    )
+    # 回答は rag_poc(DocRAG)の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
+    # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_docrag_answer_vision_enabled: bool = Field(
         default=False,
         description=(
@@ -857,7 +852,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_docrag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
-            "チャットで DocRAG 回答エンジンを使うとき、会話履歴から最新の質問を"
+            "チャットで回答するとき、会話履歴から最新の質問を"
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
     )
@@ -925,7 +920,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "リクエスト単位で業務ビューから解決する用語・ルール"
             "(rag_poc runtime knowledge payload)。"
-            "DocRAG 回答エンジンだけが使う。"
+            "回答フローだけが使う。"
         ),
     )
     rag_domain_keywords: list[str] = Field(

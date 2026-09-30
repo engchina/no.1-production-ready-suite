@@ -60,7 +60,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 
 /**
  * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
- * 業務ビューの「検索・回答設定」で上書きできる。回答エンジンが「標準」の業務ビューでは使われない。
+ * 業務ビューの「検索・回答設定」で上書きできる。業務ビューを指定しない呼び出し(MCP など)もこの値を使う。
  */
 export function AnsweringSettingsCard() {
   const query = useAnsweringSettings();
