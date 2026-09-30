@@ -20,11 +20,12 @@ import {
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  StatusBadge as UiStatusBadge,
   offsetForPage,
   offsetPagination,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
-import { RotateCcw, Sparkles, Trash2, X } from "lucide-react";
+import { RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -615,7 +616,21 @@ function documentColumns({
     {
       key: "status",
       header: t("fileList.col.status"),
-      render: (doc) => <StatusBadge status={doc.status} />,
+      render: (doc) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <StatusBadge status={doc.status} />
+          {/* 作成後に項目の定義などが変わった派生情報がある（#550）。作り直しは文書の詳細の「再処理」。 */}
+          {doc.layers_rebuild_required ? (
+            <span title={t("fileList.layersRebuildTitle")} data-testid={`file-list-rebuild-${doc.id}`}>
+              <UiStatusBadge
+                variant="warning"
+                icon={RefreshCw}
+                label={t("fileList.layersRebuild")}
+              />
+            </span>
+          ) : null}
+        </div>
+      ),
     },
     {
       key: "size",

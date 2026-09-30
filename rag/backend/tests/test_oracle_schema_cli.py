@@ -57,6 +57,7 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert sql.count("CREATE TABLE rag_document_extractions") == 1
     assert "extraction_id   VARCHAR2(64) PRIMARY KEY" not in sql
     assert "CREATE TABLE rag_artifact_layers" in sql
+    assert "input_fingerprint   JSON" in sql
     # 3 層モデル: per-KB binding 表は base schema から退役済み(membership + is_serving に一本化)。
     assert "CREATE TABLE rag_kb_chunk_set_bindings" not in sql
     assert "rag_chunk_sets_document_fk" in sql
@@ -320,14 +321,26 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX'" in jobs_migration
     assert "query" not in jobs_migration.split("-- migration: ", 1)[0].lower()
     # 説明が空の DEFAULT の KB・業務ビューに既定の説明を補う（#521）。利用者の説明は上書きしない。
-    descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[1]
+    descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
     assert "UPDATE rag_knowledge_bases" in descriptions_migration
     assert "UPDATE rag_business_views" in descriptions_migration
     assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
     assert f"'{DEFAULT_BUSINESS_VIEW_DESCRIPTION}'" in descriptions_migration
     assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
     assert "name =" not in descriptions_migration
-    assert len(statements) == 71
+    # 派生情報レイヤーに、作ったときの入力の指紋の列を足す（#550）。無ければ足す（冪等）。
+    fingerprint_migration = sql.split(
+        "-- migration: 20260930_002_artifact_layers_input_fingerprint", 1
+    )[1]
+    assert "table_name = 'RAG_ARTIFACT_LAYERS'" in fingerprint_migration
+    assert "column_name = 'INPUT_FINGERPRINT'" in fingerprint_migration
+    assert "IF v_column_count = 0 THEN" in fingerprint_migration
+    assert "ALTER TABLE rag_artifact_layers ADD (input_fingerprint JSON)" in fingerprint_migration
+    # 既存の行は NULL のまま（不明）。値を埋める UPDATE はしない。
+    assert "UPDATE" not in fingerprint_migration
+    assert len(statements) == 72
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -392,6 +405,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_004_ingestion_jobs_lease",
         "20260928_005_evaluation_jobs",
         "20260930_001_default_descriptions",
+        "20260930_002_artifact_layers_input_fingerprint",
     ]
 
 

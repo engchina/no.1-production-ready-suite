@@ -5,6 +5,7 @@ import {
   canDeleteRecipe,
   recipeConfigLocked,
   recipeIsActive,
+  recipeLayerRebuildSummary,
   recipeLayerStatuses,
   resolveSelectedRecipe,
 } from "./DocumentRecipeManager.logic";
@@ -148,8 +149,20 @@ describe("recipeLayerStatuses", () => {
       }),
     ];
     expect(recipeLayerStatuses(target, sets)).toEqual([
-      { layer: "graph", status: "planned_only", reason: "未実体化" },
-      { layer: "navigation", status: "materialized", reason: null },
+      {
+        layer: "graph",
+        status: "planned_only",
+        reason: "未実体化",
+        rebuildRequired: false,
+        rebuildInputs: [],
+      },
+      {
+        layer: "navigation",
+        status: "materialized",
+        reason: null,
+        rebuildRequired: false,
+        rebuildInputs: [],
+      },
     ]);
   });
 
@@ -160,5 +173,56 @@ describe("recipeLayerStatuses", () => {
     withActive.active_chunk_set_id = "cs-1";
     expect(recipeLayerStatuses(withActive, undefined)).toEqual([]);
     expect(recipeLayerStatuses(withActive, [chunkSet("cs-1", {})])).toEqual([]);
+  });
+});
+
+describe("recipeLayerRebuildSummary", () => {
+  it("作り直しが必要なレイヤーと変わった入力を重複なくまとめる", () => {
+    const target = recipe("recipe-1", 1);
+    target.active_chunk_set_id = "cs-1";
+    const statuses = recipeLayerStatuses(target, [
+      chunkSet("cs-1", {
+        metadata: {
+          layer_id: "md-1",
+          requested: true,
+          status: "materialized",
+          reason: null,
+          rebuild_required: true,
+          rebuild_inputs: ["field_schema_hash", "docrag_chunk_contract"],
+        },
+        navigation: {
+          layer_id: "nv-1",
+          requested: true,
+          status: "materialized",
+          reason: null,
+          rebuild_required: true,
+          rebuild_inputs: ["field_schema_hash"],
+        },
+        graph: { layer_id: "gl-1", requested: true, status: "planned_only", reason: null },
+      }),
+    ]);
+
+    expect(statuses.map((entry) => [entry.layer, entry.rebuildRequired])).toEqual([
+      ["metadata", true],
+      ["graph", false],
+      ["navigation", true],
+    ]);
+    expect(recipeLayerRebuildSummary(statuses)).toEqual({
+      layers: ["metadata", "navigation"],
+      inputs: ["field_schema_hash", "docrag_chunk_contract"],
+    });
+  });
+
+  it("指紋の無い古い API 応答（rebuild_required なし）は作り直し不要として扱う", () => {
+    const target = recipe("recipe-1", 1);
+    target.active_chunk_set_id = "cs-1";
+    const statuses = recipeLayerStatuses(target, [
+      chunkSet("cs-1", {
+        metadata: { layer_id: "md-1", requested: true, status: "materialized", reason: null },
+      }),
+    ]);
+
+    expect(statuses[0]?.rebuildRequired).toBe(false);
+    expect(recipeLayerRebuildSummary(statuses)).toEqual({ layers: [], inputs: [] });
   });
 });

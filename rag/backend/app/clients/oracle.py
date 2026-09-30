@@ -1616,8 +1616,9 @@ class OracleClient:
         status: str,
         reason: str | None = None,
         metrics: Mapping[str, object] | None = None,
+        input_fingerprint: Mapping[str, object] | None = None,
     ) -> None:
-        """chunk_set 派生 layer の実体化状態を保存する。"""
+        """chunk_set 派生 layer の実体化状態と、作ったときの入力の指紋(#550)を保存する。"""
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "layer_id": layer_id,
@@ -1629,6 +1630,9 @@ class OracleClient:
             "status": status,
             "reason": reason,
             "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+            "input_fingerprint": (
+                _json_dumps(input_fingerprint) if input_fingerprint is not None else None
+            ),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -1646,13 +1650,14 @@ class OracleClient:
                     t.status = :status,
                     t.reason = :reason,
                     t.metrics_json = :metrics_json,
+                    t.input_fingerprint = :input_fingerprint,
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (layer_id, layer_kind, parent_chunk_set_id, document_id, tenant_id_hash,
-                     requested, status, reason, metrics_json)
+                     requested, status, reason, metrics_json, input_fingerprint)
                     VALUES
                     (:layer_id, :layer_kind, :parent_chunk_set_id, :document_id, :tenant_id_hash,
-                     :requested, :status, :reason, :metrics_json)
+                     :requested, :status, :reason, :metrics_json, :input_fingerprint)
                 """,
                 binds,
             )
@@ -1672,7 +1677,7 @@ class OracleClient:
             _render_sql(
                 """
                 SELECT layer_id, layer_kind, parent_chunk_set_id, requested, status, reason,
-                       metrics_json
+                       metrics_json, input_fingerprint
                 FROM rag_artifact_layers
                 WHERE {in_sql}
                 """,
@@ -1685,7 +1690,56 @@ class OracleClient:
             normalized = {str(key).lower(): value for key, value in row.items()}
             normalized["requested"] = int(str(normalized.get("requested") or 0)) == 1
             normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
+            normalized["input_fingerprint"] = _json_loads(normalized.get("input_fingerprint"))
             result[str(normalized["layer_id"])] = normalized
+        return result
+
+    async def list_serving_artifact_layer_fingerprints(
+        self,
+        document_ids: Sequence[str],
+    ) -> list[dict[str, object]]:
+        """文書の検索対象の chunk_set の派生 layer のうち、指紋のある行を返す(一覧の判定。#550)。
+
+        検索対象はレシピの active chunk_set と、レシピを持たない(legacy の plan の)配信中の
+        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピ
+        (無ければ文書)の処理設定も返す。抽出結果などの大きな JSON 列は読まない。
+        """
+        ids = list(dict.fromkeys(document_ids))
+        if not ids:
+            return []
+        in_sql, binds = _oracle_in_predicate("l.document_id", "doc", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+                SELECT l.document_id, l.layer_id, l.layer_kind, l.parent_chunk_set_id,
+                       l.input_fingerprint, cs.recipe_id,
+                       r.processing_config AS recipe_processing_config,
+                       d.processing_config AS document_processing_config
+                FROM rag_artifact_layers l
+                JOIN rag_chunk_sets cs ON cs.chunk_set_id = l.parent_chunk_set_id
+                JOIN rag_documents d ON d.document_id = l.document_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+                WHERE {in_sql}
+                  AND l.requested = 1
+                  AND l.input_fingerprint IS NOT NULL
+                  AND (cs.is_active = 1 OR (cs.recipe_id IS NULL AND cs.is_serving = 1))
+                  AND {document_access_sql}
+                """,
+                in_sql=in_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds),
+        )
+        result: list[dict[str, object]] = []
+        for row in rows:
+            normalized = {str(key).lower(): value for key, value in row.items()}
+            for key in (
+                "input_fingerprint",
+                "recipe_processing_config",
+                "document_processing_config",
+            ):
+                normalized[key] = _json_loads(normalized.get(key))
+            result.append(normalized)
         return result
 
     async def list_document_knowledge_base_configs(
@@ -13175,6 +13229,7 @@ CREATE TABLE rag_artifact_layers (
     status              VARCHAR2(32) DEFAULT 'planned_only' NOT NULL,
     reason              VARCHAR2(2000),
     metrics_json        JSON,
+    input_fingerprint   JSON,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_artifact_layers_chunk_set_fk
