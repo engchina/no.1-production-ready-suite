@@ -998,6 +998,8 @@ export interface SearchRequestBody {
   business_view_id?: string | null;
   business_view_ids?: string[];
   generation_profile?: GenerationProfileName | null;
+  /** 回答を作らずに検索だけを行う(LLM を呼ばない。回答エンジンが docrag のときだけ効く。#593)。 */
+  retrieval_only?: boolean;
 }
 
 export interface RetrievedChunk {
@@ -2036,7 +2038,19 @@ export interface GenerationSettingsData {
   custom_prompt_configured: boolean;
 }
 
-/** DocRAG 回答記録の保持日数(0 は無期限)。 */
+/** 回答の検索と生成の全体既定(業務ビューで上書きできる。#593)。 */
+export interface AnsweringSettingsData {
+  query_strategy: DocragQueryStrategyName;
+  answer_flow: DocragAnswerFlowName;
+  neighbor_child_count: number;
+  rerank_enabled: boolean;
+  screen_linking_enabled: boolean;
+  config_source: "runtime";
+}
+
+export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source">>;
+
+/** 回答の記録の保持日数(0 は無期限)。 */
 export interface AnswerRecordSettingsData {
   retention_days: number;
   config_source: "runtime";
@@ -3358,6 +3372,13 @@ export const api = {
   // 設定: Generation アダプター
   getGenerationSettings: () =>
     request<GenerationSettingsData>("/api/settings/generation"),
+  getAnsweringSettings: () => request<AnsweringSettingsData>("/api/settings/answering"),
+  updateAnsweringSettings: (body: AnsweringSettingsUpdate) =>
+    request<AnsweringSettingsData>("/api/settings/answering", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getAnswerRecordSettings: () =>
     request<AnswerRecordSettingsData>("/api/settings/answer-records"),
   updateAnswerRecordSettings: (body: { retention_days: number }) =>

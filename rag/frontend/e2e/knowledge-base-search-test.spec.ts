@@ -133,8 +133,8 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
   await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
   await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
 
-  // request は単一 KB scope を明示し、業務ビューは渡さない。
-  expect(streamRequestBody).toMatchObject({ knowledge_base_ids: ["kb-1"] });
+  // request は単一 KB scope を明示し、業務ビューは渡さない。回答は作らずに検索だけを頼む（#593）。
+  expect(streamRequestBody).toMatchObject({ knowledge_base_ids: ["kb-1"], retrieval_only: true });
   expect(streamRequestBody).not.toHaveProperty("business_view_ids");
 
   // 引用カードは画面を移動するリンクを持たない（#442）。
@@ -152,6 +152,51 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
 
   await expectNoPageOverflow(page);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`検索だけの結果（回答なし）は件数と時間と引用を出す (#593, ${viewport.name}, ${theme})`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      // 外観（テーマ）は共有 UI の ui-store の保存値で決まる。
+      await page.addInitScript(
+        (value) =>
+          window.localStorage.setItem(
+            "production-ready-rag.ui",
+            JSON.stringify({ state: { theme: value }, version: 0 })
+          ),
+        theme
+      );
+      await mockKbPage(page, 1);
+      // 回答エンジンが検索だけを行ったときの応答（delta の本文が空）。
+      const body = searchStreamBody("policy.pdf", 2).replace(
+        'event: delta\ndata: {"text":"これはテスト回答です。"}',
+        'event: delta\ndata: {"text":""}'
+      );
+      await page.route("**/api/search/stream", (route) =>
+        route.fulfill({ status: 200, contentType: "text/event-stream", body })
+      );
+
+      await page.goto("/knowledge-bases/kb-1");
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+        .toBe(theme === "dark");
+      await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
+      await page.getByRole("button", { name: "検索テスト" }).click();
+
+      await expect(page.getByTestId("kb-search-test-meta")).toHaveText("ハイブリッド / 2 件 / 120 ms");
+      await expect(page.getByText("policy.pdf")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "引用（根拠）（2）" })).toBeVisible();
+      // 回答の欄は出さない（空の回答の枠を残さない）。
+      await expect(page.getByRole("heading", { name: "回答", exact: true })).toHaveCount(0);
+      await expectNoPageOverflow(page);
+    });
+  }
+}
 
 // #349: 回答の引用のプレビューでも、DocRAG の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
 test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", async ({

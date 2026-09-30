@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
-from typing import Any, Sequence
+from typing import Any, Callable, Iterator, Sequence
 from docrag.dependencies import llm_call_count
 from docrag.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
 
@@ -47,6 +47,31 @@ _structured_steps: ContextVar[list[dict[str, Any]] | None] = ContextVar("docrag_
 
 _execution_lines: ContextVar[list[str] | None] = ContextVar("answer_execution_lines", default=None)
 
+# 工程の開始・終了を呼び出し側へ知らせる(進捗の表示。#593)。引数は (工程名, "started" /
+# "success" / "error", 経過秒)。通知の失敗は回答を止めない。
+StepListener = Callable[[str, str, float], None]
+_step_listener: ContextVar[StepListener | None] = ContextVar("answer_step_listener", default=None)
+
+
+@contextmanager
+def bind_step_listener(listener: StepListener | None) -> Iterator[None]:
+    """この呼び出しの中の工程の開始・終了を ``listener`` へ知らせる。"""
+    token = _step_listener.set(listener)
+    try:
+        yield
+    finally:
+        _step_listener.reset(token)
+
+
+def _notify_step(name: str, outcome: str, elapsed: float) -> None:
+    listener = _step_listener.get()
+    if listener is None:
+        return
+    try:
+        listener(name, outcome, elapsed)
+    except Exception:  # noqa: BLE001 - 進捗の通知は補助。回答の処理を止めない。
+        pass
+
 class AnswerExecutionError(RuntimeError):
     """失敗時も完了済み工程と中断箇所を質問欄へ返すための例外。"""
 
@@ -74,13 +99,17 @@ def _execution_step(name: str, purpose: str = ""):
         lines.extend(["", f"{name} 開始"])
         if purpose:
             lines.append(f"  目的: {purpose}")
+    _notify_step(name, "started", 0.0)
+    failed = False
     try:
         yield step
     except Exception:
+        failed = True
         step.status = "エラーで中断"
         raise
     finally:
         elapsed = monotonic() - start
+        _notify_step(name, "error" if failed else "success", elapsed)
         llm_calls = llm_call_count.get() - llm_before
         if steps is not None:
             steps[index] = {"name": name, "status": step.status or "complete", "elapsed_seconds": elapsed,
