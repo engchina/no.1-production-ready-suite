@@ -39,7 +39,6 @@ import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { randomUuid } from "@/lib/randomUuid";
 import { t } from "@/lib/i18n";
-import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -227,16 +226,15 @@ export function DataManagementPage() {
   const previewRequestSequence = useRef(0);
   const previewObjectManualSelection = useRef(false);
   const csvTableManualSelection = useRef(false);
-  const debouncedObjectSearch = useDebouncedValue(previewObjectSearch, 250);
-  const debouncedObjectOwnerPrefix = useDebouncedValue(previewObjectOwnerPrefix, 250);
-  const debouncedCsvTableSearch = useDebouncedValue(csvTableSearch, 250);
+  // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
+  // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
   const baseObjectsQuery = useDbAdminObjects("", "all", "all");
-  const csvTablesQuery = useDbAdminObjects(debouncedCsvTableSearch, "table", "all");
+  const csvTablesQuery = useDbAdminObjects(csvTableSearch, "table", "all");
   const previewObjectsQuery = useDbAdminObjects(
-    debouncedObjectSearch,
+    previewObjectSearch,
     previewObjectKindFilter,
     "all",
-    debouncedObjectOwnerPrefix,
+    previewObjectOwnerPrefix,
     "name_comment"
   );
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();

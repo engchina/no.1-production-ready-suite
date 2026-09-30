@@ -474,7 +474,6 @@ describe("api.request envelope", () => {
         connections: [
           {
             connection_id: "primary" as const,
-            display_name: "",
             endpoint: "https://enterprise-ai.example",
             project_ocid: "ocid1.generativeaiproject.oc1..example",
             api_key: "",
@@ -535,7 +534,6 @@ describe("api.request envelope", () => {
           connections: [
             {
               connection_id: "primary" as const,
-              display_name: "",
               endpoint: "https://enterprise-ai.example",
               project_ocid: "ocid1.generativeaiproject.oc1..example",
               api_key: "",

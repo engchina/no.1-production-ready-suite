@@ -292,7 +292,7 @@ test.describe("作業状態の保持", () => {
 
     await page.goto("/file-list");
     await page.getByRole("button", { name: "エラー", exact: true }).click();
-    const search = page.getByRole("textbox", { name: "ファイル名で検索" });
+    const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
     await search.fill("policy");
     await search.press("Enter");
     await page.getByRole("checkbox", { name: "この行を選択" }).check();
@@ -302,7 +302,7 @@ test.describe("作業状態の保持", () => {
         "aria-pressed",
         "true"
       );
-      await expect(page.getByRole("textbox", { name: "ファイル名で検索" })).toHaveValue("policy");
+      await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("policy");
       await expect(page.getByRole("checkbox", { name: "この行を選択" })).not.toBeChecked();
       expect(documentRequests.at(-1)).toContain("status=ERROR");
       expect(documentRequests.at(-1)).toContain("q=policy");

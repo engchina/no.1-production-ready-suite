@@ -14,12 +14,19 @@ export {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
 } from "./lib/list-density";
+export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
 export { Tooltip, type TooltipProps, type TooltipPlacement } from "./components/ui/tooltip";
-export { Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
+export { DEFAULT_TAB_INVALID_LABEL, Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
 export { TextField, type TextFieldProps, type TextFieldSize } from "./components/ui/text-field";
+export {
+  SearchField,
+  SEARCH_FIELD_DEBOUNCE_MS,
+  trimSearchValue,
+  type SearchFieldProps,
+} from "./components/ui/search-field";
 export {
   SecretField,
   type SecretFieldProps,

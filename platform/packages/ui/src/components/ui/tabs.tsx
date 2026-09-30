@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import { CircleAlert, type LucideIcon } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
@@ -22,7 +22,18 @@ export interface TabItem {
    * 画面の別の場所に同じ理由を書いているときは渡さない（二重に伝えない）。
    */
   disabledReason?: string;
+  /**
+   * タブの中に入力のエラーがある（#542）。ラベルの後ろに danger 色の `CircleAlert` を出し、
+   * 読み上げでは `invalidLabel` を説明として伝える（色だけに頼らない）。フォームを複数のタブに分けたとき、
+   * 選んでいないタブのエラーを見落とさないために使う。
+   */
+  invalid?: boolean;
+  /** `invalid` のときの読み上げの説明（翻訳済み）。既定 `DEFAULT_TAB_INVALID_LABEL`。 */
+  invalidLabel?: string;
 }
+
+/** エラーがあるタブの既定の説明。3 製品で同じ語にそろえるため `packages/ui` が持つ（#542）。 */
+export const DEFAULT_TAB_INVALID_LABEL = "入力にエラーがあります";
 
 export interface TabsProps {
   items: TabItem[];
@@ -188,6 +199,8 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
         const Icon = item.icon;
         const badge = item.count ?? item.badge;
         const badgeId = `${idPrefix}-tab-${item.id}-badge`;
+        const invalidId = `${idPrefix}-tab-${item.id}-invalid`;
+        const describedBy = [badge == null ? "" : badgeId, item.invalid ? invalidId : ""].filter(Boolean).join(" ");
         return (
           <button
             key={item.id}
@@ -199,7 +212,8 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
             id={`${idPrefix}-tab-${item.id}`}
             aria-selected={selected}
             aria-label={item.ariaLabel}
-            aria-describedby={badge == null ? undefined : badgeId}
+            aria-describedby={describedBy || undefined}
+            data-invalid={item.invalid || undefined}
             aria-controls={`${idPrefix}-panel-${item.id}`}
             tabIndex={selected ? 0 : -1}
             disabled={item.disabled}
@@ -227,6 +241,14 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
                 {badge}
               </span>
             )}
+            {item.invalid ? (
+              <>
+                <CircleAlert size={14} className="shrink-0 text-danger-fg" aria-hidden />
+                <span id={invalidId} className="sr-only">
+                  {item.invalidLabel ?? DEFAULT_TAB_INVALID_LABEL}
+                </span>
+              </>
+            ) : null}
           </button>
         );
       })}

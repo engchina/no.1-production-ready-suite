@@ -1367,31 +1367,17 @@ export declare function ExecutionConfirmationField(props: ExecutionConfirmationF
 import { TextField } from "@engchina/production-ready-ui";
 import { Search } from "lucide-react";
 
-// 一覧の絞り込み: 値があるときだけ末尾に「検索語をクリア」、Escape でも消える
-<TextField
-  id="feedback-search"
-  label={t("feedback.filters.search")}
-  type="search"
-  value={draft}
-  onValueChange={setDraft}
-  leadingIcon={Search}
-  onClear={() => setDraft("")}
-  clearLabel={t("common.clearSearch")}
-/>
+// 一覧の絞り込みの検索欄は TextField ではなく SearchField で作る（下の「SearchField」、#535）。
 
-// blur / Enter で確定する検索欄: クリアは入力と確定済みの検索語の両方を消す
+// 重い検索の質問欄（明示的に実行する）: Enter の判定は IME 対応の isSubmitEnter
 <TextField
-  id="file-list-search"
-  label={t("fileList.searchPlaceholder")}
+  id="search-test-query"
+  label={t("knowledgeBases.searchTest.title")}
   labelHidden
-  value={search}
-  onValueChange={setSearch}
-  onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
-  onBlur={commit}
-  onClear={() => { setSearch(""); apply(""); }}
-  clearLabel={t("common.clearSearch")}
+  value={query}
+  onValueChange={setQuery}
+  onKeyDown={(e) => { if (isSubmitEnter(e)) void submit(); }}
   leadingIcon={Search}
-  className="w-56"
 />
 
 // lg の Button と同じ行に並べる質問欄
@@ -1489,6 +1475,44 @@ export type TextFieldProps = {
 
 - E2E: 1 画面に `tabpanel` が複数になる。`page.getByRole("tabpanel")` で引いていたテストは、ペイン（`getByTestId("document-inspector-pane")`）やパネルの名前（`{ name: "抽出エクスポート" }`）で絞る。
 - 単体テストは `packages/ui/tests/components.test.tsx`（役割・選択・無効の理由・キー操作）、実ブラウザは RAG の `e2e/document-workspace-file-processing.spec.ts`（「処理前/処理後と抽出エクスポートの形式は共有の Tabs で…」）。
+
+## Tabs — 変更（#542）: エラーのあるタブ
+
+フォームを複数のタブに分けたとき（モデル設定のプライマリ接続 / セカンダリ接続）、選んでいないタブの欄のエラーを見落とさないように、`TabItem` に `invalid` を足しました。ほかの props・id・キー操作は変えていません。
+
+```tsx
+<Tabs
+  idPrefix="enterprise-connection"
+  ariaLabel="OCI Enterprise AI の接続"
+  value={tab}
+  onChange={setTab}
+  items={[
+    { id: "primary", label: "プライマリ接続" },
+    // 保存で止めたときは、呼び出し側が最初のエラーのタブへ切り替えて、最初のエラーの欄へフォーカスする。
+    { id: "secondary", label: "セカンダリ接続", badge: unsaved ? "未保存" : undefined, invalid: hasErrors },
+  ]}
+/>
+```
+
+```ts
+export interface TabItem {
+  // …
+  /** タブの中に入力のエラーがある。ラベルの後ろに danger 色の CircleAlert、読み上げは invalidLabel。 */
+  invalid?: boolean;
+  /** invalid のときの読み上げの説明（翻訳済み）。既定 DEFAULT_TAB_INVALID_LABEL（「入力にエラーがあります」）。 */
+  invalidLabel?: string;
+}
+export declare const DEFAULT_TAB_INVALID_LABEL: string;
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 印はラベル（とバッジ）の後ろの `CircleAlert`（14px、`text-danger-fg`、`aria-hidden`） | エラーは利用者の対応が要る状態なので状態色を使う。アイコンの形でも伝え、色だけに頼らない（WCAG 1.4.1）。選択中のタブの下線・文字色は変えない |
+| 読み上げは `sr-only` の説明を `aria-describedby` で結ぶ（タブの名前は変えない） | タブの名前（「セカンダリ接続」）を保ったまま、フォーカスしたときに「入力にエラーがあります」と伝える。件数バッジと同じ結び方 |
+| `data-invalid` を付ける | E2E・単体テストで状態を引ける（見た目の class に依存しない） |
+| タブの切り替えとフォーカスは呼び出し側が行う | どの欄が最初のエラーかは画面が知っている。Tabs は表示と読み上げだけを持つ |
+
+- 単体テストは `packages/ui/tests/components.test.tsx`（「Tabs のエラーの表示（#542）」）。実ブラウザは RAG の `e2e/model-settings-switch.spec.ts`（「接続はプライマリ接続とセカンダリ接続のタブで切り替え…」）。
 
 ## Disclosure — **新規** / DisclosureChevron — 変更（#397）
 
@@ -1740,3 +1764,87 @@ export type FieldsetProps = {
 
 - 製品で `RequiredBadge` を直接ラベルに並べない（adherence の lint が検出する）。ラベルでない所（カードの見出しに付ける条件付きの必須など）に置く必要があるときだけ、理由を添えて局所的に lint を外す。
 - 単体テストは `packages/ui/tests/required-field.test.tsx`（既定の文言・`aria-required`・タグの読み上げの扱い・任意の欄に何も付かないこと・`Fieldset` の `aria-describedby`）。lint の検出と許容の例は RAG `frontend/src/design-system-adherence.test.ts`。
+
+---
+
+## SearchField — **新規**（#535）
+
+一覧の絞り込み（画面上の一覧・表を名前などで絞る）の検索欄。入力に合わせて絞り込み（debounce 300ms、Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持ちます。検索ボタンは置きません。決めたことの表は README §4「`SearchField`」、どの検索に使うか（重い検索は明示実行）は UX 契約 [page-archetypes.md「一覧の絞り込みの検索」](../ux-contracts/page-archetypes.md#一覧の絞り込みの検索535)。
+
+```tsx
+import { ClearActionButton, EmptyState, SearchField } from "@engchina/production-ready-ui";
+
+// サーバー側で絞り込む一覧（RAG の業務ビュー）。q は作業状態に保存した適用中の検索語。
+const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isView);
+const query = useBusinessViews({ q: view.q || undefined, limit, offset: view.offset });
+// ↑ queryKey に q を入れ、placeholderData: keepPreviousData（古い応答で上書きしない・前の一覧を出したまま）
+
+<SearchField
+  id="business-view-search"
+  label={t("businessViews.search.placeholder")}
+  labelHidden
+  value={view.q}
+  onSearch={(next) => setView((current) => ({ ...current, q: next, offset: 0 }))} // 変わったら 1 ページ目
+  clearLabel={t("common.clearSearch")}
+  resultCountLabel={query.data ? t("common.searchResultCount", { count: query.data.total }) : ""}
+  placeholder={t("businessViews.search.placeholder")}
+  className="w-full sm:w-64"
+/>
+
+// 0 件: 空の状態と「検索語をクリア」
+{view.q ? (
+  <EmptyState
+    title={t("businessViews.search.noResultsTitle")}
+    hint={t("businessViews.search.noResultsHint")}
+    action={<ClearActionButton label={t("common.clearSearch")} matchButtonHeight onClick={() => applySearch("")} />}
+  />
+) : null}
+
+// 所有者名のように、入力中も大文字で見せ、確定した値も大文字にする（NL2SQL の DbOwnerPrefixFilterField）
+<SearchField id="owner" label="所有者" value={owner} onSearch={setOwner} clearLabel="入力をクリア"
+  formatInput={(v) => v.toUpperCase()} normalize={(v) => v.trim().toUpperCase()} touchTarget />
+```
+
+### SearchField の props
+
+```ts
+export const SEARCH_FIELD_DEBOUNCE_MS = 300;
+
+export type SearchFieldProps = Omit<
+  TextFieldProps,
+  "type" | "value" | "defaultValue" | "onChange" | "onValueChange" | "onClear" | "leadingIcon" | "required" | "requiredLabel"
+> & {
+  /** 適用中の検索語（作業状態・URL に保存している値）。外から変わったときだけ入力欄を合わせる。 */
+  value: string;
+  /** 確定した検索語（正規化済み）。入力が止まって debounceMs・Enter・消去・入力欄が外れるときに呼ぶ。IME の変換中は呼ばない。前回と同じなら呼ばない。 */
+  onSearch: (value: string) => void;
+  /** 消去ボタンの読み上げ名と Tooltip（翻訳済み）。 */
+  clearLabel: string;
+  /** 既定 300。0 なら確定した入力のたびにすぐ呼ぶ。 */
+  debounceMs?: number;
+  /** onSearch に渡す前の正規化（既定は trim）。 */
+  normalize?: (value: string) => string;
+  /** 入力中の文字の見せ方（例: 大文字）。IME の変換中は適用しない。 */
+  formatInput?: (value: string) => string;
+  /** 件数の文言。検索語があるときだけ role="status"（aria-live="polite"、sr-only）で読み上げる。 */
+  resultCountLabel?: string;
+  /** 入力中の文字（下書き）が変わったとき。絞り込みには onSearch を使う。 */
+  onDraftChange?: (draft: string) => void;
+};
+
+// IME 対応の Enter の判定（重い検索の明示実行・条件フォーム・追加の入力欄で使う）
+export function isImeComposing(event: KeyboardEventLike): boolean; // isComposing または keyCode 229（Safari）
+export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "Enter" かつ変換中でない
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 入力中の文字（下書き）は部品が持ち、`value` は適用中の値だけにする。最後に `onSearch` へ渡した値を覚え、`value` がそれと違う値に変わったときだけ外からの変更として入力欄を合わせる | 親が `trim` した値・大文字にした値を返しても、入力中の空白・文字を書き換えない |
+| debounce のタイマーは部品の中の 1 つ。親で `useDebouncedValue` などを重ねない（NL2SQL の 5 ページの 250ms を外した） | 反映が 550ms に遅れない。debounce と IME の判定を 1 か所にする |
+| `compositionstart` で待っている分を取り消す。`compositionend` で確定した値を予約する（ブラウザにより確定後の `input` が来ないため） | 変換の途中の読みで絞り込まない。確定した値を取りこぼさない |
+| Enter は `preventDefault` して囲む form を送信しない。変換を確定する Enter は既定の動作も止めない | 一覧の絞り込みは form の送信ではない。IME の確定を妨げない |
+| 入力欄が外れるときは待っている分を確定する。部品の外の状態（作業状態）が同じ画面に残るとき、消した・入力した検索語が戻らない。画面ごと外れる（別のページへ移る）ときは親の状態も消えるので、残したい e2e は Enter で確定してから移る | 一覧 ⇄ 作成の切り替えで、消したはずの検索語が一覧に戻っていた |
+
+- 単体テストは `packages/ui/tests/search-field.test.tsx`（debounce・Enter・trim・正規化・`formatInput`・IME の `compositionstart` 〜 `compositionend` と確定の Enter・消去・外からの変更・外れるときの確定・件数の読み上げ。fake timers）。
+- 実ブラウザは RAG `e2e/list-search.spec.ts`（業務ビュー・ナレッジベース。ボタンなし・入力に合わせた問い合わせ・IME・0 件の「検索語をクリア」、desktop / 375px、ライト / ダーク）、Agent `e2e/list-search.spec.ts`（メモリ）、NL2SQL `tests/e2e/nl2sql-workflows.spec.ts`（学習候補・アプリ内フィードバック）。IME は `compositionstart` → `isComposing` の `input` → `compositionend` の DOM event を出して確かめる（Playwright の keyboard は IME を通さない）。
+- 製品の置き換え: RAG（ナレッジベース・業務ビュー・文書・フィードバック・ナレッジベース詳細の追加する文書）、NL2SQL（`DbManagementSearchField` / `DbOwnerPrefixFilterField` を使う全一覧・DB 管理のオブジェクト一覧・スキーマ参照・アプリ内フィードバック・学習候補）、Agent（メモリ）、system-settings（`SecuritySearchField`: ユーザー・ロール・権限管理・権限の対象。NL2SQL の Deep Data Security も使う）。

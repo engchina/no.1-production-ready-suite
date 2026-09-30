@@ -44,7 +44,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, StatusBadge, isImeComposing } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
@@ -498,13 +498,17 @@ function GraphToolbarSearchField({
       data-testid="ontology-graph-search-field"
     >
       <Search size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
+      {/* 一覧の絞り込みではなく、グラフ上の一致した概念を強調・順に移動する検索（行を減らさない）。ツールバーの
+          他の操作と同じ枠の中に置く専用の見た目のため SearchField にしない（UX 契約 page-archetypes.md の例外。#535）。 */}
+      {/* oxlint-disable-next-line design-system/restricted-syntax */}
       <input
         type="search"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => {
-          // Escape で検索をクリアする(入力が空のときはブラウザ既定に任せる)
-          if (event.key === "Escape" && value) {
+          // Escape で検索をクリアする(入力が空のときはブラウザ既定に任せる)。
+          // IME の変換中の Escape は変換の取り消しなので消さない（#535）。
+          if (event.key === "Escape" && value && !isImeComposing(event)) {
             event.preventDefault();
             event.stopPropagation();
             onChange("");

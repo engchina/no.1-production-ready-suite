@@ -33,8 +33,6 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
-    oci_enterprise_ai_connection_name: str = ""
-    oci_enterprise_ai_secondary_connection_name: str = ""
     oci_enterprise_ai_secondary_endpoint: str = ""
     oci_enterprise_ai_secondary_project_ocid: str = ""
     oci_enterprise_ai_secondary_api_key: str = ""
@@ -360,7 +358,7 @@ def test_vision_model_is_derived_when_not_set_explicitly() -> None:
             "default_vision_model_id",
             "画像入力（Vision）に対応したモデルがありません",
         ),
-        ({"default_vision_model_id": ""}, "default_vision_model_id", "選んでください"),
+        ({"default_vision_model_id": ""}, "default_vision_model_id", "選択してください"),
         ({"default_vision_model_id": "gone"}, "default_vision_model_id", "登録モデルにありません"),
         (
             {"default_vision_model_id": "llm-a"},

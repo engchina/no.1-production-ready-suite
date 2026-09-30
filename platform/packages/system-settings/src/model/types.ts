@@ -6,9 +6,12 @@ export type ModelSettingsTestStatus = "success" | "failed";
 export type ModelSettingsTestTargetType =
   "enterprise_text" | "enterprise_vision" | "embedding" | "rerank";
 
-/** OCI Enterprise AI の接続の ID（#533）。接続ごとに backend の Settings の属性・env 名が決まっている。 */
+/**
+ * OCI Enterprise AI の接続の ID（#533）。接続ごとに backend の Settings の属性・env 名が決まっている。
+ * 画面の名前は「プライマリ接続」「セカンダリ接続」（#542）。
+ */
 export type EnterpriseAiConnectionId = "primary" | "secondary";
-/** 接続の並び（1 件目が既定）。backend の ENTERPRISE_AI_CONNECTION_IDS と同じ。 */
+/** 接続の並び（プライマリ接続が既定）。backend の ENTERPRISE_AI_CONNECTION_IDS と同じ。 */
 export const ENTERPRISE_AI_CONNECTION_IDS: readonly EnterpriseAiConnectionId[] = [
   "primary",
   "secondary",
@@ -20,15 +23,16 @@ export interface EnterpriseAiConfiguredModel {
   model_id: string;
   display_name: string;
   vision_enabled: boolean;
-  /** 呼び出しに使う接続（#533）。未指定は接続 1。存在しない接続を指すと保存時に欄のエラー。 */
+  /** 呼び出しに使う接続（#533）。未指定はプライマリ接続。存在しない接続を指すと保存時に欄のエラー。 */
   connection_id?: string;
 }
 
-/** OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空。 */
+/**
+ * OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空。
+ * 表示名は持たない（#542。画面は ID から「プライマリ接続」「セカンダリ接続」と表示する）。
+ */
 export interface EnterpriseAiConnectionSettings {
   connection_id: EnterpriseAiConnectionId;
-  /** 空なら「接続 1」「接続 2」と表示する。 */
-  display_name: string;
   endpoint: string;
   project_ocid: string;
   api_key: string;
@@ -37,7 +41,7 @@ export interface EnterpriseAiConnectionSettings {
 }
 
 export interface EnterpriseAiModelSettings {
-  /** 1 件目（接続 1）が既定。最大 MAX_ENTERPRISE_AI_CONNECTIONS 件（#533）。 */
+  /** 1 件目（プライマリ接続）が既定。2 件目はセカンダリ接続（任意。#533）。 */
   connections: EnterpriseAiConnectionSettings[];
   models: EnterpriseAiConfiguredModel[];
   /** 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。 */

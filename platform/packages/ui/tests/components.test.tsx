@@ -37,6 +37,36 @@ describe("Tabs", () => {
   });
 });
 
+describe("Tabs のエラーの表示（#542）", () => {
+  it("invalid のタブはアイコンと読み上げの説明を持ち、件数バッジと並べて説明に結ぶ", () => {
+    const html = renderToStaticMarkup(
+      <Tabs
+        idPrefix="conn"
+        value="a"
+        items={[
+          { id: "a", label: "プライマリ接続" },
+          { id: "b", label: "セカンダリ接続", badge: "未保存", invalid: true },
+        ]}
+      />
+    );
+    const tabs = html.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
+    expect(tabs[0]).not.toContain("data-invalid");
+    expect(tabs[0]).not.toContain("aria-describedby");
+    expect(tabs[1]).toContain('data-invalid="true"');
+    expect(tabs[1]).toContain('aria-describedby="conn-tab-b-badge conn-tab-b-invalid"');
+    expect(html).toContain('<span id="conn-tab-b-invalid" class="sr-only">入力にエラーがあります</span>');
+    expect(html).toMatch(/<svg[^>]*text-danger-fg[^>]*aria-hidden="true"/);
+  });
+
+  it("invalidLabel で説明の文言を上書きできる", () => {
+    const html = renderToStaticMarkup(
+      <Tabs value="a" items={[{ id: "a", label: "A", invalid: true, invalidLabel: "未入力の欄があります" }]} />
+    );
+    expect(html).toContain('aria-describedby="pr-tab-a-invalid"');
+    expect(html).toContain(">未入力の欄があります</span>");
+  });
+});
+
 describe("Tabs でペインの中の見方を切り替える（#396）", () => {
   const items = [
     { id: "original", label: "処理前" },

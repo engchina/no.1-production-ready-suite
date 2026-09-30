@@ -6,6 +6,9 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
 - 検索: backend の Oracle hybrid 検索(業務ビューの KB フィルタとドメインキーワード付き)。
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``docrag_parent_text``)で親子を復元する。
+  質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
+  profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
+  metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。docrag 内部の Responses API 経路を使う。
 回答フローは同期関数のため worker thread で動かし、非同期 I/O はイベントループへ戻して実行する。
@@ -46,6 +49,8 @@ DOCRAG_ANSWER_ENGINE = "docrag"
 DOCRAG_SOURCE_RUN_ID = "0" * 16
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
+# 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
+_MAX_QUESTION_FILE_TERMS = 3
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,12 @@ class _SearchState:
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
     work_dir: Path | None = None
     sources: dict[str, bytes | None] = field(default_factory=dict)
+    # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
+    # 1 回だけ決める。
+    filters: dict[str, str] | None = None
+    # 文書の分類(rag_documents.classification)を document_id ごとに保持する(#545)。
+    classifications: dict[str, dict[str, object]] = field(default_factory=dict)
+    loaded_classification_ids: set[str] = field(default_factory=set)
 
 
 def build_docrag_settings(
@@ -230,6 +241,8 @@ class DocragAnswerEngine:
         retrieval_queries: Sequence[str],
         candidate_limit: int = 24,
         vector_only_queries: Sequence[str] = (),
+        inquiry_conditions: Any = None,
+        settings: Any = None,
         **_: object,
     ) -> Any:
         from docrag.models.storage import HybridSearchResult
@@ -237,21 +250,45 @@ class DocragAnswerEngine:
         queries = [query for query in dict.fromkeys(q.strip() for q in retrieval_queries) if query]
         if not queries:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
+        if state.filters is None:
+            state.filters = await self._question_filters(dict(request.filters), inquiry_conditions)
         vector_only = {query.strip() for query in vector_only_queries}
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
         fused: dict[str, float] = {}
+        rankings: list[list[str]] = []
         k = float(self._settings.rag_rrf_k)
         derived_weight = 1.0 / max(1, len(queries) - 1)
         for index, (query, embedding) in enumerate(zip(queries, embeddings, strict=False)):
             mode = SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID
             hits = await self._oracle.hybrid_search(
-                query, embedding, candidate_limit, mode=mode, filters=dict(request.filters)
+                query, embedding, candidate_limit, mode=mode, filters=dict(state.filters)
             )
+            rankings.append([hit.chunk_id for hit in hits])
             # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
             weight = 1.0 if index == 0 else derived_weight
             for rank, hit in enumerate(hits, start=1):
                 state.chunks.setdefault(hit.chunk_id, hit)
                 fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
+        await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
+        if inquiry_conditions is not None:
+            pool = [
+                _stored_child(
+                    state.chunks[chunk_id],
+                    rrf_score=0.0,
+                    classification=state.classifications.get(state.chunks[chunk_id].document_id),
+                )
+                for chunk_id in fused
+            ]
+            channels = _inquiry_channel_rankings(
+                pool,
+                inquiry_conditions,
+                rankings,
+                limit=candidate_limit,
+                profile_enabled=bool(getattr(settings, "profile_channel_enabled", True)),
+            )
+            for _channel, channel_weight, ranking in channels:
+                for rank, (chunk_id, _score) in enumerate(ranking, start=1):
+                    fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
         ranked = sorted(fused, key=lambda chunk_id: -fused[chunk_id])[:candidate_limit]
         anchors = [state.chunks[chunk_id] for chunk_id in ranked]
         siblings = await self._oracle.context_group_siblings(
@@ -264,16 +301,76 @@ class DocragAnswerEngine:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
+        classifications = state.classifications
         children = [
-            _stored_child(chunk, rrf_score=fused.get(chunk.chunk_id, 0.0)) for chunk in anchors
+            _stored_child(
+                chunk,
+                rrf_score=fused.get(chunk.chunk_id, 0.0),
+                classification=classifications.get(chunk.document_id),
+            )
+            for chunk in anchors
         ]
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
-            all_children.setdefault(sibling.chunk_id, _stored_child(sibling, rrf_score=0.0))
+            all_children.setdefault(
+                sibling.chunk_id,
+                _stored_child(
+                    sibling, rrf_score=0.0, classification=classifications.get(sibling.document_id)
+                ),
+            )
         parents = _stored_parents(list(all_children.values()), state)
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _question_filters(
+        self, filters: dict[str, str], inquiry_conditions: Any
+    ) -> dict[str, str]:
+        """質問が名指しした文書名・ページを検索条件(``hybrid_search`` の filters)へ足す(#546)。
+
+        - 画面で文書(``file_name`` / ``document_id``)を指定したときは、そちらを優先して足さない。
+          ページも同じく、画面で指定したときは足さない。
+        - ナレッジベースに無い文書名は足さない(0 件にしない。rag_poc の
+          ``_resolved_metadata_filter``)。
+          ページは文書名と組でだけ使う条件なので、文書名を足さないときは一緒に外す。
+        - filters の ``file_name`` は 1 語なので、質問が複数の文書名を挙げたときは、
+          最初に見つかったものを使う。
+        """
+        metadata_filter = getattr(inquiry_conditions, "metadata_filter", None)
+        terms = [
+            term.strip()
+            for term in getattr(metadata_filter, "source_file_terms", ())
+            if isinstance(term, str) and term.strip()
+        ]
+        if not terms or any(filters.get(key, "").strip() for key in ("file_name", "document_id")):
+            return filters
+        for term in terms[:_MAX_QUESTION_FILE_TERMS]:
+            candidate = {**filters, "file_name": term}
+            if await self._oracle.has_retrieval_chunks(candidate):
+                break
+        else:
+            return filters
+        pages = [
+            page
+            for page in getattr(metadata_filter, "page_numbers", ())
+            if isinstance(page, int) and page > 0
+        ]
+        if pages and not any(
+            filters.get(key, "").strip() for key in ("page_number_min", "page_number_max")
+        ):
+            candidate["page_number_min"] = str(min(pages))
+            candidate["page_number_max"] = str(max(pages))
+        return candidate
+
+    async def _load_classifications(
+        self, chunks: Sequence[RetrievedChunk], state: _SearchState
+    ) -> None:
+        """まだ読んでいない文書の分類を、ヒットした document_id でまとめて 1 回で読む(#545)。"""
+        missing = sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
+        if not missing:
+            return
+        state.classifications.update(await self._oracle.document_classifications(missing))
+        state.loaded_classification_ids.update(missing)
 
     async def _materialize_image_evidence(self, chunk: RetrievedChunk, state: _SearchState) -> None:
         """根拠 chunk の image_evidence を作業ディレクトリへ切り出し、crop_path を差し替える。
@@ -402,12 +499,69 @@ def _group_id(chunk: RetrievedChunk) -> str:
     return str(chunk.metadata.get("chunk_group_id") or chunk.chunk_id)
 
 
-def _stored_child(chunk: RetrievedChunk, *, rrf_score: float) -> Any:
+def _inquiry_channel_rankings(
+    pool: Sequence[Any],
+    inquiry_conditions: Any,
+    rankings: Sequence[Sequence[str]],
+    *,
+    limit: int,
+    profile_enabled: bool,
+) -> list[tuple[str, float, Sequence[tuple[str, float | None]]]]:
+    """質問の理解に合う候補を、RRF に足すチャネル(profile / business_match)の順位で返す(#546)。
+
+    rag_poc の検索(``adapters/oracle/store.py``)と同じ docrag の関数で計算する。対象は今回の検索で
+    見つかった候補だけで、ナレッジベースの全 chunk は読まない。文書名・ページは検索条件
+    (``_question_filters``)で適用済みか、ナレッジベースに無いため外したので、ここでは使わない。
+    """
+    from docrag.adapters.oracle.store import (
+        _business_match_ranking,
+        _chunks_matching_metadata_filter,
+    )
+    from docrag.retrieval.inquiry_conditions import profile_channel_rankings
+
+    metadata_filter = getattr(inquiry_conditions, "metadata_filter", None)
+    if metadata_filter is not None:
+        metadata_filter = replace(metadata_filter, source_file_terms=(), page_numbers=())
+    matched = _chunks_matching_metadata_filter(pool, metadata_filter)
+    channels: list[tuple[str, float, Sequence[tuple[str, float | None]]]] = []
+    if profile_enabled:
+        channels.extend(profile_channel_rankings(matched, inquiry_conditions, limit=limit))
+    channels.extend(
+        _business_match_ranking(
+            matched,
+            metadata_filter,
+            [[(chunk_id, None) for chunk_id in ranking] for ranking in rankings],
+            [],
+            limit=limit,
+        )
+    )
+    return channels
+
+
+def _stored_child(
+    chunk: RetrievedChunk,
+    *,
+    rrf_score: float,
+    classification: Mapping[str, object] | None = None,
+) -> Any:
+    """backend の chunk を docrag の子 chunk にする。
+
+    ``classification`` は文書の分類(rag_documents.classification)。docrag は
+    ``metadata["document"]["classification"]`` で業務の候補を絞る
+    (``_same_business_records``。#545)。
+    分類は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    """
     from docrag.models.storage import StoredChunk
 
     metadata = _docrag_metadata(chunk)
     metadata["rrf_score"] = rrf_score
     metadata["document_id"] = chunk.document_id
+    if classification:
+        document = metadata.get("document")
+        metadata["document"] = {
+            **(document if isinstance(document, dict) else {}),
+            "classification": dict(classification),
+        }
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,

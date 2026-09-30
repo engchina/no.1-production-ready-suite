@@ -152,7 +152,7 @@ test("built-in and archived roles cannot be edited from the permission editor", 
   assert.match(permissionsPageSource, /disabled=\{targetReadOnly\}[\s\S]{0,200}?onToggle=\{\(\) => toggle\(item\.id\)\}/u);
   assert.match(securityManagementSharedSource, /disabled\?: boolean/u);
   // 検索欄は共有の TextField（無効の見た目は TextField が持つ。#384）に disabled を渡す。
-  assert.match(securityManagementSharedSource, /export function SecuritySearchField[\s\S]*?<TextField[\s\S]*?disabled=\{disabled\}/u);
+  assert.match(securityManagementSharedSource, /export function SecuritySearchField[\s\S]*?<SearchField[\s\S]*?disabled=\{disabled\}/u);
   assert.ok((permissionsPageSource.match(/if \(inputReadOnly\) return;/gu) ?? []).length >= 3);
   assert.ok((permissionsPageSource.match(/if \(targetReadOnly\) return;/gu) ?? []).length >= 4);
 });

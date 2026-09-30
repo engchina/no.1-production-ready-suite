@@ -93,38 +93,33 @@ test("表示一覧はサーバ検索結果をそのまま使い二重フィル�
   assert.match(profilePage, /viewObjects=\{viewObjects\}/u);
 });
 
-test("業務プロファイル画面の検索は共有デバウンス hook を通す", () => {
-  const debounceHook = readFileSync(
-    new URL("../src/lib/useDebouncedValue.ts", import.meta.url),
+test("業務プロファイル画面の検索は SearchField が確定した値で問い合わせる（二重に遅延させない。#535）", () => {
+  const filterFields = readFileSync(
+    new URL("../src/components/DbObjectFilterFields.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(debounceHook, /export function useDebouncedValue<T>/u);
-  assert.match(debounceHook, /export const LIST_SEARCH_DEBOUNCE_MS = 250;/u);
-
-  assert.match(
-    profilePage,
-    /useDebouncedValue\(profileSearch, LIST_SEARCH_DEBOUNCE_MS\)/u,
-  );
-  assert.match(profilePage, /useDebouncedValue\(objectFilter, LIST_SEARCH_DEBOUNCE_MS\)/u);
-  assert.match(profilePage, /useSchemaObjects\(debouncedObjectFilter, "TABLE"\)/u);
-  assert.match(profilePage, /useSchemaObjects\(debouncedObjectFilter, "VIEW"\)/u);
+  // debounce と IME の対応は共有の SearchField が持つ。
+  assert.match(filterFields, /<SearchField/u);
+  assert.match(profilePage, /useProfileSummaries\(profileSearch, profileSort\)/u);
+  assert.match(profilePage, /useSchemaObjects\(objectFilter, "TABLE"\)/u);
+  assert.match(profilePage, /useSchemaObjects\(objectFilter, "VIEW"\)/u);
   // 一括操作も表示中の一覧と同じ条件を使う。
-  assert.match(profilePage, /const filter = debouncedObjectFilter\.trim\(\);/u);
+  assert.match(profilePage, /const filter = objectFilter\.trim\(\);/u);
 });
 
-test("管理系一覧ページはデバウンス hook を重複定義しない", () => {
+test("管理系一覧ページは検索語を独自に遅延させない（SearchField の debounce に一本化。#535）", () => {
   for (const page of [
     "TableManagementPage",
     "ViewManagementPage",
     "MetadataSqlManagementPage",
     "DataManagementPage",
+    "ProfileManagementPage",
   ]) {
     const source = readFileSync(
       new URL(`../src/features/nl2sql/pages/${page}.tsx`, import.meta.url),
       "utf8",
     );
-    assert.doesNotMatch(source, /(const|function) useDebouncedValue/u, page);
-    assert.match(source, /from "@\/lib\/useDebouncedValue"/u, page);
+    assert.doesNotMatch(source, /useDebouncedValue|setTimeout\([^)]*[Ss]earch/u, page);
   }
 });
 

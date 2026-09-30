@@ -5,10 +5,11 @@ import {
   connectionLabel,
   connectionOptions,
   emptyConnection,
+  firstConnectionError,
   modelsUsingConnection,
-  nextConnectionId,
   normalizeModelSettings,
   removeConnection,
+  unsavedConnectionIds,
   validateConnections,
   validateModelConnections,
 } from "../src/model/connections";
@@ -27,8 +28,9 @@ const primary: EnterpriseAiConnectionSettings = {
 };
 const secondary: EnterpriseAiConnectionSettings = {
   ...emptyConnection("secondary"),
-  display_name: "シカゴ",
   endpoint: "https://secondary.example",
+  project_ocid: "ocid1.generativeaiproject.oc1..secondary",
+  has_api_key: true,
 };
 const models: EnterpriseAiConfiguredModel[] = [
   { model_id: "llm-a", display_name: "標準", vision_enabled: false },
@@ -36,34 +38,78 @@ const models: EnterpriseAiConfiguredModel[] = [
   { model_id: " ", display_name: "未入力", vision_enabled: false, connection_id: "secondary" },
 ];
 
-describe("接続（#533）", () => {
-  it("上限は 2 件で、次に追加できる接続を返す", () => {
+describe("接続（#533 / #542）", () => {
+  it("接続はプライマリ接続とセカンダリ接続の 2 つ", () => {
     expect(MAX_ENTERPRISE_AI_CONNECTIONS).toBe(2);
-    expect(nextConnectionId([primary])).toBe("secondary");
-    expect(nextConnectionId([primary, secondary])).toBeNull();
   });
 
-  it("表示名が空なら「接続 N」、表示名があれば番号を説明に出す", () => {
-    expect(connectionLabel(primary)).toBe("接続 1");
-    expect(connectionLabel(secondary)).toBe("シカゴ");
+  it("名前はタブと同じ「プライマリ接続」「セカンダリ接続」で、選択肢は設定した接続だけ", () => {
+    expect(connectionLabel("primary")).toBe("プライマリ接続");
+    expect(connectionLabel("secondary")).toBe("セカンダリ接続");
+    expect(connectionLabel("unknown")).toBe("プライマリ接続");
+    expect(connectionOptions([primary])).toEqual([
+      { value: "primary", label: "プライマリ接続" },
+    ]);
     expect(connectionOptions([primary, secondary])).toEqual([
-      { value: "primary", label: "接続 1" },
-      { value: "secondary", label: "シカゴ", description: "接続 2" },
+      { value: "primary", label: "プライマリ接続" },
+      { value: "secondary", label: "セカンダリ接続" },
     ]);
   });
 
-  it("接続 1 の入力欄の id は #533 より前のまま", () => {
+  it("プライマリ接続の入力欄の id は #533 より前のまま", () => {
     expect(connectionFieldId("primary", "endpoint")).toBe("enterprise-endpoint");
-    expect(connectionFieldId("primary", "api-key")).toBe("enterprise-api-key");
+    expect(connectionFieldId("primary", "project_ocid")).toBe("enterprise-project-ocid");
+    expect(connectionFieldId("primary", "api_key")).toBe("enterprise-api-key");
     expect(connectionFieldId("secondary", "endpoint")).toBe("enterprise-secondary-endpoint");
+    expect(connectionFieldId("secondary", "api_key")).toBe("enterprise-secondary-api-key");
   });
 
-  it("接続 2 を追加したら Endpoint URL は必須（接続 1 は OCI 運用時だけ必須のまま）", () => {
+  it("セカンダリ接続を設定したら Endpoint URL・Project OCID・API key は必須（プライマリは止めない）", () => {
     expect(validateConnections([emptyConnection("primary")])).toEqual({});
-    expect(validateConnections([primary, emptyConnection("secondary")])).toEqual({
-      secondary:
-        "接続 2 の Endpoint URL を入力してください。使わない場合は接続を削除してください。",
+    const errors = validateConnections([primary, emptyConnection("secondary")]);
+    expect(errors).toEqual({
+      secondary: {
+        endpoint: "Endpoint URL を入力してください。",
+        project_ocid: "Project OCID を入力してください。",
+        api_key: "API key を入力してください。",
+      },
     });
+    expect(firstConnectionError(errors)).toEqual({
+      connectionId: "secondary",
+      field: "endpoint",
+    });
+    expect(validateConnections([primary, secondary])).toEqual({});
+    expect(firstConnectionError({})).toBeNull();
+  });
+
+  it("API key は新しい入力か、削除しない保存済みの key があればよい", () => {
+    const noSaved = { ...secondary, has_api_key: false };
+    expect(validateConnections([primary, noSaved]).secondary).toEqual({
+      api_key: "API key を入力してください。",
+    });
+    expect(validateConnections([primary, { ...noSaved, api_key: "sk-new" }])).toEqual({});
+    expect(
+      validateConnections([primary, { ...secondary, clear_api_key: true }]).secondary?.api_key,
+    ).toBe("API key を入力してください。");
+  });
+
+  it("保存済みから変えた接続（設定・削除・入力）を「未保存」にする", () => {
+    expect(unsavedConnectionIds([primary], [primary])).toEqual(new Set());
+    expect(unsavedConnectionIds([primary, emptyConnection("secondary")], [primary])).toEqual(
+      new Set(["secondary"]),
+    );
+    expect(unsavedConnectionIds([primary], [primary, secondary])).toEqual(
+      new Set(["secondary"]),
+    );
+    expect(
+      unsavedConnectionIds([{ ...primary, api_key: "sk-new" }, secondary], [primary, secondary]),
+    ).toEqual(new Set(["primary"]));
+    expect(
+      unsavedConnectionIds(
+        [primary, { ...secondary, endpoint: "https://other.example" }],
+        [primary, secondary],
+      ),
+    ).toEqual(new Set(["secondary"]));
   });
 
   it("ない接続・保存前の接続を指すモデルを欄のエラーにする（モデル ID の空の行は除く）", () => {
@@ -74,11 +120,11 @@ describe("接続（#533）", () => {
       1: "「vlm-b」の接続がありません。登録されている接続から選び直してください。",
     });
     expect(validateModelConnections(models, [primary, secondary], ["primary"])[1]).toContain(
-      "シカゴ はまだ保存されていません",
+      "セカンダリ接続 はまだ保存されていません",
     );
   });
 
-  it("接続を削除すると、使っていたモデルを接続 1 に移す", () => {
+  it("セカンダリ接続を削除すると、使っていたモデルをプライマリ接続に移す", () => {
     const enterprise = { connections: [primary, secondary], models } as EnterpriseAiModelSettings;
     expect(modelsUsingConnection(models, "secondary").map((model) => model.model_id)).toEqual([
       "vlm-b",
@@ -92,7 +138,7 @@ describe("接続（#533）", () => {
     ]);
   });
 
-  it("接続の一覧がない応答（#533 より前の形）は接続 1 として読む", () => {
+  it("接続の一覧がない応答（#533 より前の形）はプライマリ接続として読む", () => {
     const legacy = {
       enterprise_ai: {
         endpoint: "https://legacy.example",
@@ -117,5 +163,22 @@ describe("接続（#533）", () => {
     ]);
     expect(normalized.enterprise_ai.models[0]?.connection_id).toBe("primary");
     expect("endpoint" in normalized.enterprise_ai).toBe(false);
+  });
+
+  it("#533 の表示名（display_name）が残った応答も読み、接続から落とす", () => {
+    const withNames = {
+      enterprise_ai: {
+        connections: [
+          { ...primary, display_name: "大阪" },
+          { ...secondary, display_name: "シカゴ" },
+        ],
+        models: [],
+        default_text_model_id: "",
+        default_vision_model_id: "",
+      },
+      generative_ai: { embedding_model: "e", embedding_dim: 1536, rerank_model: "r" },
+    } as unknown as ModelSettingsPayload;
+    const normalized = normalizeModelSettings(withNames);
+    expect(normalized.enterprise_ai.connections).toEqual([primary, secondary]);
   });
 });

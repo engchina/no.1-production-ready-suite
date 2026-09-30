@@ -225,6 +225,8 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#run-goal").fill("下書きの目標");
       await page.goto("/memory");
       await page.locator("#memory-search").fill("学習メモ");
+      // 検索語は入力が止まってから（Enter ならすぐ）確定して作業状態に残す（SearchField。#535）。
+      await page.locator("#memory-search").press("Enter");
       await (await sidebarLink(page, "/runs")).click();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
       await page.reload();

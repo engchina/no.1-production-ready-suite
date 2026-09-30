@@ -47,7 +47,6 @@ import { PageNotice } from "@/components/page-notice";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
-import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
@@ -1361,12 +1360,12 @@ export function ProfileManagementPage() {
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
   // 1 打鍵ごとに一覧 / オブジェクト検索 API を叩かないよう、query key へはデバウンス値を渡す。
-  const debouncedProfileSearch = useDebouncedValue(profileSearch, LIST_SEARCH_DEBOUNCE_MS);
-  const debouncedObjectFilter = useDebouncedValue(objectFilter, LIST_SEARCH_DEBOUNCE_MS);
-  const profilesQuery = useProfileSummaries(debouncedProfileSearch, profileSort);
+  // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
+  // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
+  const profilesQuery = useProfileSummaries(profileSearch, profileSort);
   const profileDetailQuery = useProfileDetail(selectedProfileId);
-  const tableObjectsQuery = useSchemaObjects(debouncedObjectFilter, "TABLE");
-  const viewObjectsQuery = useSchemaObjects(debouncedObjectFilter, "VIEW");
+  const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
+  const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
   const schemaOwnersQuery = useSchemaOwners();
   const schemaHeadQuery = useSchemaCatalogHead();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
@@ -1749,7 +1748,7 @@ export function ProfileManagementPage() {
     setBulkSelecting(true);
     const key = kind === "table" ? "allowedTables" : "allowedViews";
     // 表示中の一覧と同じ条件で一括操作するため、デバウンス後の値を使う。
-    const filter = debouncedObjectFilter.trim();
+    const filter = objectFilter.trim();
     const filtered = Boolean(filter);
     try {
       // フィルタ適用中は「表示されている(=ヒットした)object」だけを一括対象にする。

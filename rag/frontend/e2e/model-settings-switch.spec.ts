@@ -3,7 +3,6 @@ import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } fr
 
 const SECONDARY_CONNECTION = {
   connection_id: "secondary",
-  display_name: "シカゴ",
   endpoint: "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
   project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.secondary",
   api_key: "",
@@ -18,7 +17,6 @@ function createModelSettings({ secondary = false }: { secondary?: boolean } = {}
         connections: [
           {
             connection_id: "primary",
-            display_name: "",
             endpoint: "",
             project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.example",
             api_key: "",
@@ -282,7 +280,7 @@ test("既定の Vision モデルに選んだモデルを一覧から削除する
 
 for (const scheme of ["light", "dark"] as const) {
   // desktop（1440px）と mobile（375px）は playwright.config の project で回す。
-  test(`接続を 2 件にし、登録モデルごとに接続を選んで保存する (${scheme})`, async ({
+  test(`接続はプライマリ接続とセカンダリ接続のタブで切り替え、登録モデルごとに接続を選んで保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     const viewportWidth = page.viewportSize()?.width ?? 1440;
@@ -301,50 +299,101 @@ for (const scheme of ["light", "dark"] as const) {
     );
     await page.goto("/settings/model");
 
-    await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "接続 2" })).toHaveCount(0);
+    // 接続は OCI Enterprise AI のカードの中の共有の Tabs（#542）。表示名の欄はない。
+    const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+    const primaryTab = tablist.getByRole("tab", { name: "プライマリ接続" });
+    const secondaryTab = tablist.getByRole("tab", { name: "セカンダリ接続" });
+    await expect(primaryTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("表示名", { exact: true })).toHaveCount(0);
+    await expect(page.locator("#enterprise-connection-name")).toHaveCount(0);
     const modelConnection1 = page.getByRole("combobox", { name: "モデル 1 の接続" });
-    await expect(modelConnection1).toContainText("接続 1");
+    await expect(modelConnection1).toContainText("プライマリ接続");
+    // 未設定のセカンダリ接続は、登録モデルの「接続」の選択肢に出さない。
+    await modelConnection1.click();
+    await expect(
+      page.getByRole("listbox", { name: "モデル 1 の接続" }).getByRole("option")
+    ).toHaveText(["プライマリ接続"]);
+    await page.keyboard.press("Escape");
 
-    // 接続 2 を追加する。Endpoint URL が空のまま保存すると、欄のエラーで止める。
-    await page.getByRole("button", { name: "接続を追加" }).click();
+    // ← → / Home / End でタブを移る。未設定のセカンダリ接続は空の状態と「セカンダリ接続を設定」。
+    await primaryTab.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(secondaryTab).toBeFocused();
+    await expect(secondaryTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("enterprise-connection-secondary-empty")).toContainText(
+      "セカンダリ接続は設定されていません。"
+    );
+    await page.keyboard.press("Home");
+    await expect(primaryTab).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("End");
+    await expect(secondaryTab).toHaveAttribute("aria-selected", "true");
+    await page.screenshot({
+      path: testInfo.outputPath(`connection-secondary-empty-${scheme}-${testInfo.project.name}.png`),
+    });
+
+    // 設定すると入力欄を出し、Endpoint URL・Project OCID・API key はすべて必須。
+    await page.getByRole("button", { name: "セカンダリ接続を設定" }).click();
     const secondary = page.getByTestId("enterprise-connection-secondary");
-    await expect(secondary.getByRole("heading", { name: "接続 2" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "接続を追加" })).toHaveCount(0);
-    await expect(secondary.getByLabel("表示名")).toBeFocused();
     const secondaryEndpoint = page.locator("#enterprise-secondary-endpoint");
-    await expect(secondaryEndpoint).toHaveAttribute("aria-required", "true");
+    const secondaryProject = page.locator("#enterprise-secondary-project-ocid");
+    const secondaryApiKey = page.locator("#enterprise-secondary-api-key");
+    await expect(secondaryEndpoint).toBeFocused();
+    for (const field of [secondaryEndpoint, secondaryProject, secondaryApiKey]) {
+      await expect(field).toHaveAttribute("aria-required", "true");
+    }
+    await expect(page.getByTestId("enterprise-connection-tab-secondary-unsaved")).toHaveText("未保存");
+
+    // プライマリ接続のタブから保存しても、エラーのあるセカンダリ接続のタブへ移り、最初の欄へフォーカスする。
+    await primaryTab.click();
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(secondaryTab).toHaveAttribute("aria-selected", "true");
+    await expect(secondaryTab).toHaveAttribute("data-invalid", "true");
     await expect(secondaryEndpoint).toBeFocused();
     await expect(secondaryEndpoint).toHaveAttribute("aria-invalid", "true");
+    await expect(secondary.getByText("Endpoint URL を入力してください。")).toBeVisible();
+    await expect(secondary.getByText("Project OCID を入力してください。")).toBeVisible();
+    await expect(secondary.getByText("API key を入力してください。")).toBeVisible();
     expect(patches).toHaveLength(0);
+    await page.screenshot({
+      path: testInfo.outputPath(`connection-secondary-errors-${scheme}-${testInfo.project.name}.png`),
+    });
 
-    await secondary.getByLabel("表示名").fill("シカゴ");
     await secondaryEndpoint.fill("https://secondary.example/openai/v1");
-    await page.locator("#enterprise-secondary-api-key").fill("sk-secondary-input");
+    await secondaryProject.fill("ocid1.generativeaiproject.oc1.us-chicago-1.secondary");
+    await secondaryApiKey.fill("sk-secondary-input");
+    await expect(secondaryTab).not.toHaveAttribute("data-invalid", "true");
 
     // 保存前の接続を選んだモデルは、登録モデルの保存を止めて先に接続の保存を案内する。
     await modelConnection1.click();
-    await page.getByRole("listbox", { name: "モデル 1 の接続" }).getByRole("option", { name: /シカゴ/ }).click();
-    await expect(modelConnection1).toContainText("シカゴ");
+    await page
+      .getByRole("listbox", { name: "モデル 1 の接続" })
+      .getByRole("option", { name: "セカンダリ接続" })
+      .click();
+    await expect(modelConnection1).toContainText("セカンダリ接続");
     await expect(modelConnection1).toHaveAttribute("aria-invalid", "true");
-    await expect(page.getByText("シカゴ はまだ保存されていません。", { exact: false })).toBeVisible();
+    await expect(
+      page.getByText("セカンダリ接続 はまだ保存されていません。", { exact: false })
+    ).toBeVisible();
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(modelConnection1).toBeFocused();
     expect(patches).toHaveLength(0);
 
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
     await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
-    expect(patches[0]?.enterprise_ai.connections).toMatchObject([
-      { connection_id: "primary" },
-      {
+    expect(patches[0]?.enterprise_ai.connections).toEqual([
+      expect.objectContaining({ connection_id: "primary" }),
+      expect.objectContaining({
         connection_id: "secondary",
-        display_name: "シカゴ",
         endpoint: "https://secondary.example/openai/v1",
+        project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.secondary",
         api_key: "sk-secondary-input",
-      },
+      }),
     ]);
+    for (const connection of patches[0]?.enterprise_ai.connections as object[]) {
+      expect(connection).not.toHaveProperty("display_name");
+    }
     await expect(modelConnection1).toHaveAttribute("aria-invalid", "false");
+    await expect(page.getByTestId("enterprise-connection-tab-secondary-unsaved")).toHaveCount(0);
 
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
@@ -354,12 +403,9 @@ for (const scheme of ["light", "dark"] as const) {
     ]);
 
     await expectNoPageOverflow(page);
-    await page.getByRole("heading", { name: "接続 1（既定）" }).scrollIntoViewIfNeeded();
+    await tablist.scrollIntoViewIfNeeded();
     await page.screenshot({
       path: testInfo.outputPath(`connections-${scheme}-${testInfo.project.name}.png`),
-    });
-    await page.getByTestId("enterprise-connection-secondary").screenshot({
-      path: testInfo.outputPath(`connection-2-${scheme}-${testInfo.project.name}.png`),
     });
     await page.locator("#enterprise-model-catalog").screenshot({
       path: testInfo.outputPath(`model-catalog-${scheme}-${testInfo.project.name}.png`),
@@ -367,7 +413,7 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-test("接続 2 を使うモデルがあるとき、削除は確認して接続 1 に移す", async ({ page }) => {
+test("セカンダリ接続を使うモデルがあるとき、削除は確認してプライマリ接続に移す", async ({ page }) => {
   const patches: Array<{ enterprise_ai: Record<string, unknown> }> = [];
   await mockModelSettings(
     page,
@@ -377,21 +423,22 @@ test("接続 2 を使うモデルがあるとき、削除は確認して接続 1
   await page.goto("/settings/model");
 
   const modelConnection2 = page.getByRole("combobox", { name: "モデル 2 の接続" });
-  await expect(modelConnection2).toContainText("シカゴ");
-  const remove = page.getByRole("button", { name: "接続 2: 接続を削除" });
+  await expect(modelConnection2).toContainText("セカンダリ接続");
+  await page.getByRole("tab", { name: "セカンダリ接続" }).click();
+  const remove = page.getByRole("button", { name: "セカンダリ接続を削除" });
 
   // やめると何も変わらない。
   await remove.click();
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("シカゴ を使っている登録モデルがあります（Vision LLM）");
+  await expect(dialog).toContainText("セカンダリ接続を使っている登録モデルがあります（Vision LLM）");
   await dialog.getByRole("button", { name: "キャンセル" }).click();
   await expect(page.getByTestId("enterprise-connection-secondary")).toBeVisible();
 
   await remove.click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "接続 1 に移して削除" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "プライマリ接続に移して削除" }).click();
   await expect(page.getByTestId("enterprise-connection-secondary")).toHaveCount(0);
-  await expect(modelConnection2).toContainText("接続 1");
-  await expect(page.getByRole("button", { name: "接続を追加" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "セカンダリ接続を設定" })).toBeFocused();
+  await expect(modelConnection2).toContainText("プライマリ接続");
 
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
   await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();

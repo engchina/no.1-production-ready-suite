@@ -168,6 +168,7 @@ export function QuestionClassifierModelsPage() {
   };
   const loadSequence = useRef(0);
   const retryCandidates = useRef<(() => void) | null>(null);
+  const candidateLoadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const filteredExamples = useMemo(() => {
@@ -274,11 +275,14 @@ export function QuestionClassifierModelsPage() {
     }
   ) => {
     retryCandidates.current = () => void loadCandidates(cursor, direction, filters);
+    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
+    const sequence = ++candidateLoadSequence.current;
     setLoading("candidates-load");
     setCandidateError("");
     setCandidateActionError("");
     try {
       const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(cursor, filters));
+      if (sequence !== candidateLoadSequence.current) return;
       setCandidateAppliedFilters(filters);
       setCandidates(data);
       setCandidateHasActiveFilters(
@@ -297,9 +301,10 @@ export function QuestionClassifierModelsPage() {
         setCandidatePage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
     } catch (err) {
+      if (sequence !== candidateLoadSequence.current) return;
       setCandidateError(err instanceof Error ? err.message : t("qcm.candidates.error.load"));
     } finally {
-      setLoading("");
+      if (sequence === candidateLoadSequence.current) setLoading("");
     }
   };
 
@@ -677,10 +682,19 @@ export function QuestionClassifierModelsPage() {
               error={candidateError}
               actionError={candidateActionError}
               hasActiveFilters={candidateHasActiveFilters}
-              onSearchChange={setCandidateSearch}
-              onStatusChange={setCandidateStatus}
-              onProfileFilterChange={setCandidateProfileId}
-              onApplyFilters={() => void loadCandidates()}
+              // 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。#535）。
+              onSearchChange={(value) => {
+                setCandidateSearch(value);
+                void loadCandidates("", "reset", { search: value, status: candidateStatus, profileId: candidateProfileId });
+              }}
+              onStatusChange={(value) => {
+                setCandidateStatus(value);
+                void loadCandidates("", "reset", { search: candidateSearch, status: value, profileId: candidateProfileId });
+              }}
+              onProfileFilterChange={(value) => {
+                setCandidateProfileId(value);
+                void loadCandidates("", "reset", { search: candidateSearch, status: candidateStatus, profileId: value });
+              }}
               onRetry={() => retryCandidates.current?.()}
               onResetFilters={resetCandidateFilters}
               onSelectionChange={setSelectedCandidates}
@@ -1253,7 +1267,6 @@ function TrainingCandidatesPanel({
   onSearchChange,
   onStatusChange,
   onProfileFilterChange,
-  onApplyFilters,
   onRetry,
   onResetFilters,
   onSelectionChange,
@@ -1278,7 +1291,6 @@ function TrainingCandidatesPanel({
   onSearchChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   onProfileFilterChange: (value: string) => void;
-  onApplyFilters: () => void;
   onRetry: () => void;
   onResetFilters: () => void;
   onSelectionChange: (value: Set<string>) => void;
@@ -1332,13 +1344,10 @@ function TrainingCandidatesPanel({
         <CompactFact label={t("qcm.candidates.attention")} value={formatNumber(data?.attention_count ?? 0)} />
       </div>
 
-      <form
-        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+      {/* 一覧の絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。 */}
+      <div
+        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-3 xl:items-end 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]"
         data-testid="qcm-candidate-filters"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onApplyFilters();
-        }}
       >
         <DbManagementSearchField
           label={t("qcm.candidates.search")}
@@ -1368,16 +1377,7 @@ function TrainingCandidatesPanel({
           onValueChange={onProfileFilterChange}
           buttonClassName="h-11"
         />
-        {/* 入力と同じ行の送信操作なので、Button spec の許容例に従い入力高 44px に揃える。 */}
-        <Button
-          type="submit"
-          variant="secondary"
-          size="lg"
-          touchTarget className="w-full whitespace-nowrap md:w-auto"
-          loading={loading === "candidates-load"} icon={RefreshCw}>
-          <span>{t("qcm.candidates.applyFilters")}</span>
-        </Button>
-      </form>
+      </div>
 
       {isLoading ? (
         <DbManagementLoadingSkeleton
@@ -1386,9 +1386,9 @@ function TrainingCandidatesPanel({
           variant="list"
           rows={3}
           placement={loading === "candidates-load" ? "result" : "panel"}
-          // 読込は「絞り込みを適用」か PageHeader の「表示を更新」の loading がスピナーを出す（同じ処理のスピナーは
-          // 1 つ。messaging §3.7、#416）。
-          activityIcon="none"
+          // PageHeader の「表示を更新」の読込はそのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+          // messaging §3.7、#416）。絞り込みの読込は操作したボタンがない（#535）ので、ここでスピナーを出す。
+          activityIcon={loading === "candidates-load" ? "spinner" : "none"}
         />
       ) : error ? (
         <ErrorState

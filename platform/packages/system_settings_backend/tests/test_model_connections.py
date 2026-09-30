@@ -1,4 +1,4 @@
-"""OCI Enterprise AI の接続を 2 件まで持ち、モデルごとに選ぶ（#533）。"""
+"""OCI Enterprise AI の接続（プライマリ / セカンダリ）を持ち、モデルごとに選ぶ（#533 / #542）。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from pr_system_settings.model import (
     EnterpriseAiConfiguredModel,
     EnterpriseAiModelSettings,
     ModelSettingsTestRequest,
+    connection_label,
     enterprise_ai_connection_for_model,
     enterprise_ai_connections,
     validate_enterprise_ai_connections,
@@ -39,14 +40,12 @@ def two_connection_payload(**secondary: Any) -> dict[str, Any]:
             "connections": [
                 {
                     "connection_id": "primary",
-                    "display_name": "大阪",
                     "endpoint": PRIMARY_ENDPOINT,
                     "project_ocid": "ocid1.project.primary",
                     "api_key": "sk-primary",
                 },
                 {
                     "connection_id": "secondary",
-                    "display_name": "シカゴ",
                     "endpoint": SECONDARY_ENDPOINT,
                     "project_ocid": "ocid1.project.secondary",
                     "api_key": "sk-secondary",
@@ -112,7 +111,8 @@ def test_save_two_connections_keeps_keys_only_in_env(tmp_path: Path) -> None:
     assert response.status_code == 200, response.text
     enterprise = response.json()["data"]["settings"]["enterprise_ai"]
     assert [c["connection_id"] for c in enterprise["connections"]] == ["primary", "secondary"]
-    assert [c["display_name"] for c in enterprise["connections"]] == ["大阪", "シカゴ"]
+    # 接続の表示名は持たない（#542）
+    assert all("display_name" not in c for c in enterprise["connections"])
     assert all(c["api_key"] == "" and c["has_api_key"] for c in enterprise["connections"])
     assert [m["connection_id"] for m in enterprise["models"]] == ["primary", "secondary"]
     assert "sk-primary" not in response.text and "sk-secondary" not in response.text
@@ -123,13 +123,11 @@ def test_save_two_connections_keeps_keys_only_in_env(tmp_path: Path) -> None:
     assert document["enterprise_ai"]["connections"] == [
         {
             "connection_id": "primary",
-            "display_name": "大阪",
             "endpoint": PRIMARY_ENDPOINT,
             "project_ocid": "ocid1.project.primary",
         },
         {
             "connection_id": "secondary",
-            "display_name": "シカゴ",
             "endpoint": SECONDARY_ENDPOINT,
             "project_ocid": "ocid1.project.secondary",
         },
@@ -163,7 +161,7 @@ def test_resolver_returns_connection_of_each_model(tmp_path: Path) -> None:
         "sk-secondary",
         "ocid1.project.secondary",
     )
-    # 登録モデルにない ID は接続 1
+    # 登録モデルにない ID はプライマリ接続
     assert enterprise_ai_connection_for_model(settings, "unknown").connection_id == "primary"
     # API key は repr に出さない
     assert "sk-secondary" not in repr(vision)
@@ -184,7 +182,7 @@ def test_resolver_falls_back_to_primary_when_connection_is_gone() -> None:
 def test_secondary_connection_from_environment_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """env だけで接続 2 を設定した環境（JSON なし）も、接続 2 を使える。"""
+    """env だけでセカンダリ接続を設定した環境（JSON なし）も、セカンダリ接続を使える。"""
     monkeypatch.setenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, "sk-env-secondary")
     settings = FakeSettings(
         oci_enterprise_ai_secondary_endpoint=SECONDARY_ENDPOINT,
@@ -197,7 +195,7 @@ def test_secondary_connection_from_environment_only(
 
 
 def test_old_json_is_read_as_single_connection(tmp_path: Path) -> None:
-    """#533 より前の JSON（接続 1 組）は接続 1 として読み、モデルは接続 1 を使う。"""
+    """#533 より前の JSON（接続 1 組）はプライマリ接続として読み、モデルはプライマリ接続を使う。"""
     old = {
         "version": 3,
         "enterprise_ai": {
@@ -222,7 +220,6 @@ def test_old_json_is_read_as_single_connection(tmp_path: Path) -> None:
     assert enterprise["connections"] == [
         {
             "connection_id": "primary",
-            "display_name": "",
             "endpoint": PRIMARY_ENDPOINT,
             "project_ocid": "ocid1.project.primary",
             "api_key": "",
@@ -271,13 +268,87 @@ def test_model_pointing_to_missing_connection_is_a_field_error(tmp_path: Path) -
     assert not (tmp_path / "model-settings.json").exists()
 
 
-def test_secondary_connection_requires_endpoint() -> None:
-    payload = two_connection_payload(endpoint="", display_name="")
+def test_connection_labels_are_tab_names() -> None:
+    """画面のタブ・登録モデルの選択肢・メッセージの名前（#542）。"""
+    assert connection_label("primary") == "プライマリ接続"
+    assert connection_label("secondary") == "セカンダリ接続"
+    assert connection_label("unknown") == "プライマリ接続"
+
+
+@pytest.mark.parametrize(
+    ("field", "label"),
+    [("endpoint", "Endpoint URL"), ("project_ocid", "Project OCID")],
+)
+def test_secondary_connection_requires_each_field(field: str, label: str) -> None:
+    payload = two_connection_payload(**{field: ""})
     enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
     errors = validate_enterprise_ai_connections(enterprise)
-    assert [(e.field, e.message.split(" の")[0]) for e in errors] == [
-        ("connections.1.endpoint", "接続 2")
+    assert [(e.field, e.message) for e in errors] == [
+        (f"connections.1.{field}", f"セカンダリ接続の {label} を入力してください。")
     ]
+
+
+def test_primary_connection_fields_stay_optional() -> None:
+    """プライマリ接続は OCI で運用するときだけ必須（画面は「OCI 運用時必須」）。保存は止めない。"""
+    payload = two_connection_payload()
+    payload["enterprise_ai"]["connections"][0].update(endpoint="", project_ocid="", api_key="")
+    enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
+    keys = {"primary": "", "secondary": "sk-secondary"}
+    assert validate_enterprise_ai_connections(enterprise, api_keys=keys) == []
+
+
+def test_secondary_connection_requires_api_key(tmp_path: Path) -> None:
+    """セカンダリ接続の API key は、保存後の値（空欄は保存済みの値）で確かめる（#542）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+
+    response = client.patch("/api/settings/model", json=two_connection_payload(api_key=""))
+    assert response.status_code == 422
+    assert response.json()["detail"] == "セカンダリ接続の API key を入力してください。"
+    assert not (tmp_path / "model-settings.json").exists()
+
+    # 保存済みの key があれば、空欄のままで保存できる
+    assert client.patch("/api/settings/model", json=two_connection_payload()).status_code == 200
+    assert (
+        client.patch("/api/settings/model", json=two_connection_payload(api_key="")).status_code
+        == 200
+    )
+    assert settings.oci_enterprise_ai_secondary_api_key == "sk-secondary"
+
+
+def test_saved_json_and_payload_with_connection_names_are_accepted(tmp_path: Path) -> None:
+    """#533 の表示名（`display_name`）が残った JSON・payload も失敗させない（#542 で廃止）。"""
+    document = {
+        "version": 3,
+        "enterprise_ai": {
+            "connections": [
+                {"connection_id": "primary", "display_name": "大阪", "endpoint": PRIMARY_ENDPOINT},
+                {
+                    "connection_id": "secondary",
+                    "display_name": "シカゴ",
+                    "endpoint": SECONDARY_ENDPOINT,
+                    "project_ocid": "ocid1.project.secondary",
+                },
+            ],
+            "models": [],
+        },
+    }
+    (tmp_path / "model-settings.json").write_text(json.dumps(document), encoding="utf-8")
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    enterprise = client.get("/api/settings/model").json()["data"]["settings"]["enterprise_ai"]
+    assert [c["connection_id"] for c in enterprise["connections"]] == ["primary", "secondary"]
+    assert all("display_name" not in c for c in enterprise["connections"])
+
+    payload = two_connection_payload()
+    payload["enterprise_ai"]["connections"][1]["display_name"] = "シカゴ"
+    assert client.patch("/api/settings/model", json=payload).status_code == 200
+    saved = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert all("display_name" not in c for c in saved["enterprise_ai"]["connections"])
 
 
 def test_removing_secondary_clears_its_settings_and_key(tmp_path: Path) -> None:
@@ -302,7 +373,11 @@ def test_removing_secondary_clears_its_settings_and_key(tmp_path: Path) -> None:
     assert [c.connection_id for c in enterprise_ai_connections(settings)] == ["primary"]
 
 
-def test_blank_secondary_key_keeps_current_and_clear_removes_it(tmp_path: Path) -> None:
+def test_blank_secondary_key_keeps_current_and_clear_is_rejected(tmp_path: Path) -> None:
+    """空欄は保存済みの key を保持する。key だけの削除は、必須の欄を空にするので止める（#542）。
+
+    セカンダリ接続の key を消すときは、セカンダリ接続ごと削除する。
+    """
     settings = FakeSettings()
     store = make_store(tmp_path)
     store.load(settings)
@@ -312,12 +387,14 @@ def test_blank_secondary_key_keeps_current_and_clear_removes_it(tmp_path: Path) 
     client.patch("/api/settings/model", json=two_connection_payload(api_key=""))
     assert settings.oci_enterprise_ai_secondary_api_key == "sk-secondary"
 
-    data = client.patch(
+    response = client.patch(
         "/api/settings/model", json=two_connection_payload(api_key="", clear_api_key=True)
-    ).json()["data"]
-    assert data["settings"]["enterprise_ai"]["connections"][1]["has_api_key"] is False
-    assert ENTERPRISE_AI_SECONDARY_API_KEY_ENV not in dotenv_values(tmp_path / ".env")
-    # 接続 1 の key は変わらない
+    )
+    assert response.status_code == 422
+    assert "セカンダリ接続の API key を入力してください。" in response.json()["detail"]
+    assert settings.oci_enterprise_ai_secondary_api_key == "sk-secondary"
+    assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_SECONDARY_API_KEY_ENV] == "sk-secondary"
+    # プライマリ接続の key は変わらない
     assert settings.oci_enterprise_ai_api_key == "sk-primary"
 
 

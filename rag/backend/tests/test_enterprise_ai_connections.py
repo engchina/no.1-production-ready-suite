@@ -165,7 +165,7 @@ async def test_vlm_extraction_uses_vision_connection() -> None:
 
 
 async def test_compare_model_override_uses_that_model_connection() -> None:
-    """マルチモデル比較で選んだモデル（接続 2）は、接続 2 で呼ぶ。"""
+    """マルチモデル比較で選んだモデル（セカンダリ接続）は、セカンダリ接続で呼ぶ。"""
     transport = RecordingTransport()
     client = OciEnterpriseAiClient(
         settings=_settings(), http_transport=transport, model_id="text-c"
@@ -240,6 +240,7 @@ def _two_connection_payload() -> dict[str, Any]:
                 },
                 {
                     "connection_id": "secondary",
+                    # #533 の表示名が残った payload も受け付ける（#542 で廃止。無視する）。
                     "display_name": "シカゴ",
                     "endpoint": SECONDARY,
                     "project_ocid": "ocid1.project.secondary",
