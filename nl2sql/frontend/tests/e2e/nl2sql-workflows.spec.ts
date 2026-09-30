@@ -16608,6 +16608,70 @@ test("classifier training save locks edits and retains draft after failure", asy
   await expect(input).toHaveCount(0);
 });
 
+for (const theme of ["light", "dark"] as const) {
+  // #535: 一覧の絞り込みは入力に合わせて適用し、「絞り込み」ボタンを置かない。IME の変換中は問い合わせない。
+  test(`learning candidate search applies as you type without a filter button and waits for IME commit (${theme})`, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => {
+      localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({
+        state: { sidebarCollapsed: false, collapsedSections: {}, theme: value }, version: 0,
+      }));
+    }, theme);
+    await mockNl2SqlApi(page);
+    const queries: string[] = [];
+    await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
+      const url = new URL(route.request().url());
+      const q = url.searchParams.get("q") ?? "";
+      queries.push(q);
+      const all = [
+        { history_id: "history-1", question: "請求金額を確認" },
+        { history_id: "history-2", question: "人事の申請件数" },
+      ].filter((item) => !q || item.question.includes(q));
+      return fulfillJson(route, {
+        items: all.map((item) => ({ ...item,
+          profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
+          feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
+          status: "pending", training_example_id: "", conflict_profile_ids: [] })),
+        total: all.length, next_cursor: "", pending_count: all.length, added_count: 0, attention_count: 0,
+      });
+    });
+    await page.goto("/question-classifier-models?tab=candidates");
+    const filters = page.getByTestId("qcm-candidate-filters");
+    const search = filters.getByRole("searchbox", { name: "候補検索" });
+    const candidates = page.getByTestId("qcm-training-candidate");
+    await expect(candidates).toHaveCount(2);
+    await expect(filters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+
+    // 変換中の読みでは問い合わせず、確定した値で問い合わせる。
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('[data-testid="qcm-candidate-filters"] input[type="search"]')!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      input.focus();
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+      for (const step of ["j", "じ", "じん", "じんじ", "人事"]) {
+        setter.call(input, step);
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true, data: step }));
+      }
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true }));
+    });
+    await page.waitForTimeout(700);
+    expect(queries.filter((q) => q !== "")).toEqual([]);
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('[data-testid="qcm-candidate-filters"] input[type="search"]')!;
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "人事" }));
+    });
+    await expect(candidates).toHaveCount(1);
+    await expect(candidates).toContainText("人事の申請件数");
+    expect(queries.filter((q) => q !== "")).toEqual(["人事"]);
+
+    // 入力に合わせて絞り込む（Enter もボタンも押さない）。
+    await search.fill("請求");
+    await expect(candidates).toHaveCount(1);
+    await expect(candidates).toContainText("請求金額を確認");
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: testInfo.outputPath(`qcm-candidate-search-${theme}.png`), fullPage: true });
+  });
+}
+
 test("classifier refresh retains the applied candidate filter and current page", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   const requests: URL[] = [];
