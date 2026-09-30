@@ -243,18 +243,18 @@ async def test_docrag_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPa
     assert audits[0]["diagnostics"].docrag is not None
 
 
-def test_business_view_overrides_text_search_tokenizer() -> None:
+def test_business_view_ignores_removed_text_search_tokenizer_override() -> None:
+    """全文検索の分割方式の上書きは #588 で削除した。保存済みの値は読み捨てる。"""
     from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 
-    config = BusinessViewConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(text_search_tokenizer="sudachi"),
-    )
+    query = KnowledgeBaseQueryConfig.model_validate({"text_search_tokenizer": "sudachi"})
+    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], query=query)
 
     settings, _ = resolve_business_view_settings(Settings(), config)
 
-    assert settings.rag_text_search_tokenizer == "sudachi"
+    assert "text_search_tokenizer" not in query.model_dump()
+    assert not hasattr(settings, "rag_text_search_tokenizer")
 
 
 def test_business_view_overrides_docrag_answer_options() -> None:

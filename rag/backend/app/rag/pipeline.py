@@ -373,7 +373,7 @@ class RagPipeline:
             settings=self._settings,
             query=query_guardrail.sanitized_text,
         )
-        keyword_terms = oracle_text_terms(query_guardrail.sanitized_text)
+        keyword_terms = oracle_text_terms(query_guardrail.sanitized_text, settings=self._settings)
         runtime_retrieval_strategy = resolved_strategy.strategy.value
         runtime_fallback_reason = resolved_strategy.fallback_reason
         runtime_graph_hit_count = resolved_strategy.graph_hit_count

@@ -785,8 +785,6 @@ export interface KnowledgeBaseQueryConfig {
   guardrail_policy: GuardrailPolicyName | null;
   /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
   answer_engine?: AnswerEngineName | null;
-  /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
-  text_search_tokenizer?: TextSearchTokenizerName | null;
   /** DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。null / 未指定はグローバル継承。 */
   docrag_query_strategy?: DocragQueryStrategyName | null;
   docrag_answer_flow?: DocragAnswerFlowName | null;
@@ -805,8 +803,6 @@ export type DocragQueryStrategyName =
   | "hyde";
 
 export type DocragAnswerFlowName = "crag" | "standard_rag";
-
-export type TextSearchTokenizerName = "builtin" | "sudachi";
 
 export type AnswerEngineName = "standard" | "docrag";
 
@@ -1948,8 +1944,6 @@ export interface RetrievalSettingsData {
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
-  /** 全文検索の分割方式(業務ビューの上書きが優先)。 */
-  text_search_tokenizer: TextSearchTokenizerName;
   modes: RetrievalStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1962,7 +1956,6 @@ export interface RetrievalSettingsUpdate {
   gap_stop?: boolean;
   corrective_retrieval?: boolean;
   business_fit_weighting?: boolean;
-  text_search_tokenizer?: TextSearchTokenizerName;
 }
 
 // --- 設定: Grounding アダプター ---

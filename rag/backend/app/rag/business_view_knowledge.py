@@ -52,10 +52,7 @@ from docrag.knowledge.runtime_knowledge import (
     build_runtime_knowledge_context,
 )
 from docrag.knowledge.runtime_knowledge_management import edit_knowledge, load_knowledge_snapshot
-from docrag.retrieval.text_search_tokenizer import (
-    TEXT_SEARCH_TOKENIZER_SUDACHI,
-    TextSearchTokenizerConfig,
-)
+from docrag.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +131,7 @@ async def suggest_domain_keywords(
     candidates = suggest_domain_keyword_candidates(
         sources,
         existing_keywords=existing,
-        tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_SUDACHI),
+        tokenizer_config=TextSearchTokenizerConfig(),
         limit=limit,
     )
     return DomainKeywordSuggestion(candidates=candidates, processed_chunk_count=len(sources))

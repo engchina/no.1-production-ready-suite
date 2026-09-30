@@ -239,6 +239,17 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
+## 既存環境の更新手順（#588 全文検索の分割方式の統合）
+
+#588 で全文検索（Oracle Text）の検索語の分割を、Sudachi（形態素解析）と文字種の区切りを組み合わせた 1 つの方式にし、選択を削除した（分割の中身は [rag-architecture.md の「ハイブリッド検索」](./rag-architecture.md)）。旧名との互換は持たない。
+
+- 「検索・回答設定 › 検索方法」と業務ビューの編集の「全文検索の分割方式」の選択は無くなった。
+- `backend/.env` の `RAG_TEXT_SEARCH_TOKENIZER` は読まない。行が残っていても無視するが、混乱を避けるため削除する（`sed -i '/^RAG_TEXT_SEARCH_TOKENIZER=/d' backend/.env`。直前の説明のコメント行も消してよい）。
+- 業務ビューに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
+- docrag_core を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
+- 索引（`rag_chunks_text_idx` などの `RAG_TEXT_WORLD_LEXER`）は変えていないので、作り直しは要らない。backend を再起動すると新しい分割になる。
+- Sudachi の辞書（`sudachidict_full`。backend の依存に含まれる）が入っていない環境では、自動で文字種の区切りだけで分割し、backend の log に「Sudachi を使えないため、全文検索の語は文字種の区切りだけで作ります」を 1 回出す。
+
 ## 既存環境の更新手順（#566 既定のテキストモデルの必須化）
 
 #566 で「システム設定 › モデル」の既定のテキストモデルを必須にした（並びはテキスト → Vision）。既定のテキストモデルが未設定の環境は、
