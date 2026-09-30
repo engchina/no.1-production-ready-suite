@@ -4063,7 +4063,15 @@ def test_security_conflicts_and_validation_use_problem_contract(
             assert {item["pointer"] for item in invalid_body["problem"]["field_errors"]} == {
                 "/login_user_id",
                 "/display_name",
+                "/role_ids",
             }
+            # ロールは画面と同じく必須（#540）。欄の下に出す文言は画面と同じ。
+            role_error = next(
+                item
+                for item in invalid_body["problem"]["field_errors"]
+                if item["pointer"] == "/role_ids"
+            )
+            assert role_error["message"] == "ロールを選択してください。"
 
     try:
         asyncio.run(exercise())

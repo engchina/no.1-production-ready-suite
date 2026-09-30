@@ -72,6 +72,7 @@ import {
   type RoleManagementApi,
   type SecurityRole,
 } from "./types";
+import { roleCodeValidationError } from "./validation";
 
 type RolePanelView = "list" | "create" | "edit";
 
@@ -326,8 +327,10 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     const normalizedRoleCode = draft.roleCode.trim().toUpperCase();
     // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
     const requiredErrors: RoleFieldErrors = {};
-    if (activeView === "create" && !normalizedRoleCode) {
-      requiredErrors.roleCode = t("security.roles.codeRequired");
+    // backend（RoleCreateRequest）と同じ規則: 2〜64 文字、英大文字で始まり英大文字・数字・アンダースコア（#540）。
+    if (activeView === "create") {
+      const roleCodeError = roleCodeValidationError(normalizedRoleCode);
+      if (roleCodeError) requiredErrors.roleCode = t(roleCodeError);
     }
     if (!draft.displayName.trim()) {
       requiredErrors.displayName = t("security.roles.nameRequired");

@@ -93,14 +93,20 @@ def load_knowledge_snapshot(output_dir: Path, configured_path: Path | None = Non
     return KnowledgeSnapshot(path, payload, _revision(raw))
 
 
+def _subject(label: str) -> str:
+    """英数字で終わるラベル（「ルール ID」）は、画面の文言と同じく助詞の前に空白を入れる。"""
+    return f"{label} " if label[-1:].isascii() and label[-1:].isalnum() else label
+
+
 def _text(value: str, label: str, *, required: bool = False, limit: int = MAX_TEXT_CHARS) -> str:
     text = " ".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    subject = _subject(label)
     if required and not text:
-        raise ValueError(f"{label}を入力してください。")
+        raise ValueError(f"{subject}を入力してください。")
     if len(text) > limit:
-        raise ValueError(f"{label}は {limit} 文字以内で入力してください（自動切り詰めはしません）。")
+        raise ValueError(f"{subject}は {limit} 文字以内で入力してください（自動切り詰めはしません）。")
     if any(ord(char) < 32 or ord(char) == 127 for char in text):
-        raise ValueError(f"{label}に制御文字は使用できません。")
+        raise ValueError(f"{subject}に制御文字は使用できません。")
     return text
 
 
