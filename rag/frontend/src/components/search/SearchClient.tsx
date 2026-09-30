@@ -15,7 +15,6 @@ import {
   SelectField,
   type SelectFieldOption,
   TextField,
-  ToggleChip,
   TimedLoadingState,
   Skeleton,
   ListSkeleton,
@@ -33,7 +32,6 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
-import { ExtractedText } from "@/components/documents/extraction-bits";
 import { CitationCard } from "./CitationCard";
 import {
   buildFeedbackContentSnapshot,
@@ -47,7 +45,6 @@ import {
   type BusinessViewSummary,
   type RetrievedChunk,
   type SearchDiagnostics,
-  type SearchMode,
 } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { answerStageLabel } from "@/lib/answer-progress";
@@ -91,7 +88,6 @@ interface SearchRun {
   stages: SearchStageEvent[];
 }
 
-const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
 const CONTENT_KIND_OPTIONS = [
   "",
   "text",
@@ -108,16 +104,8 @@ const CONTENT_KIND_OPTIONS = [
 ] as const;
 type ContentKindFilter = (typeof CONTENT_KIND_OPTIONS)[number];
 const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
-const RERANK_TOP_N_OPTIONS = ["1", "3", "5", "8", "10"] as const;
 const DEFAULT_TOP_K = "20";
-const DEFAULT_RERANK_TOP_N = "5";
 type TopKOption = (typeof TOP_K_OPTIONS)[number];
-type RerankTopNOption = (typeof RERANK_TOP_N_OPTIONS)[number];
-const MODE_LABEL: Record<SearchMode, Parameters<typeof t>[0]> = {
-  hybrid: "search.mode.hybrid",
-  vector: "search.mode.vector",
-  keyword: "search.mode.keyword",
-};
 const CONTENT_KIND_LABEL: Record<ContentKindFilter, Parameters<typeof t>[0]> = {
   "": "search.filters.contentKind.all",
   text: "search.filters.contentKind.text",
@@ -140,10 +128,6 @@ const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
   value: option,
   label: option,
 })) satisfies SelectFieldOption<TopKOption>[];
-const RERANK_TOP_N_SELECT_OPTIONS = RERANK_TOP_N_OPTIONS.map((option) => ({
-  value: option,
-  label: option,
-})) satisfies SelectFieldOption<RerankTopNOption>[];
 
 /** RAG 検索画面。回答を SSE でストリーミング表示する。 */
 export function SearchClient() {
@@ -151,7 +135,6 @@ export function SearchClient() {
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
   const [query, setQuery] = useWorkspaceState("search.query", "");
   const [submittedQuery, setSubmittedQuery] = useState("");
-  const [mode, setMode] = useWorkspaceState<SearchMode>("search.mode", "hybrid", isOneOf(MODES));
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
@@ -178,11 +161,6 @@ export function SearchClient() {
   );
   const [extractionOpen, setExtractionOpen] = useState(false);
   const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
-  const [rerankTopN, setRerankTopN] = useWorkspaceState<RerankTopNOption>(
-    "search.rerankTopN",
-    DEFAULT_RERANK_TOP_N,
-    isOneOf(RERANK_TOP_N_OPTIONS)
-  );
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
   const [sectionFiltersOpen, setSectionFiltersOpen] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
@@ -236,12 +214,9 @@ export function SearchClient() {
     Boolean(contentKind) || hasSectionFilters || hasClassificationFilters || hasExtractionFieldFilters;
   // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
   const classificationVisible = classificationOpen;
-  const hasSearchTuning = topK !== DEFAULT_TOP_K || rerankTopN !== DEFAULT_RERANK_TOP_N;
+  const hasSearchTuning = topK !== DEFAULT_TOP_K;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
   const sectionFiltersVisible = sectionFiltersOpen;
-  const rerankTopNOptions = RERANK_TOP_N_SELECT_OPTIONS.filter(
-    (option) => Number(option.value) <= Number(topK)
-  );
 
   const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
@@ -308,9 +283,7 @@ export function SearchClient() {
       await streamSearch(
         {
           query: trimmed,
-          mode,
           top_k: Number(topK),
-          rerank_top_n: Number(rerankTopN),
           business_view_ids: businessViewIds,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
@@ -400,19 +373,13 @@ export function SearchClient() {
     setExtractionRows([]);
     setExtractionOpen(false);
     setTopK(DEFAULT_TOP_K);
-    setRerankTopN(DEFAULT_RERANK_TOP_N);
     setAdvancedOpen(false);
     setSectionFiltersOpen(false);
-  };
-  const changeTopK = (next: TopKOption) => {
-    setTopK(next);
-    setRerankTopN((current) => clampRerankTopN(current, next));
   };
 
   const noResults = phase === "done" && citations.length === 0;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
-  const structuredJsonAnswer = meta?.diagnostics?.generation_profile === "structured_json";
 
   return (
     <div>
@@ -494,17 +461,6 @@ export function SearchClient() {
                 onSelect={setQuery}
               />
 
-              <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("search.pipeline")}>
-                  {MODES.map((m) => (
-                    <ToggleChip key={m} selected={mode === m} onClick={() => setMode(m)}>
-                      {t(MODE_LABEL[m])}
-                    </ToggleChip>
-                  ))}
-                </div>
-                <p className="text-xs text-fg-muted">{t("search.pipeline")}</p>
-              </div>
-
               <div className="rounded-md border border-border bg-surface-sunken">
                 <button
                   type="button"
@@ -534,18 +490,7 @@ export function SearchClient() {
                       value={topK}
                       options={TOP_K_SELECT_OPTIONS}
                       helper={t("search.tuning.topKHelp")}
-                      onValueChange={changeTopK}
-                      className="[&_label]:text-xs"
-                      buttonClassName="bg-surface"
-                    />
-
-                    <SelectField
-                      id="search-rerank-top-n"
-                      label={t("search.tuning.rerankTopN")}
-                      value={rerankTopN}
-                      options={rerankTopNOptions}
-                      helper={t("search.tuning.rerankTopNHelp")}
-                      onValueChange={setRerankTopN}
+                      onValueChange={setTopK}
                       className="[&_label]:text-xs"
                       buttonClassName="bg-surface"
                     />
@@ -774,18 +719,12 @@ export function SearchClient() {
                     />
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
-                  {structuredJsonAnswer ? (
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-hover p-3 font-mono text-sm leading-relaxed text-fg">
-                      {answer}
-                    </pre>
-                  ) : (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
-                      {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
-                      {isStreaming ? (
-                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
-                      ) : null}
-                    </p>
-                  )}
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
+                    {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
+                    {isStreaming ? (
+                      <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
+                    ) : null}
+                  </p>
                   {meta && phase === "done" ? (
                     <FeedbackControls
                       traceId={meta.trace_id}
@@ -839,15 +778,6 @@ export function SearchClient() {
       </PageBody>
     </div>
   );
-}
-
-function clampRerankTopN(
-  current: RerankTopNOption,
-  topK: TopKOption
-): RerankTopNOption {
-  if (Number(current) <= Number(topK)) return current;
-  const allowed = RERANK_TOP_N_OPTIONS.filter((option) => Number(option) <= Number(topK));
-  return allowed[allowed.length - 1] ?? DEFAULT_RERANK_TOP_N;
 }
 
 function SearchRunPanel({
@@ -1070,15 +1000,10 @@ function contentKindFilterLabel(value: string): string {
     : value;
 }
 
+/** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（DocragAnswerPanel）が出す。 */
 function SearchExecutionMeta({ meta }: { meta: Meta }) {
-  const diagnostics = meta.diagnostics ?? {};
-  const items = searchExecutionItems(diagnostics);
-  const keywordTerms = (diagnostics.keyword_terms ?? []).filter(Boolean);
-  const breakdown = retrievalBreakdownFromDiagnostics(diagnostics);
-  const candidates = diagnostics.retrieval_candidates ?? [];
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   return (
-    <div className="mt-4 space-y-3 border-t border-border pt-3">
+    <div className="mt-4 border-t border-border pt-3">
       <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
         <span>
           {t("search.meta.elapsed")}: {Math.round(meta.elapsed_ms)} ms
@@ -1087,325 +1012,8 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
           {t("search.meta.trace")}: {meta.trace_id.slice(0, 12)}
         </span>
       </p>
-      {keywordTerms.length ? (
-        <div aria-label={t("search.meta.keywords")} className="space-y-1.5">
-          <p className="text-xs font-medium text-fg-muted">{t("search.meta.keywords")}</p>
-          <div className="flex flex-wrap gap-1.5">
-            {keywordTerms.map((term, index) => (
-              <span
-                key={`${term}-${index}`}
-                className="max-w-full break-all rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs font-medium leading-snug text-fg"
-              >
-                {term}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      <RetrievalFlow breakdown={breakdown} />
-      {items.length || candidates.length ? (
-        <div className="rounded-md border border-border bg-surface-sunken">
-          <button
-            type="button"
-            aria-expanded={diagnosticsOpen}
-            aria-controls="search-diagnostics-panel"
-            onClick={() => setDiagnosticsOpen((open) => !open)}
-            className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            <span>{t("search.meta.diagnostics")}</span>
-            <DisclosureChevron expanded={diagnosticsOpen} size={14} className="text-fg-muted" />
-          </button>
-          {diagnosticsOpen ? (
-          <div id="search-diagnostics-panel" className="space-y-3 border-t border-border p-3">
-            {items.length ? (
-              <section className="space-y-2">
-                <h4 className="text-xs font-medium text-fg-muted">{t("search.meta.detailMetrics")}</h4>
-                <dl
-                  aria-label={t("search.meta.execution")}
-                  className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4"
-                >
-                  {items.map((item) => (
-                    <div
-                      key={item.key}
-                      className="min-w-0 rounded-md border border-border bg-surface px-3 py-2"
-                    >
-                      <dt className="truncate text-xs font-medium text-fg-muted">{item.label}</dt>
-                      <dd className="tnum mt-0.5 text-sm font-semibold text-fg">{item.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            ) : null}
-            <RetrievalCandidateDetails candidates={candidates} />
-          </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
-}
-
-function RetrievalFlow({ breakdown }: { breakdown: NormalizedRetrievalBreakdown }) {
-  const steps = [
-    { key: "vector", label: t("search.meta.flow.vector"), value: breakdown.vector_count },
-    { key: "keyword", label: t("search.meta.flow.keyword"), value: breakdown.keyword_count },
-    { key: "overlap", label: t("search.meta.flow.overlap"), value: breakdown.overlap_count },
-    { key: "fused", label: t("search.meta.flow.fused"), value: breakdown.fused_count },
-    {
-      key: "rerankKept",
-      label: t("search.meta.flow.rerankKept"),
-      value: breakdown.rerank_kept_count,
-    },
-    { key: "citation", label: t("search.meta.flow.citation"), value: breakdown.citation_count },
-  ];
-  return (
-    <div className="space-y-1.5">
-      <p className="text-xs font-medium text-fg-muted">{t("search.meta.flow")}</p>
-      <ol
-        aria-label={t("search.meta.flow")}
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-sunken px-3 py-2 text-xs"
-      >
-        {steps.map((step, index) => (
-          <li key={step.key} className="inline-flex items-center gap-2">
-            {index > 0 ? <span className="text-fg-muted" aria-hidden>→</span> : null}
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <span className="text-fg-muted">{step.label}</span>
-              <strong className="tnum text-sm text-fg">{step.value}</strong>
-            </span>
-          </li>
-        ))}
-      </ol>
-      {breakdown.dropped_count > 0 ? (
-        <p className="tnum text-xs text-fg-muted">
-          {t("search.meta.flow.dropped")}: {breakdown.dropped_count}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function RetrievalCandidateDetails({
-  candidates,
-}: {
-  candidates: NonNullable<SearchDiagnostics["retrieval_candidates"]>;
-}) {
-  return (
-    <section className="space-y-2">
-      <h4 className="text-xs font-medium text-fg-muted">{t("search.meta.candidateDetails")}</h4>
-      {candidates.length ? (
-        <div role="table" aria-label={t("search.meta.candidateDetails")} className="space-y-1.5">
-          <div
-            role="row"
-            className="hidden grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] gap-2 px-2 text-xs font-medium text-fg-muted md:grid"
-          >
-            <span role="columnheader">{t("fileList.col.fileName")}</span>
-            <span role="columnheader">{t("search.meta.candidate")}</span>
-            <span role="columnheader">{t("search.meta.source")}</span>
-            <span role="columnheader">{t("search.meta.vector")}</span>
-            <span role="columnheader">{t("search.meta.keyword")}</span>
-            <span role="columnheader">{t("search.meta.rrf")}</span>
-            <span role="columnheader">{t("search.meta.rerankScore")}</span>
-            <span role="columnheader">{t("search.meta.status")}</span>
-          </div>
-          {candidates.map((candidate) => (
-            <CandidateRow key={candidate.chunk_id} candidate={candidate} />
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-fg-muted">{t("search.meta.noCandidates")}</p>
-      )}
-    </section>
-  );
-}
-
-function CandidateRow({
-  candidate,
-}: {
-  candidate: NonNullable<SearchDiagnostics["retrieval_candidates"]>[number];
-}) {
-  return (
-    // 表の行を開いて原文を見せる「展開できる行」。見出し行（role="row"）と列をそろえるため summary を行の grid にしており、
-    // 見出しと Chevron だけを持つ Disclosure では表せない。Chevron・reduced-motion は DisclosureChevron で共通にする（#397）。
-    // eslint-disable-next-line no-restricted-syntax -- 展開できる表の行（上の説明）。
-    <details
-      role="row"
-      className="group/disclosure rounded-md border border-border bg-surface text-xs"
-    >
-      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 transition-colors hover:bg-surface-hover motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
-        <span
-          role="cell"
-          data-testid="candidate-file-name"
-          className="flex min-w-0 items-center gap-2"
-        >
-          <DisclosureChevron expanded="group" size={14} className="text-fg-muted" />
-          <span
-            className="min-w-0 truncate font-medium text-fg"
-            title={candidate.file_name ?? candidate.document_id}
-          >
-            {candidate.file_name ?? candidate.document_id}
-          </span>
-        </span>
-        <span
-          role="cell"
-          data-testid="candidate-preview"
-          className="min-w-0 truncate text-xs text-fg-muted"
-          title={candidate.text || undefined}
-        >
-          {candidate.text || "—"}
-        </span>
-        <span role="cell" className="flex flex-wrap gap-1">
-          {candidate.sources.map((source) => (
-            <span
-              key={source}
-              className="rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted"
-            >
-              {sourceLabel(source)}
-            </span>
-          ))}
-        </span>
-        <span role="cell" className="tnum text-fg">
-          {formatRankScore(candidate.vector_rank, candidate.vector_score)}
-        </span>
-        <span role="cell" className="tnum text-fg">
-          {formatRankScore(candidate.keyword_rank, candidate.keyword_score)}
-        </span>
-        <span role="cell" className="tnum text-fg">
-          {formatScore(candidate.rrf_score)}
-        </span>
-        <span role="cell" className="tnum text-fg">
-          {formatRankScore(candidate.rerank_rank, candidate.rerank_score)}
-        </span>
-        <span role="cell" className="min-w-0 text-fg">
-          <span>{candidateStatusLabel(candidate.status)}</span>
-          {candidate.drop_reason ? (
-            <span className="ml-1 text-fg-muted">({dropReasonLabel(candidate.drop_reason)})</span>
-          ) : null}
-        </span>
-      </summary>
-      <div data-testid="candidate-original" className="border-t border-border p-3">
-        <p className="mb-2 text-xs font-medium text-fg-muted">
-          {t("search.meta.chunkOriginal")}
-        </p>
-        <ExtractedText text={candidate.text ?? ""} />
-      </div>
-    </details>
-  );
-}
-
-interface NormalizedRetrievalBreakdown {
-  vector_count: number;
-  keyword_count: number;
-  overlap_count: number;
-  fused_count: number;
-  fusion_dropped_count: number;
-  rerank_input_count: number;
-  rerank_kept_count: number;
-  rerank_dropped_count: number;
-  evidence_count: number;
-  citation_count: number;
-  dropped_count: number;
-}
-
-function retrievalBreakdownFromDiagnostics(
-  diagnostics: Partial<SearchDiagnostics>
-): NormalizedRetrievalBreakdown {
-  const fallbackRetrieved = diagnostics.retrieved_count ?? 0;
-  const fallbackReranked = diagnostics.reranked_count ?? 0;
-  const fallbackCitations = diagnostics.citation_count ?? 0;
-  return {
-    vector_count: diagnostics.retrieval_breakdown?.vector_count ?? 0,
-    keyword_count: diagnostics.retrieval_breakdown?.keyword_count ?? 0,
-    overlap_count: diagnostics.retrieval_breakdown?.overlap_count ?? 0,
-    fused_count: diagnostics.retrieval_breakdown?.fused_count ?? fallbackRetrieved,
-    fusion_dropped_count: diagnostics.retrieval_breakdown?.fusion_dropped_count ?? 0,
-    rerank_input_count: diagnostics.retrieval_breakdown?.rerank_input_count ?? fallbackRetrieved,
-    rerank_kept_count: diagnostics.retrieval_breakdown?.rerank_kept_count ?? fallbackReranked,
-    rerank_dropped_count: diagnostics.retrieval_breakdown?.rerank_dropped_count ?? 0,
-    evidence_count: diagnostics.retrieval_breakdown?.evidence_count ?? 0,
-    citation_count: diagnostics.retrieval_breakdown?.citation_count ?? fallbackCitations,
-    dropped_count:
-      diagnostics.retrieval_breakdown?.dropped_count ??
-      Math.max(0, fallbackRetrieved - fallbackCitations),
-  };
-}
-
-function searchExecutionItems(diagnostics: Partial<SearchDiagnostics>) {
-  return [
-    { key: "retrieved", label: t("search.meta.retrieved"), value: diagnostics.retrieved_count },
-    { key: "reranked", label: t("search.meta.reranked"), value: diagnostics.reranked_count },
-    { key: "citations", label: t("search.meta.citations"), value: diagnostics.citation_count },
-    {
-      key: "fusionDropped",
-      label: t("search.meta.flow.fusionDropped"),
-      value: diagnostics.retrieval_breakdown?.fusion_dropped_count,
-    },
-    {
-      key: "rerankDropped",
-      label: t("search.meta.flow.rerankDropped"),
-      value: diagnostics.retrieval_breakdown?.rerank_dropped_count,
-    },
-    {
-      key: "adaptive",
-      label: t("search.meta.adaptive"),
-      value: diagnostics.context_adaptive_expanded_count,
-    },
-    {
-      key: "dependency",
-      label: t("search.meta.dependency"),
-      value: diagnostics.context_dependency_promoted_count,
-    },
-    { key: "group", label: t("search.meta.group"), value: diagnostics.context_group_expanded_count },
-    { key: "neighbor", label: t("search.meta.neighbor"), value: diagnostics.context_expanded_count },
-    { key: "compressed", label: t("search.meta.compressed"), value: diagnostics.context_compressed_count },
-  ].flatMap((item) => (typeof item.value === "number" ? [{ ...item, value: item.value }] : []));
-}
-
-function sourceLabel(source: string): string {
-  switch (source) {
-    case "vector":
-      return t("search.meta.vector");
-    case "keyword":
-      return t("search.meta.keyword");
-    case "graph":
-      return "Graph";
-    case "agent_memory":
-      return "Memory";
-    default:
-      return source || "—";
-  }
-}
-
-function candidateStatusLabel(status: string): string {
-  switch (status) {
-    case "citation":
-      return t("search.meta.status.citation");
-    case "reranked":
-      return t("search.meta.status.reranked");
-    case "dropped":
-      return t("search.meta.status.dropped");
-    default:
-      return t("search.meta.status.retrieved");
-  }
-}
-
-function dropReasonLabel(reason: string): string {
-  switch (reason) {
-    case "rerank_out":
-      return t("search.meta.drop.rerank_out");
-    case "not_cited":
-      return t("search.meta.drop.not_cited");
-    default:
-      return reason;
-  }
-}
-
-function formatRankScore(rank: number | null, score: number | null): string {
-  const scoreText = formatScore(score);
-  return rank == null ? scoreText : `#${rank} / ${scoreText}`;
-}
-
-function formatScore(score: number | null): string {
-  return typeof score === "number" && Number.isFinite(score) ? score.toFixed(3) : "—";
 }
 
 function buildSearchFilters({

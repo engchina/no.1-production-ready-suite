@@ -12,7 +12,9 @@
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`・作成 `?id=new`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 業務ビュー（`/business-views`） | 文書は一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。業務ビューは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。ナレッジベースは業務ビューと同じ構成のエディタで、詳細の URL だけ既存のパスの `:id` を保つ（§1.2。#555）。 |
 | B. マスタ詳細の閲覧 | フィードバック（`/feedback`） | 一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。 |
-| D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/grounding` `/settings/generation` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph` `/settings/agentic`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
+| D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
+
+- 削除した設定のページ（根拠確認 `/settings/grounding`・回答スタイル `/settings/generation`・高度な検索 `/settings/agentic`。#595）の URL は、回答の設定が移った検索方法（`/settings/retrieval`）へ置き換えで移す（ブックマーク対策。`App.tsx` の `REMOVED_ANSWER_SETTINGS_ROUTES`）。移った先の権限は通常どおり判定し、検索方法の権限が無ければ権限なしの画面になる。
 
 ### 1.1 業務ビューの全画面エディタ（`?id=`）
 
@@ -56,7 +58,6 @@
 | 業務ビュー | 業務ビュー | アーカイブ（danger。DEFAULT は理由付きで無効） | エディタの「基本情報と検索・回答設定」の見出しに同じ定義 | `BusinessViewManagementClient.tsx` の `useBusinessViewActions` |
 | 業務ビュー（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
 | 業務ビュー（用語・ルール） | 用語 / ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
-| 回答プロンプト | 版 | 有効化（有効な版は理由付きで無効） | — | `PromptVersionsClient.tsx` の `versionActions` |
 | フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースに追加（品質評価の要求 JSON に追記して品質評価へ移る）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
 | RAG 検索 / チャット | 保存された回答 | — | この回答を削除（danger。確認ダイアログを通す。危険な操作だけなので「その他の操作」に入る） | `DocragAnswerHistory.tsx` の `SavedDocragAnswer` |
 | サービス管理 | サービス（`deployable` の行） | ログを表示 / 閉じる、起動（一部異常のときだけ）、ビルド、削除（danger。確認ダイアログを通す）。行には別に状態に応じた起動 / 停止を 1 つだけ出す（§3.1） | — | `ServicesManagementClient.tsx` の `ServiceRow`（`servicePrimaryAction`） |
@@ -68,7 +69,7 @@
 
 ## 3. 例外（行に `RowActionMenu` 以外のボタンを残す画面）
 
-理由のある例外だけを残す（#147 で業務ビュー・フィードバック・ランタイム知識・回答プロンプト・保存された回答は規約に揃えた。#158 でサービス管理を §3.1 の規則に揃え、例外から外した）。
+理由のある例外だけを残す（#147 で業務ビュー・フィードバック・ランタイム知識・回答プロンプト（#595 で版の一覧ごと削除）・保存された回答は規約に揃えた。#158 でサービス管理を §3.1 の規則に揃え、例外から外した）。
 
 | 画面 | 残しているボタン | 理由 |
 |---|---|---|

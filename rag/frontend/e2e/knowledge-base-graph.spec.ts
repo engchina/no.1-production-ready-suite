@@ -24,9 +24,6 @@ const nullIngestion = {
   auto_index_after_chunk_enabled: null,
 };
 const nullQuery = {
-  retrieval_strategy: null,
-  post_retrieval_pipeline: null,
-  generation_profile: null,
   guardrail_policy: null,
 };
 const kbDetail = {

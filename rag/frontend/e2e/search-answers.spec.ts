@@ -270,11 +270,11 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await page.getByRole("combobox", { name: "業務ビュー" }).click();
   await page.getByRole("option", { name: "経理ビュー" }).click();
   await page.getByRole("list", { name: "会話" }).getByRole("button").first().click();
-  await expect(page.getByText("DocRAG の根拠と実行記録")).toBeVisible();
+  await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
 
-  // 保存された回答は、チャットの「DocRAG の根拠と実行記録」から確認を通して削除できる（#147）。
-  await page.getByText("DocRAG の根拠と実行記録").click();
+  // 保存された回答は、チャットの「この回答の根拠と実行記録」から確認を通して削除できる（#147）。
+  await page.getByText("この回答の根拠と実行記録", { exact: true }).click();
   const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
   await answerActions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "この回答を削除" }).click();
@@ -285,5 +285,5 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
   await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
   expect(deleted).toBe(true);
-  await expect(page.getByText("DocRAG の根拠と実行記録")).toHaveCount(0);
+  await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toHaveCount(0);
 });

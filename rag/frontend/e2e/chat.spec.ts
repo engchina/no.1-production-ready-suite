@@ -696,7 +696,7 @@ test("DocRAG 回答ではチャットにも根拠パネルと会話から補っ�
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
 
-  const panel = page.getByRole("region", { name: "回答の根拠と実行記録（DocRAG）" });
+  const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();

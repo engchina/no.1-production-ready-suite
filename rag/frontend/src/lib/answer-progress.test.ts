@@ -16,32 +16,32 @@ import { t } from "./i18n";
 describe("answer-progress（Issue 375）", () => {
   it("今の工程は、終わっていない最後の工程（入れ子の内側が終われば外側）", () => {
     const events: AnswerStageEvent[] = [
-      { stage: "agentic_planning", outcome: "started" },
-      { stage: "agentic_planning", outcome: "success" },
-      { stage: "embedding", outcome: "started" },
+      { stage: "docrag_history_rewrite", outcome: "started" },
+      { stage: "docrag_history_rewrite", outcome: "success" },
+      { stage: "docrag_answer", outcome: "started" },
     ];
     expect(currentAnswerStage([])).toBeNull();
-    expect(currentAnswerStage(events.slice(0, 1))).toBe("agentic_planning");
-    expect(currentAnswerStage(events)).toBe("embedding");
+    expect(currentAnswerStage(events.slice(0, 1))).toBe("docrag_history_rewrite");
+    expect(currentAnswerStage(events)).toBe("docrag_answer");
     const nested: AnswerStageEvent[] = [
-      { stage: "agentic_multi_hop_retrieval", outcome: "started" },
-      { stage: "context_expansion", outcome: "started" },
-      { stage: "context_expansion", outcome: "success" },
+      ...events,
+      { stage: "answer_step:文書検索", outcome: "started" },
+      { stage: "answer_step:文書検索", outcome: "success" },
     ];
-    expect(currentAnswerStage(nested)).toBe("agentic_multi_hop_retrieval");
+    expect(currentAnswerStage(nested)).toBe("docrag_answer");
     // どれも実行中でなければ最後に通知された工程。
-    expect(
-      currentAnswerStage([...nested, { stage: "agentic_multi_hop_retrieval", outcome: "success" }])
-    ).toBe("agentic_multi_hop_retrieval");
+    expect(currentAnswerStage([...nested, { stage: "docrag_answer", outcome: "success" }])).toBe(
+      "docrag_answer"
+    );
   });
 
   it("処理中の文言に今の工程を入れる。未開始は検索の準備", () => {
     expect(answerProgressLabel([])).toBe("回答を生成しています（検索の準備）");
-    expect(answerProgressLabel([{ stage: "agentic_planning", outcome: "started" }])).toBe(
-      "回答を生成しています（検索の計画）"
+    expect(answerProgressLabel([{ stage: "docrag_history_rewrite", outcome: "started" }])).toBe(
+      "回答を生成しています（会話を踏まえた質問の書き換え）"
     );
-    expect(answerProgressLabel([{ stage: "agentic_multi_hop", outcome: "started" }])).toBe(
-      "回答を生成しています（追加の検索の計画）"
+    expect(answerProgressLabel([{ stage: "retrieval", outcome: "started" }])).toBe(
+      "回答を生成しています（検索）"
     );
     expect(answerStageLabel("unknown_stage")).toBe(t("search.stage.processing"));
   });
@@ -58,9 +58,9 @@ describe("answer-progress（Issue 375）", () => {
     const backendLabels = Object.fromEntries(
       [...block.matchAll(/"([a-z_]+)": "([^"]+)"/g)].map((match) => [match[1], match[2]])
     );
-    expect(Object.keys(backendLabels).length).toBeGreaterThan(10);
+    // backend が送る工程と画面が名前を持つ工程は同じ集合（片方だけに残る工程を作らない。#595）。
+    expect(Object.keys(ANSWER_STAGE_LABEL).sort()).toEqual(Object.keys(backendLabels).sort());
     for (const [stage, label] of Object.entries(backendLabels)) {
-      expect(ANSWER_STAGE_LABEL[stage], stage).toBeDefined();
       expect(answerStageLabel(stage), stage).toBe(label);
     }
     const preparing = /ANSWER_STAGE_BEFORE_START_LABEL = "([^"]+)"/.exec(source)?.[1];

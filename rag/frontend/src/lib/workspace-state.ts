@@ -17,7 +17,6 @@ const MAX_JSON_CHARS = 200_000;
 /** 保存してよい field の allowlist。新しい field はここへ明示登録する。 */
 export type WorkspaceField =
   | "search.query"
-  | "search.mode"
   | "search.businessViewIds"
   | "search.contentKind"
   | "search.sectionTitle"
@@ -25,7 +24,6 @@ export type WorkspaceField =
   | "search.classification"
   | "search.extractionFields"
   | "search.topK"
-  | "search.rerankTopN"
   | "search.advancedOpen"
   | "chat.businessViewId"
   | "chat.conversationId"

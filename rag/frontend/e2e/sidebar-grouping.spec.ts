@@ -35,13 +35,15 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     "文書分割",
     "検索インデックス",
     "検索方法",
-    "根拠確認",
-    "回答スタイル",
     "回答プロンプト",
     "安全チェック",
     "評価の基準",
   ]) {
     await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
+  }
+  // 根拠確認・回答スタイル・高度な検索の画面は削除した（#595）。
+  for (const removed of ["根拠確認", "回答スタイル", "高度な検索"]) {
+    await expect(pipelineSection.getByText(removed, { exact: true })).toHaveCount(0);
   }
 
   // セクションは NL2SQL と同じ並び方で「… → 検索・回答設定 → 改善・運用 → RAG セキュリティ → 運用設定 →

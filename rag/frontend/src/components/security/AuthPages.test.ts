@@ -41,7 +41,6 @@ describe("isDatabaseGateExempt", () => {
     for (const route of [
       APP_ROUTES.settingsPipeline,
       APP_ROUTES.settingsRetrieval,
-      APP_ROUTES.settingsGeneration,
       APP_ROUTES.settingsServices,
       APP_ROUTES.settingsPrompts,
       APP_ROUTES.securityUsers,
