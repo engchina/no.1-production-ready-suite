@@ -333,14 +333,19 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 派生情報レイヤーに、作ったときの入力の指紋の列を足す（#550）。無ければ足す（冪等）。
     fingerprint_migration = sql.split(
         "-- migration: 20260930_002_artifact_layers_input_fingerprint", 1
-    )[1]
+    )[1].split("-- migration: ", 1)[0]
     assert "table_name = 'RAG_ARTIFACT_LAYERS'" in fingerprint_migration
     assert "column_name = 'INPUT_FINGERPRINT'" in fingerprint_migration
     assert "IF v_column_count = 0 THEN" in fingerprint_migration
     assert "ALTER TABLE rag_artifact_layers ADD (input_fingerprint JSON)" in fingerprint_migration
     # 既存の行は NULL のまま（不明）。値を埋める UPDATE はしない。
     assert "UPDATE" not in fingerprint_migration
-    assert len(statements) == 72
+    # 文書の 1 ページ目の本文を chunk set ごとに 1 つ持つ列（#557）。列が無ければ足す（冪等）。
+    first_page_marker = "-- migration: 20260930_003_chunk_sets_first_page_context"
+    first_page_migration = sql.split(first_page_marker, 1)[1]
+    assert "column_name = 'FIRST_PAGE_CONTEXT'" in first_page_migration
+    assert "'ALTER TABLE rag_chunk_sets ADD (first_page_context JSON)'" in first_page_migration
+    assert len(statements) == 73
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -406,6 +411,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_005_evaluation_jobs",
         "20260930_001_default_descriptions",
         "20260930_002_artifact_layers_input_fingerprint",
+        "20260930_003_chunk_sets_first_page_context",
     ]
 
 
