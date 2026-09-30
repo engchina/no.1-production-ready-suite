@@ -158,6 +158,11 @@ export function SearchableSelectField({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
+  // 開いているあいだに無効になったら閉じる（SelectField と同じ。#631）。
+  useEffect(() => {
+    if (disabled && open) close(false);
+  }, [disabled, open]);
+
   // 開いたら検索欄へ（位置が決まってから。決まる前は画面外にあり、フォーカスでスクロールさせない）。
   const positioned = Boolean(position);
   useEffect(() => {
@@ -384,20 +389,24 @@ export function SearchableSelectField({
         className={cn(
           CONTROL_MIN_HEIGHT_CLASS[size],
           "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg outline-none transition-colors",
-          "hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
+          "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error ? "border-danger-fg" : "border-border-control",
           buttonClassName
         )}
       >
         {/* 選択中の名前は切らずに折り返す（長い名前も全体を読める）。 */}
-        <span id={valueId} className={cn("min-w-0 [overflow-wrap:anywhere]", !current && "text-fg-muted")}>
+        <span id={valueId} className={cn("min-w-0 [overflow-wrap:anywhere]", !current && !disabled && "text-fg-muted")}>
           {current?.label ?? (value || placeholder)}
         </span>
         <ChevronDown
           size={16}
           aria-hidden
-          className={cn("shrink-0 text-fg-muted transition-transform duration-150", open && "rotate-180 text-accent-fg")}
+          className={cn(
+            "shrink-0 transition-transform duration-150",
+            disabled ? "text-fg-disabled" : "text-fg-muted",
+            open && "rotate-180 text-accent-fg"
+          )}
         />
       </button>
       {popover}
