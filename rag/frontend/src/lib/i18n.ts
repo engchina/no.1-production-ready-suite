@@ -2019,6 +2019,7 @@ export const ja = {
   "search.answerDetails.searchTitle": "検索の根拠の構成と実行記録",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
+  "search.answerText.openCitation": "{citation} の原文を開く",
   "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
   "search.answerDetails.autoFieldFilterRelaxed":
     "読み取った条件では見つからなかったため、条件を外して検索しました。",

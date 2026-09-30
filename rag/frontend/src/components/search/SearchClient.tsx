@@ -677,6 +677,7 @@ export function SearchClient() {
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       streaming={isStreaming}
+                      citations={citations}
                       cursor={
                         isStreaming ? (
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
