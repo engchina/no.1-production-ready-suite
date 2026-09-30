@@ -38,8 +38,19 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   answer_guardrail: "search.stage.answerGuardrail",
 };
 
+/**
+ * 回答フローの中の各工程（質問の理解・文書検索など）の工程名の接頭辞（#593）。後ろは利用者向けの
+ * 工程名（日本語）で、そのまま表示する。backend の `app/rag/docrag_answer.py` の
+ * `ANSWER_STEP_STAGE_PREFIX` と同じ。
+ */
+export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
+
 /** 工程の表示名。未知の工程は「処理」。 */
 export function answerStageLabel(stage: string): string {
+  if (stage.startsWith(ANSWER_STEP_STAGE_PREFIX)) {
+    const name = stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim();
+    if (name) return name;
+  }
   return t(ANSWER_STAGE_LABEL[stage] ?? "search.stage.processing");
 }
 

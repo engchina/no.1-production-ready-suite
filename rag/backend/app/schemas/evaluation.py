@@ -3,45 +3,90 @@
 from datetime import datetime
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.config import EvaluationSuite
+from app.config import DocragAnswerFlow, DocragQueryStrategy, EvaluationSuite
 from app.schemas.search import (
-    SUPPORTED_CONTENT_KIND_FILTERS,
     SearchDiagnostics,
-    SearchMode,
     format_search_id_filter,
     normalize_query_text,
     normalize_search_filters,
     normalize_search_id_list,
     parse_search_id_filter,
-    validate_rerank_top_n,
 )
 
 EvaluationSuiteName = EvaluationSuite
 
+# 標準回答の長さの上限(文字)。標準回答による評価の入力の予算(48,000 bytes)に収まる長さにする。
+STANDARD_ANSWER_MAX_CHARS = 8000
+
+# 失敗理由(#591)。保存済みの結果には削除した理由(content_kind_miss など)が残るため、
+# 結果の model は str で受ける。
 EvaluationFailureReason = Literal[
     "retrieval_miss",
     "partial_recall",
-    "unexpected_retrieval",
+    "unexpected_answer",
+    "unexpected_refusal",
     "answer_keyword_miss",
     "low_groundedness",
+    "unsupported_claim",
+    "missing_content",
+    "answer_failed",
+    "answer_evaluation_error",
     "guardrail_warning",
-    "content_kind_miss",
-    "section_miss",
     "case_error",
 ]
 
+# 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つ。
+EvaluationMetricName = Literal[
+    "context_recall",
+    "mrr",
+    "faithfulness",
+    "citation_traceability_coverage",
+    "claim_support_rate",
+    "answer_keyword_hit_rate",
+    "refusal_accuracy",
+    "requirement_coverage",
+    "answer_pass_rate",
+]
+EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
+    "context_recall",
+    "mrr",
+    "faithfulness",
+    "citation_traceability_coverage",
+    "claim_support_rate",
+    "answer_keyword_hit_rate",
+    "refusal_accuracy",
+    "requirement_coverage",
+    "answer_pass_rate",
+)
+
 
 class EvaluationCase(BaseModel):
-    """1 件の評価ケース。"""
+    """1 件の評価ケース。
+
+    `answerable=false` のケース(資料に答えが無い質問)は、拒答の正しさだけを測る。省略したときは、
+    正解の文書・期待する語・標準回答のどれも無いケースを答えるべきでない質問とみなす(#301)。
+    `standard_answer` があるケースは、回答を標準回答と LLM で比較する(4 軸の採点・主張の監査・
+    必要な項目の網羅)。削除した期待値の欄(`expected_content_kind`・`expected_section_paths`。
+    #591)は、既存の golden set を読めるように無視する。
+    """
 
     id: str
     query: str = Field(..., min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
     expected_answer_keywords: list[str] = Field(default_factory=list)
-    expected_content_kind: str | None = None
-    expected_section_paths: list[str] = Field(default_factory=list)
+    standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
+    answerable: bool | None = None
+
+    @property
+    def expects_answer(self) -> bool:
+        """答えるべき質問か(明示が無ければ、期待する内容を 1 つでも持つか)。"""
+        if self.answerable is not None:
+            return self.answerable
+        return bool(
+            self.relevant_document_ids or self.expected_answer_keywords or self.standard_answer
+        )
 
     @field_validator("query")
     @classmethod
@@ -49,85 +94,37 @@ class EvaluationCase(BaseModel):
         """SearchRequest と同じ規則で query を正規化する。"""
         return normalize_query_text(query)
 
-    @field_validator("expected_content_kind")
+    @field_validator("standard_answer")
     @classmethod
-    def validate_expected_content_kind(cls, value: str | None) -> str | None:
-        """期待 content_kind を検索 filter と同じ語彙に寄せる。"""
+    def validate_standard_answer(cls, value: str | None) -> str | None:
+        """空白だけの標準回答は無いものとして扱う。"""
         if value is None:
             return None
-        normalized = value.strip().casefold()
-        if not normalized:
-            return None
-        if normalized not in SUPPORTED_CONTENT_KIND_FILTERS:
-            raise ValueError("expected_content_kind は対応済み content_kind を指定してください。")
-        return normalized
-
-    @field_validator("expected_section_paths")
-    @classmethod
-    def validate_expected_section_paths(cls, values: list[str]) -> list[str]:
-        """section_path 期待値を重複排除し、空値を落とす。"""
-        seen: set[str] = set()
-        normalized: list[str] = []
-        for value in values:
-            cleaned = " > ".join(part.strip() for part in value.split(">") if part.strip())
-            if not cleaned or cleaned in seen:
-                continue
-            seen.add(cleaned)
-            normalized.append(cleaned)
-        return normalized
+        cleaned = value.strip()
+        return cleaned or None
 
 
-class EvaluationMetrics(BaseModel):
-    """評価結果の集計指標。"""
+class EvaluationAnswerJudgement(BaseModel):
+    """標準回答による LLM の評価(4 軸の採点・主張の監査・必要な項目の網羅)の要約。
 
-    case_count: int
-    error_count: int = 0
-    evaluation_suite: str = "request_only"
-    evaluated_k: int
-    precision_at_k: float
-    recall_at_k: float
-    mrr: float
-    answer_keyword_hit_rate: float
-    groundedness_pass_rate: float
-    faithfulness: float = 0.0
-    context_precision: float = 0.0
-    context_recall: float = 0.0
-    response_relevancy: float = 0.0
-    noise_sensitivity: float = 0.0
-    citation_traceability_coverage: float = 0.0
-    bbox_citation_coverage: float = 0.0
-    element_lineage_coverage: float = 0.0
-    content_kind_hit_rate: float = 0.0
-    section_coverage: float = 0.0
-    passed: bool = True
-    threshold_failures: list["EvaluationThresholdFailure"] = Field(default_factory=list)
-    failure_reason_counts: dict[EvaluationFailureReason, int] = Field(default_factory=dict)
-    case_results: list["EvaluationCaseResult"] = Field(default_factory=list)
-    ingestion_quality: "EvaluationIngestionQualitySummary" = Field(
-        default_factory=lambda: EvaluationIngestionQualitySummary()
-    )
+    詳細(軸ごとの理由・主張ごとの判定)は trace_id の回答の記録に保存する。`status` は
+    completed / error / input_too_large / timeout / unavailable(評価の記録が無いなど)。
+    """
 
-
-class EvaluationIngestionQualitySummary(BaseModel):
-    """評価対象 corpus の取込品質サマリ。"""
-
-    document_count: int = 0
-    table_document_count: int = 0
-    figure_document_count: int = 0
-    formula_document_count: int = 0
-    low_confidence_document_count: int = 0
-    fallback_document_count: int = 0
-    failed_segment_document_count: int = 0
-    segment_artifact_cache_miss_document_count: int = 0
-    long_document_count: int = 0
-    average_page_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
-    warning_counts: dict[str, int] = Field(default_factory=dict)
-    risk_counts: dict[str, int] = Field(default_factory=lambda: {"low": 0, "medium": 0, "high": 0})
-    parser_profile_counts: dict[str, int] = Field(default_factory=dict)
+    status: str
+    total_score: float | None = None
+    max_score: float = 20.0
+    passed: bool | None = None
+    claims_supported: bool | None = None
+    requirement_coverage: float | None = None
+    # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
+    missing_content: bool | None = None
+    goal_alignment: str | None = None
+    message: str | None = None
 
 
 class EvaluationCaseResult(BaseModel):
-    """1 評価ケースごとの診断結果。"""
+    """1 評価ケースごとの診断結果。測れない指標は None。"""
 
     case_id: str
     trace_id: str
@@ -135,26 +132,19 @@ class EvaluationCaseResult(BaseModel):
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     hit_document_ids: list[str] = Field(default_factory=list)
-    precision_at_k: float
-    recall_at_k: float
-    reciprocal_rank: float
-    answer_keyword_hit: bool
-    groundedness_passed: bool
-    groundedness_score: float
+    context_recall: float | None = None
+    reciprocal_rank: float | None = None
+    faithfulness: float | None = None
     grounding_overlap_count: int = 0
     grounding_answer_feature_count: int = 0
-    faithfulness: float = 0.0
-    context_precision: float = 0.0
-    context_recall: float = 0.0
-    response_relevancy: float = 0.0
-    noise_sensitivity: float = 0.0
-    citation_traceability_coverage: float = 0.0
-    bbox_citation_coverage: float = 0.0
-    element_lineage_coverage: float = 0.0
-    content_kind_hit_rate: float = 0.0
-    section_coverage: float = 0.0
+    citation_traceability_coverage: float | None = None
+    answer_keyword_hit: bool | None = None
+    # 回答が「資料から答えられない」旨だけだったか(拒答)と、それが期待どおりだったか。
+    abstained: bool | None = None
+    refusal_correct: bool | None = None
+    answer_evaluation: EvaluationAnswerJudgement | None = None
     guardrail_warnings: list[str] = Field(default_factory=list)
-    failure_reasons: list[EvaluationFailureReason] = Field(default_factory=list)
+    failure_reasons: list[str] = Field(default_factory=list)
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
     elapsed_ms: float
     error_type: str | None = None
@@ -164,86 +154,86 @@ class EvaluationCaseResult(BaseModel):
     error_message: str | None = None
 
 
-EvaluationMetricName = Literal[
-    "precision_at_k",
-    "recall_at_k",
-    "mrr",
-    "answer_keyword_hit_rate",
-    "groundedness_pass_rate",
-    "faithfulness",
-    "context_precision",
-    "context_recall",
-    "response_relevancy",
-    "noise_sensitivity",
-    "citation_traceability_coverage",
-    "bbox_citation_coverage",
-    "element_lineage_coverage",
-    "content_kind_hit_rate",
-    "section_coverage",
-]
-
-
-class EvaluationThresholds(BaseModel):
-    """CI gate に使う aggregate metric の最低値。"""
-
-    precision_at_k: float | None = Field(default=None, ge=0.0, le=1.0)
-    recall_at_k: float | None = Field(default=None, ge=0.0, le=1.0)
-    mrr: float | None = Field(default=None, ge=0.0, le=1.0)
-    answer_keyword_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    groundedness_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
-    context_precision: float | None = Field(default=None, ge=0.0, le=1.0)
-    context_recall: float | None = Field(default=None, ge=0.0, le=1.0)
-    response_relevancy: float | None = Field(default=None, ge=0.0, le=1.0)
-    noise_sensitivity: float | None = Field(default=None, ge=0.0, le=1.0)
-    citation_traceability_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-    bbox_citation_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-    element_lineage_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-    content_kind_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    section_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-
-
 class EvaluationThresholdFailure(BaseModel):
-    """閾値を下回った aggregate metric。"""
+    """閾値を下回った aggregate metric。保存済みの結果の削除した指標も読めるよう str で受ける。"""
 
-    metric: EvaluationMetricName
+    metric: str
     actual: float
     threshold: float
 
 
-class EvaluationRagOverrides(BaseModel):
-    """評価 experiment ごとに一時適用する非 secret RAG 設定。"""
+class EvaluationMetrics(BaseModel):
+    """評価結果の集計指標(#591)。
 
+    各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に持つ。
+    対象のケースが無い指標は None。保存済みの結果にある削除した指標は読み込み時に捨てる。
+    """
+
+    case_count: int
+    error_count: int = 0
+    evaluation_suite: str = "standard"
+    context_recall: float | None = None
+    mrr: float | None = None
+    faithfulness: float | None = None
+    citation_traceability_coverage: float | None = None
+    claim_support_rate: float | None = None
+    answer_keyword_hit_rate: float | None = None
+    refusal_accuracy: float | None = None
+    requirement_coverage: float | None = None
+    answer_pass_rate: float | None = None
+    metric_case_counts: dict[str, int] = Field(default_factory=dict)
+    passed: bool = True
+    threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
+    failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    case_results: list[EvaluationCaseResult] = Field(default_factory=list)
+
+
+class EvaluationThresholds(BaseModel):
+    """CI gate に使う aggregate metric の最低値。削除した指標の名前は受け付けない。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    mrr: float | None = Field(default=None, ge=0.0, le=1.0)
+    faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_traceability_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    claim_support_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    answer_keyword_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    refusal_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
+    requirement_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    answer_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class EvaluationRagOverrides(BaseModel):
+    """評価 experiment ごとに一時適用する非 secret の回答設定(#591)。
+
+    回答エンジンの全体の既定(質問拡張戦略・回答生成フロー・近傍 child 数・rerank)と、検索の
+    RRF 定数・同じ group から足す child の上限・ベクトル検索の target accuracy を上書きする。
+    削除したキー(query_expansion_* / context_window_chars など)は受け付けない。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    query_strategy: DocragQueryStrategy | None = None
+    answer_flow: DocragAnswerFlow | None = None
+    neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
-    query_expansion_enabled: bool | None = None
-    query_expansion_max_variants: int | None = Field(default=None, ge=1, le=8)
-    context_window_chars: int | None = Field(default=None, ge=1000, le=100000)
-    context_neighbor_window: int | None = Field(default=None, ge=0, le=5)
-    context_diversity_lambda: float | None = Field(default=None, ge=0.0, le=1.0)
-    context_adaptive_expansion_enabled: bool | None = None
-    context_adaptive_neighbor_window: int | None = Field(default=None, ge=0, le=5)
-    context_adaptive_min_overlap: float | None = Field(default=None, ge=0.0, le=1.0)
-    context_group_expansion_enabled: bool | None = None
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)
-    context_dependency_promotion_enabled: bool | None = None
-    context_dependency_max_chunks: int | None = Field(default=None, ge=1, le=20)
-    context_compression_enabled: bool | None = None
-    context_compression_max_sentences: int | None = Field(default=None, ge=1, le=10)
-    context_compression_max_chars_per_chunk: int | None = Field(
-        default=None,
-        ge=200,
-        le=8000,
-    )
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
 
 
 class EvaluationExperiment(BaseModel):
-    """AutoRAG 風に比較する 1 つの検索設定。"""
+    """同じ golden set で比較する 1 つの回答設定。
+
+    回答エンジンは検索の方式(mode)と rerank の件数(rerank_top_n)を使わないため、指定は
+    受け付けない(#591。比較の結果が同じになるのに、違う設定に見えるため)。
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1, max_length=80)
-    top_k: int = Field(default=10, ge=1, le=100)
-    rerank_top_n: int = Field(default=5, ge=1, le=50)
-    mode: SearchMode = SearchMode.HYBRID
+    top_k: int = Field(default=20, ge=1, le=100)
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     rag_overrides: EvaluationRagOverrides | None = None
@@ -271,8 +261,7 @@ class EvaluationExperiment(BaseModel):
 
     @model_validator(mode="after")
     def validate_search_options(self) -> Self:
-        """SearchRequest と同じ rerank 深さと KB 指定制約を適用する。"""
-        validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        """SearchRequest と同じ KB 指定制約を適用する。"""
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,
@@ -281,28 +270,50 @@ class EvaluationExperiment(BaseModel):
 
 
 class EvaluationExperimentResult(BaseModel):
-    """1 experiment の評価結果と ranking 情報。"""
+    """1 experiment の評価結果と ranking 情報。順位の指標を測れなかったときは None。"""
 
     rank: int
-    ranking_score: float
+    ranking_score: float | None = None
     experiment: EvaluationExperiment
     metrics: EvaluationMetrics
 
 
 class EvaluationCompareResponse(BaseModel):
-    """複数 experiment の比較結果。"""
+    """複数 experiment の比較結果。保存済みの結果の削除した指標も読めるよう str で受ける。"""
 
-    ranking_metric: EvaluationMetricName
+    ranking_metric: str
     best_experiment_id: str | None
     results: list[EvaluationExperimentResult] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def drop_legacy_experiment_fields(cls, data: object) -> object:
+        """保存済みの結果の experiment にある削除した欄(mode 等)を、読み込み時に捨てる。"""
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            return data
+        allowed = set(EvaluationExperiment.model_fields)
+        overrides_allowed = set(EvaluationRagOverrides.model_fields)
+        results = []
+        for result in data["results"]:
+            experiment = result.get("experiment") if isinstance(result, dict) else None
+            if isinstance(experiment, dict):
+                cleaned = {key: value for key, value in experiment.items() if key in allowed}
+                overrides = cleaned.get("rag_overrides")
+                if isinstance(overrides, dict):
+                    cleaned["rag_overrides"] = {
+                        key: value for key, value in overrides.items() if key in overrides_allowed
+                    }
+                result = {**result, "experiment": cleaned}
+            results.append(result)
+        return {**data, "results": results}
+
 
 class EvaluationCompareRequest(BaseModel):
-    """複数検索設定の比較実行リクエスト。"""
+    """複数の回答設定の比較実行リクエスト。"""
 
     cases: list[EvaluationCase] = Field(..., min_length=1)
     experiments: list[EvaluationExperiment] = Field(..., min_length=1, max_length=20)
-    ranking_metric: EvaluationMetricName = "mrr"
+    ranking_metric: EvaluationMetricName = "context_recall"
     thresholds: EvaluationThresholds | None = None
     suite: EvaluationSuiteName | None = None
 
@@ -319,12 +330,15 @@ class EvaluationCompareRequest(BaseModel):
 
 
 class EvaluationRunRequest(BaseModel):
-    """評価実行リクエスト。"""
+    """評価実行リクエスト。
+
+    回答エンジンの全体の既定で評価する(業務ビューは受け取らない。#301)。検索の方式(mode)と
+    rerank の件数(rerank_top_n)は回答エンジンが使わないため持たない(#591。以前の golden set の
+    指定は無視する)。
+    """
 
     cases: list[EvaluationCase] = Field(..., min_length=1)
-    top_k: int = Field(default=10, ge=1, le=100)
-    rerank_top_n: int = Field(default=5, ge=1, le=50)
-    mode: SearchMode = SearchMode.HYBRID
+    top_k: int = Field(default=20, ge=1, le=100)
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     thresholds: EvaluationThresholds | None = None
@@ -345,8 +359,7 @@ class EvaluationRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_search_options(self) -> Self:
-        """SearchRequest と同じ rerank 深さと KB 指定制約を適用する。"""
-        validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        """SearchRequest と同じ KB 指定制約を適用する。"""
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,

@@ -191,16 +191,16 @@ class GroundingStageResponse(BaseModel):
 
 
 class EvaluationStageRequest(BaseModel):
-    """``POST /run``(evaluation)の入力。suite のみ。"""
+    """``POST /run``(evaluation)の入力。suite(評価の基準)のみ。"""
 
-    suite: str = "request_only"
+    suite: str = "standard"
 
 
 class EvaluationStageResponse(BaseModel):
     """``POST /run``(evaluation)の出力(CI gate 用閾値)。"""
 
     suite: str
-    thresholds: dict[str, float] | None = None
+    thresholds: dict[str, float] = Field(default_factory=dict)
 
 
 class RetrievalStageRequest(BaseModel):

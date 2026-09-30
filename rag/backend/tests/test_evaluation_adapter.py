@@ -1,4 +1,4 @@
-"""Evaluation アダプター(評価スイート/閾値)のテスト。"""
+"""Evaluation アダプター(評価の基準 = 閾値のプリセット。#591)のテスト。"""
 
 from app.config import Settings
 from app.rag.evaluation_adapter import (
@@ -8,55 +8,46 @@ from app.rag.evaluation_adapter import (
     resolve_evaluation_adapter,
     resolve_evaluation_suite,
 )
+from app.schemas.evaluation import EVALUATION_METRIC_NAMES
 
 
-def test_request_only_has_no_preset_thresholds() -> None:
-    """既定 request_only はプリセット閾値なし(None)で現行挙動と一致。"""
-    assert resolve_evaluation_suite("request_only") is None
+def test_default_suite_is_standard_with_thresholds() -> None:
+    """既定は標準。閾値を持ち、評価の結果を合格 / 要改善で判定する。"""
     params = resolve_evaluation_adapter(Settings())
-    assert params.suite == "request_only"
-    assert params.thresholds is None
+    assert params.suite == "standard"
+    assert params.thresholds.context_recall == 0.8
+    assert params.thresholds.refusal_accuracy == 0.9
 
 
-def test_retrieval_focused_sets_retrieval_thresholds() -> None:
-    thresholds = resolve_evaluation_suite("retrieval_focused")
-    assert thresholds is not None
-    assert thresholds.precision_at_k == 0.6
-    assert thresholds.recall_at_k == 0.8
-    assert thresholds.mrr == 0.7
-    assert thresholds.groundedness_pass_rate is None
-
-
-def test_balanced_adds_answer_and_groundedness() -> None:
-    thresholds = resolve_evaluation_suite("balanced")
-    assert thresholds is not None
-    assert thresholds.answer_keyword_hit_rate == 0.9
-    assert thresholds.groundedness_pass_rate == 0.9
-
-
-def test_strict_ci_sets_high_thresholds_with_traceability() -> None:
-    thresholds = resolve_evaluation_suite("strict_ci")
-    assert thresholds is not None
-    assert thresholds.groundedness_pass_rate == 0.95
-    assert thresholds.citation_traceability_coverage == 0.9
-
-
-def test_ragas_like_focuses_on_answer_quality_metrics() -> None:
-    thresholds = resolve_evaluation_suite("ragas_like")
-    assert thresholds is not None
-    assert thresholds.faithfulness == 0.8
-    assert thresholds.context_precision == 0.7
-    assert thresholds.context_recall == 0.8
-    assert thresholds.response_relevancy == 0.7
+def test_presets_cover_every_metric_and_strict_is_stricter() -> None:
+    """2 つの基準は 9 つの指標すべてに閾値を持ち、厳格は標準以上。"""
+    standard = resolve_evaluation_suite("standard").model_dump()
+    strict = resolve_evaluation_suite("strict").model_dump()
+    assert set(standard) == set(EVALUATION_METRIC_NAMES)
+    for metric in EVALUATION_METRIC_NAMES:
+        assert standard[metric] is not None
+        assert strict[metric] is not None
+        assert strict[metric] >= standard[metric]
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:
-    runtime = evaluation_adapter_runtime_settings(Settings(rag_evaluation_suite="ragas_like"))
+    runtime = evaluation_adapter_runtime_settings(Settings(rag_evaluation_suite="strict"))
     assert tuple(status.name for status in runtime.suites) == EVALUATION_SUITE_ORDER
+    assert EVALUATION_SUITE_ORDER == ("standard", "strict")
     selected = [status.name for status in runtime.suites if status.selected]
-    assert selected == ["ragas_like"]
+    assert selected == ["strict"]
 
 
-def test_normalize_evaluation_suite_defaults() -> None:
-    assert normalize_evaluation_suite("nope") == "request_only"
-    assert normalize_evaluation_suite("strict_ci") == "strict_ci"
+def test_normalize_evaluation_suite_maps_legacy_names() -> None:
+    """削除した基準は後継へ、未知の名前は既定(標準)へ寄せる。"""
+    assert normalize_evaluation_suite("nope") == "standard"
+    assert normalize_evaluation_suite("strict_ci") == "strict"
+    assert normalize_evaluation_suite("request_only") == "standard"
+    assert normalize_evaluation_suite("ragas_like") == "standard"
+    assert normalize_evaluation_suite("STRICT") == "strict"
+
+
+def test_settings_accept_legacy_suite_value_for_startup() -> None:
+    """保存済みの .env の旧値でも起動でき、後継の基準で動く。"""
+    assert Settings(rag_evaluation_suite="strict_ci").rag_evaluation_suite == "strict"
+    assert Settings(rag_evaluation_suite="balanced").rag_evaluation_suite == "standard"

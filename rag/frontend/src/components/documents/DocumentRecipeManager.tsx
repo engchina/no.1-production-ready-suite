@@ -752,15 +752,18 @@ function RecipeComparison({
     setError("");
     setResults(null);
     try {
+      // 引用の候補を比べるので、回答は作らずに検索だけを行う（LLM を呼ばない。#593）。
       const [leftResult, rightResult] = await Promise.all([
         api.search({
           query: query.trim(),
           top_k: 5,
+          retrieval_only: true,
           filters: { document_id: documentId, chunk_set_id: left.active_chunk_set_id },
         }),
         api.search({
           query: query.trim(),
           top_k: 5,
+          retrieval_only: true,
           filters: { document_id: documentId, chunk_set_id: right.active_chunk_set_id },
         }),
       ]);

@@ -12,17 +12,28 @@ for (const viewport of [
   test(`評価の基準は品質評価の基準を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
-    await mockEvaluation(page, "request_only");
+    await mockEvaluation(page, "standard");
 
     await page.goto("/settings/evaluation");
 
     await expect(page.getByRole("heading", { name: "評価の基準", exact: true, level: 1 })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /リクエスト準拠/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /厳格 CI/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Ragas 観点/ })).toBeVisible();
+    // 基準は標準・厳格の 2 つだけ(#591)。
+    await expect(page.getByRole("radio")).toHaveCount(2);
+    await expect(page.getByRole("radio", { name: /標準/ })).toBeChecked();
+    await expect(page.getByRole("radio", { name: /厳格/ })).toBeVisible();
+    // 選んだ基準の閾値を、検索・根拠・回答の観点ごとに指標の意味と一緒に出す。
+    const metrics = page.getByTestId("settings-evaluation-metrics");
+    await expect(metrics.getByRole("heading", { name: "標準の指標と閾値" })).toBeVisible();
+    for (const perspective of ["検索", "根拠", "回答"]) {
+      await expect(metrics.getByRole("heading", { name: perspective, exact: true })).toBeVisible();
+    }
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(9);
+    await expect(page.getByTestId("settings-evaluation-metric-context_recall")).toContainText(
+      "閾値 80%"
+    );
     await expect(
-      page.getByText("プリセット閾値なし(request の thresholds を使用)")
-    ).toBeVisible();
+      page.getByTestId("settings-evaluation-metric-answer_pass_rate")
+    ).toContainText("標準回答が必要");
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect(
       (await openSidebarNav(page))
@@ -33,29 +44,32 @@ for (const viewport of [
   });
 }
 
-test("品質評価設定は strict_ci を選んで閾値表示し保存できる", async ({ page }) => {
+test("評価の基準は厳格を選んで閾値を表示し保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/evaluation-suite", async (route) => {
     if (route.request().method() === "PATCH") {
       saved = route.request().postDataJSON();
-      await route.fulfill({ json: evaluationEnvelope("strict_ci") });
+      await route.fulfill({ json: evaluationEnvelope("strict") });
       return;
     }
-    await route.fulfill({ json: evaluationEnvelope("request_only") });
+    await route.fulfill({ json: evaluationEnvelope("standard") });
   });
 
   await page.goto("/settings/evaluation");
 
-  const strict = page.getByRole("radio", { name: /厳格 CI/ });
+  const strict = page.getByRole("radio", { name: /厳格/ });
   await strict.click();
   await expect(strict).toBeChecked();
-  await expect(page.getByText("groundedness_pass_rate", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(page.getByTestId("settings-evaluation-metric-claim_support_rate")).toContainText(
+    "閾値 100%"
+  );
 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("品質評価設定を保存しました。")).toBeVisible();
-  expect(saved).toEqual({ suite: "strict_ci" });
+  expect(saved).toEqual({ suite: "strict" });
   await expectNoHorizontalOverflow(page);
 });
 
@@ -84,35 +98,26 @@ async function collapseSidebar(page: Page) {
 }
 
 function evaluationEnvelope(suite: string) {
-  const specs: { name: string; thresholds: Record<string, number>; focus_metrics: string[] }[] = [
-    { name: "request_only", thresholds: {}, focus_metrics: [] },
-    {
-      name: "retrieval_focused",
-      thresholds: { precision_at_k: 0.6, recall_at_k: 0.8, mrr: 0.7 },
-      focus_metrics: ["precision_at_k", "recall_at_k", "mrr"],
-    },
-    {
-      name: "balanced",
-      thresholds: { precision_at_k: 0.6, recall_at_k: 0.8, mrr: 0.7, groundedness_pass_rate: 0.9 },
-      focus_metrics: ["groundedness_pass_rate"],
-    },
-    {
-      name: "strict_ci",
-      thresholds: { groundedness_pass_rate: 0.95, citation_traceability_coverage: 0.9 },
-      focus_metrics: ["groundedness_pass_rate", "citation_traceability_coverage"],
-    },
-    {
-      name: "ragas_like",
-      thresholds: { faithfulness: 0.8, context_recall: 0.8 },
-      focus_metrics: ["faithfulness", "context_recall"],
-    },
+  const thresholds = (strict: boolean) => ({
+    context_recall: strict ? 0.9 : 0.8,
+    mrr: strict ? 0.8 : 0.6,
+    faithfulness: strict ? 0.8 : 0.7,
+    citation_traceability_coverage: strict ? 0.95 : 0.9,
+    claim_support_rate: strict ? 1 : 0.9,
+    answer_keyword_hit_rate: strict ? 0.9 : 0.8,
+    refusal_accuracy: strict ? 1 : 0.9,
+    requirement_coverage: strict ? 0.9 : 0.8,
+    answer_pass_rate: strict ? 0.8 : 0.7,
+  });
+  const specs = [
+    { name: "standard", thresholds: thresholds(false) },
+    { name: "strict", thresholds: thresholds(true) },
   ];
   const selected = specs.find((s) => s.name === suite) ?? specs[0];
   return {
     data: {
       suite,
       thresholds: selected.thresholds,
-      focus_metrics: selected.focus_metrics,
       suites: specs.map((s) => ({
         ...s,
         origin: "x",

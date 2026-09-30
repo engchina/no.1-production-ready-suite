@@ -206,8 +206,6 @@ async def _execute_run(
     metrics = await EvaluationRunner().run(
         cases=request.cases,
         top_k=request.top_k,
-        rerank_top_n=request.rerank_top_n,
-        mode=request.mode,
         filters=request.filters,
         knowledge_base_ids=request.knowledge_base_ids,
         thresholds=effective_thresholds,
@@ -308,8 +306,6 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
         "case_count": len(request.cases),
         "cases": [_case_summary(case) for case in request.cases],
         "top_k": request.top_k,
-        "rerank_top_n": request.rerank_top_n,
-        "mode": request.mode.value,
         "filter_keys": sorted(request.filters),
         "knowledge_base_ids": request.knowledge_base_ids,
         "thresholds": (
@@ -352,6 +348,10 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
             _hash_text(keyword) for keyword in case.expected_answer_keywords
         ],
         "expected_answer_keyword_count": len(case.expected_answer_keywords),
+        # 標準回答の本文は残さない(有無と hash だけ。#591)。
+        "standard_answer_hash": (
+            _hash_text(case.standard_answer) if case.standard_answer is not None else None
+        ),
     }
 
 
@@ -359,8 +359,6 @@ def _experiment_summary(experiment: EvaluationExperiment) -> dict[str, Any]:
     return {
         "id": experiment.id,
         "top_k": experiment.top_k,
-        "rerank_top_n": experiment.rerank_top_n,
-        "mode": experiment.mode.value,
         "filter_keys": sorted(experiment.filters),
         "knowledge_base_ids": experiment.knowledge_base_ids,
         "rag_overrides": (

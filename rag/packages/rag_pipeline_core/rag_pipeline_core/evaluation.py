@@ -1,23 +1,34 @@
-"""Evaluation スイート/閾値の決定論解決(backend / サービス共有)。
+"""評価の基準(閾値のプリセット)の決定論解決(backend / サービス共有)。
 
-suite → CI gate 用の閾値(metric 名→最低値の dict)を決定論で解決する。
-Ragas / AutoRAG / FlashRAG 観点の名前付き閾値を束ねる。閾値は素の dict[str, float] で受け渡し、
-backend が `EvaluationThresholds` へ写す。request_only は閾値なし(None)。Settings 非依存。
-外部評価 SaaS / LLM-as-judge は導入しない(決定論指標のみ)。
+基準 → CI gate 用の閾値(指標名→最低値の dict)を決定論で解決する(#591)。
+指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つだけを持つ。
+
+- 検索: context_recall(正解の文書を取れたか)/ mrr(正解の文書の順位)
+- 根拠: faithfulness(回答が根拠の語に沿うか)/ citation_traceability_coverage(引用を原文の位置へ
+  たどれるか)/ claim_support_rate(標準回答による評価で、根拠のない主張が無いか)
+- 回答: answer_keyword_hit_rate(期待する語を含むか)/ refusal_accuracy(答えるべきでないときに
+  答えず、答えるべきときに答えたか)/ requirement_coverage(標準回答の必要な項目を網羅したか)/
+  answer_pass_rate(標準回答による評価の合格)
+
+プリセットは「標準」と「厳格」の 2 つ。閾値は、そのケースの集合で測れた指標だけに適用する
+(標準回答の無い golden set では、標準回答による評価の閾値を判定しない)。閾値は素の
+dict[str, float] で受け渡し、backend が `EvaluationThresholds` へ写す。Settings 非依存。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-EVALUATION_SUITES: tuple[str, ...] = (
-    "request_only",
-    "retrieval_focused",
-    "balanced",
-    "strict_ci",
-    "ragas_like",
-)
-DEFAULT_EVALUATION_SUITE = "request_only"
+EVALUATION_SUITES: tuple[str, ...] = ("standard", "strict")
+DEFAULT_EVALUATION_SUITE = "standard"
+# 旧プリセット(#591 で削除)の名前。保存済みの設定値を後継へ寄せる。
+LEGACY_EVALUATION_SUITES: dict[str, str] = {
+    "request_only": "standard",
+    "retrieval_focused": "standard",
+    "balanced": "standard",
+    "ragas_like": "standard",
+    "strict_ci": "strict",
+}
 
 
 @dataclass(frozen=True)
@@ -25,53 +36,40 @@ class EvaluationSpec:
     name: str
     origin: str
     recommended_for: tuple[str, ...]
-    thresholds: dict[str, float] | None  # None は request_only(プリセット閾値なし)
+    thresholds: dict[str, float]
 
 
 EVALUATION_SPECS: dict[str, EvaluationSpec] = {
-    "request_only": EvaluationSpec(
-        "request_only", "current_request_thresholds", ("ad_hoc", "manual"), None
-    ),
-    "retrieval_focused": EvaluationSpec(
-        "retrieval_focused",
-        "retrieval_quality",
-        ("retrieval", "recall"),
-        {"precision_at_k": 0.6, "recall_at_k": 0.8, "mrr": 0.7},
-    ),
-    "balanced": EvaluationSpec(
-        "balanced",
+    "standard": EvaluationSpec(
+        "standard",
         "general_rag",
-        ("general", "balanced"),
+        ("general", "nightly"),
         {
-            "precision_at_k": 0.6,
-            "recall_at_k": 0.8,
-            "mrr": 0.7,
-            "answer_keyword_hit_rate": 0.9,
-            "groundedness_pass_rate": 0.9,
-        },
-    ),
-    "strict_ci": EvaluationSpec(
-        "strict_ci",
-        "strict_ci_gate",
-        ("ci", "regression"),
-        {
-            "precision_at_k": 0.7,
-            "recall_at_k": 0.85,
-            "mrr": 0.75,
-            "answer_keyword_hit_rate": 0.9,
-            "groundedness_pass_rate": 0.95,
-            "citation_traceability_coverage": 0.9,
-        },
-    ),
-    "ragas_like": EvaluationSpec(
-        "ragas_like",
-        "ragas",
-        ("ragas", "answer_quality"),
-        {
-            "faithfulness": 0.8,
-            "context_precision": 0.7,
             "context_recall": 0.8,
-            "response_relevancy": 0.7,
+            "mrr": 0.6,
+            "faithfulness": 0.7,
+            "citation_traceability_coverage": 0.9,
+            "claim_support_rate": 0.9,
+            "answer_keyword_hit_rate": 0.8,
+            "refusal_accuracy": 0.9,
+            "requirement_coverage": 0.8,
+            "answer_pass_rate": 0.7,
+        },
+    ),
+    "strict": EvaluationSpec(
+        "strict",
+        "release_gate",
+        ("release", "regression"),
+        {
+            "context_recall": 0.9,
+            "mrr": 0.8,
+            "faithfulness": 0.8,
+            "citation_traceability_coverage": 0.95,
+            "claim_support_rate": 1.0,
+            "answer_keyword_hit_rate": 0.9,
+            "refusal_accuracy": 1.0,
+            "requirement_coverage": 0.9,
+            "answer_pass_rate": 0.8,
         },
     ),
 }
@@ -80,17 +78,17 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
 @dataclass(frozen=True)
 class EvaluationResolved:
     suite: str
-    thresholds: dict[str, float] | None
+    thresholds: dict[str, float]
 
 
 def normalize_evaluation_suite(value: object) -> str:
-    normalized = str(value).casefold()
+    """基準の名前を正規化する。旧プリセットは後継へ、未知の名前は既定(標準)へ寄せる。"""
+    normalized = str(value).strip().casefold()
+    normalized = LEGACY_EVALUATION_SUITES.get(normalized, normalized)
     return normalized if normalized in EVALUATION_SPECS else DEFAULT_EVALUATION_SUITE
 
 
 def resolve_evaluation(suite: object) -> EvaluationResolved:
-    """suite から CI gate 用閾値 dict を解決する(request_only は None)。"""
+    """基準から CI gate 用の閾値 dict を解決する。"""
     name = normalize_evaluation_suite(suite)
-    spec = EVALUATION_SPECS[name]
-    thresholds = dict(spec.thresholds) if spec.thresholds is not None else None
-    return EvaluationResolved(suite=name, thresholds=thresholds)
+    return EvaluationResolved(suite=name, thresholds=dict(EVALUATION_SPECS[name].thresholds))
