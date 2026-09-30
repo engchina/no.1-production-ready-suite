@@ -59,6 +59,24 @@ class FakeOracle:
             _chunk("doc-1:c1", "受注番号を入力し、登録ボタンを押します。", 1),
             _chunk("doc-1:c2", "登録後は受注一覧に表示されます。", 2),
         ]
+        self.classifications: dict[str, dict[str, object]] = {}
+        self.classification_calls: list[list[str]] = []
+        self.probes: list[dict[str, str]] = []
+
+    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
+        self.probes.append(dict(filters))
+        name = filters.get("file_name", "").casefold()
+        return any(name in (chunk.file_name or "").casefold() for chunk in self.chunks)
+
+    async def document_classifications(
+        self, document_ids: list[str]
+    ) -> dict[str, dict[str, object]]:
+        self.classification_calls.append(list(document_ids))
+        return {
+            document_id: self.classifications[document_id]
+            for document_id in document_ids
+            if document_id in self.classifications
+        }
 
     async def hybrid_search(
         self,
@@ -858,3 +876,360 @@ async def test_docrag_rewrite_is_rechecked_by_guardrail(monkeypatch: pytest.Monk
     assert oracle.queries[0] == _nfkc("それの登録方法は？")
     assert response.diagnostics.docrag is not None
     assert response.diagnostics.docrag["rewritten_question"] == ""
+
+
+# --- 文書の分類を回答フローへ渡す(#545)・質問の理解を検索に使う(#546) ---
+
+
+@pytest.fixture
+def business_profile(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """質問の業務名(business_domains)を取れる domain profile に差し替える。
+
+    本製品の既定(DOCRAG_DOMAIN_PROFILE_FILE 未指定)では業務名の規則が空で、業務の絞り込みは
+    効かない。ここでは規則を持つ profile で、分類が渡れば絞り込みが効くことを確かめる。
+    """
+    from docrag.profiles import load_profile
+
+    path = tmp_path / "domain_profile.json"
+    path.write_text(
+        json.dumps(
+            {"business_patterns": [["業務A", "業務A"], ["業務B", "業務B"], ["業務C", "業務C"]]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOCRAG_DOMAIN_PROFILE_FILE", str(path))
+    load_profile.cache_clear()
+    yield path
+    load_profile.cache_clear()
+
+
+def _doc_chunk(
+    document_id: str,
+    text: str,
+    *,
+    file_name: str = "manual.pdf",
+    retrieval_profile: dict[str, object] | None = None,
+) -> RetrievedChunk:
+    chunk = _chunk(f"{document_id}:c1", text, 1)
+    metadata = json.loads(str(chunk.metadata["docrag_metadata_json"]))
+    if retrieval_profile is not None:
+        metadata["retrieval_profile"] = retrieval_profile
+    return chunk.model_copy(
+        update={
+            "document_id": document_id,
+            "file_name": file_name,
+            "metadata": {
+                **chunk.metadata,
+                "chunk_group_id": f"{document_id}-p1",
+                "docrag_parent_text": text,
+                "docrag_search_text": f"Source file: {file_name}\nChild text: {text}",
+                "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False),
+            },
+        }
+    )
+
+
+class TwoDocumentOracle(FakeOracle):
+    """業務B の文書を 1 位、業務A の文書を 2 位で返す検索のスタブ(兄弟 chunk なし)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chunks = [
+            _doc_chunk("doc-b", "業務Bでは受注番号を入力し、確定ボタンを押します。"),
+            _doc_chunk("doc-a", "受注番号を入力し、登録ボタンを押します。"),
+        ]
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.filters.append(dict(filters or {}))
+        return list(self.chunks)
+
+    async def context_group_siblings(
+        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+    ) -> list[RetrievedChunk]:
+        return []
+
+
+async def _answer_two_documents(
+    monkeypatch: pytest.MonkeyPatch, oracle: TwoDocumentOracle, question: str
+) -> Any:
+    import docrag.adapters.oci as docrag_oci
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    engine = DocragAnswerEngine(
+        Settings(
+            rag_docrag_query_strategy="simple_retrieval",
+            rag_docrag_answer_flow="standard_rag",
+            rag_docrag_rerank_enabled=False,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    return await engine.run(SearchRequest(query=question))
+
+
+async def test_docrag_keeps_only_candidates_of_named_business(
+    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+) -> None:
+    """質問が業務を名指ししたら、その業務の文書の候補だけが根拠に残る(#545)。"""
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "10_業務A"},
+        "doc-b": {"large_category": "20_業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
+    # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
+    assert oracle.classification_calls == [["doc-a", "doc-b"]]
+
+
+@pytest.mark.parametrize(
+    ("classifications", "question"),
+    [
+        ({}, "業務Aの受注の登録方法は？"),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            "業務Cの受注の登録方法は？",
+        ),
+    ],
+    ids=["no-classification", "no-matching-business"],
+)
+async def test_docrag_business_filter_keeps_candidates_without_match(
+    monkeypatch: pytest.MonkeyPatch,
+    business_profile: Any,
+    classifications: dict[str, dict[str, object]],
+    question: str,
+) -> None:
+    """分類の無い文書、名指しした業務の候補が無いときは、候補を落とさない(#545)。"""
+    oracle = TwoDocumentOracle()
+    oracle.classifications = classifications
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, question)
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_docrag_search_puts_document_classification_on_child_and_parent() -> None:
+    """子・親の chunk の metadata に document.classification を載せる(#545)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {"doc-a": {"large_category": "業務A", "small_category": "登録"}}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+
+    result = await engine._search(
+        SearchRequest(query="q"), _SearchState(), retrieval_queries=["受注の登録"]
+    )
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
+    assert documents["doc-a:c1"] == {
+        "classification": {"large_category": "業務A", "small_category": "登録"}
+    }
+    assert documents["doc-a:doc-a-p1"] == documents["doc-a:c1"]
+    assert documents["doc-b:c1"] is None
+    # 分類は検索用テキスト(埋め込み・全文検索の入力)には入れない。
+    child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-a:c1")
+    assert "業務A" not in child.retrieval_text
+
+
+def _inquiry(question: str) -> Any:
+    from docrag.retrieval.inquiry_conditions import parse_inquiry_conditions
+
+    return parse_inquiry_conditions(question)
+
+
+async def _search_filters(
+    request_filters: dict[str, str], question: str, *, searches: int = 1
+) -> FakeOracle:
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = FakeOracle()
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+    for _ in range(searches):
+        await engine._search(
+            SearchRequest(query=question, filters=request_filters),
+            state,
+            retrieval_queries=[question],
+            inquiry_conditions=_inquiry(question),
+        )
+    return oracle
+
+
+async def test_question_file_name_and_pages_become_search_filters() -> None:
+    """質問が名指しした文書名・ページを hybrid_search の filters に足す(#546)。"""
+    oracle = await _search_filters(
+        {"knowledge_base_id": "kb-1"}, "manual.pdf の12ページと13ページの登録手順は？", searches=2
+    )
+
+    assert oracle.filters[0] == {
+        "knowledge_base_id": "kb-1",
+        "file_name": "manual.pdf",
+        "page_number_min": "12",
+        "page_number_max": "13",
+    }
+    assert oracle.filters[1] == oracle.filters[0]
+    # 存在の確認は CRAG の各回で繰り返さない。
+    assert oracle.probes == [{"knowledge_base_id": "kb-1", "file_name": "manual.pdf"}]
+
+
+async def test_question_file_name_missing_from_knowledge_base_is_dropped() -> None:
+    """ナレッジベースに無い文書名は外し、ページも一緒に外す(0 件にしない。#546)。"""
+    oracle = await _search_filters({"knowledge_base_id": "kb-1"}, "other.pdf の12ページの手順は？")
+
+    assert oracle.filters[0] == {"knowledge_base_id": "kb-1"}
+    assert oracle.probes == [{"knowledge_base_id": "kb-1", "file_name": "other.pdf"}]
+
+
+@pytest.mark.parametrize(
+    ("request_filters", "expected", "probed"),
+    [
+        ({"file_name": "guide.pdf"}, {"file_name": "guide.pdf"}, False),
+        ({"document_id": "doc-9"}, {"document_id": "doc-9"}, False),
+        ({"page_number_min": "3"}, {"page_number_min": "3", "file_name": "manual.pdf"}, True),
+    ],
+    ids=["screen-file-name", "screen-document", "screen-page"],
+)
+async def test_screen_filters_take_precedence_over_question(
+    request_filters: dict[str, str], expected: dict[str, str], probed: bool
+) -> None:
+    """画面で明示した文書・ページの条件が、質問の文書名・ページより優先する(#546)。"""
+    oracle = await _search_filters(request_filters, "manual.pdf の12ページの登録手順は？")
+
+    assert oracle.filters[0] == expected
+    assert bool(oracle.probes) is probed
+
+
+def _order(result: Any) -> list[str]:
+    return [chunk.chunk_uid for chunk in result.child_chunks]
+
+
+async def test_business_match_channel_raises_candidate_of_named_business(
+    business_profile: Any,
+) -> None:
+    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {"doc-a": {"large_category": "業務A"}}
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    question = "業務Aの受注の登録方法は？"
+
+    baseline = await engine._search(
+        SearchRequest(query=question), _SearchState(), retrieval_queries=[question]
+    )
+    boosted = await engine._search(
+        SearchRequest(query=question),
+        _SearchState(),
+        retrieval_queries=[question],
+        inquiry_conditions=_inquiry(question),
+    )
+
+    assert _order(baseline) == ["doc-b:c1", "doc-a:c1"]
+    assert _order(boosted) == ["doc-a:c1", "doc-b:c1"]
+
+
+@pytest.mark.parametrize(
+    ("profile_channel_enabled", "expected"),
+    [(True, ["doc-a:c1", "doc-b:c1"]), (False, ["doc-b:c1", "doc-a:c1"])],
+    ids=["enabled", "disabled"],
+)
+async def test_profile_channel_raises_candidate_of_question_profile(
+    profile_channel_enabled: bool, expected: list[str]
+) -> None:
+    """質問の問い合わせ種別に合う chunk が profile のチャネルで上がる。設定で無効にできる(#546)。"""
+    from types import SimpleNamespace
+
+    from app.rag.docrag_answer import _SearchState
+
+    oracle = TwoDocumentOracle()
+    oracle.chunks = [
+        _doc_chunk("doc-b", "受注一覧に表示されます。"),
+        _doc_chunk(
+            "doc-a",
+            "登録できない場合の条件は次のとおりです。",
+            retrieval_profile={"active_profiles": ["conditions_and_exceptions"]},
+        ),
+    ]
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    question = "登録できない場合の条件は？"
+
+    result = await engine._search(
+        SearchRequest(query=question),
+        _SearchState(),
+        retrieval_queries=[question],
+        inquiry_conditions=_inquiry(question),
+        settings=SimpleNamespace(profile_channel_enabled=profile_channel_enabled),
+    )
+
+    assert _order(result) == expected
+
+
+async def test_oracle_document_classifications_reads_hit_documents_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """分類はヒットした document_id の IN で 1 回だけ読み、分類の無い文書は返さない(#545)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [
+            {"document_id": "doc-a", "classification": '{"large_category": "業務A"}'},
+            {"document_id": "doc-b", "classification": None},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.document_classifications([]) == {}
+    assert calls == []
+    result = await client.document_classifications(["doc-a", "doc-b", "doc-a"])
+
+    assert result == {"doc-a": {"large_category": "業務A"}}
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "FROM rag_documents d" in statement
+    document_binds = [
+        value for key, value in binds.items() if key.startswith("classification_document")
+    ]
+    assert document_binds == ["doc-a", "doc-b"]
+
+
+async def test_oracle_has_retrieval_chunks_uses_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """文書名の存在確認は検索と同じ条件(KB・文書名)で 1 行だけ読む(#546)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [] if len(calls) > 1 else [{"found": 1}]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+    filters = {"knowledge_base_id": "kb-1", "file_name": "Manual.pdf"}
+
+    assert await client.has_retrieval_chunks(filters) is True
+    assert await client.has_retrieval_chunks(filters) is False
+    statement, binds = calls[0]
+    assert "ROWNUM = 1" in statement
+    assert "LOWER(d.file_name) LIKE :filter_file_name" in statement
+    assert binds["filter_file_name"] == "%manual.pdf%"
+    assert "kb-1" in binds.values()
