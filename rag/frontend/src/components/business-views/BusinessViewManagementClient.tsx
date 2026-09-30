@@ -35,7 +35,7 @@ import {
   TextField,
   ListToolbar,
 } from "@engchina/production-ready-ui";
-import { Archive, ArrowLeft, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
+import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
@@ -46,7 +46,6 @@ import {
   useKnowledgeBaseSelectionHealth,
 } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
-  EditorBreadcrumbs,
   EditorDraftNotice,
   EditorTargetState,
 } from "@/components/layout/EntityLayout";
@@ -71,6 +70,7 @@ import {
 import { useEditorRoute } from "@/lib/editor-route";
 import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
@@ -85,7 +85,6 @@ import {
   useCreateBusinessView,
   useUpdateBusinessView,
 } from "@/lib/queries";
-import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useWorkspaceState } from "@/lib/workspace-state";
@@ -607,7 +606,6 @@ function BusinessViewEditRoute({
     <EditorTargetState
       id={id}
       listLabel={t("nav.businessViews")}
-      listHref={APP_ROUTES.businessViews}
       error={detail.error}
       loadingLabel={t("businessViews.detail.loading")}
       loadingTestId="business-view-detail-loading"
@@ -663,8 +661,10 @@ function BusinessViewEditor({
   // 説明はフォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2。#521）。
   const [descriptionTouched, setDescriptionTouched] = useState(false);
 
+  // 左上の「一覧へ戻る」は、エディタのフォームだけでなくページのほかの未保存（知識の節・構築設定など）も
+  // リンク・戻るボタンと同じく 1 回だけ確認する（#586 / #618）。
   const back = async () => {
-    if (await editor.confirmLeave()) onBack();
+    if (await confirmPendingLeave()) onBack();
   };
 
   const discard = () => {
@@ -779,21 +779,26 @@ function BusinessViewEditor({
             </span>
           ) : undefined
         }
-        breadcrumbs={
-          <EditorBreadcrumbs
-            listLabel={t("nav.businessViews")}
-            listHref={APP_ROUTES.businessViews}
-            current={title}
-          />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左（#618）。
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: t("nav.businessViews") }),
+          onClick: () => void back(),
+          testId: "editor-back",
+        }}
         actions={[
-          {
-            id: "back",
-            kind: "secondary",
-            label: t("common.backToList"),
-            icon: ArrowLeft,
-            onClick: () => void back(),
-          },
+          ...(isArchived
+            ? []
+            : [
+                {
+                  id: "discard",
+                  kind: "secondary" as const,
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !dirty || pending,
+                  onClick: discard,
+                },
+              ]),
           {
             id: "save",
             kind: "primary",
@@ -968,19 +973,6 @@ function BusinessViewEditor({
                   />
                 </div>
               </fieldset>
-
-              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  type="button"
-                  icon={RotateCcw}
-                  onClick={discard}
-                  disabled={!dirty || pending}
-                >
-                  {t("editor.actions.discard")}
-                </Button>
-              </div>
             </form>
           </CardContent>
         </Card>

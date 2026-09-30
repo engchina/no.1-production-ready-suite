@@ -1,8 +1,7 @@
 import { PageBody, PageHeader, Skeleton } from "@engchina/production-ready-ui";
-import { ArrowLeft } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { EditorBreadcrumbs, EditorTargetState } from "@/components/layout/EntityLayout";
+import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { StatusBadge } from "@/components/StatusBadge";
 import { t } from "@/lib/i18n";
 import { confirmPendingLeave } from "@/lib/leave-guard";
@@ -38,7 +37,6 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       <EditorTargetState
         id={documentId}
         listLabel={listLabel}
-        listHref={APP_ROUTES.fileList}
         error={query.isError ? query.error : null}
         loadingLabel={t("documents.detail.loading")}
         loadingTestId="document-detail-loading"
@@ -62,19 +60,13 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         wide
         title={doc.file_name}
         status={<StatusBadge status={status} />}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={listLabel} listHref={APP_ROUTES.fileList} current={doc.file_name} />
-        }
-        actions={[
-          {
-            id: "back",
-            kind: "secondary",
-            label: t("common.backToList"),
-            icon: ArrowLeft,
-            onClick: () => void backToList(),
-          },
-        ]}
-        moreActionsLabel={t("common.objectActions.more")}
+        // 一覧へ戻るは左上（#618）。
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: listLabel }),
+          onClick: () => void backToList(),
+          testId: "editor-back",
+        }}
       />
       <PageBody wide>
         <DocumentWorkspace documentId={documentId} showTitle={false} />

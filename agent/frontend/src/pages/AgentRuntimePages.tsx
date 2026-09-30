@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   Brain,
   Check,
   Download,
@@ -107,7 +106,6 @@ import {
 } from "@/lib/api";
 import {
   AgentSplitPane,
-  EditorBreadcrumbs,
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
@@ -123,7 +121,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
-import { APP_ROUTES } from "@/lib/routes";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
 import {
   isNullableString,
@@ -659,9 +656,6 @@ export function AgentsPage() {
         <PageHeader
           wide
           title={t("nav.agents")}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={3} />}>
@@ -2805,9 +2799,6 @@ export function McpServersPage() {
         <PageHeader
           wide
           title={listTitle}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<FormSkeleton fields={4} />}>
@@ -2922,11 +2913,9 @@ function McpServerEditor({
         wide
         title={title}
         subtitle={server ? server.server_id : t("page.settings.mcp.subtitle")}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: listTitle }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           ...(readOnly
             ? []
             : [
@@ -3337,7 +3326,6 @@ export function SkillsPage() {
         <PageHeader
           wide
           title={t("skills.title")}
-          breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={target.id} />}
         />
         <PageBody wide>
           <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<FormSkeleton fields={4} />}>
@@ -3460,9 +3448,7 @@ function SkillEditor({
   }
 
   const title = skill ? skill.name : t("skills.addTitle");
-  const headerActions: PageHeaderAction[] = [
-    { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
-  ];
+  const headerActions: PageHeaderAction[] = [];
   if (editable) {
     headerActions.push({
       id: "save",
@@ -3480,7 +3466,8 @@ function SkillEditor({
         wide
         title={title}
         subtitle={skill ? skill.id : t("page.skills.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("skills.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={headerActions}
         moreActionsLabel={t("common.moreActions")}
       />
@@ -3861,7 +3848,6 @@ export function PluginsPage() {
         <PageHeader
           wide
           title={t("plugins.title")}
-          breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={target.id} />}
         />
         <PageBody wide>
           <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<FormSkeleton fields={3} />}>
@@ -3921,9 +3907,9 @@ function PluginInstallEditor({
         wide
         title={title}
         subtitle={t("page.plugins.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           {
             id: "install",
             kind: "primary",
@@ -4001,9 +3987,9 @@ function PluginDetail({
         wide
         title={plugin.name}
         subtitle={`${plugin.id} · v${plugin.version}`}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={plugin.name} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: onBack, testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
         ]}
       />
       <PageBody wide className="space-y-6">
@@ -4288,9 +4274,6 @@ export function PluginMarketplacesPage() {
         <PageHeader
           wide
           title={t("marketplaces.title")}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<FormSkeleton fields={3} />}>
@@ -4358,11 +4341,9 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         wide
         title={title}
         subtitle={t("page.pluginMarketplaces.subtitle")}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           {
             id: "create",
             kind: "primary",
@@ -4594,11 +4575,9 @@ function MarketplaceDetail({
         wide
         title={title}
         subtitle={source.id}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: onBack, testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
         ]}
       />
       <PageBody wide className="space-y-6">
@@ -5821,9 +5800,9 @@ function AgentEditorView({
         wide
         title={title}
         subtitle={agent ? agent.id : t("page.agents.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("nav.agents") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           ...(readOnly
             ? []
             : [

@@ -1,10 +1,8 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { ArrowLeft, FilePen } from "lucide-react";
 
 import {
   Banner,
-  Breadcrumbs,
   Button,
   Card,
   FixedSplitPane,
@@ -20,28 +18,6 @@ import { t } from "@/lib/i18n";
 
 /** RAG の分割ペインの比率を保存する localStorage key の前置き（製品ごとに分ける）。 */
 export const RAG_SPLIT_STORAGE_PREFIX = "production-ready-rag.fixedSplitPane";
-
-/**
- * A 型のエディタのパンくず（一覧 › 対象名）。一覧へのリンクは内部リンクなので、
- * 未保存の編集があれば共有の離脱ガードが確認する。
- */
-export function EditorBreadcrumbs({
-  listLabel,
-  listHref,
-  current,
-}: {
-  listLabel: string;
-  listHref: string;
-  current: string;
-}) {
-  return (
-    <Breadcrumbs
-      ariaLabel={t("common.breadcrumbs")}
-      linkComponent={Link}
-      items={[{ label: listLabel, href: listHref }, { label: current }]}
-    />
-  );
-}
 
 /** URL の `?id=` の対象が無いときの説明。黙って別の対象に置き換えず、一覧へ戻る導線を出す。 */
 export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => void }) {
@@ -67,7 +43,6 @@ export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => 
 export function EditorTargetState({
   id,
   listLabel,
-  listHref,
   error,
   loadingLabel,
   loadingTestId,
@@ -78,7 +53,6 @@ export function EditorTargetState({
 }: {
   id: string;
   listLabel: string;
-  listHref: string;
   /** 取得の失敗（読み込み中は null）。 */
   error: unknown;
   loadingLabel: string;
@@ -96,22 +70,17 @@ export function EditorTargetState({
       <PageHeader
         wide
         title={listLabel}
-        breadcrumbs={<EditorBreadcrumbs listLabel={listLabel} listHref={listHref} current={id} />}
-        // 見つからないときは本文の「一覧へ戻る」だけにし、同じボタンを重ねない。
-        actions={
+        // エディタと同じ左上の「一覧へ戻る」（#618）。見つからないときは本文の「一覧へ戻る」だけにし、同じボタンを重ねない。
+        back={
           notFound
             ? undefined
-            : [
-                {
-                  id: "back",
-                  kind: "secondary",
-                  label: t("common.backToList"),
-                  icon: ArrowLeft,
-                  onClick: onBack,
-                },
-              ]
+            : {
+                label: t("common.backToList"),
+                ariaLabel: t("editor.backToListOf", { list: listLabel }),
+                onClick: onBack,
+                testId: "editor-back",
+              }
         }
-        moreActionsLabel={t("common.objectActions.more")}
       />
       <PageBody wide>
         {!error ? (

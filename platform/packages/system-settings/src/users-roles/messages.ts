@@ -13,7 +13,7 @@ export const USERS_ROLES_MESSAGES = {
   "nav.securityUsers": "ユーザー管理",
   "security.common.actions": "操作",
   "security.common.active": "有効",
-  "security.common.backToList": "一覧に戻る",
+  "security.common.backToList": "一覧へ戻る",
   "security.common.cancel": "キャンセル",
   "security.common.clearSearch": "検索語をクリア",
   "security.common.create": "新規作成",

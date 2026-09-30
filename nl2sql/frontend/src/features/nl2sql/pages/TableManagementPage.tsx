@@ -1,7 +1,7 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
+import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
   Button,
@@ -895,6 +895,12 @@ export function TableManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="table-schema-refresh-status" />}
+        // 作業（作成・取込）の画面の「一覧へ戻る」はページの左上（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: t("tableMgmt.action.backToList"), onClick: returnToList, testId: "table-management-back" }
+        }
         actionsLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
         actions={
@@ -1078,11 +1084,6 @@ export function TableManagementPage() {
           </>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList} icon={ArrowLeft}>
-                <span>{t("tableMgmt.action.backToList")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id={`table-management-panel-${activeView}`}
               role="region"

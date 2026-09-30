@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListPlus,
-  ArrowLeft,
   FileJson,
   Plus,
   RefreshCw,
@@ -2056,6 +2055,18 @@ export function ProfileManagementPage() {
             : []
         }
         actionsTestId="profile-management-actions"
+        // 編集の画面の「一覧へ戻る」はページの左上（#618）。保存は Oracle への反映を伴うため、確認語欄の操作行に置く
+        // （確認語が要る保存の例外。design-system README §4「詳細・作成・編集の画面の操作」）。
+        back={
+          activeView === "list"
+            ? undefined
+            : {
+                label: t("profiles.action.backToList"),
+                onClick: () => void backToList(),
+                disabled: mutationBusy,
+                testId: "profile-management-back",
+              }
+        }
       />
 
       <PageBody wide className="grid gap-4">
@@ -2093,11 +2104,6 @@ export function ProfileManagementPage() {
             </DbObjectManagementPanelShell>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void backToList()} icon={ArrowLeft}>
-                <span>{t("profiles.action.backToList")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id="profile-management-panel-editor"
               role="region"

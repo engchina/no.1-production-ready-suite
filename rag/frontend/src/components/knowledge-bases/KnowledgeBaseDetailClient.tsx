@@ -71,7 +71,6 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       <EditorTargetState
         id={knowledgeBaseId}
         listLabel={t("nav.knowledgeBases")}
-        listHref={APP_ROUTES.knowledgeBases}
         error={detail.error}
         loadingLabel={t("knowledgeBases.detail.loading")}
         loadingTestId="knowledge-base-detail-loading"

@@ -1,6 +1,5 @@
 import {
   Banner,
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -13,10 +12,9 @@ import {
   StatusBadge,
   TextField,
 } from "@engchina/production-ready-ui";
-import { ArrowLeft, Database, Library, RotateCcw, Save } from "lucide-react";
+import { Database, Library, RotateCcw, Save } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 
-import { EditorBreadcrumbs } from "@/components/layout/EntityLayout";
 import { useEntityEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import {
   ApiError,
@@ -24,10 +22,10 @@ import {
   type KnowledgeBaseDetail,
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
 import { useCreateKnowledgeBase, useUpdateKnowledgeBase } from "@/lib/queries";
 import { firstInvalidFieldId, focusFirstInvalidField } from "@/lib/required-fields";
-import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 import {
@@ -122,8 +120,10 @@ export function KnowledgeBaseEditor({
     ? validateKnowledgeBaseDescription(draft.description)
     : null;
 
+  // 左上の「一覧へ戻る」は、エディタのフォームだけでなくページのほかの未保存（知識の節・構築設定など）も
+  // リンク・戻るボタンと同じく 1 回だけ確認する（#586 / #618）。
   const back = async () => {
-    if (await editor.confirmLeave()) onBack();
+    if (await confirmPendingLeave()) onBack();
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -192,21 +192,29 @@ export function KnowledgeBaseEditor({
         status={initial ? <KnowledgeBaseStatusPill status={initial.status} /> : undefined}
         subtitle={initial?.description || t("knowledgeBases.subtitle")}
         meta={initial ? <KnowledgeBaseMeta knowledgeBase={initial} /> : undefined}
-        breadcrumbs={
-          <EditorBreadcrumbs
-            listLabel={t("nav.knowledgeBases")}
-            listHref={APP_ROUTES.knowledgeBases}
-            current={title}
-          />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左（#618）。
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: t("nav.knowledgeBases") }),
+          onClick: () => void back(),
+          testId: "editor-back",
+        }}
         actions={[
-          {
-            id: "back",
-            kind: "secondary",
-            label: t("common.backToList"),
-            icon: ArrowLeft,
-            onClick: () => void back(),
-          },
+          ...(isArchived
+            ? []
+            : [
+                {
+                  id: "discard",
+                  kind: "secondary" as const,
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !dirty || pending,
+                  onClick: () => {
+                    editor.discard();
+                    setTouched({ name: false, description: false });
+                  },
+                },
+              ]),
           {
             id: "save",
             kind: "primary",
@@ -287,23 +295,6 @@ export function KnowledgeBaseEditor({
                   inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
               </div>
-              {isArchived ? null : (
-                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    type="button"
-                    icon={RotateCcw}
-                    onClick={() => {
-                      editor.discard();
-                      setTouched({ name: false, description: false });
-                    }}
-                    disabled={!dirty || pending}
-                  >
-                    {t("editor.actions.discard")}
-                  </Button>
-                </div>
-              )}
             </form>
           </CardContent>
         </Card>

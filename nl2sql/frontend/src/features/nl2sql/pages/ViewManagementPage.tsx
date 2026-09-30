@@ -1,7 +1,7 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
+import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import {
   Button,
@@ -694,6 +694,12 @@ export function ViewManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />}
+        // 作業（作成）の画面の「一覧へ戻る」はページの左上（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: t("viewMgmt.action.backToList"), onClick: returnToList, testId: "view-management-back" }
+        }
         actionsLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
         actions={
@@ -873,11 +879,6 @@ export function ViewManagementPage() {
           </>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList} icon={ArrowLeft}>
-                <span>{t("viewMgmt.action.backToList")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id={`view-management-panel-${activeView}`}
               role="region"

@@ -248,7 +248,7 @@ export {
   type NavDrawerLabels,
 } from "./components/app-shell/nav-drawer";
 export { Sidebar, SidebarAccountFooter, type SidebarFooterAction, type SidebarProps } from "./components/app-shell/Sidebar";
-export { PageHeader, type PageHeaderAction } from "./components/app-shell/PageHeader";
+export { PageHeader, type PageHeaderAction, type PageHeaderBack } from "./components/app-shell/PageHeader";
 export { PageBody, Section } from "./components/app-shell/PageBody";
 export {
   FixedSplitPane,

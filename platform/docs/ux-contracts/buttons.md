@@ -74,7 +74,9 @@
 ## 4. 配置
 
 工程 / フォームの主操作は入力内容の末尾に置く。補助操作を同じ高さで並べ、破壊的操作は離す。
-ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar`、フォームの確定・取消・破壊的操作は `FormActionBar` に置く。
+ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar`、設定のカードのフォームの確定・取消は `FormActionBar` に置く。
+
+**詳細・作成・編集の画面（1 ページ = 1 つの対象。#618）**: 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。右の操作の列に入れない）、保存・作成は `PageHeader` の右端の primary、「変更を破棄」はその左の secondary。対象への操作（アーカイブ・削除・復元・パスワードのリセット・無効化など）は最初のカードの見出しの右の `ObjectActionBar` 1 か所。保存の失敗はヘッダーの直下の `SaveErrorBanner`（messaging.md §3.3.1）。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」（「一覧に戻る」「保存する」「作成する」「変更を元に戻す」は使わない）。例外は確認語が要る保存（確認語欄の操作行）。詳細は [design-system README §4「詳細・作成・編集の画面の操作」](../design-system/README.md)。
 
 ---
 
@@ -145,7 +147,7 @@
 
 ## 5.2.1 フォームの操作行
 
-編集フォーム・作成フォームの末尾の操作は `FormActionBar`（`packages/ui`。#226）にまとめる。手書きのボタン列を組まない。
+設定の画面のカード（1 ページに保存の対象が複数ある画面）のフォームの末尾の操作は `FormActionBar`（`packages/ui`。#226）にまとめる。手書きのボタン列を組まない。詳細・作成・編集の画面（1 ページ = 1 つの対象）の保存は `PageHeader` の右端に置き、`FormActionBar` を使わない（§4、#618）。
 
 - **並び**：`primaryActions`（保存・作成など）→ `secondaryActions`（キャンセルなど）の順に直置きし、`status`（`FormStatus` など）はその右に置く。
 - **破壊的操作**：`dangerActions`（削除など）は赤いボタンとして直置きせず、右端の「その他の操作」メニューへまとめる（`moreLabel` で製品の i18n から差し替える。既定は日本語）。メニューは WAI-ARIA の Menu Button（`aria-haspopup="menu"`、`Escape` / 矢印 / `Home` / `End`、閉じたら起点へフォーカスを戻す）。

@@ -329,7 +329,12 @@ import type { LucideIcon } from "lucide-react";
 export interface PageHeaderProps {
   title: string; subtitle?: string; status?: React.ReactNode;
   breadcrumbs?: { label: string; href?: string }[];
-  /** 並びは danger → utility → secondary → primary（右端が primary）。 */
+  /**
+   * 詳細・作成・編集の画面の「一覧へ戻る」（#618）。タイトルの上の左端に ghost の sm ボタン（ArrowLeft）で出す。
+   * actions に id: "back" の操作を入れない。2 階層のパンくずの代わり（3 階層以上だけ breadcrumbs）。
+   */
+  back?: { label: string; onClick: () => void; ariaLabel?: string; disabled?: boolean; testId?: string };
+  /** 並びは danger → utility → secondary → primary（右端が primary）。詳細・作成・編集の画面は 変更を破棄（secondary）→ 保存（primary）。 */
   actions?: { id: string; kind: "primary" | "secondary" | "utility" | "danger"; label?: string; ariaLabel?: string; icon?: LucideIcon; onClick?: () => void; loading?: boolean; disabled?: boolean }[];
   /** <Tabs> を渡すとヘッダー下端に吸い付く。ビュー切替の唯一の置き場所。 */
   tabs?: React.ReactNode;

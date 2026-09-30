@@ -592,7 +592,9 @@ const agentJa = {
   "marketplaces.overview": "配布元",
 
   // 一覧 → 全画面エディタ（A 型）と、一覧 + 詳細（B 型）の共通文言（#137）
-  "common.backToList": "一覧に戻る",
+  // 詳細・作成・編集の画面の操作の文言は 3 製品でそろえる（一覧へ戻る / 保存 / 作成 / 変更を破棄。#618）
+  "common.backToList": "一覧へ戻る",
+  "editor.backToListOf": "{list}の一覧へ戻る",
   "common.breadcrumbs": "パンくず",
   "common.moreActions": "その他の操作",
   "common.entityActions": "{name} の操作",

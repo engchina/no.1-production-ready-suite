@@ -20,13 +20,10 @@ for (const viewport of [
     await page.goto("/business-views?id=new");
 
     await expect(page.getByRole("heading", { name: "業務ビューを作成" })).toBeVisible();
-    // A 型のエディタはパンくず（一覧 › 対象名）を出す（page-archetypes.md §1 A）。
-    const breadcrumbs = page.getByRole("navigation", { name: "パンくず" });
-    await expect(breadcrumbs.getByRole("link", { name: "業務ビュー (Business View)" })).toHaveAttribute(
-      "href",
-      "/business-views"
-    );
-    await expect(breadcrumbs.getByText("業務ビューを作成")).toHaveAttribute("aria-current", "page");
+    // A 型のエディタの「一覧へ戻る」は左上（パンくずは出さない。page-archetypes.md §1 A、#618）。
+    await expect(page.getByTestId("editor-back")).toHaveText("一覧へ戻る");
+    await expect(page.getByTestId("editor-back")).toHaveAccessibleName(/の一覧へ戻る$/);
+    await expect(page.getByRole("navigation", { name: "パンくず" })).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "名前", exact: true })).toBeVisible();
     await expect(page.getByText("参照するナレッジベース", { exact: false }).first()).toBeVisible();
     // ナレッジベースはコンボボックスを開くと候補として現れる。
@@ -83,7 +80,7 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   await expect(override).toHaveAttribute("aria-pressed", "true");
   await guardrailSetting.getByRole("combobox", { name: "安全チェック" }).click();
   await page.getByRole("option", { name: "規制対応" }).click();
-  await page.getByRole("button", { name: "作成する" }).click();
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
 
   await expect
     .poll(() => (createBody?.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids)
@@ -110,7 +107,7 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   // 作成に成功したら作成した業務ビューのエディタへ replace で移る（戻るで空の新規フォームへ戻らない）。
   await expect(page).toHaveURL(/\/business-views\?id=bv-new$/);
   await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存する" })).toBeVisible();
+  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/business-views$/);
   await expect(page.getByRole("button", { name: "新規作成" })).toBeVisible();
@@ -149,7 +146,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   );
   await expect(screenLinking).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
   await screenLinking.getByRole("button", { name: "ON" }).click();
-  await page.getByRole("button", { name: "作成する" }).click();
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
@@ -205,14 +202,14 @@ for (const viewport of [
     await expect(description).toHaveAttribute("aria-required", "true");
     const guardrail = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
     await guardrail.getByRole("button", { name: "業務ビューで上書き" }).click();
-    await page.getByRole("button", { name: "保存する" }).click();
+    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("説明を入力してください。")).toBeVisible();
     await expect(description).toHaveAttribute("aria-invalid", "true");
     await expect(description).toBeFocused();
     expect(updateBody).toBeNull();
 
     await description.fill("全社共通の検索設定");
-    await page.getByRole("button", { name: "保存する" }).click();
+    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true }).click();
 
     await expect.poll(() => updateBody?.name).toBeUndefined();
     await expect
@@ -242,14 +239,14 @@ test("業務ビューの名前と説明は必須で、空・空白だけでは�
   // placeholder に「任意」を出さない。
   await expect(description).toHaveAttribute("placeholder", "例: 経理規程の問い合わせに回答します");
 
-  await page.getByRole("button", { name: "作成する" }).click();
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("名前を入力してください。")).toBeVisible();
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(name).toBeFocused();
 
   await name.fill("経理ビュー");
   await description.fill("   ");
-  await page.getByRole("button", { name: "作成する" }).click();
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("名前を入力してください。")).toHaveCount(0);
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(description).toBeFocused();
@@ -426,8 +423,7 @@ test("業務ビューは行のクリックで ?id= の全画面エディタを�
   await row.getByRole("cell").nth(2).click();
   await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
   await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
-  const breadcrumbs = page.getByRole("navigation", { name: "パンくず" });
-  await expect(breadcrumbs.getByText("経理ビュー")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("editor-back")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("経理ビュー");
   await expect(page.getByRole("heading", { name: "業務ビューの知識" })).toBeVisible();
   await expectNoPageOverflow(page);
@@ -447,17 +443,14 @@ test("業務ビューは行のクリックで ?id= の全画面エディタを�
   await expect(page).toHaveURL(/\/business-views$/);
 });
 
-test("業務ビューのエディタは未保存の変更があるとパンくずでの移動を確認し、下書きを対象ごとに残す", async ({
+test("業務ビューのエディタは未保存の変更があると一覧へ戻るの移動を確認し、下書きを対象ごとに残す", async ({
   page,
 }) => {
   await mockBusinessViews(page, [accountingView]);
   await page.goto("/business-views?id=bv-1");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
 
-  await page
-    .getByRole("navigation", { name: "パンくず" })
-    .getByRole("link", { name: "業務ビュー (Business View)" })
-    .click();
+  await page.getByTestId("editor-back").click();
   const dialog = page.getByRole("alertdialog", { name: "保存していない変更があります" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル" }).click();
@@ -474,7 +467,7 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
   await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
-  await page.getByRole("button", { name: "変更を元に戻す" }).click();
+  await page.getByRole("button", { name: "変更を破棄" }).click();
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費精算の相談");
   await page.goto("/business-views?id=new");
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("");
@@ -508,7 +501,7 @@ test("業務ビューのエディタは未保存の変更があるとブラウ�
   // （移動しても下書きはこのタブに残るため、開き直したら先に元に戻す。）
   await page.goForward();
   await expect(page).toHaveURL(/\?id=bv-1$/);
-  await page.getByRole("button", { name: "変更を元に戻す" }).click();
+  await page.getByRole("button", { name: "変更を破棄" }).click();
   await page.locator("#domain-keywords-editor").fill("経費精算");
   await page.goBack();
   const discardDialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
@@ -516,11 +509,8 @@ test("業務ビューのエディタは未保存の変更があるとブラウ�
   await discardDialog.getByRole("button", { name: "キャンセル" }).click();
   await expect(page).toHaveURL(/\?id=bv-1$/);
   await expect(page.locator("#domain-keywords-editor")).toHaveValue("経費精算");
-  // リンク（パンくず）とリロード（beforeunload）も同じく確認する。
-  await page
-    .getByRole("navigation", { name: "パンくず" })
-    .getByRole("link", { name: "業務ビュー (Business View)" })
-    .click();
+  // サイドナビのリンクとリロード（beforeunload）も同じく確認する。
+  await page.getByTestId("editor-back").click();
   await expect(discardDialog).toBeVisible();
   await discardDialog.getByRole("button", { name: "キャンセル" }).click();
   await expect(page).toHaveURL(/\?id=bv-1$/);
@@ -552,15 +542,15 @@ test("業務ビューの保存に失敗すると、理由をヘッダーの直�
   });
   await page.goto("/business-views?id=bv-1");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
-  // 長いフォームの下（取り消しの行）までスクロールしてから、ヘッダーの保存を押す。
-  await page.getByRole("button", { name: "変更を元に戻す" }).scrollIntoViewIfNeeded();
+  // 長いフォームの下までスクロールしてから、ヘッダーの保存を押す。
+  await page.getByRole("heading", { name: "業務ビューの知識" }).scrollIntoViewIfNeeded();
   const actions = page.getByRole("group", { name: "ページ操作" });
-  const save = actions.getByRole("button", { name: "保存する" });
+  const save = actions.getByRole("button", { name: "保存", exact: true });
   if (await save.isVisible()) {
     await save.click();
   } else {
     await actions.getByRole("button", { name: "その他の操作" }).click();
-    await page.getByRole("menuitem", { name: "保存する" }).click();
+    await page.getByRole("menuitem", { name: "保存", exact: true }).click();
   }
 
   const banner = page.getByTestId("business-view-save-error");
@@ -630,7 +620,7 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByText("アーカイブ済みの業務ビューは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
-  await expect(page.getByRole("button", { name: "保存する" })).toBeDisabled();
+  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   await expect(
     page.getByRole("group", { name: "安全チェック" }).getByRole("button", { name: "業務ビューで上書き" })
   ).toBeDisabled();
@@ -646,13 +636,14 @@ test("業務ビューが無いときは、空の状態から作成エディタ�
 });
 
 /**
- * エディタの「一覧へ戻る」。375px でも「その他の操作」に畳まず、1 タップで押せる
- * （ページ操作は「一覧へ戻る」と主操作の 2 つだけ。#582）。
+ * エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でも 1 タップで押せる。
+ * 右の操作の列（変更を破棄・保存）は 2 つだけなので畳まない（#582 / #618）。
  */
 async function clickBackToList(page: Page) {
   const actions = page.getByRole("group", { name: "ページ操作" });
   await expect(actions.getByRole("button", { name: /^その他の操作/ })).toHaveCount(0);
-  await actions.getByRole("button", { name: "一覧へ戻る" }).click();
+  await expect(actions.getByTestId("editor-back")).toHaveCount(0);
+  await page.getByTestId("editor-back").click();
 }
 
 interface BusinessViewSummaryFixture {

@@ -205,6 +205,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ```
 
 - `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
+- **詳細・作成・編集の画面（#618。3 製品で統一）**: 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。`actions` に入れない。2 階層のパンくずは出さない）、保存・作成は `PageHeader` の右端の primary、「変更を破棄」はその左の secondary。対象への操作（アーカイブ・削除など）は最初のカードの見出しの右の `ObjectActionBar` 1 か所。保存の失敗はヘッダーの直下の `SaveErrorBanner`（#585）、未保存の離脱の確認は製品の離脱ガード（#586）のまま。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」。例外は確認語が要る保存（`ExecutionConfirmationField` の操作行）。設定の画面のカードのフォームは `FormActionBar`。正本は design-system README §4「詳細・作成・編集の画面の操作」、UX 契約 `buttons.md` §4 / `page-archetypes.md` の A 型。
 - `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
 - 本文は日本語第一フォントスタック `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文ベース `14px`。

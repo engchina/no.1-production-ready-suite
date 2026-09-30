@@ -225,6 +225,34 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 7. **狭い画面（lg 未満）の折りたたみは、メニューに入るのが 2 つ以上のときだけ**（#582）。主操作 1 つ +「その他の操作」に畳むとき、メニューに入るのが 1 つだけ（「一覧へ戻る」+ 保存など）なら畳まず、広い画面と同じ並びで全部出す。1 項目のメニューは開く手間が増えるだけで、ボタン 2 つなら 375px でも 1 行に収まる。3 つ以上で「一覧へ戻る」がメニューに入る画面は、パンくず（`breadcrumbs`）で一覧へ 1 タップで戻れるようにする。
 8. **「その他の操作」の読み上げ名に対象を足す**（#582）。見た目の文言は「その他の操作」のまま、読み上げ名（`aria-label`）とメニューの名前を「その他の操作（<操作のグループの名前>）」にする。`PageHeader` は `actionsLabel`（既定「ページ操作」）、`ObjectActionBar` / `FormActionBar` は `ariaLabel` を足す（`contextualMenuLabel`）。ページとカードの「その他の操作」が同じ名前で並び、読み上げ・音声操作で区別できなかった。見えている文言を先頭に置く（WCAG 2.5.3 Label in Name）。
 
+### 詳細・作成・編集の画面の操作（新設）— ★ 戻るは左上、保存は右端の primary（#618）
+
+詳細・作成・編集の画面の「一覧へ戻る」「保存」の置き場所・形・文言が、製品・画面ごとに違いました。RAG・Agent のエディタは `PageHeader` の右に「一覧へ戻る」（secondary）と保存（primary）を並べ、パンくずも出していました。NL2SQL・system-settings（ユーザー・ロール・権限）は本文の先頭に左寄せの「一覧に戻る」（ghost）を置き、保存はフォームの末尾の `FormActionBar` でした。文言も「一覧へ戻る / 一覧に戻る」「保存 / 保存する」「作成 / 作成する」「変更を破棄 / 変更を元に戻す」が混在していました。
+
+```text
+┌ PageHeader ───────────────────────────────────────────────────────────────┐
+│ ← 一覧へ戻る                                                               │  ← back（左上。Tab の先頭）
+│ 経理ビュー [状態]                        [変更を破棄] [保存（primary）]    │  ← 右端が primary、破棄はその左
+└───────────────────────────────────────────────────────────────────────────┘
+  SaveErrorBanner（保存の失敗。ヘッダーの直下の 1 か所。#585）
+┌ 最初のカード ────────────────────────── [その他の操作 ▾]（ObjectActionBar）┐  ← 対象への操作は 1 か所
+│ フォーム …                                                                  │
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| **一覧へ戻るは `PageHeader` の `back`**: タイトルの上の左端に、左向きの矢印付きの ghost の `sm` ボタン（矢印の左端をタイトルの左端にそろえる）。右の操作の列に置かない。2 階層（一覧 › 対象）のパンくずは出さず、`back` がその役をする（3 階層以上の深い導線だけ `breadcrumbs`） | 戻る操作は画面の先頭・左上（Material 3 の top app bar の navigation icon、Apple HIG の navigation bar の戻るボタン、Polaris の `backAction`、GitHub Primer の `PageHeader` の parent link）。主操作と並べると「保存せずに戻る」と「保存」を取り違える。パンくずと戻るの 2 つの導線を重ねない |
+| 文言は「一覧へ戻る」。読み上げ名は戻り先を足す（`editor.backToListOf`「{list}の一覧へ戻る」。見える文言を含む。WCAG 2.5.3） | 3 製品・全画面で 1 つにする |
+| **保存・作成は `PageHeader` の右端の primary**（`kind: "primary"`。文言は「保存」「作成」）。**変更を破棄はその左の secondary**（「変更を破棄」。変更が無いときは disabled）。本文のカードの中に重ねて置かない | 右端が最も押しやすい位置（`PageHeader` の並び順と同じ）。Polaris・Atlassian・Carbon の page header と同じ。ヘッダーは lg 以上で sticky なので、長いフォームの下までスクロールしても保存に届く。キーボードでは本文の欄の Enter でも保存できる（フォームの submit） |
+| **対象への操作（アーカイブ・削除・復元・パスワードのリセット・無効化など）は `ObjectActionBar` 1 か所**。最初のカード（system-settings はフォームのパネル）の見出しの右に置く。非破壊・高頻度の 2 つまでを直置き、残りと危険な操作は「その他の操作」 | 置き場所を 1 つにする（buttons.md §5.1）。保存と破棄の近くに危険な操作を並べない |
+| 保存の失敗は `SaveErrorBanner`（ヘッダーの直下の 1 か所。#585 のまま）。欄に結び付く失敗は欄の直下 | 保存のボタンがヘッダーにあるので、失敗もヘッダーの直下に出す |
+| 未保存の変更がある状態で戻るときの確認（#586）は、`back.onClick` から呼ぶ製品の離脱ガードのまま | 戻る導線の置き場所だけを変え、確認の規則は変えない |
+| **例外**: 確認語が要る保存（NL2SQL の業務プロファイルの Oracle への反映）は、確認語欄（`ExecutionConfirmationField`）の操作行に置く。作業の画面（NL2SQL のテーブル・ビューの作成・取込）は、実行を確認語欄の操作行に置き、戻るだけを左上にする | 確認語と確定を 1 つの区画にまとめる（README §4「確認語欄」、#379） |
+| 設定の画面（OCI・データベース・モデルなど、1 ページに複数のカードのフォームがある画面）は、今までどおりカードの末尾の `FormActionBar` | 1 ページに保存の対象が複数あるので、ページのヘッダーに 1 つの保存を置けない |
+
+- 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）。`actions` に `id: "back"` の操作を入れない。
+- 置き換えた画面: RAG のナレッジベース・業務ビューのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・外部 MCP サーバー・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
+
 ### `Button`（変更）— ★ アイコンと loading の統一基準
 
 アイコンの有無と loading 表示がバラバラだった問題を、**1つのルールで結びました。**
@@ -912,12 +940,14 @@ QA に事前共有してください。**47点あります。**
 | 53 | **一覧の検索欄が左（先頭）に移り、大量の候補から選ぶ一覧が 1 つの見た目になる**（#600） | RAG のナレッジベース・業務ビューの一覧: 左に状態のチップ、右端に検索欄（`sm:w-64`）、間が空く → `ListToolbar` で左に検索欄（残りを埋める）、その右に状態のチップ。文書の一覧: 右端の検索欄（`sm:ml-auto sm:w-64`）→ 左端に検索欄、その右に状態・ナレッジベース。ナレッジベースの「所属文書」: 検索なし、上に「追加する文書を検索」+ 選択欄 +「追加」（1 件ずつ・候補 100 件まで）→ 左に「所属文書を検索」、右に「文書を追加」。押すと下に `ListPicker`（候補は 100 件ずつ「さらに読み込む」、チェックで複数を選び「選択した N 件を追加」、追加済みは灰色で「追加済み」）。NL2SQL の業務プロファイルの許可する表・ビュー: 枠 392px 固定の中に手書きのチェックボックスの行（44px）と、スキーマごとの枠 → `ListPicker`（見出し・一覧・フッターの 3 段、一覧は 28rem / 375px では 17.5rem、行 3.5rem、スキーマの見出しは面の地、チェックは塗りの四角）。権限管理の「利用できる対象」: 2 列のチェックボックスの行（名前 + 説明 2 行）→ `ListPicker` の 1 列の行（名前 + 説明 1 行で省略、全文は title、状態のバッジは右端）。フッターの「さらに読み込む」は失敗中は出さず、Banner の「再試行」だけにする | 検索欄の位置を 3 製品でそろえる（UX 契約 page-archetypes.md「一覧のツールバー」）。数千〜数万件から検索して複数をまとめて選べる。キーボード（Tab 1 回で一覧に入り、矢印と Space）・読み上げを共通の部品にそろえる |
 | 54 | **NL2SQL のメタデータ SQL・合成データの対象が `ListPicker` に、Deep Data Security の対象が検索できる選択欄になる**（#608） | メタデータ SQL（コメント・アノテーション・ドメイン）の対象: 一括選択の下に 3 列の `DataTable`（対象名・種類・所有者の並べ替え、行のチェックボックス、コメントは 2 行）→ `ListPicker`（選択の行、1 列の listbox、行は名前・コメント 1 行で省略・右端に種類のバッジ、28rem / 375px では 17.5rem、フッターの「さらに読み込む」）。合成データの対象の表: 手書きのチェックボックスの行 → `ListPicker`（左に候補の検索欄）。Deep Data Security の対象 table/view: 枠の中に検索欄・所有者の欄・手書きの listbox（max-h-52）・「さらに読み込む」のボタン → `SearchableSelectField`（ボタンに選んだ名前、開くと検索と候補の一覧。所有者の欄は無くなり、検索がスキーマ名も照合する）。権限管理の「利用できる対象」は見た目は同じで、候補を 50 件ずつ読む（フッターの「さらに読み込む」が出る） | 似た機能を同じ部品にそろえる（UX 契約 page-archetypes.md「大量の候補から選ぶ」の画面ごとの判断）。候補を全件読まない |
 | 55 | **入力欄・選択欄・ボタンの高さが 3 段にそろい、選択欄が値の長さの幅になる**（#613） | 高さ: 入力欄 36px・その横のボタン 44px（`touchTarget`）、NL2SQL の選択欄 38.5px（`h-11`）/ 44px（`min-h-[44px]`）、Agent の入力欄 40px（`h-10`、地は `surface-sunken`）、ログインの入力欄 38.5px と送信 44px、確認語欄 44px、タッチ端末では入力欄 36px・ボタン 44px → 同じ行は同じ段（sm 32 / md 36 / lg 40px）、タッチ端末は入力欄も含めて 44px。ネイティブの select / input も共有の見た目（地は `surface`）。幅: 単独の選択欄が親の幅いっぱい（RAG のチャットの業務ビューが 1,280px で約 560px）→ 値の長さの段（xs 8 / sm 12 / md 20 / lg 28rem、sm 未満は全幅）。チャットの入力欄と送信は下端をそろえ、送信は lg | README §4「操作部品の高さと幅」。Carbon・Material 3・Apple HIG・GOV.UK の指針。行の中で上端・下端がずれず、短い値の欄が長く伸びない |
+| 56 | **詳細・作成・編集の画面の「一覧へ戻る」が左上に、保存が右端の primary にそろう**（#618） | RAG・Agent: ヘッダーの右に「一覧へ戻る」（secondary）+ 保存、タイトルの上にパンくず（一覧 › 対象）、RAG は「変更を元に戻す」を本文のカードの下。NL2SQL・system-settings: 本文の先頭に左寄せの「一覧に戻る」（ghost）、system-settings の保存はフォームの末尾の `FormActionBar`（キャンセル・危険な操作と同じ行） → すべて `PageHeader` の左上（タイトルの上）に「← 一覧へ戻る」、右端に保存・作成（primary）、その左に「変更を破棄」。パンくずは出さない。system-settings のパスワードのリセット・無効化・削除・復元・アーカイブはフォームのパネルの見出しの右の `ObjectActionBar`、保存の失敗はヘッダーの直下の `SaveErrorBanner`。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」 | README §4「詳細・作成・編集の画面の操作」。Material 3・Apple HIG・Polaris・Atlassian・GitHub Primer の型 |
 
 ### API の非互換
 
 | 対象 | 変更 |
 |---|---|
 | `Button` | `icon` / `trailingIcon` プロップ新設。子にアイコンを書く旧スタイルは動くが**非推奨** |
+| `PageHeader`（#618） | `back`（`PageHeaderBack`: `{ label, onClick, ariaLabel?, disabled?, testId? }`）を追加し、`PageHeaderBack` を export。「一覧へ戻る」は `actions` の `id: "back"` ではなく `back` で渡す（タイトルの上の左端。`data-page-header-back`）。E2E で `getByTestId("<page>-actions")` の中から「一覧へ戻る」を探していたら、`getByRole("button", { name: /一覧へ戻る/ })` か `data-testid` で引く |
 | 操作部品の高さと幅（#613） | **新規 export** `ControlSize` / `FieldWidth` / `CONTROL_HEIGHT_CLASS` / `CONTROL_MIN_HEIGHT_CLASS` / `FIELD_WIDTH_CLASS` / `fieldWidthClass` / `fieldControlClassName` / `FieldActionRow`。`TextField` / `SearchField` / `SecretField` / `SelectField` / `SearchableSelectField` に `size`（`"sm" \| "md" \| "lg"`）と `width`（`"xs" \| "sm" \| "md" \| "lg" \| "full"`）を追加。`TextField` の `touchTarget` と `ClearActionButton` の `matchButtonHeight` を**削除**（`ClearActionButton` はマウス環境でも 44px にしない。行と同じ `size` を渡す）。トークン `--control-height-sm` / `md` / `lg` と `--field-width-xs` / `sm` / `md` / `lg` を新設し、`--button-height-*` / `--field-height` は別名にした。`pointer: coarse` では入力欄・選択欄も 44px |
 | `Button`（#355） | `loading` 中はネイティブの `disabled` ではなく `aria-disabled="true"`（CSS の `:disabled`・jest-dom の `toBeDisabled()` では判定できない）。`ButtonProps` は `interface` から `type`（`variant` と `tone` の組み合わせの union）に変わり、`variant="danger"` + `tone="danger"` は型エラー。組み合わせの型は `ButtonVariantToneProps` として export |
 | `StatusBadge` | `icon` プロップ新設（既定 `true`）。`pending` は `warning` の別名で**非推奨** |

@@ -26,10 +26,10 @@
 
 - URL の検索パラメータ（`?id=` など）を**唯一の情報源**とし、`null` = 一覧 / `"new"` = 新規 / `<id>` = 編集。
 - 一覧：共有 `DataTable`（検索 / ソート / `Pagination`）+「新規」ボタン + 必要なら状態バー。
-- エディタ：全幅で `Section` を**縦に積む**。上部に 戻る / 保存（primary）/ 削除（danger）。
+- エディタ：全幅で `Section` を**縦に積む**。`PageHeader` の左上（タイトルの上）に「一覧へ戻る」（`back`）、右端に保存・作成（primary）、その左に「変更を破棄」（secondary）。対象への操作（アーカイブ・削除など）は最初のカードの見出しの右の `ObjectActionBar` 1 か所（[design-system README §4「詳細・作成・編集の画面の操作」](../design-system/README.md)、#618）。一覧と同じページで切り替える編集（NL2SQL・system-settings）も同じ置き方にする。
 - **保存の失敗**：欄に結び付く失敗は欄の直下、それ以外はヘッダーの直下の `SaveErrorBanner` の 1 か所だけ（Toast・フォームの下の `FormStatus` に重ねない。[messaging.md §3.3.1](./messaging.md#331-全画面のエディタの保存の失敗585)）。
 - **離脱ガード**：未保存のまま離れるときは破棄を確認する（[workspace-state.md](./workspace-state.md#未保存変更の離脱ガード)）。
-- **パンくず**：一覧 › 対象名 を出す。
+- **戻る**：2 階層（一覧 › 対象）のパンくずは出さず、`PageHeader` の `back`「一覧へ戻る」にする（読み上げ名は「{list}の一覧へ戻る」）。3 階層以上の深い導線だけパンくずを使う（#618）。
 - 古いタブ（list / create / import など）は、**一覧上の操作** か **エディタ内の節** に平らにする。破壊的な操作は `useConfirm` に集める。
 
 ### B. マスタ詳細の閲覧（読み取り / 点検）
