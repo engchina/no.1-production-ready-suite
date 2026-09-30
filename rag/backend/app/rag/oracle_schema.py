@@ -527,6 +527,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=_artifact_layers_input_fingerprint_migration_sql(),
         ),
         OracleSchemaSection(
+            name="20260930_003_chunk_sets_first_page_context",
+            table_name="rag_chunk_sets",
+            sql=_chunk_sets_first_page_context_migration_sql(),
+        ),
+        OracleSchemaSection(
             name="20260930_004_knowledge_base_extraction_fields",
             table_name="rag_knowledge_bases",
             sql=_knowledge_base_extraction_fields_migration_sql(),
@@ -1506,6 +1511,29 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (classification JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _chunk_sets_first_page_context_migration_sql() -> str:
+    """rag_chunk_sets に文書の 1 ページ目の本文の JSON 列を追加する(冪等。#557)。
+
+    回答の「文書の背景」に使う。chunk ごとに複製せず、解析の結果(chunk set)ごとに 1 つ持つ。
+    既存の chunk set は NULL のまま(再索引で作られる)。
+    """
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS'
+      AND column_name = 'FIRST_PAGE_CONTEXT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (first_page_context JSON)';
     END IF;
 END;
 /
