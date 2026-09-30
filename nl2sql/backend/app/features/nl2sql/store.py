@@ -1,6 +1,6 @@
 """NL2SQL persistence store boundary.
 
-local / CI は memory store を使い、production では Oracle 26ai 内の JSON CLOB
+local / CI は memory store を使い、production では Oracle AI Database 内の JSON CLOB
 テーブルへ snapshot を保存する。service 層は Pydantic model の shape を保ったまま
 store を差し替えられる。
 """

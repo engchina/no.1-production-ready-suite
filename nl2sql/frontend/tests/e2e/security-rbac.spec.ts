@@ -2921,11 +2921,13 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
   await expect(page.getByRole("checkbox", { name: /外観/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).toBeChecked();
-  const securityGroupBulkActions = page.getByTestId("security-roles-セキュリティ管理-permission-selection-actions");
+  await expect(page.getByRole("checkbox", { name: /^ロール管理/ })).toBeChecked();
+  // 機能の一覧は左のナビのグループ・名前にそろえる（Issue 567）。backend のグループ「セキュリティ管理」・
+  // 名前「ロール・権限管理」ではなく、ナビの「ユーザーとロール」「ロール管理」で出す。
+  const securityGroupBulkActions = page.getByTestId("security-roles-ユーザーとロール-permission-selection-actions");
   const securityGroupHeading = securityGroupBulkActions
     .locator("..")
-    .getByRole("heading", { name: "セキュリティ管理" });
+    .getByRole("heading", { name: "ユーザーとロール" });
   await expect
     .poll(async () => {
       const [actionsBox, headingBox] = await Promise.all([
@@ -2936,10 +2938,10 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
       return Math.abs(actionsBox.x - headingBox.x);
     })
     .toBeLessThanOrEqual(1);
-  await expect(securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択をすべて解除" })).toBeEnabled();
-  await securityGroupBulkActions.getByRole("button", { name: "セキュリティ管理 の選択をすべて解除" }).click();
+  await expect(securityGroupBulkActions.getByRole("button", { name: "ユーザーとロール の選択をすべて解除" })).toBeEnabled();
+  await securityGroupBulkActions.getByRole("button", { name: "ユーザーとロール の選択をすべて解除" }).click();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).not.toBeChecked();
-  await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /^ロール管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.locator("#security-permissions-panel-list")).toBeVisible();

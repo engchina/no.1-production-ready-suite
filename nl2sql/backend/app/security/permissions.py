@@ -33,11 +33,12 @@ def _menu_permission(
     *,
     implies: tuple[str, ...] = (),
 ) -> PermissionDefinition:
+    # 説明はナビの名前（label）と同じ用語で書く（#580）。
     return _permission(
         code,
         group,
         label,
-        f"{label}を表示し、関連操作を利用できます。",
+        f"「{label}」の画面を表示し、関連操作を利用できます。",
         implies=implies,
     )
 
@@ -59,19 +60,11 @@ SYSTEM_STATUS_READ_PERMISSION = "nl2sql.system_status.read"
 PERSISTENCE_RECOVER_PERMISSION = "nl2sql.persistence.recover"
 
 
+# メニュー権限のグループ・名前・並び順は左のナビ（frontend の nav-config.ts と、
+# i18n のサイドナビの表示名）と同じにする（#567 / #580。一致は
+# tests/test_permission_catalog_nav.py が確かめる）。ナビに無い権限（Ontology・
+# 参照権限・実行権限・管理権限の capability）はメニュー権限の後ろに置く。
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _permission(
-        "nl2sql.ontology.capabilities.manage",
-        "Ontology",
-        "能力設定（Capability Binding）",
-        "公開済みの関数・操作に実装を明示的に設定します。",
-    ),
-    _permission(
-        "nl2sql.ontology.actions.execute",
-        "Ontology",
-        "操作実行（Action Execution）",
-        "許可された Profile の操作をプレビューして確認後に実行します。",
-    ),
     _menu_permission(
         "menu.query",
         "AI 活用",
@@ -157,7 +150,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(
         "menu.sample_data",
         "データ準備",
-        "検証用サンプルデータ",
+        "サンプルデータ管理",
         implies=(SAMPLE_DATA_MANAGE_PERMISSION, SCHEMA_READ_PERMISSION),
     ),
     _menu_permission(
@@ -209,11 +202,22 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "SQL生成評価",
         implies=(PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION),
     ),
-    # ユーザー管理・ロール管理は3製品共通の画面（#206）。権限管理と DeepSec は NL2SQL 固有。
-    _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
-    _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
+    # 権限管理と DeepSec は NL2SQL 固有。ユーザー管理・ロール管理は3製品共通の画面（#206）。
     _menu_permission("menu.security_permissions", "NL2SQL セキュリティ", "権限管理"),
     _menu_permission("menu.security_deepsec", "NL2SQL セキュリティ", "Deep Data Security"),
+    _menu_permission(
+        "menu.settings_system_tables",
+        "運用設定",
+        "システムテーブル",
+        implies=(
+            SCHEMA_READ_PERMISSION,
+            SCHEMA_REFRESH_PERMISSION,
+            SYSTEM_STATUS_READ_PERMISSION,
+            PERSISTENCE_RECOVER_PERMISSION,
+        ),
+    ),
+    _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
+    _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
     _menu_permission("menu.settings_upload_storage", "システム設定", "アップロード保存先"),
     _menu_permission("menu.settings_model", "システム設定", "モデル"),
@@ -228,23 +232,26 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             PERSISTENCE_RECOVER_PERMISSION,
         ),
     ),
-    _menu_permission(
-        "menu.settings_system_tables",
-        "システム設定",
-        "システムテーブル",
-        implies=(
-            SCHEMA_READ_PERMISSION,
-            SCHEMA_REFRESH_PERMISSION,
-            SYSTEM_STATUS_READ_PERMISSION,
-            PERSISTENCE_RECOVER_PERMISSION,
-        ),
-    ),
     _menu_permission("menu.settings_appearance", "システム設定", "外観"),
+    # ここから下はナビに無い権限（画面の中の操作を許可する capability）。
+    _permission(
+        "nl2sql.ontology.capabilities.manage",
+        "Ontology",
+        "能力設定（Capability Binding）",
+        "公開済みの関数・操作に実装を明示的に設定します。",
+    ),
+    _permission(
+        "nl2sql.ontology.actions.execute",
+        "Ontology",
+        "操作実行（Action Execution）",
+        "許可された Profile の操作をプレビューして確認後に実行します。",
+    ),
     _permission(
         PROFILE_READ_PERMISSION,
         "参照権限",
         "業務プロファイル参照",
-        "SQL 生成や SQL から質問生成で、業務プロファイルの選択肢と利用コンテキストを参照できます。",
+        "「SQL 生成」や「SQL から質問を生成」で、業務プロファイルの選択肢と利用コンテキストを"
+        "参照できます。",
     ),
     _permission(
         PROFILE_MANAGE_PERMISSION,
@@ -282,7 +289,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         FEEDBACK_WRITE_PERMISSION,
         "実行権限",
         "フィードバック登録",
-        "自分の SQL 生成履歴へ利用者フィードバックを登録できます。",
+        "自分の「実行履歴」（SQL 生成の履歴）へ利用者フィードバックを登録できます。",
     ),
     _permission(
         FEEDBACK_MANAGE_PERMISSION,
@@ -314,8 +321,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _permission(
         SAMPLE_DATA_MANAGE_PERMISSION,
         "管理権限",
-        "検証用サンプルデータ管理",
-        "検証用サンプルデータの確認、投入、削除を実行できます。",
+        "サンプルデータの投入・削除",
+        "「サンプルデータ管理」で、サンプルデータの確認、投入、削除を実行できます。",
     ),
     _permission(
         LEARNING_MATERIAL_MANAGE_PERMISSION,

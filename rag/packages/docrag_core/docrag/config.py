@@ -18,7 +18,6 @@ from docrag.knowledge.query_history import (
     QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT,
 )
 from docrag.retrieval.text_search_tokenizer import (
-    DEFAULT_TEXT_SEARCH_TOKENIZER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
 )
@@ -227,7 +226,6 @@ class Settings:
     embedding_batch_size: int
     image_embedding_enabled: bool
     image_embedding_rrf_weight: float
-    text_search_tokenizer: str
     text_search_query_variant_limit: int
     # 文脈構築で同じ親から起点（retrieved_anchor）に採る child の上限（#669、#889）。1 以上。
     max_anchors_per_parent: int
@@ -401,8 +399,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             0.0,
             _env_float(env, "IMAGE_EMBEDDING_RRF_WEIGHT", DEFAULT_IMAGE_EMBEDDING_RRF_WEIGHT),
         ),
-        text_search_tokenizer=env.get("TEXT_SEARCH_TOKENIZER", DEFAULT_TEXT_SEARCH_TOKENIZER).strip()
-        or DEFAULT_TEXT_SEARCH_TOKENIZER,
         text_search_query_variant_limit=max(
             1,
             _env_int(env, "TEXT_SEARCH_QUERY_VARIANT_LIMIT", DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT),

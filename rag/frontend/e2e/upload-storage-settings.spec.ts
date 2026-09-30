@@ -135,7 +135,7 @@ test("アップロード時に選択したナレッジベースへ所属でき�
 
   await page.goto("/upload");
 
-  const kbCombo = page.getByRole("combobox", { name: "アップロード先のナレッジベース" });
+  const kbCombo = page.getByRole("combobox", { name: "所属させるナレッジベース" });
   await kbCombo.click();
   await page.getByRole("option", { name: /社内規程/ }).click();
   await kbCombo.press("Escape");

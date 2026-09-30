@@ -10,6 +10,7 @@
 - **UI に触る変更（`packages/ui` および各製品（`rag/` `nl2sql/` `agent/`）の `frontend/`）では、`docs/design-system/` を正本とする。** 作業前に [ARCHITECTURE.md](./docs/design-system/ARCHITECTURE.md) を読む。トークン値・コンポーネント仕様・意図的な見た目の変更点は [README.md](./docs/design-system/README.md) に、実装の参照は [components-reference.md](./docs/design-system/components-reference.md) にある。
 - **依存の向きを逆流させない。** デザインシステムの決定 → `packages/ui` → 各製品（`file:../../platform/packages/ui` リンク）の一方向のみ。製品側でコンポーネントやトークンを新規実装してはならない。必要になった場合は `packages/ui` に入れる Issue を立てる。
 - **各製品が持てるのは `nav-config.ts`（ナビ構造）、`i18n.ts`（業務コピー）、データ取得・状態管理・権限、ドメイン enum → コンポーネント prop の対応表、画面固有の業務レイアウトのみ。** 色・型・余白・角丸・影・モーションは `packages/ui` が持つ。
+- 共通の権限管理（`packages/system-settings` の `RolePermissionsPage`）は、渡された権限の一覧の順にグループを並べる。一覧は製品が `permissionNavSections` / `arrangePermissionsByNav` で左のナビにそろえてから渡す（規則は [../AGENTS.md](../AGENTS.md)「共通の仕組みと製品固有の仕組みの分け方」。#567）。
 - 1製品しか使わないもの（`WorkflowProgressStrip`、オントロジーグラフ等）はその製品のディレクトリに置いてよい。判断基準は **「他の2製品がこれを欲しがるか」** — 欲しがるなら `packages/ui` に入れる。
 
 ### 禁止事項

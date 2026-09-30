@@ -94,8 +94,8 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await expectNoPageOverflow(page);
 
   // KB を選ぶと案内が消え、選んだ KB を付けて送る。
-  await page.getByRole("combobox", { name: "アップロード先のナレッジベース" }).click();
-  await page.getByRole("listbox", { name: "アップロード先のナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "所属させるナレッジベース" }).click();
+  await page.getByRole("listbox", { name: "所属させるナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
   await page.keyboard.press("Escape");
   await expect(picker.getByRole("alert")).toHaveCount(0);
   await expect(picker.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();

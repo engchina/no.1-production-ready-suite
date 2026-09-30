@@ -287,7 +287,7 @@ def test_put_classification_validates_and_returns_404(monkeypatch: pytest.Monkey
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_classification_is_saved_and_filters_documents_on_real_oracle() -> None:
-    """実 Oracle 26ai で、保存した分類と有効期間が述語どおりに絞り込まれることを確かめる。"""
+    """実 Oracle AI Database で、保存した分類と有効期間が述語どおりに絞り込まれることを確かめる。"""
     oracle = OracleClient()
     document = await oracle.create_document(
         file_name="classification.pdf",

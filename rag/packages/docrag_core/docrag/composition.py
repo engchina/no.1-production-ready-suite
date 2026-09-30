@@ -74,7 +74,7 @@ def create_oracle_application(
     chosen = load_profile(profile) if isinstance(profile, str) else profile
     if not isinstance(chosen, DomainProfile):
         raise TypeError("profile must be a DomainProfile or a built-in profile name")
-    settings = settings or get_settings(environ={}, dotenv_path=None, text_search_tokenizer="regex", domain_keywords_override=())
+    settings = settings or get_settings(environ={}, dotenv_path=None, domain_keywords_override=())
     def path(value):
         if value is None:
             return None

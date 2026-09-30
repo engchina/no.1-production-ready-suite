@@ -193,12 +193,11 @@ from docrag.knowledge.runtime_knowledge import (
 from docrag.config import Settings
 from docrag.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
-    TEXT_SEARCH_TOKENIZER_AUTO,
-    TEXT_SEARCH_TOKENIZER_REGEX,
-    TEXT_SEARCH_TOKENIZER_SUDACHI,
+    TEXT_SEARCH_TOKENIZER_HYBRID,
     TextSearchTokenizerConfig,
     build_oracle_text_query,
     normalize_text_search_tokenizer_config,
+    text_search_tokenizer_name,
     tokenize_text_search_query,
     tokenize_text_search_query_with_trace,
     tokenizer_fingerprint,
@@ -1626,7 +1625,8 @@ def build_question_text_search_info(
     """Oracle Text 検索用の token と query trace を作成します。"""
     config = _question_text_search_tokenizer_config(settings)
     config = normalize_text_search_tokenizer_config(config)
-    tokenizer_label = _text_search_tokenizer_label(config)
+    tokenizer_name = text_search_tokenizer_name(config)
+    tokenizer_label = _text_search_tokenizer_label(config, tokenizer_name)
     fingerprint = ""
     try:
         fingerprint = tokenizer_fingerprint(config)
@@ -1652,7 +1652,7 @@ def build_question_text_search_info(
                 max_tokens=MAX_TEXT_SEARCH_TOKENS,
             )
             terms = tuple(tokenization.tokens)
-            oracle_query = build_oracle_text_query(terms)
+            oracle_query = build_oracle_text_query(terms, weights=tokenization.weights)
             if oracle_query and oracle_query not in seen_queries:
                 oracle_queries.append(oracle_query)
                 seen_queries.add(oracle_query)
@@ -1661,6 +1661,7 @@ def build_question_text_search_info(
                 {
                     "query": variant,
                     "tokens": list(terms),
+                    "weights": list(tokenization.weights),
                     "matched_domain_keywords": list(tokenization.matched_domain_keywords),
                     "selected_domain_keywords": list(tokenization.selected_domain_keywords),
                     "truncated_domain_keywords": list(tokenization.truncated_domain_keywords),
@@ -1675,7 +1676,7 @@ def build_question_text_search_info(
         terms = query_terms[0] if query_terms else ()
         oracle_query = oracle_queries[0] if oracle_queries else ""
         return QuestionTextSearchInfo(
-            tokenizer=config.mode,
+            tokenizer=tokenizer_name,
             tokenizer_label=tokenizer_label,
             tokenizer_fingerprint=fingerprint,
             tokens=terms,
@@ -1688,7 +1689,7 @@ def build_question_text_search_info(
         )
     except Exception as exc:
         return QuestionTextSearchInfo(
-            tokenizer=config.mode,
+            tokenizer=tokenizer_name,
             tokenizer_label=tokenizer_label,
             tokenizer_fingerprint=fingerprint,
             query_variants=tuple(variants),
@@ -1826,23 +1827,20 @@ def _target_text_queries(question: str, settings: Settings) -> list[str]:
 
 def _question_text_search_tokenizer_config(settings: Settings) -> TextSearchTokenizerConfig:
     return TextSearchTokenizerConfig(
-        mode=settings.text_search_tokenizer,
         sudachi_dict_type=settings.text_search_tokenizer_sudachi_dict,
         sudachi_config_path=settings.text_search_tokenizer_sudachi_config,
         latin_stemmer=settings.text_search_tokenizer_latin_stemmer,
     )
 
 
-def _text_search_tokenizer_label(config: TextSearchTokenizerConfig) -> str:
+def _text_search_tokenizer_label(config: TextSearchTokenizerConfig, tokenizer_name: str) -> str:
     cfg = normalize_text_search_tokenizer_config(config)
-    if cfg.mode == TEXT_SEARCH_TOKENIZER_SUDACHI:
-        name = "Sudachi"
-    elif cfg.mode == TEXT_SEARCH_TOKENIZER_AUTO:
-        name = "Auto（Sudachi優先）"
-    elif cfg.mode == TEXT_SEARCH_TOKENIZER_REGEX:
-        name = "Regex"
-    else:
-        name = cfg.mode
+    # 分割は 1 つ（#588）。Sudachi が使えない環境では文字種の区切りだけになる。
+    name = (
+        "Sudachi＋文字種の区切り"
+        if tokenizer_name == TEXT_SEARCH_TOKENIZER_HYBRID
+        else "文字種の区切り（Sudachi なし）"
+    )
     detail = f"dict={cfg.sudachi_dict_type}, latin={cfg.latin_stemmer}"
     if cfg.sudachi_config_path:
         detail += f", config={cfg.sudachi_config_path}"

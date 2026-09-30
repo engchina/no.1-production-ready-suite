@@ -1519,7 +1519,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Fail if OCI GenAI feedback embedding is not configured. "
-            "Use with --execute-feedback-index for live Oracle 26ai vector smoke."
+            "Use with --execute-feedback-index for live Oracle AI Vector Search smoke."
         ),
     )
     parser.add_argument(

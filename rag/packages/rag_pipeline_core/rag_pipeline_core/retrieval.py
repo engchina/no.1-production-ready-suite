@@ -4,7 +4,7 @@ strategy → 検索挙動(mode_override / strategy_bias / gap_stop / corrective 
 query_expansion)を決定論で解決する。mode_override / strategy_bias は wire 中立のため **文字列**
 (SearchMode / SearchStrategy の値)で受け渡し、backend が enum へ写す。query_expansion は None の
 とき settings 既定に従うため、呼び出し側から settings_query_expansion を渡す。Settings 非依存。
-外部検索エンジンは導入しない(実 retrieval は Oracle 26ai 経路を backend が実行)。
+外部検索エンジンは導入しない(実 retrieval は Oracle AI Database 経路を backend が実行)。
 """
 
 from __future__ import annotations

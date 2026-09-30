@@ -129,14 +129,83 @@ def test_field_round_trips_through_document_payload_only_when_present() -> None:
 def test_extraction_fields_settings_api_returns_saved_schema() -> None:
     get_resp = client.get("/api/settings/extraction-fields")
     assert get_resp.status_code == 200
-    assert get_resp.json()["data"]["fields"] == []
+    assert get_resp.json()["data"]["uses_standard"] is True
 
     fields_mod.save_field_schema(
         [FieldDefinition(name="請求書番号", description="invoice", value_type="string")]
     )
 
-    fields = client.get("/api/settings/extraction-fields").json()["data"]["fields"]
-    assert [f["name"] for f in fields] == ["請求書番号"]
+    data = client.get("/api/settings/extraction-fields").json()["data"]
+    assert [f["name"] for f in data["fields"]] == ["請求書番号"]
+    assert data["uses_standard"] is False
+
+
+# ---- 標準の項目（未保存の環境の全体の既定。#556）----
+
+_STANDARD_NAMES = ["文書の種類", "文書タイトル", "発行日・作成日", "発行元・作成部署"]
+
+
+def test_standard_fields_are_the_default_until_saved() -> None:
+    """一度も保存していない(ファイルが無い)環境は、標準の 4 項目を全体の既定にする。"""
+    assert fields_mod.load_saved_field_schema() is None
+    loaded = fields_mod.load_field_schema().fields
+    assert [field.name for field in loaded] == _STANDARD_NAMES
+    assert [field.value_type for field in loaded] == ["string", "string", "date", "string"]
+    # 説明はモデルへの指示になるため、すべて空でなく、保存の上限(500 字)に収まる。
+    assert all(0 < len(field.description) <= 500 for field in loaded)
+    # 標準の項目は保存の検証(重複・上限)も通る。
+    assert validate_field_schema(loaded).fields == loaded
+    # 呼び出し側が変更しても定数は変わらない。
+    loaded[0].name = "変更"
+    assert fields_mod.STANDARD_FIELD_DEFINITIONS[0].name == "文書の種類"
+
+
+def test_saved_empty_schema_is_respected_not_replaced_by_standard() -> None:
+    """意図して空を保存した環境は、標準の項目を使わない(項目を抽出しない)。"""
+    fields_mod.save_field_schema([])
+    saved = fields_mod.load_saved_field_schema()
+    assert saved is not None
+    assert saved.fields == []
+    assert fields_mod.load_field_schema().fields == []
+    data = client.get("/api/settings/extraction-fields").json()["data"]
+    assert data["fields"] == []
+    assert data["uses_standard"] is False
+
+
+def test_broken_saved_schema_is_empty_not_standard(tmp_path: Path) -> None:
+    """壊れたファイルは「保存済み」として安全に空にし、標準の項目へ黙って切り替えない。"""
+    (tmp_path / "extraction-fields.json").write_text("{broken", encoding="utf-8")
+    assert fields_mod.load_field_schema().fields == []
+
+
+def test_reset_extraction_fields_api_returns_to_standard(tmp_path: Path) -> None:
+    """「標準の項目に戻す」(DELETE)は保存した定義を消し、標準の項目を返す。"""
+    schema_file = tmp_path / "extraction-fields.json"
+    fields_mod.save_field_schema(_DEFS)
+    assert schema_file.exists()
+
+    resp = client.delete("/api/settings/extraction-fields")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["uses_standard"] is True
+    assert [field["name"] for field in data["fields"]] == _STANDARD_NAMES
+    assert not schema_file.exists()
+    assert [f.name for f in fields_mod.load_field_schema().fields] == _STANDARD_NAMES
+    # 保存していないときに呼んでも成功する(何度呼んでも同じ結果)。
+    again = client.delete("/api/settings/extraction-fields")
+    assert again.status_code == 200
+    assert again.json()["data"] == data
+
+
+def test_reset_extraction_fields_api_reports_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail() -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("app.api.routes.settings.reset_field_schema", _fail)
+    resp = client.delete("/api/settings/extraction-fields")
+    assert resp.status_code == 500
+    assert "標準の項目に戻せませんでした" in resp.text
 
 
 # ---- ナレッジベースごとの項目の定義（#548）----
@@ -287,6 +356,42 @@ async def test_ingestion_extracts_with_default_when_knowledge_base_has_no_defini
     )
     assert "請求書番号" in vlm.prompts[0]
     assert [f.name for f in result.fields] == ["請求書番号"]
+
+
+class _StandardResponder(_PromptRecorder):
+    async def generate(self, prompt: str, text: str) -> str:
+        self.prompts.append(prompt)
+        return (
+            '[{"name":"文書の種類","value":"規程"},'
+            '{"name":"発行日・作成日","value":"2026年4月1日"}]'
+        )
+
+
+@pytest.mark.anyio
+async def test_ingestion_uses_standard_fields_until_saved() -> None:
+    """全体の既定を保存していない環境の取込は、標準の項目で抽出する(#556)。"""
+    vlm = _StandardResponder()
+    result = await _pipeline(_FieldSetOracle([None]), vlm)._attach_extraction_fields(
+        "trace", StructuredExtraction(raw_text="就業規程 2026年4月1日 総務部"), document_id="doc-1"
+    )
+    assert all(name in vlm.prompts[0] for name in _STANDARD_NAMES)
+    assert [(f.name, f.value, f.value_type) for f in result.fields] == [
+        ("文書の種類", "規程", "string"),
+        ("発行日・作成日", "2026-04-01", "date"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_ingestion_skips_extraction_when_empty_default_was_saved() -> None:
+    """空の全体の既定を保存した環境では、標準の項目を使わず LLM を呼ばない(#556)。"""
+    fields_mod.save_field_schema([])
+    vlm = _StandardResponder()
+    extraction = StructuredExtraction(raw_text="本文")
+    result = await _pipeline(_FieldSetOracle([None]), vlm)._attach_extraction_fields(
+        "trace", extraction, document_id="doc-1"
+    )
+    assert result is extraction
+    assert vlm.prompts == []
 
 
 @pytest.mark.anyio

@@ -178,6 +178,13 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
 
   await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
 
+  // 機能の一覧は左のナビと同じグループ・並び順・名前（Issue 567）。backend のカタログが RAG 検索 → チャットの
+  // 順でも、ナビの順（チャット → RAG 検索）に並べ、ナビに無い capability は後ろに置く。
+  const featureList = page.locator('form[aria-labelledby="security-permissions-form-heading"] fieldset').first();
+  await expect(featureList.locator("h3")).toHaveText(["業務ビュー", "ナレッジ構築", "管理権限"]);
+  await expect(featureList.getByRole("checkbox").nth(0)).toHaveAccessibleName(/^チャット/);
+  await expect(featureList.getByRole("checkbox").nth(1)).toHaveAccessibleName(/^RAG 検索/);
+
   const views = page.getByTestId("security-roles-business-view-access-list");
   const bases = page.getByTestId("security-roles-knowledge-base-access-list");
   await expect(views).toHaveAccessibleName("利用できる業務ビュー");

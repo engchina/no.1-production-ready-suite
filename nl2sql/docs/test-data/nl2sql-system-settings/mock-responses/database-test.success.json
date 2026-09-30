@@ -2,7 +2,7 @@
   "data": {
     "status": "success",
     "readiness": "ok",
-    "message": "Oracle 26ai への接続を確認しました。",
+    "message": "Oracle AI Database への接続を確認しました。",
     "elapsed_ms": 43,
     "troubleshooting": [],
     "details": {

@@ -69,7 +69,7 @@ async def search(
 ) -> ApiResponse[SearchResponse]:
     """自然言語クエリで RAG 検索を実行する。
 
-    フロー: 埋め込み -> Oracle 26ai ベクトル検索 -> Cohere Rerank v4 fast -> LLM 回答生成。
+    フロー: 埋め込み -> Oracle AI Vector Search -> Cohere Rerank v4 fast -> LLM 回答生成。
     """
     enforce_rate_limit("search", http_request)
     result = await _run_search_with_timeout(request)

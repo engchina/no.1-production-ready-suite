@@ -242,7 +242,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ## 共通の技術方針
 
-- AI / DB は OCI / Oracle に集約する（回答生成・構造化抽出 = OCI Enterprise AI、embedding / rerank = OCI Generative AI の Cohere Embed v4 / Rerank v4 fast、ベクトル検索・データの正本 = Oracle 26ai）。外部ベクトル DB、別 LLM provider、別 SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
+- AI / DB は OCI / Oracle に集約する（回答生成・構造化抽出 = OCI Enterprise AI、embedding / rerank = OCI Generative AI の Cohere Embed v4 / Rerank v4 fast、ベクトル検索 = Oracle AI Vector Search、データの正本 = Oracle AI Database）。外部ベクトル DB、別 LLM provider、別 SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
+- **Oracle の製品名は公式名で書き、名前にバージョン（`26ai` 等）を入れない（#564）。** データベースは「Oracle AI Database」、ベクトル検索は「Oracle AI Vector Search」、マネージドサービスは「Oracle Autonomous AI Database」。文脈で明らかなら「Oracle」「データベース」でよい。対応バージョンは [terraform/README.md](./terraform/README.md) の「Autonomous AI Database（全製品で共有）」の 1 か所にだけ書き、ほかはそこを参照する（Terraform の `adb_db_version` の値や `oracle_26ai` のような API・保存値・識別子は変えない）。
 - 自前のコード（3製品の backend・worker・frontend、RAG の前処理 / parser）は Docker イメージを作らず、ネイティブで動かす（開発は `uv run` / `npm run dev`、本番は Compute 上の systemd + Nginx。各製品の `init_script.sh`）。Dockerfile・自前の compose は持たない（#286 / #356）。Docker を使うのは第三者が構築済みのイメージを配るもの（Agent の Runtime の OpenClaw・Hermes・DeerFlow。`agent/docker-compose.yml`、digest 固定）だけ。
 - Backend は Python 3.12 + FastAPI + Pydantic v2 + uv、共通基盤は `pr_backend_core`。
 - **Python の版は 3.12 に固定する（#286）。** すべての `pyproject.toml` の `requires-python` は `">=3.12,<3.13"`、リポジトリ直下の `.python-version` は `3.12`。uv は project の中では直下の `.python-version` を読まないため、上限は `requires-python` で掛ける。版を変えるときは、全 `pyproject.toml`・`uv.lock`（`uv lock`）・CI の `python-version`・各製品の `init_script.sh` の `uv python install` / `--python` を同じ PR でそろえる。Frontend は Vite + React Router + TypeScript + Tailwind + `@engchina/production-ready-ui` + TanStack Query + Zustand。
@@ -262,6 +263,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **3製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観）とユーザー管理・ロール管理は、画面を `packages/system-settings`、API（または API 契約）を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ（#70 / #206）。
 - **製品固有の機能は、共通のメニューに混ぜず製品固有のメニューセクションに置く。** 例: NL2SQL の権限管理（ロールごとの機能権限・業務プロファイル利用権限）と Deep Data Security は「NL2SQL セキュリティ」。共通の「ユーザーとロール」「システム設定」はナビの末尾にそろえる。
 - ロールの基本情報（コード・名称・説明・アーカイブ）は共通のロール管理が扱い、ロールに付ける権限は製品ごとの権限管理が扱う。共通のロール API は権限を変更しない。
+- **権限管理の機能（メニュー）の一覧は、左のナビを正本にしてグループ・並び順・名前をそろえる（#567）。** 一覧は製品の `nav-config.ts` から作り（`packages/system-settings` の `permissionNavSections` / `arrangePermissionsByNav` を、製品の `PERMISSIONS_API.permissions` で通す）、backend のカタログの `group` / `label` を画面に使わない。名前はサイドナビの表示名（`sidebarLabelKey` があればそれ）。ナビに無い権限（画面の中の操作を許可する capability）は、ナビの後ろに backend のグループのまま置く。
+  - 画面のあるメニュー権限は必ずナビの項目にする。ナビを変えたら権限の一覧は自動で追従し、ナビとメニュー権限・backend のカタログの code のずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
 
 ### 設定（`.env`）とデータベース object の命名
 

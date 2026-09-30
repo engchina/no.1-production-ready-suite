@@ -70,6 +70,22 @@ export {
   SelectField,
   type SelectFieldOption,
 } from "./components/ui/select-field";
+export {
+  SearchableSelectField,
+  type SearchableSelectFieldProps,
+} from "./components/ui/searchable-select-field";
+export {
+  SearchableMultiSelect,
+  type SearchableMultiSelectProps,
+} from "./components/ui/searchable-multi-select";
+export {
+  DEFAULT_SEARCHABLE_SELECT_LABELS,
+  filterSearchableOptions,
+  type SearchableSelectOption,
+  type SearchableSelectRemote,
+  type SearchableSelectLabels,
+  type SearchableMultiSelectLabels,
+} from "./components/ui/searchable-options";
 export { Banner } from "./components/ui/banner";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
