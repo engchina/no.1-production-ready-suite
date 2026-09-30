@@ -23,6 +23,7 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "-- section: knowledge_bases" in sql
     assert "CREATE TABLE rag_knowledge_bases" in sql
     assert "CREATE TABLE rag_document_knowledge_bases" in sql
+    assert "extraction_fields     JSON," in sql
     assert "-- section: business_views" in sql
     assert "CREATE TABLE rag_business_views" in sql
     assert "-- section: prompt_versions" in sql
@@ -345,7 +346,14 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     first_page_migration = sql.split(first_page_marker, 1)[1]
     assert "column_name = 'FIRST_PAGE_CONTEXT'" in first_page_migration
     assert "'ALTER TABLE rag_chunk_sets ADD (first_page_context JSON)'" in first_page_migration
-    assert len(statements) == 73
+    # KB ごとの項目抽出の定義の列（#548）。既存の KB は NULL（全体の既定に従う）のまま。
+    fields_migration = sql.split("-- migration: 20260930_004_knowledge_base_extraction_fields", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
+    assert "column_name = 'EXTRACTION_FIELDS'" in fields_migration
+    assert "ALTER TABLE rag_knowledge_bases ADD (extraction_fields JSON)" in fields_migration
+    assert "UPDATE" not in fields_migration
+    assert len(statements) == 74
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -412,6 +420,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_001_default_descriptions",
         "20260930_002_artifact_layers_input_fingerprint",
         "20260930_003_chunk_sets_first_page_context",
+        "20260930_004_knowledge_base_extraction_fields",
     ]
 
 

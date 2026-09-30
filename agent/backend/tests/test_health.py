@@ -1537,7 +1537,7 @@ def test_model_settings_save_persists_json_and_env_secret(
                     "vision_enabled": True,
                 }
             ],
-            "default_text_model_id": "",
+            "default_text_model_id": "enterprise-model",
             "default_vision_model_id": "enterprise-model",
             "api_path": "/responses",
             "vlm_input_mode": "auto",
@@ -1568,7 +1568,7 @@ def test_model_settings_save_persists_json_and_env_secret(
     )
     assert settings.oci_enterprise_ai_models[0].model_id == "enterprise-model"
     assert saved["enterprise_ai"]["default_vision_model_id"] == "enterprise-model"
-    assert saved["enterprise_ai"]["default_text_model_id"] == ""
+    assert saved["enterprise_ai"]["default_text_model_id"] == "enterprise-model"
     assert "default_model_id" not in saved["enterprise_ai"]
     assert saved["generative_ai"]["embedding_dim"] == 1536
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600

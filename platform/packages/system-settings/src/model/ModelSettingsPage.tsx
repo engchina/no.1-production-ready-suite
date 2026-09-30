@@ -119,7 +119,7 @@ export interface ModelSettingsPageProps {
  * - Enterprise AI の接続はプライマリ接続とセカンダリ接続（#533）。カードの中の Tabs で切り替えて入力し、
  *   登録モデルの行で使う接続を選ぶ（#542）。セカンダリ接続は「設定」したときだけあり、削除は、
  *   使っているモデルがあればプライマリ接続に移すか確認する。エラー・未保存の入力があるタブは Tabs が示す
- * - 登録モデルの節の下で、既定の Vision モデル（必須）と既定のテキストモデル（任意）を選ぶ（#499）。
+ * - 登録モデルの節の下で、既定のテキストモデルと既定の Vision モデル（どちらも必須）を選ぶ（#499 / #566）。
  *   選んだモデルの削除・Vision 対応のオフ・保存の操作で、保存前にフィールドのエラーを出す
  * - 保存中・テスト中は入力を止め、未保存のまま離れようとすると確認する
  */
@@ -1202,8 +1202,9 @@ const CATALOG_COLUMNS =
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
+ * 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順。#566）。
+ * - 既定のテキストモデル: 必須。選択肢は登録モデルすべて
  * - 既定の Vision モデル: 必須。選択肢は画像入力（Vision）に対応した登録モデルだけ
- * - 既定のテキストモデル: 任意。未選択は「既定の Vision モデルを使う」
  * 一覧から消えた・Vision 対応でなくなったモデルが選ばれたままなら、その ID を出したままエラーにする。
  */
 function DefaultModelFields({
@@ -1231,24 +1232,26 @@ function DefaultModelFields({
       </div>
       <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
         <SelectField
+          id={DEFAULT_MODEL_FIELD_IDS.default_text_model_id}
+          label={t("settings.model.defaults.text")}
+          required
+          value={enterprise.default_text_model_id}
+          options={textModelOptions(enterprise.models)}
+          placeholder={t("settings.model.defaults.placeholder")}
+          helper={t("settings.model.defaults.textHelp")}
+          error={errors.default_text_model_id}
+          onValueChange={(value) => onChange("default_text_model_id", value)}
+        />
+        <SelectField
           id={DEFAULT_MODEL_FIELD_IDS.default_vision_model_id}
           label={t("settings.model.defaults.vision")}
           required
           value={enterprise.default_vision_model_id}
           options={visionModelOptions(enterprise.models)}
-          placeholder={t("settings.model.defaults.visionPlaceholder")}
+          placeholder={t("settings.model.defaults.placeholder")}
           helper={t("settings.model.defaults.visionHelp")}
           error={errors.default_vision_model_id}
           onValueChange={(value) => onChange("default_vision_model_id", value)}
-        />
-        <SelectField
-          id={DEFAULT_MODEL_FIELD_IDS.default_text_model_id}
-          label={t("settings.model.defaults.text")}
-          value={enterprise.default_text_model_id}
-          options={textModelOptions(enterprise.models)}
-          helper={t("settings.model.defaults.textHelp")}
-          error={errors.default_text_model_id}
-          onValueChange={(value) => onChange("default_text_model_id", value)}
         />
       </div>
     </section>

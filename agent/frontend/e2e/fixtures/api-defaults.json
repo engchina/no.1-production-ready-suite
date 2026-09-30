@@ -2010,7 +2010,7 @@
             "connection_id": "primary"
           }
         ],
-        "default_text_model_id": "",
+        "default_text_model_id": "enterprise-llm",
         "default_vision_model_id": "enterprise-llm",
         "api_path": "/responses",
         "vlm_input_mode": "auto",

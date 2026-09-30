@@ -3,7 +3,8 @@
 レイヤー(``rag_artifact_layers``)を作ったときに、その結果を実際に変える入力だけを指紋として
 保存し、画面の表示のたびに今の設定と比べる。設計の判断:
 
-- **入れる入力は結果を変えるものだけ**: 項目の定義(``field_schema_hash``)、DocRAG の chunk
+- **入れる入力は結果を変えるものだけ**: 項目の定義(``field_schema_hash``。文書が属する KB の
+  定義か全体の既定。#548)、DocRAG の chunk
   metadata の契約(``docrag_chunk_contract``。``CHUNK_METADATA_SCHEMA_VERSION`` /
   ``SEARCH_TEXT_SCHEMA_VERSION`` / ``INQUIRY_CHUNK_METADATA_SCHEMA_VERSION`` /
   ``inquiry_profile_contract_hash``。rag_poc の ``schema_version`` による古い chunk の検出に
@@ -33,7 +34,11 @@ from functools import lru_cache
 
 from app.config import Settings
 from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY
-from app.rag.extraction_field_adapter import FieldDefinition, load_field_schema
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    load_field_schema,
+    resolve_field_definitions,
+)
 
 # 指紋の入力の名前(API の ``rebuild_inputs`` にもそのまま返し、画面が i18n で表示名にする)。
 FIELD_SCHEMA_INPUT = "field_schema_hash"
@@ -45,13 +50,19 @@ FIELD_SCHEMA_HASH_ARTIFACT_KEY = "layer_input_field_schema_hash"
 NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY = "layer_input_navigation_summary_max_nodes"
 
 
-def current_field_definitions() -> list[FieldDefinition]:
-    """今の項目の定義。指紋の「今の値」はここだけから読む。
+def current_field_definitions(
+    knowledge_base_field_sets: Sequence[list[FieldDefinition] | None],
+    default_fields: Sequence[FieldDefinition] | None = None,
+) -> list[FieldDefinition]:
+    """文書の今の項目の定義。指紋の「今の値」はここだけから決める。
 
-    #548 で項目の定義を KB ごとに DB へ移したら、この関数だけを差し替える(抽出の工程の刻みは
-    実際に使った定義から作るため、そちらは差し替え不要)。
+    抽出の工程と同じく、文書が属する有効な KB ごとの定義(無ければ全体の既定)の和集合にする
+    (#548 の ``resolve_field_definitions``)。``knowledge_base_field_sets`` は
+    ``OracleClient.list_document_extraction_field_sets`` の値。多数の文書を判定するときは、全体の
+    既定を 1 回だけ読んで ``default_fields`` に渡す(文書ごとに file を読まない)。
     """
-    return list(load_field_schema().fields)
+    default = list(load_field_schema().fields) if default_fields is None else list(default_fields)
+    return resolve_field_definitions(knowledge_base_field_sets, default)
 
 
 def field_schema_hash(fields: Sequence[FieldDefinition]) -> str:
@@ -107,10 +118,16 @@ def recorded_layer_fingerprint(
     return fingerprint or None
 
 
-def current_layer_inputs(settings: Settings) -> dict[str, object]:
-    """今の設定での各入力の値(記録された指紋と同じ名前)。"""
+def current_layer_inputs(
+    settings: Settings,
+    field_definitions: Sequence[FieldDefinition],
+) -> dict[str, object]:
+    """今の設定での各入力の値(記録された指紋と同じ名前)。
+
+    ``field_definitions`` は判定する文書の今の項目の定義(``current_field_definitions``)。
+    """
     return {
-        FIELD_SCHEMA_INPUT: field_schema_hash(current_field_definitions()),
+        FIELD_SCHEMA_INPUT: field_schema_hash(field_definitions),
         DOCRAG_CHUNK_CONTRACT_INPUT: docrag_chunk_contract_hash(),
         NAVIGATION_SUMMARY_MAX_NODES_INPUT: settings.rag_navigation_summary_max_nodes,
     }

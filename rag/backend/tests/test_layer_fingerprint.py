@@ -19,6 +19,7 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     NAVIGATION_SUMMARY_MAX_NODES_INPUT,
     changed_layer_inputs,
+    current_field_definitions,
     current_layer_inputs,
     docrag_chunk_contract_hash,
     field_schema_hash,
@@ -30,6 +31,11 @@ _DEFS = [
     FieldDefinition(name="請求書番号", description="invoice no"),
     FieldDefinition(name="合計金額", value_type="number"),
 ]
+
+
+def _current_fields() -> list[FieldDefinition]:
+    """KB の定義を持たない文書の今の定義(全体の既定)。"""
+    return current_field_definitions([])
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +87,7 @@ def test_recorded_fingerprint_adds_docrag_contract_only_for_docrag_chunking() ->
 def test_changed_inputs_compares_recorded_inputs_with_current() -> None:
     save_field_schema(_DEFS)
     settings = Settings(rag_navigation_summary_max_nodes=24)
-    current = current_layer_inputs(settings)
+    current = current_layer_inputs(settings, _current_fields())
     recorded = {
         FIELD_SCHEMA_INPUT: field_schema_hash(_DEFS),
         NAVIGATION_SUMMARY_MAX_NODES_INPUT: 24,
@@ -90,11 +96,11 @@ def test_changed_inputs_compares_recorded_inputs_with_current() -> None:
     assert changed_layer_inputs(recorded, current) == []
 
     save_field_schema(_DEFS[:1])
-    changed = changed_layer_inputs(recorded, current_layer_inputs(settings))
+    changed = changed_layer_inputs(recorded, current_layer_inputs(settings, _current_fields()))
     assert changed == [FIELD_SCHEMA_INPUT]
 
     smaller = current_layer_inputs(
-        settings.model_copy(update={"rag_navigation_summary_max_nodes": 8})
+        settings.model_copy(update={"rag_navigation_summary_max_nodes": 8}), _current_fields()
     )
     assert changed_layer_inputs(recorded, smaller) == [
         FIELD_SCHEMA_INPUT,
@@ -105,13 +111,13 @@ def test_changed_inputs_compares_recorded_inputs_with_current() -> None:
 @pytest.mark.parametrize("recorded", [None, {}, "not-a-mapping"], ids=["null", "empty", "text"])
 def test_missing_fingerprint_is_unknown(recorded: object) -> None:
     """指紋の無い行は「不明」で、作り直しの警告を出さない(誤警告を避ける)。"""
-    current = current_layer_inputs(Settings())
+    current = current_layer_inputs(Settings(), _current_fields())
     assert changed_layer_inputs(recorded, current) == []
 
 
 def test_inputs_unknown_to_current_code_are_ignored() -> None:
     """記録にあっても今のコードが知らない(削除した)入力は、結果を変えないため比べない。"""
-    current = current_layer_inputs(Settings())
+    current = current_layer_inputs(Settings(), _current_fields())
     recorded = {"retired_input": "old", FIELD_SCHEMA_INPUT: current[FIELD_SCHEMA_INPUT]}
     assert changed_layer_inputs(recorded, current) == []
 
@@ -126,7 +132,11 @@ class _FakeVlm:
 
 
 class _NoOracle:
-    pass
+    """文書は KB の定義を持たない(全体の既定で抽出する)。"""
+
+    async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
+        _ = document_id
+        return []
 
 
 def _pipeline(settings: Settings, response: str) -> Any:
@@ -145,7 +155,7 @@ async def test_field_extraction_stamps_the_definitions_it_used() -> None:
     )
 
     result = await pipeline._attach_extraction_fields(
-        "trace", StructuredExtraction(raw_text="請求書番号 INV-1")
+        "trace", StructuredExtraction(raw_text="請求書番号 INV-1"), document_id="doc-1"
     )
 
     assert [field.name for field in result.fields] == ["請求書番号"]
@@ -156,7 +166,7 @@ async def test_field_extraction_without_definitions_does_not_stamp() -> None:
     pipeline = _pipeline(Settings(rag_field_extraction_enabled=True), "[]")
 
     result = await pipeline._attach_extraction_fields(
-        "trace", StructuredExtraction(raw_text="請求書番号 INV-1")
+        "trace", StructuredExtraction(raw_text="請求書番号 INV-1"), document_id="doc-1"
     )
 
     assert FIELD_SCHEMA_HASH_ARTIFACT_KEY not in result.parser_artifacts
@@ -191,3 +201,60 @@ async def test_navigation_without_summary_does_not_stamp() -> None:
 
     assert result.navigation
     assert NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY not in result.parser_artifacts
+
+
+# ---- 文書が属する KB の定義で比べる（#548）----
+
+_KB_DEFS = [FieldDefinition(name="契約日", value_type="date")]
+
+
+def test_current_field_definitions_follow_knowledge_base_definitions() -> None:
+    """今の定義は抽出と同じ解決(KB の定義・無ければ既定・複数 KB は和集合)で決める。"""
+    save_field_schema(_DEFS)
+    assert current_field_definitions([]) == _DEFS
+    assert current_field_definitions([None]) == _DEFS
+    assert current_field_definitions([_KB_DEFS]) == _KB_DEFS
+    assert current_field_definitions([_KB_DEFS, None]) == [*_KB_DEFS, *_DEFS]
+    # 全体の既定を渡せば file を読まない(一覧で文書ごとに読まない)。
+    assert current_field_definitions([None], default_fields=_KB_DEFS) == _KB_DEFS
+
+
+def test_knowledge_base_definition_change_marks_rebuild_only_for_its_documents() -> None:
+    """KB の定義で抽出した層は、全体の既定が変わっても作り直しにならず、KB の定義が変わるとなる。"""
+    save_field_schema(_DEFS)
+    settings = Settings()
+    recorded = {FIELD_SCHEMA_INPUT: field_schema_hash(_KB_DEFS)}
+
+    def changed(fields: list[FieldDefinition]) -> list[str]:
+        return changed_layer_inputs(
+            recorded, current_layer_inputs(settings, current_field_definitions([fields]))
+        )
+
+    assert changed(_KB_DEFS) == []
+    save_field_schema(_DEFS[:1])
+    assert changed(_KB_DEFS) == []
+    assert changed([_KB_DEFS[0].model_copy(update={"description": "締結日"})]) == [
+        FIELD_SCHEMA_INPUT
+    ]
+
+
+async def test_field_extraction_stamps_knowledge_base_definitions_it_used() -> None:
+    """抽出の刻みは、実際に使った KB の定義の hash にする。"""
+
+    class _KbOracle:
+        async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
+            _ = document_id
+            return [_KB_DEFS]
+
+    save_field_schema(_DEFS)
+    pipeline = IngestionPipeline(
+        vlm=_FakeVlm('[{"name": "契約日", "value": "2025-04-01"}]'),  # type: ignore[arg-type]
+        oracle=_KbOracle(),  # type: ignore[arg-type]
+        settings=Settings(rag_field_extraction_enabled=True),
+    )
+
+    result = await pipeline._attach_extraction_fields(
+        "trace", StructuredExtraction(raw_text="契約日 2025-04-01"), document_id="doc-1"
+    )
+
+    assert result.parser_artifacts[FIELD_SCHEMA_HASH_ARTIFACT_KEY] == field_schema_hash(_KB_DEFS)

@@ -5,6 +5,7 @@ Business View 指定時に参照 KB 群を検索対象へ展開し、その quer
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
@@ -12,8 +13,10 @@ from pytest import MonkeyPatch
 from app.api.routes import search as search_route
 from app.config import Settings
 from app.main import app
+from app.rag import extraction_field_adapter as fields_mod
 from app.rag.business_view_config import BusinessViewConfig
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.extraction_field_adapter import FieldDefinition
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, KnowledgeBaseQueryConfig
 from app.schemas.business_view import BusinessViewDetail, BusinessViewStatus
 from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
@@ -441,3 +444,67 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] == "bv-1"
     assert diagnostics["kb_adapter_config_applied"] is None
+
+
+class FakeFieldSetOracle(FakeViewOracle):
+    """業務ビューと、KB ごとの項目抽出の定義(#549)を返すテスト用 Oracle。"""
+
+    def __init__(
+        self,
+        views: dict[str, BusinessViewConfig],
+        field_sets: dict[str, list[FieldDefinition] | None],
+    ) -> None:
+        super().__init__(views)
+        self._field_sets = field_sets
+        self.requested_kb_ids: list[str] = []
+
+    async def list_knowledge_base_extraction_field_sets(
+        self, knowledge_base_ids: list[str]
+    ) -> list[list[FieldDefinition] | None]:
+        self.requested_kb_ids = list(knowledge_base_ids)
+        return [
+            self._field_sets[kb_id] for kb_id in knowledge_base_ids if kb_id in self._field_sets
+        ]
+
+
+def test_search_extraction_fields_unions_business_view_knowledge_bases(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """検索の絞り込みの項目は、選んだ業務ビューの KB の定義(無ければ既定)の和集合(#549)。"""
+    monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "fields.json"))
+    fields_mod.save_field_schema([FieldDefinition(name="請求書番号")])
+    oracle = FakeFieldSetOracle(
+        {
+            "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-contract"]),
+            "bv-2": BusinessViewConfig(knowledge_base_ids=["kb-contract", "kb-default"]),
+        },
+        {
+            "kb-contract": [
+                FieldDefinition(name="契約日", value_type="date"),
+                FieldDefinition(name="金額", value_type="number"),
+            ],
+            "kb-default": None,
+        },
+    )
+    monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
+
+    response = client.get("/api/search/extraction-fields?business_view_ids=bv-1,bv-2")
+
+    assert response.status_code == 200
+    assert oracle.requested_kb_ids == ["kb-contract", "kb-default"]
+    assert [
+        (field["name"], field["value_type"]) for field in response.json()["data"]["fields"]
+    ] == [("契約日", "date"), ("金額", "number"), ("請求書番号", "string")]
+
+
+def test_search_extraction_fields_without_knowledge_bases_and_missing_view(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    oracle = FakeFieldSetOracle({"bv-empty": BusinessViewConfig()}, {})
+    monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
+
+    empty = client.get("/api/search/extraction-fields?business_view_ids=bv-empty")
+    assert empty.status_code == 200
+    assert empty.json()["data"]["fields"] == []
+    missing = client.get("/api/search/extraction-fields?business_view_ids=bv-missing")
+    assert missing.status_code == 404

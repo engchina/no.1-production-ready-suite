@@ -792,6 +792,8 @@ export interface KnowledgeBaseQueryConfig {
   docrag_answer_flow?: DocragAnswerFlowName | null;
   docrag_neighbor_child_count?: number | null;
   docrag_rerank_enabled?: boolean | null;
+  // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
+  docrag_screen_linking_enabled?: boolean | null;
 }
 
 export type DocragQueryStrategyName =
@@ -2103,6 +2105,12 @@ export interface ExtractionFieldsSettingsData {
   fields: ExtractionFieldDefinition[];
 }
 
+/** ナレッジベースの項目抽出の定義（#548）。inherits_default なら fields は全体の既定。 */
+export interface KnowledgeBaseExtractionFieldsData {
+  inherits_default: boolean;
+  fields: ExtractionFieldDefinition[];
+}
+
 export interface GuardrailSettingsData {
   policy: GuardrailPolicyName;
   block_prompt_injection: boolean;
@@ -2127,6 +2135,8 @@ export type GuardrailBackend = "local" | "oci_guardrails";
 
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
+/** 実際の索引と推奨ビルドの比較結果(backend の判定。#562)。unknown = 実際の値を確認できない。 */
+export type VectorIndexBuildStatus = "match" | "reprovision" | "unknown";
 
 export interface VectorIndexProfileStatusData {
   name: VectorIndexProfileName;
@@ -2137,6 +2147,7 @@ export interface VectorIndexProfileStatusData {
   neighbors: number;
   efconstruction: number;
   distance: string;
+  index_status: VectorIndexBuildStatus;
 }
 
 export interface VectorIndexSettingsData {
@@ -2146,6 +2157,10 @@ export interface VectorIndexSettingsData {
   efconstruction: number;
   distance: string;
   requires_reprovision: boolean;
+  index_status: VectorIndexBuildStatus;
+  /** 実際の索引の値。確認できないときは null。 */
+  actual_neighbors: number | null;
+  actual_efconstruction: number | null;
   profiles: VectorIndexProfileStatusData[];
   reindex_sql: string;
   config_source: "runtime";
@@ -2618,6 +2633,20 @@ export const api = {
       )}/extraction-export?${search.toString()}`,
     );
   },
+  /**
+   * 抽出エクスポートのダウンロード URL（`download=true` で `Content-Disposition: attachment` の
+   * ファイルを返す。ファイル名は backend が文書名とレシピから決める。#561）。
+   */
+  documentRecipeExtractionExportUrl: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat,
+  ) => {
+    const search = new URLSearchParams({ format, download: "true" });
+    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+      recipeId,
+    )}/extraction-export?${search.toString()}`;
+  },
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs`,
@@ -2863,6 +2892,26 @@ export const api = {
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     request<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
+    ),
+  // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。
+  getKnowledgeBaseExtractionFields: (id: string) =>
+    request<KnowledgeBaseExtractionFieldsData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/extraction-fields`,
+    ),
+  updateKnowledgeBaseExtractionFields: (
+    id: string,
+    body: { fields: ExtractionFieldDefinition[] | null },
+  ) =>
+    request<KnowledgeBaseExtractionFieldsData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/extraction-fields`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    ),
+  // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
+  getSearchExtractionFields: (businessViewIds: string[]) =>
+    request<ExtractionFieldsSettingsData>(
+      `/api/search/extraction-fields?${new URLSearchParams({
+        business_view_ids: businessViewIds.join(","),
+      }).toString()}`,
     ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
     request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),

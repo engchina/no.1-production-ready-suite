@@ -10,8 +10,8 @@
 - それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
-- 既定のモデルは 2 つ（#499）。画像を読む呼び出しは「既定の Vision モデル」（必須）、
-  それ以外は「既定のテキストモデル」（任意。未設定なら既定の Vision モデル）を使う
+- 既定のモデルは 2 つ（#499）。画像を読む呼び出しは「既定の Vision モデル」、
+  それ以外は「既定のテキストモデル」を使う。画面・API では 2 つとも必須（#566）
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ class EnterpriseAiModelSettings(BaseModel):
         max_length=MAX_ENTERPRISE_AI_CONNECTIONS,
     )
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
-    # 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。
+    # 画像を扱わない処理の既定。モデルを 1 つ以上登録したら必須（#499 / #566）。
     default_text_model_id: str = Field(default="", max_length=256)
     # 画像を読む処理の既定。モデルを 1 つ以上登録したら必須で、Vision 対応のモデルに限る。
     default_vision_model_id: str = Field(default="", max_length=256)
@@ -542,6 +542,8 @@ def enterprise_ai_default_model_id(settings: Any) -> str:
     """画像を扱わない呼び出しで使うモデル ID を返す。
 
     既定のテキストモデル → 既定の Vision モデル → 登録モデルの先頭 の順に決める（#499）。
+    画面・API では既定のテキストモデルは必須（#566）。Vision・先頭への代替は、`.env` だけで
+    構成した既存環境が設定を保存し直すまで動き続けるための安全策として残す。
     """
     text_model = _setting_text(settings, "oci_enterprise_ai_default_text_model")
     if text_model:
@@ -642,12 +644,27 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
     """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
 
     - モデルを 1 つ以上登録したら、既定の Vision モデルは必須で、Vision 対応のモデルに限る
-    - 既定のテキストモデルは任意。選ぶなら登録したモデルのどれか（Vision 対応でもよい）
+    - 既定のテキストモデルも、モデルを 1 つ以上登録したら必須（#566）。登録したモデルのどれか
+      （Vision 対応でもよい）
+    エラーは画面の並び順（テキスト → Vision）で返す。
     """
     models = [model for model in enterprise.models if model.model_id]
     registered = {model.model_id for model in models}
     vision_capable = {model.model_id for model in models if model.vision_enabled}
     errors: list[ModelFieldError] = []
+    text = enterprise.default_text_model_id
+    if models and not text:
+        errors.append(
+            ModelFieldError("default_text_model_id", "既定のテキストモデルを選択してください。")
+        )
+    elif text and text not in registered:
+        errors.append(
+            ModelFieldError(
+                "default_text_model_id",
+                f"既定のテキストモデル「{text}」は登録モデルにありません。"
+                "登録モデルから選び直してください。",
+            )
+        )
     vision = enterprise.default_vision_model_id
     if models and not vision_capable:
         errors.append(
@@ -675,15 +692,6 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
                 "default_vision_model_id",
                 f"「{vision}」は画像入力（Vision）に対応していません。"
                 "対応をオンにするか、別のモデルを選んでください。",
-            )
-        )
-    text = enterprise.default_text_model_id
-    if text and text not in registered:
-        errors.append(
-            ModelFieldError(
-                "default_text_model_id",
-                f"既定のテキストモデル「{text}」は登録モデルにありません。"
-                "登録モデルから選び直すか、「既定の Vision モデルを使う」にしてください。",
             )
         )
     return errors
