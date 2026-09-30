@@ -22,7 +22,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -107,7 +106,12 @@ def build_docrag_settings(
     output_dir: Path,
     runtime_knowledge_path: Path | None = None,
 ) -> Any:
-    """backend Settings から docrag Settings を作る(env や .env は読まない)。"""
+    """backend Settings から docrag Settings を作る(env や .env は読まない)。
+
+    業務 profile の JSON はここでは決まらない。`docrag.profiles` が process の環境変数
+    `DOCRAG_DOMAIN_PROFILE_FILE`(未指定なら作業ディレクトリの `domain_profile.json`)を
+    直接読む(#569)。
+    """
     from docrag.config import get_settings as docrag_get_settings
 
     # 回答のモデルと Vision のモデルは、それぞれのモデルの接続で呼ぶ(#533)。
@@ -134,8 +138,6 @@ def build_docrag_settings(
         "DOCRAG_OUTPUT_DIR": str(output_dir),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
-        # 別プロセスの domain_profile.json を拾わないよう、legacy 指定時も明示パスだけを読む。
-        "DOCRAG_DOMAIN_PROFILE_FILE": os.environ.get("DOCRAG_DOMAIN_PROFILE_FILE", ""),
         "DOCRAG_ANSWER_LLM_SUPPORTS_VISION": (
             "1" if settings.rag_docrag_answer_vision_enabled else "0"
         ),
