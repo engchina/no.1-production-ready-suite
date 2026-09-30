@@ -5,6 +5,7 @@ from rag_engine.generation.answer_policy import OPERATION_GUIDANCE_POLICY, OPERA
 
 import json
 import hashlib
+import logging
 from collections import deque
 from typing import Any, Literal
 
@@ -14,6 +15,8 @@ from rag_engine.dependencies import parse_text_response
 from rag_engine.generation.grounded import is_structural_line, quote_in_text, verbatim_quote_lines
 from rag_engine.generation.operation_audit import answer_passages, is_heading
 from rag_engine.retrieval.task_contract import task_contract
+
+logger = logging.getLogger(__name__)
 
 
 class AxisScore(BaseModel):
@@ -581,6 +584,8 @@ def evaluate_answer_payload(payload: dict[str, Any], settings, *, provider_id: s
     except EvaluationInputTooLarge:
         return {**base, "status": "input_too_large", "message": "質問・標準回答・生成回答または累積評価が入力上限を超えています。質問や比較対象の範囲を絞ってください。回答は保存されています。"}
     except Exception as exc:
+        # 画面には固定の文言だけを返すので、原因はログで追えるようにする（#678）。
+        logger.warning("answer evaluation failed", exc_info=True)
         return {**base, "status": "error", "error_type": type(exc).__name__,
                 "contract_error": str(exc) if isinstance(exc, EvaluationContractError) else "",
                 "message": "評価を完了できませんでした。部分評価は採用せず、回答を保存しました。"}
