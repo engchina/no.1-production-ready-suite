@@ -1679,15 +1679,16 @@ export interface PreprocessSettingsUpdate {
   profile: PreprocessProfileName;
 }
 
-// --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+// --- サービス管理（各工程のサービスの稼働可視化・起動/停止）---
+// カテゴリと工程の設定画面の対応は components/settings/service-stages.ts（並びはサイドナビ。#638）。
 export type ServiceCategory =
   | "preprocess"
   | "parser"
   | "chunking"
   | "vector_index"
+  | "graphrag"
   | "guardrail"
-  | "evaluation"
-  | "graphrag";
+  | "evaluation";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
 // systemd の unit の状態 + /health（#286）。starting は unit が動いているが /health にまだ届かない、
 // failed は unit が失敗して止まった、not_installed は unit が登録されていない。

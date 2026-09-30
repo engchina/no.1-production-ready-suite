@@ -20,15 +20,17 @@ from typing import Literal
 
 from app.config import Settings
 
+# 工程の並びはサイドナビ(ファイル準備 → 文書解析 → 文書分割 → 検索インデックス → 関係情報の構築 →
+# 安全チェック → 評価の基準)と同じ。画面の工程の並び・名前はフロントの nav-config.ts が正本(#638)。
 ServiceCategory = Literal[
     "preprocess",
     "parser",
-    # pipeline 各ステージのプラグイン(マイクロサービス)化。順次追加する。
+    # pipeline 各ステージのプラグイン(マイクロサービス)化。
     "chunking",
     "vector_index",
+    "graphrag",
     "guardrail",
     "evaluation",
-    "graphrag",
 ]
 # cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
 # プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
@@ -87,7 +89,7 @@ class ServiceCatalogEntry:
         return f"http://127.0.0.1:{self.port}"
 
 
-# パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
+# 工程の順に並べる(ファイル準備 → 文書解析 CPU / GPU / OCI → 文書分割以降の工程)。
 SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
     ServiceCatalogEntry(
         service_id="preprocess-office-to-pdf",
