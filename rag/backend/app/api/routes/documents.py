@@ -102,6 +102,7 @@ from app.schemas.document import (
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentClassification,
+    DocumentClassificationOptions,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
@@ -579,6 +580,19 @@ async def document_delete_impact(
             if knowledge_base.id not in known
         )
     return ApiResponse(data=list(impacts.values()))
+
+
+@router.get(
+    "/classification-options",
+    response_model=ApiResponse[DocumentClassificationOptions],
+)
+async def document_classification_options() -> ApiResponse[DocumentClassificationOptions]:
+    """分類の入力の候補(利用者が見られる文書の保存済みの分類の値)を返す(#547)。
+
+    語の一覧の管理画面は持たず、保存済みの値を候補にして表記を寄せる。
+    """
+    values = await OracleClient().list_document_classification_values()
+    return ApiResponse(data=DocumentClassificationOptions.from_values(values))
 
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])

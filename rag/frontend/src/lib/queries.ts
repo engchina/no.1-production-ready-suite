@@ -114,6 +114,7 @@ export const queryKeys = {
     offset?: number;
   }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
+  documentClassificationOptions: ["document-classification-options"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
@@ -632,7 +633,16 @@ export function useSaveDocumentRecipeReviewEdits() {
   });
 }
 
-/** 文書のナレッジベース所属を置き換える。 */
+/** 分類の入力の候補（保存済みの文書の分類の値。#547）。 */
+export function useDocumentClassificationOptions() {
+  return useQuery({
+    queryKey: queryKeys.documentClassificationOptions,
+    queryFn: () => api.getDocumentClassificationOptions(),
+    staleTime: 60_000,
+  });
+}
+
+/** 文書の分類と有効期間を保存する。 */
 export function useSaveDocumentClassification() {
   const qc = useQueryClient();
   return useMutation({
@@ -640,6 +650,8 @@ export function useSaveDocumentClassification() {
       api.saveDocumentClassification(id, payload),
     onSuccess: (detail) => {
       qc.setQueryData(queryKeys.document(detail.id), detail);
+      // 新しく入力した値を、次の入力の候補に出す。
+      qc.invalidateQueries({ queryKey: queryKeys.documentClassificationOptions });
     },
   });
 }
