@@ -116,7 +116,7 @@ def test_answers_evaluates_resumes_and_summarizes(
     search_path, search_body, headers = api.requests[0]
     assert (search_path, search_body) == (
         "/api/search",
-        {"query": "承認者は？", "business_view_ids": ["bv-1"]},
+        {"query": "承認者は？", "business_view_id": "bv-1"},
     )
     assert headers["x-tenant-id"] == "tenant-a"
     a1 = json.loads((out / "a1.json").read_text(encoding="utf-8"))

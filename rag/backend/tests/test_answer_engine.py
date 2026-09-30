@@ -737,7 +737,7 @@ async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     )
 
     response = await pipeline.run(
-        SearchRequest(query="受注の登録方法は？", business_view_ids=["bv-1"]), trace_id="trace-1"
+        SearchRequest(query="受注の登録方法は？", business_view_id="bv-1"), trace_id="trace-1"
     )
     await pipeline.run(SearchRequest(query="受注の登録方法は？"), trace_id="trace-2", history=[])
 

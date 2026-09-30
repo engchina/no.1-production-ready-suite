@@ -335,3 +335,13 @@ export async function expectedControlHeight(page: Page, size: keyof typeof CONTR
   const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
   return coarse ? 44 : CONTROL_HEIGHT[size];
 }
+
+/**
+ * RAG 検索・チャットの「対象の業務ビュー」を 1 つ選ぶ（#635。共有の SearchableSelectField）。
+ * ボタンを押して候補の一覧を開き、候補を選ぶ（選ぶと一覧は閉じてボタンへ戻る）。
+ */
+export async function selectBusinessView(page: Page, name: RegExp | string) {
+  await page.getByRole("button", { name: /対象の業務ビュー/ }).click();
+  await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name }).click();
+  await expect(page.getByRole("listbox", { name: /対象の業務ビュー/ })).toHaveCount(0);
+}

@@ -172,6 +172,13 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#635 RAG 検索の業務ビューを 1 つにする）
+
+- **画面**: RAG 検索の「対象の業務ビュー」を 1 つだけ選ぶ欄にし、チャットの業務ビューの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.businessViewIds`）は読まず、再読込後は未選択から始まる。
+- **API**: `POST /api/search`・`POST /api/search/stream` は業務ビューを `business_view_id`（1 つ）だけで受ける。`business_view_ids` を送ると 422 を返す（読み捨てると業務ビューの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `business_view_ids` から `business_view_id` に変えた。MCP の `rag_search` / `rag_chat_send_message` と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
+- **データベース**: DDL・データの移行は要らない。回答の記録・質問の履歴は元から業務ビューを 1 つだけ保存している。以前に複数の業務ビューで検索した監査（`rag_search_audit` の `business_view_applied`）は `bv-1,bv-2` の文字列のまま残り、表示・集計は変わらない。
+- **手順**: コードを更新して backend と frontend を再起動する。`/api/search` を直接呼ぶ独自のスクリプトがあれば、`business_view_ids: [id]` を `business_view_id: id` に変える。
+
 ## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
 
 #599 で、rag_poc から移したときの名前（`docrag`）を、コードの識別子・設定（環境変数）・API・DB の名前から外し、RAG の標準の名前にした。回答・分割の挙動は変わらない。旧名との互換は持たない（旧名の環境変数は読まず、保存値と表は migration で書き換える）。#599 の migration はデータを削除しないので、承認（`--allow-destructive`）は要らない（#621 の `20260930_007_retire_graph_claims_community` などデータを削除する migration が未適用なら、そちらの承認が要る。下の「既存環境の更新手順（#621）」と上の「共通の注意」）。
@@ -296,21 +303,46 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 - **backend/.env の `RAG_GRAPH_PROFILE=full` は起動を止める。** 読み替えず、書き換え先（`entities` か `off`）を示すエラーで止まる。
 - **保存済みの上書きの `full` は、migration `20260930_006_graph_profile_entities` が `entities` に書き換える**（文書・文書レシピの `processing_config`、ナレッジベースの `retrieval_config.ingestion`、取込ジョブの `settings_overrides.processing_config`、chunk_set に刻んだレシピ `recipe_subset`）。データを削除しない migration。
 - **migration `20260930_007_retire_graph_claims_community` が `rag_graph_claims`・`rag_graph_community_summaries` を削除する。** データを削除する migration なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。どちらも文書から作り直せる派生データで、読む経路が無かったため、書き出しは要らない。
-- 2 つの migration は同時に未適用になるので、承認するまではどちらも当たらない。その間も backend は動く。保存済みの `full` は `entities` として読み（上書きの設定全体を失わないため）、旧 `full` で構築した文書を再取込・削除するときは、残っている `rag_graph_claims` の行（関係情報の entity を参照する）を先に消す。
+- **旧値との互換は持たない（#629）。** 保存値に `full` が残っていると、ほかの不正な値と同じ扱いになる（文書・文書レシピの処理設定などは読み込みが検証エラーになり、ナレッジベースの構築設定は警告を出して空の設定（すべて既定を継承）に戻る）。旧 `full` で構築した文書に残る `rag_graph_claims` の行も消さないので、表が残ったままだと再取込・削除が FK で失敗する。**新しい版の backend と取込 worker を起動する前に、2 つの migration（006・007）を当てる。** 2 つは同時に未適用になり、007 の承認が無いとどちらも当たらない。
 
 ### 手順
 
-1. #621 の版のコードを取得する（`git pull` など）。
-2. `backend/.env` に `RAG_GRAPH_PROFILE=full` があれば `RAG_GRAPH_PROFILE=entities` に書き換える（構築しない場合は `off`）。`RAG_GRAPH_ENABLED` の行があれば消す（残っても読まないが、`true` だった環境は、以前は `full` で構築していた。同じものを作り続けるなら `RAG_GRAPH_PROFILE=entities` にする）。
-3. backend と ingestion-worker を再起動する（`init_script.sh` の再実行でもよい。`init_script.sh` は承認を付けずに更新するので、この 2 つの migration は WARNING を出して当てずに進む）。
-4. システムテーブルを承認付きで更新する。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」の確認ダイアログで「削除して更新」を押すか、CLI で実行する。
+1. #621 の版のコードを取得する（`git pull` など）。backend・取込 worker・前処理 / parser は止める（migration の前に新しい版が保存値 `full` を読むと検証エラーになり、取込が関係情報の表に書き込まないようにする）。
+
+   ```bash
+   sudo systemctl stop 'production-ready-rag-*'
+   ```
+
+2. `backend/.env` に `RAG_GRAPH_PROFILE=full` があれば `RAG_GRAPH_PROFILE=entities` に書き換える（構築しない場合は `off`。`full` のままだと起動時の検証で止まる）。`RAG_GRAPH_ENABLED` の行があれば消す（残っても読まないが、`true` だった環境は、以前は `full` で構築していた。同じものを作り続けるなら `RAG_GRAPH_PROFILE=entities` にする）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
+3. backend の venv を新しい版に合わせる（リポジトリの所有者で実行する。`init_script.sh` は、システムテーブルの更新の後の手順 5 で再実行する）。
+
+   ```bash
+   # OCI Compute
+   cd /u01/aipoc/no.1-production-ready-suite/rag
+   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
+
+   # ローカル
+   cd rag/backend && uv sync --locked
+   ```
+
+4. サービスを止めたまま、システムテーブルを承認付きで更新する（006 と 007 を当てる）。
 
    ```bash
    cd /u01/aipoc/no.1-production-ready-suite/rag/backend
    sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
    ```
 
-5. `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空であることを確かめる。
+   画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」の確認ダイアログ（「削除して更新」）で行う場合は、backend だけを起動し（取込 worker と前処理 / parser は止めたまま）、ほかの操作をせずに更新する。当てるまでは、保存値に `full` が残る設定が上のとおり読めない（この間にナレッジベースの構築設定を画面から保存すると、既定に戻った設定のまま保存される）。
+5. backend・worker・前処理 / parser と frontend を起動し直す（`sudo systemctl start 'production-ready-rag-*'`。Compute では `init_script.sh` の再実行でもよい。migration は当たっているので、承認なしの更新で止まらない）。
+6. 確かめる。
+   - `system_schema_cli status` が `ready` で、`retired_objects`・`pending_versions`・`pending_destructive_migrations` が空。
+   - 保存値に `full` が残っていない（0 件）。
+
+     ```sql
+     SELECT COUNT(*) FROM rag_documents WHERE JSON_VALUE(processing_config, '$.graph_profile') = 'full';
+     SELECT COUNT(*) FROM rag_document_recipes WHERE JSON_VALUE(processing_config, '$.graph_profile') = 'full';
+     SELECT COUNT(*) FROM rag_knowledge_bases WHERE JSON_VALUE(retrieval_config, '$.ingestion.graph_profile') = 'full';
+     ```
 
 ### 旧 `full` で構築した文書
 

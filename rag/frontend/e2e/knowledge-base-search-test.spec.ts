@@ -132,7 +132,7 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
 
   // request は単一 KB scope を明示し、業務ビューは渡さない。回答は作らずに検索だけを頼む（#593）。
   expect(streamRequestBody).toMatchObject({ knowledge_base_ids: ["kb-1"], retrieval_only: true });
-  expect(streamRequestBody).not.toHaveProperty("business_view_ids");
+  expect(streamRequestBody).not.toHaveProperty("business_view_id");
   // 検索の方式は回答エンジンが使わないため送らず、選ぶチップも出さない（#595）。
   expect(streamRequestBody).not.toHaveProperty("mode");
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);

@@ -160,7 +160,7 @@ async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyP
         settings=Settings(rag_query_history_enabled=True),
     )
 
-    await pipeline.run(SearchRequest(query="受注の登録方法は？", business_view_ids=["bv-1"]))
+    await pipeline.run(SearchRequest(query="受注の登録方法は？", business_view_id="bv-1"))
     await pipeline.run(SearchRequest(query="業務ビューなしの受注の登録方法は？"))
 
     assert [

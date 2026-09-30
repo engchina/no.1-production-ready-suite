@@ -7,6 +7,7 @@ import {
   mockAuthUser,
   mockDatabaseReady,
   openSidebarNav,
+  selectBusinessView,
 } from "./_helpers";
 
 // 権限によるナビ・ルート・ページ内操作の出し分け（#214）。
@@ -206,8 +207,7 @@ test("業務ビューの KB を利用できない検索の 403 は、画面を�
   );
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name: /人事 FAQ/ }).click();
+  await selectBusinessView(page, /人事 FAQ/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("育休の申請期限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 

@@ -197,7 +197,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         "filters": arguments.filters,
     }
     if arguments.business_view_id is not None:
-        payload["business_view_ids"] = [arguments.business_view_id]
+        payload["business_view_id"] = arguments.business_view_id
     if arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
     try:

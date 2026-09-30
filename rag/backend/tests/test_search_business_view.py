@@ -129,33 +129,15 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2"
 
 
-def test_multiple_business_views_expand_union_and_use_first_config(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """複数業務ビューでは参照 KB を union し、query 設定は先頭 View を代表にする。"""
-    first = BusinessViewConfig(
-        knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(query_strategy="rag_fusion"),
-    )
-    second = BusinessViewConfig(
-        knowledge_base_ids=["kb-2", "kb-3"],
-        query=KnowledgeBaseQueryConfig(query_strategy="hyde"),
-    )
-    _install(monkeypatch, {"bv-1": first, "bv-2": second})
+@pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
+def test_business_view_ids_is_rejected(monkeypatch: MonkeyPatch, path: str) -> None:
+    """業務ビューは 1 つだけ。削除した business_view_ids は読み捨てず 422 にする（#635）。"""
+    _install(monkeypatch, {"bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1"])})
 
-    response = client.post(
-        "/api/search",
-        json={"query": "経費精算の上限", "business_view_ids": ["bv-1", "bv-2"]},
-    )
+    response = client.post(path, json={"query": "経費精算の上限", "business_view_ids": ["bv-1"]})
 
-    assert response.status_code == 200
-    diagnostics = response.json()["data"]["diagnostics"]
-    assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_query_strategy == "rag_fusion"
-    assert diagnostics["business_view_applied"] == "bv-1,bv-2"
-    assert RecordingPipeline.captured_request is not None
-    assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2", "kb-3"]
-    assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2,kb-3"
+    assert response.status_code == 422
+    assert RecordingPipeline.captured_request is None
 
 
 def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: MonkeyPatch) -> None:
@@ -232,38 +214,15 @@ def test_business_view_without_knowledge_bases_is_rejected(
     monkeypatch: MonkeyPatch, path: str
 ) -> None:
     """参照 KB が 0 件の業務ビューでは利用者の全 KB を検索せず、理由を 409 で返す（#304）。"""
-    _install(
-        monkeypatch,
-        {"bv-empty": BusinessViewConfig(), "bv-empty-2": BusinessViewConfig()},
-    )
+    _install(monkeypatch, {"bv-empty": BusinessViewConfig()})
 
-    response = client.post(
-        path, json={"query": "上限額", "business_view_ids": ["bv-empty", "bv-empty-2"]}
-    )
+    response = client.post(path, json={"query": "上限額", "business_view_id": "bv-empty"})
 
     assert response.status_code == 409
     assert response.json()["error_messages"] == [
         search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE
     ]
     assert RecordingPipeline.captured_request is None
-
-
-def test_empty_business_view_is_searched_with_other_views_knowledge_bases(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """KB のない業務ビューを、KB のある業務ビューと一緒に選んだときは、その KB だけを検索する。"""
-    _install(
-        monkeypatch,
-        {"bv-empty": BusinessViewConfig(), "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1"])},
-    )
-
-    response = client.post(
-        "/api/search", json={"query": "上限額", "business_view_ids": ["bv-empty", "bv-1"]}
-    )
-
-    assert response.status_code == 200
-    assert RecordingPipeline.captured_request is not None
-    assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1"]
 
 
 def test_missing_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
@@ -433,10 +392,7 @@ def test_search_extraction_fields_unions_business_view_knowledge_bases(
     monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "fields.json"))
     fields_mod.save_field_schema([FieldDefinition(name="請求書番号")])
     oracle = FakeFieldSetOracle(
-        {
-            "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-contract"]),
-            "bv-2": BusinessViewConfig(knowledge_base_ids=["kb-contract", "kb-default"]),
-        },
+        {"bv-1": BusinessViewConfig(knowledge_base_ids=["kb-contract", "kb-default"])},
         {
             "kb-contract": [
                 FieldDefinition(name="契約日", value_type="date"),
@@ -447,7 +403,7 @@ def test_search_extraction_fields_unions_business_view_knowledge_bases(
     )
     monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
 
-    response = client.get("/api/search/extraction-fields?business_view_ids=bv-1,bv-2")
+    response = client.get("/api/search/extraction-fields?business_view_id=bv-1")
 
     assert response.status_code == 200
     assert oracle.requested_kb_ids == ["kb-contract", "kb-default"]
@@ -462,8 +418,8 @@ def test_search_extraction_fields_without_knowledge_bases_and_missing_view(
     oracle = FakeFieldSetOracle({"bv-empty": BusinessViewConfig()}, {})
     monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
 
-    empty = client.get("/api/search/extraction-fields?business_view_ids=bv-empty")
+    empty = client.get("/api/search/extraction-fields?business_view_id=bv-empty")
     assert empty.status_code == 200
     assert empty.json()["data"]["fields"] == []
-    missing = client.get("/api/search/extraction-fields?business_view_ids=bv-missing")
+    missing = client.get("/api/search/extraction-fields?business_view_id=bv-missing")
     assert missing.status_code == 404

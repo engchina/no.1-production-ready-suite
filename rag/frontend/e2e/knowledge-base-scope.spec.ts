@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockEvaluationJobs } from "./_evaluation-jobs";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -26,11 +26,7 @@ test("狭い画面幅(375px)でも検索ページがページを横スクロー�
   await expectNoPageOverflow(page);
 
   // 業務ビューを選択してから検索する(検索は business view 選択が前提)。
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /経理ビュー/ })
-    .click();
+  await selectBusinessView(page, /経理ビュー/);
 
   // 検索実行後(結果・引用カードが出た状態)でも横はみ出しが無いこと。
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費申請の承認フロー");

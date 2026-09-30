@@ -1,5 +1,5 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 // rag_poc からの移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
@@ -124,14 +124,21 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "業務ビューの知識" });
     await expect(panel).toBeVisible();
+    // 先頭・既定のタブは Approved FAQ（#636）。
+    const tabs = page.getByRole("tablist", { name: "業務ビューの知識" }).getByRole("tab");
+    await expect(tabs).toHaveText(["Approved FAQ（類似問）", "ドメインキーワード", "用語・ルール"]);
+    await expect(page.getByRole("tab", { name: "Approved FAQ（類似問）" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    await expect(page.getByRole("rowheader", { name: faqSuggestion.question })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
+
+    await page.getByRole("tab", { name: "ドメインキーワード" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号");
     await page.getByRole("button", { name: "候補を生成" }).click();
     await page.getByRole("button", { name: "伝票区分" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号\n伝票区分");
-
-    await page.getByRole("tab", { name: "Approved FAQ（類似問）" }).click();
-    await expect(page.getByRole("rowheader", { name: faqSuggestion.question })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
 
     await page.getByRole("tab", { name: "用語・ルール" }).click();
     await expect(page.getByRole("rowheader", { name: "受注" })).toBeVisible();
@@ -155,12 +162,7 @@ for (const viewport of [
 
 async function selectBusinessViewAndAsk(page: Page, question: string) {
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /受注サポート/ })
-    .click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /受注サポート/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill(question);
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
@@ -184,12 +186,7 @@ test("よく聞かれている質問を入力欄の下に出し、選ぶと質�
   });
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /受注サポート/ })
-    .click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /受注サポート/);
   const input = page.getByRole("textbox", { name: "RAG 検索" });
   await input.fill("受注");
   const suggestions = page.getByRole("list", { name: "よく聞かれている質問" });
@@ -381,7 +378,11 @@ test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に�
   await page.getByRole("option", { name: "ルール" }).click();
   await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
   await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  // ヘッダーの「保存」（業務ビューの設定。#618）と区別し、用語・ルールのタブの中の保存を押す。
+  await page
+    .getByRole("tabpanel", { name: "用語・ルール" })
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
   await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
   await expect(page.locator("#runtime-knowledge-content")).toHaveAccessibleDescription(/ルール内容を入力してください。/);

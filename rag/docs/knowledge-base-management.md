@@ -349,6 +349,10 @@ GET /api/documents?knowledge_base_id=kb_1&status=INDEXED&q=規程&limit=50&offse
 互換性のため、Phase 1 では `filters.knowledge_base_id` も単一 ID として受け付ける。ただし新規 UI は
 `knowledge_base_ids` を使う。
 
+業務ビューで検索するときは `business_view_id` を 1 つ渡す（RAG 検索・チャット・MCP の `rag_search` が使う）。
+業務ビューの参照 KB を検索対象へ展開し、その業務ビューの検索・回答設定で回答する。複数の業務ビューを受ける
+`business_view_ids` は #635 で削除し、送ると 422 を返す（読み捨てて業務ビューの外を検索しないため）。
+
 retrieval SQL の基本条件:
 
 ```sql
@@ -384,7 +388,7 @@ WHERE d.status = 'INDEXED'
 - 項目の無い文書、`number` / `date` に変換できない値（例: 「約100万円」）は一致しない（除かれる）。取込は抽出値を
   型に寄せて保存する（`normalize_field_value`。桁区切りを除いた数字・`YYYY-MM-DD`・`true` / `false`）。
 - 関数索引は作っていない。実データの件数で実行計画を確かめ、必要なら検討する。
-- 画面の候補は `GET /api/search/extraction-fields?business_view_ids=` が返す（選んだ業務ビューの KB の定義の和集合）。
+- 画面の候補は `GET /api/search/extraction-fields?business_view_id=` が返す（選んだ業務ビューの参照 KB の定義の和集合）。
 
 ### 6.6 評価 API
 

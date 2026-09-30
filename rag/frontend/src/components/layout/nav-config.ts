@@ -32,7 +32,7 @@ import {
 } from "@engchina/production-ready-system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
-import type { I18nKey } from "@/lib/i18n";
+import { ja, type I18nKey } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 
 export interface NavItem {
@@ -268,4 +268,16 @@ export function visibleNavSections(
 export function canOpenNavRoute(route: string, hasPermission: HasPermission): boolean {
   const item = NAV_ITEMS.find((candidate) => candidate.href === route);
   return item ? hasPermission(item.permission) : false;
+}
+
+/**
+ * 設定画面の説明（その画面の PageHeader の subtitle）の i18n キー。`nav.settingsX` → `settings.x.subtitle`。
+ * 設定の概要（PipelineHubClient）とサービス管理（#638）が工程の説明に使い、設定画面と同じ文を出す。
+ * 対応するキーが無い項目は null。
+ */
+export function settingsSubtitleKey(item: NavItem): I18nKey | null {
+  const raw = item.labelKey.replace(/^nav\.settings/, "");
+  if (raw === item.labelKey || raw === "") return null;
+  const key = `settings.${raw.charAt(0).toLowerCase()}${raw.slice(1)}.subtitle`;
+  return key in ja ? (key as I18nKey) : null;
 }

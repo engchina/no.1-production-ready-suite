@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, type LucideIcon } from "lucide-react";
 import {
   type KeyboardEvent,
   type UIEvent,
@@ -59,6 +59,11 @@ export interface SearchableSelectFieldProps {
   requiredLabel?: string;
   /** 何も選んでいないときのボタンの文言。 */
   placeholder?: string;
+  /**
+   * ボタンの先頭のアイコン（任意。lucide-react のコンポーネント。例: `leadingIcon={Search}`）。16px・読み上げない。
+   * 検索して選ぶ欄であることを、開く前から見せたいときに使う（RAG の対象の業務ビュー。#635）。
+   */
+  leadingIcon?: LucideIcon;
   disabled?: boolean;
   labels?: Partial<SearchableSelectLabels>;
   /** 高さの最小（既定 md = 36px）。選択中の名前は折り返すので、長い名前では高くなる。同じ行の Button と同じ size にする（#613）。 */
@@ -93,6 +98,7 @@ export function SearchableSelectField({
   required,
   requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
+  leadingIcon: LeadingIcon,
   disabled = false,
   labels: labelOverrides,
   size = "md",
@@ -396,8 +402,17 @@ export function SearchableSelectField({
         )}
       >
         {/* 選択中の名前は切らずに折り返す（長い名前も全体を読める）。 */}
-        <span id={valueId} className={cn("min-w-0 [overflow-wrap:anywhere]", !current && !disabled && "text-fg-muted")}>
-          {current?.label ?? (value || placeholder)}
+        <span className="flex min-w-0 items-center gap-2">
+          {LeadingIcon ? (
+            <LeadingIcon
+              size={16}
+              aria-hidden
+              className={cn("shrink-0", disabled ? "text-fg-disabled" : "text-fg-muted")}
+            />
+          ) : null}
+          <span id={valueId} className={cn("min-w-0 [overflow-wrap:anywhere]", !current && !disabled && "text-fg-muted")}>
+            {current?.label ?? (value || placeholder)}
+          </span>
         </span>
         <ChevronDown
           size={16}

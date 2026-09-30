@@ -27,7 +27,7 @@ const TEST_TOP_K = 10;
 /**
  * KB 詳細の「このナレッジで検索テスト」パネル。
  * 業務ビュー(Business View)を介さず、単一 KB scope で retrieval をその場確認する。
- * backend は business_view_ids が無ければ request 明示 KB scope + global defaults で検索する。
+ * backend は business_view_id が無ければ request 明示 KB scope + global defaults で検索する。
  */
 export function KnowledgeBaseSearchTestPanel({
   knowledgeBaseId,

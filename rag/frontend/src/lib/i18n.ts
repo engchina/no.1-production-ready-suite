@@ -473,7 +473,7 @@ export const ja = {
   "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
   "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
   "settings.services.subtitle":
-    "前処理 / Parser / pipeline マイクロサービスの稼働状態を確認し、起動・停止します。",
+    "ファイル準備・文書解析など各工程のサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
   "settings.services.overview.description":
     "各サービスの systemd の unit と /health を確認して稼働状態を表示します。起動/停止は systemd の unit を操作します。",
@@ -500,7 +500,7 @@ export const ja = {
   "settings.services.commands.install.label":
     "開発環境で unit と sudoers を登録(CPU サービス)",
   "settings.services.commands.installGpu.label":
-    "開発環境で GPU parser(ASR 音声文字起こし)を登録",
+    "開発環境で GPU の文書解析サービス(ASR 音声文字起こし)を登録",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.lastUpdated": "最終更新: {time}",
@@ -510,13 +510,6 @@ export const ja = {
   "settings.services.profile.cpu": "CPU",
   "settings.services.profile.gpu": "GPU",
   "settings.services.profile.oci": "OCI",
-  "settings.services.stage.preprocess": "前処理 (Preprocess)",
-  "settings.services.stage.parser": "解析 (Parser)",
-  "settings.services.stage.chunking": "文書分割",
-  "settings.services.stage.vectorIndex": "検索インデックス",
-  "settings.services.stage.guardrail": "安全チェック",
-  "settings.services.stage.evaluation": "品質評価",
-  "settings.services.stage.graphrag": "関係情報",
   "settings.services.cpuNote":
     "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を処理レシピで選んだ場合だけ使用します。",
   "settings.services.gpuNote":
@@ -555,7 +548,7 @@ export const ja = {
   "settings.services.optionalStoppedHint.inProcess":
     "停止中です。backend 内処理で継続します。負荷分散や外部サービス検証が必要な場合のみ起動してください。",
   "settings.services.optionalStoppedHint.selectedAdapter":
-    "停止中です。取込/解析設定でこのサービスを選択した場合のみ起動してください。",
+    "停止中です。ファイル準備・文書解析の設定か処理レシピでこのサービスを選んだ場合だけ起動してください。",
   "settings.services.action.start": "起動",
   "settings.services.processing.start": "{service} を起動しています",
   "settings.services.processing.stop": "{service} を停止しています",
@@ -579,7 +572,7 @@ export const ja = {
   "settings.services.logs.loadError": "ログを取得できませんでした。",
   "settings.services.confirm.stop.title": "サービスを停止しますか?",
   "settings.services.confirm.stop.description":
-    "{service} を停止します。サーバーを再起動・再配備しても停止したままになります。このサービスを必須とする処理段階は利用できなくなります。",
+    "{service} を停止します。サーバーを再起動・再配備しても停止したままになります。このサービスを必須とする工程は利用できなくなります。",
   "settings.services.confirm.stop.confirm": "停止する",
   "settings.services.confirm.cancel": "キャンセル",
   "settings.services.toast.started": "{service} を起動しました。",
@@ -601,9 +594,9 @@ export const ja = {
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
   "settings.services.item.pipelineChunking": "文書分割",
   "settings.services.item.pipelineVectorIndex": "検索インデックス",
-  "settings.services.item.pipelineGraphrag": "関係情報",
+  "settings.services.item.pipelineGraphrag": "関係情報の構築",
   "settings.services.item.pipelineGuardrail": "安全チェック",
-  "settings.services.item.pipelineEvaluation": "品質評価",
+  "settings.services.item.pipelineEvaluation": "評価の基準",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
     "回答の検索と生成の全体の既定（業務ビューで上書きできます）と、回答の記録の保存期間・質問履歴を設定します。",
@@ -1105,27 +1098,17 @@ export const ja = {
   "businessViews.confirm.archive.description":
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務ビュー",
-  "businessViews.scope.helper": "選択した業務ビューに紐づく KB を検索対象にします。",
+  "businessViews.scope.helper":
+    "選んだ業務ビューが参照するナレッジベースを検索し、その業務ビューの検索・回答設定で回答します。",
   "businessViews.scope.required": "対象の業務ビューを選択してください。",
   "businessViews.scope.noKnowledgeBases":
     "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加してください。",
-  "businessViews.scope.applied":
-    "{count} 件の業務ビューを対象にしています。回答方針・persona は先頭の業務ビューを使います。",
-  "businessViewPicker.addPlaceholder": "業務ビューを検索して追加…",
-  "businessViewPicker.toggleListAria": "業務ビューの一覧を開閉",
-  "businessViewPicker.removeChip": "{name} を選択から外す",
-  "businessViewPicker.selectedList": "選択中の業務ビュー",
-  "businessViewPicker.count": "{shown} / {total} 件",
-  "businessViewPicker.knowledgeBaseCount": "参照 KB {count} 件",
-  "businessViewPicker.noMatch": "「{query}」に一致する業務ビューがありません。",
-  "businessViewPicker.emptyList": "業務ビューがありません。",
-  "businessViewPicker.selectedCount": "{count} 件選択中",
-  "businessViewPicker.selectAllVisible": "表示中をすべて選択",
-  "businessViewPicker.clear": "クリア",
-  "businessViewPicker.done": "完了",
-  "businessViewPicker.hideEmpty": "参照 KB なしを隠す",
-  "businessViewPicker.hiddenEmptyCount": "参照 KB なしの業務ビュー {count} 件を非表示中",
-  "businessViewPicker.primary": "代表方針",
+  "businessViewSelect.placeholder": "業務ビューを検索して選択…",
+  "businessViewSelect.searchPlaceholder": "業務ビューの名前・説明で検索…",
+  "businessViewSelect.count": "{shown} / {total} 件",
+  "businessViewSelect.knowledgeBaseCount": "参照 KB {count} 件",
+  "businessViewSelect.noMatch": "「{query}」に一致する業務ビューがありません。",
+  "businessViewSelect.emptyList": "業務ビューがありません。",
   "knowledgeBases.subtitle": "文書の所属先を管理し、検索スコープごとに整理します。",
   "knowledgeBases.create.title": "ナレッジベースを作成",
   // 一覧 → 作成 / 詳細の構成を業務ビューにそろえる（#555）
@@ -1910,8 +1893,6 @@ export const ja = {
   // チャット（会話 / マルチモデル比較）
   "chat.title": "チャット",
   "chat.subtitle": "業務ビューの根拠をもとに会話形式で質問できます。複数モデルの回答を並べて比較もできます。",
-  "chat.businessView.label": "業務ビュー",
-  "chat.businessView.placeholder": "業務ビューを選択",
   "chat.businessView.empty": "公開済みの業務ビューがありません。先に業務ビューを作成してください。",
   "chat.businessView.required": "業務ビューを選択するとチャットを始められます。",
   "chat.businessView.open": "業務ビューを作成",

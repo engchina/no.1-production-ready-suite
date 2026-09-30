@@ -64,6 +64,8 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
+import { serviceStages } from "./service-stages";
+
 export type DisplayRuntimeStatus = ServiceRuntimeStatus | "loading" | "error";
 type DisplayServiceData = ServiceCatalogItemData & {
   status: DisplayRuntimeStatus;
@@ -129,7 +131,7 @@ const SERVICE_PROCESSING_LABEL_KEYS = {
   restart: "settings.services.processing.restart",
 } as const satisfies Record<ServiceControlAction, I18nKey>;
 
-/** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
+/** ファイル準備・文書解析などの工程のサービスの稼働可視化・起動/停止を行う設定画面。 */
 export function ServicesManagementClient() {
   const query = useServiceCatalog();
   const serviceIds = query.data?.services.map((service) => service.service_id) ?? [];
@@ -196,29 +198,21 @@ export function ServicesManagementClient() {
   });
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  // サービス管理ページのセクションは検索・回答フロー順(サイドナビと一致)で表示する。
-  // 各ステージは CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
-  const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
-    { category: "preprocess", labelKey: "settings.services.stage.preprocess" },
-    { category: "parser", labelKey: "settings.services.stage.parser" },
-    { category: "chunking", labelKey: "settings.services.stage.chunking" },
-    { category: "vector_index", labelKey: "settings.services.stage.vectorIndex" },
-    { category: "guardrail", labelKey: "settings.services.stage.guardrail" },
-    { category: "evaluation", labelKey: "settings.services.stage.evaluation" },
-    { category: "graphrag", labelKey: "settings.services.stage.graphrag" },
-  ];
+  // 工程の並び・名前・説明はサイドナビ（nav-config.ts の「検索・回答設定」）と対応する設定画面の説明を正本にする
+  // （#638）。各工程は CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
   const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({
     profile,
     ...PROFILE_GROUP_META[profile],
   }));
-  const stageGroups = PIPELINE_STAGE_ORDER.map(({ category, labelKey }) => {
+  const stageGroups = serviceStages().map(({ category, labelKey, descriptionKey }) => {
     const label = t(labelKey);
+    const description = descriptionKey ? t(descriptionKey) : undefined;
     const groups = PROFILE_ORDER.map((p) => ({
       ...p,
       services: displayServices.filter((s) => s.category === category && s.profile === p.profile),
     })).filter((g) => g.services.length > 0);
-    return { category, label, groups };
+    return { category, label, description, groups };
   });
 
   async function act(service: DisplayServiceData, action: ServiceControlAction) {
@@ -340,7 +334,7 @@ export function ServicesManagementClient() {
         const multi = stage.groups.length > 1;
         return (
           <Fragment key={stage.category}>
-            {stage.groups.map((g) => (
+            {stage.groups.map((g, index) => (
               <ServiceGroup
                 key={`${stage.category}-${g.profile}`}
                 title={
@@ -348,8 +342,10 @@ export function ServicesManagementClient() {
                     ? t(g.suffixKey, { stage: stage.label })
                     : stage.label
                 }
+                // 工程の説明（設定画面の説明と同じ文）は、工程の最初のグループにだけ出す（CPU/GPU/OCI で繰り返さない）。
+                description={index === 0 ? stage.description : undefined}
                 note={
-                  // CPU note(Docling 既定)は解析(parser)ステージのみ。前処理 CPU には出さない。
+                  // CPU note(Docling 既定)は文書解析(parser)の工程のみ。ファイル準備の CPU には出さない。
                   g.noteKey && (g.profile !== "cpu" || stage.category === "parser")
                     ? t(g.noteKey)
                     : undefined
@@ -461,6 +457,7 @@ function CommandRow({ label, command }: { label: string; command: string }) {
 
 function ServiceGroup({
   title,
+  description,
   note,
   services,
   controlEnabled,
@@ -471,6 +468,7 @@ function ServiceGroup({
   onToggleLogs,
 }: {
   title: string;
+  description?: string;
   note?: string;
   services: DisplayServiceData[];
   controlEnabled: boolean;
@@ -485,6 +483,7 @@ function ServiceGroup({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">{title}</CardTitle>
+        {description ? <CardDescription>{description}</CardDescription> : null}
         {note ? <CardDescription>{note}</CardDescription> : null}
       </CardHeader>
       <CardContent className="space-y-2">
