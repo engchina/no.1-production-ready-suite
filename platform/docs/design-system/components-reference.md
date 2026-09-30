@@ -1427,6 +1427,29 @@ export type TextFieldProps = {
 - 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。
 - 検索欄の E2E は `getByRole("searchbox" | "textbox", { name })` で引きます。先頭アイコンは入力欄の親（`xpath=..`）の `[data-text-field-slot="leading"]`、後置は `[data-text-field-slot="trailing"]` です。
 
+## TextField — 候補（`suggestions`、#547）
+
+候補から選べて、候補に無い値もそのまま入力できる入力欄（editable combobox）。RAG の文書の分類（大・中・小分類）で、保存済みの値を候補に出して表記の揺れを防ぐために足しました。既存の props・id・aria は変えていません。
+
+```tsx
+<TextField
+  id="document-classification-large_category"
+  label={t("documents.classification.large_category")}
+  value={value}
+  onValueChange={setValue}
+  suggestions={options?.large_categories}   // 翻訳しないデータの値。空・未指定なら普通の入力欄
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 候補の一覧は独自の listbox ではなく、ネイティブの `<datalist>`（入力欄の `list`） | キー操作（↓ で開く・Enter で選ぶ）・読み上げ（role=combobox）・モバイルの候補表示・`color-scheme` によるダークテーマを OS / ブラウザに任せる。`type="date"` の日付選択と同じ扱いで、選んだ値は普通の入力と同じく `onChange` / `onValueChange` に届く |
+| 候補があるときだけ `list` と `autoComplete="off"`（呼び出し側の `autoComplete` が優先） | ブラウザの入力履歴を候補に混ぜない。候補が無いときは従来と同じ入力欄 |
+| `list` 属性は props で受け取らない（`TextFieldProps` から除く） | datalist の id は `useId` で作り、ほかの入力欄の候補と取り違えない |
+
+- 候補の一覧の見た目（ポップアップ）はブラウザが描くため、トークンの色・角丸にはなりません（日付選択と同じ）。候補を絞り込む・複数選ぶ・候補に無い値を拒む入力は、この部品ではなく `SelectField` や RAG の `MultiSelectCombobox` の型です。
+- テストは `packages/ui/tests/text-field-slots.test.tsx`（datalist との結び付き・`autocomplete`）、実ブラウザは RAG の `e2e/structure-explainability.spec.ts`（文書詳細の分類、desktop / 375px、light / dark）。
+
 ## Tabs — 変更（#374）
 
 強制カラーモードで、選ばれていないタブの下線を `Canvas`（`forced-colors:border-b-[Canvas]`）、選んだタブの下線を `Highlight`（`forced-colors:aria-selected:border-b-[Highlight]`）にしました。props・id・aria・キー操作は変えていません。

@@ -2118,6 +2118,8 @@ export const ja = {
   "documents.classification.title": "文書の分類と有効期間",
   "documents.classification.description":
     "RAG 検索の「文書の分類」で絞り込むときに使います。有効期間外の文書は、基準日（未指定なら今日）の検索に出ません。",
+  "documents.classification.suggestionsHelper":
+    "ほかの文書で使っている分類から選べます。新しい分類はそのまま入力してください。",
   "documents.classification.large_category": "大分類",
   "documents.classification.middle_category": "中分類",
   "documents.classification.small_category": "小分類",
@@ -2216,7 +2218,7 @@ export const ja = {
     "見出し名や階層が分かる場合だけ使います。「経費申請」や「料金表」のように一部だけでも絞り込めます。",
   "search.filters.classificationGroup": "文書の分類で絞り込む",
   "search.filters.classificationHelper":
-    "文書詳細で設定した分類と完全に一致する文書だけを検索します。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
+    "文書詳細で設定した分類と一致する文書だけを検索します（全角・半角、前後の空白、先頭の番号（「10_」など）の違いは同じ分類として扱います）。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
   "search.filters.large_category": "大分類",
   "search.filters.middle_category": "中分類",
   "search.filters.small_category": "小分類",

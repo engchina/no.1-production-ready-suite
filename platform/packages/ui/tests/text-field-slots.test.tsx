@@ -138,6 +138,35 @@ describe("TextField のクリア（onClear）と後置スロット（trailing）
   });
 });
 
+describe("TextField の候補（suggestions、#547）", () => {
+  it("候補があるとき、入力欄を datalist と結び（role=combobox になる）、ブラウザの入力履歴を混ぜない", () => {
+    const html = render({ suggestions: ["10_経理", "人事"] });
+    const tag = input(html);
+    const listId = tag.match(/list="([^"]+)"/)?.[1];
+
+    expect(listId).toBeTruthy();
+    expect(tag).toMatch(/autocomplete="off"/i);
+    expect(openingTag(html, /^<datalist\b/)).toContain(`id="${listId}"`);
+    expect(html).toContain('<option value="10_経理">');
+    expect(html).toContain('<option value="人事">');
+  });
+
+  it("候補が無い（空を含む）ときは datalist を出さず、autocomplete も変えない", () => {
+    for (const suggestions of [undefined, []]) {
+      const html = render({ suggestions });
+
+      expect(html).not.toContain("<datalist");
+      expect(input(html)).not.toMatch(/\slist=|autocomplete=/i);
+    }
+  });
+
+  it("呼び出し側の autoComplete を優先する", () => {
+    expect(input(render({ suggestions: ["a"], autoComplete: "organization" }))).toMatch(
+      /autocomplete="organization"/i
+    );
+  });
+});
+
 describe("TextField の高さ（size）", () => {
   it("既定は --field-height、lg は lg の Button と同じ --button-height-lg（同じ行に並べる検索欄）", () => {
     expect(classesOf(input(render()))).toContain("min-h-[var(--field-height)]");

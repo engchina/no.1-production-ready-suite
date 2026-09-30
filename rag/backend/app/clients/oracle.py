@@ -56,6 +56,7 @@ from app.schemas.business_view import (
     BusinessViewStatus,
     BusinessViewSummary,
 )
+from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
@@ -650,6 +651,58 @@ class OracleClient:
             anchors,
             max_chunks_per_group=max_chunks_per_group,
         )
+
+    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
+        """検索と同じ条件(KB・分類・文書名など)で、検索対象の chunk が 1 件でもあるかを返す。
+
+        質問が名指しした文書名がナレッジベースに無いときに、その条件を外すために使う(#546)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT 1 AS found
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND ROWNUM = 1
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return row is not None
+
+    async def document_classifications(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """文書の分類(rag_documents.classification)を document_id ごとにまとめて返す。
+
+        分類の無い文書は含めない。分類は chunk に焼き込まず、回答のときに読む(#545)。
+        """
+        ids = _unique_optional_sequence(list(document_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("d.document_id", "classification_document", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.document_id, d.classification
+            FROM rag_documents d
+            WHERE {in_sql}
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        classifications: dict[str, dict[str, object]] = {}
+        for row in rows:
+            classification = _json_loads(row.get("classification"))
+            if classification:
+                classifications[str(row["document_id"])] = classification
+        return classifications
 
     async def context_dependency_chunks(
         self,
@@ -3687,6 +3740,68 @@ class OracleClient:
             )
 
         return await self._run_transaction(operation)
+
+    async def list_document_classification_values(self) -> list[tuple[str, object]]:
+        """利用者が見られる文書の分類の値(項目ごとの DISTINCT)を返す(入力の候補。#547)。"""
+        selects = [
+            _render_sql(
+                """
+            SELECT DISTINCT '{key}' AS category_key,
+                   JSON_VALUE(d.classification, '$.{key}') AS category_value
+            FROM rag_documents d
+            WHERE d.classification IS NOT NULL
+              AND {access_predicate}
+            """,
+                key=key,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            )
+            for key in CLASSIFICATION_CATEGORY_KEYS
+        ]
+        rows = await self._fetch_all(
+            "SELECT category_key, category_value FROM ("
+            + " UNION ALL ".join(selects)
+            + ") WHERE category_value IS NOT NULL",
+            _with_tenant_bind({}),
+        )
+        return [(str(row["category_key"]), row["category_value"]) for row in rows]
+
+    async def list_document_classifications_for_normalization(
+        self, *, limit: int, after_document_id: str | None
+    ) -> list[tuple[str, object]]:
+        """運用 CLI 用に全 tenant の文書の分類を document_id 順に返す(API では使わない。#547)。"""
+        rows = await self._fetch_all(
+            """
+            SELECT document_id, classification
+            FROM rag_documents
+            WHERE classification IS NOT NULL
+              AND (:after_document_id IS NULL OR document_id > :after_document_id)
+            ORDER BY document_id ASC
+            FETCH NEXT :limit ROWS ONLY
+            """,
+            {"after_document_id": after_document_id, "limit": limit},
+        )
+        return [(str(row["document_id"]), _json_loads(row.get("classification"))) for row in rows]
+
+    async def update_document_classification_for_normalization(
+        self, document_id: str, classification: dict[str, object] | None
+    ) -> None:
+        """運用 CLI 用に正規化した分類だけを上書きする(tenant の範囲を越える。#547)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_documents
+                SET classification = :classification
+                WHERE document_id = :document_id
+                """,
+                {
+                    "document_id": document_id,
+                    "classification": None if not classification else _json_dumps(classification),
+                },
+            )
+
+        await self._run_transaction(operation)
 
     async def save_preprocess_artifact(
         self,
@@ -11001,22 +11116,30 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     return " AND ".join(clauses), binds
 
 
-_CLASSIFICATION_FILTER_KEYS = ("large_category", "middle_category", "small_category")
+_CLASSIFICATION_FILTER_KEYS = CLASSIFICATION_CATEGORY_KEYS
+
+
+def _category_label_sql(expression: str) -> str:
+    """`category_label` の番号の接頭辞の除去を SQL で行う(後ろに 1 文字以上あるときだけ外す)。"""
+    return f"REGEXP_REPLACE({expression}, '^[0-9]+_(.)', '\\1')"
 
 
 def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
     """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
 
-    - 分類は指定した項目だけを完全一致で絞る。
+    - 分類は指定した項目だけを、番号の接頭辞を除いた名前の一致で絞る(`10_業務A` と `業務A` を
+      同じ分類として扱う。docrag_core の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
+      保存時と検索の入力で同じ正規化を通すので、SQL では接頭辞だけを外す。
     - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
       ISO 日付の文字列比較は時系列順と一致する。
     """
     clauses: list[str] = []
     binds: dict[str, object] = {}
     for key in _CLASSIFICATION_FILTER_KEYS:
-        if value := (filters.get(key) or "").strip():
-            clauses.append(f"JSON_VALUE(d.classification, '$.{key}') = :filter_{key}")
-            binds[f"filter_{key}"] = value
+        if label := category_label(filters.get(key)):
+            column = f"JSON_VALUE(d.classification, '$.{key}')"
+            clauses.append(f"{_category_label_sql(column)} = :filter_{key}")
+            binds[f"filter_{key}"] = label
     clauses.append(
         "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) <= :filter_as_of"
     )
