@@ -14,33 +14,20 @@ import {
 import { cn } from "../../lib/utils";
 
 import { Button } from "./button";
+import {
+  CONTROL_MIN_HEIGHT_CLASS,
+  type ControlSize,
+  type FieldWidth,
+  fieldControlClass,
+  fieldWidthClass,
+} from "./control-size";
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 
-/**
- * 入力欄の見た目（枠線は secondary ボタンと同じ --color-border-control、角丸は Button・SelectField と同じ --radius-control）。
- * SecretField も同じ見た目にするため、パッケージ内でだけ共有する（index.ts からは export しない）。
- */
-export const fieldControlClass = cn(
-  "w-full min-h-[var(--field-height)] rounded-control border bg-surface px-3 text-sm text-fg outline-none transition-colors",
-  // プレースホルダも「文字」。透過で薄めると 3:1 を割るので fg-muted のまま使う
-  "placeholder:text-fg-muted placeholder:opacity-100",
-  "focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
-  "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
-  "read-only:bg-surface-sunken",
-  "forced-colors:border-[CanvasText]",
-  // type="search" のブラウザ既定のクリアボタン（Chromium / Safari の ×）と装飾を出さない。
-  // キーボードで届かず読み上げ名も訳せないため、クリアは onClear の共有ボタン（または trailing）で出す（#384）。
-  "[&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
-);
+export { fieldControlClass };
 
-/** 高さ。md は既定の --field-height（36px）、lg は隣に置く lg の Button と同じ --button-height-lg（40px、タッチ端末は 44px）。 */
-export type TextFieldSize = "md" | "lg";
-
-const sizeClass: Record<TextFieldSize, string> = {
-  md: "",
-  lg: "min-h-[var(--button-height-lg)]",
-};
+/** 高さ（`ControlSize`）。既定 md（36px）。同じ行の Button と同じ size にする（#613）。 */
+export type TextFieldSize = ControlSize;
 
 /**
  * 先頭アイコンがあるときの左の余白 = アイコンの左の位置（px-3）+ アイコン（16px）+ Button のアイコンと文字の間隔（8px）。
@@ -103,13 +90,13 @@ export type TextFieldProps = {
   requiredLabel?: string;
   className?: string;
   inputClassName?: string;
-  /** 高さ（既定 md = --field-height の 36px）。lg の Button と同じ行に並べる入力欄だけ lg（--button-height-lg）。 */
-  size?: TextFieldSize;
   /**
-   * マウス環境でも 44px（--control-height-touch）にする場合だけ true。Button の `touchTarget` と同じ。
-   * 44px の Button・select と同じ行に並べる入力欄に使う（size より優先）。
+   * 高さ（既定 md = 36px）。同じ行に並べる Button と同じ size にする（lg の Button の隣は lg）。
+   * タッチ端末では sm / md / lg とも 44px になる（Button と同じ）。
    */
-  touchTarget?: boolean;
+  size?: TextFieldSize;
+  /** 幅（入る値の長さで選ぶ。既定は親の幅いっぱい）。sm（640px）未満は全幅。 */
+  width?: FieldWidth;
   /** 先頭のアイコン（lucide-react のコンポーネント。例: `leadingIcon={Search}`）。16px・読み上げない。 */
   leadingIcon?: LucideIcon;
   /** 末尾の任意の要素（単位・件数・ボタン）。値を消すボタンは `onClear` を使う。 */
@@ -153,7 +140,7 @@ export function TextField({
   className,
   inputClassName,
   size = "md",
-  touchTarget = false,
+  width,
   leadingIcon: LeadingIcon,
   trailing,
   onClear,
@@ -223,7 +210,7 @@ export function TextField({
   }
 
   return (
-    <div className={cn("space-y-1.5", className)}>
+    <div className={cn("space-y-1.5", fieldWidthClass(width), className)}>
       <label
         htmlFor={id}
         className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}
@@ -251,7 +238,7 @@ export function TextField({
             fieldControlClass,
             // 先頭アイコンの色を disabled に合わせるため peer にする（アイコンは入力欄の後ろに置く）。
             "peer",
-            touchTarget ? "min-h-[var(--control-height-touch)]" : sizeClass[size],
+            CONTROL_MIN_HEIGHT_CLASS[size],
             LeadingIcon && TEXT_FIELD_LEADING_PADDING_CLASS,
             hasTrailing && TEXT_FIELD_TRAILING_FALLBACK_PADDING_CLASS,
             error ? "border-danger-fg" : "border-border-control",

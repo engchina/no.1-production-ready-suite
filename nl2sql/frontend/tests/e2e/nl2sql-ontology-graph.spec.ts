@@ -376,9 +376,12 @@ async function expectQuestionActionLayoutWithClear(page: Page, playground: Locat
   expect(inputBox).not.toBeNull();
   expect(runBox).not.toBeNull();
   expect(clearBox).not.toBeNull();
-  expect(inputBox!.height).toBeGreaterThanOrEqual(43);
-  expect(runBox!.height).toBeGreaterThanOrEqual(43);
-  expect(clearBox!.height).toBeGreaterThanOrEqual(43);
+  // 質問の行は lg（40px）。タッチ端末（pointer: coarse）では 44px（#613）。
+  const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
+  for (const box of [inputBox, runBox, clearBox]) {
+    expect(box!.height).toBeGreaterThanOrEqual(coarse ? 43 : 39);
+    expect(box!.height).toBeLessThanOrEqual(coarse ? 45 : 41);
+  }
 
   const viewportWidth = page.viewportSize()?.width ?? 0;
   if (viewportWidth >= 640) {
@@ -418,7 +421,9 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   expect(detailsBox).not.toBeNull();
 
   const viewportWidth = page.viewportSize()?.width ?? 0;
-  expect(fieldBox!.height).toBeGreaterThanOrEqual(viewportWidth < 640 ? 43 : 39);
+  // グラフのツールバーは lg（40px）。画面幅ではなく入力方式で、タッチ端末は 44px（#613）。
+  const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
+  expect(fieldBox!.height).toBeGreaterThanOrEqual(coarse ? 43 : 39);
   expect(fieldBox!.height).toBeLessThanOrEqual(45);
   expect(Math.abs(fieldBox!.height - modeBox!.height)).toBeLessThanOrEqual(1);
   expect(Math.abs(fieldBox!.height - detailsBox!.height)).toBeLessThanOrEqual(1);

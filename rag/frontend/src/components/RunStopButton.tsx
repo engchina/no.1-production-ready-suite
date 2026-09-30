@@ -29,7 +29,6 @@ export function RunStopButton({
   runIcon,
   runDisabled = false,
   size = "lg",
-  touchTarget,
   className,
   testId,
 }: {
@@ -41,8 +40,8 @@ export function RunStopButton({
   runIcon: LucideIcon;
   /** 実行できない（入力が空など）。実行中の停止には効かない。 */
   runDisabled?: boolean;
+  /** 高さ。並べる入力欄と同じ size にする（既定 lg。README §4「操作部品の高さと幅」、#613）。 */
   size?: ButtonProps["size"];
-  touchTarget?: boolean;
   className?: string;
   testId?: string;
 }) {
@@ -51,7 +50,6 @@ export function RunStopButton({
       type="button"
       variant={running ? "secondary" : "primary"}
       size={size}
-      touchTarget={touchTarget}
       icon={running ? Square : runIcon}
       aria-disabled={!running && runDisabled ? true : undefined}
       data-state={running ? "running" : "idle"}

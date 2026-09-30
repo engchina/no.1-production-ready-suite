@@ -41,6 +41,7 @@ import {
   type ListPickerGroup,
   type ListPickerItem,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -165,8 +166,8 @@ function emptyProfileForm(): ProfileFormState {
   };
 }
 
-const inputClass =
-  "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const inputClass = fieldControlClassName({ className: "min-w-0 py-2" });
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -535,7 +536,6 @@ function SelectAiConfigFields({
             if (requiredErrors.region) onRequiredErrorClear("region");
           }}
           className="min-w-0"
-          buttonClassName="h-11"
         />
         <TextField
           id="profile-select-ai-model"
@@ -548,7 +548,6 @@ function SelectAiConfigFields({
             if (requiredErrors.model) onRequiredErrorClear("model");
           }}
           className="min-w-0"
-          inputClassName="h-11"
         />
         <TextField
           id="profile-select-ai-max-tokens"
@@ -570,7 +569,6 @@ function SelectAiConfigFields({
             })
           }
           className="min-w-0"
-          inputClassName="h-11"
         />
         <TextField
           id="profile-select-ai-embedding-model"
@@ -585,7 +583,6 @@ function SelectAiConfigFields({
             if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
           }}
           className="min-w-0"
-          inputClassName="h-11"
         />
       </div>
       <div className="grid gap-2 md:grid-cols-4">
@@ -1109,7 +1106,6 @@ function ProfileEditor({
             </Button>
             <ClearActionButton
               label={t("profiles.oracle.actions.clear")}
-              matchButtonHeight
               size="lg"
               className="w-full sm:w-auto"
               disabled={!canClearOracleExecution || saving}

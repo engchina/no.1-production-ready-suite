@@ -197,6 +197,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 | コンテナ（カード / `Section` / `Banner` / 危険な操作区画 / 確認語欄の枠 / フォーム枠 / 一覧 / 表 / 検索欄の外枠） | **max-width を付けない**（`max-w-[var(--content-max-width)]` / `max-w-3xl` 等で止めない） | — |
 | フォーム項目 | `grid gap-x-6 gap-y-4 lg:grid-cols-2`。短い値が並ぶなら `2xl:grid-cols-3`。**意味のペアは同じ行**、入力順は崩さない | ユーザー / パスワード、接続方式 / Wallet ZIP、リージョン / テナンシ |
 | 長い値 | `col-span-full` | OCID・URL・パス・textarea・JSON / SQL エディタ・`Banner`・チェックボックスの説明 |
+| grid の外に単独で置く選択欄・短い値の入力欄 | 部品の `width`（`xs` / `sm` / `md` / `lg`）で値の長さの幅にする（下の「操作部品の高さと幅」、#613）。**カードや行の幅いっぱいに伸ばさない** | チャットの業務ビュー（`lg`）、表示件数（`sm`）、保存期間（`md`） |
 | 短い値と長い値のペア | 比率で配分（`lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]`） | リージョン（1）/ OCID（2） |
 | 検索・絞り込みの toolbar | 検索欄と、フィルタ / ファイル選択 / 件数 / 一覧全体の操作を**同じ行に比率で配分**（`lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]` 等）。行全体は 100%。**並べる要素があるのに検索欄だけを行全体に伸ばさない** | 検索（2）/ 件数・XLSX 出力（1）、ファイル選択（2）/ アップロードモード（1） |
 | 数値などの短い単独入力と実行ボタン | 同じ操作行に置く（`lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center`） | 取得件数上限（1）/ 実行・リセット（2） |
@@ -253,9 +254,9 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | 一覧の追加読込 | `secondary` | `sm`（32px） | `ListPlus` |
 | 一括選択 / 選択解除 | `secondary` / `ghost` | 同じ `sm`（32px） | `CheckSquare` / `X` |
 | 確認ダイアログの確定 / 取消 | `primary` または `danger` / `secondary` | 共通ダイアログに従い、同じ行で統一 | ダイアログの専用規約を優先 |
-| 入力欄に隣接する操作 | 操作の役割で決定 | `touchTarget`（44px） | 操作を示すアイコン |
+| 入力欄に隣接する操作（取得・接続テスト） | 操作の役割で決定 | 入力欄と同じ段（既定 `md`。lg の入力欄の横は `lg`）。`touchTarget` は使わない（#613） | 操作を示すアイコン |
 
-- **タッチ端末は全サイズ44px**。32/36/40pxは位置に応じた密度の違いであり、primaryだけを大きくする規則ではない。同じ操作行のprimary/secondary/ghostは同じ高さにする。
+- **タッチ端末は全サイズ44px**（入力欄・選択欄も。#613）。32/36/40pxは位置に応じた密度の違いであり、primaryだけを大きくする規則ではない。同じ操作行のprimary/secondary/ghostと、同じ行の入力欄・選択欄は同じ高さにする（下の「操作部品の高さと幅」）。
 - **取得という動詞だけでsecondaryにしない。** 対象選択・内容確認へ進む唯一の主操作はprimary。すでに表示した一覧の再読込や状態再確認はsecondary。
 - disabledでも同じサイズとアイコンを保つ。未選択だからアイコンを消したり、高さを変えたりしない。
 - サイズ・色・角丸・アイコン枠は`packages/ui`の`Button`とトークンが実装する。アプリはrole/placementからpropsを選び、独自CSSや同等部品を作らない。
@@ -329,6 +330,54 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 部品の間隔が、両側の広がりの合計（チップは約 19px、スイッチは 20px）より狭いときは、**重なった間の当たり判定は後ろ（下・右）の部品が取る**。どの部品にも見た目の上のタップは届くので誤タップにはならないが、前の部品の実効の当たり判定は 44px より小さくなる（例: `gap-2`（7px）で縦に並べたスイッチは、上が 34px・下が 41px）。どちらも 44px にするには `gap-6`（21px）以上を空ける
 - スクロール領域の端（余白なし）に置くと、広げた当たり判定の分だけスクロールできる範囲が伸びることがある。カード・フォームの余白の中に置く
 - 製品は何も書かない（`ToggleChip` / `Switch` を使えば付く）。同じことを製品で手書きしない
+
+### 操作部品の高さと幅（新設）— ★ 同じ行は同じ高さ、選択欄は値の長さの幅（#613）
+
+画面ごとに入力欄・選択欄・ボタンの高さと幅がそろっていませんでした。製品が `touchTarget` / `size="lg"` / `h-10` / `h-11` / `min-h-[44px]` を画面ごとに選び（3 製品で 75 か所。高さは 35 / 36 / 38.5 / 40 / 44px が混在）、同じ行でも部品ごとに高さが違いました。タッチ端末では Button だけが 44px になり、入力欄（36px）とずれていました。選択欄の幅には規則が無く、短い値（「DEFAULT」「90 日」）の選択欄が親の幅いっぱい（1,280px の画面で約 560px、1,920px で約 900px）に伸びていました。
+
+**高さ（3 段 + タッチ端末）**
+
+| 段 | 高さ | 使う場面 |
+|---|---|---|
+| `sm` | 32px（`--control-height-sm`） | 表の行・密なツールバーの中の操作、内容のコピー・ダウンロード、追加読込、一括選択、ページ送り、空の状態の「検索語をクリア」 |
+| `md`（既定） | 36px（`--control-height-md`） | すべての入力欄・選択欄、一覧のツールバー（検索・絞り込み）、フォームの欄とその横の操作（取得・接続テスト）、ページヘッダーの操作、ダイアログ |
+| `lg` | 40px（`--control-height-lg`） | 工程・フォームの末尾で次へ進む主操作の行（`FormActionBar`・保存・実行）、主な問い合わせの入力の行（チャットの入力欄と送信・検索テスト・オントロジーの質問）、確認語欄、ログインなど 1 つの作業だけの画面のフォーム |
+| タッチ端末 | 44px（`--control-height-touch`） | `pointer: coarse` では 3 段とも 44px（入力欄・選択欄も）。画面幅ではなく入力方式で決める |
+
+- **1 つの行の中では、入力欄・選択欄・ボタンを同じ段にする。** lg の Button の隣の入力欄は `size="lg"`、入力欄の横の操作は入力欄と同じ `md`。Button・`TextField`・`SearchField`・`SecretField`・`SelectField`・`SearchableSelectField` が同じ `size`（`sm` / `md` / `lg`）を受け取り、同じトークン（`--control-height-*`。`--button-height-*` / `--field-height` は別名）を参照する。
+- **製品で `touchTarget` を使わない。** タッチ端末では全部品が 44px になるので、マウス環境で 44px にする理由が無い（以前の「入力欄に隣接する操作は `touchTarget`」は廃止。`TextField` の `touchTarget` は削除した）。`touchTarget` は `packages/ui` の画面の端の閉じる・メニューのボタン（Toast・Banner・AppShell の上端のバー）だけが使う。
+- **製品で `h-*` / `min-h-*` を操作部品に書かない。** ネイティブの `<select>` / `<input>` を残す画面（`<optgroup>` を使う選択など）も、`fieldControlClassName({ size, width })` で同じ見た目・高さにする。
+- 例外（理由をコメントに書いて局所的に除外）: 説明文を含むカード型の選択肢（NL2SQL の回答エンジンの選択）。
+
+**幅（値の長さで選ぶ 5 段）**
+
+| 段 | 幅 | 入る値の例 |
+|---|---|---|
+| `xs` | 8rem（112px） | 数値・件数・短いコード（「10」「DEFAULT」） |
+| `sm` | 12rem（168px） | 短い列挙（状態・種類・言語・「1 ページの表示件数」） |
+| `md` | 20rem（280px） | 名前（ユーザー名・表名・評価の指標・保存期間） |
+| `lg` | 28rem（392px） | 長めの名前（業務ビュー・ナレッジベース・モデル） |
+| `full` | 親の幅 | URL・OCID・パス・文章・一覧の検索欄 |
+
+- **フォームの grid のセルに置く欄は `width` を渡さない**（セルの幅いっぱい）。欄の最大幅は grid の段組みで決める（上の「wide 画面の 100% 充填」。1 つの欄を行全体に伸ばさない）。**grid の外に単独で置く選択欄・短い値の入力欄は必ず `width` を渡す**（カードの先頭の対象の選択、ツールバーの絞り込み、表示件数、操作の横の選択）。
+- 最も長い選択肢と**ラベル**が 1 行に収まる段を選ぶ（ラベルが折り返す幅にしない）。
+- sm（640px）未満はどの段も全幅。`width` は欄の外枠（ラベル・補足・エラーを含む）に付き、親より広くはならない（`sm:max-w-full`）。
+- **製品で `w-*` / `max-w-*` を欄に書かない。** adherence の lint が検出する。
+
+**複数行の入力と操作の行**
+
+- 入力欄と、その値への操作（送信・実行・取得）を 1 行に置くときは `FieldActionRow` を使う。操作は**入力欄の下端にそろえる**（チャットの入力欄の型。ラベルが上にある 1 行の入力欄でも同じ）。375px では操作を入力欄の下に全幅で置く。欄の補足・エラーは `footer` に出す（欄の中に出すと、下端でそろえた操作が文の下端に合ってしまう）。
+- 複数行の入力欄の高さは `rows` で決める。最小の高さは 1 行の入力欄と同じ段（`--control-height-md`）で、横の操作より低くならない。
+
+**根拠（業界の指針）**
+
+| 指針 | 取り入れたこと |
+|---|---|
+| [Carbon Form](https://carbondesignsystem.com/components/form/usage/)（入力欄・選択欄・ボタンが 32 / 40 / 48px の 3 段。同じ行は同じ段） | 部品をまたいで同じ段を使い、行の中では段をそろえる。既定は中の段 |
+| [Material 3 Density / Accessibility](https://m3.material.io/foundations/designing/structure)（密度は 4dp 刻みで下げる、タッチの当たり判定は 48dp） | 段を 4px 刻み（32 / 36 / 40）にし、タッチ端末では当たり判定を広げる |
+| [Apple HIG Layout](https://developer.apple.com/design/human-interface-guidelines/layout)（操作の最小 44 × 44pt）・[WCAG 2.2 SC 2.5.5 / 2.5.8](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html) | タッチ端末では入力欄も含めて 44px。マウス環境は 2.5.8 の 24px を満たす密度のまま |
+| [GOV.UK Design System Text input](https://design-system.service.gov.uk/components/text-input/)（「欄の幅は入る値の長さに合わせる」、固定幅は狭い画面では画面の幅に縮む）・Baymard Institute の入力欄の幅の研究 | 値の長さで選ぶ幅の段。狭い画面では全幅 |
+| [Atlassian Textfield](https://atlassian.design/components/textfield/)（`width` で欄の最大幅を決める） | 幅を部品の prop にし、製品で幅のクラスを書かない |
 
 ### `Tooltip`（新規）— ★ アイコンだけのボタンの説明（#372）
 
@@ -475,13 +524,13 @@ import { Search } from "lucide-react";
 // 一覧の絞り込みの検索欄は TextField ではなく SearchField で作る（下の「`SearchField`」、#535）。
 // TextField の先頭アイコン・クリアは、重い検索の質問欄や、単位・件数を後ろに置く入力欄に使う。
 
-// lg の Button と同じ行: size="lg"。44px の Button・select と同じ行: touchTarget
+// lg の Button と同じ行: size="lg"（同じ行の部品は同じ size。#613 で touchTarget は削除）
 <TextField id="search-query" label="RAG 検索" labelHidden size="lg" leadingIcon={Search} … />
 ```
 
 | 決めたこと | 理由 |
 |---|---|
-| **高さはトークンだけ。** 既定は `--field-height`（36px）。同じ行に `lg` の Button を置くときは `size="lg"`（`--button-height-lg`）、44px の Button・select と並べるときは `touchTarget`（`--control-height-touch`）。Button の `size` / `touchTarget` と同じ考え方 | 並ぶ操作部品と上端・下端がそろう。製品で `h-9` / `h-11` を書かない |
+| **高さはトークンだけ。** 既定は `md`（36px）。同じ行に `lg` の Button を置くときは `size="lg"`、密な行は `size="sm"`（`--control-height-*`、タッチ端末は 44px）。Button の `size` と同じ段（#613。`touchTarget` は削除） | 並ぶ操作部品と上端・下端がそろう。製品で `h-9` / `h-11` を書かない |
 | 先頭アイコン（`leadingIcon`）は 16px（`--icon-md`）、左 `--space-3`、`--color-fg-muted`（無効の入力欄では `--color-fg-disabled`）。`aria-hidden`、`pointer-events: none` | 読み上げは label が担う。アイコンを押しても下の入力欄にフォーカスが入る |
 | 文字の開始位置 = `--space-3` + `--icon-md` + `--button-gap`（34.5px） | アイコン付きの Button と同じ、アイコンと文字の間の 8px |
 | クリア（`onClear` + `clearLabel`）は、**値があるときだけ**末尾に `ghost` の `iconOnly` Button（`X`）を出す。入力欄の枠線の内側に、入力欄の高さの正方形で置き、外側の角だけ `--radius-control` − 1px | 空の欄に押せない × を出さない。ホバーの地が入力欄の枠線に重ならない。`iconOnly` なので既定で Tooltip が出る |
@@ -862,12 +911,14 @@ QA に事前共有してください。**47点あります。**
 | 52 | **複数行の入力欄の見た目が 1 つにそろう**（#584） | 手書きの `<textarea>`: 地が `bg-surface-sunken`（RAG の業務ビュー・設定・評価など）/ `bg-surface`、角丸 `rounded-md`、disabled が `opacity-50` など、ラベル・文字数の位置も画面ごと → 共有 `TextareaField`: 地は `bg-surface`（read-only は `bg-surface-sunken`、disabled は `bg-surface-disabled`）、角丸 `--radius-control`、余白 `px-3 py-2`、枠線・フォーカスは `TextField` と同じ、文字数と補足は欄の下（RAG のドメインキーワードの補足は欄の上 → 下）。等幅の欄（SQL・JSON・論理構造など。NL2SQL の SQL の入力欄は 14px だった）は `--font-mono` の 12px。RAG の DocRAG プロンプトの「既定値／カスタマイズ済み」のバッジはラベルの横 → 操作の行 | 1 行の入力欄と同じ部品に見せ、disabled を透過で薄めない（§4「`TextareaField`」） |
 | 53 | **一覧の検索欄が左（先頭）に移り、大量の候補から選ぶ一覧が 1 つの見た目になる**（#600） | RAG のナレッジベース・業務ビューの一覧: 左に状態のチップ、右端に検索欄（`sm:w-64`）、間が空く → `ListToolbar` で左に検索欄（残りを埋める）、その右に状態のチップ。文書の一覧: 右端の検索欄（`sm:ml-auto sm:w-64`）→ 左端に検索欄、その右に状態・ナレッジベース。ナレッジベースの「所属文書」: 検索なし、上に「追加する文書を検索」+ 選択欄 +「追加」（1 件ずつ・候補 100 件まで）→ 左に「所属文書を検索」、右に「文書を追加」。押すと下に `ListPicker`（候補は 100 件ずつ「さらに読み込む」、チェックで複数を選び「選択した N 件を追加」、追加済みは灰色で「追加済み」）。NL2SQL の業務プロファイルの許可する表・ビュー: 枠 392px 固定の中に手書きのチェックボックスの行（44px）と、スキーマごとの枠 → `ListPicker`（見出し・一覧・フッターの 3 段、一覧は 28rem / 375px では 17.5rem、行 3.5rem、スキーマの見出しは面の地、チェックは塗りの四角）。権限管理の「利用できる対象」: 2 列のチェックボックスの行（名前 + 説明 2 行）→ `ListPicker` の 1 列の行（名前 + 説明 1 行で省略、全文は title、状態のバッジは右端）。フッターの「さらに読み込む」は失敗中は出さず、Banner の「再試行」だけにする | 検索欄の位置を 3 製品でそろえる（UX 契約 page-archetypes.md「一覧のツールバー」）。数千〜数万件から検索して複数をまとめて選べる。キーボード（Tab 1 回で一覧に入り、矢印と Space）・読み上げを共通の部品にそろえる |
 | 54 | **NL2SQL のメタデータ SQL・合成データの対象が `ListPicker` に、Deep Data Security の対象が検索できる選択欄になる**（#608） | メタデータ SQL（コメント・アノテーション・ドメイン）の対象: 一括選択の下に 3 列の `DataTable`（対象名・種類・所有者の並べ替え、行のチェックボックス、コメントは 2 行）→ `ListPicker`（選択の行、1 列の listbox、行は名前・コメント 1 行で省略・右端に種類のバッジ、28rem / 375px では 17.5rem、フッターの「さらに読み込む」）。合成データの対象の表: 手書きのチェックボックスの行 → `ListPicker`（左に候補の検索欄）。Deep Data Security の対象 table/view: 枠の中に検索欄・所有者の欄・手書きの listbox（max-h-52）・「さらに読み込む」のボタン → `SearchableSelectField`（ボタンに選んだ名前、開くと検索と候補の一覧。所有者の欄は無くなり、検索がスキーマ名も照合する）。権限管理の「利用できる対象」は見た目は同じで、候補を 50 件ずつ読む（フッターの「さらに読み込む」が出る） | 似た機能を同じ部品にそろえる（UX 契約 page-archetypes.md「大量の候補から選ぶ」の画面ごとの判断）。候補を全件読まない |
+| 55 | **入力欄・選択欄・ボタンの高さが 3 段にそろい、選択欄が値の長さの幅になる**（#613） | 高さ: 入力欄 36px・その横のボタン 44px（`touchTarget`）、NL2SQL の選択欄 38.5px（`h-11`）/ 44px（`min-h-[44px]`）、Agent の入力欄 40px（`h-10`、地は `surface-sunken`）、ログインの入力欄 38.5px と送信 44px、確認語欄 44px、タッチ端末では入力欄 36px・ボタン 44px → 同じ行は同じ段（sm 32 / md 36 / lg 40px）、タッチ端末は入力欄も含めて 44px。ネイティブの select / input も共有の見た目（地は `surface`）。幅: 単独の選択欄が親の幅いっぱい（RAG のチャットの業務ビューが 1,280px で約 560px）→ 値の長さの段（xs 8 / sm 12 / md 20 / lg 28rem、sm 未満は全幅）。チャットの入力欄と送信は下端をそろえ、送信は lg | README §4「操作部品の高さと幅」。Carbon・Material 3・Apple HIG・GOV.UK の指針。行の中で上端・下端がずれず、短い値の欄が長く伸びない |
 
 ### API の非互換
 
 | 対象 | 変更 |
 |---|---|
 | `Button` | `icon` / `trailingIcon` プロップ新設。子にアイコンを書く旧スタイルは動くが**非推奨** |
+| 操作部品の高さと幅（#613） | **新規 export** `ControlSize` / `FieldWidth` / `CONTROL_HEIGHT_CLASS` / `CONTROL_MIN_HEIGHT_CLASS` / `FIELD_WIDTH_CLASS` / `fieldWidthClass` / `fieldControlClassName` / `FieldActionRow`。`TextField` / `SearchField` / `SecretField` / `SelectField` / `SearchableSelectField` に `size`（`"sm" \| "md" \| "lg"`）と `width`（`"xs" \| "sm" \| "md" \| "lg" \| "full"`）を追加。`TextField` の `touchTarget` と `ClearActionButton` の `matchButtonHeight` を**削除**（`ClearActionButton` はマウス環境でも 44px にしない。行と同じ `size` を渡す）。トークン `--control-height-sm` / `md` / `lg` と `--field-width-xs` / `sm` / `md` / `lg` を新設し、`--button-height-*` / `--field-height` は別名にした。`pointer: coarse` では入力欄・選択欄も 44px |
 | `Button`（#355） | `loading` 中はネイティブの `disabled` ではなく `aria-disabled="true"`（CSS の `:disabled`・jest-dom の `toBeDisabled()` では判定できない）。`ButtonProps` は `interface` から `type`（`variant` と `tone` の組み合わせの union）に変わり、`variant="danger"` + `tone="danger"` は型エラー。組み合わせの型は `ButtonVariantToneProps` として export |
 | `StatusBadge` | `icon` プロップ新設（既定 `true`）。`pending` は `warning` の別名で**非推奨** |
 | `PageHeader` | `tabs` / `wide` プロップ新設。アクションの並び順が変わる |

@@ -139,7 +139,8 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit} noValidate>
             {error ? <Banner severity="danger">{error}</Banner> : null}
-            {/* 認証の入力はモバイルでも 44px のタッチ領域を確保する。未入力は送信時に検証する（noValidate）。 */}
+            {/* ログインは画面の唯一の作業なので、入力欄と送信を lg（40px、タッチ端末は 44px）にそろえる（#613）。
+                未入力は送信時に検証する（noValidate）。 */}
             <TextField
               id="auth-login-user-id"
               label={m.loginUserId}
@@ -147,7 +148,7 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
               requiredLabel={m.required}
               autoComplete="username"
               autoFocus
-              inputClassName="h-11"
+              size="lg"
               value={loginUserId}
               onValueChange={setLoginUserId}
             />
@@ -158,12 +159,11 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
               requiredLabel={m.required}
               type="password"
               autoComplete="current-password"
-              inputClassName="h-11"
+              size="lg"
               value={password}
               onValueChange={setPassword}
             />
-            {/* 認証の主導線はモバイルでも 44px のタッチ領域を確保する。 */}
-            <Button size="lg" touchTarget className="w-full" loading={busy} type="submit" icon={LogIn}>
+            <Button size="lg" className="w-full" loading={busy} type="submit" icon={LogIn}>
               {m.loginSubmit}
             </Button>
             {busy ? (
@@ -275,10 +275,10 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
           <CardContent className="space-y-5">
             <Banner severity="warning">{m.passwordNotAllowed}</Banner>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Button type="button" size="lg" touchTarget className="w-full whitespace-nowrap" variant="secondary" onClick={handleBack} icon={ArrowLeft}>
+              <Button type="button" size="lg" className="w-full whitespace-nowrap" variant="secondary" onClick={handleBack} icon={ArrowLeft}>
                 {m.passwordBack}
               </Button>
-              <Button type="button" size="lg" touchTarget className="w-full whitespace-nowrap" onClick={handleLogout} icon={LogOut}>
+              <Button type="button" size="lg" className="w-full whitespace-nowrap" onClick={handleLogout} icon={LogOut}>
                 {m.sidebarLogout}
               </Button>
             </div>
@@ -299,7 +299,7 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
           <form className="space-y-4" onSubmit={handleSubmit} noValidate>
             {error ? <Banner severity="danger">{error}</Banner> : null}
             <Banner severity="info">{m.passwordRule}</Banner>
-            {/* 認証の入力はモバイルでも 44px のタッチ領域を確保する。未入力は送信時に検証する（noValidate）。 */}
+            {/* パスワードの変更も画面の唯一の作業なので lg（#613）。未入力は送信時に検証する（noValidate）。 */}
             {PASSWORD_FIELDS.map((field) => (
               <TextField
                 key={field.id}
@@ -309,7 +309,7 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
                 requiredLabel={m.required}
                 type="password"
                 autoComplete={field.autoComplete}
-                inputClassName="h-11"
+                size="lg"
                 value={values[field.id]}
                 onValueChange={(value) => setValues((current) => ({ ...current, [field.id]: value }))}
               />
@@ -318,7 +318,6 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
                 <Button
                   size="lg"
-                  touchTarget
                   className="w-full whitespace-nowrap"
                   disabled={busy}
                   type="button"
@@ -328,7 +327,7 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
                 >
                   {auth.user?.force_password_change ? m.passwordBackToLogin : m.passwordBack}
                 </Button>
-                <Button size="lg" touchTarget className="w-full whitespace-nowrap" loading={busy} type="submit" icon={KeyRound}>
+                <Button size="lg" className="w-full whitespace-nowrap" loading={busy} type="submit" icon={KeyRound}>
                   {m.passwordSubmit}
                 </Button>
               </div>

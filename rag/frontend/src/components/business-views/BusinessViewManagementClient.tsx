@@ -424,7 +424,6 @@ function BusinessViewList({
                 action={
                   <ClearActionButton
                     label={t("common.clearSearch")}
-                    matchButtonHeight
                     onClick={() => setQ("")}
                   />
                 }

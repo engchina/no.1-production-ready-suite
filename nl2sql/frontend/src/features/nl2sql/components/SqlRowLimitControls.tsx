@@ -4,6 +4,7 @@ import {
   FieldError,
   StatusBadge,
   FieldLabel,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
@@ -56,7 +57,8 @@ export function RowLimitField({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? "true" : undefined}
-        className="h-10 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled focus:border-focus-ring"
+        // 件数は短い数値なので xs の幅（補足の文は欄の外枠の幅で出す）。高さ・見た目は TextField と同じ（#613）。
+        className={fieldControlClassName({ width: "xs" })}
       />
       <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-fg-muted">
         {helper}

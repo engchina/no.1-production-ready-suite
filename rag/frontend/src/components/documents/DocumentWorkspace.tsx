@@ -2387,9 +2387,9 @@ function ChunkPreviewControls({
               chunk_overlap: preset.overlap,
             });
           }}
-          buttonClassName="min-h-11"
         />
-        <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken px-3 py-2">
+        {/* 隣の選択欄（md）と同じ高さの最小（#613）。 */}
+        <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken px-3 py-2">
           <span className="text-sm font-medium text-fg">
             {t("flow.chunkPreview.contextHeader")}
           </span>

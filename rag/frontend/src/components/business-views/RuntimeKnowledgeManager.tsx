@@ -337,6 +337,7 @@ export function RuntimeKnowledgeManager({
             onValueChange={(value) =>
               value && update({ kind: value, selected: null })
             }
+            width="sm"
           />
           <TextField
             id="runtime-knowledge-name"

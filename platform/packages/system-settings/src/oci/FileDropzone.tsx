@@ -193,7 +193,8 @@ export function FileDropzone({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "group flex h-[44px] min-w-0 touch-manipulation items-center gap-2 rounded-md border border-dashed bg-surface-sunken px-3 py-1 text-left",
+            // 入力欄と同じ md の高さ（タッチ端末は 44px）。隣のクリアも同じ size（#613）。
+            "group flex h-[var(--control-height-md)] min-w-0 touch-manipulation items-center gap-2 rounded-md border border-dashed bg-surface-sunken px-3 py-1 text-left",
             "transition-[border-color,background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none",
             "focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring",
             interactionDisabled
@@ -266,6 +267,7 @@ export function FileDropzone({
         </label>
         {onClear ? (
           <ClearActionButton
+            size="md"
             disabled={clearIsDisabled || interactionDisabled}
             ariaLabel={clearAriaLabel ?? clearText}
             onClick={() => {

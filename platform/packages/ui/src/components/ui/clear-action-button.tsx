@@ -8,15 +8,17 @@ export interface ClearActionButtonProps
   ariaLabel?: string;
   dataTestId?: string;
   label: string;
-  matchButtonHeight?: boolean;
 }
 
+/**
+ * 検索語・条件を消す「クリア」ボタン（secondary・`X`）。既定は sm（空の状態の「検索語をクリア」など）。入力欄・ボタンと同じ行に置くときは、その行と同じ `size` を渡す。
+ * 以前はマウス環境でも 44px にしていたが、同じ行の入力欄とずれるためやめた（#613）。
+ */
 export function ClearActionButton({
   ariaLabel,
   className,
   dataTestId,
   label,
-  matchButtonHeight = false,
   size = "sm",
   ...props
 }: ClearActionButtonProps) {
@@ -25,7 +27,6 @@ export function ClearActionButton({
       type="button"
       variant="secondary"
       size={size}
-      touchTarget={!matchButtonHeight}
       className={cn("whitespace-nowrap", className)}
       aria-label={ariaLabel ?? label}
       data-testid={dataTestId}

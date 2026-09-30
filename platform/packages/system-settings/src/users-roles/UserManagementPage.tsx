@@ -23,6 +23,7 @@ import {
   entityActionToFormAction,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -124,8 +125,8 @@ const EMPTY_DRAFT: UserDraftState = {
   temporaryPassword: "",
 };
 
-const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus:border-focus-ring read-only:cursor-default read-only:bg-surface-hover read-only:text-fg-muted disabled:bg-surface-hover disabled:text-fg-disabled";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName();
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");

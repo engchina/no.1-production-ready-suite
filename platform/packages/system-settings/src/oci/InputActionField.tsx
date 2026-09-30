@@ -7,6 +7,7 @@ import {
   type ButtonProps,
   FieldError,
   FieldLabel,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 export interface InputActionFieldAction {
@@ -43,7 +44,10 @@ export interface InputActionFieldProps {
   action: InputActionFieldAction;
 }
 
-/** テキスト入力と右側アクションを同じ 44px 高で揃える共通フィールド。 */
+/**
+ * テキスト入力と右側の操作（取得・接続テスト）を同じ高さ（md 36px、タッチ端末は 44px）でそろえる欄。
+ * 以前はマウス環境でも 44px（touchTarget）にしていたが、フォームのほかの欄（36px）とずれるためやめた（#613）。
+ */
 export function InputActionField({
   id,
   label,
@@ -99,20 +103,15 @@ export function InputActionField({
           placeholder={placeholder}
           data-testid={inputTestId}
           onChange={handleChange}
-          className={cn(
-            "h-11 w-full min-h-[44px] rounded-md border px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
-            readOnly ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface",
-            disabled && "cursor-not-allowed opacity-60",
-            error ? "border-danger-fg" : "border-border-control",
-            inputClassName
-          )}
+          className={fieldControlClassName({
+            className: cn(readOnly && "cursor-default text-fg-muted", inputClassName),
+          })}
         />
-        {/* 入力と同じ行の操作なので、Button spec の許容例に従い入力高 44px に揃える。 */}
+        {/* 入力と同じ行の操作なので、入力欄と同じ md（README §4「操作部品の高さと幅」）。 */}
         <Button
           type={action.type ?? "button"}
           variant={action.variant ?? "secondary"}
-          size="lg"
-          touchTarget
+          size="md"
           className={cn("w-full", action.className)}
           aria-label={action.ariaLabel}
           aria-describedby={actionError ? actionErrorId : undefined}

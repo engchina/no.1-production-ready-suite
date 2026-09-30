@@ -90,7 +90,11 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
     tooltip?: string | false;
     /** Tooltip を出す側（既定は上。入らなければ反転する）。 */
     tooltipPlacement?: TooltipPlacement;
-    /** マウス環境でも 44px の高さにする場合だけ true（タッチ端末では --button-height-* が 44px になる）。 */
+    /**
+     * マウス環境でも 44px の高さにする場合だけ true（タッチ端末では sm / md / lg とも 44px になる）。
+     * **製品では使わない**（adherence の lint が検出する。#613）。`packages/ui` の部品の、画面の端に置く
+     * 閉じる・メニューのボタン（Toast・Banner・AppShell の上端のバー）だけが使う。同じ行の入力欄とは `size` でそろえる。
+     */
     touchTarget?: boolean;
     /**
      * true で先頭アイコンがスピナーに置き換わる（ラベル・幅は変わらない）。`icon` と一緒に使う。
@@ -127,7 +131,8 @@ export function loadingKeyDownHandler(onKeyDown?: (event: KeyboardEvent<HTMLButt
 }
 
 /**
- * RAG / NL2SQL / Agent 共通のボタン。4 バリアント × 3 サイズ（32 / 36 / 40px）。
+ * RAG / NL2SQL / Agent 共通のボタン。4 バリアント × 3 サイズ（32 / 36 / 40px。入力欄・選択欄と同じ --control-height-*）。
+ * 同じ行に並べる入力欄・選択欄とは同じ `size` にする（README §4「操作部品の高さと幅」、#613）。
  *
  * 非同期の操作を起こすボタンは必ず `icon` を持たせる（adherence の lint が検出する）。loading 中は先頭アイコンが
  * スピナーに置き換わるため幅が変わらない（アイコンが無いとスピナーの分だけ幅が広がる）。

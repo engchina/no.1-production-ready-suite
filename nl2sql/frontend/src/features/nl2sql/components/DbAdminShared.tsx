@@ -983,7 +983,6 @@ export function StatementRunnerCard({
           {runButton}
           <ClearActionButton
             label={t("nl2sql.action.clearSql")}
-            matchButtonHeight
             size="lg"
             className="w-full sm:w-auto"
             disabled={!canClearRunner || loading}
@@ -1028,8 +1027,8 @@ export function StatementRunnerCard({
         <Button
           type="button"
           variant="secondary"
-          size="sm"
-          touchTarget className="sm:self-end"
+          size="md"
+          className="sm:self-end"
           disabled={!sql}
           onClick={() => {
             setSql("");

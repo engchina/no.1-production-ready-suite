@@ -34,7 +34,6 @@ function ConfirmationExample() {
             </Button>
             <ClearActionButton
               label={t("nl2sql.action.clearSql")}
-              matchButtonHeight
               size="lg"
               className="w-full sm:w-auto"
               disabled={loading}

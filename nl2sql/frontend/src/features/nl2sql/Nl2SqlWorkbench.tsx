@@ -12,6 +12,7 @@ import {
   DisclosureChevron,
   FieldLabel,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -1100,7 +1101,8 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                       }}
                       disabled={active || profilesQuery.isPending || noProfiles}
-                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
+                      // 隣の「自動判定」（md）と同じ高さ・見た目（#613）。
+                      className={fieldControlClassName({ className: "min-w-0 flex-1 py-2" })}
                     >
                       {profilesQuery.isPending && (
                         <option value={profileId}>{t("profiles.summary.loading")}</option>

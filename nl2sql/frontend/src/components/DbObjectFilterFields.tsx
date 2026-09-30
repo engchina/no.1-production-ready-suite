@@ -1,12 +1,11 @@
-import { SearchField } from "@engchina/production-ready-ui";
+import { SearchField, fieldControlClassName } from "@engchina/production-ready-ui";
 import { useId } from "react";
 
 import { t } from "@/lib/i18n";
 
-// 種類の select（native）の見た目。検索・所有者は共有の SearchField（touchTarget = 44px。#535）で作り、
-// 同じ行に並べる select も同じ高さ・枠線（--color-border-control）・角丸（--radius-control）にそろえる（#384）。
-const INPUT_CLASS =
-  "min-h-[44px] w-full rounded-control border border-border-control bg-surface px-3 py-2 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled";
+// 種類の select（native）の見た目。検索・所有者は共有の SearchField（#535）で作り、同じ行に並べる select も
+// 共有の fieldControlClassName で同じ高さ（md。タッチ端末は 44px）・枠線・角丸にそろえる（#384 / #613）。
+const INPUT_CLASS = fieldControlClassName({ className: "py-2" });
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -64,7 +63,6 @@ export function DbManagementSearchField({
       disabled={disabled}
       onSearch={onChange}
       clearLabel={t("common.clearSearch")}
-      touchTarget
       placeholder={placeholder}
       autoComplete="off"
       className={`min-w-0 ${className}`}
@@ -97,7 +95,6 @@ export function DbOwnerPrefixFilterField({
       normalize={normalizeOwnerPrefix}
       formatInput={toUpperCase}
       clearLabel={t("common.clearInput")}
-      touchTarget
       placeholder={placeholder}
       autoCapitalize="characters"
       autoComplete="off"

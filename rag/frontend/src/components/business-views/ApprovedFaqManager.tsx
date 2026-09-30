@@ -278,6 +278,7 @@ export function ApprovedFaqManager({
             value={mode}
             options={IMPORT_MODE_OPTIONS}
             onValueChange={(value) => value && setMode(value)}
+            width="md"
           />
           {previewError ? (
             <FormStatus tone="danger" message={previewError} />

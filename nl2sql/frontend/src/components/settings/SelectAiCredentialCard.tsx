@@ -206,7 +206,6 @@ export function SelectAiCredentialCard() {
                   helper={t(
                     "settings.database.selectAiCredential.field.regionHelper",
                   )}
-                  buttonClassName="h-11"
                 />
               </fieldset>
             </div>

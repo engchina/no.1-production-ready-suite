@@ -75,9 +75,9 @@ describe("ExecutionConfirmationField", () => {
     expect(tag).toContain('spellCheck="false"');
   });
 
-  it("フォーカス: 44px の入力欄で、フォーカス中は枠線を danger 色にし、ring を重ねない", () => {
+  it("フォーカス: lg（--control-height-lg）の入力欄で、フォーカス中は枠線を danger 色にし、ring を重ねない", () => {
     const tag = input(render());
-    expect(tag).toContain("h-[44px]");
+    expect(tag).toContain("h-[var(--control-height-lg)]");
     expect(tag).toContain("border border-border-control bg-surface");
     expect(tag).toContain("focus:border-danger-fg");
     expect(tag).not.toMatch(/focus(-visible)?:ring-/);

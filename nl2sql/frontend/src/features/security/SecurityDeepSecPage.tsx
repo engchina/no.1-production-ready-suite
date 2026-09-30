@@ -22,6 +22,7 @@ import {
   TimedLoadingState,
   SearchableSelectField,
   type SearchableSelectOption,
+  fieldControlClassName,
   FieldLabel,
   FieldLegend,
 } from "@engchina/production-ready-ui";
@@ -110,8 +111,8 @@ type ScrollPositionSnapshot = {
   left: number;
 };
 
-const INPUT_CLASS =
-  "h-11 min-w-0 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm focus:border-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName({ className: "min-w-0" });
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;

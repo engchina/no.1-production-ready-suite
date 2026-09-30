@@ -182,6 +182,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` / `--graph-line` 等）は platform で削除済みで、書くと未定義になり色が付かない。
 - `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
 - `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
+- 操作部品の高さ・幅を手書きする（`touchTarget`・`h-*` / `min-h-*`・欄の `w-*` / `max-w-*`）。`size` / `width` を渡す（下の「操作部品の高さと幅」、#613）。
 - `<table>` を手書きする。`DataTable` を使う。例外は「元の文書の表を再現して編集するグリッド」（見出し行がなく、列数が表ごとに変わるもの。RAG の `ReviewTextEditor.tsx`）だけで、使う理由をコードのコメントに書く（#129）。
 - `<div className="px-8 py-6">` や `style={{ padding: "1.5rem 2rem" }}` のような余白コンテナを手書きする。`PageBody` を使う。
 - `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
@@ -207,6 +208,16 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
 - 本文は日本語第一フォントスタック `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文ベース `14px`。
+
+### 操作部品の高さと幅（#613。3 製品で統一）
+
+- 正本は [platform/docs/design-system/README.md](./platform/docs/design-system/README.md) §4「操作部品の高さと幅」、画面での選び方は UX 契約 `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。業界の指針（Carbon の 3 段の field / button、Material 3 の密度と当たり判定、Apple HIG の 44pt、WCAG 2.5.5 / 2.5.8、GOV.UK の「欄の幅は入る値の長さに合わせる」、Atlassian の `width`）から決めた。
+- **高さは 3 段**: `sm` 32px（表の行・密なツールバーの中）/ **`md` 36px（既定。入力欄・選択欄・一覧のツールバー・フォームの欄の横の操作・ページヘッダーの操作）**/ `lg` 40px（工程・フォームの末尾で次へ進む主操作の行、チャット・検索テストなど主な問い合わせの入力の行、確認語欄、ログインなど 1 つの作業だけの画面）。**タッチ端末（`pointer: coarse`）では 3 段とも 44px**（入力欄・選択欄も）。
+- **1 つの行の中では、入力欄・選択欄・ボタンに同じ `size` を渡す。** `Button`・`TextField`・`SearchField`・`SecretField`・`SelectField`・`SearchableSelectField` が `size` を受け取り、同じトークン（`--control-height-*`）を参照する。
+- **幅は入る値（とラベル）の長さで選ぶ**: `width` = `xs` 8rem（数値・短いコード）/ `sm` 12rem（短い列挙）/ `md` 20rem（名前）/ `lg` 28rem（長めの名前）/ `full`（URL・OCID・文章・一覧の検索欄）。sm（640px）未満は全幅。**フォームの grid のセルに置く欄は `width` を渡さない**（セルの幅。grid の段組みで最大幅を決める）。**grid の外に単独で置く選択欄・短い値の欄は必ず `width` を渡し**、カードや行の幅いっぱいに伸ばさない。
+- **入力欄と、その値への操作（送信・実行・取得）の行は `FieldActionRow`**（操作は入力欄の下端にそろい、375px では下に全幅）。複数行の入力欄の高さは `rows` で決める。
+- **製品で書かないもの**（adherence の lint が検出する）: `touchTarget`、共有の操作部品への `h-*` / `min-h-*`、入力欄・選択欄への `w-*` / `max-w-*`、ネイティブの `<input>` / `<select>` への `h-*` / `min-h-*`。ネイティブの要素を残す画面は `fieldControlClassName({ size, width })` を使う。
+- e2e で高さを確かめるときは、画面幅ではなく入力方式で期待値を決める（RAG `e2e/_helpers.ts`・NL2SQL `tests/e2e/_helpers/control-height.ts` の `expectedControlHeight(page, size)`）。
 
 ### 読み込み中・一覧・ページング（3 製品で統一。NL2SQL が基準）
 

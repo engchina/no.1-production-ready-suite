@@ -11,6 +11,7 @@ import {
   PageBody,
   ExecutionConfirmationField,
   ProcessingIndicator,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -451,7 +452,7 @@ export function SampleDataPage() {
                 setSchemaRefreshJobId("");
                 setDataset(event.currentTarget.value as SampleDataset);
               }}
-              className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+              className={fieldControlClassName({ className: "min-w-0 py-2" })}
             >
               {SAMPLE_DATASETS.map((item) => <option key={item} value={item}>{t(`dataTools.sample.dataset.${item}`)}</option>)}
             </select>
@@ -516,7 +517,7 @@ export function SampleDataPage() {
                     value={sampleStep}
                     disabled={Boolean(loading)}
                     onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
-                    className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+                    className={fieldControlClassName({ className: "py-2" })}
                   >
                     {SAMPLE_STEPS.map((step) => (
                       <option key={step} value={step}>

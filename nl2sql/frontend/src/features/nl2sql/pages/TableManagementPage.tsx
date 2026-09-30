@@ -14,6 +14,7 @@ import {
   ProcessingIndicator,
   ExecutionConfirmationField,
   FieldLabel,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -70,8 +71,8 @@ type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
 
 const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
-const importControlClass =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg focus:border-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const importControlClass = fieldControlClassName();
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
@@ -269,7 +270,6 @@ function ImportWizard({
               </Button>
               <ClearActionButton size="lg"
                 label={t("dbAdmin.import.actions.clear")}
-                matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClear || loading}
                 onClick={onClear}

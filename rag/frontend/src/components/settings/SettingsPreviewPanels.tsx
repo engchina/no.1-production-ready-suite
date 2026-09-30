@@ -56,7 +56,8 @@ export function SettingsPreviewCard({
           <Button
             type="button"
             variant="secondary"
-            size="lg"
+            // 内容のコピーは局所の操作（sm。README §4「Button」の表）。
+            size="sm"
             className="w-full shrink-0 whitespace-nowrap sm:w-auto"
             onClick={() => void handleCopy()} icon={Clipboard}>
             {copyState === "success"

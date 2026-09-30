@@ -37,7 +37,7 @@
 - 工程を進める操作（対象の取得、生成、保存、実行など、入力を確定して次へ進む操作）は主操作（`primary/lg`）。
 - ページ全体の表示更新・外部データの再取得は `PageHeader` の `utility`。通常表示は `secondary/md`。
 - コピー、ダウンロード、状態の再確認、追加読込は局所ツール（`secondary/sm`）。追加読込は `ListPlus`、更新は `RefreshCw`。
-- 入力欄に並ぶ取得 / 接続テストは入力と同じ 44px。`touchTarget` と `icon` を渡す。
+- 入力欄に並ぶ取得 / 接続テストは入力欄と同じ高さの段（既定 `md`。lg の入力欄の横は `lg`）にし、`icon` を渡す。`touchTarget` は使わない（タッチ端末では入力欄もボタンも 44px になる。design-system README §4「操作部品の高さと幅」、#613）。
 - 同じ操作行は主操作・補助操作とも同じ size。非同期操作は必ず `icon` prop を使い、loading 中もラベルと幅を保つ。
 - `danger`（赤塗り）は実際の破壊的確定に使う。選択・未選択の変化で variant やアイコンを切り替えず、`disabled` だけを変える。
 - 確定の前の起点（確認ダイアログを開くボタン）と、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は赤塗りにしない。`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。確定は `ConfirmDialog` の `danger` ボタンで行う（#355）。
@@ -221,7 +221,7 @@
 ## 9. アクセシビリティ チェックリスト（必須）
 
 - [ ] Icon-only に `aria-label`。見える名前は共通 `Button` の Tooltip（`iconOnly` の既定で `aria-label` と同じ文言）が出す。HTML の `title` 属性で説明しない（キーボード・タッチで出ない）。文言を変えるときは `tooltip`（[デザインシステム README §4「`Tooltip`」](../design-system/README.md)）。
-- [ ] 操作領域：desktop 32/36/40px、icon-only 36px、mobile / coarse pointer は 44px。
+- [ ] 操作領域：desktop 32/36/40px、icon-only 36px、coarse pointer は入力欄・選択欄も含めて 44px。同じ行の入力欄・選択欄・ボタンは同じ段（#613）。
 - [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。フォーカスの表示は outline 1 つ。`focus:ring-*` / `focus-visible:ring-*` を足したり、`focus(-visible):outline-none` で消したりしない（[デザインシステム README §4「フォーカスの表示」](../design-system/README.md)、adherence の lint が検出する）。
 - [ ] disabled は `disabled` 属性 + disabled の意味の色（共通 `Button` 済み）。見た目だけの無効化をしない。
 - [ ] `loading` 中は `aria-disabled="true"` + `aria-busy="true"`（共通 `Button` 済み）。Enter → loading → 完了でフォーカスがボタンに残り、`loading` 中の Enter / Space / クリック / 入力欄の Enter で二重に送信しない。

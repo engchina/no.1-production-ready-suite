@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
+import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldWidthClass } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
@@ -60,6 +61,10 @@ export interface SearchableSelectFieldProps {
   placeholder?: string;
   disabled?: boolean;
   labels?: Partial<SearchableSelectLabels>;
+  /** 高さの最小（既定 md = 36px）。選択中の名前は折り返すので、長い名前では高くなる。同じ行の Button と同じ size にする（#613）。 */
+  size?: ControlSize;
+  /** 幅（候補の名前の長さで選ぶ。既定は親の幅いっぱい）。sm（640px）未満は全幅（#613）。 */
+  width?: FieldWidth;
   className?: string;
   buttonClassName?: string;
 }
@@ -90,6 +95,8 @@ export function SearchableSelectField({
   placeholder = "",
   disabled = false,
   labels: labelOverrides,
+  size = "md",
+  width,
   className,
   buttonClassName,
 }: SearchableSelectFieldProps) {
@@ -355,7 +362,7 @@ export function SearchableSelectField({
       : null;
 
   return (
-    <div ref={rootRef} className={cn("space-y-1.5", className)}>
+    <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
       <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {required && requiredLabel ? <RequiredBadge label={requiredLabel} aria-hidden /> : null}
@@ -375,7 +382,8 @@ export function SearchableSelectField({
         onClick={() => (open ? close(false) : openPopover())}
         onKeyDown={handleButtonKeyDown}
         className={cn(
-          "flex min-h-[var(--field-height)] w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg outline-none transition-colors",
+          CONTROL_MIN_HEIGHT_CLASS[size],
+          "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg outline-none transition-colors",
           "hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error ? "border-danger-fg" : "border-border-control",

@@ -641,7 +641,7 @@ function ExternalConnectionCard({
         <Button
           type="button"
           variant="secondary"
-          className="min-h-[var(--control-height-touch)] w-full sm:w-auto"
+          className="w-full sm:w-auto"
           loading={statusQuery.isFetching}
           disabled={saving || dirty || !connection?.configured}
           onClick={() => void statusQuery.refetch()} icon={Plug}>
@@ -715,7 +715,6 @@ function ConnectionTextField({
       autoComplete="off"
       error={error}
       onValueChange={onChange}
-      touchTarget
     />
   );
 }

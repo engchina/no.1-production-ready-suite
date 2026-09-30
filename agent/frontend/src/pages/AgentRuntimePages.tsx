@@ -73,6 +73,7 @@ import {
   isSubmitEnter,
   SearchField,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -1201,7 +1202,7 @@ export function RunsPage() {
                         id="run-agent"
                         value={selectedAgentId}
                         onChange={(event) => onAgentChange(event.target.value)}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className={fieldControlClassName()}
                       >
                         {runnableAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
@@ -1239,7 +1240,7 @@ export function RunsPage() {
                           setBindingId(event.target.value);
                           setBindingError(null);
                         }}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className={fieldControlClassName()}
                       >
                         <option value="">
                           {defaultBinding
@@ -1642,7 +1643,7 @@ export function AuditPage() {
                   onKeyDown={(event) => {
                     if (isSubmitEnter(event)) applyFilters();
                   }}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
@@ -1650,7 +1651,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setFilter("toolName", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1665,7 +1666,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setFilter("stepStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1680,7 +1681,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setFilter("approvalStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1699,7 +1700,7 @@ export function AuditPage() {
                   onKeyDown={(event) => {
                     if (isSubmitEnter(event)) applyFilters();
                   }}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
@@ -1707,7 +1708,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1722,7 +1723,7 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setFilter("limit", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
             </div>
@@ -2094,7 +2095,7 @@ export function MemoryPage() {
                       id="memory-kind"
                       value={kind}
                       onChange={(event) => setKind(event.target.value as MemoryKind)}
-                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className={fieldControlClassName()}
                     >
                       <option value="user_preference">{t("memory.kind.userPreference")}</option>
                       <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -2483,7 +2484,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className={fieldControlClassName()}
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -2491,7 +2492,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className={fieldControlClassName()}
             />
           </Field>
           <Button
@@ -2500,7 +2501,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
             disabled={!configured}
             aria-describedby={!configured ? "mcp-discovery-configure-hint" : undefined}
             loading={tools.isFetching}
-            className="min-h-10" icon={RefreshCw}>
+            icon={RefreshCw}>
             {t("settings.mcpDiscovery.refresh")}
           </Button>
         </div>
@@ -2630,8 +2631,8 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
   return type;
 }
 
-const INPUT_CLASS =
-  "h-10 w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName();
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
     return t("settings.mcpServers.authOauth");
@@ -4871,7 +4872,7 @@ export function CommandPolicySettingsPage() {
                       setWorkspaceRoot(event.target.value);
                       clearFieldError("workspaceRoot");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4891,7 +4892,7 @@ export function CommandPolicySettingsPage() {
                       setOutputLimit(event.target.value);
                       clearFieldError("outputLimit");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4912,7 +4913,7 @@ export function CommandPolicySettingsPage() {
                       setDefaultTimeout(event.target.value);
                       clearFieldError("defaultTimeout");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4935,7 +4936,7 @@ export function CommandPolicySettingsPage() {
                       // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
                       clearFieldError("defaultTimeout");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -4957,7 +4958,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
@@ -4979,7 +4980,7 @@ export function CommandPolicySettingsPage() {
                       setArtifactStoragePath(event.target.value);
                       clearFieldError("artifactStoragePath");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -5101,7 +5102,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className={fieldControlClassName({ width: "md" })}
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -5149,7 +5150,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className={fieldControlClassName()}
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -5282,7 +5283,7 @@ export function RuntimeSafetySettingsPage() {
                       setMaxToolCalls(event.target.value);
                       setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -5307,7 +5308,7 @@ export function RuntimeSafetySettingsPage() {
                       setMaxPendingApprovals(event.target.value);
                       setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -5519,7 +5520,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className={fieldControlClassName()}
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -5882,7 +5883,7 @@ function AgentEditorView({
                       setName(event.target.value);
                       setNameError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
@@ -5890,7 +5891,7 @@ function AgentEditorView({
                     id={`${fieldId}-agent-description`}
                     value={agentDescription}
                     onChange={(event) => setAgentDescription(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <TextareaField
@@ -6210,7 +6211,7 @@ function RuntimeBindingsPanel({
                       setRuntimeId(event.target.value);
                       setRuntimeError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
+                    className={fieldControlClassName()}
                   >
                     {candidates.map((runtime) => (
                       <option key={runtime.id} value={runtime.id}>
@@ -6237,7 +6238,7 @@ function RuntimeBindingsPanel({
                       setNativeAgentRef(event.target.value);
                       setNativeAgentRefError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>

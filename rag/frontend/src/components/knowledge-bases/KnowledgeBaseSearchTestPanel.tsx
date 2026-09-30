@@ -11,6 +11,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  FieldActionRow,
   TextField,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -137,8 +138,24 @@ export function KnowledgeBaseSearchTestPanel({
           />
         ) : (
           <>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              {/* 隣の lg の Button と同じ高さ（size="lg"）。入力欄の Enter は実行だけ（実行中の Enter は submit が無視する）。 */}
+            {/* 検索テストと停止は同じボタン。実行中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
+                主な問い合わせの行なので入力欄とボタンを同じ lg にする（README §4「操作部品の高さと幅」、#613）。 */}
+            <FieldActionRow
+              actions={
+                <RunStopButton
+                  running={isStreaming}
+                  onRun={() => void submit()}
+                  onStop={cancel}
+                  runLabel={t("knowledgeBases.searchTest.button")}
+                  stopLabel={t("knowledgeBases.searchTest.cancel")}
+                  runIcon={SearchIcon}
+                  size="lg"
+                  className="sm:min-w-28"
+                  testId="kb-search-test-run-stop"
+                />
+              }
+            >
+              {/* 入力欄の Enter は実行だけ（実行中の Enter は submit が無視する）。 */}
               <TextField
                 id={inputId}
                 label={t("knowledgeBases.searchTest.title")}
@@ -151,20 +168,8 @@ export function KnowledgeBaseSearchTestPanel({
                 }}
                 placeholder={t("knowledgeBases.searchTest.placeholder")}
                 leadingIcon={SearchIcon}
-                className="min-w-0 flex-1"
               />
-              {/* 検索テストと停止は同じボタン。実行中は同じ位置で「停止」になる（buttons.md §3.1、#413）。 */}
-              <RunStopButton
-                running={isStreaming}
-                onRun={() => void submit()}
-                onStop={cancel}
-                runLabel={t("knowledgeBases.searchTest.button")}
-                stopLabel={t("knowledgeBases.searchTest.cancel")}
-                runIcon={SearchIcon}
-                className="sm:min-w-28"
-                testId="kb-search-test-run-stop"
-              />
-            </div>
+            </FieldActionRow>
 
             {phase === "idle" ? (
               <EmptyState title={t("knowledgeBases.searchTest.initialHint")} />

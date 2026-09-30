@@ -397,7 +397,9 @@ export function FileListClient() {
                 value={filter}
                 options={statusOptions}
                 onValueChange={(value) => resetView(() => setFilter(value))}
-                className="w-full @md:w-48 [&_label]:text-xs"
+                // 最も長い状態（「ファイル準備確認待ち」）が切れない幅（#613）。
+                width="md"
+                className="[&_label]:text-xs"
                 buttonClassName="bg-surface"
               />
               <SearchableSelectField
@@ -431,7 +433,8 @@ export function FileListClient() {
                   searchPlaceholder: t("knowledgeBasePicker.searchPlaceholder"),
                 }}
                 // 「利用できるすべてのナレッジベース」が 1 行に収まる幅。長い名前は切らずに折り返す。
-                className="w-full @md:w-[22rem] [&_label]:text-xs"
+                width="lg"
+                className="[&_label]:text-xs"
                 buttonClassName="bg-surface"
               />
             </>
@@ -547,7 +550,6 @@ export function FileListClient() {
                   q ? (
                     <ClearActionButton
                       label={t("common.clearSearch")}
-                      matchButtonHeight
                       onClick={() => applySearch("")}
                     />
                   ) : undefined

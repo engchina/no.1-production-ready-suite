@@ -113,7 +113,9 @@ for (const theme of ["light", "dark"]) {
     const rect = await icon.boundingBox();
     expect(rect?.height).toBe(mobile ? 44 : 36);
     expect(rect?.width).toBe(rect?.height);
-    await expect(page.getByTestId("field")).toHaveCSS("height", "44px");
+    // 入力欄と横の操作は同じ高さ（md 36px、タッチ端末は 44px。#613）。
+    await expect(page.getByTestId("field")).toHaveCSS("height", mobile ? "44px" : "36px");
+    await expect(page.getByTestId("field-input")).toHaveCSS("height", mobile ? "44px" : "36px");
     await page.getByTestId("sm-primary").focus();
     await page.keyboard.press("Tab");
     await expect(page.getByTestId("sm-secondary")).toBeFocused();

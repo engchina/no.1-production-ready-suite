@@ -10,6 +10,7 @@ import {
 } from "./_helpers/fixed-split-pane";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
+import { expectedControlHeight } from "./_helpers/control-height";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { expectToastStackAtTop } from "./_helpers/toast";
@@ -119,14 +120,18 @@ async function expectRowLimitActionRow(input: Locator, button: Locator) {
   const buttonBox = await button.boundingBox();
   expect(inputBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
-  // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。lg 以上では取得件数上限を 50% 幅にする。
+  // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
   expect(buttonBox!.x).toBeLessThanOrEqual(inputBox!.x + 1);
   // 取得件数上限の欄（FieldLabel と入力を包む要素）の親が操作の行（#531 で label の包みから FieldLabel に変わった）。
   const rowWidth = await input.evaluate((element) => element.parentElement!.parentElement!.clientWidth);
   const viewport = input.page().viewportSize();
-  if (viewport && viewport.width >= 1024) {
-    expect(inputBox!.width).toBeLessThanOrEqual(rowWidth / 2 + 1);
+  if (viewport && viewport.width >= 640) {
+    // 件数は短い数値なので xs の幅（8rem。README §4「操作部品の高さと幅」、#613）。
+    const xsWidth = await input.evaluate(
+      () => 8 * Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+    );
+    expect(inputBox!.width).toBeLessThanOrEqual(xsWidth + 1);
   } else {
     expect(inputBox!.width).toBeGreaterThan(rowWidth - 1);
   }
@@ -8093,7 +8098,7 @@ test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する"
   await expectNoHorizontalScroll(page);
 });
 
-test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロップで読み込める", async ({ page }) => {
+test("SQL ファイル入力は入力欄と同じ高さのまま選択とドラッグ＆ドロップで読み込める", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
@@ -8120,7 +8125,8 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
     .toBeLessThan(1);
   const desktopBox = await dropzone.boundingBox();
   expect(desktopBox).not.toBeNull();
-  expect(desktopBox!.height).toBe(44);
+  // ファイルの選択は入力欄と同じ md（タッチ端末は 44px。#613）。
+  expect(desktopBox!.height).toBe(await expectedControlHeight(page));
 
   await fileInput.focus();
   await expect(fileInput).toBeFocused();
@@ -8246,11 +8252,11 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
 
   const selectedBox = await dropzone.boundingBox();
   expect(selectedBox).not.toBeNull();
-  expect(selectedBox!.height).toBe(44);
+  expect(selectedBox!.height).toBe(await expectedControlHeight(page));
   await page.setViewportSize({ width: 375, height: 812 });
   const mobileBox = await dropzone.boundingBox();
   expect(mobileBox).not.toBeNull();
-  expect(mobileBox!.height).toBe(44);
+  expect(mobileBox!.height).toBe(await expectedControlHeight(page));
   await expect(dropzone.getByText(".SQL / .TXT", { exact: true })).toBeHidden();
   await expectNoHorizontalScroll(page);
 
@@ -9007,7 +9013,8 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(pageRefreshButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
   const entryRefreshButtons = page.getByRole("button", { name: "最新エントリを取得" });
   await expect(entryRefreshButtons).toHaveCount(1);
-  await expect(entryRefreshButtons).toHaveCSS("height", "44px");
+  // 隣の業務プロファイルの選択と同じ md（タッチ端末は 44px。#613）。
+  await expect(entryRefreshButtons).toHaveCSS("height", `${await expectedControlHeight(page)}px`);
 
   const selectedEntryButton = page.getByRole("button", {
     name: "select ai showsql 請求金額を確認したい の feedback を選択",
@@ -9066,7 +9073,8 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(feedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
   const feedbackSearchBox = await feedbackSearch.boundingBox();
   expect(feedbackSearchBox).not.toBeNull();
-  expect(feedbackSearchBox!.height).toBe(44);
+  // 絞り込みの欄は md（タッチ端末は 44px。#613）。
+  expect(feedbackSearchBox!.height).toBe(await expectedControlHeight(page));
   const appFeedbackActions = page.getByTestId("feedback-app-actions");
   const saveAppFeedbackButton = appFeedbackActions.getByRole("button", {
     name: "フィードバック保存",
@@ -9380,7 +9388,7 @@ test("Select AI feedback stacks its workspace and keeps controls usable at 375px
   }
 
   await expectSplitPaneStacked(pane);
-  await expect(refresh).toHaveCSS("height", "44px");
+  await expect(refresh).toHaveCSS("height", `${await expectedControlHeight(page)}px`);
   await expectHorizontallyContained(toolbar, workspace);
   await expect(page.getByTestId("feedback-management-entry-detail")).toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -9595,7 +9603,7 @@ test("app feedback keeps history left of the editor without crossing the divider
   expect(mobileFilterFormBox).not.toBeNull();
   expect(mobileSearchBox).not.toBeNull();
   expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
-  expect(mobileSearchBox!.height).toBe(44);
+  expect(mobileSearchBox!.height).toBe(await expectedControlHeight(page));
   // 「絞り込み」ボタンは置かない（#535）。
   await expect(mobileFeedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
   const mobileActionBar = page.getByTestId("feedback-app-actions");

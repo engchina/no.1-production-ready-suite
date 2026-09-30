@@ -1815,11 +1815,11 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
   await expect(loginInput).toHaveValue("001");
   await expect(loginInput).toBeDisabled();
-  await expect(loginInput).toHaveClass(/disabled:bg-surface-hover/u);
+  await expect(loginInput).toHaveClass(/disabled:bg-surface-disabled/u);
   await expect(displayNameInput).toHaveValue("短いログインユーザーIDユーザー");
   await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[0]);
   await expect(temporaryPasswordInput).toHaveAttribute("readonly", "");
-  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-surface-hover/u);
+  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-surface-sunken/u);
   await expect(viewerRadio).toBeChecked();
   await expect(runnerRadio).not.toBeChecked();
   await expect(createButton).toHaveCount(0);
@@ -2250,7 +2250,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
   await expect(temporaryPassword).toHaveValue("");
   await expect(temporaryPassword).toHaveAttribute("readonly", "");
-  await expect(temporaryPassword).toHaveClass(/read-only:bg-surface-hover/u);
+  await expect(temporaryPassword).toHaveClass(/read-only:bg-surface-sunken/u);
   await expect(copyTemporaryPassword).toBeDisabled();
   await displayName.fill("未保存の営業ユーザー");
 

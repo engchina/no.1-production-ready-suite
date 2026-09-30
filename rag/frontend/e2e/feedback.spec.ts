@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
+  expectedControlHeight,
   expectNoPageOverflow,
   measureTableCellOverflow,
   mockAuthUser,
@@ -611,8 +612,8 @@ test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・�
   const select = page.getByRole("combobox", { name: "業務ビュー" });
   const [searchBox, selectBox] = await Promise.all([search.boundingBox(), select.boundingBox()]);
   expect(searchBox && selectBox).toBeTruthy();
-  // --field-height（36px）。タッチ端末でも入力欄は 36px（Button だけが 44px になる）。
-  expect(Math.round(searchBox!.height)).toBe(36);
+  // 入力欄・選択欄は md（36px）。タッチ端末では Button と同じく 44px（#613）。
+  expect(Math.round(searchBox!.height)).toBe(await expectedControlHeight(page));
   expect(Math.abs(searchBox!.height - selectBox!.height)).toBeLessThanOrEqual(0.5);
   // 選択欄 5 つが 1 行目、検索欄は 2 行目（#405）。検索欄は選択欄の行の下にあり、左端がそろう。
   expect(searchBox!.y).toBeGreaterThan(selectBox!.y + selectBox!.height);

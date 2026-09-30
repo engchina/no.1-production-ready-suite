@@ -31,6 +31,7 @@ import {
   Skeleton,
   TimedLoadingState,
   INFORMATION_LIST_SCROLL_CLASS,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
 
@@ -429,7 +430,7 @@ function HistoryFilterSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+        className={fieldControlClassName({ className: "min-w-0 py-2" })}
       >
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>

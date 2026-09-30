@@ -6,6 +6,7 @@ import {
   Banner,
   Card,
   CardContent,
+  FieldActionRow,
   SelectField,
   type SelectFieldOption,
   TextareaField,
@@ -190,7 +191,6 @@ function AssistantColumn({
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="h-11 sm:h-8"
                 icon={RotateCcw}
                 onClick={onRetry}
               >
@@ -780,6 +780,8 @@ export function ChatClient() {
                   options={businessViewOptions}
                   onValueChange={(value) => setBusinessViewId(value || null)}
                   required
+                  // 業務ビューの名前の長さの幅（画面の半分まで伸ばさない。#613）。
+                  width="lg"
                 />
                 {businessViewWithoutKnowledgeBases && businessViewId ? (
                   <Banner
@@ -828,7 +830,6 @@ export function ChatClient() {
                 </span>
                 <Button
                   size="sm"
-                  className="h-11 sm:h-8"
                   onClick={() => void startNewConversation()}
                   disabled={createConversation.isPending} icon={Plus}>
                   {t("chat.sessions.new")}
@@ -1076,7 +1077,26 @@ export function ChatClient() {
                   ))}
                 </div>
               ) : null}
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
+              <FieldActionRow
+                actions={
+                  // 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
+                  // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
+                  <RunStopButton
+                    running={sending}
+                    onRun={() => void send()}
+                    onStop={stop}
+                    runLabel={t("chat.composer.send")}
+                    stopLabel={t("chat.composer.stop")}
+                    runIcon={SendHorizontal}
+                    runDisabled={
+                      !activeId || composer.trim().length === 0 || businessViewWithoutKnowledgeBases
+                    }
+                    size="lg"
+                    testId="chat-run-stop"
+                  />
+                }
+              >
                 <TextareaField
                   ref={composerRef}
                   id="chat-composer"
@@ -1098,26 +1118,10 @@ export function ChatClient() {
                   // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
                   // 生成中に disabled にすると、Enter で送った直後にフォーカスが body へ外れる。
                   disabled={!activeId}
-                  // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けず送信ボタンと下端をそろえる。
-                  className="min-w-0 flex-1 space-y-0"
-                  textareaClassName="min-h-11"
+                  // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
+                  className="space-y-0"
                 />
-                {/* 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。 */}
-                <RunStopButton
-                  running={sending}
-                  onRun={() => void send()}
-                  onStop={stop}
-                  runLabel={t("chat.composer.send")}
-                  stopLabel={t("chat.composer.stop")}
-                  runIcon={SendHorizontal}
-                  runDisabled={
-                    !activeId || composer.trim().length === 0 || businessViewWithoutKnowledgeBases
-                  }
-                  size="md"
-                  className="w-full shrink-0 sm:w-auto"
-                  testId="chat-run-stop"
-                />
-              </div>
+              </FieldActionRow>
               {errorText ? (
                 <p className="text-sm text-danger-fg" role="alert">
                   {errorText}

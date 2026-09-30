@@ -44,7 +44,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, StatusBadge, isImeComposing } from "@engchina/production-ready-ui";
+import { Button, StatusBadge, isImeComposing, fieldControlClassName } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
@@ -455,7 +455,7 @@ function GraphModeControl({
 }) {
   return (
     <div
-      className="pointer-events-auto flex min-h-[var(--control-height-touch)] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-surface px-1 shadow-sm sm:min-h-[var(--button-height-lg)]"
+      className="pointer-events-auto flex min-h-[var(--control-height-lg)] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-surface px-1 shadow-sm"
       role="group"
       aria-label={t("nl2sql.ontology.graphMode.label")}
       data-testid="ontology-graph-view-mode"
@@ -494,7 +494,7 @@ function GraphToolbarSearchField({
   const label = t("nl2sql.ontology.graphSearch");
   return (
     <label
-      className="pointer-events-auto flex h-[var(--control-height-touch)] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring sm:h-[var(--button-height-lg)] sm:w-72 sm:max-w-[18rem]"
+      className="pointer-events-auto flex h-[var(--control-height-lg)] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring sm:w-72 sm:max-w-[18rem]"
       data-testid="ontology-graph-search-field"
     >
       <Search size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
@@ -1072,10 +1072,11 @@ function OntologyFlow({
 
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
-      {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする */}
+      {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする。
+          高さはツールバーの全部品を lg（40px、タッチ端末は 44px）にそろえる（画面幅ではなく入力方式で決める。#613）。 */}
       <div className="flex flex-wrap items-end gap-2" data-testid="ontology-graph-toolbar">
         <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-fg-muted sm:w-72">{t("markdownOntology.kindFilter")}
-          <select aria-label={t("markdownOntology.kindFilter")} className="h-[var(--control-height-touch)] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg sm:h-[var(--button-height-lg)]" value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
+          <select aria-label={t("markdownOntology.kindFilter")} className={fieldControlClassName({ size: "lg", className: "min-w-0" })} value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
             <option value="">{t("markdownOntology.allConcepts")}</option>
             {[conceptKinds.slice(0,6),conceptKinds.slice(6)].map((kinds,i)=><optgroup key={i} label={t(i?"markdownOntology.auxConcepts":"markdownOntology.mainConcepts")}>
               {kinds.map(kind=>{const exists=kind === "link_type" ? graph.edges.some(e=>e.kind === "link_type" || e.kind === "business_relationship") : graph.nodes.some(n=>nodeConceptKind(n.kind) === kind); return <option key={kind} value={kind} disabled={!exists}>{conceptLabel(kind)}{exists?"":` · ${t("markdownOntology.noConcept")}`}</option>;})}
@@ -1087,7 +1088,7 @@ function OntologyFlow({
           <GraphToolbarSearchField value={search} onChange={setSearch} />
           {query ? (
             <div
-              className="flex h-[var(--control-height-touch)] items-center gap-0.5 rounded-md border border-border bg-surface px-1 shadow-sm sm:h-[var(--button-height-lg)]"
+              className="flex h-[var(--control-height-lg)] items-center gap-0.5 rounded-md border border-border bg-surface px-1 shadow-sm"
               data-testid="ontology-graph-search-nav"
             >
               <span className="px-1 text-xs tabular-nums text-fg-muted" aria-live="polite">
@@ -1121,7 +1122,7 @@ function OntologyFlow({
         {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button type="button" key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
         {detailCount > 0 ? (
           <label
-            className="flex h-[var(--control-height-touch)] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring sm:h-[var(--button-height-lg)]"
+            className="flex h-[var(--control-height-lg)] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring"
             data-testid="ontology-graph-details-toggle-field"
           >
             <input

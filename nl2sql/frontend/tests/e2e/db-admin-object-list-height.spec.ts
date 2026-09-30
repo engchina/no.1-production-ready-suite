@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expectedControlHeight } from "./_helpers/control-height";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
@@ -114,7 +115,8 @@ async function expectThreeFieldFilterLayout(
 
   expect(Math.abs(searchBox.height - ownerBox.height)).toBeLessThanOrEqual(2);
   expect(Math.abs(searchBox.height - kindBox.height)).toBeLessThanOrEqual(2);
-  expect(searchBox.height).toBeGreaterThanOrEqual(44);
+  // 検索・所有者・種類は同じ md の高さ（タッチ端末は 44px。#613）。
+  expect(searchBox.height).toBeGreaterThanOrEqual(await expectedControlHeight(search.page()));
 
   if (layout === "desktop") {
     expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
@@ -2852,8 +2854,10 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   expect(filePickerBox).not.toBeNull();
   expect(clearButtonBox).not.toBeNull();
   expect(fillsAvailableWidth).toBe(true);
-  expect(filePickerBox!.height).toBeGreaterThanOrEqual(44);
-  expect(clearButtonBox!.height).toBeGreaterThanOrEqual(44);
+  // ファイルの選択と、その横のクリアは同じ md の高さ（タッチ端末は 44px。#613）。
+  const expectedHeight = await expectedControlHeight(page);
+  expect(filePickerBox!.height).toBeGreaterThanOrEqual(expectedHeight);
+  expect(clearButtonBox!.height).toBeGreaterThanOrEqual(expectedHeight);
   if ((page.viewportSize()?.width ?? 0) < 640) {
     expect(clearButtonBox!.y).toBeGreaterThanOrEqual(filePickerBox!.y + filePickerBox!.height + 8);
     expect(filePickerBox!.width).toBeGreaterThanOrEqual(fileFieldBox!.width - 1);

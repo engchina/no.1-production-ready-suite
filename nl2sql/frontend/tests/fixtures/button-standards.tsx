@@ -10,7 +10,7 @@ import { DataTable, type DataTableSort } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Eye, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { Button, buttonVariants, FormActionBar, PageHeader, Pagination } from "@engchina/production-ready-ui";
+import { Button, buttonVariants, FormActionBar, PageHeader, Pagination, TextField } from "@engchina/production-ready-ui";
 import { ErrorState } from "../../src/components/StateViews";
 import "../../src/globals.css";
 
@@ -41,7 +41,9 @@ function Standards() {
       </section>)}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <Button iconOnly variant="ghost" aria-label="コピーする" data-testid="icon"><Copy aria-hidden /></Button>
-        <Button variant="secondary" touchTarget data-testid="field">入力横の操作</Button>
+        {/* 入力欄と、その横の操作は同じ size（既定 md）でそろえる。タッチ端末は両方 44px（#613）。 */}
+        <TextField id="standards-field" label="入力" labelHidden width="sm" value="" onChange={() => {}} data-testid="field-input" />
+        <Button variant="secondary" data-testid="field">入力横の操作</Button>
         <Button variant="secondary" tone="danger" data-testid="danger-trigger" onClick={async () => {
           if (await confirm({ title: "削除の確認", confirmLabel: "削除する", tone: "danger" })) setCount(c => c + 1);
         }}>削除</Button>

@@ -316,7 +316,7 @@ export function DocumentProcessingConfigPanel({
           aria-controls="document-processing-config-editor"
           onClick={() => setExpanded((value) => !value)}
           disabled={loading || Boolean(error) || !data}
-          className="min-h-9 shrink-0">
+          className="shrink-0">
           {t(expanded ? "documents.processingConfig.actions.close" : "documents.processingConfig.actions.edit")}
           {/* 開閉の状態は向きの変わる Chevron で示す（静的な icon={ChevronDown} は閉じる操作でも下向きのままだった。#397）。 */}
           <DisclosureChevron expanded={expanded} size={16} />
@@ -537,7 +537,6 @@ function SelectRow<T extends string>({
           options={options}
           onValueChange={onChange}
           className="[&>label]:sr-only"
-          buttonClassName="min-h-11"
         />
       ) : (
         <InheritResolved

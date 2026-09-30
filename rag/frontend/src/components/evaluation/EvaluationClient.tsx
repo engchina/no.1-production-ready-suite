@@ -342,6 +342,7 @@ export function EvaluationClient() {
                   value={rankingMetric}
                   options={RANKING_METRIC_OPTIONS}
                   onValueChange={setRankingMetric}
+                  width="md"
                 />
                 <JsonField
                   id={EXPERIMENTS_JSON_ID}
@@ -568,6 +569,7 @@ function SuiteSelector({
           value={suite}
           options={options}
           onValueChange={onChange}
+          width="lg"
         />
         <div className="rounded-md border border-border bg-surface-hover p-3">
           <p className="text-xs font-medium text-fg-muted">

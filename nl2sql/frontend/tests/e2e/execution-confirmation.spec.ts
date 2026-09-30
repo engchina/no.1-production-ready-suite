@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { expectedControlHeight } from "./_helpers/control-height";
+
 for (const theme of ["light", "dark"]) {
   test(`${theme}: 実行確認語の統一表示・状態・キーボード操作`, async ({ page }, testInfo) => {
     await page.route("**/__execution-confirmation**", route => route.fulfill({
@@ -55,7 +57,8 @@ for (const theme of ["light", "dark"]) {
     expect(styles.label).toBe(await resolveColor(styles.fg));
     expect(styles.helper).toBe(await resolveColor(styles.muted));
     expect(styles.background).not.toBe(styles.inputBackground);
-    expect(styles.inputHeight).toBe(44);
+    // 確認語の欄は下の操作行（lg）と同じ lg（タッチ端末は 44px。#613）。
+    expect(styles.inputHeight).toBe(await expectedControlHeight(page, "lg"));
     expect(styles.actionsY).toBeGreaterThanOrEqual(styles.helperBottom);
     expect(styles.separator).toBe("1px");
     const mobile = testInfo.project.name === "mobile-375";

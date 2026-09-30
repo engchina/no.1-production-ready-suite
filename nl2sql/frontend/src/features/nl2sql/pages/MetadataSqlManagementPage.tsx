@@ -21,6 +21,7 @@ import {
   type ListPickerItem,
   ProcessingIndicator,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 
@@ -1082,7 +1083,7 @@ function MetadataInputPanel({
                     const value = Number(event.currentTarget.value);
                     onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
                   }}
-                  className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+                  className={fieldControlClassName({ className: "py-2" })}
                 />
               </label>
               <StatusBadge icon={false} variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
