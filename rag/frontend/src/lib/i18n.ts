@@ -880,15 +880,19 @@ export const ja = {
     "検索時の精度とレイテンシのバランスを選択します。",
   "settings.vectorIndex.overview.title": "検索インデックス",
   "settings.vectorIndex.overview.description":
-    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現索引には未反映の参考値で、下に生成される再作成 SQL を DBA が適用したときに反映されます。",
+    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現在の索引の値と比べ、違うときは下に生成される再作成 SQL を DBA が適用すると反映されます。",
   "settings.vectorIndex.profile": "検索精度",
   "settings.vectorIndex.targetAccuracy": "検索時 target accuracy",
   "settings.vectorIndex.neighbors": "NEIGHBORS",
   "settings.vectorIndex.efconstruction": "EFCONSTRUCTION",
   "settings.vectorIndex.distance": "距離計量",
   "settings.vectorIndex.build": "推奨ビルド",
+  "settings.vectorIndex.currentIndex": "現在の索引",
+  "settings.vectorIndex.currentIndex.unknown": "確認できません",
   "settings.vectorIndex.reprovision":
     "この検索精度の推奨ビルドパラメータを適用するには索引の再作成が必要です。検索時 accuracy は保存後すぐ反映されます。下の再作成 SQL を DBA が実行すると NEIGHBORS / EFCONSTRUCTION が反映されます。",
+  "settings.vectorIndex.reprovisionUnknown":
+    "現在の索引の NEIGHBORS / EFCONSTRUCTION を確認できないため、再作成が必要かを判断できません。検索時 accuracy は保存後すぐ反映されます。推奨ビルドを適用するときは、下の再作成 SQL を DBA が実行してください。",
   "settings.vectorIndex.profile.balanced": "バランス",
   "settings.vectorIndex.profile.balanced.description":
     "現行設定の target accuracy を使用",

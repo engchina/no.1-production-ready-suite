@@ -861,7 +861,7 @@ async def update_guardrail_settings(
 @router.get("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
 async def get_vector_index_settings() -> ApiResponse[VectorIndexSettingsData]:
     """Vector Index アダプター(索引/検索精度)の選択と解決内容を返す。"""
-    return ApiResponse(data=_vector_index_settings_data(get_settings()))
+    return ApiResponse(data=await _vector_index_settings_data(get_settings()))
 
 
 @router.patch("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
@@ -875,7 +875,7 @@ async def update_vector_index_settings(
     )
     _persist_vector_index_settings(candidate)
     settings.rag_vector_index_profile = candidate.rag_vector_index_profile
-    return ApiResponse(data=_vector_index_settings_data(settings))
+    return ApiResponse(data=await _vector_index_settings_data(settings))
 
 
 @router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
@@ -1402,9 +1402,10 @@ def _persist_evaluation_settings(settings: Settings) -> None:
     )
 
 
-def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
-    """Settings から検索インデックス設定の表示用データを作る。"""
-    runtime = vector_index_adapter_runtime_settings(settings)
+async def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
+    """Settings と実際の索引の値から検索インデックス設定の表示用データを作る。"""
+    actual_build = await OracleClient(settings).get_vector_index_build_params()
+    runtime = vector_index_adapter_runtime_settings(settings, actual_build)
     return VectorIndexSettingsData(
         profile=runtime.profile,
         target_accuracy=runtime.target_accuracy,
@@ -1412,6 +1413,9 @@ def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
         efconstruction=runtime.efconstruction,
         distance=runtime.distance,
         requires_reprovision=runtime.requires_reprovision,
+        index_status=runtime.index_status,
+        actual_neighbors=runtime.actual_neighbors,
+        actual_efconstruction=runtime.actual_efconstruction,
         profiles=[
             VectorIndexProfileStatusData(
                 name=status.name,
@@ -1422,6 +1426,7 @@ def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
                 neighbors=status.neighbors,
                 efconstruction=status.efconstruction,
                 distance=status.distance,
+                index_status=status.index_status,
             )
             for status in runtime.profiles
         ],
