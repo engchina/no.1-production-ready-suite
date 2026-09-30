@@ -432,7 +432,13 @@ async def _generate_chat_answer(
     trace_id = new_trace_id()
     try:
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
-        pipeline = RagPipeline(settings=turn.settings, llm=llm, guardrails=turn.guardrails)
+        # DocRAG は llm を使わず自分でモデルを呼ぶので、列のモデルを別に渡す(#593)。
+        pipeline = RagPipeline(
+            settings=turn.settings,
+            llm=llm,
+            guardrails=turn.guardrails,
+            answer_model_id=model_id or None,
+        )
         result = await run_answer_with_timeout(
             lambda tracker: pipeline.run(
                 turn.request,

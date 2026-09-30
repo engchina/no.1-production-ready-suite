@@ -4011,3 +4011,55 @@ def test_legacy_parser_api_key_in_json_moves_to_env_on_parser_save() -> None:
     assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "legacy-parser-secret"
     assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
     assert settings.legacy_model_secret_detected is False
+
+
+def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_docrag_query_strategy", "auto_routing")
+    monkeypatch.setattr(settings, "rag_docrag_answer_flow", "crag")
+    monkeypatch.setattr(settings, "rag_docrag_neighbor_child_count", 3)
+    monkeypatch.setattr(settings, "rag_docrag_rerank_enabled", True)
+    monkeypatch.setattr(settings, "rag_docrag_screen_linking_enabled", False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    assert client.get("/api/settings/answering").json()["data"] == {
+        "query_strategy": "auto_routing",
+        "answer_flow": "crag",
+        "neighbor_child_count": 3,
+        "rerank_enabled": True,
+        "screen_linking_enabled": False,
+        "config_source": "runtime",
+    }
+
+    resp = client.patch(
+        "/api/settings/answering",
+        json={"query_strategy": "rag_fusion", "neighbor_child_count": 5, "rerank_enabled": False},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["query_strategy"] == "rag_fusion"
+    assert data["answer_flow"] == "crag"
+    assert data["neighbor_child_count"] == 5
+    assert data["rerank_enabled"] is False
+    assert settings.rag_docrag_query_strategy == "rag_fusion"
+    assert settings.rag_docrag_neighbor_child_count == 5
+    assert settings.rag_docrag_rerank_enabled is False
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_DOCRAG_QUERY_STRATEGY=rag_fusion" in env_text
+    assert "RAG_DOCRAG_ANSWER_FLOW=crag" in env_text
+    assert "RAG_DOCRAG_NEIGHBOR_CHILD_COUNT=5" in env_text
+    assert "RAG_DOCRAG_RERANK_ENABLED=false" in env_text
+    assert "RAG_DOCRAG_SCREEN_LINKING_ENABLED=false" in env_text
+
+
+def test_answering_settings_rejects_invalid_values() -> None:
+    """選択肢に無い値・範囲外の近傍数は 422(#593)。"""
+    assert (
+        client.patch("/api/settings/answering", json={"query_strategy": "unknown"}).status_code
+        == 422
+    )
+    assert (
+        client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
+        == 422
+    )

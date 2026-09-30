@@ -29,9 +29,10 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | DocRAG 親子階層 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子階層」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
 | 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank・画面目録で操作画面を探す） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
+| 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | global | 検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_DOCRAG_*` に保存する。#593）。業務ビューで上書きできる |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
-| 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 回答スタイル「質問履歴」（既定は無効） |
+| 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 検索方法「質問履歴」（既定は無効。#593 で回答スタイルの画面から移した） |
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 
 | DocRAG の回答生成テンプレート（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
@@ -82,15 +83,15 @@ DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲�
 | `RAG_VISION_ENABLED` | `false` | 解析の後に図と画像入りの表を既定の Vision モデルで説明し、図の要素の本文にする。全ての解析エンジンで使える（文書レシピで上書きできる。#497。旧 `RAG_PARSER_DOCLING_VISION_ENABLED` は読まない） |
 | `RAG_ANSWER_ENGINE` | `standard` | 回答エンジンの全体既定。`docrag` で rag_poc の回答フローを使う（業務ビューで上書きできる） |
 | `RAG_TEXT_SEARCH_TOKENIZER` | `builtin` | Oracle Text クエリの分割方式。`sudachi` で rag_poc の Sudachi 分割を使う（検索・回答設定 > 検索方法で変更でき、業務ビューで上書きできる）。業務ビューにドメインキーワードがあれば、`builtin` でも DocRAG の分割でキーワードを 1 語として優先する |
-| `RAG_DOCRAG_QUERY_STRATEGY` | `auto_routing` | DocRAG 回答の質問拡張戦略（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。業務ビューで上書きできる |
-| `RAG_DOCRAG_ANSWER_FLOW` | `crag` | DocRAG 回答の回答生成フロー。`standard_rag` は補正検索をしない。業務ビューで上書きできる |
-| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `3` | DocRAG 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。業務ビューで上書きできる |
-| `RAG_DOCRAG_RERANK_ENABLED` | `true` | DocRAG 回答で検索候補を rerank で並べ替える。業務ビューで上書きできる |
-| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。docrag の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「DocRAG のオプション」） |
+| `RAG_DOCRAG_QUERY_STRATEGY` | `auto_routing` | DocRAG 回答の質問拡張戦略（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
+| `RAG_DOCRAG_ANSWER_FLOW` | `crag` | DocRAG 回答の回答生成フロー。`standard_rag` は補正検索をしない。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
+| `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `3` | DocRAG 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
+| `RAG_DOCRAG_RERANK_ENABLED` | `true` | DocRAG 回答で検索候補を rerank で並べ替える。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
+| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。docrag の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「DocRAG のオプション」） |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
-| `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | DocRAG 回答記録の保存日数（`0` は無期限）。検索・回答設定 > 回答スタイルの「DocRAG 回答の保存期間」で変更できる |
+| `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | 回答の記録の保存日数（`0` は無期限）。検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
 | `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
 | `DOCRAG_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。docrag の `docrag.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。docrag の設定（`build_docrag_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `DOCRAG_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
@@ -151,11 +152,21 @@ DocRAG の回答フロー（`DocragAnswerEngine`）は `rag_docrag_*` の設定�
 | 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、業務ビュー「検索方法」 | 使わない。DocRAG は質問拡張戦略で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答生成フロー）が行う |
 | 全文検索の分割方式 | 同上 | **使う**（Oracle Text の検索語の切り出し） |
 | 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認、業務ビュー「根拠確認」 | 使わない。DocRAG の根拠確認は業務ビューの「DocRAG の回答生成フロー」（補正 RAG / 通常 RAG）で選ぶ |
-| 回答スタイル | 検索・回答設定 > 回答スタイル、業務ビュー「回答スタイル」 | 使わない（同じ画面の「DocRAG 回答の保存期間」は使う） |
+| 回答スタイル | 検索・回答設定 > 回答スタイル、業務ビュー「回答スタイル」 | 使わない（回答の記録の保存期間と質問履歴は、#593 で検索方法の画面へ移した） |
 | system prompt の版（カスタム回答スタイル） | 検索・回答設定 > 回答プロンプト | 使わない。DocRAG は同じ画面の「DocRAG の回答生成テンプレート」を使う |
 | 回答の役割・口調・既定の回答言語 | 業務ビュー「回答プロンプト」 | 使わない |
 
 安全チェックは DocRAG でも質問と回答の両方に適用する。
+
+## 回答エンジンを 1 つにする前の取り込み（#593）
+
+standard の回答エンジンを消す（#592）前に、standard だけが持っていた次の機能を用意した。standard の挙動と既定は変えていない。
+
+- **チャットのモデル比較**: チャットは比較の列ごとのモデルを `RagPipeline(answer_model_id=...)` で渡し、`DocragAnswerEngine` → `build_docrag_settings(answer_model_id=...)` がそのモデル（とその接続）で回答する。以前は列がすべて既定のモデルで答えていた。Vision のモデルは比較の対象ではなく、常に既定の Vision モデルを使う。
+- **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`DocragAnswerEngine.retrieve` が回答の検索（`_search`）を原質問 1 本で呼び、候補を引用として返す（回答は空）。質問の理解・質問の拡張・rerank・CRAG・回答の生成は行わず、LLM を呼ばない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答する（`retrieval_only` を無視する）。
+- **全体既定の画面**: 質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すの全体既定を、検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
+- **回答フローの進捗**: 回答フローの各工程（`docrag.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）の開始と終了を、`docrag_answer` の中の入れ子の工程として進捗（SSE の `stage`）へ流す。工程の名前は `answer_step:<工程名>` で、画面の進捗と時間切れの文言は工程名をそのまま出す（`ANSWER_STEP_STAGE_PREFIX`。frontend の `answer-progress.ts` と同じ）。
+- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・ルール、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。standard と一緒に削除する（#595）。
 
 ## 親子階層（`hierarchical_parent_child`）の削除（#271）
 

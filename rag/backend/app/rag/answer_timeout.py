@@ -13,6 +13,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from app.config import Settings
+from app.rag.docrag_answer import ANSWER_STEP_STAGE_PREFIX
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 
 # 進捗の工程（SSE の `stage`）の利用者向けの名前。時間切れの文言（ERROR として保存する回答・
@@ -49,6 +50,9 @@ def answer_stage_label(stage: str | None) -> str:
     """工程の利用者向けの名前。未開始は「検索の準備」、未知の工程は「処理」。"""
     if not stage:
         return ANSWER_STAGE_BEFORE_START_LABEL
+    # 回答フローの各工程(#593)は、工程名をそのまま出す。
+    if stage.startswith(ANSWER_STEP_STAGE_PREFIX):
+        return stage.removeprefix(ANSWER_STEP_STAGE_PREFIX) or ANSWER_STAGE_UNKNOWN_LABEL
     return ANSWER_STAGE_LABELS.get(stage, ANSWER_STAGE_UNKNOWN_LABEL)
 
 

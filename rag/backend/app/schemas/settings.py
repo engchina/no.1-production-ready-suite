@@ -97,6 +97,8 @@ from app.config import (
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     AgenticProfile,
     ChunkingStrategy,
+    DocragAnswerFlow,
+    DocragQueryStrategy,
     EvaluationSuite,
     GenerationProfile,
     GraphProfile,
@@ -794,6 +796,30 @@ class DocragPromptsData(BaseModel):
 
 class DocragPromptUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
+
+
+class AnsweringSettingsData(BaseModel):
+    """回答の検索と生成の全体既定(docrag 回答エンジン。#593)。
+
+    業務ビューの「検索・回答設定」で上書きできる。値は backend/.env の RAG_DOCRAG_* に保存する。
+    """
+
+    query_strategy: DocragQueryStrategy
+    answer_flow: DocragAnswerFlow
+    neighbor_child_count: int = Field(ge=0, le=20)
+    rerank_enabled: bool
+    screen_linking_enabled: bool
+    config_source: Literal["runtime"] = "runtime"
+
+
+class AnsweringSettingsUpdate(BaseModel):
+    """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
+
+    query_strategy: DocragQueryStrategy | None = None
+    answer_flow: DocragAnswerFlow | None = None
+    neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    rerank_enabled: bool | None = None
+    screen_linking_enabled: bool | None = None
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

@@ -19,7 +19,10 @@ import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { AnswerRecordRetentionCard } from "@/components/settings/AnswerRecordRetentionCard";
+import { AnsweringSettingsCard } from "@/components/settings/AnsweringSettingsCard";
 import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
+import { QueryHistorySettingsCard } from "@/components/settings/QueryHistorySettingsCard";
 import {
   ApiError,
   type RetrievalModeName,
@@ -343,6 +346,10 @@ export function RetrievalSettingsClient() {
           </div>
         </CardContent>
       </Card>
+      {/* 回答の検索と生成の全体既定と、回答の記録・質問履歴（#593。回答スタイルの画面から移した）。 */}
+      <AnsweringSettingsCard />
+      <AnswerRecordRetentionCard />
+      <QueryHistorySettingsCard />
     </PageBody>
   );
 }
