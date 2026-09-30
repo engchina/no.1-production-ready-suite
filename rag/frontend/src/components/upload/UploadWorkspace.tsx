@@ -38,7 +38,8 @@ import { Link } from "react-router-dom";
 import { Dropzone } from "./Dropzone";
 import { UploadSendingState } from "./UploadProgress";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
-import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
+import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
+import { useKnowledgeBaseSelectionHealth } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { useAuth } from "@/components/security/AuthProvider";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -51,7 +52,7 @@ import {
 } from "@/lib/api";
 import {
   uploadErrorMessage,
-  useAllKnowledgeBases,
+  useKnowledgeBaseChoices,
   useBatchUploadDocuments,
   useCancelIngestionJob,
   useDrainIngestionJobs,
@@ -621,6 +622,7 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
 
 const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";
 const UPLOAD_KNOWLEDGE_BASE_INPUT_ID = "upload-knowledge-base-input";
+const UPLOAD_KNOWLEDGE_BASE_LABEL_ID = "upload-knowledge-base-label";
 
 function UploadKnowledgeBasePicker({
   selectedIds,
@@ -640,9 +642,11 @@ function UploadKnowledgeBasePicker({
   /** ナレッジベース管理の画面を開けるか（開けない利用者には導線を出さない）。 */
   canManageKnowledgeBases: boolean;
 }) {
-  // 先頭のページだけだと 51 件目以降の KB を選べないため、ACTIVE をすべて取得する（#280）。
-  const query = useAllKnowledgeBases({ status: "ACTIVE" });
-  const items = query.data ?? [];
+  // 200 件以下は全件を手元で絞り込み、超えるとサーバー側で検索する（全件を読まない。#578）。
+  const [q, setQ] = useState("");
+  const query = useKnowledgeBaseChoices({ status: "ACTIVE", q });
+  const hasKnowledgeBases = query.total > 0;
+  const selection = useKnowledgeBaseSelectionHealth(selectedIds);
   const errorId = useId();
 
   return (
@@ -651,6 +655,7 @@ function UploadKnowledgeBasePicker({
         <CardTitle>
           {/* 必須は入力欄（combobox）の aria-required で伝える。タグは FieldLabel が読み上げから外す */}
           <FieldLabel
+            id={UPLOAD_KNOWLEDGE_BASE_LABEL_ID}
             htmlFor={UPLOAD_KNOWLEDGE_BASE_INPUT_ID}
             label={t("upload.knowledgeBases.title")}
             required={required}
@@ -688,19 +693,21 @@ function UploadKnowledgeBasePicker({
               </Button>
             </div>
           </Banner>
-        ) : items.length > 0 ? (
-          <KnowledgeBasePickerGrid
-            items={items}
+        ) : hasKnowledgeBases ? (
+          <KnowledgeBaseMultiSelect
+            id={UPLOAD_KNOWLEDGE_BASE_INPUT_ID}
+            label={t("upload.knowledgeBases.title")}
+            labelHidden
+            labelledBy={UPLOAD_KNOWLEDGE_BASE_LABEL_ID}
+            required={required}
+            invalid={missing}
+            describedBy={missing ? errorId : undefined}
+            choices={query}
+            onQueryChange={setQ}
             selectedIds={selectedIds}
             onChange={onChange}
+            selectedItems={selection.items}
             disabled={disabled}
-            ariaLabel={t("upload.knowledgeBases.aria")}
-            field={{
-              inputId: UPLOAD_KNOWLEDGE_BASE_INPUT_ID,
-              required,
-              invalid: missing,
-              describedBy: missing ? errorId : undefined,
-            }}
           />
         ) : required ? (
           <p className="rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted">
@@ -721,7 +728,7 @@ function UploadKnowledgeBasePicker({
           </div>
         )}
         {/* 未選択のエラーを出している間は、同じ内容の案内を重ねない。 */}
-        {items.length > 0 && !missing ? (
+        {hasKnowledgeBases && !missing ? (
           <p className="mt-3 text-xs text-fg-muted">
             {selectedIds.length > 0
               ? t("upload.knowledgeBases.selected", { count: selectedIds.length })

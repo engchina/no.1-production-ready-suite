@@ -565,15 +565,27 @@ UX 要件:
 - 名前、説明、既定検索モード、retrieval config。
 - アーカイブ状態の説明。
 
-### 8.4.1 KB を選ぶ UI（#302）
+### 8.4.1 KB を選ぶ UI（#302、#578）
 
-業務ビュー・品質評価・文書詳細の KB の選択（`KnowledgeBaseScopePicker`）は、候補をサーバー側で検索する
-（`GET /api/knowledge-bases?status=ACTIVE&q=`。名前・説明の部分一致、入力から 300ms 後）。1 回 50 件を取り、
-「さらに表示」で次のページを足す（件数の上限なし）。選択済みの KB は `ids` で引き、候補のページに無くてもチップに
-名前を出す。アーカイブ済みの KB は「アーカイブ済み」、見つからない ID（存在しない・範囲外）は「見つかりません」を
-チップに添える（色だけに頼らない）。候補の並びはサーバーの順（DEFAULT → 更新の新しい順）で、全件を持たないため
-「最多」の目印と「空の KB を隠す」は出さない。文書インデックスの絞り込み（`SelectField`）は、有効な KB を
-200 件ずつたどってすべて取る（`useAllKnowledgeBases`。アップロードの KB 選択も同じ取得。#280）。
+KB の選択は、共有 UI の検索できる選択部品（`SearchableMultiSelect` / `SearchableSelectField`。#578）で作る。
+複数選択（業務ビューの参照 KB・品質評価・文書詳細の所属先は `KnowledgeBaseScopePicker`、アップロードの登録先）は
+「検索欄 ＋ 候補の一覧（開いている間だけ）＋ 選択済みの chip」、文書インデックスの絞り込みは単一選択
+（ボタンに選択中の名前を切らずに出し、押すと検索欄と候補の一覧が開く）。
+
+候補の取得は `useKnowledgeBaseChoices`（`frontend/src/lib/queries.ts`）の 1 か所で決める。
+
+- まず有効な KB の先頭 200 件（`KNOWLEDGE_BASE_LOCAL_FILTER_LIMIT` = 一覧 API の `limit` の最大値）を 1 回で取る。
+  全件がそこに収まれば、検索は画面側で絞り込む（入力のたびに問い合わせない）。既定の KB を先頭に文書の多い順で並べ、
+  文書の最も多い KB に「最多」を付ける。
+- 201 件以上なら、サーバー側の検索に切り替える（`GET /api/knowledge-bases?status=ACTIVE&q=`。名前・説明の部分一致）。
+  1 回 50 件を取り、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ で続きを読む。
+  全件をページ送りで読み切らない（旧 `useAllKnowledgeBases` は削除した）。候補はサーバーの順（DEFAULT → 更新の新しい順）。
+- 検索語は部品の `SearchField` が確定した値（300ms・Enter・IME の変換の確定後）。親で遅延させない（UX 契約 page-archetypes.md の規則 7）。
+- 文書のない KB も隠さない（作ったばかりの KB へ登録・所属させるため。右端の「0 文書」で分かる）。
+
+選択済みの KB は `ids` で引き、候補のページに無くても chip（単一選択はボタン）に名前を出す。アーカイブ済みの KB は
+「アーカイブ済み」、見つからない ID（存在しない・範囲外）は「見つかりません」を chip に添える（色だけに頼らない）。
+文書インデックスで復元した絞り込みの KB が削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
 
 ### 8.4.1a 項目抽出の定義（#548）
 
@@ -717,7 +729,7 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 
 - `KnowledgeBaseManagementClient.tsx`: 一覧（検索・状態の絞り込み・ページング）と作成フォーム
 - `KnowledgeBaseDetailClient.tsx`: 詳細（所属文書の追加・解除、アーカイブ、検索テスト、関係情報）
-- `KnowledgeBaseScopePicker.tsx` / `KnowledgeBasePickerGrid.tsx`: 検索・評価・業務ビュー・アップロード・文書詳細で使う複数選択（サーバー側の検索と「さらに表示」。#302）
+- `KnowledgeBaseScopePicker.tsx` / `KnowledgeBaseMultiSelect.tsx`: 評価・業務ビュー・アップロード・文書詳細で使う複数選択と、文書インデックスの絞り込みの選択肢・文言（共有の `SearchableMultiSelect` / `SearchableSelectField`。200 件以下は画面側、超えるとサーバー側の検索。#302 / #578）
 - `KnowledgeBaseStatusPill.tsx`: 状態のバッジ（一覧・詳細で共有）
 - `KnowledgeBaseSearchTestPanel.tsx`: 詳細の検索テスト
 - `KnowledgeBaseGraphView.tsx` / `KnowledgeBasePipelineCanvas.tsx`: 関係情報と取込パイプラインの読み取り専用の図（高度な診断）
