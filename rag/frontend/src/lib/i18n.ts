@@ -901,6 +901,9 @@ export const ja = {
   "businessViews.field.neighborChildCount": "根拠の前後から加える数",
   "businessViews.field.answerOptions": "回答の検索のオプション",
   "businessViews.field.rerank": "Rerank で検索候補を並べ替える",
+  "businessViews.field.autoFieldFilter": "質問から項目の条件を読み取る",
+  "businessViews.field.autoFieldFilterHelper":
+    "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
   "businessViews.field.screenLinking": "画面目録で操作画面を探す",
   "businessViews.field.screenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
@@ -2016,6 +2019,11 @@ export const ja = {
   "search.answerDetails.searchTitle": "検索の根拠の構成と実行記録",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
+  "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
+  "search.answerDetails.autoFieldFilterRelaxed":
+    "読み取った条件では見つからなかったため、条件を外して検索しました。",
+  "search.autoFieldFilter.chip": "自動: {label}",
+  "search.autoFieldFilter.remove": "{label} を外して検索し直す",
   "search.answerDetails.reasoning": "判断理由: {reason}",
   "search.answerDetails.externalData.title": "業務システムで確かめる値",
   "search.answerDetails.externalData.hint": "資料だけでは決まりません。実際のデータで確認してください。",
@@ -2147,6 +2155,9 @@ export const ja = {
   "settings.answering.rerank": "Rerank で検索候補を並べ替える",
   "settings.answering.rerankHint":
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
+  "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",
+  "settings.answering.autoFieldFilterHint":
+    "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。",
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
@@ -2344,6 +2355,7 @@ export const ja = {
   // 工程の名前は backend の時間切れの文言（app/rag/answer_timeout.py）と揃える（#375）。
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
+  "search.stage.fieldFilter": "検索条件の読み取り",
   "search.stage.answer": "根拠の検索と回答の生成",
   "search.stage.retrieval": "検索",
   "answer.progress.label": "回答を生成しています（{stage}）",

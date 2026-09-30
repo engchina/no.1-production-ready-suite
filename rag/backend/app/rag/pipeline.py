@@ -19,6 +19,8 @@ from app.config import Settings, get_settings
 from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, answer_step_stage
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
+from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
@@ -32,6 +34,7 @@ from app.rag.observability import (
 from app.rag.query_history import record_query_history
 from app.schemas.common import JsonValue
 from app.schemas.search import (
+    ExtractionFieldCondition,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -248,12 +251,23 @@ class RagPipeline:
             )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
+        # 質問に書かれた条件を抽出項目の条件として読み取る(self-query。有効なときだけ。#652)。
+        # チャットは会話履歴で書き換えた質問から読む。
+        auto_field_conditions: list[ExtractionFieldCondition] = []
+        if self._settings.rag_auto_field_filter_enabled and request.business_view_id:
+            auto_field_conditions = await _observe_stage(
+                trace_id,
+                "field_filter",
+                self._read_field_conditions(request),
+                progress_callback=progress_callback,
+            )
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             answer_model_id=self._answer_model_id,
+            auto_field_conditions=auto_field_conditions,
         )
 
         async def emit_step(name: str, outcome: str, elapsed: float) -> None:
@@ -456,6 +470,37 @@ class RagPipeline:
                 "answer record save failed",
                 extra={"trace_id": trace_id, "error": str(exc)},
             )
+
+    async def _read_field_conditions(
+        self, request: SearchRequest
+    ) -> list[ExtractionFieldCondition]:
+        """業務ビューの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
+
+        定義は検索の絞り込みの項目と同じ(利用者が使える有効な KB の定義の和集合。KB に無ければ
+        全体の既定)。定義が無い・読めないときは LLM を呼ばずに空(条件なしで検索を続ける)。
+        """
+        try:
+            view = await self._oracle.get_business_view(request.business_view_id or "")
+            field_sets = (
+                await self._oracle.list_knowledge_base_extraction_field_sets(
+                    view.config.normalized_knowledge_base_ids()
+                )
+                if view is not None
+                else []
+            )
+        except Exception as exc:  # 読み取りは補助。条件なしで検索を続ける。
+            logger.warning("field definitions load failed", extra={"error": str(exc)})
+            return []
+        if not field_sets:
+            return []
+        # 利用者が画面で外した項目は読み取らない(定義から除く)。
+        excluded = {name.strip().casefold() for name in request.auto_field_filter_excluded}
+        field_defs = [
+            definition
+            for definition in resolve_field_definitions(field_sets, load_field_schema().fields)
+            if definition.name.casefold() not in excluded
+        ]
+        return await read_field_conditions(request.query, field_defs, self._llm)
 
     async def _safe_rewritten_query(self, query: str, history: Sequence[ChatTurn]) -> str:
         """履歴で書き換えた質問を、元の質問と同じ安全チェックに通してから返す。

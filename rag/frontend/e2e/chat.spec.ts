@@ -667,6 +667,10 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     external_data_required: true,
     external_data_items: ["申請者の役職"],
     question_type: ["規則"],
+    auto_field_filter: {
+      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
+      relaxed: false,
+    },
     original_question: "それの上限は？",
     rewritten_question: "経費精算の上限額は？",
     generated_queries: [],
@@ -708,6 +712,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(models).toContainText("cohere.rerank-v4.0-fast");
   // rag_poc の回答 viewer と同じ情報（判断理由・外部データの確認・問い合わせ型）と本文の構成（#651）。
   await expect(panel.getByText("問い合わせ型: 規則")).toBeVisible();
+  // 質問から読み取った条件（#652）も記録として出す。
+  await expect(panel.getByTestId("auto-field-filter")).toContainText("金額 ≥ 100000");
   await expect(panel.getByText(/^判断理由: 引用照合済みの説明 1 件/)).toBeVisible();
   const externalData = panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" });
   await expect(externalData).toContainText("申請者の役職");

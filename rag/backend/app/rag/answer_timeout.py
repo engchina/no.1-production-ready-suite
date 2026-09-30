@@ -23,6 +23,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     # 検索だけ(KB の検索テスト・レシピの検索比較。#593)
     "retrieval": "検索",
     "history_rewrite": "会話を踏まえた質問の書き換え",
+    "field_filter": "検索条件の読み取り",
     "answer": "根拠の検索と回答の生成",
 }
 ANSWER_STAGE_BEFORE_START_LABEL = "検索の準備"

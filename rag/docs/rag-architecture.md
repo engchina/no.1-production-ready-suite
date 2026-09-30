@@ -70,6 +70,7 @@
    - `SearchRequest` の `mode`・`strategy`・`rerank_top_n`・`generation_profile` は #595 で削除した。旧クライアントが送っても 422 にせず読み捨てる。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。RAG 検索の画面からは #649 で入力欄を外した（API の条件としては残す）。
+   - 抽出項目の値の条件（`filters.extraction_fields`。#549）は、利用者が手で指定するほか、`RAG_AUTO_FIELD_FILTER_ENABLED` が有効な業務ビューでは質問から LLM で読み取って足す（self-query。#652。読み取った条件で 0 件なら外して検索し直す。詳細は `docs/rag-engine.md`）。
    - `source_acl` と `document_version` は Oracle chunk metadata に対する完全一致 filter として使い、AIDB RAG の Business Context Pack で tenant / ACL / dataset / version を検索前に固定する。
    - keyword score は重複を除いた query token coverage として 0.0-1.0 に正規化する。
    - keyword（Oracle Text）の検索語の分割は 1 つだけで、設定では選ばない（#588。`rag_engine` の `retrieval/text_search_tokenizer.py`）。Sudachi の長い単位（C）と短い単位（A）を主の語にし、文字種の区切り（漢字・カタカナ・英数字の連続）・漢字の複合語の先頭 2 字と末尾 2 字・送り仮名を除いた形（「取り消し」→「取消」）を補う語として足す。業務ビューのドメインキーワードは 1 語として優先する。語は `ACCUM` で結び、重みはキーワード 2・主の語 1・補う語と 1 字の語 0.5（多くの語に当たる chunk ほど上にし、補った語だけの一致は軽くする）。語は最大 24 語、query は最大 3,800 文字。Sudachi の辞書が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。索引の側（`RAG_TEXT_WORLD_LEXER` = `WORLD_LEXER`）は変えない。回答の検索とフィードバックの検索は同じ分割を使う。

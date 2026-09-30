@@ -55,6 +55,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
+    auto_field_filter_enabled: settings.auto_field_filter_enabled,
   };
 }
 
@@ -148,6 +149,14 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           checked={form.screen_linking_enabled}
           disabled={save.isPending}
           onChange={(checked) => update({ screen_linking_enabled: checked })}
+        />
+        <SwitchRow
+          id="answering-auto-field-filter"
+          label={t("settings.answering.autoFieldFilter")}
+          description={t("settings.answering.autoFieldFilterHint")}
+          checked={form.auto_field_filter_enabled}
+          disabled={save.isPending}
+          onChange={(checked) => update({ auto_field_filter_enabled: checked })}
         />
       </div>
       <div className="flex flex-wrap items-center gap-3">

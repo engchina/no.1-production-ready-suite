@@ -96,6 +96,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "neighbor_child_count": "rag_neighbor_child_count",
     "rerank_enabled": "rag_rerank_enabled",
     "screen_linking_enabled": "rag_screen_linking_enabled",
+    "auto_field_filter_enabled": "rag_auto_field_filter_enabled",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -259,6 +260,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     rerank_enabled: bool | None = None
     # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
     screen_linking_enabled: bool | None = None
+    # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
+    auto_field_filter_enabled: bool | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

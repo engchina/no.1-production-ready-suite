@@ -2076,3 +2076,145 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
         "embedding": settings.oci_genai_embedding_model,
         "rerank": "",
     }
+
+
+class EmptyWithFieldFilterOracle(FakeOracle):
+    """抽出項目の条件があると 0 件、無ければ候補を返す(読み取った条件が厳しすぎる状況)。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.filters.append(dict(filters or {}))
+        if (filters or {}).get("extraction_fields"):
+            return []
+        return self.chunks[:1]
+
+
+async def test_answer_engine_applies_auto_field_conditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """質問から読み取った条件を検索条件に足し、診断に出す(#652)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.schemas.search import ExtractionFieldCondition
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    oracle = FakeOracle()
+    condition = ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="100000")
+    engine = AnswerEngine(
+        Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        auto_field_conditions=[condition],
+    )
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert oracle.filters
+    assert all(
+        json.loads(item["extraction_fields"])[0]["name"] == "金額" for item in oracle.filters
+    )
+    assert outcome.diagnostics["auto_field_filter"] == {
+        "conditions": [condition.model_dump()],
+        "relaxed": False,
+    }
+
+
+async def test_answer_engine_relaxes_auto_field_conditions_without_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """読み取った条件で 0 件なら、条件を外して 1 回だけ検索し直す(手の条件は外さない。#652)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.schemas.search import ExtractionFieldCondition
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    oracle = EmptyWithFieldFilterOracle()
+    engine = AnswerEngine(
+        Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        auto_field_conditions=[
+            ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
+        ],
+    )
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "extraction_fields" in oracle.filters[0]
+    assert "extraction_fields" not in oracle.filters[-1]
+    assert outcome.citations
+    assert outcome.diagnostics["auto_field_filter"]["relaxed"] is True
+
+
+async def test_pipeline_reads_field_conditions_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定が有効なときだけ、業務ビューの項目の定義で質問から条件を読み取る(#652)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    import app.rag.pipeline as pipeline_module
+    from app.rag.extraction_field_adapter import FieldDefinition
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+
+    class ViewOracle(SavingOracle):
+        async def get_business_view(self, business_view_id: str) -> Any:
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                config=SimpleNamespace(normalized_knowledge_base_ids=lambda: ["kb-1"])
+            )
+
+        async def list_knowledge_base_extraction_field_sets(self, ids: list[str]) -> Any:
+            return [[FieldDefinition(name="金額", value_type="number")]]
+
+    monkeypatch.setattr(pipeline_module, "resolve_field_definitions", lambda sets, default: sets[0])
+    for enabled in (False, True):
+        llm = RewriteLlm('[{"name": "金額", "op": "gte", "value": "100000"}]')
+        oracle = ViewOracle()
+        stages: list[str] = []
+
+        async def capture(progress: Any, stages: list[str] = stages) -> None:
+            stages.append(progress.stage)
+
+        pipeline = pipeline_module.RagPipeline(
+            settings=Settings(rag_auto_field_filter_enabled=enabled),
+            oracle=oracle,  # type: ignore[arg-type]
+            genai=FakeGenAi(),  # type: ignore[arg-type]
+            llm=llm,  # type: ignore[arg-type]
+        )
+        response = await pipeline.run(
+            SearchRequest(query="10万円以上の受注は？", business_view_id="bv-1"),
+            progress_callback=capture,
+        )
+        answer = cast(dict[str, Any], response.diagnostics.answer or {})
+        if enabled:
+            assert len(llm.calls) == 1
+            assert "field_filter" in stages
+            assert answer["auto_field_filter"]["conditions"][0]["value"] == "100000"
+        else:
+            assert llm.calls == []
+            assert "field_filter" not in stages
+            assert "auto_field_filter" not in answer
+
+    # 画面で外した項目は読み取らない(項目の定義が残らなければ LLM を呼ばない)。
+    llm = RewriteLlm('[{"name": "金額", "op": "gte", "value": "100000"}]')
+    pipeline = pipeline_module.RagPipeline(
+        settings=Settings(rag_auto_field_filter_enabled=True),
+        oracle=ViewOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+    )
+    response = await pipeline.run(
+        SearchRequest(
+            query="10万円以上の受注は？",
+            business_view_id="bv-1",
+            auto_field_filter_excluded=["金額"],
+        )
+    )
+    assert llm.calls == []
+    assert "auto_field_filter" not in (response.diagnostics.answer or {})

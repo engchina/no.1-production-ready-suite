@@ -70,6 +70,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
         "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
+        "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

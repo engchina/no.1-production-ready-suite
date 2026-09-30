@@ -223,6 +223,14 @@ class SearchRequest(BaseModel):
             "使う(#593)。"
         ),
     )
+    auto_field_filter_excluded: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_EXTRACTION_FIELD_CONDITIONS,
+        description=(
+            "質問から読み取った抽出項目の条件のうち、使わない項目の名前(画面で利用者が外した条件。"
+            "#652)。"
+        ),
+    )
     generate_answer: bool = Field(
         default=True,
         description=(

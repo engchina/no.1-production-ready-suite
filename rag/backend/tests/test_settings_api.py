@@ -3516,6 +3516,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
     monkeypatch.setattr(settings, "rag_rerank_enabled", True)
     monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
+    monkeypatch.setattr(settings, "rag_auto_field_filter_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     assert client.get("/api/settings/answering").json()["data"] == {
@@ -3524,12 +3525,18 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "neighbor_child_count": 3,
         "rerank_enabled": True,
         "screen_linking_enabled": False,
+        "auto_field_filter_enabled": False,
         "config_source": "runtime",
     }
 
     resp = client.patch(
         "/api/settings/answering",
-        json={"query_strategy": "rag_fusion", "neighbor_child_count": 5, "rerank_enabled": False},
+        json={
+            "query_strategy": "rag_fusion",
+            "neighbor_child_count": 5,
+            "rerank_enabled": False,
+            "auto_field_filter_enabled": True,
+        },
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -3546,6 +3553,10 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert "RAG_NEIGHBOR_CHILD_COUNT=5" in env_text
     assert "RAG_RERANK_ENABLED=false" in env_text
     assert "RAG_SCREEN_LINKING_ENABLED=false" in env_text
+    # 質問から抽出項目の条件を読み取る(#652)。
+    assert data["auto_field_filter_enabled"] is True
+    assert settings.rag_auto_field_filter_enabled is True
+    assert "RAG_AUTO_FIELD_FILTER_ENABLED=true" in env_text
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

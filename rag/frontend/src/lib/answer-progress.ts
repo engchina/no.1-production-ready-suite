@@ -16,6 +16,7 @@ export interface AnswerStageEvent {
 export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   retrieval: "search.stage.retrieval",
   history_rewrite: "search.stage.historyRewrite",
+  field_filter: "search.stage.fieldFilter",
   answer: "search.stage.answer",
 };
 

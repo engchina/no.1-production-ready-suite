@@ -741,6 +741,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "業務ビューで上書きできる。"
         ),
     )
+    rag_auto_field_filter_enabled: bool = Field(
+        default=False,
+        description=(
+            "質問に書かれた条件(「2025 年以降」「10 万円以上」など)を、業務ビューの KB で定義した"
+            "抽出項目の条件として LLM で読み取り、検索を絞り込む(self-query。LLM の呼び出しが"
+            " 1 回増える。読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
+            "業務ビューで上書きできる。"
+        ),
+    )
     rag_answer_record_retention_days: int = Field(
         default=90,
         ge=0,

@@ -46,8 +46,9 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル2行(回答の Rerank・画面目録)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(6);
+    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル3行
+    // (回答の Rerank・画面目録・質問から項目の条件を読み取る(#652))。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(7);
     await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(4);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
@@ -146,6 +147,13 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   );
   await expect(screenLinking).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
   await screenLinking.getByRole("button", { name: "ON" }).click();
+  // 質問から項目の条件を読み取るも既定 無効(継承)。業務ビューで ON にできる(#652)。
+  const autoFieldFilter = page.getByRole("group", { name: "質問から項目の条件を読み取る" });
+  await expect(
+    autoFieldFilter.getByRole("button", { name: "グローバル既定を継承" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(autoFieldFilter).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
+  await autoFieldFilter.getByRole("button", { name: "ON" }).click();
   await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
@@ -155,6 +163,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.neighbor_child_count).toBe(3);
   expect(query.rerank_enabled).toBe(false);
   expect(query.screen_linking_enabled).toBe(true);
+  expect(query.auto_field_filter_enabled).toBe(true);
   expect(query.answer_flow ?? null).toBeNull();
 });
 

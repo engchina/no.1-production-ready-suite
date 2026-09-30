@@ -56,14 +56,15 @@ import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-st
 import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
+import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { AnswerText } from "./AnswerText";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
 import {
   EXTRACTION_FIELD_FILTER_KEY,
-  type ExtractionFieldCondition,
   type ExtractionFieldFilterRow,
+  extractionFieldConditionLabel,
   extractionFieldConditions,
   extractionFieldFilterValue,
   isActiveExtractionFieldFilterRow,
@@ -143,6 +144,8 @@ export function SearchClient() {
   const [answerBusinessViewId, setAnswerBusinessViewId] = useState<string | null>(null);
   // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
   const [lastSkipFaq, setLastSkipFaq] = useState(false);
+  // 質問から読み取った条件のうち、利用者が外した項目（#652）。新しく検索するたびに空に戻す。
+  const [autoFieldExcluded, setAutoFieldExcluded] = useState<string[]>([]);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -180,7 +183,7 @@ export function SearchClient() {
   const hasSearchTuning = topK !== DEFAULT_TOP_K;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
 
-  const runSubmit = async (skipFaq: boolean) => {
+  const runSubmit = async (skipFaq: boolean, excludedAutoFields: string[]) => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
     if (!businessViewId) {
@@ -199,6 +202,7 @@ export function SearchClient() {
     setScopeError("");
     setSubmittedQuery(trimmed);
     setLastSkipFaq(skipFaq);
+    setAutoFieldExcluded(excludedAutoFields);
     setFaqSuggestions(null);
     setFaqAnswer(null);
     if (!skipFaq) {
@@ -246,6 +250,7 @@ export function SearchClient() {
           top_k: Number(topK),
           business_view_id: businessViewId,
           generate_answer: generateAnswer,
+          ...(excludedAutoFields.length ? { auto_field_filter_excluded: excludedAutoFields } : {}),
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -303,11 +308,11 @@ export function SearchClient() {
 
   // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
   const submittingRef = useRef(false);
-  const submit = async (skipFaq = false) => {
+  const submit = async (skipFaq = false, excludedAutoFields: string[] = []) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     try {
-      await runSubmit(skipFaq);
+      await runSubmit(skipFaq, excludedAutoFields);
     } finally {
       submittingRef.current = false;
     }
@@ -619,7 +624,10 @@ export function SearchClient() {
               </CardContent>
             </Card>
           ) : phase === "error" ? (
-            <ErrorState message={errorText} onRetry={() => void submit(lastSkipFaq)} />
+            <ErrorState
+              message={errorText}
+              onRetry={() => void submit(lastSkipFaq, autoFieldExcluded)}
+            />
           ) : (
             <>
               {/* 安全チェック警告 */}
@@ -657,6 +665,14 @@ export function SearchClient() {
                     />
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
+                  {meta && phase === "done" ? (
+                    <AutoFieldFilterChips
+                      diagnostics={meta.diagnostics?.answer}
+                      disabled={isStreaming}
+                      // 外した項目を読み取らずに検索し直す（類似 FAQ は出し直さない）。
+                      onRemove={(name) => void submit(true, [...autoFieldExcluded, name])}
+                    />
+                  ) : null}
                   {answerMode ? (
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
@@ -690,11 +706,16 @@ export function SearchClient() {
                   ) : null}
                   {meta && phase === "done" && meta.diagnostics?.answer ? (
                     answerMode ? (
-                      <AnswerDetailsPanel diagnostics={meta.diagnostics.answer} traceId={meta.trace_id} />
+                      <AnswerDetailsPanel
+                        diagnostics={meta.diagnostics.answer}
+                        traceId={meta.trace_id}
+                        showAutoFieldFilter={false}
+                      />
                     ) : (
                       <AnswerDetailsPanel
                         diagnostics={meta.diagnostics.answer}
                         title={t("search.answerDetails.searchTitle")}
+                        showAutoFieldFilter={false}
                       />
                     )
                   ) : null}
@@ -890,6 +911,58 @@ function shortTraceId(traceId: string | null): string {
   return traceId.length > 12 ? traceId.slice(0, 12) : traceId;
 }
 
+/**
+ * 質問から読み取って検索に足した条件（#652）。「自動」のチップで出し、外して検索し直せる。
+ * 読み取った条件で見つからず外して検索したときは、その旨を出す。
+ */
+function AutoFieldFilterChips({
+  diagnostics,
+  disabled,
+  onRemove,
+}: {
+  diagnostics: unknown;
+  disabled: boolean;
+  onRemove: (name: string) => void;
+}) {
+  const auto = parseAnswerDiagnostics(diagnostics)?.autoFieldFilter;
+  if (!auto) return null;
+  const names = [...new Set(auto.conditions.map((condition) => condition.name))];
+  return (
+    <div aria-label={t("search.answerDetails.autoFieldFilter")} className="mb-3 space-y-1.5" data-testid="auto-field-filter-chips">
+      <p className="text-xs font-medium text-fg-muted">{t("search.answerDetails.autoFieldFilter")}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {names.map((name) => {
+          const label = auto.conditions
+            .filter((condition) => condition.name === name)
+            .map(extractionFieldConditionLabel)
+            .join(" / ");
+          return (
+            <span
+              key={name}
+              className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-border bg-info-subtle py-0.5 pl-2 text-xs font-medium leading-snug text-fg"
+            >
+              <span className="break-all">{t("search.autoFieldFilter.chip", { label })}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                iconOnly
+                icon={X}
+                disabled={disabled}
+                aria-label={t("search.autoFieldFilter.remove", { label })}
+                onClick={() => onRemove(name)}
+              />
+            </span>
+          );
+        })}
+      </div>
+      {auto.relaxed ? (
+        <Banner severity="info">{t("search.answerDetails.autoFieldFilterRelaxed")}</Banner>
+      ) : null}
+    </div>
+  );
+}
+
 function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
   const chips = activeFilterChips(filters);
   if (!chips.length) return null;
@@ -930,14 +1003,6 @@ function activeFilterChips(filters: Record<string, string>) {
       })
     ),
   ].flatMap((chip) => (chip ? [chip] : []));
-}
-
-function extractionFieldConditionLabel(condition: ExtractionFieldCondition): string {
-  const value =
-    condition.value_type === "bool"
-      ? t(condition.value === "true" ? "search.filters.fields.true" : "search.filters.fields.false")
-      : condition.value;
-  return t(`search.filters.fields.applied.${condition.op}`, { name: condition.name, value });
 }
 
 /** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（AnswerDetailsPanel）が出す。 */
