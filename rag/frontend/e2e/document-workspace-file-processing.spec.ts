@@ -164,19 +164,21 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
 }, testInfo) => {
   // マウスホイールでのスクロール引き継ぎはデスクトップの操作。タッチ端末プロジェクトでは入力方式が前提と一致しない。
   test.skip(testInfo.project.name !== "desktop", "desktop (mouse wheel) contract");
-  await mockDocumentWorkspace(page, { pdfPreview: true });
+  // chunk を増やし、Chunk の一覧が右ペインからあふれるようにする。
+  await mockDocumentWorkspace(page, { pdfPreview: true, extraChunkCount: 23 });
 
-  // 内容が右ペインからあふれる高さにする（ペインは 1 画面分の高さ）。
-  await page.setViewportSize({ width: 1440, height: 640 });
+  // 画面の低い xl の幅（ペインは 1 画面より高くなる）。
+  await page.setViewportSize({ width: 1280, height: 640 });
   await page.goto("/documents/doc-1");
 
-  // 右ペイン（タブ + 内容）は左のプレビューと同じ 1 画面分の高さにそろえる（#349）。
+  // 右ペイン（タブ + 内容）は左のプレビューと同じ高さにそろえる（#349 / #559）。
+  // ページ画像が無い（iframe の）PDF は A4 縦の縦横比で高さを取るので、1 画面分（下限）より高い。
   const previewPane = page.getByTestId("document-preview-pane");
   const inspectorPane = page.getByTestId("document-inspector-pane");
   await expect(page.locator('iframe[title="policy.pdf"]')).toBeVisible();
   const previewPaneBox = await previewPane.boundingBox();
   expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(previewPaneBox!.height, 0);
-  expect(previewPaneBox!.height).toBeCloseTo(640 - 28, 0);
+  expect(previewPaneBox!.height).toBeGreaterThan(640 - 28);
   const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const previewHeight = await textPanel.evaluate((element) => element.clientHeight);
   expect(previewHeight).toBeGreaterThan(400);
@@ -195,7 +197,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
   expect(textPanelMetrics.overscrollBehaviorY).toBe("auto");
   expect(textPanelMetrics.scrollbarGutter).toContain("stable");
 
-  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("tab", { name: "Chunk / Citation", exact: false }).click();
   const panel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const panelMetrics = await panel.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -230,7 +232,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     mainScrollTop
   );
 
-  for (const tabName of ["Chunk / Citation", "抽出エクスポート"]) {
+  for (const tabName of ["構造化要素", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
     // 抽出エクスポートのパネルの中には形式のタブのパネル（入れ子）もあるため、右ペインのタブの名前で引く。
     const tabPanelMetrics = await page
@@ -805,29 +807,154 @@ test("プレビューの回転・拡大の後も強調が同じ位置に重な�
   await expectNoHorizontalOverflow(page);
 });
 
-test("プレビューの領域は 1 画面分の高さで、ページは内部でスクロールする", async ({ page }) => {
+// 文書詳細のプレビューは、幅に合わせたときに 1 ページ全体が縦スクロールなしで入る高さにする（#559）。
+// desktop（1280 / 1920）と 375px、light / dark で、開いた直後の状態・拡大・ページ送りを確かめる。
+for (const viewportCase of [
+  { name: "1280 light", width: 1280, height: 800, theme: "light" },
+  { name: "1920 dark", width: 1920, height: 1080, theme: "dark" },
+  { name: "375 dark", width: 375, height: 812, theme: "dark" },
+  { name: "375 light", width: 375, height: 812, theme: "light" },
+] as const) {
+  test(`プレビューは開いた直後に 1 ページ全体を縦スクロールなしで表示する (${viewportCase.name})`, async ({
+    page,
+  }, testInfo) => {
+    // 幅は setViewportSize で決めるので、desktop のプロジェクトだけで実行する（mobile と同じ内容を 2 回走らせない）。
+    test.skip(testInfo.project.name !== "desktop", "viewport は各ケースで指定する");
+    await page.addInitScript((theme) => {
+      window.localStorage.setItem(
+        "production-ready-rag.ui",
+        JSON.stringify({ state: { theme }, version: 0 })
+      );
+    }, viewportCase.theme);
+    await page.setViewportSize({ width: viewportCase.width, height: viewportCase.height });
+    await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+
+    await page.goto("/documents/doc-1");
+
+    const pane = page.getByTestId("document-preview-pane");
+    const inspectorPane = page.getByTestId("document-inspector-pane");
+    const viewport = page.getByTestId("preview-viewport");
+    const frame = page.getByTestId("preview-page-frame");
+    await expect(page.getByTestId("preview-viewer")).toHaveAttribute("data-sizing", "page");
+    await expect(viewport.getByRole("img", { name: "policy.pdf p.1" })).toBeVisible();
+    await expect(viewport).toHaveAttribute("data-fit-mode", "fit-width");
+
+    // 開いた直後: ビューポートの中に縦・横のスクロールが無く、ページの枠全体がビューポートの中にある。
+    const metrics = await viewport.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight);
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+    const viewportBox = (await viewport.boundingBox())!;
+    const frameBox = (await frame.boundingBox())!;
+    expect(frameBox.y).toBeGreaterThanOrEqual(viewportBox.y);
+    expect(frameBox.y + frameBox.height).toBeLessThanOrEqual(viewportBox.y + viewportBox.height);
+    // 幅に合わせた表示（ページの幅 ≒ ビューポートの幅）。
+    expect(frameBox.width).toBeGreaterThan(viewportBox.width - 32);
+
+    const screenHeight = viewportCase.height;
+    const paneBox = (await pane.boundingBox())!;
+    if (viewportCase.width >= 1280) {
+      // xl 以上: 右ペインは左と同じ高さ。下限は今までの 1 画面分（上下 1rem ずつの余白を除く）。
+      expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
+      expect(paneBox.height).toBeGreaterThanOrEqual(screenHeight - 28 - 1);
+    } else {
+      // xl 未満の縦積み: 1 画面分の枠に小さなページが浮かないよう、ページの形の高さに詰める。
+      expect(paneBox.height).toBeLessThan(screenHeight - 28);
+    }
+    if (viewportCase.width !== 1280) {
+      // 下限にかからないときは、ビューポートはページの高さ + ステージの余白（と数 px の遊び）だけ。
+      expect(viewportBox.height - frameBox.height).toBeLessThan(32);
+    }
+    // 目視の記録: ペインの下端（ページの下端とビューアの枠）が見える位置までスクロールして撮る。
+    await pane.evaluate((element) => element.scrollIntoView({ block: "end" }));
+    await page.screenshot({
+      path: testInfo.outputPath(`preview-pane-${viewportCase.width}-${viewportCase.theme}.png`),
+    });
+
+    // 拡大してもペインの高さは変わらず、ページはビューアの中でスクロールする。
+    await viewport.focus();
+    for (let index = 0; index < 5; index += 1) await page.keyboard.press("+");
+    await expect(page.getByTestId("preview-zoom-status")).toHaveText("300%");
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollHeight > element.clientHeight))
+      .toBe(true);
+    expect((await pane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
+
+    // 横長の 2 ページ目へ送っても、ペインの高さは変わらない（文書で最も縦長のページで高さを決める）。
+    await page.keyboard.press("w");
+    await page.keyboard.press("PageDown");
+    await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
+    await expect(viewport.getByRole("img", { name: "policy.pdf p.2" })).toBeVisible();
+    expect((await pane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollHeight <= element.clientHeight))
+      .toBe(true);
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("ページ画像の寸法が届く前は A4 縦で領域を取り、届いた後も高さがほとんど変わらない", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop の幅で確かめる");
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  // ページ一覧の応答を遅らせ、読み込み中の表示の高さを測る。
+  let releasePages: () => void = () => {};
+  const pagesGate = new Promise<void>((resolve) => {
+    releasePages = resolve;
+  });
+  await page.route(
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/preview-pages(?:\?|$)/,
+    async (route) => {
+      await pagesGate;
+      await route.fallback();
+    }
+  );
 
   await page.goto("/documents/doc-1");
-
   const pane = page.getByTestId("document-preview-pane");
-  const viewport = page.getByTestId("preview-viewport");
-  await expect(viewport).toBeVisible();
-  const viewportHeight = page.viewportSize()!.height;
-  const paneBox = await pane.boundingBox();
-  // 上下 1rem（14px ルート）ずつの余白を除いた高さ。
-  expect(paneBox!.height).toBeCloseTo(viewportHeight - 28, 0);
-  const viewerBox = await page.getByTestId("preview-viewer").boundingBox();
-  expect(viewerBox!.y + viewerBox!.height).toBeLessThanOrEqual(paneBox!.y + paneBox!.height + 1);
-  // 拡大してもプレビューの高さは変わらず、ページはビューアの中でスクロールする。
-  await viewport.focus();
-  for (let index = 0; index < 5; index += 1) await page.keyboard.press("+");
-  await expect(page.getByTestId("preview-zoom-status")).toHaveText("300%");
+  await expect(page.getByTestId("preview-loading")).toBeVisible();
+  const loadingHeight = (await pane.boundingBox())!.height;
+  releasePages();
+  await expect(page.getByTestId("preview-viewport").getByRole("img")).toBeVisible();
+  const loadedHeight = (await pane.boundingBox())!.height;
+  // A4 縦（1 : 1.414）と、このページ（US Letter 1 : 1.294）の違いの分だけ変わる（1 割未満）。
+  expect(Math.abs(loadedHeight - loadingHeight) / loadedHeight).toBeLessThan(0.1);
+});
+
+test("「強調した位置へ移動」は画面の外にある強調をページごと見せる", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop の幅で確かめる");
+  // 画面が低いと、プレビューのページの上の方の強調でも開いた直後は画面の外にある。
+  await page.setViewportSize({ width: 1440, height: 600 });
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  await page
+    .getByTestId("document-inspector-pane")
+    .getByRole("tabpanel")
+    .getByRole("button", { name: /交通費は1000円/ })
+    .click();
+  // ビューアが中央へ寄せるのは、最初の主の強調（querySelector と同じ）。
+  const highlight = page.locator("[data-highlight-tone='primary']").first();
+  await expect(highlight).toBeVisible();
+  // chunk を選んだだけではページは動かさない。主ページを先頭へ戻して強調を画面の外に置く。
+  await page.locator("main").evaluate((element) => element.scrollTo(0, 0));
+  await expect.poll(() => highlight.evaluate((element) => element.getBoundingClientRect().top)).toBeGreaterThan(600);
+
+  await page.getByRole("button", { name: "強調した位置へ移動" }).click();
   await expect
-    .poll(() => viewport.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .poll(() =>
+      highlight.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return box.top >= 0 && box.bottom <= window.innerHeight;
+      })
+    )
     .toBe(true);
-  expect((await pane.boundingBox())!.height).toBeCloseTo(paneBox!.height, 0);
-  await expectNoHorizontalOverflow(page);
 });
 
 test("明示された xywh bbox mode で citation overlay を位置決めする", async ({ page }) => {
