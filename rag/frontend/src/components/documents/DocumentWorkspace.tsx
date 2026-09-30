@@ -48,6 +48,7 @@ import {
   resolveIngestionProgressSummary,
   resolvePhaseRows,
   resolveStatusMessageSlot,
+  selectDocumentRecipe,
   shouldShowProcessingWatchBanner,
   shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
@@ -281,19 +282,22 @@ export function DocumentWorkspace({
   documentId,
   watchProcessing = false,
   initialSourceProfile = null,
+  showTitle = true,
 }: {
   documentId: string;
   watchProcessing?: boolean;
   initialSourceProfile?: SourceProfile | null;
+  /**
+   * カードの見出し（ファイル名と状態）を出すか。文書詳細（`/documents/:id`）はページの `PageHeader` が
+   * ファイル名・状態を持つので出さない（#581）。アップロード直後の画面では出す。
+   */
+  showTitle?: boolean;
 }) {
   const query = useDocument(documentId);
   const [searchParams, setSearchParams] = useSearchParams();
   const recipesQuery = useDocumentRecipes(documentId);
   const requestedRecipeId = searchParams.get("recipe");
-  const selectedRecipe =
-    recipesQuery.data?.find((recipe) => recipe.recipe_id === requestedRecipeId) ??
-    recipesQuery.data?.[0] ??
-    null;
+  const selectedRecipe = selectDocumentRecipe(recipesQuery.data, requestedRecipeId);
   const selectedRecipeId = selectedRecipe?.recipe_id ?? null;
   const hasSelectedRecipeExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
   useEffect(() => {
@@ -435,6 +439,7 @@ export function DocumentWorkspace({
     () => segmentsQuery.data?.filter((segment) => segment.recipe_id === selectedRecipeId) ?? [],
     [segmentsQuery.data, selectedRecipeId]
   );
+  // 見出しの状態（DocumentDetailPage の documentDisplayStatus）と同じ規則。
   const status = selectedRecipe?.status ?? query.data?.status ?? "UPLOADED";
   const latestDocumentJob = recipeJobs[0] ?? null;
   const latestDocumentJobActive = ingestionJobIsActive(latestDocumentJob?.status);
@@ -1100,18 +1105,20 @@ export function DocumentWorkspace({
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex min-w-0 flex-1 items-center gap-2 text-base">
-            <FileText size={20} className="text-accent-fg" aria-hidden />
-            <span className="truncate" title={doc.file_name}>
-              {doc.file_name}
-            </span>
-          </CardTitle>
-          <StatusBadge status={status} />
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-5">
+      {showTitle ? (
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="flex min-w-0 flex-1 items-center gap-2 text-base">
+              <FileText size={20} className="text-accent-fg" aria-hidden />
+              <span className="truncate" title={doc.file_name}>
+                {doc.file_name}
+              </span>
+            </CardTitle>
+            <StatusBadge status={status} />
+          </div>
+        </CardHeader>
+      ) : null}
+      <CardContent className={showTitle ? "space-y-5" : "space-y-5 pt-5"}>
         {doc.duplicate_of_document_id ? (
           <Banner severity="warning">
             <div className="space-y-1">

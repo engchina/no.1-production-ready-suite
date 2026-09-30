@@ -445,9 +445,23 @@ test("未保存変更がある状態でページを離れると破棄確認を�
   await page.getByRole("tab", { name: "構造化要素" }).click();
   await page.getByRole("button", { name: "構造化要素を修正" }).click();
   await page.locator("#review-edit-el-0000").fill("未保存の変更");
-  await page.getByRole("link", { name: "一覧へ戻る" }).click();
+  // パンくずのリンク（共有の離脱ガード）と、見出しの「一覧へ戻る」（navigate の前に同じ確認。#581）。
+  await page.getByRole("navigation", { name: "パンくず" }).getByRole("link", { name: "文書インデックス" }).click();
 
   const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByText("未保存の変更を破棄しますか?")).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(new RegExp(`/documents/${DOC_ID}(\\?recipe=recipe-1)?$`));
+  await expect(page.locator("#review-edit-el-0000")).toHaveValue("未保存の変更");
+
+  const actions = page.getByRole("group", { name: "ページ操作" });
+  const back = actions.getByRole("button", { name: "一覧へ戻る" });
+  if (await back.isVisible()) {
+    await back.click();
+  } else {
+    await actions.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "一覧へ戻る" }).click();
+  }
   await expect(dialog.getByText("未保存の変更を破棄しますか?")).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル" }).click();
   await expect(page).toHaveURL(new RegExp(`/documents/${DOC_ID}(\\?recipe=recipe-1)?$`));
