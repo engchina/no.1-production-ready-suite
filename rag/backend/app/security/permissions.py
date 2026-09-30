@@ -62,13 +62,10 @@ MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
 MENU_SETTINGS_CHUNKING = "menu.settings_chunking"
 MENU_SETTINGS_VECTOR_INDEX = "menu.settings_vector_index"
 MENU_SETTINGS_RETRIEVAL = "menu.settings_retrieval"
-MENU_SETTINGS_GROUNDING = "menu.settings_grounding"
-MENU_SETTINGS_GENERATION = "menu.settings_generation"
 MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
 MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
 MENU_SETTINGS_EVALUATION = "menu.settings_evaluation"
 MENU_SETTINGS_GRAPH = "menu.settings_graph"
-MENU_SETTINGS_AGENTIC = "menu.settings_agentic"
 MENU_SETTINGS_HUGGINGFACE = "menu.settings_huggingface"
 MENU_SETTINGS_SERVICES = "menu.settings_services"
 MENU_SETTINGS_OCI = "menu.settings_oci"
@@ -115,12 +112,9 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
     _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
     _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
-    _menu_permission(MENU_SETTINGS_GROUNDING, _GROUP_PIPELINE, "根拠確認"),
-    _menu_permission(MENU_SETTINGS_GENERATION, _GROUP_PIPELINE, "回答スタイル"),
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
     _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
     _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "評価の基準"),
-    _menu_permission(MENU_SETTINGS_AGENTIC, _GROUP_PIPELINE, "高度な検索"),
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
     _permission(
         MENU_FEEDBACK,
@@ -441,12 +435,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
     ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
-    ("GET", "/settings/retrieval"): _any(MENU_SETTINGS_RETRIEVAL),
-    ("PATCH", "/settings/retrieval"): _any(MENU_SETTINGS_RETRIEVAL),
-    ("GET", "/settings/grounding"): _any(MENU_SETTINGS_GROUNDING),
-    ("PATCH", "/settings/grounding"): _any(MENU_SETTINGS_GROUNDING),
-    ("GET", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
-    ("PATCH", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
     # 回答の検索と生成の全体既定・回答の記録の保存期間・質問履歴は「検索方法」の画面にある(#593)。
     ("GET", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
@@ -463,9 +451,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/settings/docrag-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
     ),
-    ("GET", "/settings/prompts"): _any(MENU_SETTINGS_PROMPTS),
-    ("POST", "/settings/prompts"): _any(MENU_SETTINGS_PROMPTS),
-    ("POST", "/settings/prompts/{version_id}/activate"): _any(MENU_SETTINGS_PROMPTS),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
     ("GET", "/settings/extraction-fields"): _any(
         MENU_FILE_LIST, MENU_UPLOAD, MENU_SETTINGS_PARSER_ADAPTERS
@@ -483,8 +468,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION),
     ("GET", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
     ("PATCH", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
-    ("GET", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
-    ("PATCH", "/settings/agentic"): _any(MENU_SETTINGS_AGENTIC),
     # ---- ユーザーとロール（platform の共通 router。NL2SQL と同じ割り当て）----
     # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#476）。
     ("GET", "/security/users"): _any(MENU_SECURITY_USERS),

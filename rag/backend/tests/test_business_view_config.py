@@ -19,17 +19,20 @@ def test_empty_config_keeps_global_settings() -> None:
 
 
 def test_query_overrides_apply() -> None:
-    """query 設定はグローバルへ上書きされる。"""
+    """query 設定(回答の検索と生成・安全チェック)はグローバルへ上書きされる。"""
     settings = get_settings()
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+        query=KnowledgeBaseQueryConfig(
+            docrag_query_strategy="rag_fusion", guardrail_policy="strict"
+        ),
     )
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    assert merged.rag_generation_profile == "detailed_cited"
+    assert merged.rag_docrag_query_strategy == "rag_fusion"
+    assert merged.rag_guardrail_policy == "strict"
     # グローバルは破壊しない。
-    assert settings.rag_generation_profile == "grounded_concise"
+    assert settings.rag_docrag_query_strategy == "auto_routing"
 
 
 def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
@@ -38,7 +41,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     config = parse_business_view_config(
         {
             "query": {
-                "generation_profile": "detailed_cited",
+                "docrag_answer_flow": "standard_rag",
                 "vector_index_profile": "accurate",
             }
         }
@@ -47,7 +50,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     assert config.query.vector_index_profile == "accurate"
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    assert merged.rag_generation_profile == "detailed_cited"
+    assert merged.rag_docrag_answer_flow == "standard_rag"
     assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
     dumped_query = dump_business_view_config(config)["query"]
     assert isinstance(dumped_query, dict)
@@ -60,14 +63,14 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     config = parse_business_view_config(
         {
             "query": {
-                "generation_profile": "detailed_cited",
+                "docrag_rerank_enabled": False,
                 "evaluation_suite": "strict_ci",
             }
         }
     )
 
     # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
-    assert config.query.generation_profile == "detailed_cited"
+    assert config.query.docrag_rerank_enabled is False
     assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
@@ -75,37 +78,68 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     dumped_query = dump_business_view_config(config)["query"]
     assert isinstance(dumped_query, dict)
     assert "evaluation_suite" not in dumped_query
-    assert dumped_query["generation_profile"] == "detailed_cited"
+    assert dumped_query["docrag_rerank_enabled"] is False
 
 
-def test_persona_and_language_remain_separate_generation_layers() -> None:
-    """persona と既定言語は profile を置換せず別 layer として注入される。"""
+def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> None:
+    """旧 standard の回答エンジンの値(#595 で削除)は読み込み時に捨て、次回保存で消える。
+
+    検索モード・検索オプション・根拠確認・回答スタイルと、persona(system prompt / 既定言語)。
+    他の上書きは生きたまま残す(設定全体を空へ縮退させない)。
+    """
     settings = get_settings()
-    config = BusinessViewConfig(
-        system_prompt="あなたは経理規程アシスタントです。",
-        default_language="日本語",
+    config = parse_business_view_config(
+        {
+            "knowledge_base_ids": ["kb-1"],
+            "system_prompt": "あなたは経理規程アシスタントです。",
+            "default_language": "日本語",
+            "query": {
+                "retrieval_strategy": "business_context_strict",
+                "retrieval_query_expansion": False,
+                "retrieval_query_expansion_llm": True,
+                "retrieval_gap_stop": True,
+                "retrieval_corrective": True,
+                "retrieval_business_fit_weighting": True,
+                "post_retrieval_pipeline": "lean",
+                "generation_profile": "structured_json",
+                "docrag_neighbor_child_count": 5,
+            },
+        }
     )
+
+    assert config.normalized_knowledge_base_ids() == ["kb-1"]
+    assert config.query.docrag_neighbor_child_count == 5
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    override = merged.rag_generation_system_prompt_override
-    assert override is not None
-    assert "経理規程アシスタント" in override
-    assert "日本語" not in override
-    assert merged.rag_generation_default_language == "日本語"
+    assert merged.rag_docrag_neighbor_child_count == 5
+    dumped = dump_business_view_config(config)
+    assert "system_prompt" not in dumped
+    assert "default_language" not in dumped
+    dumped_query = dumped["query"]
+    assert isinstance(dumped_query, dict)
+    for removed in (
+        "retrieval_strategy",
+        "retrieval_query_expansion",
+        "retrieval_query_expansion_llm",
+        "retrieval_gap_stop",
+        "retrieval_corrective",
+        "retrieval_business_fit_weighting",
+        "post_retrieval_pipeline",
+        "generation_profile",
+    ):
+        assert removed not in dumped_query
+    assert dumped_query["docrag_neighbor_child_count"] == 5
 
 
 def test_dump_parse_roundtrip() -> None:
     """dump -> parse で設定が保たれる。"""
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", " kb-1 ", "kb-2"],
-        query=KnowledgeBaseQueryConfig(retrieval_strategy="vector"),
-        system_prompt="persona",
-        default_language="ja",
+        query=KnowledgeBaseQueryConfig(docrag_screen_linking_enabled=True),
         serving_mode="fused",
     )
     restored = parse_business_view_config(dump_business_view_config(config))
-    assert restored.query.retrieval_strategy == "vector"
-    assert restored.system_prompt == "persona"
+    assert restored.query.docrag_screen_linking_enabled is True
     assert restored.serving_mode == "fused"
     # 正規化で重複・空白は取り除かれる。
     assert restored.normalized_knowledge_base_ids() == ["kb-1", "kb-2"]
@@ -136,46 +170,4 @@ def test_parse_tolerates_broken_payload() -> None:
     """壊れた永続値は空設定へ縮退する。"""
     restored = parse_business_view_config({"query": "not-a-dict"})
     assert restored.normalized_knowledge_base_ids() == []
-    assert restored.system_prompt is None
-
-
-def test_retrieval_toggle_overrides_apply() -> None:
-    """検索方法の合成トグルは業務ビューからグローバルへ上書きできる(双方向)。"""
-    settings = get_settings()
-    config = BusinessViewConfig(
-        query=KnowledgeBaseQueryConfig(
-            retrieval_strategy="graph_augmented",
-            retrieval_corrective=True,
-            retrieval_query_expansion=False,
-            retrieval_query_expansion_llm=True,
-        )
-    )
-    merged, applied = resolve_business_view_settings(settings, config)
-    assert applied is True
-    assert merged.rag_retrieval_strategy == "graph_augmented"
-    assert merged.rag_retrieval_corrective_enabled is True
-    assert merged.rag_query_expansion_enabled is False
-    assert merged.rag_query_expansion_llm_enabled is True
-    # グローバルは破壊しない。
-    assert settings.rag_retrieval_corrective_enabled is False
-
-
-def test_legacy_retrieval_strategy_is_read_and_normalized_on_save() -> None:
-    """legacy 複合値は読み取り互換で効き、保存時にモード + トグルへ正規化される。"""
-    settings = get_settings()
-    config = parse_business_view_config(
-        {"query": {"retrieval_strategy": "business_context_strict"}}
-    )
-    assert config.query.retrieval_strategy == "business_context_strict"
-    # runtime: merged settings の strategy は legacy 値のまま渡り、
-    # resolve_retrieval_adapter が分解する(挙動は従来同等)。
-    merged, applied = resolve_business_view_settings(settings, config)
-    assert applied is True
-    assert merged.rag_retrieval_strategy == "business_context_strict"
-    # 保存: 新形式(モード + 明示トグル)のみを書き出す。
-    dumped_query = dump_business_view_config(config)["query"]
-    assert isinstance(dumped_query, dict)
-    assert dumped_query["retrieval_strategy"] == "hybrid_rrf"
-    assert dumped_query["retrieval_gap_stop"] is True
-    assert dumped_query["retrieval_business_fit_weighting"] is True
-    assert dumped_query["retrieval_corrective"] is None
+    assert restored.query == KnowledgeBaseQueryConfig()

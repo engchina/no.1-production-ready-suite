@@ -44,13 +44,10 @@ from app.config import (
     ChunkingStrategy,
     DocragAnswerFlow,
     DocragQueryStrategy,
-    GenerationProfile,
     GraphProfile,
     GuardrailPolicyName,
     ParserAdapterBackend,
-    PostRetrievalPipeline,
     PreprocessProfile,
-    RetrievalStrategy,
     Settings,
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
@@ -93,14 +90,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "auto_index_after_chunk_enabled": "rag_auto_index_after_chunk_enabled",
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
-    "retrieval_strategy": "rag_retrieval_strategy",
-    "retrieval_query_expansion": "rag_query_expansion_enabled",
-    "retrieval_query_expansion_llm": "rag_query_expansion_llm_enabled",
-    "retrieval_gap_stop": "rag_retrieval_gap_stop_enabled",
-    "retrieval_corrective": "rag_retrieval_corrective_enabled",
-    "retrieval_business_fit_weighting": "rag_retrieval_business_fit_weighting_enabled",
-    "post_retrieval_pipeline": "rag_post_retrieval_pipeline",
-    "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
     "docrag_query_strategy": "rag_docrag_query_strategy",
     "docrag_answer_flow": "rag_docrag_answer_flow",
@@ -248,19 +237,9 @@ class KnowledgeBaseQueryConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    # legacy 複合値(business_context_strict 等)込みで受理し、runtime 解決時に
-    # rag_pipeline_core.decompose_retrieval_strategy がモード + トグルへ読み替える。
-    # 型を narrow すると parse 失敗で config 全体が空へ縮退する事故になるため、
-    # legacy 込み Literal を維持する。
-    retrieval_strategy: RetrievalStrategy | None = None
-    # 検索方法の合成トグル(None はグローバル継承)。
-    retrieval_query_expansion: bool | None = None
-    retrieval_query_expansion_llm: bool | None = None
-    retrieval_gap_stop: bool | None = None
-    retrieval_corrective: bool | None = None
-    retrieval_business_fit_weighting: bool | None = None
-    post_retrieval_pipeline: PostRetrievalPipeline | None = None
-    generation_profile: GenerationProfile | None = None
+    # 旧 standard の回答エンジンの上書き(検索モード・検索オプション・根拠確認・回答スタイル。
+    # retrieval_strategy / retrieval_* / post_retrieval_pipeline / generation_profile)は
+    # #595 で削除した。保存済みの値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
     guardrail_policy: GuardrailPolicyName | None = None
     vector_index_profile: VectorIndexProfile | None = Field(
         default=None,

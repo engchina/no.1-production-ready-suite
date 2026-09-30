@@ -43,10 +43,7 @@ class RecordingPipeline:
             trace_id=trace_id,
             elapsed_ms=1.0,
             diagnostics=build_search_diagnostics(
-                request,
-                settings=settings,
-                generation_profile=(settings.rag_generation_profile if settings else None),
-                vector_index_profile=(settings.rag_vector_index_profile if settings else None),
+                request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
             ),
         )
 
@@ -77,23 +74,14 @@ def _reset_recording() -> None:
 
 
 def _install(monkeypatch: MonkeyPatch, configs: dict[str, KnowledgeBaseAdapterConfig]) -> None:
-    async def keep_global_settings(settings: Settings, *, client: object | None = None) -> Settings:
-        _ = client
-        return settings
-
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(search_route, "OracleClient", lambda: FakeSearchOracle(configs))
-    monkeypatch.setattr(
-        search_route,
-        "resolve_oracle_generation_settings",
-        keep_global_settings,
-    )
 
 
 def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) -> None:
     """単一 KB 指定でも、その KB の legacy query 上書きは pipeline に効かない。"""
     config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"generation_profile": "detailed_cited", "vector_index_profile": "fast"}}
+        {"query": {"docrag_query_strategy": "hyde", "vector_index_profile": "fast"}}
     )
     _install(monkeypatch, {"kb-1": config})
 
@@ -104,19 +92,16 @@ def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) 
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "grounded_concise"
-    assert diagnostics["vector_index_profile"] == "accurate"
     assert diagnostics["kb_adapter_config_applied"] is None
     # pipeline へはグローバル settings が渡っている。
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_generation_profile == "grounded_concise"
+    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "auto_routing"
+    assert RecordingPipeline.captured_settings.rag_vector_index_profile == "accurate"
 
 
 def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:
     """複数 KB 指定は設定競合を避けてグローバル既定を使う。"""
-    config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"generation_profile": "detailed_cited"}}
-    )
+    config = KnowledgeBaseAdapterConfig.model_validate({"query": {"docrag_query_strategy": "hyde"}})
     _install(monkeypatch, {"kb-1": config, "kb-2": config})
 
     response = client.post(
@@ -126,8 +111,9 @@ def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "grounded_concise"
     assert diagnostics["kb_adapter_config_applied"] is None
+    assert RecordingPipeline.captured_settings is not None
+    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "auto_routing"
 
 
 def test_empty_kb_config_does_not_mark_applied(monkeypatch: MonkeyPatch) -> None:
@@ -141,5 +127,4 @@ def test_empty_kb_config_does_not_mark_applied(monkeypatch: MonkeyPatch) -> None
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "grounded_concise"
     assert diagnostics["kb_adapter_config_applied"] is None

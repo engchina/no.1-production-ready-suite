@@ -175,7 +175,7 @@ def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeBusinessViewOracle:
 
 
 def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
-    """複数 KB と query 設定・persona を束ねて作成し、参照 KB 名が解決される。"""
+    """複数 KB と回答の設定を束ねて作成し、参照 KB 名が解決される。"""
     resp = client.post(
         "/api/business-views",
         json={
@@ -184,11 +184,14 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
             "config": {
                 "knowledge_base_ids": ["kb-1", "kb-2"],
                 "query": {
-                    "generation_profile": "detailed_cited",
+                    "docrag_query_strategy": "rag_fusion",
                     "vector_index_profile": "accurate",
                     # 業務ビューは品質評価を上書きしない。送られても保存しない(#301)。
                     "evaluation_suite": "strict_ci",
+                    # 旧 standard の回答スタイル(#595 で削除)。送られても保存しない。
+                    "generation_profile": "detailed_cited",
                 },
+                # 旧 standard の persona(#595 で削除)。送られても保存しない。
                 "system_prompt": "あなたは経理規程アシスタントです。",
                 "default_language": "日本語",
             },
@@ -199,9 +202,12 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
     data = resp.json()["data"]
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
-    assert data["config"]["query"]["generation_profile"] == "detailed_cited"
+    assert data["config"]["query"]["docrag_query_strategy"] == "rag_fusion"
     assert "vector_index_profile" not in data["config"]["query"]
     assert "evaluation_suite" not in data["config"]["query"]
+    assert "generation_profile" not in data["config"]["query"]
+    assert "system_prompt" not in data["config"]
+    assert "default_language" not in data["config"]
     assert [ref["name"] for ref in data["knowledge_bases"]] == ["社内規程", "製品 FAQ"]
 
     get_resp = client.get(f"/api/business-views/{data['id']}")
@@ -394,15 +400,14 @@ def test_default_business_view_allows_settings_but_protects_identity_and_scope(
             "description": "全社共通の検索設定",
             "config": {
                 "knowledge_base_ids": ["kb-default"],
-                "query": {"generation_profile": "detailed_cited"},
-                "default_language": "日本語",
+                "query": {"docrag_answer_flow": "standard_rag"},
             },
         },
     )
     assert update.status_code == 200
     assert update.json()["data"]["description"] == "全社共通の検索設定"
     assert update.json()["data"]["config"]["knowledge_base_ids"] == ["kb-default"]
-    assert update.json()["data"]["config"]["query"]["generation_profile"] == "detailed_cited"
+    assert update.json()["data"]["config"]["query"]["docrag_answer_flow"] == "standard_rag"
 
     # 画面の保存と同じ形（名前を送らず説明と設定を送る）で DEFAULT を保存できる（#521）。
     assert default["description"] == DEFAULT_BUSINESS_VIEW_DESCRIPTION
@@ -441,6 +446,6 @@ def test_get_missing_business_view_returns_404(fake_oracle: FakeBusinessViewOrac
 
 def test_detail_config_roundtrips_through_schema() -> None:
     """detail の config は BusinessViewConfig として解釈できる。"""
-    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], system_prompt="x")
+    config = BusinessViewConfig(knowledge_base_ids=["kb-1"])
     restored = parse_business_view_config(config.model_dump(mode="json"))
-    assert restored.system_prompt == "x"
+    assert restored.normalized_knowledge_base_ids() == ["kb-1"]

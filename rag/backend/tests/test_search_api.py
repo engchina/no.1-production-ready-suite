@@ -14,25 +14,11 @@ from app.main import app
 from app.rag.answer_timeout import answer_timeout_message
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.generation_contract import GenerationContractError
 from app.rag.pipeline import SearchStageProgress
-from app.schemas.search import (
-    SearchRequest,
-    SearchResponse,
-    SearchRetrievalBreakdown,
-    SearchRetrievalCandidate,
-)
+from app.schemas.search import SearchRequest, SearchResponse
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def _stub_generation_settings(monkeypatch: MonkeyPatch) -> None:
-    async def identity(settings, *, client=None):  # type: ignore[no-untyped-def]
-        return settings
-
-    monkeypatch.setattr(search_route, "resolve_oracle_generation_settings", identity)
 
 
 def test_search_api_returns_504_when_pipeline_times_out(
@@ -49,8 +35,8 @@ def test_search_api_returns_504_when_pipeline_times_out(
     body = response.json()
     assert body["data"] is None
     # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
-    assert body["error_messages"] == [answer_timeout_message("agentic_planning", 0.05)]
-    assert "検索の計画" in body["error_messages"][0]
+    assert body["error_messages"] == [answer_timeout_message("docrag_answer", 0.05)]
+    assert "根拠の検索と回答の生成" in body["error_messages"][0]
     assert "もう一度送信してください" in body["error_messages"][0]
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
@@ -60,9 +46,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert audit_event["error_type"] == "TimeoutError"
     assert audit_event["retrieved_count"] == 0
     assert audit_event["citation_count"] == 0
-    assert audit_event["top_k"] == 20
-    assert audit_event["rerank_top_n"] == 5
-    assert audit_event["context_window_chars"]
+    assert audit_event["mode"] == "hybrid"
     assert audit_event["config_fingerprint"]
     assert audit_event["trace_id"]
     assert "INV-SECRET" not in str(audit_event)
@@ -79,11 +63,11 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: error" in response.text
-    assert answer_timeout_message("agentic_planning", 0.05) in response.text
+    assert answer_timeout_message("docrag_answer", 0.05) in response.text
     # 進捗は時間切れの前に届き、error event は工程と TimeoutError を持つ（画面は 504 相当にする）。
-    assert '"stage": "agentic_planning", "outcome": "started"' in response.text
+    assert '"stage": "docrag_answer", "outcome": "started"' in response.text
     assert '"error_type": "TimeoutError"' in response.text
-    assert '"stage": "agentic_planning"}' in response.text
+    assert '"stage": "docrag_answer"}' in response.text
 
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
@@ -118,43 +102,42 @@ class _SlowAnswerPipeline:
         return SearchResponse(answer="遅い回答", trace_id=trace_id or "trace", elapsed_ms=100.0)
 
 
-def test_search_api_returns_502_when_generation_contract_fails(
+def test_search_api_accepts_and_ignores_removed_standard_options(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    class FailingPipeline:
+    """旧 standard の指定(mode など。#595 で削除)は 422 にせず、読み捨てて検索する。"""
+    observed: list[SearchRequest] = []
+
+    class CapturingPipeline:
         def __init__(self, **_kwargs: object) -> None:
             pass
 
-        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
-            raise GenerationContractError(["unknown_citation"], attempt_count=2)
+        async def run(
+            self, request: SearchRequest, trace_id: str | None = None, **_kwargs: object
+        ) -> SearchResponse:
+            observed.append(request)
+            return SearchResponse(answer="回答", trace_id=trace_id or "trace", elapsed_ms=1.0)
 
-    monkeypatch.setattr(search_route, "RagPipeline", FailingPipeline)
+    monkeypatch.setattr(search_route, "RagPipeline", CapturingPipeline)
 
-    response = client.post("/api/search", json={"query": "承認条件"})
-
-    assert response.status_code == 502
-    assert "回答形式の検証に失敗" in response.json()["error_messages"][0]
-
-
-def test_stream_generation_contract_failure_emits_only_error(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    class FailingPipeline:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
-            raise GenerationContractError(["unknown_citation"], attempt_count=2)
-
-    monkeypatch.setattr(search_route, "RagPipeline", FailingPipeline)
-
-    response = client.post("/api/search/stream", json={"query": "承認条件"})
+    response = client.post(
+        "/api/search",
+        json={
+            "query": "承認条件",
+            "top_k": 3,
+            "rerank_top_n": 50,
+            "mode": "graph",
+            "strategy": "graph_global",
+            "generation_profile": "structured_json",
+        },
+    )
 
     assert response.status_code == 200
-    assert "event: error" in response.text
-    assert "unknown_citation" in response.text
-    assert "event: delta" not in response.text
-    assert "event: citations" not in response.text
+    assert response.json()["data"]["answer"] == "回答"
+    dumped = observed[0].model_dump()
+    assert dumped["top_k"] == 3
+    for removed in ("rerank_top_n", "mode", "strategy", "generation_profile"):
+        assert removed not in dumped
 
 
 def test_stream_unexpected_failure_logs_traceback_and_hides_detail(
@@ -185,12 +168,10 @@ def test_stream_unexpected_failure_logs_traceback_and_hides_detail(
     assert records[0].__dict__["exception_type"] == "RuntimeError"
 
 
-def test_stream_search_api_buffers_answer_even_when_realtime_flag_is_enabled(
+def test_stream_search_api_buffers_answer_after_answer_check(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """互換 flag が有効でも検査前 token callback を backend から渡さない。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
+    """検査前の token callback を backend から渡さず、回答全体を 1 回で送る。"""
     monkeypatch.setattr(search_route, "RagPipeline", RealtimeStreamingPipeline)
 
     response = client.post("/api/search/stream", json={"query": "承認条件"})
@@ -200,11 +181,9 @@ def test_stream_search_api_buffers_answer_even_when_realtime_flag_is_enabled(
     assert response.text.count("event: delta") == 1
     assert '{"text": "承認条件は 120000 円です。"}' in response.text
     assert "event: metadata" in response.text
-    assert '"keyword_terms": ["承認条件"]' in response.text
-    assert '"retrieval_breakdown":' in response.text
-    assert '"vector_count": 1' in response.text
-    assert '"retrieval_candidates":' in response.text
-    assert "候補本文" in response.text
+    assert '"retrieval_strategy": "docrag"' in response.text
+    assert '"confidence": "high"' in response.text
+    assert '"retrieval_breakdown"' not in response.text
     assert "event: citations" in response.text
     assert "event: done" in response.text
 
@@ -224,9 +203,7 @@ def test_search_response_dedupes_guardrail_warnings() -> None:
 def test_stream_search_api_never_emits_precheck_answer_bytes(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """互換 flag が有効でも生回答を送らず、最終マスク済み回答だけを delta 化する。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
+    """生回答を送らず、最終マスク済み回答だけを delta 化する。"""
     monkeypatch.setattr(search_route, "RagPipeline", RealtimeMaskingPipeline)
 
     response = client.post("/api/search/stream", json={"query": "口座番号"})
@@ -386,11 +363,11 @@ class SlowPipeline:
         _ = token_callback
         assert trace_id
         assert progress_callback is not None
-        # 検索の計画（LLM）の途中で時間切れになる。
+        # 回答フロー（LLM）の途中で時間切れになる。
         await progress_callback(
             SearchStageProgress(
                 trace_id=trace_id,
-                stage="agentic_planning",
+                stage="docrag_answer",
                 outcome="started",
                 elapsed_ms=0.0,
                 attributes={},
@@ -424,34 +401,8 @@ class RealtimeStreamingPipeline:
             diagnostics=build_search_diagnostics(
                 request,
                 settings=get_settings(),
-                keyword_terms=["承認条件"],
-                retrieval_breakdown=SearchRetrievalBreakdown(
-                    vector_count=1,
-                    keyword_count=1,
-                    overlap_count=1,
-                    fused_count=1,
-                    rerank_input_count=1,
-                    rerank_kept_count=1,
-                    evidence_count=1,
-                    citation_count=1,
-                ),
-                retrieval_candidates=[
-                    SearchRetrievalCandidate(
-                        chunk_id="doc-1:0",
-                        document_id="doc-1",
-                        text="候補本文",
-                        file_name="policy.txt",
-                        sources=["vector", "keyword"],
-                        vector_rank=1,
-                        vector_score=0.91,
-                        keyword_rank=1,
-                        keyword_score=0.82,
-                        rrf_score=0.032,
-                        rerank_rank=1,
-                        rerank_score=0.96,
-                        status="citation",
-                    )
-                ],
+                retrieval_strategy_adapter="docrag_grounded",
+                docrag={"confidence": "high", "answer_flow": "crag"},
             ),
         )
 
@@ -478,7 +429,9 @@ class RealtimeMaskingPipeline:
             trace_id=trace_id,
             elapsed_ms=1.0,
             answer_replaced=True,
-            diagnostics=build_search_diagnostics(request, settings=get_settings()),
+            diagnostics=build_search_diagnostics(
+                request, settings=get_settings(), retrieval_strategy_adapter="docrag_grounded"
+            ),
         )
 
 
@@ -498,13 +451,11 @@ class AuditingPipeline:
         _ = progress_callback, token_callback
         assert trace_id
         diagnostics = build_search_diagnostics(
-            request,
-            settings=get_settings(),
+            request, settings=get_settings(), retrieval_strategy_adapter="docrag_grounded"
         )
         record_rag_search_audit(
             trace_id=trace_id,
             outcome="no_results",
-            mode=request.mode,
             sanitized_query=request.query,
             filters=request.filters,
             findings=[],

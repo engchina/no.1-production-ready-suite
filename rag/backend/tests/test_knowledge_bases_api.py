@@ -624,11 +624,11 @@ def test_knowledge_base_legacy_query_config_is_flagged(
         json={
             "name": "Legacy KB",
             "description": "説明",
-            "retrieval_config": {"query": {"generation_profile": "detailed_cited"}},
+            "retrieval_config": {"query": {"guardrail_policy": "strict"}},
         },
     ).json()["data"]
 
-    assert created["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
+    assert created["adapter_config"]["query"]["guardrail_policy"] == "strict"
     assert created["legacy_query_config_ignored"] is True
 
     # 名前・説明の更新では legacy の保存値を書き換えない(読み取りのみ)。
@@ -638,7 +638,7 @@ def test_knowledge_base_legacy_query_config_is_flagged(
     ).json()["data"]
 
     assert patched["description"] == "更新後"
-    assert patched["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
+    assert patched["adapter_config"]["query"]["guardrail_policy"] == "strict"
 
 
 def test_list_knowledge_bases_filters_by_ids_including_archived(

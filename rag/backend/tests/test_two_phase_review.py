@@ -14,7 +14,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import documents as documents_route
-from app.clients.oracle import OracleClient, reset_local_store
+from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.main import app
 from app.rag import ingestion as ingestion_module
@@ -25,11 +25,6 @@ client = AsgiTestClient(app)
 
 # 実 Oracle AI Database + OCI を用いる統合テスト（DB 未到達環境では自動 skip）。
 pytestmark = pytest.mark.usefixtures("oracle_db")
-
-
-def setup_function() -> None:
-    """テストごとにローカル Oracle ストアを初期化する。"""
-    reset_local_store()
 
 
 def _enable_review_gate(monkeypatch: MonkeyPatch) -> None:
@@ -161,7 +156,7 @@ def _get_document(document_id: str) -> dict[str, Any]:
 def _search(query: str) -> dict[str, Any]:
     response = client.post(
         "/api/search",
-        json={"query": query, "top_k": 5, "rerank_top_n": 3},
+        json={"query": query, "top_k": 5},
     )
     assert response.status_code == 200
     return cast(dict[str, Any], response.json()["data"])
@@ -385,7 +380,6 @@ def test_kb_scoped_search_finds_active_chunk_set(monkeypatch: MonkeyPatch) -> No
             "query": "経費申請の承認者は？",
             "knowledge_base_ids": [knowledge_base_id],
             "top_k": 5,
-            "rerank_top_n": 3,
         },
     )
     assert response.status_code == 200
@@ -416,7 +410,6 @@ def test_document_in_two_knowledge_bases_shares_single_chunk_set(
             "query": "経費申請の承認者は？",
             "knowledge_base_ids": [kb_b],
             "top_k": 5,
-            "rerank_top_n": 3,
         },
     )
     assert response.status_code == 200

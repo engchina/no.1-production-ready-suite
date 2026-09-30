@@ -81,7 +81,7 @@ def _sidebar_nav() -> list[tuple[str, list[tuple[str, str]]]]:
 def test_menu_permissions_follow_sidebar_nav() -> None:
     """メニュー権限は、サイドナビと同じグループ・並び順・名前で先頭に並ぶ。"""
     nav = [(title, label, code) for title, items in _sidebar_nav() for label, code in items]
-    assert len(nav) > 30
+    assert len(nav) > 25
     menus = PERMISSION_CATALOG[: len(nav)]
     assert [(item.group, item.label, item.code) for item in menus] == nav
 

@@ -445,10 +445,6 @@ def _install_search(monkeypatch: MonkeyPatch) -> None:
     RecordingPipeline.captured_request = None
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
 
-    async def keep(settings: Settings, **_kwargs: object) -> Settings:
-        return settings
-
-    monkeypatch.setattr(search_route, "resolve_oracle_generation_settings", keep)
     monkeypatch.setattr(search_route, "OracleClient", lambda *_a, **_k: ScopedViewOracle(views))
 
 

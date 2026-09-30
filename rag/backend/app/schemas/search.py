@@ -18,7 +18,6 @@ from pydantic import (
     model_validator,
 )
 
-from app.config import GenerationProfile
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
 
@@ -181,29 +180,29 @@ def _normalize_extraction_field_filter(value: str) -> str:
 
 
 class SearchMode(StrEnum):
-    """検索モード。Oracle AI Database 側ではベクトル・キーワード・ハイブリッドへ対応する。"""
+    """Oracle AI Database の検索の種類(``OracleClient.hybrid_search`` の ``mode``)。
+
+    回答は DocRAG の回答フローが hybrid(RRF)と vector を内部で使い分ける。利用者が選ぶ
+    検索モードは #595 で削除した。
+    """
 
     HYBRID = "hybrid"
     VECTOR = "vector"
     KEYWORD = "keyword"
 
 
-class SearchStrategy(StrEnum):
-    """検索ルーティング戦略。既存 mode は baseline retrieval mode として維持する。"""
-
-    HYBRID = "hybrid"
-    GRAPH_LOCAL = "graph_local"
-    GRAPH_GLOBAL = "graph_global"
-
-
 class SearchRequest(BaseModel):
-    """RAG 検索リクエスト。"""
+    """RAG 検索リクエスト。
+
+    旧 standard の回答エンジンの指定(``mode``・``strategy``・``rerank_top_n``・
+    ``generation_profile``)は #595 で削除した。旧クライアントが送っても 422 にせず、
+    未定義の項目として読み捨てる(pydantic の既定 ``extra="ignore"``)。
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=20, ge=1, le=100)
-    rerank_top_n: int = Field(default=5, ge=1, le=50)
-    mode: SearchMode = SearchMode.HYBRID
-    strategy: SearchStrategy = SearchStrategy.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     business_view_id: str | None = Field(
@@ -211,8 +210,7 @@ class SearchRequest(BaseModel):
         max_length=128,
         description=(
             "業務ビュー(Business View)ID。business_view_ids が無い旧クライアント向け互換値。"
-            "指定時は参照 KB 群を検索対象へ展開し、"
-            "業務ビューの query 設定・persona を適用する(request 明示パラメータが最優先)。"
+            "指定時は参照 KB 群を検索対象へ展開し、業務ビューの回答の設定を適用する。"
         ),
     )
     business_view_ids: list[str] = Field(
@@ -220,12 +218,8 @@ class SearchRequest(BaseModel):
         max_length=50,
         description=(
             "検索対象にする業務ビュー(Business View)ID。複数指定時は参照 KB 群を union し、"
-            "query 設定・persona は先頭の業務ビューを代表として適用する。"
+            "回答の設定は先頭の業務ビューを代表として適用する。"
         ),
-    )
-    generation_profile: GenerationProfile | None = Field(
-        default=None,
-        description="API 呼び出し単位の回答スタイル上書き。業務ビューと GLOBAL より優先する。",
     )
     retrieval_only: bool = Field(
         default=False,
@@ -270,8 +264,7 @@ class SearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_search_options(self) -> Self:
-        """rerank 深さとナレッジベース指定の整合性を検証する。"""
-        validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        """ナレッジベース指定の整合性を検証する。"""
         filter_knowledge_base_ids = parse_search_id_filter(self.filters.get("knowledge_base_id"))
         if (
             self.knowledge_base_ids
@@ -310,125 +303,22 @@ class RetrievedChunk(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class SearchRetrievalBreakdown(BaseModel):
-    """検索候補が各段階で何件残ったかを示す非機密サマリ。"""
-
-    vector_count: int = 0
-    keyword_count: int = 0
-    overlap_count: int = 0
-    fused_count: int = 0
-    fusion_dropped_count: int = 0
-    rerank_input_count: int = 0
-    rerank_kept_count: int = 0
-    rerank_dropped_count: int = 0
-    evidence_count: int = 0
-    citation_count: int = 0
-    dropped_count: int = 0
-
-
-class SearchRetrievalCandidate(BaseModel):
-    """検索候補の取得元と採用状態。本文は SSE 表示時だけ明示的に返す。"""
-
-    chunk_id: str
-    document_id: str
-    text: str = Field(default="", exclude=True)
-    file_name: str | None = None
-    sources: list[str] = Field(default_factory=list)
-    vector_rank: int | None = None
-    vector_score: float | None = None
-    keyword_rank: int | None = None
-    keyword_score: float | None = None
-    rrf_score: float | None = None
-    rerank_rank: int | None = None
-    rerank_score: float | None = None
-    status: str = "retrieved"
-    drop_reason: str | None = None
-
-
 class SearchDiagnostics(BaseModel):
-    """検索実行時の非機密診断情報。"""
+    """検索・回答の再現と調査に使う非機密の診断。
 
-    mode: str = ""
-    retrieval_strategy: str = "hybrid"
-    retrieval_strategy_adapter: str = "hybrid_rrf"
-    # 検索方法の有効トグル(query_expansion / gap_stop / corrective_retrieval /
-    # business_fit_weighting)。settings トグル OR legacy 強制トグルの合成結果。
-    retrieval_toggles: dict[str, bool] = Field(default_factory=dict)
-    # クエリ拡張の実行元: llm(OCI Enterprise AI)/ deterministic(同義語)/ off。
-    query_expansion_source: str = "off"
-    # ツリー検索の踏破記録(候補 section と selected/candidate 判定)。監査用・非機密。
-    tree_search_path: list[dict[str, object]] = Field(default_factory=list)
-    # DocRAG 回答エンジンの記録(信頼度・人手確認・実行記録・根拠木)。standard では None。
+    旧 standard の回答エンジンの診断(検索の内訳・候補・context の件数・回答スタイルなど)は
+    #595 で削除した。回答の中身の診断は ``docrag`` にある。
+    """
+
+    # 回答の経路は常に DocRAG。保存済みの評価結果などの古い値も読めるよう str のままにする。
+    retrieval_strategy: str = "docrag"
+    # docrag_grounded(根拠付き回答)/ docrag_retrieval_only(検索だけ)/ blocked(質問の安全チェック)
+    retrieval_strategy_adapter: str = "docrag_grounded"
     docrag: dict[str, JsonValue] | None = None
-    post_retrieval_pipeline: str = "custom"
-    generation_profile: str = "grounded_concise"
-    generation_config_source: Literal["request", "business_view", "global"] = "global"
-    generation_contract_mode: Literal[
-        "groundedness", "format_validated", "json_schema", "custom"
-    ] = "groundedness"
-    generation_attempt_count: int = 0
-    generation_repair_count: int = 0
-    generation_validation_codes: list[str] = Field(default_factory=list)
-    custom_prompt_version_id: str | None = None
     guardrail_policy: str = "standard"
     guardrail_backend: str = "local"
     guardrail_degraded: bool = False
-    vector_index_profile: str = "balanced"
-    graph_profile: str = "off"
-    serving_mode: str = "single"
-    agentic_profile: str = "off"
-    agentic_subquery_count: int = 0
-    agentic_hops: int = 0
-    route_reason: str = "default_hybrid"
-    keyword_terms: list[str] = Field(default_factory=list)
-    retrieval_breakdown: SearchRetrievalBreakdown = Field(default_factory=SearchRetrievalBreakdown)
-    retrieval_candidates: list[SearchRetrievalCandidate] = Field(default_factory=list)
-    memory_plan_id: str | None = None
-    graph_hit_count: int = 0
-    fallback_reason: str | None = None
-    gap_stopped: bool = False
-    corrective_retried: bool = False
-    crag_confidence_score: float | None = None
-    crag_fallback_triggered: bool = False
-    # CRAG evidence grade: off(無効)/ high / mid / low。hops は精緻化再検索の実行回数。
-    crag_hops: int = 0
-    crag_evidence_grade: str = "off"
-    hyde_generated: bool = False
-    business_context: dict[str, object] = Field(default_factory=dict)
-    retrieval_plan: dict[str, object] = Field(default_factory=dict)
-    retrieved_context_pack: dict[str, object] = Field(default_factory=dict)
-    context_builder: dict[str, object] = Field(default_factory=dict)
-    stream_stage_timings: dict[str, float] = Field(default_factory=dict)
-    top_k: int = 0
-    rerank_top_n: int = 0
-    retrieved_count: int = 0
-    reranked_count: int = 0
-    deduplicated_count: int = 0
-    context_diversified_count: int = 0
-    context_group_expanded_count: int = 0
-    context_expanded_count: int = 0
-    context_adaptive_expanded_count: int = 0
-    context_dependency_promoted_count: int = 0
-    context_compressed_count: int = 0
-    context_compression_saved_chars: int = 0
-    business_fit_reordered_count: int = 0
-    agent_memory_retrieved_count: int = 0
-    agent_memory_writeback_count: int = 0
-    agent_memory_writeback_status: str = "skipped"
-    evidence_count: int = 0
-    support_count: int = 0
-    structure_count: int = 0
-    history_count: int = 0
-    resolver_rejected_count: int = 0
-    insufficient_context_count: int = 0
-    citation_count: int = 0
-    context_chars: int = 0
-    context_window_chars: int = 0
-    rrf_k: int = 0
-    query_variant_count: int = 1
-    oracle_vector_target_accuracy: int = 0
     filter_keys: list[str] = Field(default_factory=list)
-    scalar_filter_keys: list[str] = Field(default_factory=list)
     knowledge_base_count: int = 0
     kb_adapter_config_applied: str | None = None
     business_view_applied: str | None = None
@@ -620,12 +510,6 @@ def normalize_query_text(query: str) -> str:
     if not cleaned:
         raise ValueError("クエリを入力してください。")
     return cleaned
-
-
-def validate_rerank_top_n(top_k: int, rerank_top_n: int) -> None:
-    """rerank_top_n は top_k 以下に制限する。"""
-    if rerank_top_n > top_k:
-        raise ValueError("rerank_top_n は top_k 以下にしてください。")
 
 
 class AnswerRecordSummary(BaseModel):

@@ -267,7 +267,7 @@ def test_search_maps_citations_and_uses_token_user_context(
     assert citation["score"] == 0.5
     assert len(citation["text"]) == 1000
     request: SearchRequest = captured["request"]
-    assert (request.query, request.top_k, request.rerank_top_n) == ("規程", 3, 3)
+    assert (request.query, request.top_k) == ("規程", 3)
     # 利用者・agent・thread は token から決める（header の agent は使わない）。
     context: AuditRequestContext = captured["context"]
     settings = get_settings()
