@@ -4,6 +4,31 @@
  */
 export const MODEL_MESSAGES = {
   "common.delete": "削除",
+  "settings.model.connection.add": "接続を追加",
+  "settings.model.connection.addHelp":
+    "別のリージョンや Project にあるモデルを使うときに追加します（{max} 件まで）。",
+  "settings.model.connection.displayName": "表示名",
+  "settings.model.connection.displayNameHelp":
+    "登録モデルの「接続」の選択肢に表示します。空のときは「{name}」と表示します。",
+  "settings.model.connection.error.endpointRequired":
+    "{connection} の Endpoint URL を入力してください。使わない場合は接続を削除してください。",
+  "settings.model.connection.error.missing":
+    "「{model}」の接続がありません。登録されている接続から選び直してください。",
+  "settings.model.connection.error.unsaved":
+    "{connection} はまだ保存されていません。上の「OCI Enterprise AI」で接続を保存してから、登録モデルを保存してください。",
+  "settings.model.connection.name": "接続 {number}",
+  "settings.model.connection.primaryDescription":
+    "登録モデルで接続を選ばなければ、この接続を使います。",
+  "settings.model.connection.primaryTitle": "接続 1（既定）",
+  "settings.model.connection.remove": "接続を削除",
+  "settings.model.connection.removeConfirm.description":
+    "{connection} の入力内容を削除します。保存するまで確定しません。",
+  "settings.model.connection.removeConfirm.descriptionInUse":
+    "{connection} を使っている登録モデルがあります（{models}）。削除すると、これらのモデルは接続 1 を使います。保存するまで確定しません。",
+  "settings.model.connection.removeConfirm.moveAndRemove": "接続 1 に移して削除",
+  "settings.model.connection.removeConfirm.title": "{connection} を削除しますか？",
+  "settings.model.connection.secondaryDescription":
+    "この接続を選んだ登録モデルは、この接続で呼び出します。",
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
   "settings.model.defaults.error.noVisionModel":
@@ -35,8 +60,10 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.apiKeySaved": "保存済み",
   "settings.model.enterprise.apiKeyShow": "API key を表示",
   "settings.model.enterprise.clearApiKey": "保存済み API key を削除する",
+  "settings.model.enterprise.connection": "接続",
+  "settings.model.enterprise.connectionOfModel": "モデル {number} の接続",
   "settings.model.enterprise.description":
-    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。",
+    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。接続は 2 件まで設定でき、登録モデルごとに使う接続を選べます。",
   "settings.model.enterprise.displayName": "表示名",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointDocs":

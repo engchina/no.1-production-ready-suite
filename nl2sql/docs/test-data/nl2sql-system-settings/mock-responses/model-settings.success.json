@@ -2,21 +2,29 @@
   "data": {
     "settings": {
       "enterprise_ai": {
-        "endpoint": "https://enterprise-ai.example.com",
-        "project_ocid": "ocid1.generativeaiproject.oc1.ap-osaka-1.example",
-        "api_key": "",
-        "has_api_key": true,
-        "clear_api_key": false,
+        "connections": [
+          {
+            "connection_id": "primary",
+            "display_name": "",
+            "endpoint": "https://enterprise-ai.example.com",
+            "project_ocid": "ocid1.generativeaiproject.oc1.ap-osaka-1.example",
+            "api_key": "",
+            "has_api_key": true,
+            "clear_api_key": false
+          }
+        ],
         "models": [
           {
             "model_id": "enterprise-nl2sql-llm",
             "display_name": "業務 NL2SQL 標準",
-            "vision_enabled": false
+            "vision_enabled": false,
+            "connection_id": "primary"
           },
           {
             "model_id": "enterprise-nl2sql-vlm",
             "display_name": "OCR / Vision",
-            "vision_enabled": true
+            "vision_enabled": true,
+            "connection_id": "primary"
           }
         ],
         "default_text_model_id": "enterprise-nl2sql-llm",
@@ -46,4 +54,3 @@
   "error_messages": [],
   "warning_messages": []
 }
-
