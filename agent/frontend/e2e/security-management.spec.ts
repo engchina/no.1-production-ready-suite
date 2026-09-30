@@ -83,10 +83,10 @@ for (const viewport of VIEWPORTS) {
       await expect(views).toHaveAccessibleName("利用できる業務ビュー");
       // 無効なエージェントは状態を示す。保存済みの対象は選択済み。
       await expect(agents.getByText("無効")).toBeVisible();
-      await expect(agents.getByRole("checkbox", { name: /汎用業務 Agent/ })).toBeChecked();
-      await expect(views.getByRole("checkbox", { name: /sales-east/ })).toBeChecked();
+      await expect(agents.getByRole("option", { name: /汎用業務 Agent/ })).toBeChecked();
+      await expect(views.getByRole("option", { name: /sales-east/ })).toBeChecked();
 
-      await agents.getByRole("checkbox", { name: /経理 Agent/ }).check();
+      await agents.getByRole("option", { name: /経理 Agent/ }).check();
 
       // 一覧にない業務ビューは ID を入力して足す。形式に合わない ID は追加せず、入力欄の直下に理由を出す。
       const customId = page.getByTestId("security-roles-business-view-access-custom-id");
@@ -98,7 +98,7 @@ for (const viewport of VIEWPORTS) {
       // Enter でも追加でき、フォームは送信しない。
       await customId.press("Enter");
       await expect(customId).toHaveValue("");
-      await expect(views.getByRole("checkbox", { name: /sales-west/ })).toBeChecked();
+      await expect(views.getByRole("option", { name: /sales-west/ })).toBeChecked();
       await expect(views.getByText("直接入力")).toBeVisible();
       expect(mockApi.lastRequest("PUT", "/api/security/roles/role-operator/access")).toBeUndefined();
       await expectNoPageOverflow(page);
@@ -149,7 +149,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("legacy-view").first()).toBeVisible();
       await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
       const views = page.getByTestId("security-roles-business-view-access-list");
-      await expect(views.getByRole("checkbox", { name: /legacy-view/ })).toBeChecked();
+      await expect(views.getByRole("option", { name: /legacy-view/ })).toBeChecked();
     });
 
     test("RAG の業務ビューを読めなかったときは、候補を出したまま理由を警告で表示する（#240）", async ({
@@ -164,7 +164,7 @@ for (const viewport of VIEWPORTS) {
       // 色だけに頼らない警告（Banner はアイコン付き）と、読めた候補の一覧を両方出す。
       await expect(page.getByText(warning)).toBeVisible();
       await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
-      await expect(page.getByTestId("security-roles-business-view-access-list").getByRole("checkbox").first()).toBeVisible();
+      await expect(page.getByTestId("security-roles-business-view-access-list").getByRole("option").first()).toBeVisible();
       await expectNoPageOverflow(page);
     });
   });

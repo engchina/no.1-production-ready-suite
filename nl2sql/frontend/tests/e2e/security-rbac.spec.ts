@@ -3149,8 +3149,10 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
     .click();
   await expect(page.getByText("1 件", { exact: true }).first()).toBeVisible();
   await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
-  const profileSearch = page.getByTestId("security-roles-profile-access-search");
-  const profileAccessList = page.getByTestId("security-roles-profile-access-list");
+  // 候補の一覧は共通の ListPicker（#600）: 見出しの名前の区画・検索欄・選択の行・listbox のスクロール領域。
+  const profileSearch = page.getByRole("searchbox", { name: "業務プロファイルを検索" });
+  const profilePicker = page.getByTestId("security-roles-profile-access-list");
+  const profileAccessList = page.getByTestId("security-roles-profile-access-list-scroll-region");
   const readProfileAccessScrollState = () =>
     profileAccessList.evaluate((node) => {
       const computed = window.getComputedStyle(node);
@@ -3163,12 +3165,13 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
           window.getComputedStyle(document.documentElement).fontSize
         ),
         scrollHeight: node.scrollHeight,
+        noHorizontalOverflow: node.scrollWidth <= node.clientWidth + 1,
       };
     });
   await expect(profileSearch).toBeVisible();
-  await expect(profileAccessList).toHaveAttribute("role", "region");
-  await expect(profileAccessList).toHaveAccessibleName("使用可能な業務プロファイル");
-  await expect(profileAccessList).toHaveAttribute("tabindex", "0");
+  await expect(profilePicker).toHaveAccessibleName("使用可能な業務プロファイル");
+  const profileListbox = profilePicker.getByRole("listbox", { name: "使用可能な業務プロファイル" });
+  await expect(profileListbox).toHaveAttribute("tabindex", "0");
   const desktopScrollState = await readProfileAccessScrollState();
   expect(desktopScrollState.maxHeight).toBeCloseTo(
     28 * desktopScrollState.rootFontSize,
@@ -3178,26 +3181,27 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
     Math.ceil(desktopScrollState.maxHeight)
   );
   expect(desktopScrollState.scrollHeight).toBeGreaterThan(desktopScrollState.clientHeight);
-  expect(desktopScrollState.overflowX).toBe("hidden");
+  expect(desktopScrollState.noHorizontalOverflow).toBe(true);
   expect(desktopScrollState.overflowY).toBe("auto");
-  await profileAccessList.focus();
-  await expect(profileAccessList).toBeFocused();
-  await profileAccessList.press("End");
+  // Tab で listbox に入り、End で最後の候補へ移ると、スクロール領域の中だけが動く。
+  await profileListbox.focus();
+  await expect(profileListbox).toBeFocused();
+  await profileListbox.press("End");
   await expect
     .poll(() => profileAccessList.evaluate((node) => node.scrollTop))
     .toBeGreaterThan(0);
   await profileSearch.focus();
   await expect(profileSearch).toBeFocused();
   await profileSearch.fill("財務");
-  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /標準プロファイル/ })).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /財務プロファイル/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /標準プロファイル/ })).toHaveCount(0);
   const filteredScrollState = await readProfileAccessScrollState();
   expect(filteredScrollState.clientHeight).toBeLessThan(filteredScrollState.maxHeight);
   expect(filteredScrollState.scrollHeight).toBeLessThanOrEqual(
     filteredScrollState.clientHeight + 1
   );
 
-  const profileBulkActions = page.getByTestId("security-roles-profile-access-selection-actions");
+  const profileBulkActions = page.getByTestId("security-roles-profile-access-list-bulk-actions");
   await expect
     .poll(async () => {
       const [actionsBox, listBox] = await Promise.all([
@@ -3209,14 +3213,14 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
     })
     .toBeLessThanOrEqual(1);
   await profileBulkActions.getByRole("button", { name: "すべて選択" }).click();
-  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
+  await expect(page.getByRole("option", { name: /財務プロファイル/ })).toBeChecked();
   await profileBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
-  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).not.toBeChecked();
-  await page.getByRole("checkbox", { name: /財務プロファイル/ }).check();
-  await expect(page.getByRole("checkbox", { name: /財務プロファイル/ })).toBeChecked();
+  await expect(page.getByRole("option", { name: /財務プロファイル/ })).not.toBeChecked();
+  await page.getByRole("option", { name: /財務プロファイル/ }).check();
+  await expect(page.getByRole("option", { name: /財務プロファイル/ })).toBeChecked();
   await profileSearch.fill("");
   // 検索語は入力が止まってから適用する（debounce。#535）。一覧が戻るのを待ってから測る。
-  await expect(page.getByRole("checkbox", { name: /標準プロファイル/ })).toHaveCount(1);
+  await expect(page.getByRole("option", { name: /標準プロファイル/ })).toHaveCount(1);
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
   const mobileScrollState = await readProfileAccessScrollState();
@@ -3228,7 +3232,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
     Math.ceil(mobileScrollState.maxHeight)
   );
   expect(mobileScrollState.scrollHeight).toBeGreaterThan(mobileScrollState.clientHeight);
-  expect(mobileScrollState.overflowX).toBe("hidden");
+  expect(mobileScrollState.noHorizontalOverflow).toBe(true);
   expect(mobileScrollState.overflowY).toBe("auto");
   await expect(profileSearch).toBeVisible();
   await expect

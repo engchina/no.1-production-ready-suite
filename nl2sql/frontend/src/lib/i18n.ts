@@ -2898,6 +2898,7 @@ const nl2sqlJa = {
   "objectSelector.resultCount": "{visible} / {total} 件を表示",
   "objectSelector.resultCountWithSelected": "{visible} / {total} 件を表示、選択 {selected} 件",
   "objectSelector.selectObject": "{name} を選択",
+  "objectSelector.keyboardHint": "上下の矢印キーで移動し、Space キーで選択を切り替えます。",
   "objectSelector.column.name": "対象名",
   "objectSelector.column.kind": "種類",
   "objectSelector.column.rows": "行数",

@@ -38,7 +38,8 @@ test("BulkSelectionActions exposes distinct aria labels and stable test ids", ()
 
 test("bulk selection surfaces use the shared component", () => {
   for (const page of migratedPages) {
-    assert.match(page, /BulkSelectionActions/u);
+    // 大量の候補から選ぶ一覧は共通の ListPicker（グループの一括選択に BulkSelectionActions を使う。#600）。
+    assert.match(page, /BulkSelectionActions|<ListPicker\b/u);
     assert.doesNotMatch(
       page,
       /<BulkSelectionActions[^>]*className="[^"]*(?:ml-auto|justify-end)/su

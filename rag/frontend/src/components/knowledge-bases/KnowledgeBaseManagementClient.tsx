@@ -19,6 +19,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   offsetForPage,
   offsetPagination,
+  ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -182,36 +183,41 @@ function KnowledgeBaseList({
           <EditorDraftNotice message={t("knowledgeBases.draftPending")} onOpen={onCreate} />
         ) : null}
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div
-            className="flex flex-wrap items-center gap-1"
-            role="group"
-            aria-label={t("knowledgeBases.filter.aria")}
-          >
-            {FILTERS.map((item) => (
-              <ToggleChip
-                key={item}
-                selected={filter === item}
-                onClick={() => resetView(() => setFilter(item))}
-              >
-                {item === "ALL" ? t("knowledgeBases.filter.all") : knowledgeBaseStatusLabel(item)}
-              </ToggleChip>
-            ))}
-          </div>
-          <SearchField
-            id="knowledge-base-search"
-            label={t("knowledgeBases.search.placeholder")}
-            labelHidden
-            value={q}
-            onSearch={applySearch}
-            clearLabel={t("common.clearSearch")}
-            resultCountLabel={
-              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
-            }
-            placeholder={t("knowledgeBases.search.placeholder")}
-            className="w-full sm:w-64"
-          />
-        </div>
+        {/* 一覧のツールバー: 左に検索、その右に状態の絞り込み（page-archetypes.md「一覧のツールバー」。#600）。 */}
+        <ListToolbar
+          search={
+            <SearchField
+              id="knowledge-base-search"
+              label={t("knowledgeBases.search.placeholder")}
+              labelHidden
+              value={q}
+              onSearch={applySearch}
+              clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
+              placeholder={t("knowledgeBases.search.placeholder")}
+            />
+          }
+          filters={
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label={t("knowledgeBases.filter.aria")}
+            >
+              {FILTERS.map((item) => (
+                <ToggleChip
+                  key={item}
+                  selected={filter === item}
+                  onClick={() => resetView(() => setFilter(item))}
+                >
+                  {item === "ALL" ? t("knowledgeBases.filter.all") : knowledgeBaseStatusLabel(item)}
+                </ToggleChip>
+              ))}
+            </div>
+          }
+          testId="knowledge-base-list-toolbar"
+        />
 
         {query.isError ? (
           <ErrorState

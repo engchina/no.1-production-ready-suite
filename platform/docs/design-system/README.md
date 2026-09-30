@@ -571,6 +571,20 @@ import { SearchField } from "@engchina/production-ready-ui";
 - **URL で開く対象（A 型のエディタの `?id=`・NL2SQL の `?profile=` など）は `href` を渡してリンクの形にする（#583）。** `<a href>` になり、Ctrl / ⌘ / Shift + クリック・中クリック・コンテキストメニューで新しいタブ・ウィンドウに開ける。修飾キーの無いクリック（Enter を含む）は既定の遷移を止めて `onClick` を呼ぶ（画面内で開き、ページを読み直さない。離脱の確認など画面の処理をそのまま通す）。見た目・当たり判定・`current` はボタンの形と同じで、`disabled` のときはボタンのまま。行のクリック（`onRowClick`）はリンクのクリックを重ねて扱わない。選択して詳細を切り替えるだけ（B 型の分割ペイン）はボタンのまま（URL を持たない・新しいタブで開く意味が無い）。
 - 分割ペイン（`FixedSplitPane`）は既に共有部品で、製品の `RagSplitPane` / `AgentSplitPane` は保存 key の接頭辞と文言を渡す薄いラッパーなので、`packages/ui` には上げない。
 
+### `ListToolbar` / `ListPicker` / `LoadMoreFooter`（新規）— ★ 検索欄は左、大量の候補は一覧で選ぶ（#600）
+
+一覧の上の検索欄の位置が製品ごとに違いました（RAG は右端に固定幅、NL2SQL は左に 2:1、platform・Agent は全幅）。数千〜数万件の候補から選ぶ画面は、RAG の「文書を追加」が検索欄 + 選択欄 +「追加」で 1 件ずつ、NL2SQL の「許可する表・ビュー」は手書きのチェックボックスの一覧と仮想スクロールでした。規則は UX 契約 [page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」](../ux-contracts/page-archetypes.md)。
+
+| 決めたこと | 理由 |
+|---|---|
+| `ListToolbar`: 左（2）に検索欄（先頭・残りを埋める）→ 絞り込み、右（1）に件数 → 一覧への操作（主操作は右端）。2:1 にするかはツールバー自身の幅（container query、48rem）で決め、狭いと縦に積んで検索欄を先頭に全幅 | 読む順と Tab の順の先頭に「見る範囲を決める」操作を置く（Atlassian・GitHub・Polaris と同じ向き）。横に並べたパネルの中でも同じ規則で崩れない。§4「wide 画面の 100% 充填」の比率配分 |
+| `ListPicker`: ツールバー（検索）→ 選択の行（一括選択・「選択中だけ表示（K）」）→ 候補の一覧 → フッター（件数・さらに読み込む）→ 確定の操作行（任意） | NL2SQL の型を共通にした。選んだ候補は検索語を変えても残り、確かめられる |
+| 候補の一覧は選択肢の listbox（`aria-multiselectable`・`aria-checked`・`aria-posinset` / `aria-setsize`、フォーカスは listbox に 1 つで `aria-activedescendant`）。グループは見出し（件数・一括選択のボタン）と listbox を分ける | Tab 1 回で一覧を抜けられる（候補の数だけ Tab を押させない）。listbox の中にボタンを置かない（ARIA の子の制約） |
+| 行は 3.5rem、一覧は 5 / 8 行（md 未満 / 以上）。100 行を超えたら見えている行だけを描く | 数千件を読み込んでも重くならない。少ないときはページ内検索・読み上げで全部に届く |
+| チェックの印は `--color-accent-emphasis` の塗り + `Check`（14px）、選んだ行は `--color-accent-subtle`。キーボードの位置は、キーボードで操作しているときだけ行の内側に outline（`--color-focus-ring`） | 選択の状態を色と形の両方で示す。マウスで選んだときに枠を出さない |
+| 選べない候補（例: 追加済み）は `aria-disabled` と右端の理由の文言。一覧全体の `disabled`・囲む `<fieldset disabled>` の間は切り替えない | 色だけに頼らない。保存中に選択が変わらない |
+| `LoadMoreFooter`: 左に件数、右に「さらに読み込む」、失敗は再試行付きの `Banner`（スピナーは 1 つ） | NL2SQL の `DbObjectSelectorFooter` を共通にした（NL2SQL は包むだけ） |
+
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
@@ -846,6 +860,7 @@ QA に事前共有してください。**47点あります。**
 | 50 | **数百件から選ぶ選択が「検索 ＋ 候補の一覧 ＋ 選択済みの chip」になる**（#578） | RAG の文書インデックスの「ナレッジベース」の絞り込みは `SelectField`（検索できず、選んだ長い名前は「利用できるすべてのナ…」と省略）→ `SearchableSelectField`（ボタンは名前を折り返して全体を出す。押すと検索欄と候補の一覧を重ねて開き、右端に文書数、下に「51 / 300 件」）。同じ画面の状態の絞り込みは 11 個の `ToggleChip`（desktop でも 2 行、375px では 5 行に折り返した）→ 「状態」の `SelectField`（状態・ナレッジベース・検索欄が 1 行）。KB と業務ビューの複数選択（RAG 固有の `MultiSelectCombobox`: 枠の中に chip と枠なしの入力欄・先頭に塗りの虫眼鏡のタイル）→ `SearchableMultiSelect`（上に `SearchField` の検索欄と開閉の iconOnly、開いている間だけ下に候補の一覧、その下に選択済みの chip。chip の名前は省略せず折り返す。「表示中をすべて選択」「クリア」は文字のリンク → ghost の `Button`）。KB の選択の見出しの先頭のデータベースのアイコンは無くなり、「空の KB を隠す」のチェックも無くなる（作ったばかりの空の KB へ登録するため） | 数百件でも検索して選べ、全件を読まない（201 件以上はサーバー側の検索）。選んだ名前を切らない。キーボード・IME・読み上げを 3 製品で共通の部品にそろえる |
 | 51 | **狭い画面のページの操作が 2 つなら「その他の操作」に畳まない**（#582） | lg 未満の `PageHeader` は主操作 1 つ +「その他の操作」。操作が 2 つ（RAG の業務ビュー・Agent のエディタの「一覧へ戻る」+ 保存、NL2SQL・system-settings の一覧の「表示を更新」+「新規作成」など）でも、残りの 1 つだけのメニューになり、戻るのに 2 タップ要った → メニューに入るのが 1 つだけなら畳まず 2 つとも出す。読み上げ名は「その他の操作」→「その他の操作（ページ操作）」「その他の操作（〇〇の操作）」（見た目の文言は同じ） | 戻る操作を 1 タップにし、ページとカードの「その他の操作」を読み上げで区別する（§4「`PageHeader`」7・8） |
 | 52 | **複数行の入力欄の見た目が 1 つにそろう**（#584） | 手書きの `<textarea>`: 地が `bg-surface-sunken`（RAG の業務ビュー・設定・評価など）/ `bg-surface`、角丸 `rounded-md`、disabled が `opacity-50` など、ラベル・文字数の位置も画面ごと → 共有 `TextareaField`: 地は `bg-surface`（read-only は `bg-surface-sunken`、disabled は `bg-surface-disabled`）、角丸 `--radius-control`、余白 `px-3 py-2`、枠線・フォーカスは `TextField` と同じ、文字数と補足は欄の下（RAG のドメインキーワードの補足は欄の上 → 下）。等幅の欄（SQL・JSON・論理構造など。NL2SQL の SQL の入力欄は 14px だった）は `--font-mono` の 12px。RAG の DocRAG プロンプトの「既定値／カスタマイズ済み」のバッジはラベルの横 → 操作の行 | 1 行の入力欄と同じ部品に見せ、disabled を透過で薄めない（§4「`TextareaField`」） |
+| 53 | **一覧の検索欄が左（先頭）に移り、大量の候補から選ぶ一覧が 1 つの見た目になる**（#600） | RAG のナレッジベース・業務ビューの一覧: 左に状態のチップ、右端に検索欄（`sm:w-64`）、間が空く → `ListToolbar` で左に検索欄（残りを埋める）、その右に状態のチップ。文書の一覧: 右端の検索欄（`sm:ml-auto sm:w-64`）→ 左端に検索欄、その右に状態・ナレッジベース。ナレッジベースの「所属文書」: 検索なし、上に「追加する文書を検索」+ 選択欄 +「追加」（1 件ずつ・候補 100 件まで）→ 左に「所属文書を検索」、右に「文書を追加」。押すと下に `ListPicker`（候補は 100 件ずつ「さらに読み込む」、チェックで複数を選び「選択した N 件を追加」、追加済みは灰色で「追加済み」）。NL2SQL の業務プロファイルの許可する表・ビュー: 枠 392px 固定の中に手書きのチェックボックスの行（44px）と、スキーマごとの枠 → `ListPicker`（見出し・一覧・フッターの 3 段、一覧は 28rem / 375px では 17.5rem、行 3.5rem、スキーマの見出しは面の地、チェックは塗りの四角）。権限管理の「利用できる対象」: 2 列のチェックボックスの行（名前 + 説明 2 行）→ `ListPicker` の 1 列の行（名前 + 説明 1 行で省略、全文は title、状態のバッジは右端）。フッターの「さらに読み込む」は失敗中は出さず、Banner の「再試行」だけにする | 検索欄の位置を 3 製品でそろえる（UX 契約 page-archetypes.md「一覧のツールバー」）。数千〜数万件から検索して複数をまとめて選べる。キーボード（Tab 1 回で一覧に入り、矢印と Space）・読み上げを共通の部品にそろえる |
 
 ### API の非互換
 
@@ -880,6 +895,7 @@ QA に事前共有してください。**47点あります。**
 | `RowTitleButton`（#583） | `href?: string` を追加（渡すと `<a href>` のリンクの形。修飾キーの無いクリックは `onClick`、修飾キー付き・中クリックはブラウザの既定）。`ref` の型は `Ref<HTMLButtonElement \| HTMLAnchorElement>`。E2E で題名を `getByRole("button")` で探している一覧は、`href` を渡すと `getByRole("link")` になる |
 | `TextareaField`（#584） | **新規 export。** `TextareaField` / `TextareaFieldProps` / `defaultTextareaCount`。adherence の lint（`design-system/restricted-syntax`）が製品の JSX の `<textarea>` を検出する |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
+| `ListToolbar` / `ListPicker` / `LoadMoreFooter`（#600） | **新規 export。** `ListToolbar` / `ListToolbarProps` / `ListPicker` / `ListPickerProps` / `ListPickerItem` / `ListPickerGroup` / `ListPickerLabels` / `ListPickerSearch` / `DEFAULT_LIST_PICKER_LABELS` / `LoadMoreFooter` / `LoadMoreFooterProps`。NL2SQL の `profileVirtualList.ts`（仮想スクロールの計算）は削除し、`packages/ui` の `lib/list-window.ts` に移した。`DbObjectSelectorFooter` の props は変えない（中身は `LoadMoreFooter`） |
 | `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 

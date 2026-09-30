@@ -547,7 +547,7 @@ test("業務ビューのエディタは未保存の変更があるとブラウ�
   });
   await mockBusinessViews(page, [accountingView]);
   await page.goto("/business-views");
-  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page).toHaveURL(/\?id=bv-1$/);
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
 

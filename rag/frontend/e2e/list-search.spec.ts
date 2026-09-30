@@ -167,9 +167,16 @@ test("ナレッジベースの一覧も同じ部品で、入力に合わせて�
   await expect(page.getByRole("link", { name: "設計資料" })).toBeVisible();
   expect(queries.filter((q) => q !== "")).toEqual(["設計"]);
 
-  // 見た目（幅・位置）は業務ビューの一覧と同じ（375px でもはみ出さない）。
-  const box = await search.boundingBox();
-  expect(box!.width).toBeLessThanOrEqual(testInfo.project.name === "mobile" ? 375 : 400);
+  // 位置は一覧のツールバーの左端（先頭）。状態のチップはその右（狭い幅では下）に並ぶ
+  // （page-archetypes.md「一覧のツールバー」。#600）。375px でもはみ出さない。
+  const [box, toolbarBox, chipBox] = await Promise.all([
+    search.boundingBox(),
+    page.getByTestId("knowledge-base-list-toolbar").boundingBox(),
+    page.getByRole("group", { name: "ナレッジベース状態フィルター" }).boundingBox(),
+  ]);
+  expect(Math.abs(box!.x - toolbarBox!.x)).toBeLessThanOrEqual(1);
+  if (testInfo.project.name === "mobile") expect(chipBox!.y).toBeGreaterThan(box!.y);
+  else expect(chipBox!.x).toBeGreaterThan(box!.x + box!.width - 1);
   await expectNoPageOverflow(page);
 
   // × で消すと debounce を待たずに元の一覧へ戻る。

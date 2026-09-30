@@ -24,6 +24,7 @@ import {
   StatusBadge as UiStatusBadge,
   offsetForPage,
   offsetPagination,
+  ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 import { RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
@@ -370,67 +371,73 @@ export function FileListClient() {
           isRetrying={query.isFetching}
         />
 
-        {/* 絞り込み（状態・ナレッジベース）+ 検索。状態は 11 種あり ToggleChip では 2 行以上に折り返すため、
-            ナレッジベースと同じ選択の欄にして 1 行にそろえる（#578）。 */}
-        <div className="flex flex-wrap items-end gap-3">
-          <SelectField
-            id="file-list-status"
-            label={t("fileList.statusFilter.label")}
-            value={filter}
-            options={statusOptions}
-            onValueChange={(value) => resetView(() => setFilter(value))}
-            className="w-full sm:w-48 [&_label]:text-xs"
-            buttonClassName="bg-surface"
-          />
-          <SearchableSelectField
-            id="file-list-knowledge-base"
-            label={t("fileList.knowledgeBaseFilter.label")}
-            value={knowledgeBaseId}
-            options={knowledgeBaseFilterOptions}
-            selectedOption={
-              knowledgeBaseId === "ALL"
-                ? allKnowledgeBasesOption
-                : selectedKnowledgeBase
-                  ? { value: selectedKnowledgeBase.id, label: selectedKnowledgeBase.name }
-                  : null
-            }
-            onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
-            onQueryChange={setKnowledgeBaseQuery}
-            remote={
-              knowledgeBases.remote
-                ? {
-                    total: knowledgeBases.matchedTotal,
-                    hasMore: knowledgeBases.hasMore,
-                    loadingMore: knowledgeBases.loadingMore,
-                    searching: knowledgeBases.searching,
-                    onLoadMore: knowledgeBases.loadMore,
-                  }
-                : undefined
-            }
-            labels={{
-              ...knowledgeBaseSelectLabels(),
-              // 絞り込みは選ぶだけ（「追加」ではない）。
-              searchPlaceholder: t("knowledgeBasePicker.searchPlaceholder"),
-            }}
-            // 「利用できるすべてのナレッジベース」が 1 行に収まる幅。長い名前は切らずに折り返す。
-            className="w-full sm:w-[22rem] [&_label]:text-xs"
-            buttonClassName="bg-surface"
-          />
-          <SearchField
-            id="file-list-search"
-            label={t("fileList.searchPlaceholder")}
-            labelHidden
-            value={q}
-            onSearch={applySearch}
-            clearLabel={t("common.clearSearch")}
-            resultCountLabel={
-              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
-            }
-            maxLength={FILE_LIST_QUERY_MAX_LENGTH}
-            placeholder={t("fileList.searchPlaceholder")}
-            className="w-full sm:ml-auto sm:w-64"
-          />
-        </div>
+        {/* 一覧のツールバー: 左に検索、その右に状態・ナレッジベースの絞り込み（page-archetypes.md「一覧のツールバー」。#600）。
+            状態は 11 種あり ToggleChip では 2 行以上に折り返すため、ナレッジベースと同じ選択の欄にする（#578）。 */}
+        <ListToolbar
+          search={
+            <SearchField
+              id="file-list-search"
+              label={t("fileList.searchPlaceholder")}
+              labelHidden
+              value={q}
+              onSearch={applySearch}
+              clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
+              maxLength={FILE_LIST_QUERY_MAX_LENGTH}
+              placeholder={t("fileList.searchPlaceholder")}
+            />
+          }
+          filters={
+            <>
+              <SelectField
+                id="file-list-status"
+                label={t("fileList.statusFilter.label")}
+                value={filter}
+                options={statusOptions}
+                onValueChange={(value) => resetView(() => setFilter(value))}
+                className="w-full @md:w-48 [&_label]:text-xs"
+                buttonClassName="bg-surface"
+              />
+              <SearchableSelectField
+                id="file-list-knowledge-base"
+                label={t("fileList.knowledgeBaseFilter.label")}
+                value={knowledgeBaseId}
+                options={knowledgeBaseFilterOptions}
+                selectedOption={
+                  knowledgeBaseId === "ALL"
+                    ? allKnowledgeBasesOption
+                    : selectedKnowledgeBase
+                      ? { value: selectedKnowledgeBase.id, label: selectedKnowledgeBase.name }
+                      : null
+                }
+                onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
+                onQueryChange={setKnowledgeBaseQuery}
+                remote={
+                  knowledgeBases.remote
+                    ? {
+                        total: knowledgeBases.matchedTotal,
+                        hasMore: knowledgeBases.hasMore,
+                        loadingMore: knowledgeBases.loadingMore,
+                        searching: knowledgeBases.searching,
+                        onLoadMore: knowledgeBases.loadMore,
+                      }
+                    : undefined
+                }
+                labels={{
+                  ...knowledgeBaseSelectLabels(),
+                  // 絞り込みは選ぶだけ（「追加」ではない）。
+                  searchPlaceholder: t("knowledgeBasePicker.searchPlaceholder"),
+                }}
+                // 「利用できるすべてのナレッジベース」が 1 行に収まる幅。長い名前は切らずに折り返す。
+                className="w-full @md:w-[22rem] [&_label]:text-xs"
+                buttonClassName="bg-surface"
+              />
+            </>
+          }
+          testId="file-list-toolbar"
+        />
 
         {knowledgeBases.isError ? (
           <Banner severity="warning" title={t("knowledgeBaseScope.loadWarning")}>

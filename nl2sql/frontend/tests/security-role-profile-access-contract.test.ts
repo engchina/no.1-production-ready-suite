@@ -87,26 +87,22 @@ test("permission editor saves profile access and supports bulk selection", () =>
     /draftGrantsAll\(target\) \? \[\] : \(draft\.targets\[target\.key\] \?\? \[\]\)/u
   );
   assert.match(permissionsPageSource, /const idPrefix = `security-roles-\$\{target\.key\}`/u);
-  // 行は共有の RolePermissionTargetOption に切り出した（#521）。onToggle で item.id を切り替える。
-  assert.match(permissionsPageSource, /onToggle=\{\(\) => toggle\(item\.id\)\}/u);
-  assert.match(permissionsPageSource, /onChange=\{onToggle\}/u);
-  assert.match(permissionsPageSource, /onSelectAll=\{selectVisible\}/u);
-  assert.match(permissionsPageSource, /onClearAll=\{clearVisible\}/u);
-  assert.match(permissionsPageSource, /dataTestId=\{`\$\{idPrefix\}-selection-actions`\}/u);
-  assert.match(permissionsPageSource, /testId=\{`\$\{idPrefix\}-search`\}/u);
+  // 候補の一覧は共通の ListPicker（#600）。選択肢の key（= item.id）を切り替え、表示中を一括で選択・解除する。
+  assert.match(permissionsPageSource, /<ListPicker\b/u);
+  assert.match(permissionsPageSource, /onToggle=\{\(item\) => toggle\(item\.key\)\}/u);
+  assert.match(permissionsPageSource, /key: item\.id/u);
+  assert.match(permissionsPageSource, /onSelectMany=\{selectVisible\}/u);
+  assert.match(permissionsPageSource, /onClearSelection=\{clearVisible\}/u);
+  assert.match(permissionsPageSource, /id: `\$\{idPrefix\}-search`/u);
 });
 
 test("permission editor uses the shared responsive height for an accessible profile scroll region", () => {
   // 5 / 8 行の高さは共有 UI の INFORMATION_LIST_SCROLL_CLASS が持つ（値は platform の ui のテストで確かめる。#265 で一本化）。
   assert.doesNotMatch(securityManagementSharedSource, /SECURITY_LIST_SCROLL_CLASS/u);
-  assert.match(permissionsPageSource, /INFORMATION_LIST_SCROLL_CLASS/u);
+  // 一覧の高さ・スクロール・フォーカス（listbox）は共通の ListPicker が持つ（#600）。名前は対象の見出し。
   assert.match(permissionsPageSource, /id=\{`\$\{idPrefix\}-label`\}/u);
-  assert.match(permissionsPageSource, /role="region"/u);
-  assert.match(permissionsPageSource, /aria-labelledby=\{`\$\{idPrefix\}-label`\}/u);
-  assert.match(permissionsPageSource, /tabIndex=\{0\}/u);
-  assert.match(permissionsPageSource, /data-testid=\{`\$\{idPrefix\}-list`\}/u);
-  assert.match(permissionsPageSource, /overflow-x-hidden/u);
-  assert.match(permissionsPageSource, /INFORMATION_TABLE_FOCUS_CLASS/u);
+  assert.match(permissionsPageSource, /label=\{tm\.title\}/u);
+  assert.match(permissionsPageSource, /testId=\{`\$\{idPrefix\}-list`\}/u);
 });
 
 test("permission editor handles system admin and empty profile states", () => {
@@ -122,8 +118,8 @@ test("permission editor handles system admin and empty profile states", () => {
   assert.match(permissionsPageSource, /roleCode === SYSTEM_ADMIN_ROLE_CODE \|\| Boolean\(target\.grantsAll\?\.\(effectiveCodes\)\)/u);
   assert.match(permissionsPageSource, /const targetReadOnly = inputReadOnly \|\| grantsAll;/u);
   assert.match(permissionsPageSource, /systemAdmin \? tm\.grantsAllSystemAdmin : tm\.grantsAllByPermission/u);
-  assert.match(permissionsPageSource, /\{tm\.empty\}/u);
-  assert.match(permissionsPageSource, /\{tm\.noResults\}/u);
+  assert.match(permissionsPageSource, /emptyTitle: tm\.empty/u);
+  assert.match(permissionsPageSource, /noResultsTitle: tm\.noResults/u);
   assert.match(i18nSource, /利用可能な業務プロファイルがありません。管理者に権限付与を依頼してください。/u);
 });
 
@@ -147,9 +143,10 @@ test("built-in and archived roles cannot be edited from the permission editor", 
   assert.match(permissionsPageSource, /disabled=\{inputReadOnly \|\| inherited\}/u);
   assert.match(
     permissionsPageSource,
-    /disabled=\{targetReadOnly\}\s*onChange=\{\(value\) => \{\s*if \(targetReadOnly\) return;\s*onSearchChange\(value\);/u
+    /disabled: targetReadOnly,\s*onSearch: \(value\) => \{\s*if \(targetReadOnly\) return;\s*onSearchChange\(value\);/u
   );
-  assert.match(permissionsPageSource, /disabled=\{targetReadOnly\}[\s\S]{0,200}?onToggle=\{\(\) => toggle\(item\.id\)\}/u);
+  // 読み取り専用の間は ListPicker の選択肢を aria-disabled にし、切り替えない。
+  assert.match(permissionsPageSource, /<ListPicker[\s\S]*?disabled=\{targetReadOnly\}/u);
   assert.match(securityManagementSharedSource, /disabled\?: boolean/u);
   // 検索欄は共有の TextField（無効の見た目は TextField が持つ。#384）に disabled を渡す。
   assert.match(securityManagementSharedSource, /export function SecuritySearchField[\s\S]*?<SearchField[\s\S]*?disabled=\{disabled\}/u);

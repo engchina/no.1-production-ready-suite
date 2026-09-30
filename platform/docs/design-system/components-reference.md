@@ -1998,3 +1998,55 @@ type SaveErrorBannerProps = {
 
 - 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
 - 使う画面: RAG（業務ビュー・ナレッジベースのエディタ）、Agent（Agent・Skill・外部 MCP サーバー・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。
+
+---
+
+## ListToolbar / ListPicker / LoadMoreFooter — **新規**（#600）
+
+一覧の上のツールバー（検索欄の位置）と、数千〜数万件の候補から一覧で複数を選ぶ部品。数十〜数百件を選択欄で選ぶものは `SearchableSelectField` / `SearchableMultiSelect`（#578）。規則は UX 契約 page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」、見た目の変更は README §7 の 53。
+
+```tsx
+import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/production-ready-ui";
+
+// 一覧のツールバー: 左に検索（先頭）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
+<ListToolbar
+  search={<SearchField id="kb-docs-search" label="所属文書を検索" labelHidden value={q} onSearch={setQ} clearLabel="検索語をクリア" />}
+  filters={<SelectField … />}
+  summary="25 件"
+  actions={<Button variant="secondary" icon={FilePlus2} aria-expanded={open}>文書を追加</Button>}
+/>
+
+// 大量の候補から選ぶ: サーバーの検索（q）と追加読み込み（total / hasMore / loadingMore / onLoadMore は #578 の remote と同じ名前）
+<ListPicker
+  id="kb-add-documents"
+  title="追加する文書を選ぶ"
+  label="追加する文書の候補"            // listbox の名前
+  items={items}                          // { key, label, textValue, description?, meta?, disabled?, disabledReason?, groupKey? }[]
+  groups={groups}                        // 任意: { key, label, textValue, countLabel?, onSelectAll?, onClearAll?, … }[]
+  selectedKeys={selectedKeys}            // ReadonlySet<string>
+  onToggle={(item, selected) => …}
+  onSelectMany={(items) => …}            // 任意:「表示中をすべて選択」
+  onClearSelection={() => …}             // 任意:「選択をすべて解除」
+  selectedItems={selectedItems}          // 任意:「選択中だけ表示（K）」
+  search={{ label: "追加する文書を検索", value: q, onSearch: setQ }}
+  total={total} hasMore={hasMore} loadingMore={loadingMore} loadMoreError={error} onLoadMore={loadMore}
+  loading={isPending} refreshing={isPlaceholderData}
+  disabled={saving}                      // 任意: 保存中は切り替えない（<fieldset disabled> の中も同じ）
+  fixedHeight                            // 任意: 並べた 2 つの一覧の高さをそろえる
+  labels={…}                             // 翻訳済みの文言（既定は日本語。DEFAULT_LIST_PICKER_LABELS）
+  actions={<FormActionBar primaryActions={[{ id: "add", label: "選択した 3 件を追加", icon: FilePlus2 }]} … />}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 候補の一覧は listbox（`aria-multiselectable`・`aria-checked`）。Tab で listbox に入り、↑↓ / Home / End / PageUp / PageDown で移り、Space（Enter。IME の変換中は無視）で切り替える。グループの端の ↑↓ で隣のグループの listbox へフォーカスを移す | APG の multi-select listbox。候補の数だけ Tab を押させない。仮想スクロールで外れたグループにも矢印で届く |
+| グループは見出し（件数・「すべて選択」「選択をすべて解除」。非同期でよく、実行中は同じピッカーの一括操作を止める）と listbox を分ける | listbox の子は選択肢だけ（ボタンを入れない） |
+| 行の名前は `aria-labelledby`、補足・選べない理由は `aria-describedby` | Playwright の `getByLabel` / `getByRole("option", { name })`、読み上げで名前が短く伝わる |
+| 100 行を超えたら見えている行と、キーボードの位置の行だけを描く（行の高さは描いた行から測る。`lib/list-window.ts`） | 数千件でも重くならない。スクロールしてもフォーカスが body に落ちない |
+| 検索語・「選択中だけ表示」を変えたら一覧の先頭へ戻す。「選択中だけ表示」は `selectedItems` を検索語で画面側で絞る | 読み込みの範囲の外にある選択も確かめられる |
+| `LoadMoreFooter` は失敗中は「さらに読み込む」を出さず、Banner の「再試行」だけにする | 同じ処理のスピナー・ボタンを 1 つにする（messaging §3.7） |
+
+- 単体テストは `packages/ui/tests/list-picker.test.tsx`（読み上げの属性・↑↓ / Home / End / Space / Enter・IME の確定の Enter・グループ間の移動・3,000 件の仮想スクロール・検索欄の IME と件数の読み上げ・0 件・追加読み込みと再試行・一括選択と「選択中だけ表示」・無効・`list-window` の計算）。
+- 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
+- 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・業務ビュー・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。

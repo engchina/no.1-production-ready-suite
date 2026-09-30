@@ -192,8 +192,9 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   // アーカイブ済みの対象は状態を示す。
   await expect(views.getByText("アーカイブ済み")).toBeVisible();
 
-  await views.getByRole("checkbox", { name: /人事 FAQ/ }).check();
-  await bases.getByRole("checkbox", { name: /人事規程/ }).check();
+  // 候補は共通の ListPicker の選択肢（role=option・aria-checked。#600）。
+  await views.getByRole("option", { name: /人事 FAQ/ }).check();
+  await bases.getByRole("option", { name: /人事規程/ }).check();
   await page.getByRole("checkbox", { name: /^チャット/ }).uncheck();
   await expectNoPageOverflow(page);
   await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
@@ -226,8 +227,8 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   );
 });
 
-// #521: 業務ビュー・KB の候補の行は名前と説明を出し、内部の ID は出さない。長い説明は 2 行で省略し、
-// 行の高さをそろえて重ねない（375px の 1 列でも）。ライト / ダークの両方で確かめる。
+// #521: 業務ビュー・KB の候補の行は名前と説明を出し、内部の ID は出さない。長い説明は 1 行で省略し
+// （共通の ListPicker の行。#600）、行の高さをそろえて重ねない（375px でも）。ライト / ダークの両方で確かめる。
 const LONG_DESCRIPTION =
   "人事規程・就業規則・勤怠管理・福利厚生・評価制度・出張旅費・経費精算・情報セキュリティに関する社内の問い合わせにまとめて回答するための業務ビューです。" +
   "説明が長い場合は 2 行で省略し、全文は title で確かめられることを確かめます。";
@@ -290,12 +291,12 @@ for (const theme of ["light", "dark"] as const) {
       const longDescription = list.getByText(LONG_DESCRIPTION).first();
       await expect(longDescription).toBeVisible();
       await expect(list.getByText("アーカイブ済み")).toBeVisible();
-      // 省略した全文は title で確かめられ、チェックボックスの名前は全文のまま。
+      // 省略した全文は title で確かめられ、選択肢の名前は全文のまま。
       await expect(longDescription).toHaveAttribute("title", LONG_DESCRIPTION);
-      await expect(list.getByRole("checkbox", { name: new RegExp(targets[1].name) })).toHaveCount(1);
+      await expect(list.getByRole("option", { name: new RegExp(targets[1].name) })).toHaveCount(1);
 
       const boxes = await list
-        .getByTestId(`security-roles-${key}-option`)
+        .getByRole("option")
         .evaluateAll((rows) =>
           rows.map((row) => {
             const { top, bottom, left, right, height } = row.getBoundingClientRect();
@@ -313,14 +314,18 @@ for (const theme of ["light", "dark"] as const) {
           expect(overlapX > 0.5 && overlapY > 0.5).toBe(false);
         }
       }
-      // 長い説明は 2 行までで省略する。
+      // 長い説明は 1 行で省略する。
       const clamped = await longDescription.evaluate((element) => ({
         scroll: element.scrollHeight,
         client: element.clientHeight,
         lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
       }));
-      expect(clamped.client).toBeLessThanOrEqual(Math.ceil(clamped.lineHeight * 2) + 1);
-      expect(clamped.scroll).toBeGreaterThan(clamped.client);
+      const truncated = await longDescription.evaluate((element) => ({
+        scroll: element.scrollWidth,
+        client: element.clientWidth,
+      }));
+      expect(clamped.client).toBeLessThanOrEqual(Math.ceil(clamped.lineHeight) + 1);
+      expect(truncated.scroll).toBeGreaterThan(truncated.client);
     }
     await expectNoPageOverflow(page);
   });

@@ -1,5 +1,5 @@
 import { Children, useId, type ReactNode } from "react";
-import { ListPlus,
+import {
   Check,
   Code2,
   Download,
@@ -35,6 +35,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
   RowTitleButton,
+  LoadMoreFooter,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -452,6 +453,10 @@ export function DbObjectSelectorToolbar({
   );
 }
 
+/**
+ * 追加読み込み型の一覧のフッター。共通の `LoadMoreFooter`（#600）に NL2SQL の文言と枠を渡す薄い包み。
+ * 件数（「N / M 件を表示、選択 K 件」）と「さらに読み込む」、読み込みの失敗の再試行は共通の部品が持つ。
+ */
 export function DbObjectSelectorFooter({
   visibleCount,
   totalCount,
@@ -476,54 +481,27 @@ export function DbObjectSelectorFooter({
   onRetryLoadMore?: () => void;
 }) {
   return (
-    <div
-      className="grid min-h-10 gap-2 rounded-md border border-border bg-surface px-3 py-2"
-      data-testid={dataTestId}
-    >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-fg-muted" aria-live="polite">
-          {selectedCount == null
-            ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
-            : t("objectSelector.resultCountWithSelected", {
-                visible: visibleCount,
-                total: totalCount,
-                selected: selectedCount,
-              })}
-        </p>
-        {hasNextPage && onLoadMore && (
-          <Button icon={ListPlus}
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="w-full sm:w-auto"
-            // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-            loading={loadingNextPage && !(loadMoreError && onRetryLoadMore)}
-            disabled={loadingNextPage && Boolean(loadMoreError && onRetryLoadMore)}
-            onClick={onLoadMore}
-          >
-            {loadMoreLabel}
-          </Button>
-        )}
-      </div>
-      {loadMoreError && (
-        <Banner
-          severity="danger"
-          action={onRetryLoadMore ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loadingNextPage}
-              onClick={onRetryLoadMore} icon={RefreshCw}>
-              <span>{t("common.retry")}</span>
-            </Button>
-          ) : undefined}
-        >
-          {loadMoreError}
-        </Banner>
-      )}
-    </div>
+    <LoadMoreFooter
+      summary={
+        selectedCount == null
+          ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
+          : t("objectSelector.resultCountWithSelected", {
+              visible: visibleCount,
+              total: totalCount,
+              selected: selectedCount,
+            })
+      }
+      hasMore={hasNextPage}
+      loadingMore={loadingNextPage}
+      loadMoreError={loadMoreError || undefined}
+      onLoadMore={onLoadMore}
+      onRetry={onRetryLoadMore}
+      loadMoreLabel={loadMoreLabel}
+      retryLabel={t("common.retry")}
+      announce
+      className="min-h-10 rounded-md border border-border bg-surface px-3 py-2"
+      testId={dataTestId}
+    />
   );
 }
 
