@@ -119,7 +119,7 @@ def build_docrag_chunks(
     layout = extraction.parser_artifacts.get(DOCRAG_LAYOUT_ARTIFACT)
     if not isinstance(layout, Mapping) or not layout.get("records"):
         raise DocragLayoutMissingError(
-            "DocRAG 親子階層には Docling の解析結果が必要です。"
+            "親子階層（small-to-big）には Docling の解析結果が必要です。"
             "文書解析を Docling にして再解析するか、別の分割方式を選んでください。"
         )
     records = [dict(record) for record in _items(layout.get("records")) if isinstance(record, dict)]

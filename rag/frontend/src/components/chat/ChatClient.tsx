@@ -95,7 +95,7 @@ interface LiveColumn {
   traceId: string | null;
   errorMessage: string | null;
   guardrailWarnings: string[];
-  /** DocRAG 回答エンジンの根拠・実行記録(standard では null)。 */
+  /** 回答の根拠・実行記録(無い回答では null)。 */
   docrag: unknown;
   /** 回答生成の工程の進捗（#375）。 */
   stages: AnswerStageEvent[];
@@ -155,7 +155,7 @@ function AssistantColumn({
   errorMessage: string | null;
   guardrailWarnings: string[];
   docrag?: unknown;
-  /** 保存済み DocRAG 回答がある(trace_id から根拠と実行記録を開ける)。 */
+  /** 保存された回答がある(trace_id から根拠と実行記録を開ける)。 */
   savedDocrag?: boolean;
   /** 生成中の工程と開始時刻（#375）。回答の本文が届くまで経過時間と今の工程を出す。 */
   progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
@@ -425,7 +425,7 @@ export function ChatClient() {
     () => conversationQuery.data?.messages ?? [],
     [conversationQuery.data]
   );
-  // 保存済み DocRAG 回答がある回答(trace_id)。該当する回答だけ根拠と実行記録を開ける。
+  // 保存された回答がある回答(trace_id)。該当する回答だけ根拠と実行記録を開ける。
   // 回答履歴のページングに依存しないよう、開いている会話の回答の trace_id で引き当てる（#304）。
   const replyTraceIds = useMemo(
     () =>

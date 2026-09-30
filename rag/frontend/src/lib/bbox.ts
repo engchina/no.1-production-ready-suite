@@ -479,7 +479,7 @@ function normalizeBboxUnitValue(value: string): BboxOverlayUnit | null {
 }
 
 // ---- 強調する領域（#349） ----
-// DocRAG の chunk は metadata.docrag_metadata_json.layout.display_regions に、根拠にした要素ごとの
+// 親子階層（small-to-big）の chunk は metadata.docrag_metadata_json.layout.display_regions に、根拠にした要素ごとの
 // bbox（解析時のページ画像 px・左上原点・[x1, y1, x2, y2]）をページ別に持つ（rag_poc と同じ形式）。
 // プレビューでは要素ごとに矩形を重ね、無い chunk だけ包含 bbox 1 つを重ねる。
 
@@ -511,7 +511,7 @@ export type BboxDisplayRegionBox = {
 
 export type BboxDisplayRegion = { page: number; boxes: BboxDisplayRegionBox[] };
 
-/** chunk metadata から DocRAG の表示領域（ページごとの要素 bbox）を取り出す。 */
+/** chunk metadata から要素の表示領域（ページごとの要素 bbox）を取り出す。 */
 export function displayRegionsFromMetadata(
   metadata?: Record<string, unknown> | null
 ): BboxDisplayRegion[] {
@@ -558,7 +558,7 @@ function docragMetadata(metadata: Record<string, unknown>): Record<string, unkno
 /**
  * フォーカス対象の bbox と表示領域から、プレビューに重ねる領域の一覧を作る。
  *
- * - 表示領域がある（DocRAG の chunk）: 要素ごとの bbox をすべて primary にする（rag_poc の子 chunk と同じ）。
+ * - 表示領域がある（親子階層の chunk）: 要素ごとの bbox をすべて primary にする（rag_poc の子 chunk と同じ）。
  *   座標は解析時のページ画像 px なので unit は absolute、基準寸法は chunk の page_width / page_height。
  *   別のページの寸法は、同じ dpi で描いた前提で基準ページとの表示寸法（pt）の比率から求める（resolveRegionPageSize）。
  * - 無い: 包含 bbox 1 つを primary にする（従来どおり mode / unit を推定する）。

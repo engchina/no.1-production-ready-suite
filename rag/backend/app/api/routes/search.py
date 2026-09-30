@@ -68,7 +68,7 @@ async def search(
 ) -> ApiResponse[SearchResponse]:
     """自然言語クエリで RAG 検索を実行する。
 
-    回答は DocRAG の回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
+    回答は回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
     Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
     """
     enforce_rate_limit("search", http_request)
@@ -502,7 +502,7 @@ async def list_docrag_answers(
     offset: int = Query(default=0, ge=0),
     trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
 ) -> ApiResponse[Page[AnswerRecordSummary]]:
-    """保存済み DocRAG 回答を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
+    """保存された回答(回答の記録)を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
 
     持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件）。`trace_id` を
     繰り返して渡すと、その回答だけにする（チャットが会話の回答の保存有無を引き当てる）。
@@ -542,7 +542,7 @@ def _normalize_trace_id_filter(values: list[str] | None) -> list[str] | None:
 
 @router.get("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDetail])
 async def get_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
-    """保存済み DocRAG 回答 1 件(回答・引用・根拠と実行記録)を返す。"""
+    """保存された回答 1 件(回答・引用・根拠と実行記録)を返す。"""
     row = await OracleClient().get_answer_record(trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
@@ -565,7 +565,7 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
 async def evaluate_docrag_answer(
     http_request: Request, trace_id: str, body: AnswerEvaluationRequest
 ) -> ApiResponse[AnswerRecordDetail]:
-    """保存済み DocRAG 回答を標準回答で評価し(rag_poc の 4 軸評価)、結果を保存して返す。
+    """保存された回答を標準回答で評価し(4 軸の LLM 評価)、結果を保存して返す。
 
     評価は LLM を複数回呼ぶ。失敗しても例外にせず、status=error の評価として保存する
     (rag_poc と同じく部分評価は採用しない)。
@@ -603,7 +603,7 @@ async def evaluate_docrag_answer(
 
 @router.delete("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDeleteResult])
 async def delete_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDeleteResult]:
-    """保存済み DocRAG 回答を 1 件削除する。"""
+    """保存された回答を 1 件削除する。"""
     if not await OracleClient().delete_answer_record(trace_id):
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
     return ApiResponse(data=AnswerRecordDeleteResult(trace_id=trace_id))

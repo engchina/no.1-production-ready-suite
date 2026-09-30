@@ -584,7 +584,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="docrag_small_to_big",
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
-            "docrag_small_to_big(既定)は DocRAG 親子階層(Docling の解析結果を使う。"
+            "docrag_small_to_big(既定)は親子階層(small-to-big。Docling の解析結果を使う。"
             "解析結果が Docling でない文書は structure_aware で分割する)、"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "markdown_heading は章節単位、page_level はページ単位、"
@@ -605,7 +605,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=DOCRAG_CHILD_TARGET_CHARS_MIN,
         le=DOCRAG_CHILD_TARGET_CHARS_MAX,
         description=(
-            "DocRAG 親子階層で、検索に使う子 chunk の目標文字数。"
+            "親子階層(small-to-big)で、検索に使う子 chunk の目標文字数。"
             "超える Text / List-item は文末で複数の子へ分ける。"
         ),
     )
@@ -614,7 +614,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
         le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
         description=(
-            "DocRAG 親子階層で、表を行グループへ分ける閾値と各グループの目標文字数。"
+            "親子階層(small-to-big)で、表を行グループへ分ける閾値と各グループの目標文字数。"
             "各グループには列見出しと関連見出しを繰り返し付ける。"
         ),
     )
@@ -622,19 +622,19 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=DOCRAG_PARENT_TARGET_CHARS_DEFAULT,
         ge=DOCRAG_PARENT_TARGET_CHARS_MIN,
         le=DOCRAG_PARENT_TARGET_CHARS_MAX,
-        description="DocRAG 親子階層で、回答文脈に使う親 chunk の目標文字数。",
+        description="親子階層(small-to-big)で、回答文脈に使う親 chunk の目標文字数。",
     )
     rag_docrag_parent_max_pages: int = Field(
         default=DOCRAG_PARENT_MAX_PAGES_DEFAULT,
         ge=DOCRAG_PARENT_MAX_PAGES_MIN,
         le=DOCRAG_PARENT_MAX_PAGES_MAX,
-        description="DocRAG 親子階層で、1 つの親 chunk がまたげる最大ページ数。",
+        description="親子階層(small-to-big)で、1 つの親 chunk がまたげる最大ページ数。",
     )
     rag_docrag_parent_max_children: int = Field(
         default=DOCRAG_PARENT_MAX_CHILDREN_DEFAULT,
         ge=DOCRAG_PARENT_MAX_CHILDREN_MIN,
         le=DOCRAG_PARENT_MAX_CHILDREN_MAX,
-        description="DocRAG 親子階層で、1 つの親 chunk に入れる子 chunk の最大数。",
+        description="親子階層(small-to-big)で、1 つの親 chunk に入れる子 chunk の最大数。",
     )
     rag_chunk_min_chars: int = Field(
         default=120,
@@ -697,7 +697,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_docrag_answer_vision_enabled: bool = Field(
         default=False,
         description=(
-            "DocRAG 回答で根拠の図を切り出し、回答モデルへ画像として添付する"
+            "回答で根拠の図を切り出し、回答モデルへ画像として添付する"
             "(回答モデルが画像入力に対応する場合のみ有効化する)。"
         ),
     )
@@ -710,26 +710,29 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_docrag_query_strategy: DocragQueryStrategy = Field(
         default="auto_routing",
-        description="DocRAG 回答の質問拡張戦略(rag_poc と同じ)。業務ビューで上書きできる。",
+        description="質問の拡張(query rewriting / expansion)の方式。業務ビューで上書きできる。",
     )
     rag_docrag_answer_flow: DocragAnswerFlow = Field(
         default="crag",
-        description="DocRAG 回答の回答生成フロー。crag は検索結果を評価して必要なら補正検索する。",
+        description=(
+            "回答の生成方式。crag(CRAG)は検索結果を評価して必要なら補正検索し、"
+            "standard_rag(標準 RAG)は補正しない。"
+        ),
     )
     rag_docrag_neighbor_child_count: int = Field(
         default=3,
         ge=0,
         le=20,
-        description="DocRAG 回答で、根拠の child の前後から context へ足す近傍 child 数。",
+        description="回答で、根拠の child の前後から context へ足す近傍 child 数。",
     )
     rag_docrag_rerank_enabled: bool = Field(
         default=True,
-        description="DocRAG 回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
+        description="回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
     )
     rag_docrag_screen_linking_enabled: bool = Field(
         default=False,
         description=(
-            "DocRAG 回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
+            "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
             "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
             "(LLM の呼び出しが 1 回増える。#554)。"
             "業務ビューで上書きできる。"
@@ -740,7 +743,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=0,
         le=3650,
         description=(
-            "DocRAG 回答記録の保持日数。0 は無期限。回答保存時と設定変更時に期限切れを削除する。"
+            "回答の記録の保持日数。0 は無期限。回答保存時と設定変更時に期限切れを削除する。"
         ),
     )
     rag_query_history_enabled: bool = Field(
@@ -760,7 +763,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
         default="legacy",
         description=(
-            "DocRAG の業務 profile。DocRAG の回答フローは docrag の current_profile()"
+            "回答フローの業務 profile。回答フローは docrag_core の current_profile()"
             "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
             " DOCRAG_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
             "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"

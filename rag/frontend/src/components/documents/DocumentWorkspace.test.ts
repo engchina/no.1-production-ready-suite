@@ -64,7 +64,7 @@ describe("分割プレビュー設定", () => {
     });
   });
 
-  it("DocRAG 親子階層は 5 項目の範囲だけを検証し、chunk サイズの制約は使わない", () => {
+  it("親子階層（small-to-big）は 5 項目の範囲だけを検証し、chunk サイズの制約は使わない", () => {
     const docrag = { ...chunkPreviewForm(null), chunking_strategy: "docrag_small_to_big" as const };
     expect(chunkPreviewValidationError({ ...docrag, chunk_overlap: 800 })).toBeNull();
     expect(chunkPreviewValidationError({ ...docrag, docrag_child_target_chars: 299 })).toBe(

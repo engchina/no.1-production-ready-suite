@@ -1,8 +1,8 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
-// rag_poc(DocRAG)移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
-// 検索前の類似問提示、DocRAG 回答の根拠パネル。
+// rag_poc からの移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
+// 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
 
@@ -221,7 +221,7 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
   expect(streamed).toBe(false);
 });
 
-test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示する", async ({ page }) => {
+test("類似問を使わない場合は回答と根拠パネルを表示する", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });
   await mockDocragStream(page);
@@ -243,7 +243,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`DocRAG 回答を標準回答で評価し、4 軸の点と合否を表示する (${viewport.name})`, async ({
+  test(`回答を標準回答で評価し、4 軸の点と合否を表示する (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

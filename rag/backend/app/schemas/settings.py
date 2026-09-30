@@ -566,7 +566,7 @@ GuardrailBackendName = GuardrailBackend
 
 
 class AnswerRecordSettingsData(BaseModel):
-    """DocRAG 回答記録の保持設定。retention_days=0 は無期限。"""
+    """回答の記録の保持設定。retention_days=0 は無期限。"""
 
     retention_days: int = Field(ge=0, le=3650)
     config_source: Literal["runtime"] = "runtime"
@@ -590,7 +590,7 @@ class QueryHistorySettingsUpdate(QueryHistorySettingsData):
 
 
 class DocragPromptView(BaseModel):
-    """編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。"""
+    """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 
     key: Literal["vlm_answer", "image_retrieval"]
     content: str
@@ -646,7 +646,7 @@ class AnsweringSettingsUpdate(BaseModel):
 
 
 class AnswerRecordSettingsUpdate(BaseModel):
-    """DocRAG 回答記録の保持設定の更新 payload。"""
+    """回答の記録の保持設定の更新 payload。"""
 
     retention_days: int = Field(ge=0, le=3650)
 

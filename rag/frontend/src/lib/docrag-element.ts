@@ -1,6 +1,6 @@
 import type { DocumentElement } from "@/lib/api";
 
-/** DocRAG(docling) 要素の Vision 図説明の表示用情報。該当しなければ null。 */
+/** Docling の要素の Vision 図説明の表示用情報。該当しなければ null。 */
 export type ElementVision = {
   status: string;
   retrievalText: string;
@@ -102,7 +102,7 @@ function formatVisionValue(value: unknown): string {
 
 /**
  * 抽出 JSON の docrag_layout から要素(record)の Vision 説明を引き、値のある項目だけ返す。
- * 装飾・アイコンとして除外された図は reason に理由を返す。docrag 以外の抽出では null。
+ * 装飾・アイコンとして除外された図は reason に理由を返す。Docling（docrag_layout）以外の抽出では null。
  */
 export function docragVisionDetails(
   extraction: Record<string, unknown>,

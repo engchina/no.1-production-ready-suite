@@ -738,7 +738,7 @@ test("画像 preview は同一 surface 上で bbox overlay を位置決めする
   await expectNoHorizontalOverflow(page);
 });
 
-// #349: PDF はページ画像で表示し、DocRAG の表示領域（要素ごとの bbox）を強調する。強調は回転・拡大に追従する。
+// #349: PDF はページ画像で表示し、要素の表示領域（要素ごとの bbox）を強調する。強調は回転・拡大に追従する。
 async function relativeBox(child: Locator, parent: Locator) {
   const childBox = await child.boundingBox();
   const parentBox = await parent.boundingBox();
@@ -762,7 +762,7 @@ function expectBoxClose(
   expect(actual.height).toBeCloseTo(expected.height, 2);
 }
 
-test("PDF はページ画像で表示し、DocRAG の表示領域を要素ごとに強調する", async ({ page }) => {
+test("PDF はページ画像で表示し、要素の表示領域を要素ごとに強調する", async ({ page }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, docragRegions: true });
 
   await page.goto("/documents/doc-1");
@@ -1547,7 +1547,7 @@ async function mockDocumentWorkspace(
     pdfPreview?: boolean;
     /** PDF をページ画像で表示する API（preview-pages）を返す（#349）。無ければ iframe に戻る。 */
     pdfPages?: boolean;
-    /** Chunk「交通費は1000円」に DocRAG の表示領域（要素ごとの bbox・2 ページ）を持たせる（#349）。 */
+    /** Chunk「交通費は1000円」に要素の表示領域（要素ごとの bbox・2 ページ）を持たせる（#349）。 */
     docragRegions?: boolean;
     segmentError?: boolean;
     segmentCount?: number;

@@ -65,8 +65,8 @@
 
 6. ハイブリッド検索
    - API: `POST /api/search`（回答）。検索は回答フローの中で行う（`DocragAnswerEngine._search`）。
-   - Oracle AI Vector Search と Oracle Text（keyword）を Reciprocal Rank Fusion で統合する（`OracleClient.hybrid_search`）。RRF 定数は `RAG_RRF_K` で調整する。HyDE の仮説文書など、質問拡張戦略が vector だけで引く検索文は vector 検索にする。
-   - 質問拡張戦略（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング。ほかに `simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）が作った複数の検索文は、原質問を主軸にした重み付き RRF で融合する（派生の検索文は合計で原質問 1 本分の重みに抑える）。質問の理解（`inquiry_conditions`）が名指しした文書名・ページ・業務（大分類）は検索条件と profile / business_match のチャネルに加える（`docs/docrag-port.md`）。
+   - Oracle AI Vector Search と Oracle Text（keyword）を Reciprocal Rank Fusion で統合する（`OracleClient.hybrid_search`）。RRF 定数は `RAG_RRF_K` で調整する。HyDE の仮説文書など、質問の拡張が vector だけで引く検索文は vector 検索にする。
+   - 質問の拡張（`RAG_DOCRAG_QUERY_STRATEGY`。既定は自動ルーティング。ほかに `simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）が作った複数の検索文は、原質問を主軸にした重み付き RRF で融合する（派生の検索文は合計で原質問 1 本分の重みに抑える）。質問の理解（`inquiry_conditions`）が名指しした文書名・ページ・業務（大分類）は検索条件と profile / business_match のチャネルに加える（`docs/docrag-port.md`）。
    - `SearchRequest` の `mode`・`strategy`・`rerank_top_n`・`generation_profile` は #595 で削除した。旧クライアントが送っても 422 にせず読み捨てる。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。
@@ -94,7 +94,7 @@
    - Memory Router / Retrieval Plan・Resolver / Verifier・Context Builder・Agent Memory（`rag_agent_memories` への検索と writeback）は #595 で削除した。テーブルと監査の列の削除は #596 で行う。
 
 10. 回答生成
-   - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成テンプレート（検索・回答設定 > 回答プロンプト。`rag_docrag_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
+   - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成のプロンプト（検索・回答設定 > 回答プロンプト。`rag_docrag_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
    - チャットでは、会話履歴から質問を単独で意味が通る形に書き換えてから回答する（`RAG_DOCRAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。

@@ -26,7 +26,7 @@ type Axis = AnswerEvaluationView["axes"][number];
 const COVERAGE_VARIANT = { addressed: "success", partial: "warning", missing: "danger" } as const;
 
 /**
- * 保存した DocRAG 回答を標準回答で評価する（rag_poc の「LLM による回答評価」、4 軸・20 点満点）。
+ * 保存された回答を標準回答で評価する（LLM による回答の評価、4 軸・20 点満点）。
  * rag_poc と違い、生成の後に標準回答を入れて評価する。評価は LLM を複数回呼ぶので時間がかかる。
  */
 export function DocragAnswerEvaluation({

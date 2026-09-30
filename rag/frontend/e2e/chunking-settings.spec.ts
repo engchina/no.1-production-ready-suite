@@ -28,13 +28,15 @@ for (const viewport of [
       page.getByText("backend 内処理または pipeline-chunking へ渡す方式")
     ).toBeVisible();
     await expect(page.getByText("ここで選ぶ 7 個は分割方式です。", { exact: false })).toBeVisible();
-    // DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に並ぶ(#271)。
+    // 画面の文言に移植元の呼び名（DocRAG）を出さない（#598）。
+    await expect(page.locator("main")).not.toContainText("DocRAG");
+    // 親子階層（small-to-big）は、削除した「親子階層」があった位置(3 番目)に並ぶ(#271)。
     const radios = page.getByRole("radio");
     await expect(radios).toHaveCount(7);
     for (const [index, name] of [
       "構造認識",
       "再帰文字分割",
-      "DocRAG 親子階層",
+      "親子階層（small-to-big）",
       "見出し単位",
       "ページ単位",
       "固定長",
@@ -62,14 +64,14 @@ for (const viewport of [
       "overlap(文字)",
       "最小 chunk 文字数",
     ]);
-    await expectStrategyParams(page, /DocRAG 親子階層/, DOCRAG_LABELS);
+    await expectStrategyParams(page, /親子階層（small-to-big）/, DOCRAG_LABELS);
     await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
     await expect(page.getByRole("spinbutton", { name: "表の子チャンク目標文字数", exact: true })).toHaveValue("3000");
     await expect(page.getByRole("spinbutton", { name: "親チャンク目標文字数", exact: true })).toHaveValue("6000");
     await expect(page.getByRole("spinbutton", { name: "親チャンク最大ページ数", exact: true })).toHaveValue("3");
     await expect(page.getByRole("spinbutton", { name: "親チャンク最大 child 数", exact: true })).toHaveValue("12");
-    // 「有効パラメータ」に DocRAG の 5 項目が出る(空にならない)。
+    // 「有効パラメータ」に親子階層の 5 項目が出る(空にならない)。
     const activeParams = page.locator("dl > div").filter({ hasText: "有効パラメータ" });
     await expect(activeParams).toContainText("子チャンク目標文字数: 1,000");
     await expect(activeParams).toContainText("表の子チャンク目標文字数: 3,000");
@@ -128,7 +130,7 @@ test("文書分割設定取得に失敗したら再試行できる", async ({ pa
   await expectNoHorizontalOverflow(page);
 });
 
-test("文書分割設定は DocRAG 親子階層のパラメータを保存できる", async ({ page }) => {
+test("文書分割設定は親子階層（small-to-big）のパラメータを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/chunking", async (route) => {
@@ -148,7 +150,7 @@ test("文書分割設定は DocRAG 親子階層のパラメータを保存でき
 
   await page.goto("/settings/chunking");
 
-  const docrag = page.getByRole("radio", { name: /DocRAG 親子階層/ });
+  const docrag = page.getByRole("radio", { name: /親子階層（small-to-big）/ });
   await docrag.click();
   await expect(docrag).toBeChecked();
 
