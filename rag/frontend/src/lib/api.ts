@@ -2618,6 +2618,20 @@ export const api = {
       )}/extraction-export?${search.toString()}`,
     );
   },
+  /**
+   * 抽出エクスポートのダウンロード URL（`download=true` で `Content-Disposition: attachment` の
+   * ファイルを返す。ファイル名は backend が文書名とレシピから決める。#561）。
+   */
+  documentRecipeExtractionExportUrl: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat,
+  ) => {
+    const search = new URLSearchParams({ format, download: "true" });
+    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+      recipeId,
+    )}/extraction-export?${search.toString()}`;
+  },
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs`,
