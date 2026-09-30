@@ -17,7 +17,6 @@ import {
   type RolePermissionTargetSection,
   type RolePermissionsApi,
 } from "../src";
-import { RolePermissionTargetOption } from "../src/permissions/RolePermissionsPage";
 
 const pending = () => new Promise<never>(() => undefined);
 
@@ -109,49 +108,6 @@ describe("権限の継承", () => {
   it("対象の表示名は補足を括弧で添える", () => {
     expect(targetItemLabel({ id: "p1", name: "財務", secondary: "会計" })).toBe("財務 (会計)");
     expect(targetItemLabel({ id: "p1", name: "財務" })).toBe("財務");
-  });
-});
-
-describe("利用できる対象の候補の行（#521）", () => {
-  const id = "0123456789abcdef0123456789abcdef";
-  const option = (item: Parameters<typeof RolePermissionTargetOption>[0]["item"], reserve?: boolean) =>
-    renderToStaticMarkup(
-      <RolePermissionTargetOption
-        item={item}
-        checked={false}
-        disabled={false}
-        reserveDescription={reserve}
-        testId="security-roles-business-views-option"
-        onToggle={() => undefined}
-      />,
-    );
-
-  it("名前と説明を出し、内部の ID は出さない。省略する名前・説明は title に全文を持つ", () => {
-    const html = option({ id, name: "人事 FAQ", description: "人事規程の問い合わせ", status: "アーカイブ済み" });
-    expect(html).toContain("人事 FAQ");
-    expect(html).toContain("人事規程の問い合わせ");
-    expect(html).toContain("アーカイブ済み");
-    expect(html).not.toContain(id);
-    expect(html).toContain('title="人事 FAQ"');
-    expect(html).toContain('title="人事規程の問い合わせ"');
-    // 名前は 1 行、説明は 2 行で省略し、説明の 2 行分の高さを取る。
-    expect(html).toContain("truncate");
-    expect(html).toContain("line-clamp-2");
-    expect(html).toContain("min-h-[2lh]");
-  });
-
-  it("説明が無い候補も、既定では説明の 2 行分を取って行の高さをそろえる", () => {
-    const html = option({ id, name: "旧経理", description: "  " });
-    expect(html).toContain('aria-hidden="true"');
-    expect(html).toContain("min-h-[2lh]");
-    expect(html).not.toContain(id);
-  });
-
-  it("説明を持つ候補が無い対象（reserveDescription=false）は名前だけの行にする", () => {
-    const html = option({ id, name: id }, false);
-    expect(html).not.toContain("min-h-[2lh]");
-    // 名前が ID の候補（直接入力）は、名前として ID を出す。
-    expect(html).toContain(id);
   });
 });
 

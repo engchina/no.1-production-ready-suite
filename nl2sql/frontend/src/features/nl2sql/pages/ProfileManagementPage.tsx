@@ -26,19 +26,20 @@ import {
   SelectField,
   TextField,
   type SelectFieldOption,
-  BulkSelectionActions,
   ClearActionButton,
   ProcessingIndicator,
   ObjectActionBar,
   TimedLoadingState,
   TableSkeleton,
-  ListSkeleton,
   FormSkeleton,
   ExecutionConfirmationField,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
   FieldLabel,
+  ListPicker,
+  type ListPickerGroup,
+  type ListPickerItem,
   TextareaField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
@@ -60,7 +61,6 @@ import {
   DbManagementSearchField,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
-  DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
 } from "../components/DbObjectManagementShared";
 import {
@@ -88,11 +88,6 @@ import {
   selectedObjectKeys,
   toggleObjectSelection,
 } from "../profileObjectSelection";
-import {
-  SCHEMA_OPTION_ROW_HEIGHT,
-  SCHEMA_OPTION_VIEWPORT_HEIGHT,
-  schemaOptionWindow,
-} from "../profileVirtualList";
 import type { ProfileListSortKey, ProfileListSortState } from "../profileListState";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
@@ -645,82 +640,11 @@ function RequiredFieldError({ id, children }: { id: string; children: string }) 
   return <FieldError id={id} message={children} />;
 }
 
-function SchemaObjectOption({
-  object,
-  selected,
-  onToggle,
-  className = "",
-}: {
-  object: SchemaTable;
-  selected: boolean;
-  onToggle: (name: string) => void;
-  className?: string;
-}) {
-  const qualified = schemaTableQualifiedName(object);
-  return (
-    <label
-      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent-subtle ${className}`}
-      style={{ height: SCHEMA_OPTION_ROW_HEIGHT }}
-    >
-      <input
-        type="checkbox"
-        checked={selected}
-        onChange={() => onToggle(qualified)}
-        aria-label={qualified}
-        className="h-4 w-4 shrink-0 accent-[var(--color-accent-emphasis)]"
-      />
-      <span className="min-w-0 flex-1">
-        <DbObjectName value={qualified} size="xs" interactive truncate className="block" />
-        <span className="block truncate text-xs text-fg-muted">
-          {object.logical_name || object.comment || object.table_name}
-        </span>
-      </span>
-    </label>
-  );
-}
-
-function VirtualizedSchemaOptions({
-  entries,
-  selectedSet,
-  onToggle,
-}: {
-  entries: SchemaTable[];
-  selectedSet: Set<string>;
-  onToggle: (name: string) => void;
-}) {
-  const [scrollTop, setScrollTop] = useState(0);
-  const { start, end, offset, totalHeight } = schemaOptionWindow(scrollTop, entries.length);
-  const visible = entries.slice(start, end);
-
-  return (
-    <div
-      className="relative overflow-y-auto px-1"
-      style={{ height: SCHEMA_OPTION_VIEWPORT_HEIGHT }}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      data-testid="schema-object-virtual-list"
-    >
-      <div style={{ height: totalHeight }} aria-hidden="true" />
-      {/* 行は固定高。padding を挟むと offset と実描画位置がずれるため付けない。 */}
-      <div
-        className="absolute inset-x-0 top-0 grid"
-        style={{ transform: `translateY(${offset}px)` }}
-      >
-        {visible.map((object) => {
-          const qualified = schemaTableQualifiedName(object);
-          return (
-            <SchemaObjectOption
-              key={qualified}
-              object={object}
-              selected={selectedSet.has(normalizeObjectKey(qualified))}
-              onToggle={onToggle}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
+/**
+ * 許可する表・ビューの選択（#600）。大量の候補から複数を選ぶ共通の `ListPicker` に、スキーマ（owner）ごとのグループと
+ * スキーマ単位の一括選択を渡す。検索欄は表・ビューで共通のツールバー（`DbObjectSelectorToolbar`）が持つ。
+ * 行の描画・仮想スクロール・キーボード操作・追加読み込みのフッターは ListPicker が持つ（NL2SQL で二重に持たない）。
+ */
 function SchemaGroupedSelectionPanel({
   title,
   objects,
@@ -731,6 +655,8 @@ function SchemaGroupedSelectionPanel({
   emptyHint,
   onToggle,
   loading,
+  disabled,
+  hasActiveFilter,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -748,6 +674,8 @@ function SchemaGroupedSelectionPanel({
   emptyHint: string;
   onToggle: (name: string) => void;
   loading: boolean;
+  disabled: boolean;
+  hasActiveFilter: boolean;
   hasNextPage: boolean;
   loadingNextPage: boolean;
   loadMoreError: string;
@@ -756,143 +684,92 @@ function SchemaGroupedSelectionPanel({
   ownerTotals: Record<string, number>;
   onToggleSchema: (owner: string, select: boolean) => Promise<void>;
 }) {
-  const [schemaSelectionOwner, setSchemaSelectionOwner] = useState("");
   const selectedSet = useMemo(() => selectedObjectKeys(selectedItems), [selectedItems]);
-  const groups = useMemo(() => {
+  const { items, owners } = useMemo(() => {
     const grouped = new Map<string, SchemaTable[]>();
     for (const object of objects) {
       // 小文字を含む owner（`"Sales"`）を大文字の同名 owner と同じグループにしない（#563）。
-      const owner = object.owner;
-      grouped.set(owner, [...(grouped.get(owner) ?? []), object]);
+      grouped.set(object.owner, [...(grouped.get(object.owner) ?? []), object]);
     }
-    return [...grouped.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([owner, entries]) => ({
-        owner,
-        entries: entries.sort((left, right) =>
-          schemaTableQualifiedName(left).localeCompare(schemaTableQualifiedName(right))
-        ),
-      }));
+    const sortedOwners = [...grouped.keys()].sort((left, right) => left.localeCompare(right));
+    const pickerItems: ListPickerItem[] = sortedOwners.flatMap((owner) =>
+      (grouped.get(owner) ?? [])
+        .slice()
+        .sort((left, right) => schemaTableQualifiedName(left).localeCompare(schemaTableQualifiedName(right)))
+        .map((object) => {
+          const qualified = schemaTableQualifiedName(object);
+          return {
+            key: normalizeObjectKey(qualified),
+            label: <DbObjectName value={qualified} size="xs" truncate className="block" />,
+            textValue: qualified,
+            description: object.logical_name || object.comment || object.table_name,
+            groupKey: owner,
+          };
+        })
+    );
+    return { items: pickerItems, owners: sortedOwners };
   }, [objects]);
-  const toggleSchemaSelection = async (owner: string, select: boolean) => {
-    setSchemaSelectionOwner(owner);
-    try {
-      await onToggleSchema(owner, select);
-    } finally {
-      setSchemaSelectionOwner("");
-    }
-  };
+
+  const groups: ListPickerGroup[] = owners.map((owner) => {
+    const selectedCount = countSelectedObjectsInOwner(selectedSet, owner);
+    const total = ownerTotals[owner] ?? items.filter((item) => item.groupKey === owner).length;
+    // 表示・読み上げは SQL と同じ表記（`"Sales"` と `SALES` を見分けられる、#563）。
+    const ownerLabel = formatDbObjectPart(owner);
+    return {
+      key: owner,
+      label: (
+        <span className="rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs font-semibold text-fg">
+          {ownerLabel}
+        </span>
+      ),
+      textValue: ownerLabel,
+      countLabel: t("profiles.objects.schemaCount", { selected: selectedCount, total }),
+      onSelectAll: () => onToggleSchema(owner, true),
+      onClearAll: () => onToggleSchema(owner, false),
+      selectAllDisabled: total > 0 && selectedCount >= total,
+      clearAllDisabled: selectedCount === 0,
+      testId: `${ownerLabel.toLowerCase()}-schema`,
+    };
+  });
 
   return (
-    <section
-      className="grid h-[392px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden rounded-md border border-border bg-surface p-3"
-      aria-label={title}
-      data-testid={dataTestId}
-    >
-      <div className="flex min-h-8 items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-fg">{title}</h4>
-        <span className="text-xs text-fg-muted">
-          {t("profiles.objects.selected", { count: selectedItems.length })}
-        </span>
-      </div>
-      {loading ? (
-        <TimedLoadingState
-          label={t("profiles.objects.loading")}
-          operationKey={`${dataTestId}-load`}
-          framed={false}
-          className="content-start"
-          testId={`${dataTestId}-loading`}
-        >
-          <ListSkeleton rows={5} rowClassName="h-11" />
-        </TimedLoadingState>
-      ) : groups.length === 0 ? (
-        <EmptyState title={emptyTitle} hint={emptyHint} />
-      ) : (
-        <div
-          className="grid min-h-0 content-start gap-2 overflow-y-auto pr-1"
-          data-testid={`${dataTestId}-scroll-region`}
-        >
-          {groups.map(({ owner, entries }) => {
-            const selectedCount = countSelectedObjectsInOwner(selectedSet, owner);
-            const total = ownerTotals[owner] ?? entries.length;
-            const allSelected = total > 0 && selectedCount >= total;
-            const noneSelected = selectedCount === 0;
-            // 表示・読み上げは SQL と同じ表記（`"Sales"` と `SALES` を見分けられる、#563）。
-            const ownerLabel = formatDbObjectPart(owner);
-            const ownerTestId = ownerLabel.toLowerCase();
-            return (
-              <section
-                key={owner}
-                className="rounded-md border border-border bg-surface-sunken"
-                aria-label={t("profiles.objects.schemaGroup", { owner: ownerLabel })}
-              >
-                <div className="grid min-h-11 gap-2 border-b border-border bg-surface-hover px-2.5 py-1.5">
-                  <div
-                    className="flex min-w-0 flex-wrap items-center gap-2"
-                    data-testid={`${dataTestId}-${ownerTestId}-schema-heading`}
-                  >
-                    <span className="rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs font-semibold text-fg">
-                      {ownerLabel}
-                    </span>
-                    <span className="text-xs text-fg-muted">
-                      {t("profiles.objects.schemaCount", {
-                        selected: selectedCount,
-                        total,
-                      })}
-                    </span>
-                  </div>
-                  <BulkSelectionActions
-                    selectLabel={t("profiles.objects.selectSchemaAction")}
-                    clearLabel={t("profiles.objects.clearSchema")}
-                    selectAriaLabel={t("common.selection.selectGroup", { name: ownerLabel })}
-                    clearAriaLabel={t("common.selection.clearGroup", { name: ownerLabel })}
-                    selectDisabled={allSelected || Boolean(schemaSelectionOwner)}
-                    clearDisabled={noneSelected || Boolean(schemaSelectionOwner)}
-                    busy={schemaSelectionOwner === owner}
-                    dataTestId={`${dataTestId}-${ownerTestId}-schema-bulk-actions`}
-                    onSelectAll={() => void toggleSchemaSelection(owner, true)}
-                    onClearAll={() => void toggleSchemaSelection(owner, false)}
-                  />
-                </div>
-                {entries.length > 50 ? (
-                  <VirtualizedSchemaOptions
-                    entries={entries}
-                    selectedSet={selectedSet}
-                    onToggle={onToggle}
-                  />
-                ) : (
-                  <div className="grid p-1">
-                    {entries.map((object) => {
-                      const qualified = schemaTableQualifiedName(object);
-                      return (
-                        <SchemaObjectOption
-                          key={qualified}
-                          object={object}
-                          selected={selectedSet.has(normalizeObjectKey(qualified))}
-                          onToggle={onToggle}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
-      <DbObjectSelectorFooter
-        visibleCount={objects.length}
-        totalCount={totalCount}
-        selectedCount={selectedItems.length}
-        hasNextPage={hasNextPage}
-        loadingNextPage={loadingNextPage}
-        loadMoreError={loadMoreError}
-        loadMoreLabel={t("profiles.action.loadMore")}
-        dataTestId={`${dataTestId}-footer`}
-        onLoadMore={onLoadMore}
-        onRetryLoadMore={onRetryLoadMore}
-      />
-    </section>
+    <ListPicker
+      id={dataTestId}
+      title={title}
+      headingLevel={4}
+      label={title}
+      items={items}
+      groups={groups}
+      selectedKeys={selectedSet}
+      onToggle={(item) => onToggle(item.textValue)}
+      total={totalCount}
+      hasActiveFilter={hasActiveFilter}
+      loading={loading}
+      disabled={disabled}
+      hasMore={hasNextPage}
+      loadingMore={loadingNextPage}
+      loadMoreError={loadMoreError || undefined}
+      onLoadMore={loadMoreError ? onRetryLoadMore : onLoadMore}
+      fixedHeight
+      labels={{
+        resultCount: ({ visible, total, selected }) =>
+          t("objectSelector.resultCountWithSelected", { visible, total, selected }),
+        loading: t("profiles.objects.loading"),
+        loadMore: t("profiles.action.loadMore"),
+        retry: t("common.retry"),
+        emptyTitle,
+        emptyHint,
+        noResultsTitle: emptyTitle,
+        noResultsHint: emptyHint,
+        clearSearch: t("common.clearSearch"),
+        groupSelectAll: t("profiles.objects.selectSchemaAction"),
+        groupClearAll: t("profiles.objects.clearSchema"),
+        groupSelectAllAria: (name) => t("common.selection.selectGroup", { name }),
+        groupClearAllAria: (name) => t("common.selection.clearGroup", { name }),
+        keyboardHint: t("objectSelector.keyboardHint"),
+      }}
+      testId={dataTestId}
+    />
   );
 }
 
@@ -1154,6 +1031,8 @@ function ProfileEditor({
             emptyHint={t("profiles.objects.emptyTablesHint")}
             onToggle={onToggleTable}
             loading={tableObjectsLoading}
+            disabled={busy}
+            hasActiveFilter={Boolean(objectFilter.trim())}
             hasNextPage={tableHasNextPage}
             loadingNextPage={tableLoadingNextPage}
             loadMoreError={tableLoadMoreError}
@@ -1172,6 +1051,8 @@ function ProfileEditor({
             emptyHint={t("profiles.objects.emptyViewsHint")}
             onToggle={onToggleView}
             loading={viewObjectsLoading}
+            disabled={busy}
+            hasActiveFilter={Boolean(objectFilter.trim())}
             hasNextPage={viewHasNextPage}
             loadingNextPage={viewLoadingNextPage}
             loadMoreError={viewLoadMoreError}

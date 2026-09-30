@@ -377,3 +377,8 @@ export function SecurityEmptySelection({ title, hint }: { title: string; hint: s
 export function securityFilteredCount(filtered: number, total: number) {
   return t("security.common.filteredCount", { filtered, total });
 }
+
+/** 候補の一覧（ListPicker）のフッターの件数（表示中 / 全件と選択数。#600）。 */
+export function securityFilteredCountWithSelected(filtered: number, total: number, selected: number) {
+  return t("security.common.filteredCountWithSelected", { filtered, total, selected });
+}

@@ -1173,6 +1173,15 @@ export const ja = {
   "pager.range": "{start} - {end} / {total} 件",
   "pager.page": "{page} / {total} ページ",
   "pager.label": "ページ送り",
+  // 大量の候補から複数を選ぶ一覧（共通の ListPicker。#600）。
+  "listPicker.resultCount": "{visible} / {total} 件を表示、選択 {selected} 件",
+  "listPicker.refreshing": "候補を更新しています",
+  "listPicker.loadMore": "さらに読み込む",
+  "listPicker.showSelected": "選択中だけ表示（{count}）",
+  "listPicker.selectedEmpty": "選択している候補はありません。",
+  "listPicker.selectVisible": "表示中をすべて選択",
+  "listPicker.clearSelection": "選択をすべて解除",
+  "listPicker.keyboardHint": "上下の矢印キーで移動し、Space キーで選択を切り替えます。",
 
   "businessViews.field.answerEngine": "回答エンジン",
   "businessViews.answerEngine.standard": "標準",
@@ -1454,13 +1463,27 @@ export const ja = {
   "knowledgeBases.col.actions": "操作",
   "knowledgeBases.detail.archivedHint":
     "アーカイブ済みのナレッジベースは文書の追加・解除を行えません。",
+  // 「文書を追加」: 数千〜数万件の文書から、検索して複数を選んで追加する（共通の ListPicker。#600）。
   "knowledgeBases.assignment.title": "文書を追加",
-  "knowledgeBases.assignment.noOptions": "追加できる文書がありません",
+  "knowledgeBases.assignment.panelTitle": "追加する文書を選ぶ",
+  "knowledgeBases.assignment.hint":
+    "文書名で検索して、追加する文書を選んでください。すでに所属している文書は選べません。",
+  "knowledgeBases.assignment.listLabel": "追加する文書の候補",
+  "knowledgeBases.assignment.noOptions": "追加できる文書がありません。",
+  "knowledgeBases.assignment.noOptionsHint": "文書をアップロードすると、ここから追加できます。",
+  "knowledgeBases.assignment.noResults": "検索に一致する文書がありません。",
+  "knowledgeBases.assignment.noResultsHint": "文書名を変えるか、検索語をクリアしてください。",
+  "knowledgeBases.assignment.loading": "追加できる文書を読み込んでいます。",
   "knowledgeBases.assignment.search": "追加する文書を検索",
-  "knowledgeBases.assignment.searchPlaceholder": "文書名で絞り込む（Enter）",
-  "knowledgeBases.assignment.truncated":
-    "候補は新しい順に {count} 件までです。見つからない文書は名前で検索してください。",
+  "knowledgeBases.assignment.searchPlaceholder": "文書名で検索",
+  "knowledgeBases.assignment.alreadyAssigned": "追加済み",
+  "knowledgeBases.assignment.submit": "選択した {count} 件を追加",
+  "knowledgeBases.assignment.close": "閉じる",
   "knowledgeBases.documents.title": "所属文書",
+  "knowledgeBases.documents.search": "所属文書を検索",
+  "knowledgeBases.documents.searchPlaceholder": "文書名で検索",
+  "knowledgeBases.documents.noResults.title": "検索に一致する所属文書がありません。",
+  "knowledgeBases.documents.noResults.hint": "文書名を変えるか、検索語をクリアしてください。",
   // ナレッジベースの「抽出する項目」（#548）。
   "knowledgeBases.extractionFields.title": "抽出する項目",
   "knowledgeBases.extractionFields.description":
@@ -1479,7 +1502,7 @@ export const ja = {
   "knowledgeBases.extractionFields.reset.done": "全体の既定の項目に戻しました。",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
-  "knowledgeBases.documents.empty.hint": "上の選択欄から既存文書を追加してください。",
+  "knowledgeBases.documents.empty.hint": "「文書を追加」から既存の文書を追加してください。",
   "knowledgeBases.variant.layer.metadata": "項目抽出",
   "knowledgeBases.variant.layer.graph": "関係情報",
   "knowledgeBases.variant.layer.navigation": "ナビ",
