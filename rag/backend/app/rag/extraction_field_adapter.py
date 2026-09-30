@@ -6,6 +6,8 @@ PoweRAG は LangExtract で entity/field/関係を抽出する。本モジュー
   (`extraction-fields.json`、env `RAG_FIELD_SCHEMA_FILE` で上書き。config.py/.env 非依存)。
   これは全体の既定で、ナレッジベースごとの定義(`rag_knowledge_bases.extraction_fields`)が
   あればそちらを使う(#548。`resolve_field_definitions`)。
+  定義のファイルが無い(一度も保存していない)環境は、標準の項目(`STANDARD_FIELD_DEFINITIONS`)を
+  全体の既定にする(#556)。保存した定義は空でもそのまま使う。
 - **抽出**: OCI Enterprise AI の structured output を注入された抽出器で呼び、`ExtractionField`
   へ Pydantic 検証して保存。検索可能な合成 element も付けて既存 chunking 経路へ流す。
 
@@ -62,23 +64,85 @@ class FieldSchemaStore(BaseModel):
     fields: list[FieldDefinition] = Field(default_factory=list, max_length=MAX_FIELD_DEFINITIONS)
 
 
+# 標準の項目(#556): 一度も保存していない環境の全体の既定。どの文書にも通じる項目だけにし、
+# 分類・有効期間・要約など既存の仕組みと重なるものは入れない。説明は抽出の指示としてそのまま
+# モデルに渡すため、取る場所・取らないもの・見つからないときの扱いまで書く。
+STANDARD_FIELD_DEFINITIONS: tuple[FieldDefinition, ...] = (
+    FieldDefinition(
+        name="文書の種類",
+        description=(
+            "文書の種類を短い名詞で答える。規程・細則・手順書・マニュアル・契約書・覚書・報告書・"
+            "議事録・提案書・仕様書・通知・案内・申請書・請求書・見積書のうち当てはまるものを優先し、"
+            "どれにも当てはまらなければ文書の性質を表す短い名詞(例: 研修資料)にする。"
+            "表題・書式・本文の書き方から判断し、判断できなければ省略する。"
+        ),
+        value_type="string",
+    ),
+    FieldDefinition(
+        name="文書タイトル",
+        description=(
+            "表紙・1 ページ目の見出し・本文の冒頭に書かれた文書の正式な題名。書かれている表記の"
+            "まま答え、要約や言い換えをしない。副題があれば題名の後ろに続ける。ファイル名・"
+            "ヘッダー・フッター・章や節の見出しは題名として使わない。"
+        ),
+        value_type="string",
+    ),
+    FieldDefinition(
+        name="発行日・作成日",
+        description=(
+            "文書が発行・制定・作成された日付。発行日・制定日・作成日・文書の日付欄の順に優先し、"
+            "改訂日しか無ければ最新の改訂日を使う。施行日・有効期限・印刷日・本文で述べる出来事の"
+            "日付は使わない。和暦は西暦に直す。年・月・日のどれかが分からなければ省略する。"
+        ),
+        value_type="date",
+    ),
+    FieldDefinition(
+        name="発行元・作成部署",
+        description=(
+            "文書を発行・作成した組織名または部署名(会社名と部署名がともにあれば続けて書く)。"
+            "表紙・奥付・署名欄・文書の末尾の発行者の欄から取る。宛先・契約の相手方・本文で"
+            "言及されるだけの組織は使わない。個人名は含めず、組織名が無ければ省略する。"
+        ),
+        value_type="string",
+    ),
+)
+
+
+def standard_field_definitions() -> list[FieldDefinition]:
+    """標準の項目の複製(呼び出し側が変更しても定数を変えない)。"""
+    return [field.model_copy() for field in STANDARD_FIELD_DEFINITIONS]
+
+
 def _field_schema_path() -> Path:
     raw = os.environ.get(FIELD_SCHEMA_FILE_ENV, "").strip() or DEFAULT_FIELD_SCHEMA_FILE
     path = Path(raw).expanduser()
     return path if path.is_absolute() else (BACKEND_ROOT / path).resolve()
 
 
-def load_field_schema() -> FieldSchemaStore:
-    """field schema 定義を読む。無ければ空、壊れていても安全に空 store。"""
+def load_saved_field_schema() -> FieldSchemaStore | None:
+    """保存した全体の既定を読む。一度も保存していない(ファイルが無い)ときは None(#556)。
+
+    「未設定」と「意図して空」を分けるのはファイルの有無だけ。空の定義を保存したファイルは
+    空の store を返す。読めない・壊れているファイルは、保存はしてあるものとして安全に空にする
+    (標準の項目へ黙って切り替えない)。
+    """
     path = _field_schema_path()
     try:
         data = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
+        return None
+    except OSError:
         return FieldSchemaStore()
     try:
         return FieldSchemaStore.model_validate_json(data)
     except ValueError:
         return FieldSchemaStore()
+
+
+def load_field_schema() -> FieldSchemaStore:
+    """全体の既定の定義。保存していなければ標準の項目(#556)。"""
+    saved = load_saved_field_schema()
+    return FieldSchemaStore(fields=standard_field_definitions()) if saved is None else saved
 
 
 def validate_field_schema(fields: list[FieldDefinition]) -> FieldSchemaStore:
@@ -98,6 +162,11 @@ def save_field_schema(fields: list[FieldDefinition]) -> FieldSchemaStore:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(store.model_dump_json(indent=2), encoding="utf-8")
     return store
+
+
+def reset_field_schema() -> None:
+    """保存した全体の既定を消し、未設定(標準の項目を使う状態)に戻す(#556)。"""
+    _field_schema_path().unlink(missing_ok=True)
 
 
 def field_schema_from_json(value: object) -> list[FieldDefinition] | None:

@@ -1,7 +1,7 @@
 """Versioned Ontology persistence boundary for NL2SQL.
 
 The production implementation persists the shared business Ontology, profile views,
-and query traces in Oracle 26ai.  Local development and CI use the in-memory
+and query traces in Oracle AI Database.  Local development and CI use the in-memory
 implementation with the same optimistic-concurrency contract.
 
 DDL is deliberately migration-only: constructing or checking
@@ -1030,7 +1030,7 @@ class InMemoryOntologyStore(_ConvenienceMethods):
 
 
 class OracleOntologyStore(_ConvenienceMethods):
-    """Oracle 26ai implementation using a caller-supplied connection factory."""
+    """Oracle AI Database implementation using a caller-supplied connection factory."""
 
     mode = "oracle"
 

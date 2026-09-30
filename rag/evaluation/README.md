@@ -125,7 +125,7 @@ uv run python -m app.rag.file_processing_golden_cli \
   --trend-output ../evaluation/file-processing-trend.json
 ```
 
-出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle 26ai / UI preview が必要な pending check を case 単位で列挙します。`--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、real-world staging dataset policy summary、threshold status、result hash だけを含む非機密 trend snapshot を保存します。case detail、fixture path、OCR 原文、chunk 本文、検索 query / answer は含めません。nightly workflow はこの gate を先に実行し、`file-processing-report.json` と `file-processing-trend.json` を artifact に保存します。前回の非機密 trend を baseline として保持している場合は、trend regression gate で table QA / page hit / bbox / fallback rate / real-world policy / ingestion p95 などの退化を CI で止められます。
+出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle AI Database / UI preview が必要な pending check を case 単位で列挙します。`--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、real-world staging dataset policy summary、threshold status、result hash だけを含む非機密 trend snapshot を保存します。case detail、fixture path、OCR 原文、chunk 本文、検索 query / answer は含めません。nightly workflow はこの gate を先に実行し、`file-processing-report.json` と `file-processing-trend.json` を artifact に保存します。前回の非機密 trend を baseline として保持している場合は、trend regression gate で table QA / page hit / bbox / fallback rate / real-world policy / ingestion p95 などの退化を CI で止められます。
 
 ```bash
 cd backend

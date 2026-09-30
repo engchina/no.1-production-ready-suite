@@ -1,7 +1,7 @@
 # Production Ready NL2SQL
 
 Production Ready NL2SQL is a production-oriented NL2SQL reference implementation
-for deploying an Oracle 26ai-backed application with OCI Enterprise AI and OCI
+for deploying an Oracle AI Database-backed application with OCI Enterprise AI and OCI
 Generative AI.
 
 ## Deploy to OCI
@@ -92,4 +92,4 @@ This deployment keeps the approved architecture:
 
 - LLM/VLM: OCI Enterprise AI
 - Embedding/rerank: OCI Generative AI
-- Vector search and application state: Oracle 26ai
+- Vector search and application state: Oracle AI Database (Oracle AI Vector Search)

@@ -96,8 +96,10 @@ def test_oracle_text_query_keeps_domain_keyword_as_single_term() -> None:
     query = _oracle_text_query("伝票区分を変更する方法", settings=settings)
 
     assert query is not None
-    assert "{伝票区分}" in query
-    # キーワードも sudachi も無ければ既存の builtin 分割のまま。
-    assert _oracle_text_query("伝票区分を変更する方法", settings=Settings()) == _oracle_text_query(
-        "伝票区分を変更する方法"
-    )
+    # ドメインキーワードは 1 語として重く(*2)、先頭に置く。語は ACCUM で結ぶ(#588)。
+    assert query.startswith("{伝票区分}*2 ACCUM ")
+    assert " OR " not in query
+    # キーワードが無ければ重みを付けない(設定を渡さない呼び出しと同じ)。
+    plain = _oracle_text_query("伝票区分を変更する方法", settings=Settings())
+    assert plain == _oracle_text_query("伝票区分を変更する方法")
+    assert plain is not None and "*2" not in plain

@@ -94,7 +94,7 @@ def test_normalize_vector_index_profile_defaults() -> None:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_vector_index_build_params_on_real_oracle() -> None:
-    """実 Oracle 26ai で主検索索引の実際の NEIGHBORS / EFCONSTRUCTION を読める(#562)。
+    """実 Oracle AI Database で主検索索引の実際の NEIGHBORS / EFCONSTRUCTION を読める(#562)。
 
     アプリのユーザーが v$vector_graph_index を読める環境(ローカルの ADMIN)を前提にする。
     """

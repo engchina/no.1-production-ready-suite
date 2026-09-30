@@ -1,6 +1,6 @@
 # pipeline ステージ: vector_index
 
-Vector Index プロファイル(balanced/accurate/fast)を Oracle 26ai AI Vector Search の
+Vector Index プロファイル(balanced/accurate/fast)を Oracle AI Vector Search の
 target accuracy + HNSW 推奨ビルド値へ解決するステージマイクロサービス。解決ロジックは backend と
 **同一(`rag_pipeline_core.vector_index`)** で決定論・外部依存なし。外部ベクトル DB は導入しない。
 

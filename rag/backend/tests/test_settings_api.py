@@ -1146,29 +1146,26 @@ def test_update_retrieval_settings_persists_llm_expansion_opt_in(
     assert "RAG_QUERY_EXPANSION_LLM_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
-def test_update_retrieval_settings_persists_text_search_tokenizer(
+def test_retrieval_settings_no_longer_expose_text_search_tokenizer(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """全文検索の分割方式(builtin / sudachi)を全体既定として .env へ永続化する。"""
+    """全文検索の分割方式の選択は #588 で削除した(応答に出さず、.env にも書かない)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
-    monkeypatch.setattr(settings, "rag_text_search_tokenizer", "builtin")
     _patch_retrieval_toggle_fields(monkeypatch, settings)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    assert (
-        client.get("/api/settings/retrieval").json()["data"]["text_search_tokenizer"] == "builtin"
+    assert "text_search_tokenizer" not in client.get("/api/settings/retrieval").json()["data"]
+
+    only_removed = client.patch(
+        "/api/settings/retrieval", json={"text_search_tokenizer": "sudachi"}
     )
+    assert only_removed.status_code == 422  # 更新する項目が無い
 
-    resp = client.patch("/api/settings/retrieval", json={"text_search_tokenizer": "sudachi"})
-
+    resp = client.patch("/api/settings/retrieval", json={"gap_stop": True})
     assert resp.status_code == 200
-    assert resp.json()["data"]["text_search_tokenizer"] == "sudachi"
-    assert settings.rag_text_search_tokenizer == "sudachi"
-    assert "RAG_TEXT_SEARCH_TOKENIZER=sudachi" in env_file.read_text(encoding="utf-8")
-    invalid = client.patch("/api/settings/retrieval", json={"text_search_tokenizer": "mecab"})
-    assert invalid.status_code == 422
+    assert "RAG_TEXT_SEARCH_TOKENIZER" not in env_file.read_text(encoding="utf-8")
 
 
 def test_update_retrieval_settings_rejects_unknown_mode() -> None:
@@ -3176,7 +3173,9 @@ def test_database_connection_test_returns_timeout_guidance(
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
 
     async def fake_test_oracle_connection(candidate: Settings) -> None:
-        raise OracleConnectionTimeoutError("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")
+        raise OracleConnectionTimeoutError(
+            "Oracle AI Database の接続テストが 15 秒でタイムアウトしました。"
+        )
 
     _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)

@@ -1,4 +1,4 @@
-"""Oracle 26ai クライアント。
+"""Oracle AI Database クライアント。
 
 AI Vector Search によるベクトル検索（VECTOR(1536, FLOAT32)）と
 Oracle Text による keyword retrieval を担う。外部ベクトル DB は使わない。
@@ -96,10 +96,6 @@ from app.schemas.search import (
 logger = logging.getLogger(__name__)
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
-ASCII_TOKEN_PATTERN = re.compile(r"^[a-z0-9_]+$", re.IGNORECASE)
-KANJI_RUN_PATTERN = re.compile(r"[一-龯々]+")
-KATAKANA_RUN_PATTERN = re.compile(r"[ァ-ンー]+")
-ORACLE_TEXT_MAX_TERMS = 12  # ponytail: safety cap, tune with retrieval evals if needed.
 ORACLE_TEXT_LEXER_PREFERENCE = "RAG_TEXT_WORLD_LEXER"
 ORACLE_TEXT_STOPLIST = "RAG_TEXT_STOPLIST"
 ORACLE_TEXT_LEXER = "WORLD_LEXER"
@@ -122,61 +118,6 @@ ORACLE_TEXT_STOP_WORDS = (
     "なん",
     "んで",
 )
-ENGLISH_QUERY_STOP_TERMS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "at",
-    "be",
-    "by",
-    "can",
-    "could",
-    "did",
-    "do",
-    "does",
-    "for",
-    "from",
-    "how",
-    "in",
-    "is",
-    "it",
-    "near",
-    "of",
-    "on",
-    "or",
-    "please",
-    "should",
-    "the",
-    "to",
-    "was",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "with",
-    "would",
-}
-ORACLE_TEXT_OPERATOR_TERMS = {
-    "about",
-    "accum",
-    "and",
-    "equiv",
-    "fuzzy",
-    "haspath",
-    "inpath",
-    "minus",
-    "near",
-    "not",
-    "or",
-    "soundex",
-    "stem",
-    "within",
-}
-JAPANESE_QUERY_STOP_TERMS = set(ORACLE_TEXT_STOP_WORDS)
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
@@ -447,7 +388,7 @@ class KnowledgeBaseNameConflictError(ValueError):
 
 
 class OracleClient:
-    """Oracle 26ai 接続・ベクトル検索クライアント。"""
+    """Oracle AI Database 接続・ベクトル検索クライアント。"""
 
     def __init__(
         self,
@@ -5210,7 +5151,7 @@ class OracleClient:
         top_k: int,
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        """Oracle 26ai Agent Memory から scoped history context を取得する。"""
+        """Oracle AI Database の Agent Memory から scoped history context を取得する。"""
         del filters
         if top_k <= 0 or not _agent_memory_scope_available():
             return []
@@ -5336,7 +5277,7 @@ class OracleClient:
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
-        """Oracle 26ai AI Vector Search で近傍 chunk を取得する。"""
+        """Oracle AI Vector Search で近傍 chunk を取得する。"""
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update(
             {
@@ -12923,7 +12864,7 @@ async def test_oracle_connection(
         )
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
-            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
 
@@ -13619,7 +13560,7 @@ CREATE INDEX {table_name}_recipe_status_idx
 
 
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
-    """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
+    """Oracle AI Database VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
 {oracle_text_preferences_sql()}
 
@@ -14092,7 +14033,7 @@ CREATE INDEX rag_graph_entity_chunks_chunk_set_idx
 
 
 def oracle_agent_memory_schema_sql(table_name: str = "rag_agent_memories") -> str:
-    """Agent Memory を Oracle 26ai VECTOR と hash scope で保存する DDL を返す。"""
+    """Agent Memory を Oracle AI Database VECTOR と hash scope で保存する DDL を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     memory_id        VARCHAR2(64) PRIMARY KEY,
@@ -14720,85 +14661,33 @@ def _tokens(text: str) -> list[str]:
     return [match.group(0).lower() for match in TOKEN_PATTERN.finditer(text)]
 
 
-def oracle_text_terms(query: str) -> list[str]:
-    # ponytail: lightweight terms; move to Oracle Text lexer/morphology if CJK recall still misses.
-    terms: list[str] = []
-    for match in TOKEN_PATTERN.finditer(query):
-        raw_token = match.group(0).strip()
-        token = raw_token.casefold()
-        if len(token) < 2:
-            continue
-        if ASCII_TOKEN_PATTERN.fullmatch(raw_token):
-            term = _english_query_term(raw_token, token)
-            if term is not None:
-                terms.append(term)
-            continue
-        terms.extend(_japanese_query_terms(token))
-    return _unique_optional_sequence(terms)[:ORACLE_TEXT_MAX_TERMS]
+def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[str]:
+    """全文検索（Oracle Text）の語。検索と同じ分割で、診断に出す（#588）。"""
+    from docrag.retrieval.text_search_tokenizer import tokenize_text_search_query
+
+    return tokenize_text_search_query(query, domain_keywords=_text_search_domain_keywords(settings))
 
 
 def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str | None:
-    if settings is not None and (
-        settings.rag_domain_keywords or settings.rag_text_search_tokenizer == "sudachi"
-    ):
-        return _docrag_oracle_text_query(query, settings)
-    unique_terms = oracle_text_terms(query)
-    if not unique_terms:
-        return None
-    return " ACCUM ".join(f"{{{term}}}" for term in unique_terms)
+    """質問文から Oracle Text の CONTAINS の query を作る（#588）。
 
+    分割は docrag の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
+    送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。業務ビューの
+    ドメインキーワードは 1 語として優先する。語は重み付きの ``ACCUM`` で結ぶ。
+    索引の側（WORLD_LEXER）は変えない。
+    """
+    from docrag.retrieval.text_search_tokenizer import oracle_text_query_for_question
 
-def _docrag_oracle_text_query(query: str, settings: Settings) -> str | None:
-    """rag_poc(DocRAG)の分割でドメインキーワードを 1 語として優先した Oracle Text query。"""
-    from docrag.retrieval.text_search_tokenizer import (
-        TEXT_SEARCH_TOKENIZER_REGEX,
-        TEXT_SEARCH_TOKENIZER_SUDACHI,
-        TextSearchTokenizerConfig,
-        build_oracle_text_query,
-        tokenize_text_search_query,
+    return (
+        oracle_text_query_for_question(
+            query, domain_keywords=_text_search_domain_keywords(settings)
+        )
+        or None
     )
 
-    mode = (
-        TEXT_SEARCH_TOKENIZER_SUDACHI
-        if settings.rag_text_search_tokenizer == "sudachi"
-        else TEXT_SEARCH_TOKENIZER_REGEX
-    )
-    terms = tokenize_text_search_query(
-        query,
-        domain_keywords=settings.rag_domain_keywords,
-        config=TextSearchTokenizerConfig(mode=mode),
-    )
-    return build_oracle_text_query(terms) or None
 
-
-def _english_query_term(raw_token: str, token: str) -> str | None:
-    if token in ORACLE_TEXT_OPERATOR_TERMS:
-        return None
-    if token in ENGLISH_QUERY_STOP_TERMS and not raw_token.isupper():
-        return None
-    return token
-
-
-def _japanese_query_terms(token: str) -> list[str]:
-    terms: list[str] = []
-    for run in KANJI_RUN_PATTERN.findall(token):
-        if len(run) < 2 or run in JAPANESE_QUERY_STOP_TERMS:
-            continue
-        if len(run) <= 3:
-            terms.append(run)
-        terms.extend(_kanji_compound_terms(run))
-    for run in KATAKANA_RUN_PATTERN.findall(token):
-        if len(run) >= 2 and run not in JAPANESE_QUERY_STOP_TERMS:
-            terms.append(run)
-    return terms
-
-
-def _kanji_compound_terms(value: str) -> list[str]:
-    if len(value) == 3:
-        return [value[:2]]
-    if len(value) >= 4:
-        return [value[:2], value[-2:]]
-    return []
+def _text_search_domain_keywords(settings: Settings | None) -> list[str]:
+    return list(settings.rag_domain_keywords) if settings is not None else []
 
 
 def _keyword_score(query_tokens: list[str], document_tokens: list[str]) -> float:

@@ -373,7 +373,7 @@ class RagPipeline:
             settings=self._settings,
             query=query_guardrail.sanitized_text,
         )
-        keyword_terms = oracle_text_terms(query_guardrail.sanitized_text)
+        keyword_terms = oracle_text_terms(query_guardrail.sanitized_text, settings=self._settings)
         runtime_retrieval_strategy = resolved_strategy.strategy.value
         runtime_fallback_reason = resolved_strategy.fallback_reason
         runtime_graph_hit_count = resolved_strategy.graph_hit_count
@@ -1409,7 +1409,7 @@ class RagPipeline:
         citations: list[RetrievedChunk],
         retrieval_plan: RetrievalPlan,
     ) -> tuple[int, str]:
-        """根拠付き回答を scoped Agent Memory として Oracle 26ai へ writeback する。"""
+        """根拠付き回答を scoped Agent Memory として Oracle AI Database へ writeback する。"""
         if (
             not self._settings.rag_agent_memory_writeback_enabled
             or not _agent_memory_scope_available()

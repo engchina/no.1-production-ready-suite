@@ -38,7 +38,7 @@ export interface SchemaColumn {
   nullable: boolean;
   comment: string;
   sample_values: string[];
-  /** 列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。 */
+  /** 列に関連付いた SQL ドメイン(OWNER.NAME)。SQL ドメインに対応したバージョンの dictionary から取得。無ければ空。 */
   domain_name?: string;
 }
 

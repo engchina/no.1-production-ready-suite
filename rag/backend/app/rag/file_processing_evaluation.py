@@ -952,7 +952,7 @@ def run_file_processing_contract_checks(
 ) -> FileProcessingContractReport:
     """同梱 fixture を local parser/chunker で検証する。
 
-    OCI Enterprise AI、Object Storage、Oracle 26ai が必要な品質 check は失敗扱いにせず、
+    OCI Enterprise AI、Object Storage、Oracle AI Database が必要な品質 check は失敗扱いにせず、
     ``pending_checks`` として返す。CI では local contract の退化を検出し、staging/nightly
     では pending check を実データで閉じる。
     """

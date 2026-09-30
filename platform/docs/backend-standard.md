@@ -12,7 +12,7 @@
 | Web | FastAPI（本番: Gunicorn + `uvicorn.workers.UvicornWorker` / 開発: `uvicorn --reload`） |
 | Validation / Config | Pydantic v2 + pydantic-settings（`.env` + 任意 JSON 設定） |
 | HTTP client | httpx |
-| DB / Vector | Oracle 26ai + python-oracledb（AI Vector Search / Oracle Text） |
+| DB / Vector | Oracle AI Database + python-oracledb（Oracle AI Vector Search / Oracle Text）。対応バージョンは [terraform/README.md](../../terraform/README.md) |
 | LLM・VLM | OCI Enterprise AI |
 | Embedding・Rerank | OCI Generative AI（Cohere） |
 | Observability | Prometheus metrics + JSON logging + request-id |
@@ -20,7 +20,7 @@
 | Security | Bandit + pip-audit + gitleaks |
 | CI | GitHub Actions（`uv sync --locked`） |
 
-> ⚠️ LLM/VLM = Enterprise AI、embedding/rerank = OCI GenAI、ベクトル DB = Oracle 26ai。
+> ⚠️ LLM/VLM = Enterprise AI、embedding/rerank = OCI GenAI、ベクトル DB = Oracle AI Database。
 > 外部ベクトル DB・別 LLM provider は導入しない（各業務 repo のルールに従う）。
 
 ## 役割分担（backend_core ↔ 業務 repo）

@@ -1,6 +1,6 @@
 """データベース設定の API（3製品共通。NL2SQL の実装を基準に移設。#108）。
 
-- Oracle 26ai の接続設定（`.env` へ保存。secret はレスポンスに返さない）
+- Oracle AI Database の接続設定（`.env` へ保存。secret はレスポンスに返さない）
 - Wallet ZIP の安全な展開と差し替え（権限 0700 / 0600、失敗時は元に戻す、同時実行は 409）
 - readiness（Wallet のファイル・Wallet パスワード・DSN の別名）と接続テストの結果
 - Autonomous Database の情報取得・起動・停止と、OCI からの Wallet 取得
@@ -71,7 +71,7 @@ AdbOperationStatus = Literal[
 
 
 class DatabaseSettingsData(BaseModel):
-    """Oracle 26ai 接続設定の表示用データ。"""
+    """Oracle AI Database の接続設定の表示用データ。"""
 
     user: str
     dsn: str
@@ -133,7 +133,7 @@ class AdbInfoData(BaseModel):
 
 
 class DatabaseSettingsUpdate(BaseModel):
-    """Oracle 26ai 接続設定の更新 payload。
+    """Oracle AI Database の接続設定の更新 payload。
 
     password / wallet_password は未指定または空文字なら既存値を保持する。
     clear_* が true の場合だけ保存済み secret を削除する。
@@ -156,7 +156,7 @@ class DatabaseSettingsUpdate(BaseModel):
 
 
 class DatabaseConnectionTestResult(BaseModel):
-    """Oracle 26ai 接続テスト結果。"""
+    """Oracle AI Database の接続テスト結果。"""
 
     status: DatabaseConnectionTestStatus
     readiness: str
@@ -366,17 +366,17 @@ def database_readiness_message(readiness: str) -> str:
         )
     if readiness == "invalid":
         return (
-            "Oracle 26ai 接続設定を確認してください。"
+            "Oracle AI Database の接続設定を確認してください。"
             "サービス名 / DSN が現在の Wallet の tnsnames.ora に存在しません。"
         )
     if readiness == "wallet_not_found":
         return (
-            "Oracle 26ai 接続に必要な Wallet を確認してください。"
+            "Oracle AI Database への接続に必要な Wallet を確認してください。"
             "現在の Wallet 保存先に接続用ファイルが揃っていません。"
         )
     if readiness == "wallet_password_invalid":
         return (
-            "Oracle 26ai 接続に必要な Wallet パスワードを確認してください。"
+            "Oracle AI Database への接続に必要な Wallet パスワードを確認してください。"
             "暗号化 Wallet の ewallet.pem を現在の "
             "PLATFORM_ORACLE_WALLET_PASSWORD で復号できません。"
         )
@@ -385,7 +385,7 @@ def database_readiness_message(readiness: str) -> str:
             "Walletless TLS では Wallet サービス名ではなく、"
             "ADB の TCPS 接続文字列または Easy Connect DSN を指定してください。"
         )
-    return "Oracle 26ai 接続に必要な設定が不足しています。"
+    return "Oracle AI Database への接続に必要な設定が不足しています。"
 
 
 # --------------------------------------------------------------------------- connection test
@@ -403,7 +403,7 @@ def database_connection_error_message(exc: Exception, error_codes: list[str]) ->
 
     code_label = f"（{', '.join(error_codes)}）" if error_codes else ""
     code_set = set(error_codes)
-    prefix = f"Oracle 26ai へ接続できませんでした{code_label}。"
+    prefix = f"Oracle AI Database へ接続できませんでした{code_label}。"
     if "ORA-01017" in code_set:
         return prefix + "ユーザー名または DB パスワードを確認してください。"
     if "ORA-12154" in code_set:
@@ -433,7 +433,7 @@ def database_connection_error_message(exc: Exception, error_codes: list[str]) ->
     if error_codes:
         return prefix + "下の確認ポイントと backend ログを確認してください。"
     return (
-        "Oracle 26ai へ接続できませんでした。"
+        "Oracle AI Database へ接続できませんでした。"
         "下の確認ポイントと backend ログの Oracle エラーコードを確認してください。"
     )
 
@@ -597,8 +597,8 @@ def _persist_database_settings(settings: Any, env_file: Path) -> None:
     _write_env(
         env_file,
         values,
-        section_comment="# Oracle 26ai",
-        error_detail="Oracle 26ai 接続設定を platform/.env へ保存できませんでした。",
+        section_comment="# Oracle AI Database",
+        error_detail="Oracle AI Database の接続設定を platform/.env へ保存できませんでした。",
     )
 
 
@@ -1474,7 +1474,7 @@ def build_database_router(
             data=DatabaseConnectionTestResult(
                 status="success",
                 readiness=readiness,
-                message="Oracle 26ai への接続に成功しました。",
+                message="Oracle AI Database への接続に成功しました。",
                 elapsed_ms=_elapsed_ms(started),
                 details=_timeout_details(candidate),
             )

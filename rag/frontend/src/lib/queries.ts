@@ -77,6 +77,7 @@ import {
   type ExtractionFieldDefinition,
   type ExtractionFieldsSettingsData,
   type KnowledgeBaseExtractionFieldsData,
+  type SearchExtractionFieldsData,
   type PipelineSettingsData,
   type PipelineSettingsUpdate,
   type GuardrailSettingsData,
@@ -841,31 +842,6 @@ export function useKnowledgeBases(params: {
   });
 }
 
-/** 一覧 API の 1 ページの上限（backend の `limit` の最大値）。 */
-const KNOWLEDGE_BASE_PAGE_LIMIT = 200;
-
-/**
- * 条件に合うナレッジベースをすべて取得する（ページを順にたどる）。
- * 選択肢に使う一覧は、先頭のページだけだと 51 件目以降の KB を選べなくなる（#280）。
- */
-export function useAllKnowledgeBases(params: { status?: KnowledgeBaseStatus } = {}) {
-  return useQuery({
-    queryKey: ["knowledge-bases", "all", params] as const,
-    queryFn: async (): Promise<KnowledgeBaseSummary[]> => {
-      const items: KnowledgeBaseSummary[] = [];
-      for (let offset = 0; ; offset += KNOWLEDGE_BASE_PAGE_LIMIT) {
-        const page = await api.listKnowledgeBases({
-          ...params,
-          limit: KNOWLEDGE_BASE_PAGE_LIMIT,
-          offset,
-        });
-        items.push(...page.items);
-        if (!page.has_next || page.items.length === 0) return items;
-      }
-    },
-  });
-}
-
 /** ナレッジベース詳細(adapter_config を含む)。 */
 export function useKnowledgeBase(id: string | null) {
   return useQuery({
@@ -915,7 +891,7 @@ function useKnowledgeBaseExtractionFieldsSaved(id: string) {
 
 /** 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。 */
 export function useSearchExtractionFields(businessViewIds: string[], enabled = true) {
-  return useQuery<ExtractionFieldsSettingsData>({
+  return useQuery<SearchExtractionFieldsData>({
     queryKey: queryKeys.searchExtractionFields(businessViewIds),
     queryFn: () => api.getSearchExtractionFields(businessViewIds),
     enabled: enabled && businessViewIds.length > 0,
@@ -980,7 +956,10 @@ export const KNOWLEDGE_BASE_SEARCH_PAGE_SIZE = 50;
  * 先頭のページだけで打ち切らず、`fetchNextPage` で続きを取れる。検索語を変えている間は
  * 直前の結果を出したままにする（一覧が空に戻ってちらつかないように）。
  */
-export function useKnowledgeBaseSearch(params: { status?: KnowledgeBaseStatus; q?: string }) {
+export function useKnowledgeBaseSearch(
+  params: { status?: KnowledgeBaseStatus; q?: string },
+  { enabled = true }: { enabled?: boolean } = {},
+) {
   return useInfiniteQuery({
     queryKey: queryKeys.knowledgeBaseSearch(params),
     queryFn: ({ pageParam }) =>
@@ -993,7 +972,68 @@ export function useKnowledgeBaseSearch(params: { status?: KnowledgeBaseStatus; q
     getNextPageParam: (lastPage) =>
       lastPage.has_next ? lastPage.offset + lastPage.items.length : undefined,
     placeholderData: keepPreviousData,
+    enabled,
   });
+}
+
+/**
+ * 画面側で絞り込む KB の件数の上限（= 一覧 API の `limit` の最大値。1 回の取得で全件が揃う）。
+ * これを超えるときはサーバー側の検索（`GET /api/knowledge-bases?q=`）に切り替え、全件を読まない（#578）。
+ */
+export const KNOWLEDGE_BASE_LOCAL_FILTER_LIMIT = 200;
+
+/**
+ * KB の選択肢（検索できる選択部品用。#578）。
+ *
+ * - まず先頭の 200 件（`KNOWLEDGE_BASE_LOCAL_FILTER_LIMIT`）を 1 回で取る。全件がそこに収まれば、
+ *   選択肢は手元の全件で、検索は画面側で絞り込む（`remote: false`。1 文字ごとに問い合わせない）。
+ * - 収まらない（201 件以上）ときは、検索語 `q` でサーバー側を検索し、50 件ずつ続きを読む（`remote: true`）。
+ *   全件をページ送りで読み切らない（数百件でも最初の表示と検索が遅くならない）。
+ */
+export function useKnowledgeBaseChoices(params: { status?: KnowledgeBaseStatus; q: string }) {
+  const head = useQuery({
+    queryKey: queryKeys.knowledgeBases({
+      status: params.status,
+      limit: KNOWLEDGE_BASE_LOCAL_FILTER_LIMIT,
+      offset: 0,
+    }),
+    queryFn: () =>
+      api.listKnowledgeBases({
+        status: params.status,
+        limit: KNOWLEDGE_BASE_LOCAL_FILTER_LIMIT,
+        offset: 0,
+      }),
+  });
+  const remote = Boolean(head.data?.has_next);
+  const search = useKnowledgeBaseSearch(
+    { status: params.status, q: params.q || undefined },
+    { enabled: remote },
+  );
+  const items: KnowledgeBaseSummary[] = remote
+    ? (search.data?.pages.flatMap((page) => page.items) ?? [])
+    : (head.data?.items ?? []);
+  return {
+    /** サーバー側で検索している（全件を持たない）。 */
+    remote,
+    items,
+    /** 条件（status）に合う KB の総数（検索語によらない）。 */
+    total: head.data?.total ?? 0,
+    /** 検索語に一致する件数（サーバー側の検索のとき）。 */
+    matchedTotal: remote ? (search.data?.pages[0]?.total ?? 0) : items.length,
+    isPending: head.isPending || (remote && search.isPending),
+    isError: head.isError || (remote && search.isError),
+    error: head.error ?? search.error,
+    isFetching: head.isFetching || search.isFetching,
+    /** 検索語を変えて取り直している（前の結果を出したまま）。 */
+    searching: remote && search.isPlaceholderData && search.isFetching,
+    hasMore: remote && Boolean(search.hasNextPage),
+    loadingMore: remote && search.isFetchingNextPage,
+    loadMore: () => void search.fetchNextPage(),
+    refetch: () => {
+      void head.refetch();
+      if (remote) void search.refetch();
+    },
+  };
 }
 
 /** 一覧 API の `ids` の上限（backend の `MAX_KNOWLEDGE_BASE_ID_FILTER`）。 */
@@ -1987,18 +2027,29 @@ export function useUpdatePipelineSettings() {
 
 /** 抽出項目の定義を保存する（文書解析の「解析後の処理」。#528）。 */
 export function useUpdateExtractionFieldsSettings() {
-  const qc = useQueryClient();
+  const onSuccess = useExtractionFieldsSettingsSaved();
   return useMutation({
     mutationFn: (fields: ExtractionFieldDefinition[]) =>
       api.updateExtractionFieldsSettings({ fields }),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.extractionFieldsSettings, data);
-      // 全体の既定は、定義を持たない KB と検索の項目の候補にも効く（#548）。
-      void qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "knowledge-bases" && query.queryKey[2] === "extraction-fields",
-      });
-      void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
-    },
+    onSuccess,
   });
+}
+
+/** 保存した全体の既定を消し、標準の項目に戻す（#556）。 */
+export function useResetExtractionFieldsSettings() {
+  const onSuccess = useExtractionFieldsSettingsSaved();
+  return useMutation({ mutationFn: () => api.resetExtractionFieldsSettings(), onSuccess });
+}
+
+function useExtractionFieldsSettingsSaved() {
+  const qc = useQueryClient();
+  return (data: ExtractionFieldsSettingsData) => {
+    qc.setQueryData(queryKeys.extractionFieldsSettings, data);
+    // 全体の既定は、定義を持たない KB と検索の項目の候補にも効く（#548）。
+    void qc.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "knowledge-bases" && query.queryKey[2] === "extraction-fields",
+    });
+    void qc.invalidateQueries({ queryKey: ["search", "extraction-fields"] });
+  };
 }

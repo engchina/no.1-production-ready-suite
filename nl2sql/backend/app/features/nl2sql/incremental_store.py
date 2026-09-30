@@ -326,7 +326,7 @@ def _read_lob(value: Any) -> str:
     read = getattr(value, "read", None)
     raw = read() if callable(read) else value
     if isinstance(raw, (Mapping, list, tuple)):
-        # Oracle 26ai may return JSON columns as native Python values instead
+        # Oracle AI Database may return JSON columns as native Python values instead
         # of LOB locators depending on the column/driver configuration.
         return _canonical_json(raw)
     if isinstance(raw, bytes):
@@ -1381,7 +1381,7 @@ class MemoryIncrementalNl2SqlRepository:
 
 
 class OracleIncrementalNl2SqlRepository:
-    """Oracle 26ai backed incremental repository。DDL は migration の責務。"""
+    """Oracle AI Database backed incremental repository。DDL は migration の責務。"""
 
     mode = "oracle"
 

@@ -159,7 +159,7 @@ Prometheus metrics は `/metrics` で公開する。
 
 `rag_search_stage_duration_seconds` は `mode`、`stage`、`outcome` label を持つ。`stage` は `embedding`、`retrieval`、`rerank`、`generation`、`outcome` は `success`、`error`、`cancelled` を使い、OCI / Oracle / LLM のどこが遅いかを切り分ける。
 
-`rag_ingestion_stage_duration_seconds` は `stage`、`outcome` label を持つ。`stage` は `vlm_extraction`、`chunking`、`embedding`、`indexing`、`outcome` は `success`、`error`、`cancelled` を使い、OCI Enterprise AI の OCR/構造化、chunking、OCI Generative AI embedding、Oracle 26ai indexing のどこで遅延・失敗しているかを切り分ける。
+`rag_ingestion_stage_duration_seconds` は `stage`、`outcome` label を持つ。`stage` は `vlm_extraction`、`chunking`、`embedding`、`indexing`、`outcome` は `success`、`error`、`cancelled` を使い、OCI Enterprise AI の OCR/構造化、chunking、OCI Generative AI embedding、Oracle AI Database indexing のどこで遅延・失敗しているかを切り分ける。
 
 `rag_evaluation_cases_total{mode,status}` と `rag_evaluation_case_duration_seconds{mode,status}` は golden set の case 単位で記録する。`status` は `success` / `error` に固定し、case id や query 本文は label に入れない。
 

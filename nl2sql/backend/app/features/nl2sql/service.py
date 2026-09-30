@@ -11826,7 +11826,7 @@ class Nl2SqlService:
         """アノテーション管理の SQL 生成を OCI Enterprise AI へ再マップする。
 
         語彙は Select AI が業務用語を SQL に変換するのに効く "DESCRIPTION" / "ALIASES" /
-        "VALUES" / "UNITS" / "JOIN COLUMN"(Oracle AI Database 26ai の検証記事に準拠)。
+        "VALUES" / "UNITS" / "JOIN COLUMN"(Oracle AI Database の検証記事に準拠)。
         """
         started = time.monotonic()
         created_at = _utc_now()
@@ -12013,7 +12013,7 @@ class Nl2SqlService:
             raw = self._enterprise_ai_client.generate(
                 response_format=response_format(SqlOutput),
                 prompt=(
-                    "以下の情報に基づき、Oracle Database 23ai 以降の SQL ドメイン"
+                    "以下の情報に基づき、Oracle AI Database の SQL ドメイン"
                     "(CREATE DOMAIN)と、その列への関連付け"
                     "(ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>)、"
                     "および ALTER DOMAIN / DROP DOMAIN / MODIFY (<列>) DROP DOMAIN の SQL のみを"
@@ -13682,7 +13682,8 @@ class Nl2SqlService:
                 endpoint="/api/nl2sql/feedback-index/rebuild",
                 request_hint='{"execute":true}',
                 expected=(
-                    "executed=true, VECTOR(1536, FLOAT32) index が Oracle 26ai に作成されること。"
+                    "executed=true, VECTOR(1536, FLOAT32) index が Oracle AI Database に"
+                    "作成されること。"
                 ),
                 next_action=next_action(
                     ["oracle_adb", "feedback_embedding"],
@@ -13792,7 +13793,7 @@ class Nl2SqlService:
                 status=guide_status("feedback_embedding"),
                 summary=guide_summary(
                     "feedback_embedding",
-                    "Oracle 26ai feedback vector learning の設定状態です。",
+                    "Oracle AI Vector Search による feedback vector learning の設定状態です。",
                 ),
                 next_action=guide_next_action(
                     "feedback_embedding",
@@ -18488,7 +18489,7 @@ class Nl2SqlService:
                 SimilarHistoryCandidate(
                     item=item,
                     score=round(max(0.0, min(score, 1.0)), 3),
-                    reason="Oracle 26ai vector search で質問意味が近い履歴です。",
+                    reason="Oracle AI Vector Search で質問意味が近い履歴です。",
                 )
             )
         return ranked
@@ -19391,7 +19392,7 @@ class Nl2SqlService:
         if history_examples:
             meta["similar_history_source"] = (
                 "oracle_vector"
-                if history_examples[0].reason.startswith("Oracle 26ai")
+                if history_examples[0].reason.startswith("Oracle AI Vector Search")
                 else "deterministic"
             )
             meta["similar_history_examples"] = [
@@ -19855,7 +19856,7 @@ class Nl2SqlService:
 
     def _enterprise_ai_sql_system_prompt(self) -> str:
         return (
-            "あなたは Oracle Database 26ai 向け NL2SQL エンジンです。"
+            "あなたは Oracle AI Database 向け NL2SQL エンジンです。"
             "与えられた schema/context の表と列だけを使用してください。"
             "FROM/JOIN の物理 object は必ず OWNER.OBJECT で修飾してください。"
             "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"

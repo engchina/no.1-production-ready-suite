@@ -57,7 +57,7 @@ def stage_prompt(name: str, response_contract: str) -> str:
 
 
 STRUCTURE_TO_SQL_PROMPT = (
-    "SQL論理構造から Oracle 26ai の SELECT/WITH 1 文を再構築する。"
+    "SQL論理構造から Oracle AI Database の SELECT/WITH 1 文を再構築する。"
     '出力は JSON object のみ: {"sql":"...", "explanation":"日本語の説明"}。'
     "参照先は schema context で許可された表と列に限定する。"
     "新しく解決する物理 object は OWNER.OBJECT で修飾する。"
@@ -73,7 +73,7 @@ STRUCTURE_TO_SQL_PROMPT = (
 RECONSTRUCTION_SQL_PREFIX = "\n\n### 再構築用の元 SQL（簡易分析で省略された詳細を保持）\n```sql\n"
 
 QUESTION_TO_SQL_PROMPT = (
-    "自然言語の質問から Oracle 26ai の SELECT/WITH 1 文を生成する。"
+    "自然言語の質問から Oracle AI Database の SELECT/WITH 1 文を生成する。"
     '出力は JSON object のみ: {"sql":"...", "explanation":"日本語の説明"}。'
     "質問文を唯一の生成要件とし、schema の論理名・COMMENT を使って業務名を物理名へ解決する。"
     "参照先は schema context で許可された表と列に限定し、物理 object は OWNER.OBJECT で修飾する。"

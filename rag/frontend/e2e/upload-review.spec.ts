@@ -104,13 +104,19 @@ async function mockUploadPage(
         const url = new URL(route.request().url());
         const limit = Number(url.searchParams.get("limit") ?? 50);
         const offset = Number(url.searchParams.get("offset") ?? 0);
+        // 201 件以上はサーバー側の検索（q）に切り替わる（#578）。選択済みは ids で引く。
+        const q = url.searchParams.get("q")?.trim();
+        const ids = url.searchParams.getAll("ids");
+        const matched = all.filter(
+          (item) => (!q || item.name.includes(q)) && (ids.length === 0 || ids.includes(item.id))
+        );
         return route.fulfill({
           json: apiEnvelope({
-            items: all.slice(offset, offset + limit),
-            total: all.length,
+            items: matched.slice(offset, offset + limit),
+            total: matched.length,
             limit,
             offset,
-            has_next: offset + limit < all.length,
+            has_next: offset + limit < matched.length,
           }),
         });
       })
@@ -259,7 +265,7 @@ test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleto
   await expect(loading.getByRole("timer")).toBeVisible();
   releaseKnowledgeBases();
   await expect(loading).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "アップロード先のナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   const processing = page.getByTestId("upload-processing");
@@ -301,7 +307,7 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   ).toBeVisible();
   failing = false;
   await picker.getByRole("button", { name: "再読み込み" }).click();
-  await expect(page.getByRole("combobox", { name: "アップロード先のナレッジベース" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
 });
 
 test("アップロードだけを許可された利用者には、設定とナレッジベース管理への導線を出さない", async ({ page }) => {
@@ -324,16 +330,16 @@ test("管理者には保存先設定とナレッジベース管理への導線�
   await expect(page.getByRole("link", { name: "ナレッジベース管理" })).toBeVisible();
 });
 
-test("先頭ページ（50 件）を超えるナレッジベースも選べる", async ({ page }) => {
+test("200 件を超えるナレッジベースは、サーバー側で検索して選べる（#578）", async ({ page }) => {
   await mockLocalAuth(page);
   await mockUploadPage(page, { knowledgeBaseCount: 230 });
 
   await page.goto("/upload");
-  const combobox = page.getByRole("combobox", { name: "アップロード先のナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "所属させるナレッジベース" });
   await combobox.click();
   await combobox.fill("ナレッジベース 230");
   await expect(
-    page.getByRole("listbox", { name: "アップロード先のナレッジベース" }).getByRole("option", { name: /ナレッジベース 230/ })
+    page.getByRole("listbox", { name: "所属させるナレッジベース" }).getByRole("option", { name: /ナレッジベース 230/ })
   ).toBeVisible();
 });
 

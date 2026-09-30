@@ -117,7 +117,7 @@ uv run python scripts/nl2sql_manual_integration.py --require-oracle --check-supp
 ```
 
 Live feedback vector index smoke. This seeds demo feedback items and rebuilds
-the Oracle 26ai vector table/index using OCI GenAI embeddings:
+the Oracle AI Database vector table/index using OCI GenAI embeddings:
 
 ```bash
 uv run python scripts/nl2sql_manual_integration.py --require-oracle --require-feedback-embedding --seed-demo-learning --execute-feedback-index --engines enterprise_ai_direct
@@ -162,7 +162,7 @@ post-refresh state.
 `--check-supporting-features` does not run DDL against business tables; it
 validates metadata suggestions, COMMENT ON SQL generation, evaluation helper
 flows, persisted evaluation set create/update/archive, evaluation run history,
-and the Oracle 26ai feedback vector index plan.
+and the Oracle AI Database feedback vector index plan.
 `--debug-raw-preview` is for troubleshooting live Oracle package responses when
 the normalized preview path falls back because no SQL could be extracted.
 `--cleanup-assets` only prints the target assets unless `--confirm-cleanup` is

@@ -64,9 +64,11 @@ test("文書インデックスはナレッジベースで絞り込み、所属�
 
   await page.goto("/file-list");
 
-  const filter = page.getByRole("combobox", { name: "ナレッジベース" });
+  // 検索できる単一選択（#578）: ボタンを押すと検索欄と候補の一覧が開く。
+  const filter = page.getByRole("button", { name: /^ナレッジベース/ });
   await filter.click();
   await page.getByRole("listbox", { name: "ナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
+  await expect(filter).toHaveAccessibleName("ナレッジベース 社内規程");
 
   await expect.poll(() => lastKnowledgeBaseId).toBe("kb-1");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();

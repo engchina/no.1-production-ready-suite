@@ -11,7 +11,7 @@
 | `sql/02_insert_base_data.sql` | 基準データを投入 |
 | `sql/03_create_views.sql` | ビュー 3 件を作成 |
 | `sql/04_comments.sql` | COMMENT ON の手動/実行カード検証 |
-| `sql/05_annotations.sql` | Oracle 23ai/26ai annotations の検証 |
+| `sql/05_annotations.sql` | Oracle AI Database の annotations の検証 |
 | `sql/06_admin_select.sql` | 管理 SQL の SELECT 検証 |
 | `sql/07_admin_confirmed_dml_batch.sql` | 管理 SQL の確認済み DML 検証 |
 | `sql/08_admin_partial_success_dml.sql` | DML 部分成功検証 |

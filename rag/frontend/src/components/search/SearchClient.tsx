@@ -1464,6 +1464,7 @@ function isClassificationFilterValues(value: unknown): value is ClassificationFi
 
 const BUSINESS_VIEW_SCOPE_INPUT_ID = "search-business-view-scope";
 const BUSINESS_VIEW_SCOPE_ERROR_ID = "search-business-view-scope-error";
+const BUSINESS_VIEW_SCOPE_LABEL_ID = "search-business-view-scope-label";
 
 /**
  * RAG 検索の対象業務ビュー(Business View)選択。複数選ぶと参照 KB 群を union し、
@@ -1486,12 +1487,15 @@ function BusinessViewScopePicker({
     <div className="space-y-1.5 sm:col-span-4">
       {/* 必須は入力欄（combobox）の aria-required で伝える。タグは FieldLabel が読み上げから外す */}
       <FieldLabel
+        id={BUSINESS_VIEW_SCOPE_LABEL_ID}
         htmlFor={BUSINESS_VIEW_SCOPE_INPUT_ID}
         label={t("businessViews.scope.label")}
         required
         className="block text-xs"
       />
       <BusinessViewPickerGrid
+        id={BUSINESS_VIEW_SCOPE_INPUT_ID}
+        labelledBy={BUSINESS_VIEW_SCOPE_LABEL_ID}
         items={views}
         selectedIds={selectedIds}
         onChange={(next) => {
@@ -1499,12 +1503,9 @@ function BusinessViewScopePicker({
         }}
         disabled={disabled}
         ariaLabel={t("businessViews.scope.label")}
-        field={{
-          inputId: BUSINESS_VIEW_SCOPE_INPUT_ID,
-          required: true,
-          invalid: Boolean(error),
-          describedBy: error ? BUSINESS_VIEW_SCOPE_ERROR_ID : undefined,
-        }}
+        required
+        invalid={Boolean(error)}
+        describedBy={error ? BUSINESS_VIEW_SCOPE_ERROR_ID : undefined}
       />
       {error ? (
         <FieldError id={BUSINESS_VIEW_SCOPE_ERROR_ID} message={error} />
