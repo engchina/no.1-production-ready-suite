@@ -182,7 +182,7 @@ export function ProfileSaveProgress({
                     className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
                   >
                     <Database size={16} aria-hidden="true" />
-                    <span>{t("profiles.oracle.sync.openDatabaseSettings")}</span>
+                    <span>{t("profiles.oracle.sync.openSelectAiCredential")}</span>
                   </Link>
                 ) : null}
                 <Button
