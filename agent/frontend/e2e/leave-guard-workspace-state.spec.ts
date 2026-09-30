@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 import { closeSidebarNav, openSidebarNav } from "./fixtures/nav";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
 
 // 未保存変更の離脱ガードと、一覧の作業状態の保持（platform UX 契約 workspace-state.md。#87）。
 
@@ -163,8 +164,8 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/audit");
       await expect(page.getByRole("heading", { name: "監査", level: 1 })).toBeVisible();
       await page.locator("#audit-run-id").fill("run-e2e-1");
-      await page.locator("#audit-tool-name").selectOption("echo");
-      await page.locator("#audit-warning-filter").selectOption("true");
+      await chooseSelectFieldOption(page.locator("#audit-tool-name"), "echo");
+      await chooseSelectFieldOption(page.locator("#audit-warning-filter"), "true");
       await page.getByRole("button", { name: "フィルター適用" }).click();
       await expect
         .poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("run_id"))
@@ -176,8 +177,8 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/runs$/);
       await (await sidebarLink(page, "/audit")).click();
       await expect(page.locator("#audit-run-id")).toHaveValue("run-e2e-1");
-      await expect(page.locator("#audit-tool-name")).toHaveValue("echo");
-      await expect(page.locator("#audit-warning-filter")).toHaveValue("true");
+      await expectSelectFieldValue(page.locator("#audit-tool-name"), "echo");
+      await expectSelectFieldValue(page.locator("#audit-warning-filter"), "true");
       await expect(page.locator("#audit-error-code")).toHaveValue("E_DRAFT");
 
       await page.reload();

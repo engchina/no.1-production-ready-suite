@@ -36,8 +36,6 @@ import {
   ExecutionConfirmationField,
   DEFAULT_PAGE_SIZE,
   EmptyState,
-  FieldError,
-  FieldLabel,
   FormSkeleton,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
@@ -71,8 +69,10 @@ import {
   RowTitleButton,
   isSubmitEnter,
   SearchField,
+  SelectField,
   TextareaField,
-  fieldControlClassName,
+  TextField,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -1191,20 +1191,13 @@ export function RunsPage() {
                     <CardDescription>{t("run.runtime")}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <Field label={t("run.form.agent")} htmlFor="run-agent">
-                      <select
-                        id="run-agent"
-                        value={selectedAgentId}
-                        onChange={(event) => onAgentChange(event.target.value)}
-                        className={fieldControlClassName()}
-                      >
-                        {runnableAgents.map((agent) => (
-                          <option key={agent.id} value={agent.id}>
-                            {agent.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
+                    <SelectField
+                      id="run-agent"
+                      label={t("run.form.agent")}
+                      value={selectedAgentId}
+                      options={runnableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                      onValueChange={onAgentChange}
+                    />
                     <TextareaField
                       id="run-goal"
                       label={t("run.form.goal")}
@@ -1218,36 +1211,28 @@ export function RunsPage() {
                       textareaClassName="min-h-24"
                     />
                     {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
-                    <Field
+                    {/* 空の値は「既定の Binding を使う」（既定があれば選べる選択肢、なければ未選択の表示）。 */}
+                    <SelectField
+                      id="run-binding"
                       label={t("run.form.binding")}
-                      htmlFor="run-binding"
                       required={!defaultBinding}
-                      error={bindingError}
-                    >
-                      <select
-                        id="run-binding"
-                        value={bindingId}
-                        aria-required={!defaultBinding || undefined}
-                        aria-invalid={bindingError ? true : undefined}
-                        aria-describedby={bindingError ? fieldErrorId("run-binding") : undefined}
-                        onChange={(event) => {
-                          setBindingId(event.target.value);
-                          setBindingError(null);
-                        }}
-                        className={fieldControlClassName()}
-                      >
-                        <option value="">
-                          {defaultBinding
-                            ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
-                            : t("run.form.selectBinding")}
-                        </option>
-                        {agentBindings.map((binding) => (
-                          <option key={binding.id} value={binding.id}>
-                            {binding.native_agent_ref} / {binding.runtime_id}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
+                      error={bindingError ?? undefined}
+                      value={bindingId}
+                      placeholder={t("run.form.selectBinding")}
+                      options={[
+                        ...(defaultBinding
+                          ? [{ value: "", label: `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}` }]
+                          : []),
+                        ...agentBindings.map((binding) => ({
+                          value: binding.id,
+                          label: `${binding.native_agent_ref} / ${binding.runtime_id}`,
+                        })),
+                      ]}
+                      onValueChange={(value) => {
+                        setBindingId(value);
+                        setBindingError(null);
+                      }}
+                    />
                     {/* Agent・実行先を取得し終えるまでは「実行先がない」と判断できないため出さない。 */}
                     {!agents.isLoading && !bindings.isLoading && !agentBindings.length ? (
                       <Banner severity="warning">{t("run.unbound")}</Banner>
@@ -1628,98 +1613,79 @@ export function AuditPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Field label={t("audit.runId")} htmlFor="audit-run-id">
-                <input
-                  id="audit-run-id"
-                  value={runId}
-                  onChange={(event) => setFilter("runId", event.target.value)}
-                  // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
-                  onKeyDown={(event) => {
-                    if (isSubmitEnter(event)) applyFilters();
-                  }}
-                  className={fieldControlClassName()}
-                />
-              </Field>
-              <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
-                <select
-                  id="audit-tool-name"
-                  value={toolName}
-                  onChange={(event) => setFilter("toolName", event.target.value)}
-                  className={fieldControlClassName()}
-                >
-                  <option value="">{t("common.all")}</option>
-                  {(tools.data?.tools ?? []).map((tool) => (
-                    <option key={tool.name} value={tool.name}>
-                      {tool.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t("audit.stepStatus")} htmlFor="audit-step-status">
-                <select
-                  id="audit-step-status"
-                  value={stepStatus}
-                  onChange={(event) => setFilter("stepStatus", event.target.value)}
-                  className={fieldControlClassName()}
-                >
-                  <option value="">{t("common.all")}</option>
-                  {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t("audit.approvalStatus")} htmlFor="audit-approval-status">
-                <select
-                  id="audit-approval-status"
-                  value={approvalStatus}
-                  onChange={(event) => setFilter("approvalStatus", event.target.value)}
-                  className={fieldControlClassName()}
-                >
-                  <option value="">{t("common.all")}</option>
-                  {["pending", "approved", "rejected", "cancelled"].map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t("audit.errorCode")} htmlFor="audit-error-code">
-                <input
-                  id="audit-error-code"
-                  value={errorCode}
-                  onChange={(event) => setFilter("errorCode", event.target.value)}
-                  // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
-                  onKeyDown={(event) => {
-                    if (isSubmitEnter(event)) applyFilters();
-                  }}
-                  className={fieldControlClassName()}
-                />
-              </Field>
-              <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
-                <select
-                  id="audit-warning-filter"
-                  value={warnings}
-                  onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
-                  className={fieldControlClassName()}
-                >
-                  <option value="any">{t("common.all")}</option>
-                  <option value="true">{t("audit.hasWarnings")}</option>
-                  <option value="false">{t("audit.noWarnings")}</option>
-                </select>
-              </Field>
-              <Field label={t("audit.limit")} htmlFor="audit-limit">
-                <input
-                  id="audit-limit"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={limit}
-                  onChange={(event) => setFilter("limit", event.target.value)}
-                  className={fieldControlClassName()}
-                />
-              </Field>
+              <TextField
+                id="audit-run-id"
+                label={t("audit.runId")}
+                value={runId}
+                onValueChange={(value) => setFilter("runId", value)}
+                // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
+                onKeyDown={(event) => {
+                  if (isSubmitEnter(event)) applyFilters();
+                }}
+              />
+              <SelectField
+                id="audit-tool-name"
+                label={t("audit.toolName")}
+                value={toolName}
+                options={[
+                  { value: "", label: t("common.all") },
+                  ...(tools.data?.tools ?? []).map((tool) => ({ value: tool.name, label: tool.name })),
+                ]}
+                onValueChange={(value) => setFilter("toolName", value)}
+              />
+              <SelectField
+                id="audit-step-status"
+                label={t("audit.stepStatus")}
+                value={stepStatus}
+                options={[
+                  { value: "", label: t("common.all") },
+                  ...["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => ({
+                    value: status,
+                    label: status,
+                  })),
+                ]}
+                onValueChange={(value) => setFilter("stepStatus", value)}
+              />
+              <SelectField
+                id="audit-approval-status"
+                label={t("audit.approvalStatus")}
+                value={approvalStatus}
+                options={[
+                  { value: "", label: t("common.all") },
+                  ...["pending", "approved", "rejected", "cancelled"].map((status) => ({ value: status, label: status })),
+                ]}
+                onValueChange={(value) => setFilter("approvalStatus", value)}
+              />
+              <TextField
+                id="audit-error-code"
+                label={t("audit.errorCode")}
+                value={errorCode}
+                onValueChange={(value) => setFilter("errorCode", value)}
+                // 条件フォームの Enter は「条件を適用」と同じ（IME の変換を確定する Enter では適用しない。#535）。
+                onKeyDown={(event) => {
+                  if (isSubmitEnter(event)) applyFilters();
+                }}
+              />
+              <SelectField<AuditWarningsFilter>
+                id="audit-warning-filter"
+                label={t("audit.guardrailWarnings")}
+                value={warnings}
+                options={[
+                  { value: "any", label: t("common.all") },
+                  { value: "true", label: t("audit.hasWarnings") },
+                  { value: "false", label: t("audit.noWarnings") },
+                ]}
+                onValueChange={(value) => setFilter("warnings", value)}
+              />
+              <TextField
+                id="audit-limit"
+                label={t("audit.limit")}
+                type="number"
+                min="1"
+                max="1000"
+                value={limit}
+                onValueChange={(value) => setFilter("limit", value)}
+              />
             </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={applyFilters} loading={audit.isFetching} icon={RefreshCw}>
@@ -2084,19 +2050,18 @@ export function MemoryPage() {
             <Card className="min-w-0">
               <CardContent className="grid min-w-0 gap-4 pt-5 lg:grid-cols-2">
                 <div className="min-w-0 space-y-4">
-                  <Field label={t("memory.kind")} htmlFor="memory-kind">
-                    <select
-                      id="memory-kind"
-                      value={kind}
-                      onChange={(event) => setKind(event.target.value as MemoryKind)}
-                      className={fieldControlClassName()}
-                    >
-                      <option value="user_preference">{t("memory.kind.userPreference")}</option>
-                      <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
-                      <option value="note">{t("memory.kind.note")}</option>
-                      <option value="run_summary">{t("memory.kind.runSummary")}</option>
-                    </select>
-                  </Field>
+                  <SelectField<MemoryKind>
+                    id="memory-kind"
+                    label={t("memory.kind")}
+                    value={kind}
+                    options={[
+                      { value: "user_preference", label: t("memory.kind.userPreference") },
+                      { value: "tool_learning", label: t("memory.kind.toolLearning") },
+                      { value: "note", label: t("memory.kind.note") },
+                      { value: "run_summary", label: t("memory.kind.runSummary") },
+                    ]}
+                    onValueChange={setKind}
+                  />
                   <TextareaField
                     id="memory-content"
                     label={t("memory.content")}
@@ -2305,70 +2270,49 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
             <CardContent className="space-y-4">
               {/* URL は全幅、タイムアウト・既定件数は 2 列に並べる。 */}
               <fieldset disabled={!canManage} className="grid min-w-0 gap-x-6 gap-y-4 lg:grid-cols-2">
-                <Field label={t("settings.productMcp.url")} htmlFor={`${kind}-mcp-url`} className="lg:col-span-2">
-                  <input
-                    id={`${kind}-mcp-url`}
-                    type="url"
-                    inputMode="url"
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={mcpUrl}
-                    onChange={(event) => setMcpUrl(event.target.value)}
-                    placeholder={isRag ? "http://rag-host/api/mcp" : "http://nl2sql-host/api/mcp"}
-                    aria-describedby={`${kind}-mcp-url-hint`}
-                    className={INPUT_CLASS}
-                  />
-                  <p id={`${kind}-mcp-url-hint`} className="mt-1 text-xs leading-5 text-fg-muted">
-                    {t("settings.productMcp.urlHint")}
-                  </p>
-                </Field>
+                <TextField
+                  id={`${kind}-mcp-url`}
+                  label={t("settings.productMcp.url")}
+                  className="lg:col-span-2"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={mcpUrl}
+                  onValueChange={setMcpUrl}
+                  placeholder={isRag ? "http://rag-host/api/mcp" : "http://nl2sql-host/api/mcp"}
+                  helper={t("settings.productMcp.urlHint")}
+                />
                 {/* 空欄を 0 として送らない。backend（ProductMcpSettingsPatch）も 0 以下を拒否する（#540）。 */}
-                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`} required error={fieldErrors.timeout}>
-                  <input
-                    id={`${kind}-timeout`}
+                <TextField
+                  id={`${kind}-timeout`}
+                  label={t("settings.timeout")}
+                  required
+                  error={fieldErrors.timeout ?? undefined}
+                  type="number"
+                  min="1"
+                  value={timeoutSeconds}
+                  onValueChange={(value) => {
+                    setTimeoutSeconds(value);
+                    setFieldErrors((current) => ({ ...current, timeout: null }));
+                  }}
+                />
+                {isNl2Sql ? (
+                  <TextField
+                    id="nl2sql-default-limit"
+                    label={t("settings.defaultLimit")}
+                    required
+                    error={fieldErrors.defaultLimit ?? undefined}
+                    helper={t("settings.productMcp.defaultLimitHint")}
                     type="number"
                     min="1"
-                    aria-required="true"
-                    aria-invalid={fieldErrors.timeout ? true : undefined}
-                    aria-describedby={fieldErrors.timeout ? fieldErrorId(`${kind}-timeout`) : undefined}
-                    value={timeoutSeconds}
-                    onChange={(event) => {
-                      setTimeoutSeconds(event.target.value);
-                      setFieldErrors((current) => ({ ...current, timeout: null }));
+                    max="1000"
+                    value={defaultLimit}
+                    onValueChange={(value) => {
+                      setDefaultLimit(value);
+                      setFieldErrors((current) => ({ ...current, defaultLimit: null }));
                     }}
-                    className={INPUT_CLASS}
                   />
-                </Field>
-                {isNl2Sql ? (
-                  <Field
-                    label={t("settings.defaultLimit")}
-                    htmlFor="nl2sql-default-limit"
-                    required
-                    error={fieldErrors.defaultLimit}
-                  >
-                    <input
-                      id="nl2sql-default-limit"
-                      type="number"
-                      aria-required="true"
-                      min="1"
-                      max="1000"
-                      value={defaultLimit}
-                      aria-invalid={fieldErrors.defaultLimit ? true : undefined}
-                      onChange={(event) => {
-                        setDefaultLimit(event.target.value);
-                        setFieldErrors((current) => ({ ...current, defaultLimit: null }));
-                      }}
-                      aria-describedby={
-                        fieldErrors.defaultLimit
-                          ? `nl2sql-default-limit-hint ${fieldErrorId("nl2sql-default-limit")}`
-                          : "nl2sql-default-limit-hint"
-                      }
-                      className={INPUT_CLASS}
-                    />
-                    <p id="nl2sql-default-limit-hint" className="mt-1 text-xs leading-5 text-fg-muted">
-                      {t("settings.productMcp.defaultLimitHint")}
-                    </p>
-                  </Field>
                 ) : null}
               </fieldset>
               {settings.data ? <ProductMcpAuthStatus settings={settings.data} /> : null}
@@ -2473,22 +2417,20 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-          <Field label={t("settings.mcpDiscovery.serverId")} htmlFor="mcp-discovery-server-id">
-            <input
-              id="mcp-discovery-server-id"
-              value={serverId}
-              onChange={(event) => setServerId(event.target.value)}
-              className={fieldControlClassName()}
-            />
-          </Field>
-          <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
-            <input
-              id="mcp-discovery-trace-id"
-              value={traceId}
-              onChange={(event) => setTraceId(event.target.value)}
-              className={fieldControlClassName()}
-            />
-          </Field>
+          <TextField
+            id="mcp-discovery-server-id"
+            label={t("settings.mcpDiscovery.serverId")}
+            className="min-w-0"
+            value={serverId}
+            onValueChange={setServerId}
+          />
+          <TextField
+            id="mcp-discovery-trace-id"
+            label={t("settings.mcpDiscovery.traceId")}
+            className="min-w-0"
+            value={traceId}
+            onValueChange={setTraceId}
+          />
           <Button
             variant="secondary"
             onClick={() => void tools.refetch()}
@@ -2625,8 +2567,6 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
   return type;
 }
 
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const INPUT_CLASS = fieldControlClassName();
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
     return t("settings.mcpServers.authOauth");
@@ -2969,113 +2909,89 @@ function McpServerEditor({
             <Card className="min-w-0">
               <CardContent className="space-y-4 pt-5">
                 {/* Server ID は作成時だけ入力でき、必須（backend の create_external_mcp_server と送信ガード）。 */}
-                <Field
+                <TextField
+                  id="mcp-server-id"
                   label={t("settings.mcpServers.serverId")}
-                  htmlFor="mcp-server-id"
                   required={!editingId}
-                  error={serverIdError}
-                >
-                  <input
-                    id="mcp-server-id"
-                    value={form.serverId}
-                    disabled={Boolean(editingId)}
-                    aria-required={!editingId || undefined}
-                    aria-invalid={serverIdError ? true : undefined}
-                    aria-describedby={
-                      serverIdError ? `mcp-server-id-hint ${fieldErrorId("mcp-server-id")}` : "mcp-server-id-hint"
-                    }
-                    onChange={(event) => {
-                      setForm({ ...form, serverId: event.target.value });
-                      setServerIdError(null);
-                    }}
-                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
-                  />
-                  <p id="mcp-server-id-hint" className="mt-1 text-xs leading-5 text-fg-muted">
-                    {t("settings.mcpServers.serverIdHint")}
-                  </p>
-                </Field>
-                <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
-                  <input
-                    id="mcp-server-label"
-                    value={form.label}
-                    onChange={(event) => setForm({ ...form, label: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
-                  <input
-                    id="mcp-server-base-url"
-                    value={form.baseUrl}
-                    onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout" required error={timeoutError}>
-                  <input
-                    id="mcp-server-timeout"
-                    type="number"
-                    min="1"
-                    aria-required="true"
-                    aria-invalid={timeoutError ? true : undefined}
-                    aria-describedby={timeoutError ? fieldErrorId("mcp-server-timeout") : undefined}
-                    value={form.timeoutSeconds}
-                    onChange={(event) => {
-                      setForm({ ...form, timeoutSeconds: event.target.value });
-                      setTimeoutError(null);
-                    }}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
-                  <input
-                    id="mcp-server-session"
-                    value={form.sessionId}
-                    autoComplete="off"
-                    onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
+                  error={serverIdError ?? undefined}
+                  helper={t("settings.mcpServers.serverIdHint")}
+                  value={form.serverId}
+                  disabled={Boolean(editingId)}
+                  onValueChange={(value) => {
+                    setForm({ ...form, serverId: value });
+                    setServerIdError(null);
+                  }}
+                />
+                <TextField
+                  id="mcp-server-label"
+                  label={t("settings.mcpServers.label")}
+                  value={form.label}
+                  onValueChange={(value) => setForm({ ...form, label: value })}
+                />
+                <TextField
+                  id="mcp-server-base-url"
+                  label={t("settings.baseUrl")}
+                  value={form.baseUrl}
+                  onValueChange={(value) => setForm({ ...form, baseUrl: value })}
+                />
+                <TextField
+                  id="mcp-server-timeout"
+                  label={t("settings.timeout")}
+                  required
+                  error={timeoutError ?? undefined}
+                  type="number"
+                  min="1"
+                  value={form.timeoutSeconds}
+                  onValueChange={(value) => {
+                    setForm({ ...form, timeoutSeconds: value });
+                    setTimeoutError(null);
+                  }}
+                />
+                <TextField
+                  id="mcp-server-session"
+                  label={t("settings.mcpSessionId")}
+                  value={form.sessionId}
+                  autoComplete="off"
+                  onValueChange={(value) => setForm({ ...form, sessionId: value })}
+                />
               </CardContent>
             </Card>
           </Section>
           <Section title={t("mcpServers.oauth")}>
             <Card className="min-w-0">
               <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
-                <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
-                  <input
-                    id="mcp-server-oauth-token"
-                    value={form.oauthTokenUrl}
-                    onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
-                  <input
-                    id="mcp-server-oauth-scope"
-                    value={form.oauthScope}
-                    onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
-                  <input
-                    id="mcp-server-oauth-client"
-                    value={form.oauthClientId}
-                    autoComplete="off"
-                    onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.mcpServers.oauthClientSecret")} htmlFor="mcp-server-oauth-secret">
-                  <input
-                    id="mcp-server-oauth-secret"
-                    type="password"
-                    value={form.oauthClientSecret}
-                    autoComplete="off"
-                    onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
+                <TextField
+                  id="mcp-server-oauth-token"
+                  label={t("settings.mcpServers.oauthTokenUrl")}
+                  className="min-w-0"
+                  value={form.oauthTokenUrl}
+                  onValueChange={(value) => setForm({ ...form, oauthTokenUrl: value })}
+                />
+                <TextField
+                  id="mcp-server-oauth-scope"
+                  label={t("settings.mcpServers.oauthScope")}
+                  className="min-w-0"
+                  value={form.oauthScope}
+                  onValueChange={(value) => setForm({ ...form, oauthScope: value })}
+                />
+                <TextField
+                  id="mcp-server-oauth-client"
+                  label={t("settings.mcpServers.oauthClientId")}
+                  className="min-w-0"
+                  value={form.oauthClientId}
+                  autoComplete="off"
+                  onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
+                />
+                {/* API が保存済みの有無を返さないため、「保存済み / 未設定」を出す SecretField ではなく password の TextField にする（#631）。 */}
+                <TextField
+                  id="mcp-server-oauth-secret"
+                  label={t("settings.mcpServers.oauthClientSecret")}
+                  className="min-w-0"
+                  type="password"
+                  value={form.oauthClientSecret}
+                  autoComplete="off"
+                  onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
+                />
               </CardContent>
             </Card>
           </Section>
@@ -3509,58 +3425,48 @@ function SkillEditor({
               <Card className="min-w-0">
                 <CardContent className="space-y-4 pt-5">
                   {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
-                  <Field label={t("skills.id")} htmlFor="skill-id" required={!editingId} error={fieldErrors.id}>
-                    <input
-                      id="skill-id"
-                      value={form.id}
-                      disabled={Boolean(editingId)}
-                      aria-required={!editingId || undefined}
-                      aria-invalid={fieldErrors.id ? true : undefined}
-                      aria-describedby={fieldErrors.id ? fieldErrorId("skill-id") : undefined}
-                      onChange={(event) => {
-                        setForm({ ...form, id: event.target.value });
-                        setFieldErrors((current) => ({ ...current, id: undefined }));
-                      }}
-                      className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
-                    />
-                  </Field>
-                  <Field label={t("skills.name")} htmlFor="skill-name" required error={fieldErrors.name}>
-                    <input
-                      id="skill-name"
-                      value={form.name}
-                      aria-required="true"
-                      aria-invalid={fieldErrors.name ? true : undefined}
-                      aria-describedby={fieldErrors.name ? fieldErrorId("skill-name") : undefined}
-                      onChange={(event) => {
-                        setForm({ ...form, name: event.target.value });
-                        setFieldErrors((current) => ({ ...current, name: undefined }));
-                      }}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
-                  <Field label={t("agent.description")} htmlFor="skill-description">
-                    <input
-                      id="skill-description"
-                      value={form.description}
-                      onChange={(event) => setForm({ ...form, description: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
+                  <TextField
+                    id="skill-id"
+                    label={t("skills.id")}
+                    required={!editingId}
+                    error={fieldErrors.id}
+                    value={form.id}
+                    disabled={Boolean(editingId)}
+                    onValueChange={(value) => {
+                      setForm({ ...form, id: value });
+                      setFieldErrors((current) => ({ ...current, id: undefined }));
+                    }}
+                  />
+                  <TextField
+                    id="skill-name"
+                    label={t("skills.name")}
+                    required
+                    error={fieldErrors.name}
+                    value={form.name}
+                    onValueChange={(value) => {
+                      setForm({ ...form, name: value });
+                      setFieldErrors((current) => ({ ...current, name: undefined }));
+                    }}
+                  />
+                  <TextField
+                    id="skill-description"
+                    label={t("agent.description")}
+                    value={form.description}
+                    onValueChange={(value) => setForm({ ...form, description: value })}
+                  />
                   <TextareaField
                     id="skill-instructions"
                     label={t("skills.instructions")}
                     value={form.instructions}
                     onValueChange={(value) => setForm({ ...form, instructions: value })}
                   />
-                  <Field label={t("skills.tags")} htmlFor="skill-tags">
-                    <input
-                      id="skill-tags"
-                      value={form.tags}
-                      onChange={(event) => setForm({ ...form, tags: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                    <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.tagsHint")}</p>
-                  </Field>
+                  <TextField
+                    id="skill-tags"
+                    label={t("skills.tags")}
+                    helper={t("skills.tagsHint")}
+                    value={form.tags}
+                    onValueChange={(value) => setForm({ ...form, tags: value })}
+                  />
                   <label className="flex items-center gap-2 text-sm text-fg">
                     <Switch
                       checked={form.enabled}
@@ -4365,37 +4271,30 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         <Section title={t("marketplaces.overview")}>
           <Card className="min-w-0">
             <CardContent className="space-y-4 pt-5">
-              <Field label={t("marketplaces.id")} htmlFor="mkt-id" required error={idError}>
-                <input
-                  id="mkt-id"
-                  value={form.id}
-                  aria-required="true"
-                  aria-invalid={idError ? true : undefined}
-                  aria-describedby={idError ? fieldErrorId("mkt-id") : undefined}
-                  onChange={(event) => {
-                    setForm({ ...form, id: event.target.value });
-                    setIdError(null);
-                  }}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("marketplaces.name")} htmlFor="mkt-name">
-                <input
-                  id="mkt-name"
-                  value={form.name}
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("marketplaces.url")} htmlFor="mkt-url">
-                <input
-                  id="mkt-url"
-                  value={form.url}
-                  onChange={(event) => setForm({ ...form, url: event.target.value })}
-                  className={INPUT_CLASS}
-                />
-                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("marketplaces.urlHint")}</p>
-              </Field>
+              <TextField
+                id="mkt-id"
+                label={t("marketplaces.id")}
+                required
+                error={idError ?? undefined}
+                value={form.id}
+                onValueChange={(value) => {
+                  setForm({ ...form, id: value });
+                  setIdError(null);
+                }}
+              />
+              <TextField
+                id="mkt-name"
+                label={t("marketplaces.name")}
+                value={form.name}
+                onValueChange={(value) => setForm({ ...form, name: value })}
+              />
+              <TextField
+                id="mkt-url"
+                label={t("marketplaces.url")}
+                helper={t("marketplaces.urlHint")}
+                value={form.url}
+                onValueChange={(value) => setForm({ ...form, url: value })}
+              />
             </CardContent>
           </Card>
         </Section>
@@ -4705,11 +4604,6 @@ export function CommandPolicySettingsPage() {
   const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
   const clearFieldError = (field: CommandPolicyField) =>
     setFieldErrors((current) => (current[field] ? { ...current, [field]: null } : current));
-  /** 欄の aria-invalid / aria-describedby（エラーは Field が欄の直下に出す）。 */
-  const invalidProps = (field: CommandPolicyField) =>
-    fieldErrors[field]
-      ? { "aria-invalid": true, "aria-describedby": fieldErrorId(COMMAND_POLICY_FIELD_IDS[field]) }
-      : {};
 
   // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
   const serverChanged = useValuesChanged([settings.data]);
@@ -4836,88 +4730,60 @@ export function CommandPolicySettingsPage() {
               </label>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Field
+                <TextField
+                  id="command-policy-workspace-root"
                   label={t("settings.commandPolicy.workspaceRoot")}
-                  htmlFor="command-policy-workspace-root"
                   required
-                  error={fieldErrors.workspaceRoot}
-                >
-                  <input
-                    id="command-policy-workspace-root"
-                    aria-required="true"
-                    {...invalidProps("workspaceRoot")}
-                    value={workspaceRoot}
-                    onChange={(event) => {
-                      setWorkspaceRoot(event.target.value);
-                      clearFieldError("workspaceRoot");
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
-                <Field
+                  error={fieldErrors.workspaceRoot ?? undefined}
+                  value={workspaceRoot}
+                  onValueChange={(value) => {
+                    setWorkspaceRoot(value);
+                    clearFieldError("workspaceRoot");
+                  }}
+                />
+                <TextField
+                  id="command-policy-output-limit"
                   label={t("settings.commandPolicy.outputLimit")}
-                  htmlFor="command-policy-output-limit"
                   required
-                  error={fieldErrors.outputLimit}
-                >
-                  <input
-                    id="command-policy-output-limit"
-                    aria-required="true"
-                    {...invalidProps("outputLimit")}
-                    type="number"
-                    min="1"
-                    value={outputLimit}
-                    onChange={(event) => {
-                      setOutputLimit(event.target.value);
-                      clearFieldError("outputLimit");
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
-                <Field
+                  error={fieldErrors.outputLimit ?? undefined}
+                  type="number"
+                  min="1"
+                  value={outputLimit}
+                  onValueChange={(value) => {
+                    setOutputLimit(value);
+                    clearFieldError("outputLimit");
+                  }}
+                />
+                <TextField
+                  id="command-policy-default-timeout"
                   label={t("settings.commandPolicy.defaultTimeout")}
-                  htmlFor="command-policy-default-timeout"
                   required
-                  error={fieldErrors.defaultTimeout}
-                >
-                  <input
-                    id="command-policy-default-timeout"
-                    aria-required="true"
-                    {...invalidProps("defaultTimeout")}
-                    type="number"
-                    min="0.1"
-                    step="0.1"
-                    value={defaultTimeout}
-                    onChange={(event) => {
-                      setDefaultTimeout(event.target.value);
-                      clearFieldError("defaultTimeout");
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
-                <Field
+                  error={fieldErrors.defaultTimeout ?? undefined}
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={defaultTimeout}
+                  onValueChange={(value) => {
+                    setDefaultTimeout(value);
+                    clearFieldError("defaultTimeout");
+                  }}
+                />
+                <TextField
+                  id="command-policy-max-timeout"
                   label={t("settings.commandPolicy.maxTimeout")}
-                  htmlFor="command-policy-max-timeout"
                   required
-                  error={fieldErrors.maxTimeout}
-                >
-                  <input
-                    id="command-policy-max-timeout"
-                    aria-required="true"
-                    {...invalidProps("maxTimeout")}
-                    type="number"
-                    min="0.1"
-                    step="0.1"
-                    value={maxTimeout}
-                    onChange={(event) => {
-                      setMaxTimeout(event.target.value);
-                      clearFieldError("maxTimeout");
-                      // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
-                      clearFieldError("defaultTimeout");
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
+                  error={fieldErrors.maxTimeout ?? undefined}
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={maxTimeout}
+                  onValueChange={(value) => {
+                    setMaxTimeout(value);
+                    clearFieldError("maxTimeout");
+                    // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
+                    clearFieldError("defaultTimeout");
+                  }}
+                />
               </div>
 
               <TextareaField
@@ -4932,36 +4798,28 @@ export function CommandPolicySettingsPage() {
               />
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label={t("settings.commandPolicy.artifactStorage")} htmlFor="command-policy-artifact-storage">
-                  <select
-                    id="command-policy-artifact-storage"
-                    value={artifactStorageBackend}
-                    onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className={fieldControlClassName()}
-                  >
-                    <option value="inline">{t("settings.commandPolicy.inline")}</option>
-                    <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
-                  </select>
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.storageHint")}</p>
-                </Field>
-                <Field
+                <SelectField<"inline" | "filesystem">
+                  id="command-policy-artifact-storage"
+                  label={t("settings.commandPolicy.artifactStorage")}
+                  helper={t("settings.commandPolicy.storageHint")}
+                  value={artifactStorageBackend}
+                  options={[
+                    { value: "inline", label: t("settings.commandPolicy.inline") },
+                    { value: "filesystem", label: t("settings.commandPolicy.filesystem") },
+                  ]}
+                  onValueChange={setArtifactStorageBackend}
+                />
+                <TextField
+                  id="command-policy-artifact-path"
                   label={t("settings.commandPolicy.artifactPath")}
-                  htmlFor="command-policy-artifact-path"
                   required
-                  error={fieldErrors.artifactStoragePath}
-                >
-                  <input
-                    id="command-policy-artifact-path"
-                    aria-required="true"
-                    {...invalidProps("artifactStoragePath")}
-                    value={artifactStoragePath}
-                    onChange={(event) => {
-                      setArtifactStoragePath(event.target.value);
-                      clearFieldError("artifactStoragePath");
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
+                  error={fieldErrors.artifactStoragePath ?? undefined}
+                  value={artifactStoragePath}
+                  onValueChange={(value) => {
+                    setArtifactStoragePath(value);
+                    clearFieldError("artifactStoragePath");
+                  }}
+                />
               </div>
 
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
@@ -5039,6 +4897,13 @@ export function ToolPolicySettingsPage() {
     setToolPolicies((current) => ({ ...current, [toolName]: policy }));
   }
 
+  const toolPolicyOptions: SelectFieldOption<ToolPolicyChoice>[] = [
+    { value: "default", label: t("settings.toolPolicy.default") },
+    { value: "allow", label: t("settings.toolPolicy.allow") },
+    { value: "ask", label: t("settings.toolPolicy.ask") },
+    { value: "deny", label: t("settings.toolPolicy.deny") },
+  ];
+
   function save() {
     const allow: string[] = [];
     const ask: string[] = [];
@@ -5076,17 +4941,17 @@ export function ToolPolicySettingsPage() {
               <CardDescription>{t("page.settings.toolPolicy.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <Field label={t("settings.toolPolicy.defaultMode")} htmlFor="tool-policy-default-mode">
-                <select
-                  id="tool-policy-default-mode"
-                  value={defaultMode}
-                  onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className={fieldControlClassName({ width: "md" })}
-                >
-                  <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
-                  <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
-                </select>
-              </Field>
+              <SelectField<"approval" | "deny">
+                id="tool-policy-default-mode"
+                label={t("settings.toolPolicy.defaultMode")}
+                width="md"
+                value={defaultMode}
+                options={[
+                  { value: "approval", label: t("settings.toolPolicy.defaultModeApproval") },
+                  { value: "deny", label: t("settings.toolPolicy.defaultModeDeny") },
+                ]}
+                onValueChange={setDefaultMode}
+              />
 
               {tools.error ? <Banner severity="danger">{tools.error.message}</Banner> : null}
               {tools.isLoading ? (
@@ -5124,19 +4989,14 @@ export function ToolPolicySettingsPage() {
                             {tool.description}
                           </p>
                         </div>
-                        <Field label={t("settings.toolPolicy.policy")} htmlFor={`tool-policy-${tool.name}`}>
-                          <select
-                            id={`tool-policy-${tool.name}`}
-                            value={policy}
-                            onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className={fieldControlClassName()}
-                          >
-                            <option value="default">{t("settings.toolPolicy.default")}</option>
-                            <option value="allow">{t("settings.toolPolicy.allow")}</option>
-                            <option value="ask">{t("settings.toolPolicy.ask")}</option>
-                            <option value="deny">{t("settings.toolPolicy.deny")}</option>
-                          </select>
-                        </Field>
+                        <SelectField<ToolPolicyChoice>
+                          id={`tool-policy-${tool.name}`}
+                          label={t("settings.toolPolicy.policy")}
+                          className="min-w-0"
+                          value={policy}
+                          options={toolPolicyOptions}
+                          onValueChange={(value) => setPolicy(tool.name, value)}
+                        />
                       </div>
                     );
                   })}
@@ -5242,54 +5102,32 @@ export function RuntimeSafetySettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                <Field
+                <TextField
+                  id="runtime-safety-max-tool-calls"
                   label={t("settings.runtimeSafety.maxToolCalls")}
-                  htmlFor="runtime-safety-max-tool-calls"
                   required
-                  error={fieldErrors.maxToolCalls}
-                >
-                  <input
-                    id="runtime-safety-max-tool-calls"
-                    type="number"
-                    min="0"
-                    aria-required="true"
-                    aria-invalid={fieldErrors.maxToolCalls ? true : undefined}
-                    aria-describedby={
-                      fieldErrors.maxToolCalls ? fieldErrorId("runtime-safety-max-tool-calls") : undefined
-                    }
-                    value={maxToolCalls}
-                    onChange={(event) => {
-                      setMaxToolCalls(event.target.value);
-                      setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
-                <Field
+                  error={fieldErrors.maxToolCalls ?? undefined}
+                  type="number"
+                  min="0"
+                  value={maxToolCalls}
+                  onValueChange={(value) => {
+                    setMaxToolCalls(value);
+                    setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
+                  }}
+                />
+                <TextField
+                  id="runtime-safety-max-pending-approvals"
                   label={t("settings.runtimeSafety.maxPendingApprovals")}
-                  htmlFor="runtime-safety-max-pending-approvals"
                   required
-                  error={fieldErrors.maxPendingApprovals}
-                >
-                  <input
-                    id="runtime-safety-max-pending-approvals"
-                    type="number"
-                    min="0"
-                    aria-required="true"
-                    aria-invalid={fieldErrors.maxPendingApprovals ? true : undefined}
-                    aria-describedby={
-                      fieldErrors.maxPendingApprovals
-                        ? fieldErrorId("runtime-safety-max-pending-approvals")
-                        : undefined
-                    }
-                    value={maxPendingApprovals}
-                    onChange={(event) => {
-                      setMaxPendingApprovals(event.target.value);
-                      setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
+                  error={fieldErrors.maxPendingApprovals ?? undefined}
+                  type="number"
+                  min="0"
+                  value={maxPendingApprovals}
+                  onValueChange={(value) => {
+                    setMaxPendingApprovals(value);
+                    setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
+                  }}
+                />
               </div>
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               <Button onClick={save} loading={mutation.isPending} icon={Save}>
@@ -5494,14 +5332,13 @@ export function RuntimeSnapshotSettingsPage() {
               spellCheck={false}
               textareaClassName="min-h-80"
             />
-            <Field label={t("settings.snapshot.reason")} htmlFor="runtime-snapshot-reason">
-              <input
-                id="runtime-snapshot-reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                className={fieldControlClassName()}
-              />
-            </Field>
+            <TextField
+              id="runtime-snapshot-reason"
+              label={t("settings.snapshot.reason")}
+              width="full"
+              value={reason}
+              onValueChange={setReason}
+            />
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
@@ -5851,28 +5688,23 @@ function AgentEditorView({
           <Section title={t("agent.basic")}>
             <Card className="min-w-0">
               <CardContent className="space-y-4 pt-5">
-                <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`} required error={nameError}>
-                  <input
-                    id={`${fieldId}-agent-name`}
-                    value={name}
-                    aria-required="true"
-                    aria-invalid={nameError ? true : undefined}
-                    aria-describedby={nameError ? fieldErrorId(`${fieldId}-agent-name`) : undefined}
-                    onChange={(event) => {
-                      setName(event.target.value);
-                      setNameError(null);
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
-                <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
-                  <input
-                    id={`${fieldId}-agent-description`}
-                    value={agentDescription}
-                    onChange={(event) => setAgentDescription(event.target.value)}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
+                <TextField
+                  id={`${fieldId}-agent-name`}
+                  label={t("agent.name")}
+                  required
+                  error={nameError ?? undefined}
+                  value={name}
+                  onValueChange={(value) => {
+                    setName(value);
+                    setNameError(null);
+                  }}
+                />
+                <TextField
+                  id={`${fieldId}-agent-description`}
+                  label={t("agent.description")}
+                  value={agentDescription}
+                  onValueChange={setAgentDescription}
+                />
                 <TextareaField
                   id={`${fieldId}-agent-instructions`}
                   label={t("agent.instructions")}
@@ -6174,52 +6006,31 @@ function RuntimeBindingsPanel({
             <>
               <div className="grid gap-3 md:grid-cols-2">
                 {/* Runtime と Runtime 内 Agent ID は RuntimeBinding の必須項目（未入力は追加を押したときに欄の下へ出す）。 */}
-                <Field
+                <SelectField
+                  id={`${agent.id}-binding-runtime`}
                   label={t("binding.runtime")}
-                  htmlFor={`${agent.id}-binding-runtime`}
+                  className="min-w-0"
                   required
-                  error={runtimeError}
-                >
-                  <select
-                    id={`${agent.id}-binding-runtime`}
-                    value={runtimeId}
-                    aria-required="true"
-                    aria-invalid={runtimeError ? true : undefined}
-                    aria-describedby={runtimeError ? fieldErrorId(`${agent.id}-binding-runtime`) : undefined}
-                    onChange={(event) => {
-                      setRuntimeId(event.target.value);
-                      setRuntimeError(null);
-                    }}
-                    className={fieldControlClassName()}
-                  >
-                    {candidates.map((runtime) => (
-                      <option key={runtime.id} value={runtime.id}>
-                        {runtime.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field
+                  error={runtimeError ?? undefined}
+                  value={runtimeId}
+                  options={candidates.map((runtime) => ({ value: runtime.id, label: runtime.name }))}
+                  onValueChange={(value) => {
+                    setRuntimeId(value);
+                    setRuntimeError(null);
+                  }}
+                />
+                <TextField
+                  id={`${agent.id}-binding-native-ref`}
                   label={t("binding.nativeAgentRef")}
-                  htmlFor={`${agent.id}-binding-native-ref`}
+                  className="min-w-0"
                   required
-                  error={nativeAgentRefError}
-                >
-                  <input
-                    id={`${agent.id}-binding-native-ref`}
-                    value={nativeAgentRef}
-                    aria-required="true"
-                    aria-invalid={nativeAgentRefError ? true : undefined}
-                    aria-describedby={
-                      nativeAgentRefError ? fieldErrorId(`${agent.id}-binding-native-ref`) : undefined
-                    }
-                    onChange={(event) => {
-                      setNativeAgentRef(event.target.value);
-                      setNativeAgentRefError(null);
-                    }}
-                    className={fieldControlClassName()}
-                  />
-                </Field>
+                  error={nativeAgentRefError ?? undefined}
+                  value={nativeAgentRef}
+                  onValueChange={(value) => {
+                    setNativeAgentRef(value);
+                    setNativeAgentRefError(null);
+                  }}
+                />
               </div>
               {error ? <Banner severity="danger">{error.message}</Banner> : null}
               <Button
@@ -7277,42 +7088,6 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
         />
       </CardContent>
     </Card>
-  );
-}
-
-/** 未入力などの欄のエラーの id。入力の aria-describedby と FieldError の id をそろえる（#531）。 */
-function fieldErrorId(htmlFor: string): string {
-  return `${htmlFor}-error`;
-}
-
-/**
- * 素の input / select / textarea のラベル・必須の表示・欄のエラー（#531）。
- * `required` の欄は入力側に `aria-required="true"` を付ける（タグは FieldLabel が二重に読ませない）。
- * `error` を渡す欄は、入力側に `aria-invalid` と `aria-describedby={fieldErrorId(htmlFor)}` を付ける。
- */
-function Field({
-  label,
-  htmlFor,
-  required = false,
-  error,
-  className,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  /** backend の検証か画面の送信ガードで必須の欄だけ true にする。 */
-  required?: boolean;
-  /** 欄の直下に出すエラー（例:「名前を入力してください。」）。 */
-  error?: string | null;
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className={className ? `space-y-1.5 ${className}` : "space-y-1.5"}>
-      <FieldLabel htmlFor={htmlFor} label={label} required={required} />
-      {children}
-      <FieldError id={fieldErrorId(htmlFor)} message={error} />
-    </div>
   );
 }
 
