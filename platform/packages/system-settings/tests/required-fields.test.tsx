@@ -74,6 +74,17 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+/**
+ * 欄の下のエラー（TextField が出す FieldError）。欄の aria-describedby が指す要素のうち、id が -error で終わるもの。
+ * TextField のエラーの id は useId を含むので、固定の id ではなく欄との結び付きから引く（#631）。
+ */
+function fieldError(inputId: string): HTMLElement | null {
+  const input = host.querySelector(`#${inputId}`);
+  const ids = input?.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
+  const errorId = ids.find((id) => id.endsWith("-error"));
+  return errorId ? document.getElementById(errorId) : null;
+}
+
 async function submitForm(labelledBy: string) {
   const form = host.querySelector<HTMLFormElement>(`form[aria-labelledby="${labelledBy}"]`);
   if (!form) throw new Error(`form not found: ${labelledBy}`);
@@ -102,17 +113,17 @@ describe("RoleManagementPage の必須の欄", () => {
     await act(async () => buttonByText("新規作成").click());
 
     const code = host.querySelector<HTMLInputElement>("#security-role-code");
-    expect(code?.getAttribute("aria-invalid")).toBeNull();
-    // 必須のタグは共有の FieldLabel が出し、入力側の required で伝えるので読み上げない。
+    expect(code?.getAttribute("aria-invalid")).not.toBe("true");
+    // 必須のタグは共有の TextField のラベルが出し、入力側の aria-required で伝えるので読み上げない。
     expect(host.querySelector('label[for="security-role-code"]')?.textContent).toBe("ロールコード必須");
     expect(host.querySelector('label[for="security-role-name"]')?.textContent).toBe("ロール名必須");
 
     await submitForm("security-roles-form-heading");
 
-    expect(host.querySelector("#security-role-code-error")?.textContent).toContain(
+    expect(fieldError("security-role-code")?.textContent).toContain(
       "ロールコードを入力してください。",
     );
-    expect(host.querySelector("#security-role-name-error")?.textContent).toContain(
+    expect(fieldError("security-role-name")?.textContent).toContain(
       "ロール名を入力してください。",
     );
     expect(document.activeElement?.id).toBe("security-role-code");
@@ -153,10 +164,10 @@ describe("ロールコードの検証（#540）", () => {
 
     await submitForm("security-roles-form-heading");
 
-    expect(host.querySelector("#security-role-code-error")?.textContent).toContain(
+    expect(fieldError("security-role-code")?.textContent).toContain(
       "ロールコードは 2 文字以上で入力してください。",
     );
-    expect(host.querySelector("#security-role-name-error")).toBeNull();
+    expect(fieldError("security-role-name")).toBeNull();
     expect(document.activeElement?.id).toBe("security-role-code");
     expect(createRole).not.toHaveBeenCalled();
   });
@@ -193,10 +204,10 @@ describe("UserManagementPage の必須の欄", () => {
 
     await submitForm("security-users-form-heading");
 
-    expect(host.querySelector("#security-user-login-user-id-error")?.textContent).toContain(
+    expect(fieldError("security-user-login-user-id")?.textContent).toContain(
       "ログインユーザーIDを入力してください。",
     );
-    expect(host.querySelector("#security-user-display-name-error")?.textContent).toContain(
+    expect(fieldError("security-user-display-name")?.textContent).toContain(
       "表示名を入力してください。",
     );
     expect(host.querySelector("#security-users-role-error")?.textContent).toContain(

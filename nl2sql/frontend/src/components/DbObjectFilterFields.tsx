@@ -1,11 +1,11 @@
-import { SearchField, fieldControlClassName } from "@engchina/production-ready-ui";
+import {
+  type FieldWidth,
+  SearchField,
+  SelectField,
+} from "@engchina/production-ready-ui";
 import { useId } from "react";
 
 import { t } from "@/lib/i18n";
-
-// 種類の select（native）の見た目。検索・所有者は共有の SearchField（#535）で作り、同じ行に並べる select も
-// 共有の fieldControlClassName で同じ高さ（md。タッチ端末は 44px）・枠線・角丸にそろえる（#384 / #613）。
-const INPUT_CLASS = fieldControlClassName({ className: "py-2" });
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -42,6 +42,8 @@ export interface DbManagementSelectFieldProps<T extends string = string> {
   options: readonly DbManagementSelectOption<T>[];
   onChange: (value: T) => void;
   disabled?: boolean;
+  /** grid の外に単独で置くときの幅（#613）。検索・所有者と並べるツールバーでは短い列挙の sm。 */
+  width?: FieldWidth;
   className?: string;
 }
 
@@ -110,25 +112,22 @@ export function DbManagementSelectField<T extends string>({
   options,
   onChange,
   disabled = false,
+  width,
   className = "",
 }: DbManagementSelectFieldProps<T>) {
+  const id = useId();
+  // 検索・所有者（SearchField）と同じ行に並べる選択欄。共有の SelectField で同じ高さ（md）・枠線・角丸にそろえる（#613 / #631）。
   return (
-    // ラベルと入力欄の間隔は TextField（space-y-1.5）と同じにし、同じ行の入力欄の上端をそろえる。
-    <label className={`grid min-w-0 gap-1.5 text-sm font-medium text-fg ${className}`}>
-      <span>{label}</span>
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value as T)}
-        className={INPUT_CLASS}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SelectField<T>
+      id={`db-management-select-${id}`}
+      label={label}
+      value={value}
+      options={options}
+      onValueChange={onChange}
+      disabled={disabled}
+      width={width}
+      className={`min-w-0 ${className}`}
+    />
   );
 }
 

@@ -20,11 +20,9 @@ import {
   TabPanel,
   Tabs,
   TextField,
-  FieldLabel,
   cn,
   toast,
   useConfirm,
-  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1110,12 +1108,14 @@ function ModelCatalogEditor({
               )}
             >
               <CompactTextInput
+                id={`enterprise-model-${index}-model-id`}
                 label={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
                 value={model.model_id}
                 placeholder={t("settings.model.placeholder.modelId")}
                 onChange={(value) => onModelChange(index, { model_id: value })}
               />
               <CompactTextInput
+                id={`enterprise-model-${index}-display-name`}
                 label={`${t("settings.model.enterprise.displayName")} ${modelNumber}`}
                 value={model.display_name}
                 placeholder={displayNamePlaceholder}
@@ -1260,30 +1260,29 @@ function DefaultModelFields({
 }
 
 function CompactTextInput({
+  id,
   label,
   value,
   placeholder,
   onChange,
 }: {
+  id: string;
   label: string;
   value: string;
   placeholder?: string;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="space-y-1.5">
-      <span className="block text-xs font-medium text-fg-muted lg:sr-only">
-        {label}
-      </span>
-      <input
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        aria-label={label}
-        onChange={(event) => onChange(event.target.value)}
-        className={fieldControlClassName()}
-      />
-    </label>
+    <TextField
+      id={id}
+      label={label}
+      value={value}
+      placeholder={placeholder}
+      onValueChange={onChange}
+      // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面のラベルは
+      // 同じ行の選択欄（接続）と同じ小さい文字にする（#631 でネイティブの input から置き換えた）。
+      className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+    />
   );
 }
 
@@ -1434,26 +1433,22 @@ function NumberField({
   onChange: (value: number) => void;
 }) {
   return (
-    <div className="space-y-1.5">
-      {/* 読み取り専用の固定値。「固定」は必須と同じタグで出さず、補足（helper）で伝える（#531）。 */}
-      <FieldLabel htmlFor={id} label={label} className="block" />
-      <input
-        id={id}
-        type="number"
-        inputMode="decimal"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        readOnly={readOnly}
-        onChange={(event) => onChange(Number(event.target.value))}
-        // 見た目・高さは TextField と同じ（read-only は地が沈む。#613）。
-        className={fieldControlClassName({ className: cn("tnum", readOnly && "text-fg-muted") })}
-      />
-      {helper ? (
-        <p className="text-xs leading-relaxed text-fg-muted">{helper}</p>
-      ) : null}
-    </div>
+    // 読み取り専用の固定値。「固定」は必須と同じタグで出さず、補足（helper）で伝える（#531）。
+    // 見た目・高さは TextField のまま（read-only は地が沈む。#613）。#631 でネイティブの input から置き換えた。
+    <TextField
+      id={id}
+      label={label}
+      type="number"
+      inputMode="decimal"
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      readOnly={readOnly}
+      helper={helper}
+      onValueChange={(next) => onChange(Number(next))}
+      inputClassName={cn("tnum", readOnly && "text-fg-muted")}
+    />
   );
 }
 

@@ -19,7 +19,6 @@ import {
   toast,
   StatusBadge,
   PageHeader,
-  FieldError,
   PageBody,
   useConfirm,
   SelectField,
@@ -35,12 +34,10 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
-  FieldLabel,
   ListPicker,
   type ListPickerGroup,
   type ListPickerItem,
   TextareaField,
-  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -164,9 +161,6 @@ function emptyProfileForm(): ProfileFormState {
     selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG },
   };
 }
-
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const inputClass = fieldControlClassName({ className: "min-w-0 py-2" });
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -632,10 +626,6 @@ function SelectAiConfigFields({
   );
 }
 
-function RequiredFieldError({ id, children }: { id: string; children: string }) {
-  return <FieldError id={id} message={children} />;
-}
-
 /**
  * 許可する表・ビューの選択（#600）。大量の候補から複数を選ぶ共通の `ListPicker` に、スキーマ（owner）ごとのグループと
  * スキーマ単位の一括選択を渡す。検索欄は表・ビューで共通のツールバー（`DbObjectSelectorToolbar`）が持つ。
@@ -870,10 +860,6 @@ function ProfileEditor({
   onRetryOracleSync: () => void;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
-  const nameDescriptionId = nameError
-    ? "profile-name-helper profile-name-error"
-    : "profile-name-helper";
-  const categoryDescriptionId = requiredErrors.category ? "profile-category-error" : undefined;
   return (
     <fieldset disabled={busy} className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
       <DbObjectPanelHeader
@@ -908,23 +894,13 @@ function ProfileEditor({
       <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <h3 className="text-sm font-semibold text-fg">{t("profiles.editor.basic")}</h3>
         <div className="grid gap-x-3 gap-y-1.5 md:grid-cols-2">
-          <FieldLabel
-            htmlFor="profile-name"
+          {/* 名称の補足は 2 列（名称・カテゴリ）にまたがる 1 行で出すため、欄の helper ではなく下の行に置き、
+              aria-describedby で名称の欄につなぐ。狭い画面では名称 → 補足 → カテゴリの順に積む（#631）。 */}
+          <TextField
+            id="profile-name"
             label={t("profiles.field.name")}
             required
-            className="order-1 md:order-none"
-          />
-          <FieldLabel
-            htmlFor="profile-category"
-            label={t("profiles.field.category")}
-            required
-            className="order-5 md:order-none"
-          />
-          <input
-            id="profile-name"
             value={form.name}
-            required
-            aria-required="true"
             onChange={(event) => {
               const value = event.currentTarget.value.toUpperCase();
               onFormChange((current) => ({ ...current, name: value }));
@@ -934,50 +910,29 @@ function ProfileEditor({
               const value = normalizeProfileName(event.currentTarget.value);
               onFormChange((current) => ({ ...current, name: value }));
             }}
-            aria-invalid={Boolean(nameError)}
-            aria-describedby={nameDescriptionId}
-            className={`${inputClass} order-2 md:order-none ${
-              nameError ? "border-danger-fg focus:border-danger-fg" : ""
-            }`}
+            error={nameError ? profileNameErrorMessage(nameError) : undefined}
+            aria-describedby="profile-name-helper"
+            className="order-1 min-w-0 md:order-none"
           />
-          <input
+          <TextField
             id="profile-category"
-            value={form.category}
+            label={t("profiles.field.category")}
             required
-            aria-required="true"
-            aria-invalid={Boolean(requiredErrors.category)}
-            aria-describedby={categoryDescriptionId}
+            value={form.category}
             onChange={(event) => {
               const value = event.currentTarget.value;
               onFormChange((current) => ({ ...current, category: value }));
               if (requiredErrors.category) onRequiredErrorClear("category");
             }}
-            className={`${inputClass} order-6 md:order-none ${
-              requiredErrors.category
-                ? "border-danger-fg focus:border-danger-fg"
-                : ""
-            }`}
+            error={requiredErrors.category ? t("profiles.error.categoryRequired") : undefined}
+            className="order-3 min-w-0 md:order-none"
           />
           <p
             id="profile-name-helper"
-            className="order-3 text-xs font-normal leading-5 text-fg-muted md:order-none md:col-span-2 md:whitespace-nowrap"
+            className="order-2 text-xs font-normal leading-5 text-fg-muted md:order-none md:col-span-2 md:whitespace-nowrap"
           >
             {t("profiles.field.nameHint")}
           </p>
-          {nameError && (
-            <div className="order-4 md:order-none md:col-span-2">
-              <RequiredFieldError id="profile-name-error">
-                {profileNameErrorMessage(nameError)}
-              </RequiredFieldError>
-            </div>
-          )}
-          {requiredErrors.category && (
-            <div className="order-7 md:order-none md:col-start-2">
-              <RequiredFieldError id="profile-category-error">
-                {t("profiles.error.categoryRequired")}
-              </RequiredFieldError>
-            </div>
-          )}
         </div>
       </section>
 
@@ -1229,6 +1184,13 @@ export function ProfileManagementPage() {
   useLayoutEffect(() => { editTargetRef.current = profileParam; });
   const [bulkSelecting, setBulkSelecting] = useState(false);
   const mutationBusy = bulkSelecting || (loading !== "" && loading !== "load");
+  // 名称の重複で保存が失敗したら名称の欄へフォーカスを戻す。保存中は編集の fieldset が disabled なので、
+  // 保存の状態が解けて欄が有効になってから移す（requestAnimationFrame だと再描画の前に走り、無効の欄に当たる）。
+  const [nameFocusRequest, setNameFocusRequest] = useState(0);
+  useEffect(() => {
+    if (nameFocusRequest === 0 || mutationBusy) return;
+    document.getElementById("profile-name")?.focus();
+  }, [nameFocusRequest, mutationBusy]);
   const mutationBusyRef = useRef(mutationBusy);
   // 最新の実行中状態を commit 時に入れる（render 中に ref を書かない）。handler は直前に true を先に入れる。
   useLayoutEffect(() => { mutationBusyRef.current = mutationBusy; });
@@ -1706,7 +1668,7 @@ export function ProfileManagementPage() {
     } catch (err) {
       if (isProfileNameConflictError(err)) {
         setNameError("duplicate");
-        window.requestAnimationFrame(() => document.getElementById("profile-name")?.focus());
+        setNameFocusRequest((current) => current + 1);
         setLoading("");
         return;
       }

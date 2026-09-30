@@ -8,7 +8,7 @@ import { expect, test } from "./fixtures/mock-api";
 async function expectFieldError(page: Page, fieldId: string, message: string) {
   const field = page.locator(`#${fieldId}`);
   await expect(field).toHaveAttribute("aria-invalid", "true");
-  // エラーは aria-describedby で結んだ要素（素の入力欄は `<id>-error`、共有の TextareaField は `<id>-<生成 id>-error`。#584）。
+  // エラーは aria-describedby で結んだ要素（共有の TextField / TextareaField は `<id>-<生成 id>-error`。#584 / #631）。
   await expect(field).toHaveAttribute("aria-describedby", new RegExp(`${fieldId}-\\S*error`));
   const describedBy = (await field.getAttribute("aria-describedby")) ?? "";
   const errorId = describedBy.split(/\s+/).find((id) => id.startsWith(`${fieldId}-`) && id.endsWith("-error"));
@@ -68,7 +68,7 @@ for (const viewport of [
 
       // 0 は「許可しない」という正当な値として保存できる。
       await page.getByLabel("Run あたり最大ツール呼び出し").fill("0");
-      await expect(page.locator("#runtime-safety-max-tool-calls-error")).toHaveCount(0);
+      await expect(page.locator("#runtime-safety-max-tool-calls")).not.toHaveAttribute("aria-invalid", "true");
       await page.getByLabel("Run あたり最大承認待ち").fill("0");
       await page.getByRole("button", { name: "保存" }).click();
       await expect(page.getByText("設定を保存しました")).toBeVisible();

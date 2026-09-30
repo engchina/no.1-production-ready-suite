@@ -1,11 +1,6 @@
 import { useId } from "react";
 
-import {
-  FieldError,
-  StatusBadge,
-  FieldLabel,
-  fieldControlClassName,
-} from "@engchina/production-ready-ui";
+import { FieldError, StatusBadge, TextField } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
 
@@ -41,24 +36,26 @@ export function RowLimitField({
   const describedBy = error ? `${helperId} ${errorId}` : helperId;
 
   return (
-    // 空や範囲外では実行できない（parseSqlRowLimit が null → 実行ボタン無効）ので必須として示す（#531）。
-    <div className={`grid w-full min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
-      <FieldLabel htmlFor={id} label={t("queryResults.rowLimit.label")} required />
-      <input
+    // 件数は短い数値なので欄は xs の幅。補足は 1 行で読めるように（#433）、欄ではなく外枠（行のセル）の幅で出すため、
+    // TextField の helper / error を使わず外に置いて aria-describedby でつなぐ（#613 / #631）。
+    <div className={`grid w-full min-w-0 gap-1 ${className}`}>
+      {/* 空や範囲外では実行できない（parseSqlRowLimit が null → 実行ボタン無効）ので必須として示す（#531）。 */}
+      <TextField
         id={id}
+        label={t("queryResults.rowLimit.label")}
+        required
         type="number"
-        aria-required="true"
         min={1}
         max={MAX_SQL_ROW_LIMIT}
         step={1}
         inputMode="numeric"
         value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
+        onValueChange={onChange}
         disabled={disabled}
         aria-describedby={describedBy}
-        aria-invalid={error ? "true" : undefined}
-        // 件数は短い数値なので xs の幅（補足の文は欄の外枠の幅で出す）。高さ・見た目は TextField と同じ（#613）。
-        className={fieldControlClassName({ width: "xs" })}
+        aria-invalid={Boolean(error)}
+        inputClassName="aria-[invalid=true]:border-danger-fg"
+        width="xs"
       />
       <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-fg-muted">
         {helper}

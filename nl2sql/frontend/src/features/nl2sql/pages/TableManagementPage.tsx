@@ -13,8 +13,7 @@ import {
   ClearActionButton,
   ProcessingIndicator,
   ExecutionConfirmationField,
-  FieldLabel,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -69,10 +68,6 @@ import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
-
-const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const importControlClass = fieldControlClassName();
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
@@ -189,40 +184,26 @@ function ImportWizard({
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <div className={importFieldClass}>
-          <FieldLabel
-            htmlFor="table-import-table-name"
-            label={t("dataTools.dbAdmin.tableName")}
-            required
-          />
-          <input
-            id="table-import-table-name"
-            value={table}
-            disabled={loading}
-            required
-            aria-required="true"
-            onChange={(event) => onTableChange(event.currentTarget.value)}
-            className={`${importControlClass} py-2`}
-            placeholder="IMPORTED_ORDERS"
-          />
-        </div>
-        <div className={importFieldClass}>
-          <FieldLabel
-            htmlFor="table-import-sheet-name"
-            label={t("dataTools.dbAdmin.sheet")}
-            required={sheetRequired}
-          />
-          <input
-            id="table-import-sheet-name"
-            value={sheet}
-            disabled={loading}
-            required={sheetRequired}
-            aria-required={sheetRequired}
-            onChange={(event) => onSheetChange(event.currentTarget.value)}
-            className={`${importControlClass} py-2`}
-            placeholder="Sheet1"
-          />
-        </div>
+        <TextField
+          id="table-import-table-name"
+          label={t("dataTools.dbAdmin.tableName")}
+          required
+          value={table}
+          disabled={loading}
+          onValueChange={onTableChange}
+          placeholder="IMPORTED_ORDERS"
+          className="min-w-0"
+        />
+        <TextField
+          id="table-import-sheet-name"
+          label={t("dataTools.dbAdmin.sheet")}
+          required={sheetRequired}
+          value={sheet}
+          disabled={loading}
+          onValueChange={onSheetChange}
+          placeholder="Sheet1"
+          className="min-w-0"
+        />
       </div>
 
       <FileDropzone

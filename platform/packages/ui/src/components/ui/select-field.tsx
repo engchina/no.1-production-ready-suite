@@ -36,6 +36,18 @@ interface SelectFieldProps<T extends string> {
   /** 必須バッジの文言。既定「必須」。条件付きの必須だけ上書きする。 */
   requiredLabel?: string;
   placeholder?: string;
+  /**
+   * 無効にする（#631）。ボタンはネイティブの disabled（Tab で止まらない・押せない・typeahead も効かない）で、
+   * 地と文字は TextField の disabled と同じ --color-surface-disabled / --color-fg-disabled。開いているときに無効になったら閉じる。
+   */
+  disabled?: boolean;
+  /**
+   * ラベルを画面に出さず読み上げだけにする（`sr-only`）。表の行・一覧のツールバーのように、周り（列の見出し・隣の文言）で
+   * 目的が分かる場所だけに使う。フォームの欄では使わない（TextField の labelHidden と同じ）。
+   */
+  labelHidden?: boolean;
+  /** ボタン（combobox）に付ける `data-testid`（e2e 用）。 */
+  "data-testid"?: string;
   /** 高さ（既定 md = 36px）。同じ行に並べる Button・入力欄と同じ size にする（#613）。 */
   size?: ControlSize;
   /**
@@ -148,6 +160,9 @@ export function SelectField<T extends string>({
   required,
   requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
+  disabled = false,
+  labelHidden = false,
+  "data-testid": testId,
   size = "md",
   width,
   className,
@@ -203,6 +218,11 @@ export function SelectField<T extends string>({
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
 
+  // 開いているあいだに無効になったら閉じる（無効な欄の一覧を残さない）。
+  useEffect(() => {
+    if (disabled && open) closeList();
+  }, [disabled, open]);
+
   useEffect(() => {
     const typeahead = typeaheadRef.current;
     return () => clearTimeout(typeahead.timer);
@@ -230,7 +250,7 @@ export function SelectField<T extends string>({
   }
 
   function openList(nextIndex = selectedIndex >= 0 ? selectedIndex : 0) {
-    if (options.length === 0) return;
+    if (disabled || options.length === 0) return;
     highlight(nextIndex);
     setPortalContainer(selectPortalContainer(buttonRef.current));
     setOpen(true);
@@ -287,6 +307,8 @@ export function SelectField<T extends string>({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    // 無効なボタンにはフォーカスが来ないが、プログラムで focus された場合も開かず typeahead もしない。
+    if (disabled) return;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
@@ -394,6 +416,8 @@ export function SelectField<T extends string>({
                   key={option.value}
                   id={optionId(id, index)}
                   role="option"
+                  // e2e が値で選択肢を選べるように、値を data 属性に出す（表示には使わない）。
+                  data-value={option.value}
                   aria-selected={selected}
                   onMouseEnter={() => {
                     revealHighlightRef.current = false;
@@ -433,7 +457,11 @@ export function SelectField<T extends string>({
 
   return (
     <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
-      <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
+      <label
+        id={labelId}
+        htmlFor={id}
+        className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}
+      >
         {label}
         {required && requiredLabel ? (
           <RequiredBadge label={requiredLabel} aria-hidden />
@@ -453,23 +481,30 @@ export function SelectField<T extends string>({
           aria-labelledby={labelId}
           aria-describedby={describedBy}
           aria-activedescendant={open && activeIndex >= 0 ? optionId(id, activeIndex) : undefined}
+          disabled={disabled}
+          data-testid={testId}
+          // e2e が選択中の値を確かめられるように、値を data 属性に出す（表示には使わない）。
+          data-value={value}
           onClick={() => (open ? closeList() : openList())}
           onKeyDown={handleKeyDown}
           className={cn(
             CONTROL_HEIGHT_CLASS[size],
             "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg outline-none transition-colors",
-            "hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
+            "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
+            // TextField・SearchableSelectField の disabled と同じ地・文字（枠線は残して欄の形を見せる）。
+            "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
             error ? "border-danger-fg" : "border-border-control",
             buttonClassName
           )}
         >
-          <span className={cn("min-w-0 truncate", !selectedOption && !value && "text-fg-muted")}>
+          <span className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}>
             {selectedOption?.label ?? (value || placeholder)}
           </span>
           <ChevronDown
             size={16}
             className={cn(
-              "shrink-0 text-fg-muted transition-transform duration-150",
+              "shrink-0 transition-transform duration-150",
+              disabled ? "text-fg-disabled" : "text-fg-muted",
               open && "rotate-180 text-accent-fg"
             )}
             aria-hidden

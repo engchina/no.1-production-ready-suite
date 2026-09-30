@@ -29,19 +29,16 @@ import {
   type DataTableSort,
   StatusBadge,
   PageHeader,
-  FieldError,
-  FieldLabel,
   PageBody,
   useConfirm,
   ProcessingIndicator,
   ObjectActionBar,
-  cn,
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   TextareaField,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
@@ -91,9 +88,6 @@ const ROLE_POINTER_TO_FIELD = {
 } as const satisfies Readonly<Record<string, RoleFormField>>;
 
 const EMPTY_DRAFT: RoleDraftState = { roleCode: "", displayName: "", description: "" };
-
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const INPUT_CLASS = fieldControlClassName();
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -764,49 +758,37 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-1.5 text-sm font-medium">
-                    <FieldLabel htmlFor="security-role-code" label={t("security.roles.code")} required />
-                    <input
-                      ref={roleCodeRef}
-                      id="security-role-code"
-                      required
-                      disabled={activeView === "edit" || inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.roleCode && "border-danger-fg")}
-                      aria-invalid={fieldErrors.roleCode ? "true" : undefined}
-                      aria-describedby={fieldErrors.roleCode ? "security-role-code-error" : undefined}
-                      value={draft.roleCode}
-                      onChange={(event) => {
-                        if (inputReadOnly) return;
-                        setDraft((current) => ({
-                          ...current,
-                          roleCode: event.target.value.toUpperCase(),
-                        }));
-                        clearFieldError("roleCode");
-                      }}
-                    />
-                    <FieldError id="security-role-code-error" message={fieldErrors.roleCode} />
-                  </div>
-                  <div className="grid gap-1.5 text-sm font-medium">
-                    <FieldLabel htmlFor="security-role-name" label={t("security.roles.name")} required />
-                    <input
-                      ref={displayNameRef}
-                      id="security-role-name"
-                      required
-                      disabled={inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger-fg")}
-                      aria-invalid={fieldErrors.displayName ? "true" : undefined}
-                      aria-describedby={
-                        fieldErrors.displayName ? "security-role-name-error" : undefined
-                      }
-                      value={draft.displayName}
-                      onChange={(event) => {
-                        if (inputReadOnly) return;
-                        setDraft((current) => ({ ...current, displayName: event.target.value }));
-                        clearFieldError("displayName");
-                      }}
-                    />
-                    <FieldError id="security-role-name-error" message={fieldErrors.displayName} />
-                  </div>
+                  <TextField
+                    ref={roleCodeRef}
+                    id="security-role-code"
+                    label={t("security.roles.code")}
+                    required
+                    disabled={activeView === "edit" || inputReadOnly}
+                    error={fieldErrors.roleCode}
+                    value={draft.roleCode}
+                    onValueChange={(value) => {
+                      if (inputReadOnly) return;
+                      setDraft((current) => ({
+                        ...current,
+                        roleCode: value.toUpperCase(),
+                      }));
+                      clearFieldError("roleCode");
+                    }}
+                  />
+                  <TextField
+                    ref={displayNameRef}
+                    id="security-role-name"
+                    label={t("security.roles.name")}
+                    required
+                    disabled={inputReadOnly}
+                    error={fieldErrors.displayName}
+                    value={draft.displayName}
+                    onValueChange={(value) => {
+                      if (inputReadOnly) return;
+                      setDraft((current) => ({ ...current, displayName: value }));
+                      clearFieldError("displayName");
+                    }}
+                  />
                 </div>
                 <TextareaField
                   id="security-role-description"

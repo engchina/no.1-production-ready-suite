@@ -19,9 +19,9 @@ import {
   Pagination,
   TableSkeleton,
   TimedLoadingState,
-  FieldLabel,
   FieldLegend,
-  fieldControlClassName,
+  SelectField,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -36,8 +36,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-
-
 
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
@@ -80,8 +78,6 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const controlClass = fieldControlClassName({ className: "py-2" });
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
 
@@ -424,38 +420,23 @@ export function EvaluationPage() {
                 className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start"
                 data-testid="quality-evaluation-input-row"
               >
-                <div
-                  className="grid min-w-0 content-start gap-1.5 text-sm font-medium text-fg"
-                  data-testid="quality-evaluation-profile-field"
-                >
-                  <FieldLabel
-                    htmlFor="quality-evaluation-profile"
+                <div className="min-w-0" data-testid="quality-evaluation-profile-field">
+                  <SelectField
+                    id="quality-evaluation-profile"
                     label={t("qualityEvaluation.profile.label")}
                     required
-                  />
-                  <select
-                    id="quality-evaluation-profile"
-                    required
-                    className={controlClass}
                     value={profileId}
-                    onChange={(event) => {
-                      setProfileId(event.currentTarget.value);
+                    placeholder={t("qualityEvaluation.profile.placeholder")}
+                    options={(profilesQuery.data?.items ?? [])
+                      .filter((profile) => !profile.archived)
+                      .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                    onValueChange={(nextProfileId) => {
+                      setProfileId(nextProfileId);
                       setFormErrors((current) => ({ ...current, profile: undefined }));
                     }}
-                    aria-invalid={Boolean(formErrors.profile)}
-                    aria-describedby={formErrors.profile ? "quality-profile-error" : undefined}
+                    error={formErrors.profile}
                     disabled={conditionsLocked}
-                  >
-                    <option value="">{t("qualityEvaluation.profile.placeholder")}</option>
-                    {(profilesQuery.data?.items ?? [])
-                      .filter((profile) => !profile.archived)
-                      .map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profileDisplayLabel(profile)}
-                        </option>
-                      ))}
-                  </select>
-                  <FieldError id="quality-profile-error" message={formErrors.profile} />
+                  />
                 </div>
 
                 <div className="grid min-w-0 content-start gap-2">
@@ -591,34 +572,25 @@ export function EvaluationPage() {
                 className="grid min-w-0 gap-3 border-t border-border pt-4 lg:grid-cols-[minmax(13rem,20rem)_minmax(0,1fr)] lg:items-start"
                 data-testid="quality-evaluation-run-summary"
               >
-                <label
-                  className="grid gap-1.5 text-sm font-medium text-fg"
-                  data-testid="quality-evaluation-repeat-field"
-                >
-                  <span data-testid="quality-evaluation-repeat-label">
-                    {t("qualityEvaluation.repeat.label")}
-                  </span>
-                  <input
+                <div className="min-w-0" data-testid="quality-evaluation-repeat-field">
+                  <TextField
+                    id="quality-evaluation-repeat"
+                    label={t("qualityEvaluation.repeat.label")}
                     type="number"
                     min={1}
                     max={10}
                     step={1}
                     inputMode="numeric"
-                    className={controlClass}
                     value={repeatCount}
                     disabled={conditionsLocked}
-                    aria-invalid={Boolean(formErrors.repeat)}
-                    aria-describedby="quality-repeat-hint quality-repeat-error"
+                    helper={t("qualityEvaluation.repeat.hint")}
+                    error={formErrors.repeat}
                     onChange={(event) => {
                       setRepeatCount(Number(event.currentTarget.value));
                       setFormErrors((current) => ({ ...current, repeat: undefined }));
                     }}
                   />
-                  <span id="quality-repeat-hint" className="text-xs font-normal text-fg-muted">
-                    {t("qualityEvaluation.repeat.hint")}
-                  </span>
-                  <FieldError id="quality-repeat-error" message={formErrors.repeat} />
-                </label>
+                </div>
                 <div
                   className="grid min-w-0 content-start gap-1.5 text-sm"
                   data-testid="quality-evaluation-estimate-summary"

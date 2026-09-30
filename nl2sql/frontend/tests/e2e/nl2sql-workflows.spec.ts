@@ -14,6 +14,7 @@ import { expectedControlHeight } from "./_helpers/control-height";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { expectToastStackAtTop } from "./_helpers/toast";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -21,6 +22,22 @@ const jobSnapshotKeys = {
   id: draftKey(systemAdminMe.user_uuid, "legacy", "/query", "nl2sql.activeJobId"),
   startedAt: draftKey(systemAdminMe.user_uuid, "legacy", "/query", "nl2sql.activeJobStartedAt"),
 };
+
+/** SelectField（#631）の一覧を開き、選択肢（role=option）を返す。一覧は Portal で描かれるので aria-controls から引く。 */
+async function openSelectFieldOptions(combobox: Locator) {
+  await combobox.click();
+  const listboxId = await combobox.getAttribute("aria-controls");
+  const listbox = combobox.page().locator(`[id="${listboxId}"]`);
+  await expect(listbox).toBeVisible();
+  return listbox.getByRole("option");
+}
+
+/** openSelectFieldOptions で開いた一覧を Escape で閉じる（選択は変えない）。 */
+async function closeSelectFieldOptions(combobox: Locator) {
+  await combobox.press("Escape");
+  await expect(combobox).toHaveAttribute("aria-expanded", "false");
+}
+
 async function readActiveJobState(page: Page) {
   return page.evaluate((keys) => ({ jobId: sessionStorage.getItem(keys.id), startedAt: sessionStorage.getItem(keys.startedAt) }), jobSnapshotKeys);
 }
@@ -36,7 +53,8 @@ async function expectBoundedRowLimit(input: Locator, action: Locator) {
   await expect(input).toHaveAttribute("min", "1");
   await expect(input).toHaveAttribute("max", "100000");
   await expect(input).toHaveAttribute("step", "1");
-  const label = input.locator("..");
+  // 取得件数上限は共有の TextField（#631）。補足・エラーは TextField の外（行のセルの幅）に置く（input → 枠の div → TextField → セル）。
+  const label = input.locator("xpath=../../..");
   const helper = label.locator("p").first();
   await expect(helper).toContainText("1〜100000 の整数。");
   await expect(helper).toHaveCSS("white-space", "nowrap");
@@ -123,8 +141,8 @@ async function expectRowLimitActionRow(input: Locator, button: Locator) {
   // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
   expect(buttonBox!.x).toBeLessThanOrEqual(inputBox!.x + 1);
-  // 取得件数上限の欄（FieldLabel と入力を包む要素）の親が操作の行（#531 で label の包みから FieldLabel に変わった）。
-  const rowWidth = await input.evaluate((element) => element.parentElement!.parentElement!.clientWidth);
+  // 取得件数上限の欄（input → 枠の div → TextField → 補足を含むセル）の親が操作の行（#631 で共有の TextField に変わった）。
+  const rowWidth = await input.evaluate((element) => element.parentElement!.parentElement!.parentElement!.parentElement!.clientWidth);
   const viewport = input.page().viewportSize();
   if (viewport && viewport.width >= 640) {
     // 件数は短い数値なので xs の幅（8rem。README §4「操作部品の高さと幅」、#613）。
@@ -381,7 +399,9 @@ async function expectCsvUploadLayout(csvPanel: Locator) {
     await expectSameVisualWidth(modeField, fileField);
     await expectTopToBottomOrder(tableSection, fileField, modeField, executionFieldset);
   }
-  await expect(modeField.getByText("DELETE & INSERT(全置換)", { exact: true })).toHaveCount(1);
+  const modeSelect = modeField.getByRole("combobox", { name: "アップロードモード" });
+  await expect((await openSelectFieldOptions(modeSelect)).filter({ hasText: "DELETE & INSERT(全置換)" })).toHaveCount(1);
+  await closeSelectFieldOptions(modeSelect);
 }
 
 function mainScroller(page: Page) {
@@ -3274,7 +3294,7 @@ test("query workbench waits for a real profile id before profile detail and sche
 
   await page.goto("/query");
 
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue(profileId);
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), profileId);
   await expect.poll(() => profileDetailRequests).toBe(1);
   await expect.poll(() => schemaProfileIds.includes(profileId)).toBe(true);
   expect(schemaProfileIds).not.toContain("");
@@ -3357,7 +3377,7 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   // 業務プロファイルは空にできない選択欄で、API で省略しても backend が既定を使うので「必須」を付けない（#540）。
   await expect(page.locator('label[for="nl2sql-profile-select"]')).not.toContainText("必須");
   await expect(page.locator("#nl2sql-profile-select")).not.toHaveAttribute("aria-required", "true");
@@ -3383,7 +3403,7 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   await expect(directExecuteButton).toBeEnabled();
 
   await page.goto("/sql-to-question");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).not.toHaveAttribute("aria-required", "true");
   await expectRequiredTextarea(page, "sql-to-question-sql-input", "対象 SQL");
   const generateButton = page.getByRole("button", { name: "SQL 分析・質問生成" });
@@ -3673,7 +3693,7 @@ test("標準プロファイル削除後は最初の利用可能なプロファ�
 
   await page.goto("/query");
 
-  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue(
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), 
     "alternate"
   );
   await expect(page.getByText("業務プロファイルがありません")).toHaveCount(0);
@@ -3797,15 +3817,15 @@ test("質問から業務プロファイルを自動判定して選択できる",
 
   await page.goto("/query");
   const profileSelect = page.locator("#nl2sql-profile-select");
-  await expect(profileSelect).toHaveValue("default");
+  await expectSelectFieldValue(profileSelect, "default");
 
   const detect = page.getByRole("button", { name: "プロファイルを自動判定" });
   await expect(detect).toBeDisabled(); // 質問未入力では押せない
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
   await detect.click();
 
-  await expect(profileSelect).toHaveValue("payment");
-  await expect(profileSelect.locator('option[value="payment"]')).toHaveText("入金管理（入金管理）");
+  await expectSelectFieldValue(profileSelect, "payment");
+  await expect(profileSelect).toHaveText("入金管理（入金管理）");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await expect(page.getByText(/^参照可能な表/)).toHaveCount(0);
   await expect(page.getByText(/入金管理（入金管理） を選択しました/)).toBeVisible();
@@ -3831,13 +3851,13 @@ test("業務プロファイル自動判定が現在の profile と同じなら s
   );
 
   await page.goto("/query");
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
 
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で確認したい");
   await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
 
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await expect(page.getByText(/既定プロファイル（既定プロファイル） は既に選択されています/)).toBeVisible();
   await expect(page.getByText(/既定プロファイル（既定プロファイル） を選択しました/)).toHaveCount(0);
@@ -3923,11 +3943,11 @@ test("推薦適用後に手動で profile を切り替えると古い選択表�
   const profileSelect = page.locator("#nl2sql-profile-select");
   await nl2sqlQuestionInput(page).fill("従業員情報の一覧");
   await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
-  await expect(profileSelect).toHaveValue("hr");
+  await expectSelectFieldValue(profileSelect, "hr");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
 
-  await profileSelect.selectOption("pm");
-  await expect(profileSelect).toHaveValue("pm");
+  await chooseSelectFieldOption(profileSelect, "pm");
+  await expectSelectFieldValue(profileSelect, "pm");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await nl2sqlQuestionInput(page).fill("プロジェクト情報の一覧");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
@@ -3990,14 +4010,14 @@ test("低信頼度の業務プロファイル自動判定は選択を変更し�
 
   await page.goto("/query");
   const profileSelect = page.locator("#nl2sql-profile-select");
-  await expect(profileSelect).toHaveValue("default");
+  await expectSelectFieldValue(profileSelect, "default");
 
   const detect = page.getByRole("button", { name: "プロファイルを自動判定" });
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
   await expect(detect).toBeEnabled();
   await detect.click();
 
-  await expect(profileSelect).toHaveValue("default");
+  await expectSelectFieldValue(profileSelect, "default");
   await expect(page.getByTestId("nl2sql-recommend-low-confidence")).toContainText(
     "十分な信頼度で自動判定できませんでした"
   );
@@ -8334,7 +8354,7 @@ test("history rerun deep-links back to query with question, engine, and profile"
   await expect(page).toHaveURL(/\/query$/);
   await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
   await expect(page.getByRole("button", { name: /Select AI Agent/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
   await expectNoHorizontalScroll(page);
   await nl2sqlQuestionInput(page).fill("再利用後に編集したクエリ");
   await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
@@ -8465,7 +8485,7 @@ test("sql to question page reverse-generates a business question with one primar
   await page.goto("/sql-to-question");
   await expect(page.getByRole("heading", { name: "SQL から質問を生成" })).toBeVisible();
   await expect(page.locator("#sql-to-question-panel-input")).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
 
@@ -8704,7 +8724,7 @@ test("sql to question page invalidates stale results when inputs change", async 
 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
-  await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("alternate");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル" }), "alternate");
   await expect(sqlToQuestionInput(page)).toHaveValue("");
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
@@ -8724,7 +8744,7 @@ test("sql to question page invalidates stale results when inputs change", async 
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
   // 別 Profile の編集で、元 Profile の候補を消去しない。
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
-  await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("default");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
   await expect(sqlToQuestionInput(page)).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByRole("region", { name: "質問候補", exact: true })).toContainText("請求金額を条件付きで一覧確認したい");
@@ -8920,12 +8940,12 @@ test("feedback management profile switch shows the entries skeleton instead of t
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/feedback-management?tab=entries");
-  const profileSelect = page.getByLabel("DBMS_CLOUD_AI profile");
-  await expect(profileSelect).toHaveValue("NL2SQL_DEFAULT_PROFILE");
+  const profileSelect = page.getByRole("combobox", { name: "DBMS_CLOUD_AI profile", exact: true });
+  await expectSelectFieldValue(profileSelect, "NL2SQL_DEFAULT_PROFILE");
   const entriesScrollRegion = page.getByTestId("feedback-management-entries-scroll-region");
   await expect(entriesScrollRegion.locator("tbody tr").first()).toBeVisible();
 
-  await profileSelect.selectOption(SECOND_PROFILE);
+  await chooseSelectFieldOption(profileSelect, SECOND_PROFILE);
   // 前の profile のエントリを出したままにせず、一覧と詳細を Skeleton にして経過時間を 1 か所だけ出す。
   await expect(page.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-detail-skeleton")).toBeVisible();
@@ -8950,7 +8970,7 @@ test("admin good feedback is available as similar history without manual index r
   });
 
   await page.goto("/feedback-management?tab=appFeedback");
-  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("good");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
   await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
   expect(rebuildRequested).toBe(false);
@@ -8980,10 +9000,12 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByRole("tab", { name: "Select AI ベクトルインデックス" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "類似検索インデックス" })).toBeVisible();
-  const profileSelect = page.getByLabel("DBMS_CLOUD_AI profile");
-  await expect(profileSelect).toHaveValue("NL2SQL_DEFAULT_PROFILE");
-  await expect(profileSelect.locator("option")).toHaveCount(1);
-  await expect(profileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
+  const profileSelect = page.getByRole("combobox", { name: "DBMS_CLOUD_AI profile", exact: true });
+  await expectSelectFieldValue(profileSelect, "NL2SQL_DEFAULT_PROFILE");
+  const profileOptions = await openSelectFieldOptions(profileSelect);
+  await expect(profileOptions).toHaveCount(1);
+  await expect(profileOptions.filter({ hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
+  await closeSelectFieldOptions(profileSelect);
   await expect(page.getByTestId("feedback-management-entry-count")).toContainText("30");
   await expect(page.getByTestId("feedback-management-entries-toolbar")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entries-runtime-info")).toContainText(
@@ -9106,7 +9128,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     name: "Select AI feedback に登録する",
   });
   await expect(registerSelectAiCheckbox).not.toBeChecked();
-  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("good");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
   await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
   expect(api.adminFeedbackPayload).toEqual({
@@ -9121,7 +9143,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("SQL は期待通りです");
 
-  await page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }).selectOption("bad");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "bad");
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAttribute("required", "");
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveAttribute("aria-required", "true");
   await page.getByLabel("管理者レビューコメント（feedback_content）").fill("");
@@ -9152,7 +9174,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     select_ai_response: historySql,
     select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
   });
-  await expect(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true })).toHaveValue("bad");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "bad");
   await expect(registerSelectAiCheckbox).toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveValue(historySql);
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("Select AI 登録用の管理者確認メモ");
@@ -9171,18 +9193,19 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveCount(0);
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("");
-  const feedbackFilterOptions = page.getByLabel("利用者評価フィルター").locator("option");
+  const feedbackFilterOptions = await openSelectFieldOptions(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }));
   await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
   await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
+  await closeSelectFieldOptions(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }));
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(2);
   await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 2");
-  await page.getByLabel("利用者評価フィルター").selectOption("good");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "good");
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
   await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
-  await page.getByLabel("利用者評価フィルター").selectOption("bad");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "bad");
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
   await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
   await expect(
@@ -10774,10 +10797,10 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
       // ドメイン管理だけ: 操作種別と既存ドメイン(定義・関連付け先)を入力確認で見せる。
       // 包み込み label は option 文言も含むため、accessible name(role)で特定する。
       const operation = inputPanel.getByRole("combobox", { name: "操作", exact: true });
-      await expect(operation).toHaveValue("create");
+      await expectSelectFieldValue(operation, "create");
       await expect(inputPanel.getByRole("textbox", { name: "既存ドメイン", exact: true })).toHaveValue(/DOMAIN: APP\.TOTAL_AMOUNT_D/);
-      await operation.selectOption("rebuild");
-      await expect(operation).toHaveValue("rebuild");
+      await chooseSelectFieldOption(operation, "rebuild");
+      await expectSelectFieldValue(operation, "rebuild");
     } else {
       await expect(inputPanel.getByRole("combobox", { name: "操作", exact: true })).toHaveCount(0);
     }
@@ -11472,9 +11495,9 @@ for (const uuidAvailable of [false, true]) {
     await expect(page.getByTestId("synthetic-submitting")).toBeVisible();
     gate.release();
     await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
-    await expect(panel.getByLabel("生成履歴")).toHaveValue("run-001");
+    await expectSelectFieldValue(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-001");
     await page.reload();
-    await expect(panel.getByLabel("生成履歴")).toHaveValue("run-001");
+    await expectSelectFieldValue(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-001");
     await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
     expect(submissions).toHaveLength(1);
     const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
@@ -11598,9 +11621,9 @@ test("synthetic new submission replaces a history link and history keeps its own
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
   await expect(page).not.toHaveURL(/synthetic_run=run-001/);
   await expect(panel.getByRole("timer")).toHaveAccessibleName(/経過時間 01:/);
-  await panel.getByLabel("生成履歴").selectOption("run-001");
+  await chooseSelectFieldOption(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-001");
   await expect(panel.getByRole("timer")).toHaveAccessibleName("処理時間 1:00:00");
-  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await chooseSelectFieldOption(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-002");
   await expect(panel.getByRole("timer")).toHaveAccessibleName(/経過時間 01:/);
   expect(writes).toBe(1);
 });
@@ -11686,11 +11709,13 @@ test("synthetic active runs allow independent same-table and other-table generat
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-003");
   expect(bodies.map((body) => body.table_name)).toEqual(["APP.INVOICES", "APP.PAYMENTS"]);
   expect(bodies[0].idempotency_key).not.toBe(bodies[1].idempotency_key);
-  await expect(panel.getByLabel("生成履歴").getByRole("option")).toHaveCount(3);
-  await expect(panel.getByLabel("生成履歴").getByRole("option", { name: /APP.PAYMENTS.*run-003/ })).toHaveCount(1);
+  const historyOptions = await openSelectFieldOptions(panel.getByRole("combobox", { name: "生成履歴", exact: true }));
+  await expect(historyOptions).toHaveCount(3);
+  await expect(historyOptions.filter({ hasText: /APP.PAYMENTS.*run-003/ })).toHaveCount(1);
+  await closeSelectFieldOptions(panel.getByRole("combobox", { name: "生成履歴", exact: true }));
   await workspace.getByRole("button", { name: "データを表示" }).click();
   await expect.poll(() => readIds.at(-1)).toBe("run-003");
-  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await chooseSelectFieldOption(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-002");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-002");
   expect(bodies).toHaveLength(2);
@@ -11832,7 +11857,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(refreshTablesActions.getByText("対象テーブル一覧の取得")).toBeVisible();
   await expect(refreshTablesActions.getByText("選択中の Profile から対象テーブル一覧を取得します。")).toBeVisible();
   await expectTopToBottomOrder(
-    syntheticPanel.getByLabel("Profile"),
+    syntheticPanel.getByRole("combobox", { name: "Profile", exact: true }),
     refreshTablesActions,
     syntheticPanel.getByTestId("data-synthetic-table")
   );
@@ -11920,7 +11945,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const resultTableSelect = syntheticPanel.getByTestId("synthetic-result-table-select");
   const resultLimitInput = syntheticResultsSection.getByLabel("取得件数上限");
   const resultsActions = syntheticPanel.getByTestId("data-synthetic-results-actions");
-  await expect(resultTableSelect).toHaveValue("APP.INVOICES");
+  await expectSelectFieldValue(resultTableSelect, "APP.INVOICES");
   await expect(resultLimitInput).toHaveValue("100");
   await expect(resultLimitInput).toHaveAttribute("max", "100000");
   await expect(syntheticResultsSection.getByText("表示するデータはまだありません")).toBeVisible();
@@ -12102,7 +12127,7 @@ test("synthetic data guides DB Profile read model refresh from the target step",
     "href",
     "/profiles"
   );
-  await expect(syntheticPanel.getByLabel("Profile")).toBeDisabled();
+  await expect(syntheticPanel.getByRole("combobox", { name: "Profile", exact: true })).toBeDisabled();
   await expect(syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" })).toBeDisabled();
   await expectNoHorizontalScroll(page);
 
@@ -12115,8 +12140,8 @@ test("synthetic data guides DB Profile read model refresh from the target step",
   await expect(page.getByTestId("data-synthetic-db-profile-refresh-processing")).toBeVisible();
   await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeDisabled();
   await expect(notice).toHaveCount(0);
-  await expect(syntheticPanel.getByLabel("Profile")).toHaveValue("NL2SQL_DEFAULT_PROFILE");
-  await expect(syntheticPanel.getByLabel("Profile")).toBeEnabled();
+  await expectSelectFieldValue(syntheticPanel.getByRole("combobox", { name: "Profile", exact: true }), "NL2SQL_DEFAULT_PROFILE");
+  await expect(syntheticPanel.getByRole("combobox", { name: "Profile", exact: true })).toBeEnabled();
   await expect(syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" })).toBeEnabled();
   await expect.poll(() => refreshSubmits).toBe(1);
 });
@@ -12380,14 +12405,15 @@ for (const sample of domainSamples) {
     }
     await page.goto("/sample-data");
     const selector = page.getByRole("combobox", { name: "サンプルデータの種類" });
-    await expect(selector).toHaveValue("hr");
-    await expect(selector.getByRole("option")).toHaveText(["人事サンプルデータ", "売上サンプルデータ", "問い合わせサンプルデータ"]);
+    await expectSelectFieldValue(selector, "hr");
+    await expect(await openSelectFieldOptions(selector)).toHaveText(["人事サンプルデータ", "売上サンプルデータ", "問い合わせサンプルデータ"]);
+    await closeSelectFieldOptions(selector);
     const confirmation = page.getByLabel("実行確認語");
     const execute = page.getByRole("button", { name: "取り込み実行", exact: true });
     await confirmation.fill("ADMIN_EXECUTE");
     await execute.click();
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
-    await selector.selectOption(sample.dataset);
+    await chooseSelectFieldOption(selector, sample.dataset);
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
     await expect(confirmation).toHaveValue("");
     await expect(confirmation).toHaveAttribute("placeholder", "ADMIN_EXECUTE");
@@ -12411,7 +12437,7 @@ for (const sample of domainSamples) {
     await expect(page.locator("pre")).toHaveText(`DROP TABLE ${sample.object}`);
     await confirmation.fill("ADMIN_EXECUTE");
     await page.reload();
-    await expect(selector).toHaveValue(sample.dataset);
+    await expectSelectFieldValue(selector, sample.dataset);
     await expect(page.getByRole("tab", { name: "削除実行", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(confirmation).toHaveValue("");
     expect(requests).toHaveLength(1);
@@ -12419,7 +12445,7 @@ for (const sample of domainSamples) {
     await page.getByRole("button", { name: "削除実行", exact: true }).click();
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
     expect(requests[1]).toMatchObject({ operation: "delete", dataset: sample.dataset, confirmation: "ADMIN_EXECUTE" });
-    await selector.selectOption("hr");
+    await chooseSelectFieldOption(selector, "hr");
     await expect(confirmation).toHaveValue("");
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
     await expectNoHorizontalScroll(page);
@@ -12446,14 +12472,14 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await page.goto("/sample-data");
   const selector = page.getByRole("combobox", { name: "サンプルデータの種類" });
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await selector.selectOption("sales");
+  await chooseSelectFieldOption(selector, "sales");
   try {
     await expect(page.getByTestId("sample-data-workspace-refresh-skeleton")).toBeVisible();
     await expect(selector).toBeDisabled();
     await expect(page.locator("pre")).toHaveCount(0);
   } finally { gate.release(); }
   await expect(page.getByText("サンプルの取得に失敗しました。表示を更新してください。", { exact: true })).toBeVisible();
-  await expect(selector).toHaveValue("sales");
+  await expectSelectFieldValue(selector, "sales");
   await expect(page.getByRole("button", { name: "取り込み実行", exact: true })).toBeDisabled();
   await expect(page.locator("pre")).not.toContainText("DEPARTMENT");
   fail = false;
@@ -12482,7 +12508,7 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
     sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: ["DROP TABLE SAMPLE_NL2SQL_SALES_ORDER CASCADE CONSTRAINTS PURGE", "DROP TABLE SALES_ORDER CASCADE CONSTRAINTS PURGE"] },
   }));
   await page.goto("/sample-data");
-  await page.getByRole("combobox", { name: "サンプルデータの種類" }).selectOption("sales");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "サンプルデータの種類" }), "sales");
   // 対象オブジェクトは所有者付きの修飾名と、アイコン付きの状態で示す（#556）。
   const sampleObjects = page.getByTestId("sample-data-object");
   await expect(sampleObjects.filter({ hasText: "APP.SALES_ORDER" })).toContainText("同名の既存オブジェクト");
@@ -12627,7 +12653,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
     .toBe(true);
   expect(dataPreviewObjectRequests.some((request) => request.exactOwner !== null)).toBe(false);
   await previewOwnerFilter.clear();
-  await expect(dataPreviewPanel.getByLabel("種別フィルタ")).toBeVisible();
+  await expect(dataPreviewPanel.getByRole("combobox", { name: "種別フィルタ", exact: true })).toBeVisible();
   await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
   const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
   await expect(previewRowLimitInput).toHaveValue("100");
@@ -12740,7 +12766,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
   await previewOwnerFilter.fill("");
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
-  await dataPreviewPanel.getByLabel("種別フィルタ").selectOption("view");
+  await chooseSelectFieldOption(dataPreviewPanel.getByRole("combobox", { name: "種別フィルタ", exact: true }), "view");
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
   await previewRowLimitInput.fill("25");
@@ -12850,10 +12876,12 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticPanel.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   const syntheticGenerateButton = syntheticPanel.getByRole("button", { name: "生成開始" });
   await expect(syntheticGenerateButton).toBeDisabled();
-  const syntheticProfileSelect = syntheticPanel.getByLabel("Profile");
-  await expect(syntheticProfileSelect).toHaveValue("NL2SQL_DEFAULT_PROFILE");
-  await expect(syntheticProfileSelect.locator("option")).toHaveCount(1);
-  await expect(syntheticProfileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
+  const syntheticProfileSelect = syntheticPanel.getByRole("combobox", { name: "Profile", exact: true });
+  await expectSelectFieldValue(syntheticProfileSelect, "NL2SQL_DEFAULT_PROFILE");
+  const syntheticProfileOptions = await openSelectFieldOptions(syntheticProfileSelect);
+  await expect(syntheticProfileOptions).toHaveCount(1);
+  await expect(syntheticProfileOptions.filter({ hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
+  await closeSelectFieldOptions(syntheticProfileSelect);
   await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
   await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).toBeVisible();
   await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "PAYMENTS", exact: true })).toHaveCount(0);
@@ -12880,7 +12908,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticGenerateButton).toBeEnabled();
   await syntheticGenerateButton.click();
   await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
-  await expect(syntheticPanel.getByTestId("synthetic-result-table-select")).toHaveValue("APP.INVOICES");
+  await expectSelectFieldValue(syntheticPanel.getByTestId("synthetic-result-table-select"), "APP.INVOICES");
   await expect(syntheticPanel.getByLabel("取得件数上限")).toHaveValue("100");
   await expect(syntheticPanel.getByRole("option", { name: "AUDIT_LOG" })).toHaveCount(0);
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
@@ -13648,7 +13676,7 @@ test("Excel/CSV取込の列幅エラーは取込フォーム内に表示して�
   expect(submittedMode).toBe("create");
   await expect(importPanel.getByLabel("Oracle 表名")).toHaveValue("TEST_TABLE");
   await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);
-  await expect(importPanel.locator("select")).toHaveCount(0);
+  await expect(importPanel.getByRole("combobox")).toHaveCount(0);
   await expect(importPanel.getByText("選択中: oversized.csv")).toBeVisible();
   await expect(importPanel.getByLabel("実行確認語")).toHaveValue("ADMIN_EXECUTE");
   await expect(executeButton).toBeEnabled();
@@ -14447,8 +14475,9 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importFileInput).toHaveAttribute("accept", ".csv,.xlsx,.xls");
   await expect(importFileInput).toHaveAttribute("required", "");
   await expect(importFileInput).toHaveAttribute("aria-required", "true");
-  await expect(importPanel.locator("#table-import-table-name")).toHaveAttribute("required", "");
-  await expect(importPanel.locator("#table-import-sheet-name")).toHaveAttribute("required", "");
+  // 表名・シート名は共有の TextField（#631）。ネイティブ検証は使わず aria-required で伝える。
+  await expect(importPanel.locator("#table-import-table-name")).toHaveAttribute("aria-required", "true");
+  await expect(importPanel.locator("#table-import-sheet-name")).toHaveAttribute("aria-required", "true");
   await expect(importPanel.getByText(".CSV / .XLSX / .XLS", { exact: true })).toHaveCount(1);
   await importPanel.getByLabel("CSV/XLSX/XLS 選択", { exact: true }).setInputFiles({
     name: "orders.csv",
@@ -14456,7 +14485,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
     buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,青山商事\n"),
   });
   await expect(importPanel.getByText("選択中: orders.csv")).toBeVisible();
-  await expect(importPanel.locator("#table-import-sheet-name")).not.toHaveAttribute("required", "");
+  await expect(importPanel.locator("#table-import-sheet-name")).not.toHaveAttribute("aria-required", "true");
   await expect(importFileClearButton).toBeEnabled();
   await importFileClearButton.click();
   await expect(importPanel.getByText("ドラッグ＆ドロップまたは選択")).toBeVisible();
@@ -14467,7 +14496,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
     buffer: Buffer.from("legacy-xls"),
   });
   await expect(importPanel.getByText("選択中: orders.XLS")).toBeVisible();
-  await expect(importPanel.locator("#table-import-sheet-name")).toHaveAttribute("required", "");
+  await expect(importPanel.locator("#table-import-sheet-name")).toHaveAttribute("aria-required", "true");
   await dropFiles(page, importPanel.getByTestId("table-import-file-field-dropzone"), [
     {
       name: "orders.exe",
@@ -15745,7 +15774,7 @@ test("synthetic manual refresh discards feedback after switching history", async
   gate = createRequestGate();
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
   await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toHaveAttribute("aria-busy", "true");
-  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await chooseSelectFieldOption(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-002");
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-002");
   gate.release();
   gate = null;
@@ -15769,14 +15798,16 @@ test("synthetic history keeps the last 24 hours after completion and preserves u
   await page.goto("/data-management?synthetic_run=run-001");
   const panel = page.getByTestId("synthetic-run-panel");
   const history = panel.getByRole("combobox", { name: "生成履歴", exact: true });
-  await expect(history.locator("option")).toHaveCount(3);
-  await expect(history.locator('option[value="expired-run"]')).toHaveCount(0);
-  await expect(history.locator('option[value="recent-finish"]')).toHaveCount(1);
-  await expect(history.locator('option[value="old-unknown"]')).toHaveCount(1);
+  const historyOptions = await openSelectFieldOptions(history);
+  await expect(historyOptions).toHaveCount(3);
+  await expect(historyOptions.and(page.locator('[data-value="expired-run"]'))).toHaveCount(0);
+  await expect(historyOptions.and(page.locator('[data-value="recent-finish"]'))).toHaveCount(1);
+  await expect(historyOptions.and(page.locator('[data-value="old-unknown"]'))).toHaveCount(1);
+  await closeSelectFieldOptions(history);
   await expect(panel).toContainText("履歴は処理終了から24時間保存します");
-  await history.selectOption("old-unknown");
+  await chooseSelectFieldOption(history, "old-unknown");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
-  await history.selectOption("recent-finish");
+  await chooseSelectFieldOption(history, "recent-finish");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   await history.scrollIntoViewIfNeeded();
   await expectNoHorizontalScroll(page);
@@ -15784,7 +15815,7 @@ test("synthetic history keeps the last 24 hours after completion and preserves u
   // 保存済みの期限切れ ID を開いても、別の run を黙って選択しない。
   runs = [recent, longRun, active];
   await page.goto("/data-management?synthetic_run=expired-run");
-  await expect(history).toHaveValue("");
+  await expectSelectFieldValue(history, "");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveCount(0);
 });
 
@@ -16276,7 +16307,7 @@ test("サンプルの操作・対象変更で確認を解除し実行中は競�
   await page.getByRole("tab", { name: "取り込み実行", exact: true }).press("Home");
   await expect(confirmation).toHaveValue("");
   await confirmation.fill("ADMIN_EXECUTE");
-  await step.selectOption("tables");
+  await chooseSelectFieldOption(step, "tables");
   await expect(confirmation).toHaveValue("");
   await confirmation.fill("ADMIN_EXECUTE");
   const gate = createRequestGate();
@@ -16552,9 +16583,10 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await expect(page.getByText("レビュー保存失敗", { exact: true })).toBeVisible();
   await expect(comment).toBeEnabled();
   await expect(comment).toHaveValue("未保存のレビューを保持");
-  await page.getByLabel("利用者評価フィルター").selectOption("bad");
+  // 未保存の下書きがあるので確認を挟み、キャンセルすると絞り込みは変わらない（選んだ値にならないので表示名で選ぶ）。
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), { label: "違う" });
   await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
-  await expect(page.getByLabel("利用者評価フィルター")).toHaveValue("all");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "all");
   await expect(comment).toHaveValue("未保存のレビューを保持");
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("feedback-draft-protection.png"), fullPage: true });
@@ -17055,7 +17087,7 @@ test("query recovery: 2.5秒より遅い状態取得を中断せず結果を表�
     await route.fallback();
   });
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
   await run.focus();
@@ -17099,7 +17131,7 @@ for (const failure of ["get", "set", "remove"] as const) {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto("/query");
-    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
     const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
     await run.click();
@@ -17141,18 +17173,18 @@ test("query recovery: Profile 切替で旧 SQL・進捗・結果を破棄し草�
     ], next_cursor: null, total: 2,
   }));
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("Profile A の請求を確認");
   await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   api.jobPayload = null;
-  await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("other");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "other");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "生成 SQL", exact: true })).toHaveCount(0);
   await expect(page.getByRole("cell", { name: "青山商事" })).toHaveCount(0);
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
   await nl2sqlQuestionInput(page).fill("Profile B の草稿");
-  await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("default");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await expect(nl2sqlQuestionInput(page)).toHaveValue("Profile A の請求を確認");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   expect(api.jobPayload).toBeNull();
@@ -17169,7 +17201,7 @@ test("query recovery: usage-context の再試行で失敗した Profile だけ�
     } else await route.fallback();
   });
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("再試行で消してはいけない草稿");
   const error = page.getByRole("alert").filter({ hasText: "Profile の一時取得エラー" });
   await expect(error).toBeVisible();
@@ -17189,7 +17221,7 @@ test("query recovery: usage-context の再試行で失敗した Profile だけ�
 test("query recovery: すべての生成条件変更で前回結果と未実行を区別する", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
@@ -17235,7 +17267,7 @@ test("query recovery: 初回 Profile 選択でも保存された進行中 job �
     await route.fallback();
   });
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   expect(creates).toBe(0);
 });
@@ -17249,7 +17281,7 @@ test("query recovery: 状態取得の timeout が続くと追跡を解除する"
     await route.fallback();
   });
   await page.goto("/query");
-  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   // 30秒の HTTP deadline だけ短縮する。polling 自体は実際の2.5秒間隔を使う。
   await page.evaluate(() => {
     const timeout = AbortSignal.timeout.bind(AbortSignal);
@@ -17280,7 +17312,7 @@ test.describe("query snapshot ownership", () => {
         ], next_cursor: null, total: 2,
       }));
       await tab.goto("/query");
-      await expect(tab.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+      await expectSelectFieldValue(tab.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     }
     return other;
   }
@@ -17317,7 +17349,7 @@ test.describe("query snapshot ownership", () => {
     expect(snapshot.jobId).toBe("job-default-001");
     expect(snapshot.startedAt).not.toBeNull();
     for (const profileId of ["other", "default"]) {
-      await other.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption(profileId);
+      await chooseSelectFieldOption(other.getByRole("combobox", { name: "業務プロファイル", exact: true }), profileId);
       await expect(other.getByTestId("nl2sql-job-progress")).toHaveCount(0);
       expect(await readSnapshot(other)).toEqual({ jobId: null, startedAt: null });
       expect(await readSnapshot(page)).toEqual(snapshot);
@@ -17352,7 +17384,7 @@ test.describe("query snapshot ownership", () => {
     await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
     expect(await readSnapshot(page)).toEqual({ jobId: null, startedAt: null });
     expect(await readSnapshot(other)).toEqual(snapshot);
-    await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("other");
+    await chooseSelectFieldOption(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "other");
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
     expect(await readSnapshot(page)).toEqual({ jobId: null, startedAt: null });
     expect(await readSnapshot(other)).toEqual(snapshot);
@@ -17416,7 +17448,7 @@ test.describe("query snapshot ownership", () => {
     await mockDatabaseGateReady(fresh);
     await mockNl2SqlApi(fresh);
     await fresh.goto("/query");
-    await expect(fresh.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expectSelectFieldValue(fresh.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     await expect(fresh.getByTestId("nl2sql-job-progress")).toHaveCount(0);
     expect(await readSnapshot(fresh)).toEqual({ jobId: null, startedAt: null });
     await fresh.close();
@@ -17491,11 +17523,11 @@ test.describe("query snapshot ownership", () => {
       return fulfillJson(route, runningJob(id));
     });
     await page.goto("/query");
-    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     await startJob(page);
     database = "db-b";
     await page.reload();
-    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
     await startJob(page);
     database = "db-a";
@@ -17506,7 +17538,7 @@ test.describe("query snapshot ownership", () => {
     expect(reads).not.toContain("job-db-b");
     user = { ...systemAdminMe, user_uuid: "other-user" };
     await page.reload();
-    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
     await startJob(page);
     await page.evaluate(() => window.dispatchEvent(new Event("app-auth-unauthorized")));
@@ -17563,7 +17595,7 @@ test("synthetic preview requires all tables and fresh consent before applying th
   await expect(review).toContainText("内容を表示した対象表: 1 / 2");
   await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toBeDisabled();
   const panel = page.locator("#data-management-panel-synthetic");
-  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.CUSTOMERS");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "結果テーブル", exact: true }), "APP.CUSTOMERS");
   await panel.getByRole("button", { name: "データを表示", exact: true }).click();
   await expect(review).toContainText("内容を表示した対象表: 2 / 2");
   await review.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
@@ -17575,9 +17607,9 @@ test("synthetic preview requires all tables and fresh consent before applying th
   await page.reload();
   await expect(review.getByLabel("実行確認語")).toHaveValue("");
   expect(applied).toHaveLength(0);
-  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.INVOICES");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "結果テーブル", exact: true }), "APP.INVOICES");
   await panel.getByRole("button", { name: "データを表示", exact: true }).click();
-  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.CUSTOMERS");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "結果テーブル", exact: true }), "APP.CUSTOMERS");
   await panel.getByRole("button", { name: "データを表示", exact: true }).click();
   await expect(review).toContainText("内容を表示した対象表: 2 / 2");
   await review.getByLabel("実行確認語").fill("ADMIN_EXECUTE");

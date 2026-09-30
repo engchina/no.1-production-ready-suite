@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { chooseSelectFieldOption } from "./fixtures/select-field";
 
 async function expectNoHorizontalOverflow(page: Page) {
   const hasNoOverflow = await page.evaluate(() => {
@@ -326,7 +327,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).first()).toBeVisible();
     await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).locator("svg")).toHaveCount(0);
 
-    const firstPolicy = page.getByLabel("ポリシー").first();
+    const firstPolicy = page.getByRole("combobox", { name: "ポリシー", exact: true }).first();
     // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。
     const savePolicy = async () => {
       const saved = page.waitForResponse(
@@ -339,10 +340,10 @@ test.describe("Agent Runtime settings", () => {
       await saved;
       await expect(page.getByText("設定を保存しました").last()).toBeVisible();
     };
-    await firstPolicy.selectOption({ label: "自動実行" });
+    await chooseSelectFieldOption(firstPolicy, { label: "自動実行" });
     await savePolicy();
 
-    await firstPolicy.selectOption({ label: "既定に従う" });
+    await chooseSelectFieldOption(firstPolicy, { label: "既定に従う" });
     await savePolicy();
   });
 
@@ -557,7 +558,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByLabel("タイムアウト秒")).toHaveValue("60");
 
     const url = page.getByLabel("MCP の URL");
-    await expect(url).toHaveAttribute("aria-describedby", "rag-mcp-url-hint");
+    await expect(url).toHaveAccessibleDescription(/接続先の製品の \/api\/mcp/);
     await url.fill("rag.example.test");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("MCP の URL は http:// または https:// で始めてください。")).toBeVisible();
@@ -650,7 +651,9 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("既定タイムアウト秒").fill("4");
     await page.getByLabel("最大タイムアウト秒").fill("6");
     await page.getByLabel("出力上限 bytes").fill("2048");
-    await page.getByLabel("Artifact storage", { exact: true }).selectOption({ label: "Filesystem" });
+    await chooseSelectFieldOption(page.getByRole("combobox", { name: "Artifact storage", exact: true }), {
+      label: "Filesystem",
+    });
     await page.getByLabel("Artifact storage path").fill(".agent-artifacts-ui");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("設定を保存しました")).toBeVisible();

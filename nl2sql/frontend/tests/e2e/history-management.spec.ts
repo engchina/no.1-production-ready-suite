@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
+import { chooseSelectFieldOption } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -426,8 +427,8 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByRole("button", { name: "請求金額を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
 
   await search.clear();
-  await page.getByLabel("利用者評価フィルター").selectOption("unrated");
-  await page.getByLabel("安全状態フィルタ").selectOption("blocked");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "unrated");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "安全状態フィルタ", exact: true }), "blocked");
   await expect(historyRows(page)).toHaveCount(1);
   await expect.poll(() => {
     const last = historyRequests.at(-1);
@@ -439,8 +440,8 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByText("監査ログを削除", { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId("history-detail").getByText("ブロック", { exact: true })).toBeVisible();
 
-  await page.getByLabel("利用者評価フィルター").selectOption("all");
-  await page.getByLabel("安全状態フィルタ").selectOption("all");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "all");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "安全状態フィルタ", exact: true }), "all");
   await page.getByRole("button", { name: "実行情報" }).click();
   await expect(historyRows(page).first()).toContainText("監査ログを削除");
 
@@ -592,7 +593,7 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
   await expect(divider).toBeHidden();
   await expect
     .poll(async () =>
-      page.getByTestId("history-filter-grid").locator("select").evaluateAll((selects) => {
+      page.getByTestId("history-filter-grid").getByRole("combobox").evaluateAll((selects) => {
         const [feedback, safety] = selects.map((select) => select.getBoundingClientRect());
         return {
           sameColumn: Math.abs(feedback.x - safety.x) < 2,
@@ -656,7 +657,10 @@ test("実行履歴の利用者評価フィルターに要確認は表示しな�
   await mockHistory(page);
   await page.goto("/history");
 
-  const options = page.getByLabel("利用者評価フィルター").locator("option");
+  // 共有の SelectField（#631）。一覧は開いたときだけ描かれ、Portal 先を aria-controls から引く。
+  const filter = page.getByRole("combobox", { name: "利用者評価フィルター", exact: true });
+  await filter.click();
+  const options = page.locator(`[id="${await filter.getAttribute("aria-controls")}"]`).getByRole("option");
   await expect(options).toHaveText(["すべて", "未評価", "良い", "違う"]);
   await expect(options.filter({ hasText: "要確認" })).toHaveCount(0);
 });
@@ -805,7 +809,7 @@ test("履歴の更新失敗後も続きが読めて条件変更では旧 cursor 
   await expect(historyRows(page)).toHaveCount(4);
   await expect(more).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("history-refresh-recovery.png") });
-  await page.getByLabel("利用者評価フィルター").selectOption("unrated");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "unrated");
   await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
   await expect(more).toHaveCount(0);
   expect(requests.filter((url) => url.searchParams.has("cursor")).map((url) => url.searchParams.get("cursor"))).toEqual(["next-1"]);

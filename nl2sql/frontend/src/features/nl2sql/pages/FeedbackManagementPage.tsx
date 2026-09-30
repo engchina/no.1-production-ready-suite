@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -43,7 +44,7 @@ import {
   FieldError,
   FieldLabel,
   TextareaField,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -987,40 +988,32 @@ export function FeedbackManagementPage() {
                     void refreshAppFeedback("", "reset", { query: value });
                   }}
                 />
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                  <span>{t("feedbackManagement.appFeedback.filter")}</span>
-                  <select
-                    aria-label={t("feedbackManagement.appFeedback.filter")}
-                    value={feedbackFilter}
-                    onChange={(event) => {
-                      const rating = event.currentTarget.value as AppFeedbackFilter;
-                      void refreshAppFeedback("", "reset", { rating });
-                    }}
-                    className={fieldControlClassName({ className: "min-w-0 py-2" })}
-                  >
-                    <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
-                    <option value="good">{t("nl2sql.feedback.good")}</option>
-                    <option value="bad">{t("nl2sql.feedback.bad")}</option>
-                    <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
-                  </select>
-                </label>
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                  <span>{t("feedbackManagement.appFeedback.profileFilter")}</span>
-                  <select
-                    aria-label={t("feedbackManagement.appFeedback.profileFilter")}
-                    value={appProfileFilter}
-                    onChange={(event) => {
-                      const profileId = event.currentTarget.value;
-                      void refreshAppFeedback("", "reset", { profileId });
-                    }}
-                    className={fieldControlClassName({ className: "min-w-0 py-2" })}
-                  >
-                    <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
-                    {appProfiles.filter((profile) => !profile.archived).map((profile) => (
-                      <option key={profile.id} value={profile.id}>{profileDisplayLabel(profile)}</option>
-                    ))}
-                  </select>
-                </label>
+                <SelectField<AppFeedbackFilter>
+                  id="app-feedback-rating-filter"
+                  label={t("feedbackManagement.appFeedback.filter")}
+                  value={feedbackFilter}
+                  options={[
+                    { value: "all", label: t("feedbackManagement.appFeedback.filterAll") },
+                    { value: "good", label: t("nl2sql.feedback.good") },
+                    { value: "bad", label: t("nl2sql.feedback.bad") },
+                    { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
+                  ]}
+                  onValueChange={(rating) => void refreshAppFeedback("", "reset", { rating })}
+                  className="min-w-0"
+                />
+                <SelectField
+                  id="app-feedback-profile-filter"
+                  label={t("feedbackManagement.appFeedback.profileFilter")}
+                  value={appProfileFilter}
+                  options={[
+                    { value: "", label: t("feedbackManagement.appFeedback.profileAll") },
+                    ...appProfiles
+                      .filter((profile) => !profile.archived)
+                      .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
+                  ]}
+                  onValueChange={(profileId) => void refreshAppFeedback("", "reset", { profileId })}
+                  className="min-w-0"
+                />
               </div>
               {loading === "app-feedback-load" ? (
                 // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
@@ -1156,21 +1149,20 @@ export function FeedbackManagementPage() {
                     textareaClassName="min-h-24 min-w-0 max-w-full"
                     placeholder={t("feedbackManagement.appFeedback.userFeedbackEmpty")}
                   />
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                    <span>{t("feedbackManagement.appFeedback.adminRating")}</span>
-                    <select
-                      aria-label={t("feedbackManagement.appFeedback.adminRating")}
-                      value={adminFeedbackRating}
-                      onChange={(event) => {
-                        setAdminFeedbackRating(event.currentTarget.value as FeedbackRating);
-                        setReviewErrors((current) => ({ ...current, adminContent: undefined }));
-                      }}
-                      className={fieldControlClassName({ className: "min-w-0 py-2" })}
-                    >
-                      <option value="good">{t("nl2sql.feedback.good")}</option>
-                      <option value="bad">{t("nl2sql.feedback.bad")}</option>
-                    </select>
-                  </label>
+                  <SelectField<FeedbackRating>
+                    id="app-feedback-admin-rating"
+                    label={t("feedbackManagement.appFeedback.adminRating")}
+                    value={adminFeedbackRating}
+                    options={[
+                      { value: "good", label: t("nl2sql.feedback.good") },
+                      { value: "bad", label: t("nl2sql.feedback.bad") },
+                    ]}
+                    onValueChange={(rating) => {
+                      setAdminFeedbackRating(rating);
+                      setReviewErrors((current) => ({ ...current, adminContent: undefined }));
+                    }}
+                    className="min-w-0"
+                  />
                   <div className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                       {/* 管理者評価が「違う」のときだけ必須（saveAppFeedback のガード）。 */}
@@ -1371,26 +1363,19 @@ function ProfileSelect({
   onChange: (value: string) => void;
   fullWidth?: boolean;
 }) {
+  const id = useId();
   return (
-    <label
-      className={`grid min-w-0 gap-1 text-sm font-medium text-fg ${
-        fullWidth ? "w-full" : "sm:min-w-72"
-      }`}
-    >
-      <span>{t("feedbackManagement.profile")}</span>
-      <select
-        value={value}
-        disabled={disabled || profiles.length === 0}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        className={fieldControlClassName({ className: "min-w-0 py-2" })}
-      >
-        {profiles.map((profile) => (
-          <option key={profile.name} value={profile.name}>
-            {profileOptionLabel(profile)}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SelectField
+      id={`feedback-db-profile-${id}`}
+      label={t("feedbackManagement.profile")}
+      value={value}
+      options={profiles.map((profile) => ({ value: profile.name, label: profileOptionLabel(profile) }))}
+      disabled={disabled || profiles.length === 0}
+      onValueChange={onChange}
+      // 一覧の上に単独で置くときは profile 名が入る幅（#613）。一覧の見出しの中では行の幅いっぱい。
+      width={fullWidth ? "full" : "md"}
+      className="min-w-0"
+    />
   );
 }
 
@@ -1731,21 +1716,22 @@ function SimilarityConfigField({
         onChange={(event) => onChange(Number(event.currentTarget.value))}
         className="w-full accent-accent-emphasis"
       />
-      <input
+      {/* 見出しは fieldset の legend が持つので、数値欄のラベルは読み上げだけにする（スライダーと 2 つ目のラベルを出さない。#631）。 */}
+      <TextField
         id={id}
+        label={label}
+        labelHidden
         type="number"
         min={min}
         max={max}
         step={step}
         inputMode="decimal"
-        aria-label={label}
         aria-describedby={hintId}
         value={value}
         onChange={(event) => {
           const nextValue = Number(event.currentTarget.value);
           if (!Number.isNaN(nextValue)) onChange(nextValue);
         }}
-        className={fieldControlClassName({ className: "py-2" })}
       />
       <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
         {hint}
@@ -1769,6 +1755,7 @@ function SliderNumberField({
   value: number;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
   return (
     <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm font-medium text-fg">
       <legend className="px-1">{label}</legend>
@@ -1782,15 +1769,17 @@ function SliderNumberField({
         onChange={(event) => onChange(Number(event.currentTarget.value))}
         className="w-full accent-accent-emphasis"
       />
-      <input
+      {/* 見出しは fieldset の legend が持つので、数値欄のラベルは読み上げだけにする（#631）。 */}
+      <TextField
+        id={id}
+        label={label}
+        labelHidden
         type="number"
-        aria-label={label}
         min={min}
         max={max}
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className={fieldControlClassName({ className: "py-2" })}
       />
     </fieldset>
   );

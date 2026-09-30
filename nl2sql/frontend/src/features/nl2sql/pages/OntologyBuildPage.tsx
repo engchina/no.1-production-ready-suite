@@ -4,13 +4,12 @@ import {
   EmptyState,
   PageHeader,
   PageBody,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-
 
 import { ErrorState } from "@/components/StateViews";
 import { isTimeoutError } from "@/lib/api";
@@ -286,22 +285,18 @@ export function OntologyBuildPage() {
           ) : (
             <div className="grid gap-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-                  <span>{t("ontologyBuild.profile.selectLabel")}</span>
-                  <select
-                    value={selectedProfileId}
-                    onChange={(event) => selectProfile(event.currentTarget.value)}
-                    className={fieldControlClassName({ className: "min-w-0 py-2" })}
-                    data-testid="ontology-build-profile-select"
-                  >
-                    {!selectedProfileId && <option value="" disabled>{t("nl2sql.workspace.profileUnavailable")}</option>}
-                    {activeProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profileDisplayLabel(profile)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SelectField
+                  id="ontology-build-profile"
+                  label={t("ontologyBuild.profile.selectLabel")}
+                  value={selectedProfileId}
+                  placeholder={t("nl2sql.workspace.profileUnavailable")}
+                  options={activeProfiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                  onValueChange={selectProfile}
+                  data-testid="ontology-build-profile-select"
+                  // grid の外で操作ボタンと並べる単独の選択欄。業務プロファイル名が入る幅（#613）。
+                  width="md"
+                  className="min-w-0"
+                />
                 {profilesQuery.hasNextPage ? (
                   <Button icon={ListPlus}
                     type="button"

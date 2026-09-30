@@ -26,12 +26,11 @@ import {
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  FieldLabel,
+  FieldActionRow,
   isImeComposing,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
-
 
 import { t } from "@/lib/i18n";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
@@ -183,8 +182,6 @@ function QuestionMatchedSpans({
     </p>
   );
 }
-
-
 
 interface GroundingComparison {
   both: string[];
@@ -943,59 +940,58 @@ export function OntologyQueryPlayground({
               runQuestion();
             }}
           >
-            {/* 質問が空では実行できない（disabled={!question.trim()}）ので必須として示す（#531）。 */}
-            <FieldLabel
-              htmlFor="ontology-playground-question"
-              label={t("ontologyPlayground.questionLabel")}
-              required
-            />
             {/* 主な問い合わせの行なので、質問欄と操作をすべて lg（40px、タッチ端末は 44px）にそろえる（#613）。 */}
-            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-              <input
+            <FieldActionRow
+              actions={
+                <>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="lg"
+                    className="whitespace-nowrap"
+                    disabled={!question.trim()}
+                    data-testid="ontology-playground-run" icon={Search}>
+                    <span>{t("ontologyPlayground.run")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="lg"
+                    className="whitespace-nowrap"
+                    disabled={!canServerSearch || serverSearch.status === "loading"}
+                    loading={serverSearch.status === "loading"}
+                    onClick={() => void runServerSearch()}
+                    title={t("ontologyPlayground.serverSearch.hint")}
+                    data-testid="ontology-playground-server-search" icon={ServerCog}>
+                    <span>{t("ontologyPlayground.serverSearch.run")}</span>
+                  </Button>
+                  <ClearActionButton
+                    size="lg"
+                    disabled={!hasResettableGroundingState}
+                    ariaLabel={t("ontologyPlayground.clearAriaLabel")}
+                    onClick={() => resetGroundingState({ clearQuestion: true })}
+                    dataTestId="ontology-playground-clear"
+                    label={t("ontologyPlayground.clear")}
+                  />
+                </>
+              }
+            >
+              {/* 質問が空では実行できない（disabled={!question.trim()}）ので必須として示す（#531）。 */}
+              <TextField
                 id="ontology-playground-question"
-                type="text"
-                aria-required="true"
+                label={t("ontologyPlayground.questionLabel")}
+                required
+                size="lg"
                 value={question}
-                onChange={(event) => handleQuestionChange(event.currentTarget.value)}
+                onValueChange={handleQuestionChange}
                 onKeyDown={(event) => {
                   // IME の変換を確定する Enter でフォームを送信しない（重い問い合わせは明示的に実行する。#535）。
                   if (event.key === "Enter" && isImeComposing(event)) event.preventDefault();
                 }}
                 placeholder={t("ontologyPlayground.questionPlaceholder")}
                 data-testid="ontology-playground-question"
-                className={fieldControlClassName({ size: "lg", className: "min-w-0" })}
               />
-              <Button
-                type="submit"
-                variant="primary"
-                size="lg"
-                className="w-full whitespace-nowrap sm:w-auto"
-                disabled={!question.trim()}
-                data-testid="ontology-playground-run" icon={Search}>
-                <span>{t("ontologyPlayground.run")}</span>
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="lg"
-                className="w-full whitespace-nowrap sm:w-auto"
-                disabled={!canServerSearch || serverSearch.status === "loading"}
-                loading={serverSearch.status === "loading"}
-                onClick={() => void runServerSearch()}
-                title={t("ontologyPlayground.serverSearch.hint")}
-                data-testid="ontology-playground-server-search" icon={ServerCog}>
-                <span>{t("ontologyPlayground.serverSearch.run")}</span>
-              </Button>
-              <ClearActionButton
-                size="lg"
-                className="w-full sm:w-auto"
-                disabled={!hasResettableGroundingState}
-                ariaLabel={t("ontologyPlayground.clearAriaLabel")}
-                onClick={() => resetGroundingState({ clearQuestion: true })}
-                dataTestId="ontology-playground-clear"
-                label={t("ontologyPlayground.clear")}
-              />
-            </div>
+            </FieldActionRow>
           </form>
           {serverSearch.status === "loading" ? (
             // 質問の embedding とベクトル検索を行うため数秒かかる。スピナーはボタンの loading が担う。

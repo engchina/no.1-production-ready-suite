@@ -1076,6 +1076,7 @@ function OntologyFlow({
           高さはツールバーの全部品を lg（40px、タッチ端末は 44px）にそろえる（画面幅ではなく入力方式で決める。#613）。 */}
       <div className="flex flex-wrap items-end gap-2" data-testid="ontology-graph-toolbar">
         <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-fg-muted sm:w-72">{t("markdownOntology.kindFilter")}
+          {/* oxlint-disable-next-line design-system/restricted-syntax -- #631: 主な概念 / 補助の概念の <optgroup> と、グラフに無い種類を選べない選択肢（<option disabled>）で示すため、SelectField で表せない */}
           <select aria-label={t("markdownOntology.kindFilter")} className={fieldControlClassName({ size: "lg", className: "min-w-0" })} value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
             <option value="">{t("markdownOntology.allConcepts")}</option>
             {[conceptKinds.slice(0,6),conceptKinds.slice(6)].map((kinds,i)=><optgroup key={i} label={t(i?"markdownOntology.auxConcepts":"markdownOntology.mainConcepts")}>

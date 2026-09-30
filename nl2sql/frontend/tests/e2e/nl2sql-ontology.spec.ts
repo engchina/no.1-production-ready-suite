@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1668,7 +1669,7 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
   });
 
   await page.goto("/query");
-  await page.locator("#nl2sql-profile-select").selectOption("all");
+  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
   await page.getByRole("button", { name: "AI要件確認" }).click();
 
@@ -1693,25 +1694,25 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
   await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
-    await expect(page.locator("#nl2sql-profile-select")).toHaveValue("all");
+    await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
     await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
     expect(payloads.job).toBeUndefined();
     await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("guided-profile-storage-error.png"), fullPage: true });
     return;
   }
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   const clarified = "今月の受注を対象に、検索結果には受注件数を表示してください。";
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
   await expect(page.locator("#nl2sql-question-input")).toBeFocused();
   expect(payloads.job).toBeUndefined();
   // Profile ごとの草稿を維持し、確認した Profile のクエリを再読込でも復元する。
-  await page.locator("#nl2sql-profile-select").selectOption("all");
+  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
   await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
-  await page.locator("#nl2sql-profile-select").selectOption("default");
+  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
   await page.reload();
-  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
   expect(payloads.job).toBeUndefined();
   await runCurrentOntologySearch(page);

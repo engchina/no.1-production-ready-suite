@@ -58,10 +58,10 @@ test("security create forms bind server field errors without parsing Japanese st
   const roles = readFileSync(new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url), "utf8");
 
   assert.match(users, /"\/login_user_id": "loginUserId"/u);
-  assert.match(users, /aria-describedby=\{fieldErrors\.loginUserId/u);
-  assert.match(users, /<FieldError id="security-user-login-user-id-error"/u);
+  // 欄のエラーは共有の TextField の error で欄の下に出し、aria-describedby で結び付ける（#631）。
+  assert.match(users, /id="security-user-login-user-id"[^>]*?error=\{fieldErrors\.loginUserId\}/u);
   assert.match(roles, /"\/role_code": "roleCode"/u);
-  assert.match(roles, /<FieldError id="security-role-code-error"/u);
+  assert.match(roles, /id="security-role-code"[^>]*?error=\{fieldErrors\.roleCode\}/u);
   assert.doesNotMatch(users, /このログインユーザーIDは既に使用されています/u);
   assert.doesNotMatch(roles, /このロールコードは既に使用されています/u);
 });

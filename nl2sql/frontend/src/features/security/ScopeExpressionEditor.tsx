@@ -4,18 +4,12 @@ import {
   FieldError,
   Button,
   ProcessingIndicator,
+  SelectField,
+  TextField,
   useConfirm,
-  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
-import {
-  cloneElement,
-  useId,
-  useEffect,
-  useRef,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { useId, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { t } from "@/lib/i18n";
@@ -44,19 +38,11 @@ import type {
 } from "./types";
 
 const text = (key: string) => t(`security.deepsec.entitlements.${key}`);
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const inputClass = fieldControlClassName({ className: "min-w-0" });
-function Labeled({ label, children }: { label: string; children: ReactNode }) {
-  const generatedId = useId();
-  const child = children as ReactElement<{ id?: string }>;
-  const id = child.props.id ?? generatedId;
-  return (
-    <div className="grid min-w-0 gap-1 text-xs font-medium">
-      <label htmlFor={id}>{label}</label>
-      {cloneElement(child, { id })}
-    </div>
-  );
-}
+// 入力欄・選択欄は共有の SelectField / TextField（ラベル・高さ・幅・無効の見た目を共有する。#613 / #631）。
+// 読み取り専用のときは、囲む <fieldset disabled> がボタン（SelectField）と入力欄をネイティブに無効にする。
+// 欄には min-w-0 を付ける（grid の中で、選択中の長い表示名が欄の最小幅を押し広げて 375px ではみ出さないように）。
+/** 追加した条件・グループ・関連カードの最初の選択欄（SelectField のボタン）へフォーカスを移す。 */
+const SELECT_FIELD_SELECTOR = 'button[role="combobox"]';
 function InlineError({ message, id }: { message: string; id?: string }) {
   const fallbackId = useId();
   return message ? (
@@ -83,127 +69,117 @@ function ConditionEditor({
   const hasValueSource =
     filter.operator === "EQ" && ["TEXT", "NUMBER"].includes(filter.value_type);
   const error = filterError(filter);
+  // 条件の誤りは条件の下の InlineError に 1 つだけ出し、値の入力欄から aria-describedby で指す。
   const inputProps = {
-    className: inputClass,
+    className: "min-w-0",
     "aria-invalid": Boolean(error),
     "aria-describedby": error ? id + "-error" : undefined,
   };
   return (
     <div className="grid gap-2">
       <div className="grid min-w-0 gap-2 md:grid-cols-2">
-        <Labeled label={text("scopeFilterColumn")}>
-          <select
-            id={`deepsec-scope-filter-column-${suffix}`}
-            className={inputClass}
-            value={filter.column_name}
-            onChange={(e) => {
-              const column = columns.find(
-                (c) => c.column_name === e.target.value,
-              );
-              onChange({
-                column_name: e.target.value,
-                operator: "EQ",
-                value_type: columnValueType(column?.data_type ?? "") ?? "TEXT",
-                value_source: "LITERAL",
-                value: "",
-                value_to: "",
-                values: [],
-              });
-            }}
-          >
-            <option value="">{text("scopeFilterColumnPlaceholder")}</option>
-            {columns
-              .filter((c) => columnValueType(c.data_type))
-              .map((c) => (
-                <option key={c.column_name} value={c.column_name}>
-                  {c.column_name} · {c.data_type}
-                </option>
-              ))}
-          </select>
-        </Labeled>
-        <Labeled label={text("scopeFilterOperator")}>
-          <select
-            id={`deepsec-scope-filter-operator-${suffix}`}
-            className={inputClass}
-            value={filter.operator}
-            onChange={(e) =>
+        <SelectField
+          id={`deepsec-scope-filter-column-${suffix}`}
+          label={text("scopeFilterColumn")}
+          className="min-w-0"
+          value={filter.column_name}
+          placeholder={text("scopeFilterColumnPlaceholder")}
+          options={columns
+            .filter((c) => columnValueType(c.data_type))
+            .map((c) => ({
+              value: c.column_name,
+              label: `${c.column_name} · ${c.data_type}`,
+            }))}
+          onValueChange={(columnName) => {
+            const column = columns.find((c) => c.column_name === columnName);
+            onChange({
+              column_name: columnName,
+              operator: "EQ",
+              value_type: columnValueType(column?.data_type ?? "") ?? "TEXT",
+              value_source: "LITERAL",
+              value: "",
+              value_to: "",
+              values: [],
+            });
+          }}
+        />
+        <SelectField
+          id={`deepsec-scope-filter-operator-${suffix}`}
+          label={text("scopeFilterOperator")}
+          className="min-w-0"
+          value={filter.operator}
+          options={operators.map((op) => ({
+            value: op,
+            label: text("operator." + op),
+          }))}
+          onValueChange={(operator) =>
+            patch({
+              operator,
+              value_source: "LITERAL",
+              value: "",
+              value_to: "",
+              values: [],
+            })
+          }
+        />
+        {hasValueSource && (
+          <SelectField
+            id={`deepsec-scope-filter-value-source-${suffix}`}
+            label={text("scopeFilterValueSource")}
+            className="min-w-0"
+            value={valueSource}
+            options={[
+              { value: "LITERAL", label: text("scopeFilterValueLiteral") },
+              {
+                value: "LOGIN_USER_ID",
+                label: text("scopeFilterValueLoginUserId"),
+              },
+            ]}
+            onValueChange={(source) =>
               patch({
-                operator: e.target.value,
-                value_source: "LITERAL",
+                value_source: source,
                 value: "",
                 value_to: "",
                 values: [],
               })
             }
-          >
-            {operators.map((op) => (
-              <option key={op} value={op}>
-                {text("operator." + op)}
-              </option>
-            ))}
-          </select>
-        </Labeled>
-        {hasValueSource && (
-          <Labeled label={text("scopeFilterValueSource")}>
-            <select
-              id={`deepsec-scope-filter-value-source-${suffix}`}
-              className={inputClass}
-              value={valueSource}
-              onChange={(e) =>
-                patch({
-                  value_source: e.target.value,
-                  value: "",
-                  value_to: "",
-                  values: [],
-                })
-              }
-            >
-              <option value="LITERAL">{text("scopeFilterValueLiteral")}</option>
-              <option value="LOGIN_USER_ID">
-                {text("scopeFilterValueLoginUserId")}
-              </option>
-            </select>
-          </Labeled>
+          />
         )}
         {!["IS_NULL", "IS_NOT_NULL"].includes(filter.operator) &&
           valueSource !== "LOGIN_USER_ID" && (
             <>
               {filter.operator === "IN" ? (
-                <Labeled label={text("scopeFilterValues")}>
-                  <input
-                    id={`deepsec-scope-filter-values-${suffix}`}
-                    {...inputProps}
-                    value={(filter.values ?? []).join(",")}
-                    onChange={(e) =>
-                      patch({ values: e.target.value.split(",") })
-                    }
-                  />
-                </Labeled>
+                <TextField
+                  id={`deepsec-scope-filter-values-${suffix}`}
+                  label={text("scopeFilterValues")}
+                  {...inputProps}
+                  value={(filter.values ?? []).join(",")}
+                  onValueChange={(value) => patch({ values: value.split(",") })}
+                />
               ) : (
-                <Labeled label={text("scopeFilterValue")}>
-                  <input
-                    id={`deepsec-scope-filter-value-${suffix}`}
-                    {...inputProps}
-                    inputMode={
-                      filter.value_type === "NUMBER"
-                        ? filter.operator === "EQ"
-                          ? "numeric"
-                          : "decimal"
-                        : "text"
-                    }
-                    value={filter.value ?? ""}
-                    onChange={(e) => patch({ value: e.target.value })}
-                  />
-                </Labeled>
+                <TextField
+                  id={`deepsec-scope-filter-value-${suffix}`}
+                  label={text("scopeFilterValue")}
+                  {...inputProps}
+                  inputMode={
+                    filter.value_type === "NUMBER"
+                      ? filter.operator === "EQ"
+                        ? "numeric"
+                        : "decimal"
+                      : "text"
+                  }
+                  value={filter.value ?? ""}
+                  onValueChange={(value) => patch({ value })}
+                />
               )}
               {filter.operator === "BETWEEN" && (
-                <Labeled label={text("scopeFilterValueTo")}>
-                  <input
-                    {...inputProps}
-                    value={filter.value_to ?? ""}
-                    onChange={(e) => patch({ value_to: e.target.value })}
-                  />
-                </Labeled>
+                <TextField
+                  id={`deepsec-scope-filter-value-to-${suffix}`}
+                  label={text("scopeFilterValueTo")}
+                  {...inputProps}
+                  value={filter.value_to ?? ""}
+                  onValueChange={(value) => patch({ value_to: value })}
+                />
               )}
             </>
           )}
@@ -250,9 +226,9 @@ function GroupEditor({
     requestAnimationFrame(() => {
       if (focusLast) {
         const children = container.current?.querySelectorAll<HTMLElement>(":scope > [data-scope-child]");
-        children?.item(children.length - 1)?.querySelector<HTMLSelectElement>("select")?.focus();
+        children?.item(children.length - 1)?.querySelector<HTMLElement>(SELECT_FIELD_SELECTOR)?.focus();
       } else
-        container.current?.querySelector<HTMLSelectElement>("select")?.focus();
+        container.current?.querySelector<HTMLElement>(SELECT_FIELD_SELECTOR)?.focus();
     });
   };
   return (
@@ -264,18 +240,18 @@ function GroupEditor({
       <legend className="max-w-full break-words px-1 text-sm font-medium">
         {text("expression.group")}
       </legend>
-      <Labeled label={text("expression.match")}>
-        <select
-          className={inputClass}
-          value={group.operator}
-          onChange={(e) =>
-            onChange({ ...group, operator: e.target.value as "AND" | "OR" })
-          }
-        >
-          <option value="AND">{text("expression.and")}</option>
-          <option value="OR">{text("expression.or")}</option>
-        </select>
-      </Labeled>
+      <SelectField<"AND" | "OR">
+        id={`deepsec-scope-group-match-${path}`}
+        label={text("expression.match")}
+        width="md"
+        className="min-w-0"
+        value={group.operator}
+        options={[
+          { value: "AND", label: text("expression.and") },
+          { value: "OR", label: text("expression.or") },
+        ]}
+        onValueChange={(operator) => onChange({ ...group, operator })}
+      />
       {!group.children.length && <InlineError message="expression.empty" />}
       {group.children.map((node, index) => (
         <div
@@ -575,15 +551,25 @@ function RelatedEditor({
           if (node.target_object) void detail.refetch();
         }}
       />
-      <Labeled label={text("expression.profile")}>
-        <select
-          className={inputClass}
-          value={node.profile_id}
-          onChange={(e) =>
+      <SelectField
+        id={`deepsec-scope-related-profile-${path}`}
+        label={text("expression.profile")}
+        width="md"
+        className="min-w-0"
+        value={node.profile_id}
+        placeholder={text("expression.select")}
+        options={[
+          ...eligible.map((p) => ({ value: p.id, label: p.name })),
+          // 保存済みの Profile が候補から外れても値を残し、利用できないことを示す。
+          ...(node.profile_id && !eligible.some((p) => p.id === node.profile_id)
+            ? [{ value: node.profile_id, label: text("expression.unavailable") }]
+            : []),
+        ]}
+        onValueChange={(profileId) =>
             patch({
-              profile_id: e.target.value,
+              profile_id: profileId,
               object_scope_version:
-                eligible.find((p) => p.id === e.target.value)
+                eligible.find((p) => p.id === profileId)
                   ?.object_scope_version ?? 1,
               target_owner: "",
               target_object: "",
@@ -598,32 +584,32 @@ function RelatedEditor({
               },
             })
           }
-        >
-          <option value="">{text("expression.select")}</option>
-          {eligible.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-          {node.profile_id &&
-            !eligible.some((p) => p.id === node.profile_id) && (
-              <option value={node.profile_id}>
-                {text("expression.unavailable")}
-              </option>
-            )}
-        </select>
-      </Labeled>
+      />
       {!profiles.isLoading && !profiles.error && !eligible.length && (
         <p className="text-sm text-fg-muted">{text("expression.noProfiles")}</p>
       )}
-      <Labeled label={text("expression.relatedTable")}>
-        <select
-          className={inputClass}
-          disabled={!catalog.data || catalog.isError}
-          value={selectedTarget}
-          onChange={(e) => {
+      <SelectField
+        id={`deepsec-scope-related-table-${path}`}
+        label={text("expression.relatedTable")}
+        width="lg"
+        className="min-w-0"
+        disabled={!catalog.data || catalog.isError}
+        value={selectedTarget}
+        placeholder={text("expression.select")}
+        options={[
+          ...(catalog.data?.objects.map((name) => ({ value: name, label: name })) ?? []),
+          ...(selectedTarget && !catalog.data?.objects.includes(selectedTarget)
+            ? [
+                {
+                  value: selectedTarget,
+                  label: `${selectedTarget} — ${text("expression.unavailable")}`,
+                },
+              ]
+            : []),
+        ]}
+        onValueChange={(name) => {
             // 引用名は dot を含み得るため、単純な split(".") ではなく引用規則どおりに分ける。
-            const target = splitDbObjectName(e.target.value);
+            const target = splitDbObjectName(name);
             patch({
               target_owner: target?.owner ?? "",
               target_object: target?.name ?? "",
@@ -639,29 +625,26 @@ function RelatedEditor({
               },
             });
           }}
-        >
-          <option value="">{text("expression.select")}</option>
-          {catalog.data?.objects.map((name) => (
-            <option key={name}>{name}</option>
-          ))}
-          {selectedTarget &&
-            !catalog.data?.objects.includes(selectedTarget) && (
-              <option value={selectedTarget}>
-                {selectedTarget} — {text("expression.unavailable")}
-              </option>
-            )}
-        </select>
-      </Labeled>
+      />
       {stale && <InlineError message="expression.stale" />}
       {node.target_object && (
         <>
-          <Labeled label={text("expression.relation")}>
-            <select
-              className={inputClass}
-              value={node.relation_id}
-              onChange={(e) => {
+          <SelectField
+            id={`deepsec-scope-related-relation-${path}`}
+            label={text("expression.relation")}
+            width="lg"
+            className="min-w-0"
+            value={node.relation_id}
+            // 「列から手動で設定」は選べる値（空文字）。未選択の placeholder ではない。
+            options={[
+              { value: "", label: text("expression.manual") },
+              ...(catalog.data?.relations
+                .filter((r) => r.target === selectedTarget)
+                .map((r) => ({ value: r.id, label: `${r.source} · ${r.id}` })) ?? []),
+            ]}
+            onValueChange={(relationId) => {
                 const relation = catalog.data?.relations.find(
-                  (r) => r.id === e.target.value,
+                  (r) => r.id === relationId,
                 );
                 patch(
                   relation
@@ -678,71 +661,51 @@ function RelatedEditor({
                       },
                 );
               }}
-            >
-              <option value="">{text("expression.manual")}</option>
-              {catalog.data?.relations
-                .filter((r) => r.target === selectedTarget)
-                .map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.source} · {r.id}
-                  </option>
-                ))}
-            </select>
-          </Labeled>
+          />
           {node.join_keys.map((key, index) => (
             <div
               key={index}
               className="grid min-w-0 gap-2 md:grid-cols-[1fr_auto_1fr_auto]"
             >
-              <Labeled label={text("expression.sourceKey")}>
-                <select
-                  className={inputClass}
-                  disabled={node.relation_source !== "MANUAL"}
-                  value={key.source_column}
-                  onChange={(e) =>
-                    patch({
-                      join_keys: node.join_keys.map((k, i) =>
-                        i === index
-                          ? { ...k, source_column: e.target.value }
-                          : k,
-                      ),
-                    })
-                  }
-                >
-                  <option value="">{text("expression.select")}</option>
-                  {columns
-                    .filter((c) => columnValueType(c.data_type))
-                    .map((c) => (
-                      <option key={c.column_name}>{c.column_name}</option>
-                    ))}
-                </select>
-              </Labeled>
+              <SelectField
+                id={`deepsec-scope-related-source-key-${path}-${index}`}
+                label={text("expression.sourceKey")}
+                className="min-w-0"
+                disabled={node.relation_source !== "MANUAL"}
+                value={key.source_column}
+                placeholder={text("expression.select")}
+                options={columns
+                  .filter((c) => columnValueType(c.data_type))
+                  .map((c) => ({ value: c.column_name, label: c.column_name }))}
+                onValueChange={(column) =>
+                  patch({
+                    join_keys: node.join_keys.map((k, i) =>
+                      i === index ? { ...k, source_column: column } : k,
+                    ),
+                  })
+                }
+              />
               <span className="self-center" aria-hidden>
                 =
               </span>
-              <Labeled label={text("expression.targetKey")}>
-                <select
-                  className={inputClass}
-                  disabled={node.relation_source !== "MANUAL"}
-                  value={key.target_column}
-                  onChange={(e) =>
-                    patch({
-                      join_keys: node.join_keys.map((k, i) =>
-                        i === index
-                          ? { ...k, target_column: e.target.value }
-                          : k,
-                      ),
-                    })
-                  }
-                >
-                  <option value="">{text("expression.select")}</option>
-                  {relatedColumns
-                    .filter((c) => columnValueType(c.data_type))
-                    .map((c) => (
-                      <option key={c.column_name}>{c.column_name}</option>
-                    ))}
-                </select>
-              </Labeled>
+              <SelectField
+                id={`deepsec-scope-related-target-key-${path}-${index}`}
+                label={text("expression.targetKey")}
+                className="min-w-0"
+                disabled={node.relation_source !== "MANUAL"}
+                value={key.target_column}
+                placeholder={text("expression.select")}
+                options={relatedColumns
+                  .filter((c) => columnValueType(c.data_type))
+                  .map((c) => ({ value: c.column_name, label: c.column_name }))}
+                onValueChange={(column) =>
+                  patch({
+                    join_keys: node.join_keys.map((k, i) =>
+                      i === index ? { ...k, target_column: column } : k,
+                    ),
+                  })
+                }
+              />
               <Button
                 iconOnly
                 variant="ghost"

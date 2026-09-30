@@ -59,8 +59,9 @@ test("table import requires table, workbook sheet, file, and confirmation in the
   const page = source("../src/features/nl2sql/pages/TableManagementPage.tsx");
 
   assert.doesNotMatch(page, /RequiredFieldsNote/u);
-  assert.match(page, /htmlFor="table-import-table-name"[\s\S]*required/u);
-  assert.match(page, /htmlFor="table-import-sheet-name"[\s\S]*required=\{sheetRequired\}/u);
+  // 表名・シート名は共有の TextField（#631）。必須は TextField の required（バッジと aria-required）で示す。
+  assert.match(page, /<TextField\s+id="table-import-table-name"[\s\S]*?required/u);
+  assert.match(page, /<TextField\s+id="table-import-sheet-name"[\s\S]*?required=\{sheetRequired\}/u);
   assert.match(page, /<FileDropzone[\s\S]*label=\{t\("dataTools\.dbAdmin\.file"\)\}[\s\S]*required/u);
   assert.match(page, /fileReady[\s\S]*\(!sheetRequired \|\| Boolean\(sheet\.trim\(\)\)\)[\s\S]*isConfirmed/u);
 });

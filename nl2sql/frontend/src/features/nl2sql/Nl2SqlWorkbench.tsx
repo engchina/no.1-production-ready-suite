@@ -10,9 +10,9 @@ import {
   ActionResultRegion,
   TimedLoadingState,
   DisclosureChevron,
-  FieldLabel,
+  FieldActionRow,
   TextareaField,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -33,7 +33,6 @@ import { ListPlus,
   Wand2,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-
 
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
@@ -1086,13 +1085,46 @@ function ExecutableNl2SqlWorkbench() {
                 <div className="grid gap-1">
                   {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API（MCP を含む）で省略したときも
                       backend が既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
-                  <FieldLabel htmlFor="nl2sql-profile-select" label={t("nl2sql.profile.label")} />
-                  <div className="flex flex-wrap items-stretch gap-2">
-                    <select
+                  <FieldActionRow
+                    actions={
+                      <>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="md"
+                          loading={detecting}
+                          disabled={!question.trim() || active || !profileSelectionReady}
+                          onClick={() => void detectProfile()} icon={Wand2}>
+                          <span>{t("nl2sql.recommend.autoDetect")}</span>
+                        </Button>
+                        {profilesQuery.hasNextPage && (
+                          <Button icon={ListPlus}
+                            type="button"
+                            variant="secondary"
+                            size="md"
+                            // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。#416）。
+                            loading={profilesQuery.isFetchingNextPage && !profileLoadMoreError}
+                            disabled={active || (profilesQuery.isFetchingNextPage && Boolean(profileLoadMoreError))}
+                            onClick={() => void profilesQuery.fetchNextPage()}
+                          >
+                            {t("profiles.action.loadMore")}
+                          </Button>
+                        )}
+                      </>
+                    }
+                  >
+                    {/* 隣の「自動判定」（md）と同じ高さ（#613）。読み込み中は今の値を「読み込み中」の選択肢として出す。 */}
+                    <SelectField
                       id="nl2sql-profile-select"
+                      label={t("nl2sql.profile.label")}
                       value={profileId}
-                      onChange={(event) => {
-                        setProfileId(event.currentTarget.value);
+                      options={
+                        profilesQuery.isPending
+                          ? [{ value: profileId, label: t("profiles.summary.loading") }]
+                          : profileOptions.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))
+                      }
+                      onValueChange={(nextProfileId) => {
+                        setProfileId(nextProfileId);
                         suppressedRecommendationSignaturesRef.current.clear();
                         setSelection(emptySelection());
                         setAutoDetectLowConfidence(false);
@@ -1101,42 +1133,8 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                       }}
                       disabled={active || profilesQuery.isPending || noProfiles}
-                      // 隣の「自動判定」（md）と同じ高さ・見た目（#613）。
-                      className={fieldControlClassName({ className: "min-w-0 flex-1 py-2" })}
-                    >
-                      {profilesQuery.isPending && (
-                        <option value={profileId}>{t("profiles.summary.loading")}</option>
-                      )}
-                      {profileOptions.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profileDisplayLabel(profile)}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      className="shrink-0"
-                      loading={detecting}
-                      disabled={!question.trim() || active || !profileSelectionReady}
-                      onClick={() => void detectProfile()} icon={Wand2}>
-                      <span>{t("nl2sql.recommend.autoDetect")}</span>
-                    </Button>
-                    {profilesQuery.hasNextPage && (
-                      <Button icon={ListPlus}
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。#416）。
-                        loading={profilesQuery.isFetchingNextPage && !profileLoadMoreError}
-                        disabled={active || (profilesQuery.isFetchingNextPage && Boolean(profileLoadMoreError))}
-                        onClick={() => void profilesQuery.fetchNextPage()}
-                      >
-                        {t("profiles.action.loadMore")}
-                      </Button>
-                    )}
-                  </div>
+                    />
+                  </FieldActionRow>
                   {profileLoadMoreError && (
                     <Banner
                       severity="danger"

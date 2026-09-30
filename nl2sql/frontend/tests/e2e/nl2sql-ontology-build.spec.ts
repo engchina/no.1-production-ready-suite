@@ -4,6 +4,7 @@ import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1173,7 +1174,7 @@ test("オントロジー構築の保存済みファイルは選択プロファ�
 
   await page.goto("/ontology-build?profile=sales");
 
-  await expect(page.getByTestId("ontology-build-profile-select")).toHaveValue("sales");
+  await expectSelectFieldValue(page.getByTestId("ontology-build-profile-select"), "sales");
   await expect(page.locator("#ontology-workspace-not-loaded")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   expect(state.profileDetailCalls).toEqual([]);
@@ -1192,7 +1193,7 @@ test("オントロジー構築の保存済みファイルは選択プロファ�
   await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toBeVisible();
   await expect(savedFiles.getByText("finance-rules.xlsx", { exact: true })).toHaveCount(0);
 
-  await page.getByTestId("ontology-build-profile-select").selectOption("finance");
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "finance");
 
   await expect(page).toHaveURL(/profile=finance/u);
   await expect(page.locator("#ontology-workspace-not-loaded")).toBeVisible();
@@ -2714,7 +2715,7 @@ test("失効したProfile URLでは別Profileの情報を取得せず明示選�
   expect(state.profileDetailCalls).toEqual([]);
   expect(state.ontologyViewCalls).toBe(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-missing-profile.png") });
-  await page.getByTestId("ontology-build-profile-select").selectOption("default");
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "default");
   await expect(fetch).toBeEnabled();
   await fetch.press("Enter");
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
@@ -2889,7 +2890,7 @@ test("旧結果 API が停止していても Markdown を取得し Profile を�
   await page.goto("/ontology-build?profile=sales"); await loadOntologyBuildWorkspace(page);
   await expect(page.getByTestId("ontology-typed-results")).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
-  await page.getByTestId("ontology-build-profile-select").selectOption("finance"); await loadOntologyBuildWorkspace(page);
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "finance"); await loadOntologyBuildWorkspace(page);
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   expect(obsolete).toBe(0);
 });

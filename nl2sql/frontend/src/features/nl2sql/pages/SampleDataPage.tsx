@@ -11,7 +11,7 @@ import {
   PageBody,
   ExecutionConfirmationField,
   ProcessingIndicator,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -436,29 +436,26 @@ export function SampleDataPage() {
 
         {/* 種類の選択（1）と、その説明・クエリ例（2）を同じ行に置き、選択欄だけを左に残さない。 */}
         <section className="grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-end lg:gap-x-6" aria-label={t("dataTools.sample.dataset.label")}>
-          <label className="grid gap-1 text-sm font-medium text-fg">
-            <span>{t("dataTools.sample.dataset.label")}</span>
-            <select
-              value={dataset}
-              disabled={Boolean(loading) || schemaRefreshing}
-              aria-describedby="sample-data-dataset-description"
-              onChange={(event) => {
-                setSampleInfo(null);
-                setSampleResult(null);
-                setSampleConfirmation("");
-                setMessage("");
-                setSchemaRefreshError("");
-                setSchemaRefreshNeedsFull(false);
-                setSchemaRefreshJobId("");
-                setDataset(event.currentTarget.value as SampleDataset);
-              }}
-              className={fieldControlClassName({ className: "min-w-0 py-2" })}
-            >
-              {SAMPLE_DATASETS.map((item) => <option key={item} value={item}>{t(`dataTools.sample.dataset.${item}`)}</option>)}
-            </select>
-          </label>
+          <SelectField<SampleDataset>
+            id="sample-data-dataset"
+            label={t("dataTools.sample.dataset.label")}
+            value={dataset}
+            options={SAMPLE_DATASETS.map((item) => ({ value: item, label: t(`dataTools.sample.dataset.${item}`) }))}
+            disabled={Boolean(loading) || schemaRefreshing}
+            onValueChange={(nextDataset) => {
+              setSampleInfo(null);
+              setSampleResult(null);
+              setSampleConfirmation("");
+              setMessage("");
+              setSchemaRefreshError("");
+              setSchemaRefreshNeedsFull(false);
+              setSchemaRefreshJobId("");
+              setDataset(nextDataset);
+            }}
+            className="min-w-0"
+          />
           <div className="grid min-w-0 gap-1 lg:min-h-11 lg:content-center">
-            <p id="sample-data-dataset-description" className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
+            <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
             <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
           </div>
         </section>
@@ -511,21 +508,14 @@ export function SampleDataPage() {
               />
 
               {!isDeleteAction && (
-                <label className="grid gap-1 text-sm font-medium text-fg">
-                  <span>{t("dataTools.sample.step")}</span>
-                  <select
-                    value={sampleStep}
-                    disabled={Boolean(loading)}
-                    onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
-                    className={fieldControlClassName({ className: "py-2" })}
-                  >
-                    {SAMPLE_STEPS.map((step) => (
-                      <option key={step} value={step}>
-                        {sampleStepLabel(step)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SelectField<SampleStep>
+                  id="sample-data-step"
+                  label={t("dataTools.sample.step")}
+                  value={sampleStep}
+                  options={SAMPLE_STEPS.map((step) => ({ value: step, label: sampleStepLabel(step) }))}
+                  disabled={Boolean(loading)}
+                  onValueChange={setSampleStep}
+                />
               )}
 
               <ExecutionConfirmationField
