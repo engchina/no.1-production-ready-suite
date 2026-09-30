@@ -272,6 +272,11 @@ class _LightOracle:
         _ = chunk_set_ids
         return {}
 
+    async def list_document_extraction_field_sets(self, document_id: str) -> list[Any]:
+        # KB の項目の定義(#548)は rag_knowledge_bases を読み、文書の JSON 列は読まない。
+        _ = document_id
+        return []
+
 
 @pytest.mark.parametrize(
     "call",

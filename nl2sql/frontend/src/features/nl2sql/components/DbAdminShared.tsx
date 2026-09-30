@@ -25,6 +25,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   ExecutionConfirmationField,
+  FieldError,
   FieldLabel,
 } from "@engchina/production-ready-ui";
 import {
@@ -859,6 +860,7 @@ export function StatementRunnerCard({
   const [message, setMessage] = useState("");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [executionRun, setExecutionRun] = useState<DbAdminExecutionRunState | null>(null);
+  const [sqlError, setSqlError] = useState("");
 
   useResetExecutionConsent(() => setConfirmation(""), JSON.stringify([sql, resetSignal, executionBlocked]));
   const [appliedRevision, setAppliedRevision] = useWorkspaceState(`runner-${policy}-${draftScope}-revision`, String(resetSignal ?? ""));
@@ -876,8 +878,15 @@ export function StatementRunnerCard({
   }, [initialSql, resetSignal, setAppliedRevision, setSql]);
 
   const run = async () => {
-    if (!sql.trim() || executionBlocked) return;
+    if (executionBlocked) return;
     if (!confirmation.trim()) return;
+    // SQL の未入力は押せないボタンだけにせず、押したときに欄の直下へ理由を出す（#541）。
+    if (!sql.trim()) {
+      setSqlError(t("dbAdmin.runner.error.sqlRequired"));
+      document.getElementById(sqlInputId)?.focus();
+      return;
+    }
+    setSqlError("");
     const startedAt = Date.now();
     const operationKey = `statement-runner-${policy}-${startedAt}`;
     setLoading(true);
@@ -919,6 +928,8 @@ export function StatementRunnerCard({
 
   const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
   const canRun = Boolean(sql.trim()) && isConfirmed;
+  // 実行のボタンは確認語（ExecutionConfirmationField が理由を出す）だけで押せなくする。SQL の未入力は押したときに案内する。
+  const runButtonEnabled = isConfirmed;
   const canClearRunner = Boolean(sql || confirmation || result || message || executionRun);
   const progressNode = progress?.({ hasSql: Boolean(sql.trim()), isConfirmed, canRun });
 
@@ -927,6 +938,7 @@ export function StatementRunnerCard({
     setConfirmation("");
     setResult(null);
     setMessage("");
+    setSqlError("");
     setExecutionRun(null);
     setSqlFileResetSignal((value) => value + 1);
   };
@@ -953,7 +965,7 @@ export function StatementRunnerCard({
       size="lg"
       className="w-full sm:w-auto"
       loading={loading}
-      disabled={!canRun || executionBlocked}
+      disabled={!runButtonEnabled || executionBlocked}
       onClick={() => void run()} icon={Play}>
       <span>{t("dbAdmin.runner.run")}</span>
     </Button>
@@ -987,24 +999,33 @@ export function StatementRunnerCard({
     <>
       {executeOnly && header}
       {progressNode}
-      {/* SQL が空のままでは実行できない（canRun）ので必須として示す（#531）。 */}
+      {/* SQL が空のままでは実行できない（backend も sql を必須にする）ので必須として示す（#531）。 */}
       <div className="grid gap-1">
         <FieldLabel htmlFor={sqlInputId} label={t("dbAdmin.runner.sqlLabel")} required />
         <textarea
           id={sqlInputId}
           aria-required="true"
+          aria-invalid={sqlError ? "true" : undefined}
+          aria-describedby={sqlError ? `${sqlInputId}-error` : undefined}
           value={sql}
-          onChange={(event) => setSql(event.currentTarget.value)}
+          onChange={(event) => {
+            setSql(event.currentTarget.value);
+            setSqlError("");
+          }}
           rows={9}
           placeholder={placeholder}
-          className="min-h-52 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
+          className={`min-h-52 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
+            sqlError ? "border-danger-fg" : "border-border-control"
+          }`}
         />
+        <FieldError id={`${sqlInputId}-error`} message={sqlError} />
       </div>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <SqlFileInput
           resetSignal={sqlFileResetSignal}
           onLoad={(text) => {
             setSql(text);
+            setSqlError("");
             setResult(null);
             setMessage("");
             setExecutionRun(null);

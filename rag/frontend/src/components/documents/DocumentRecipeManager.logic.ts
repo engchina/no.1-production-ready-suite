@@ -38,6 +38,9 @@ export interface RecipeLayerStatusView {
   layer: RecipeLayerName;
   status: DocumentLayerStatusName;
   reason: string | null;
+  /** 作成後に入力（項目の定義など）が変わり、作り直しが必要か（#550）。 */
+  rebuildRequired: boolean;
+  rebuildInputs: string[];
 }
 
 /** 選択レシピの active chunk_set から派生 layer(項目抽出/関係情報/ナビ)の状態を引く。 */
@@ -51,7 +54,22 @@ export function recipeLayerStatuses(
   return LAYER_ORDER.flatMap((layer) => {
     const status = chunkSet.layer_statuses[layer];
     if (!status?.requested || status.status === "not_requested") return [];
-    return [{ layer, status: status.status, reason: status.reason }];
+    return [
+      {
+        layer,
+        status: status.status,
+        reason: status.reason,
+        rebuildRequired: Boolean(status.rebuild_required),
+        rebuildInputs: status.rebuild_inputs ?? [],
+      },
+    ];
   });
+}
+
+/** 作り直しが必要なレイヤーと、変わった入力（重複なし・出現順）をまとめる。 */
+export function recipeLayerRebuildSummary(statuses: RecipeLayerStatusView[]) {
+  const layers = statuses.filter((entry) => entry.rebuildRequired);
+  const inputs = [...new Set(layers.flatMap((entry) => entry.rebuildInputs))];
+  return { layers: layers.map((entry) => entry.layer), inputs };
 }
 

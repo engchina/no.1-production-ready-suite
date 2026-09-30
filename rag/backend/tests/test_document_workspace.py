@@ -4,6 +4,7 @@ import hashlib
 from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import anyio
@@ -3405,6 +3406,79 @@ def test_document_extraction_export_returns_chunk_view_without_embeddings(
     assert data["chunks"][0]["chunk_id"] == f"{document_id}:0"
     assert data["chunks"][0]["element_ids"] == ["el-1"]
     assert "embedding" not in data["content"].casefold()
+
+
+@pytest.mark.parametrize(
+    ("export_format", "suffix", "content_type"),
+    [
+        (DocumentExtractionExportFormat.MARKDOWN, ".md", "text/markdown"),
+        (DocumentExtractionExportFormat.HTML, ".html", "text/html"),
+        (DocumentExtractionExportFormat.JSON, ".json", "application/json"),
+        (DocumentExtractionExportFormat.CHUNKS, "_chunks.json", "application/json"),
+    ],
+    ids=["markdown", "html", "json", "chunks"],
+)
+def test_document_extraction_export_download_returns_attachment(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    export_format: DocumentExtractionExportFormat,
+    suffix: str,
+    content_type: str,
+) -> None:
+    """download=true は同じ内容を、文書名とレシピの分かるファイル名の添付で返す(#561)。"""
+    document_id = _upload("経費規程.txt", b"policy", "text/plain")
+    extraction = {
+        "raw_text": "承認条件",
+        "document_type": "社内規程",
+        "elements": [{"kind": "text", "text": "承認条件", "order": 0, "element_id": "el-1"}],
+    }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.INDEXED,
+        extraction=extraction,
+        chunks=[
+            DocumentChunkView(
+                document_id=document_id,
+                chunk_id=f"{document_id}:0",
+                chunk_index=0,
+                text="承認条件",
+                element_ids=["el-1"],
+            )
+        ],
+    )
+    url = f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export"
+
+    view = client.get(url, params={"format": export_format.value})
+    resp = client.get(url, params={"format": export_format.value, "download": "true"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(content_type)
+    expected_name = quote(f"経費規程_レシピ1{suffix}")
+    assert resp.headers["content-disposition"] == f"attachment; filename*=UTF-8''{expected_name}"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["cache-control"] == "private, no-store"
+    # 画面の表示(JSON の envelope)と同じ本文をファイルにする。
+    assert resp.content.decode("utf-8") == view.json()["data"]["content"]
+    if export_format == DocumentExtractionExportFormat.HTML:
+        assert resp.headers["content-security-policy"] == "sandbox"
+    else:
+        assert "content-security-policy" not in resp.headers
+
+
+def test_document_extraction_export_download_without_extraction_returns_404(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """抽出結果が無いレシピは、ダウンロードでもファイルを返さず 404 にする。"""
+    document_id = _upload("policy.txt", b"policy", "text/plain")
+    recipe_id = _seed_recipe(fake_document_dependencies, document_id, status=FileStatus.UPLOADED)
+
+    resp = client.get(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/extraction-export",
+        params={"format": "markdown", "download": "true"},
+    )
+
+    assert resp.status_code == 404
+    assert "content-disposition" not in resp.headers
 
 
 def test_fields_edit_endpoint_is_not_available() -> None:

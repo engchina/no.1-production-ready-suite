@@ -27,9 +27,20 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /原本をそのまま解析/ })).toBeVisible();
     // text_normalize は廃止(in-process 正規化撤去)。radio として出ないことを確認する。
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Office を PDF へ変換/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /CSV をヘッダ列キー/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Excel\(\.xls\/\.xlsx\)/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /CSV の各行を/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Excel ファイル\(\.xls・\.xlsx\)/ })).toBeVisible();
+    // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
+    await expect(
+      page.getByRole("radio", { name: /PDF を画像として読み直す.*文字化けする PDF/ })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /スキャン画像の補正.*PDF は補正しません/ })
+    ).toBeVisible();
+    const main = page.getByRole("main");
+    for (const jargon of ["ラスタライズ", "VLM/OCR 経路", "canonical な", "派生系譜", "溯源", "in-process"]) {
+      await expect(main).not.toContainText(jargon);
+    }
     await expect(page.getByRole("radio", { name: /自動/ })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
@@ -69,7 +80,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
 
   await page.goto("/settings/preprocess");
 
-  const office = page.getByRole("radio", { name: /Office を PDF へ変換/ });
+  const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
   await office.click();
   await expect(office).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
@@ -91,7 +102,7 @@ test("ファイル準備方式のカードは矢印キーで選択が移り、Ta
   await page.goto("/settings/preprocess");
 
   const passthrough = page.getByRole("radio", { name: /原本をそのまま解析/ });
-  const office = page.getByRole("radio", { name: /Office を PDF へ変換/ });
+  const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
   await expect(passthrough).toBeChecked();
   await passthrough.focus();
   await page.keyboard.press("ArrowRight");

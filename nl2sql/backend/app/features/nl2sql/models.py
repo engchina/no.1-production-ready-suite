@@ -11,12 +11,30 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from .object_identity import qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
 
 _CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+_MAX_SQL_ROW_LIMIT = 100000
+
+
+def _validate_sql_row_limit(value: int | None) -> int | None:
+    """SQL 実行の取得件数上限（画面の「取得件数上限」と同じ規則・文言。#541）。"""
+    if value is not None and not 1 <= value <= _MAX_SQL_ROW_LIMIT:
+        raise ValueError(
+            f"取得件数上限は 1 以上 {_MAX_SQL_ROW_LIMIT} 以下の整数を入力してください。"
+        )
+    return value
 
 
 class Nl2SqlEngine(StrEnum):
@@ -744,7 +762,13 @@ class DbAdminExecuteRequest(AdminExecutionConfirmation):
     """
 
     sql: str = Field(min_length=1)
-    row_limit: int = Field(default=100, ge=1, le=100000)
+    row_limit: int = 100
+
+    @field_validator("row_limit")
+    @classmethod
+    def validate_row_limit(cls, value: int) -> int:
+        _validate_sql_row_limit(value)
+        return value
 
 
 class DbAdminExecuteData(BaseModel):
@@ -1123,9 +1147,15 @@ class ExecuteRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    # 未指定/null は「total result maximum なし」として保持する。
+    # 未指定/null は「total result maximum なし」として保持する（API の契約。画面は常に明示する）。
     # driver memory 保護は Oracle adapter の batch fetch で行い、100 件へ暗黙正規化しない。
-    row_limit: int | None = Field(default=None, ge=1, le=100000)
+    row_limit: int | None = None
+
+    @field_validator("row_limit")
+    @classmethod
+    def validate_row_limit(cls, value: int | None) -> int | None:
+        # 画面の「取得件数上限」と同じ規則・文言（#541）。
+        return _validate_sql_row_limit(value)
 
 
 class JobCreateRequest(BaseModel):
@@ -1242,7 +1272,17 @@ class FeedbackRequest(BaseModel):
     history_id: str
     rating: FeedbackRating
     comment: str = ""
-    feedback_content: str = ""
+    # 「違う」のときは利用者コメントが必須（画面の欄と同じ規則・文言。#540）。省略時も検証する。
+    feedback_content: str = Field(default="", validate_default=True)
+
+    @field_validator("feedback_content")
+    @classmethod
+    def require_content_when_bad(cls, value: str, info: ValidationInfo) -> str:
+        """旧名 comment だけを送る client も受け付け、どちらも空の「違う」だけを拒否する。"""
+        comment = info.data.get("comment", "")
+        if info.data.get("rating") == FeedbackRating.BAD and not (value.strip() or comment.strip()):
+            raise ValueError("「違う」のときは利用者コメントを入力してください。")
+        return value
 
     @model_validator(mode="after")
     def normalize_feedback_content(self) -> FeedbackRequest:
@@ -2003,10 +2043,18 @@ class AdminFeedbackReviewRequest(BaseModel):
 
     history_id: str = Field(min_length=1)
     rating: FeedbackRating
-    feedback_content: str = ""
+    # 「違う」のときは管理者レビューコメントが必須（画面の欄と同じ規則・文言。#540）。
+    feedback_content: str = Field(default="", validate_default=True)
     register_select_ai_feedback: bool = False
     select_ai_response: str = ""
     select_ai_profile_name: str = ""
+
+    @field_validator("feedback_content")
+    @classmethod
+    def require_content_when_bad(cls, value: str, info: ValidationInfo) -> str:
+        if info.data.get("rating") == FeedbackRating.BAD and not value.strip():
+            raise ValueError("「違う」のときは管理者レビューコメントを入力してください。")
+        return value
 
 
 class SimilarHistoryPublishData(BaseModel):

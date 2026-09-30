@@ -4,6 +4,8 @@ docling サービスが ``parser_artifacts["docrag_layout"]`` に保持した La
 ``docrag.chunking.build_small_to_big_chunks`` で親子チャンクを作り、子だけを索引単位として返す。
 親の本文と ID は子の metadata(``chunk_group_id`` / ``docrag_parent_text``)に保持し、既存の
 group sibling 展開と回答文脈で使う。Oracle Text と embedding には rag_poc の search_text を使う。
+文書の 1 ページ目の本文(回答の「文書の背景」)は先頭の chunk にだけ載せ、保存のときに chunk set
+へ 1 つだけ移す(#557。検索用 text には入れない)。
 
 文書解析が Docling 以外で docrag_layout がない文書は、失敗させずに「構造認識」(structure_aware)で
 分割する(#300)。縮退したことは chunk の metadata(``chunk_strategy_requested`` /
@@ -31,6 +33,10 @@ DOCRAG_LAYOUT_ARTIFACT = "docrag_layout"
 DOCRAG_SOURCE_PARSER = "docling_docrag"
 # 検索・embedding 用 text(rag_poc の retrieval_text)を載せる metadata key。
 DOCRAG_SEARCH_TEXT_KEY = "docrag_search_text"
+# 文書の物理 1 ページ目の本文(回答の「文書の背景」。rag_poc の first_page_context)を JSON で
+# 載せる metadata key(#557)。chunk ごとに同じ本文(最大 8000 文字)を持たせないよう、先頭の
+# chunk にだけ載せる。保存では chunk の行から外し、chunk set に 1 つだけ保存する。
+DOCRAG_FIRST_PAGE_CONTEXT_KEY = "docrag_first_page_context_json"
 # docrag_layout がない文書で DocRAG 親子階層の代わりに使う分割方式(#300)。
 DOCRAG_FALLBACK_CHUNKING_STRATEGY = "structure_aware"
 # 縮退時に chunk metadata へ残す key と理由。chunk_strategy には実際に使った方式が入る。
@@ -139,10 +145,18 @@ def build_docrag_chunks(
     page_sizes = {
         int(page.get("page") or 0): (page.get("width"), page.get("height")) for page in pages
     }
-    return [
+    backend_chunks = [
         _backend_chunk(child, index, parents.get(child.parent_chunk_id), page_sizes)
         for index, child in enumerate(children)
     ]
+    # docrag は子ごとに同じ 1 ページ目の本文を document に持たせるので、先頭の子から 1 つだけ取る。
+    document = children[0].metadata.get("document") if children else None
+    first_page = document.get("first_page_context") if isinstance(document, Mapping) else None
+    if backend_chunks and isinstance(first_page, Mapping):
+        backend_chunks[0].metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY] = json.dumps(
+            first_page, ensure_ascii=False
+        )
+    return backend_chunks
 
 
 def _items(value: object) -> list[object]:
@@ -198,7 +212,10 @@ def _backend_chunk(
             "atomic": bool(metadata.get("atomic")),
             "text_sha256": hashlib.sha256(child.text.encode("utf-8")).hexdigest(),
             # metadata v4 全体(display_regions / image_evidence 等)は JSON で保持する。
-            "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False, default=str),
+            # 1 ページ目の本文は chunk ごとに複製しない(chunk set に 1 つ保存する。#557)。
+            "docrag_metadata_json": json.dumps(
+                _without_first_page_context(metadata), ensure_ascii=False, default=str
+            ),
             # 回答根拠の record 対応(bbox ハイライト)に使う。
             "docrag_source_record_refs_json": json.dumps(
                 child.source_record_refs, ensure_ascii=False, default=str
@@ -207,6 +224,17 @@ def _backend_chunk(
             "docrag_chunk_seq": child.chunk_seq,
         },
     )
+
+
+def _without_first_page_context(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    """chunk に保存する metadata から document.first_page_context を外す(入力は変更しない)。"""
+    document = metadata.get("document")
+    if not isinstance(document, Mapping) or "first_page_context" not in document:
+        return metadata
+    return {
+        **metadata,
+        "document": {key: value for key, value in document.items() if key != "first_page_context"},
+    }
 
 
 def _content_kind(metadata: Mapping[str, Any]) -> str:

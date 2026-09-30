@@ -39,17 +39,9 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   // 処理の詳細(診断)パネルは折りたたみに集約。
   await expect(page.getByText("処理の詳細(診断)")).toBeVisible();
 
-  // エクスポートタブ: 形式を切替えると内容が変わる。
+  // エクスポートタブ: 内容は表示せず、ダウンロード・コピーの操作だけを出す（詳細は下の #561 のテスト）。
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
-  await expect(page.getByText("<!-- page: 1 -->")).toBeVisible();
-  await page.getByRole("tab", { name: "HTML" }).click();
-  await expect(page.getByText("<article")).toBeVisible();
-  await expect(page.getByText("<h1>経費申請</h1>")).toBeVisible();
-  await expect(page.getByText('<table data-element-id="tbl-1"')).toBeVisible();
-  await page.getByRole("tab", { name: "JSON" }).click();
-  await expect(page.getByText('"document_type": "規程"')).toBeVisible();
-  await page.getByRole("tab", { name: "Chunks" }).click();
-  await expect(page.getByText('"chunk_id": "doc-1:0"')).toBeVisible();
+  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible();
 
   // Chunk タブ: chunk を選ぶとプレビューに bbox がハイライトされる。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
@@ -234,7 +226,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
 
   for (const tabName of ["構造化要素", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
-    // 抽出エクスポートのパネルの中には形式のタブのパネル（入れ子）もあるため、右ペインのタブの名前で引く。
+    // 右ペインのタブの名前でパネルを引く。
     const tabPanelMetrics = await page
       .getByTestId("document-inspector-pane")
       .getByRole("tabpanel", { name: tabName, exact: false })
@@ -250,15 +242,6 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     expect(tabPanelMetrics.overflowY).toBe("auto");
     expect(tabPanelMetrics.overscrollBehaviorY).toBe("auto");
   }
-  // 抽出エクスポートの内容の表示は、右ペインの下端（左のプレビューの下端）まで伸びる（#436）。
-  const exportContent = inspectorPane.locator("pre");
-  const exportContentBox = (await exportContent.boundingBox())!;
-  const inspectorPaneBox = (await inspectorPane.boundingBox())!;
-  const bottomGap =
-    inspectorPaneBox.y + inspectorPaneBox.height - (exportContentBox.y + exportContentBox.height);
-  // 残りは枠（section）の padding と border だけ。
-  expect(bottomGap).toBeGreaterThanOrEqual(0);
-  expect(bottomGap).toBeLessThan(24);
 });
 
 test("取込解析エンジンは抽出工程行に segment parser だけを表示する", async ({
@@ -435,7 +418,7 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
   await expectNoPageOverflow(page);
 });
 
-test("処理前/処理後と抽出エクスポートの形式は共有の Tabs で、選択が読み上げられ矢印キーで切り替わる", async ({
+test("処理前/処理後は共有の Tabs で、選択が読み上げられ矢印キーで切り替わる", async ({
   page,
 }) => {
   // #396: 枠の中に Button を並べた手書きのセグメント（枠線が二重・隙間 0・選択状態を読み上げない）をやめた。
@@ -484,23 +467,120 @@ test("処理前/処理後と抽出エクスポートの形式は共有の Tabs �
   await expect(after).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowLeft");
   await expect(before).toHaveAttribute("aria-selected", "true");
-
-  // 抽出エクスポートの形式も同じ Tabs（右ペインのタブの中の入れ子のタブ）。
-  await page.getByRole("tab", { name: "抽出エクスポート" }).click();
-  const formatTabs = page.getByRole("tablist", { name: "抽出エクスポート形式" });
-  const markdown = formatTabs.getByRole("tab", { name: "Markdown" });
-  await expect(markdown).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tabpanel", { name: "Markdown" })).toContainText("# 経費申請");
-  await markdown.focus();
-  await page.keyboard.press("ArrowRight");
-  const html = formatTabs.getByRole("tab", { name: "HTML" });
-  await expect(html).toBeFocused();
-  await expect(html).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tabpanel", { name: "HTML" })).toContainText("<article>");
-  await page.keyboard.press("End");
-  await expect(formatTabs.getByRole("tab", { name: "Chunks" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tabpanel", { name: "Chunks" })).toContainText("経費申請の概要です。");
   await expectNoPageOverflow(page);
+});
+
+test("抽出エクスポートは Markdown / HTML / JSON をダウンロード・コピーでき、Chunk は Chunk / Citation からダウンロードする", async ({
+  page,
+}) => {
+  // #561: 画面の中で 4 形式を切り替えて見せるだけで持ち出せず、件数の Chunks が常に 0 だった。
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await mockDocumentWorkspace(page);
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("tab", { name: "抽出エクスポート" }).click();
+  const exportPanel = page.getByTestId("document-extraction-export");
+  // 形式の切り替え・本文の表示・件数（0 の誤り）を出さない。
+  await expect(exportPanel.getByRole("tab")).toHaveCount(0);
+  await expect(exportPanel.locator("pre")).toHaveCount(0);
+  await expect(exportPanel.getByText("Chunks")).toHaveCount(0);
+
+  for (const [format, label, extension] of [
+    ["markdown", "Markdown", ".md"],
+    ["html", "HTML", ".html"],
+    ["json", "JSON", ".json"],
+  ] as const) {
+    const group = exportPanel.getByRole("group", { name: `${label} の操作` });
+    await expect(exportPanel.getByTestId(`document-extraction-export-${format}`)).toContainText(
+      `ファイル: ${extension}`
+    );
+    await expect(group.getByRole("button", { name: `${label} をコピー` })).toBeVisible();
+    await expect(group.getByRole("link", { name: `${label} をダウンロード` })).toHaveAttribute(
+      "href",
+      `/api/documents/doc-1/recipes/recipe-1/extraction-export?format=${format}&download=true`
+    );
+  }
+
+  // ダウンロードは原本プレビューの「ダウンロード」と同じく、backend の添付の応答へのリンク。
+  // ファイル名（文書名 + レシピ）と content type は backend が決める（pytest で検証）。
+  // `<a download>` の遷移は page.route で横取りできないため、ここでは属性だけを見る。
+  await expect(exportPanel.getByRole("link", { name: "Markdown をダウンロード" })).toHaveAttribute(
+    "download",
+    ""
+  );
+
+  // キーボード: コピーを Enter で実行し、Tab で同じ行のダウンロードへ進む。
+  const copyMarkdown = exportPanel.getByRole("button", { name: "Markdown をコピー" });
+  await copyMarkdown.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Markdown をコピーしました")).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "<!-- page: 1 -->\n# 経費申請\n\n交通費は1000円です。"
+  );
+  await page.keyboard.press("Tab");
+  await expect(exportPanel.getByRole("link", { name: "Markdown をダウンロード" })).toBeFocused();
+
+  await exportPanel.getByRole("button", { name: "JSON をコピー" }).click();
+  await expect(page.getByText("JSON をコピーしました")).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+    '"document_type": "規程"'
+  );
+
+  // 取得に失敗したら、操作した行の直下に残す。
+  await page.route(/\/extraction-export\?format=html$/, (route) =>
+    route.fulfill({
+      status: 404,
+      json: { data: null, error_messages: ["抽出結果が見つかりません。"], warning_messages: [] },
+    })
+  );
+  await exportPanel.getByRole("button", { name: "HTML をコピー" }).click();
+  await expect(exportPanel.getByTestId("document-extraction-export-html")).toContainText(
+    "HTML をコピーできませんでした。"
+  );
+
+  // Chunk は「Chunk / Citation」タブから JSON でダウンロードする。
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  const chunksLink = page.getByRole("link", { name: "保存済みの Chunk の JSON をダウンロード" });
+  await expect(chunksLink).toHaveAttribute(
+    "href",
+    "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=chunks&download=true"
+  );
+  await expect(chunksLink).toHaveAttribute("download", "");
+  await expectNoPageOverflow(page);
+});
+
+test("抽出エクスポートは抽出結果の読み込み中・取得失敗を示す", async ({ page }) => {
+  await mockDocumentWorkspace(page);
+  let releaseExport: () => void = () => undefined;
+  const exportReleased = new Promise<void>((resolve) => {
+    releaseExport = resolve;
+  });
+  let failExport = false;
+  await page.route(/\/extraction-export\?format=json$/, async (route) => {
+    if (failExport) {
+      await route.fulfill({
+        status: 404,
+        json: { data: null, error_messages: ["抽出結果が見つかりません。"], warning_messages: [] },
+      });
+      return;
+    }
+    await exportReleased;
+    await route.fallback();
+  });
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "抽出エクスポート" }).click();
+  await expect(page.getByTestId("document-extraction-export-loading")).toContainText(
+    "抽出結果を読み込んでいます"
+  );
+  releaseExport();
+  await expect(page.getByRole("link", { name: "JSON をダウンロード" })).toBeVisible();
+
+  failExport = true;
+  await page.reload();
+  await page.getByRole("tab", { name: "抽出エクスポート" }).click();
+  await expect(page.getByText("抽出結果を取得できません")).toBeVisible();
+  await expect(page.getByRole("link", { name: "JSON をダウンロード" })).toHaveCount(0);
 });
 
 test("変換なしでも REVIEW では抽出確認を促す", async ({
@@ -1242,7 +1322,7 @@ test("ファイル準備の開始 message を操作欄に表示し、本文 expo
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
   await expect(page.getByText("chunk はまだ作成されていません。")).toBeVisible();
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
-  await expect(page.getByText("表示できる抽出エクスポートはありません。")).toBeVisible();
+  await expect(page.getByText("抽出結果がありません")).toBeVisible();
 
   await page.getByRole("button", { name: "ファイル準備を実行" }).click();
   const actionStatus = page.getByText(
@@ -1252,8 +1332,10 @@ test("ファイル準備の開始 message を操作欄に表示し、本文 expo
   await expect(page.getByText(/取込ジョブをキューに投入/)).toHaveCount(0);
   await expect(actionStatus.locator("xpath=ancestor::div[contains(@class, 'border-t')][1]")).toBeVisible();
 
-  // 取込後、エクスポート(現在のタブ)が自動更新される。
-  await expect(page.getByText("<!-- page: 1 -->")).toBeVisible({ timeout: 9_000 });
+  // 取込後、エクスポート(現在のタブ)が自動更新され、ダウンロードできるようになる。
+  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible({
+    timeout: 9_000,
+  });
   // Chunk タブにも反映される。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
   await expect(page.getByRole("button", { name: /経費申請の概要です。/ })).toBeVisible();

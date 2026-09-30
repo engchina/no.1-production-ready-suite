@@ -54,7 +54,7 @@ import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
-import { useBusinessViews } from "@/lib/queries";
+import { useBusinessViews, useSearchExtractionFields } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { RunStopButton } from "@/components/RunStopButton";
@@ -62,6 +62,17 @@ import { AnswerProgress } from "./AnswerProgress";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
+import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
+import {
+  EXTRACTION_FIELD_FILTER_KEY,
+  type ExtractionFieldCondition,
+  type ExtractionFieldFilterRow,
+  extractionFieldConditions,
+  extractionFieldFilterValue,
+  isActiveExtractionFieldFilterRow,
+  isExtractionFieldFilterRows,
+  parseExtractionFieldFilterValue,
+} from "./extraction-field-filters";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -159,6 +170,13 @@ export function SearchClient() {
     isClassificationFilterValues
   );
   const [classificationOpen, setClassificationOpen] = useState(false);
+  // 抽出項目の値の条件（#549）。行は作業状態に残し、項目の型は選んだ業務ビューの KB の定義から引く。
+  const [extractionRows, setExtractionRows] = useWorkspaceState<ExtractionFieldFilterRow[]>(
+    "search.extractionFields",
+    [],
+    isExtractionFieldFilterRows
+  );
+  const [extractionOpen, setExtractionOpen] = useState(false);
   const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
   const [rerankTopN, setRerankTopN] = useWorkspaceState<RerankTopNOption>(
     "search.rerankTopN",
@@ -205,8 +223,17 @@ export function SearchClient() {
   }, [staleBusinessViewKey, setBusinessViewIds]);
   const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
+  const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
+  const extractionFieldsQuery = useSearchExtractionFields(
+    businessViewIds,
+    extractionOpen || hasExtractionFieldFilters
+  );
+  const fieldFilter = extractionFieldConditions(
+    extractionRows,
+    extractionFieldsQuery.data?.fields
+  );
   const hasFilters =
-    Boolean(contentKind) || hasSectionFilters || hasClassificationFilters;
+    Boolean(contentKind) || hasSectionFilters || hasClassificationFilters || hasExtractionFieldFilters;
   // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
   const classificationVisible = classificationOpen;
   const hasSearchTuning = topK !== DEFAULT_TOP_K || rerankTopN !== DEFAULT_RERANK_TOP_N;
@@ -224,6 +251,14 @@ export function SearchClient() {
       return;
     }
     if (selectedWithoutKnowledgeBases) return;
+    // 誤りのある項目の条件を黙って外して検索しない。条件を開いて最初の誤りへフォーカスする。
+    const firstFieldError = extractionRows.find((row) => fieldFilter.errors[row.key]);
+    if (firstFieldError) {
+      setAdvancedOpen(true);
+      setExtractionOpen(true);
+      requestAnimationFrame(() => document.getElementById(`${firstFieldError.key}-name`)?.focus());
+      return;
+    }
     setScopeError("");
     setSubmittedQuery(trimmed);
     setLastSkipFaq(skipFaq);
@@ -262,7 +297,13 @@ export function SearchClient() {
     });
 
     try {
-      const filters = buildSearchFilters({ contentKind, sectionTitle, sectionPath, classification });
+      const filters = buildSearchFilters({
+        contentKind,
+        sectionTitle,
+        sectionPath,
+        classification,
+        extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
+      });
       setAppliedFilters(filters);
       await streamSearch(
         {
@@ -356,6 +397,8 @@ export function SearchClient() {
     setSectionPath("");
     setClassification(EMPTY_CLASSIFICATION_FILTERS);
     setClassificationOpen(false);
+    setExtractionRows([]);
+    setExtractionOpen(false);
     setTopK(DEFAULT_TOP_K);
     setRerankTopN(DEFAULT_RERANK_TOP_N);
     setAdvancedOpen(false);
@@ -597,6 +640,52 @@ export function SearchClient() {
                             />
                           ))}
                         </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-md border border-border bg-surface">
+                    <button
+                      type="button"
+                      aria-expanded={extractionOpen}
+                      aria-controls="search-extraction-field-filters"
+                      onClick={() => setExtractionOpen((open) => !open)}
+                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <span>{t("search.filters.fields.group")}</span>
+                      <span className="flex items-center gap-2">
+                        {!extractionOpen && hasExtractionFieldFilters ? (
+                          <StatusBadge variant="info" label={t("search.filters.active")} />
+                        ) : null}
+                        <DisclosureChevron expanded={extractionOpen} size={14} className="text-fg-muted" />
+                      </span>
+                    </button>
+                    {extractionOpen ? (
+                      <div id="search-extraction-field-filters" className="space-y-3 border-t border-border p-3">
+                        <p className="text-xs leading-relaxed text-fg-muted">
+                          {t("search.filters.fields.helper")}
+                        </p>
+                        {businessViewIds.length === 0 ? (
+                          <p className="text-sm text-fg-muted">{t("search.filters.fields.chooseScope")}</p>
+                        ) : (
+                          <ExtractionFieldFilters
+                            fieldsState={
+                              extractionFieldsQuery.isPending
+                                ? { status: "pending" }
+                                : extractionFieldsQuery.isError
+                                  ? {
+                                      status: "error",
+                                      error: extractionFieldsQuery.error,
+                                      retry: () => void extractionFieldsQuery.refetch(),
+                                    }
+                                  : { status: "ready", fields: extractionFieldsQuery.data.fields }
+                            }
+                            rows={extractionRows}
+                            onRowsChange={setExtractionRows}
+                            errors={fieldFilter.errors}
+                            disabled={isStreaming}
+                          />
+                        )}
                       </div>
                     ) : null}
                   </div>
@@ -958,7 +1047,21 @@ function activeFilterChips(filters: Record<string, string>) {
           }
         : null
     ),
+    ...parseExtractionFieldFilterValue(filters[EXTRACTION_FIELD_FILTER_KEY]).map(
+      (condition, index) => ({
+        key: `${EXTRACTION_FIELD_FILTER_KEY}-${index}`,
+        label: extractionFieldConditionLabel(condition),
+      })
+    ),
   ].flatMap((chip) => (chip ? [chip] : []));
+}
+
+function extractionFieldConditionLabel(condition: ExtractionFieldCondition): string {
+  const value =
+    condition.value_type === "bool"
+      ? t(condition.value === "true" ? "search.filters.fields.true" : "search.filters.fields.false")
+      : condition.value;
+  return t(`search.filters.fields.applied.${condition.op}`, { name: condition.name, value });
 }
 
 function contentKindFilterLabel(value: string): string {
@@ -1310,11 +1413,13 @@ function buildSearchFilters({
   sectionTitle,
   sectionPath,
   classification,
+  extractionFields,
 }: {
   contentKind: ContentKindFilter;
   sectionTitle: string;
   sectionPath: string;
   classification: ClassificationFilterValues;
+  extractionFields: string;
 }): Record<string, string> {
   const filters: Record<string, string> = {};
   if (contentKind) filters.content_kind = contentKind;
@@ -1323,6 +1428,7 @@ function buildSearchFilters({
   for (const key of CLASSIFICATION_FILTER_KEYS) {
     if (classification[key].trim()) filters[key] = classification[key].trim();
   }
+  if (extractionFields) filters[EXTRACTION_FIELD_FILTER_KEY] = extractionFields;
   return filters;
 }
 

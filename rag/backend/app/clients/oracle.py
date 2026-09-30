@@ -31,7 +31,12 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import docrag_search_text
+from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    FieldSchemaStore,
+    field_schema_from_json,
+)
 from app.rag.graph_index import (
     GraphClaim,
     GraphCommunitySummary,
@@ -81,7 +86,12 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStatus,
     KnowledgeBaseSummary,
 )
-from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search import (
+    EXTRACTION_FIELD_FILTER_KEY,
+    RetrievedChunk,
+    SearchMode,
+    parse_extraction_field_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +104,8 @@ ORACLE_TEXT_LEXER_PREFERENCE = "RAG_TEXT_WORLD_LEXER"
 ORACLE_TEXT_STOPLIST = "RAG_TEXT_STOPLIST"
 ORACLE_TEXT_LEXER = "WORLD_LEXER"
 CONVERSATION_TITLE_MAX_CHARS = 80
+# 主検索の HNSW 索引(schema DDL・oracle_schema.vector_index_reindex_sql と同じ名前)。
+RAG_CHUNKS_VECTOR_INDEX_NAME = "RAG_CHUNKS_EMBEDDING_HNSW_IDX"
 ORACLE_TEXT_STOP_WORDS = (
     "の",
     "は",
@@ -704,6 +716,166 @@ class OracleClient:
                 classifications[str(row["document_id"])] = classification
         return classifications
 
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
+
+        質問が名指しした業務を、検索範囲の大分類の語の一覧から見つけるために使う(#553)。
+        値は保存どおりに返す(比較の正規化は呼び出し側で行う)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT large_category FROM (
+                SELECT DISTINCT
+                    JSON_VALUE(d.classification, '$.large_category') AS large_category
+                FROM rag_documents d
+                WHERE d.classification IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunks c
+                      WHERE c.document_id = d.document_id
+                        AND {where_sql}
+                  )
+            )
+            WHERE large_category IS NOT NULL
+            ORDER BY large_category
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [str(row["large_category"]) for row in rows if row.get("large_category")]
+
+    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
+        """検索と同じ条件の chunk 集合の状態を表す短い値(画面目録の cache の key。#554)。
+
+        文書の追加・削除・再索引(chunk_id が変わる)・文書名の変更で変わる。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS chunk_count,
+                   NVL(SUM(ORA_HASH(c.chunk_id || '/' || d.file_name)), 0) AS chunk_hash
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        if row is None:
+            return "0:0"
+        return f"{row.get('chunk_count') or 0}:{row.get('chunk_hash') or 0}"
+
+    async def retrieval_screen_sections(
+        self, filters: dict[str, str]
+    ) -> list[tuple[str, str, int]]:
+        """検索と同じ条件の chunk の(文書名、見出しの列、chunk 数)を DISTINCT で返す(#554)。
+
+        見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.file_name,
+                   JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                   COUNT(*) AS chunk_count
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL
+            GROUP BY d.file_name, JSON_VALUE(c.metadata_json, '$.section_path')
+            ORDER BY d.file_name, MIN(c.chunk_index)
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [
+            (str(row["file_name"]), str(row["section_path"]), _int_value(row.get("chunk_count")))
+            for row in rows
+            if row.get("file_name") and row.get("section_path")
+        ]
+
+    async def retrieval_screen_chunks(
+        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
+    ) -> list[RetrievedChunk]:
+        """検索と同じ条件で、文書名が一致し見出しの列に ``heading`` を含む chunk を返す(#554)。
+
+        SQL は見出しの部分一致で候補を絞り、見出しの列の要素としての一致は呼び出し側で確かめる。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    c.chunk_set_id,
+                    d.file_name,
+                    d.category_name,
+                    0 AS score
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND d.file_name = :screen_file_name
+                  AND INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                ORDER BY c.document_id, c.chunk_index, c.chunk_id
+            ) WHERE ROWNUM <= :screen_limit
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "screen_file_name": file_name,
+                "screen_heading": heading,
+                "screen_limit": max(1, int(limit)),
+            },
+        )
+        return [_retrieved_chunk_from_row(row) for row in rows]
+
+    async def chunk_set_first_page_contexts(
+        self, chunk_set_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """chunk set の文書の 1 ページ目の本文(first_page_context)を chunk_set_id ごとに返す。
+
+        回答の「文書の背景」に使う。ヒットした chunk set の分を IN で 1 回だけ読む。値の無い
+        chunk set は含めない(#557)。
+        """
+        ids = _unique_optional_sequence(list(chunk_set_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("cs.chunk_set_id", "first_page_chunk_set", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT cs.chunk_set_id, cs.first_page_context
+            FROM rag_chunk_sets cs
+            JOIN rag_documents d ON d.document_id = cs.document_id
+            WHERE {in_sql}
+              AND cs.first_page_context IS NOT NULL
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        contexts: dict[str, dict[str, object]] = {}
+        for row in rows:
+            context = _json_loads(row.get("first_page_context"))
+            if context:
+                contexts[str(row["chunk_set_id"])] = context
+        return contexts
+
     async def context_dependency_chunks(
         self,
         anchors: list[RetrievedChunk],
@@ -852,6 +1024,127 @@ class OracleClient:
     async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
+
+    async def get_knowledge_base_extraction_fields(
+        self, knowledge_base_id: str
+    ) -> list[FieldDefinition] | None:
+        """KB の項目抽出の定義を返す。未設定(全体の既定に従う)と KB が無いときは None(#548)。"""
+        row = await self._fetch_one(
+            """
+            SELECT kb.extraction_fields
+            FROM rag_knowledge_bases kb
+            WHERE kb.knowledge_base_id = :knowledge_base_id
+              AND {knowledge_base_access_sql}
+            """.format(
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+        )
+        return _knowledge_base_extraction_fields(row)
+
+    async def update_knowledge_base_extraction_fields(
+        self,
+        knowledge_base_id: str,
+        fields: list[FieldDefinition] | None,
+    ) -> None:
+        """KB の項目抽出の定義を保存する。None は未設定に戻す(全体の既定に従う。#548)。"""
+        value = None if fields is None else FieldSchemaStore(fields=fields).model_dump()
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                    UPDATE rag_knowledge_bases
+                    SET extraction_fields = :extraction_fields,
+                        updated_at = SYSTIMESTAMP
+                    WHERE knowledge_base_id = :knowledge_base_id
+                      AND {knowledge_base_access_sql}
+                    """,
+                    knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "knowledge_base_id": knowledge_base_id,
+                        "extraction_fields": _json_bind(value),
+                    }
+                ),
+                input_sizes=_json_input_sizes("extraction_fields"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_document_extraction_field_sets(
+        self, document_id: str
+    ) -> list[list[FieldDefinition] | None]:
+        """文書が属する有効な KB ごとの項目抽出の定義(None は既定に従う)を作成の古い順に返す。"""
+        field_sets = await self.list_documents_extraction_field_sets([document_id])
+        return field_sets.get(document_id, [])
+
+    async def list_documents_extraction_field_sets(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, list[list[FieldDefinition] | None]]:
+        """複数の文書について、属する有効な KB ごとの項目抽出の定義を 1 回の問い合わせで返す。
+
+        文書 ID ごとに、KB の作成の古い順の定義(None は既定に従う)を並べる。有効な KB に属さない
+        文書は結果に含めない(呼び出し側で全体の既定を使う。#548 / #550)。
+        """
+        if not document_ids:
+            return {}
+        in_sql, in_binds = _oracle_in_predicate(
+            "dkb.document_id", "extraction_document_id", list(document_ids)
+        )
+        rows = await self._fetch_all(
+            """
+            SELECT dkb.document_id, kb.extraction_fields
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+                ON kb.knowledge_base_id = dkb.knowledge_base_id
+            JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+            WHERE {in_sql}
+              AND kb.status = 'ACTIVE'
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY dkb.document_id ASC, kb.created_at ASC, kb.knowledge_base_id ASC
+            """.format(
+                in_sql=in_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind(in_binds),
+        )
+        field_sets: dict[str, list[list[FieldDefinition] | None]] = {}
+        for row in rows:
+            field_sets.setdefault(str(row["document_id"]), []).append(
+                _knowledge_base_extraction_fields(row)
+            )
+        return field_sets
+
+    async def list_knowledge_base_extraction_field_sets(
+        self, knowledge_base_ids: Sequence[str]
+    ) -> list[list[FieldDefinition] | None]:
+        """指定した有効な KB ごとの項目抽出の定義を作成の古い順に返す(検索の絞り込みの候補)。"""
+        if not knowledge_base_ids:
+            return []
+        in_sql, in_binds = _oracle_in_predicate(
+            "kb.knowledge_base_id", "extraction_kb_id", list(knowledge_base_ids)
+        )
+        rows = await self._fetch_all(
+            """
+            SELECT kb.extraction_fields
+            FROM rag_knowledge_bases kb
+            WHERE {in_sql}
+              AND kb.status = 'ACTIVE'
+              AND {knowledge_base_access_sql}
+            ORDER BY kb.created_at ASC, kb.knowledge_base_id ASC
+            """.format(
+                in_sql=in_sql,
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind(in_binds),
+        )
+        return [_knowledge_base_extraction_fields(row) for row in rows]
 
     # ------------------------------------------------------------------
     # variant materialization: chunk_set / KB binding 永続層
@@ -1669,8 +1962,9 @@ class OracleClient:
         status: str,
         reason: str | None = None,
         metrics: Mapping[str, object] | None = None,
+        input_fingerprint: Mapping[str, object] | None = None,
     ) -> None:
-        """chunk_set 派生 layer の実体化状態を保存する。"""
+        """chunk_set 派生 layer の実体化状態と、作ったときの入力の指紋(#550)を保存する。"""
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "layer_id": layer_id,
@@ -1682,6 +1976,9 @@ class OracleClient:
             "status": status,
             "reason": reason,
             "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+            "input_fingerprint": (
+                _json_dumps(input_fingerprint) if input_fingerprint is not None else None
+            ),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -1699,13 +1996,14 @@ class OracleClient:
                     t.status = :status,
                     t.reason = :reason,
                     t.metrics_json = :metrics_json,
+                    t.input_fingerprint = :input_fingerprint,
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (layer_id, layer_kind, parent_chunk_set_id, document_id, tenant_id_hash,
-                     requested, status, reason, metrics_json)
+                     requested, status, reason, metrics_json, input_fingerprint)
                     VALUES
                     (:layer_id, :layer_kind, :parent_chunk_set_id, :document_id, :tenant_id_hash,
-                     :requested, :status, :reason, :metrics_json)
+                     :requested, :status, :reason, :metrics_json, :input_fingerprint)
                 """,
                 binds,
             )
@@ -1725,7 +2023,7 @@ class OracleClient:
             _render_sql(
                 """
                 SELECT layer_id, layer_kind, parent_chunk_set_id, requested, status, reason,
-                       metrics_json
+                       metrics_json, input_fingerprint
                 FROM rag_artifact_layers
                 WHERE {in_sql}
                 """,
@@ -1738,7 +2036,56 @@ class OracleClient:
             normalized = {str(key).lower(): value for key, value in row.items()}
             normalized["requested"] = int(str(normalized.get("requested") or 0)) == 1
             normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
+            normalized["input_fingerprint"] = _json_loads(normalized.get("input_fingerprint"))
             result[str(normalized["layer_id"])] = normalized
+        return result
+
+    async def list_serving_artifact_layer_fingerprints(
+        self,
+        document_ids: Sequence[str],
+    ) -> list[dict[str, object]]:
+        """文書の検索対象の chunk_set の派生 layer のうち、指紋のある行を返す(一覧の判定。#550)。
+
+        検索対象はレシピの active chunk_set と、レシピを持たない(legacy の plan の)配信中の
+        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピ
+        (無ければ文書)の処理設定も返す。抽出結果などの大きな JSON 列は読まない。
+        """
+        ids = list(dict.fromkeys(document_ids))
+        if not ids:
+            return []
+        in_sql, binds = _oracle_in_predicate("l.document_id", "doc", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+                SELECT l.document_id, l.layer_id, l.layer_kind, l.parent_chunk_set_id,
+                       l.input_fingerprint, cs.recipe_id,
+                       r.processing_config AS recipe_processing_config,
+                       d.processing_config AS document_processing_config
+                FROM rag_artifact_layers l
+                JOIN rag_chunk_sets cs ON cs.chunk_set_id = l.parent_chunk_set_id
+                JOIN rag_documents d ON d.document_id = l.document_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+                WHERE {in_sql}
+                  AND l.requested = 1
+                  AND l.input_fingerprint IS NOT NULL
+                  AND (cs.is_active = 1 OR (cs.recipe_id IS NULL AND cs.is_serving = 1))
+                  AND {document_access_sql}
+                """,
+                in_sql=in_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds),
+        )
+        result: list[dict[str, object]] = []
+        for row in rows:
+            normalized = {str(key).lower(): value for key, value in row.items()}
+            for key in (
+                "input_fingerprint",
+                "recipe_processing_config",
+                "document_processing_config",
+            ):
+                normalized[key] = _json_loads(normalized.get(key))
+            result.append(normalized)
         return result
 
     async def list_document_knowledge_base_configs(
@@ -4518,6 +4865,39 @@ class OracleClient:
     def is_connection_configured(self) -> bool:
         """実 DB に接続する設定（または明示の pool）があるかを返す。"""
         return _oracle_connection_configured(self)
+
+    async def get_vector_index_build_params(self) -> tuple[int, int] | None:
+        """主検索索引の実際の (NEIGHBORS, EFCONSTRUCTION) を返す(#562)。
+
+        ``v$vector_graph_index`` を読む。接続設定がない・V$ を読む権限がない・索引がない
+        (メモリ上のグラフがない)場合は None(確認できない)を返し、例外にしない。
+        """
+        if not _oracle_connection_configured(self):
+            return None
+        try:
+            row = await self._db_call_runner(
+                lambda: self._run_with_connection(
+                    lambda connection: _fetch_one(
+                        connection,
+                        """
+                        SELECT num_neighbors, ef_construction
+                          FROM v$vector_graph_index
+                         WHERE owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')
+                           AND index_name = :index_name
+                         FETCH FIRST 1 ROWS ONLY
+                        """,
+                        {"index_name": RAG_CHUNKS_VECTOR_INDEX_NAME},
+                    )
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "vector_index_build_params_unavailable", extra=oracle_error_log_fields(exc)
+            )
+            return None
+        if row is None or row.get("num_neighbors") is None or row.get("ef_construction") is None:
+            return None
+        return int(cast(int, row["num_neighbors"])), int(cast(int, row["ef_construction"]))
 
     async def create_evaluation_job(self, job: Mapping[str, object]) -> None:
         """品質評価の job を RUNNING で作る（#390）。heartbeat の時刻は DB の時計にする。"""
@@ -8497,7 +8877,12 @@ class OracleClient:
                         "chunk_index": chunk.index,
                         "start_offset": chunk.start_offset,
                         "end_offset": chunk.end_offset,
-                        **chunk.metadata,
+                        # 1 ページ目の本文は chunk の行に入れず chunk set に保存する(#557)。
+                        **{
+                            key: value
+                            for key, value in chunk.metadata.items()
+                            if key != DOCRAG_FIRST_PAGE_CONTEXT_KEY
+                        },
                     }
                 ),
                 "embedding": None if embedding is None else _to_vector_bind(embedding),
@@ -8539,7 +8924,23 @@ class OracleClient:
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
+
+        DocRAG の文書の 1 ページ目の本文(先頭の chunk の ``DOCRAG_FIRST_PAGE_CONTEXT_KEY``)は、
+        chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
+        ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
         """
+        first_page_context = (
+            next(
+                (
+                    json.loads(str(chunk.metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+                    for chunk in chunks
+                    if chunk.metadata.get(DOCRAG_FIRST_PAGE_CONTEXT_KEY)
+                ),
+                None,
+            )
+            if chunk_set_id is not None
+            else None
+        )
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
             document = _select_document_state(connection, document_id)
@@ -8612,6 +9013,29 @@ class OracleClient:
                     )
                     """,
                     rows,
+                )
+            if first_page_context is not None:
+                _execute(
+                    connection,
+                    """
+                    MERGE INTO rag_chunk_sets t
+                    USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
+                    ON (t.chunk_set_id = s.chunk_set_id)
+                    WHEN MATCHED THEN UPDATE SET
+                        t.first_page_context = :first_page_context
+                    WHEN NOT MATCHED THEN INSERT
+                        (chunk_set_id, document_id, tenant_id_hash, first_page_context)
+                        VALUES (
+                            :chunk_set_id, :document_id, :tenant_id_hash, :first_page_context
+                        )
+                    """,
+                    {
+                        "chunk_set_id": chunk_set_id,
+                        "document_id": document_id,
+                        "tenant_id_hash": document.tenant_id_hash,
+                        "first_page_context": _json_bind(first_page_context),
+                    },
+                    input_sizes=_json_input_sizes("first_page_context"),
                 )
             return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
 
@@ -11054,6 +11478,10 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 binds.update(kind_binds)
         elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
             continue  # 分類と有効期間は _classification_where でまとめて付ける。
+        elif key == EXTRACTION_FIELD_FILTER_KEY:
+            field_clauses, field_binds = _extraction_field_where(cleaned)
+            clauses.extend(field_clauses)
+            binds.update(field_binds)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
     classification_clauses, classification_binds = _classification_where(filters)
@@ -11068,6 +11496,68 @@ _CLASSIFICATION_FILTER_KEYS = CLASSIFICATION_CATEGORY_KEYS
 def _category_label_sql(expression: str) -> str:
     """`category_label` の番号の接頭辞の除去を SQL で行う(後ろに 1 文字以上あるときだけ外す)。"""
     return f"REGEXP_REPLACE({expression}, '^[0-9]+_(.)', '\\1')"
+
+
+# 項目の条件の演算子と、型ごとの比べる列(#549)。SQL に埋めるのはこの許可リストの値だけで、
+# 項目名と値は bind で渡す。
+_EXTRACTION_FIELD_SQL_OPERATORS = {"eq": "=", "gte": ">=", "lte": "<="}
+_EXTRACTION_FIELD_SQL_COLUMNS = {
+    "string": "{alias}.field_text",
+    "bool": "LOWER({alias}.field_text)",
+    "number": "{alias}.field_number",
+    "date": "{alias}.field_date",
+}
+
+
+def _extraction_field_where(value: str) -> tuple[list[str], dict[str, object]]:
+    """項目抽出の値の条件を、文書単位の EXISTS にする(#549)。
+
+    文書の採用中の抽出(active な chunk_set が参照する `rag_document_extractions` の行)の
+    `extraction_json.fields` を JSON_TABLE で行にし、項目名と値を比べる。number / date に
+    変換できない値と、項目の無い文書は一致しない(除かれる)。条件どうしは AND。
+    """
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for index, condition in enumerate(parse_extraction_field_filter(value)):
+        alias = f"fx_f{index}"
+        column = _EXTRACTION_FIELD_SQL_COLUMNS[condition.value_type].format(alias=alias)
+        operator = _EXTRACTION_FIELD_SQL_OPERATORS[condition.op]
+        typed_value: object = condition.value
+        if condition.value_type == "number":
+            typed_value = Decimal(condition.value)
+        elif condition.value_type == "date":
+            typed_value = date.fromisoformat(condition.value)
+        binds[f"filter_field_{index}_name"] = condition.name
+        binds[f"filter_field_{index}_value"] = typed_value
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM rag_document_extractions fx{index},
+                     JSON_TABLE(
+                         fx{index}.extraction_json, '$.fields[*]'
+                         COLUMNS (
+                             field_name VARCHAR2(120) PATH '$.name',
+                             field_text VARCHAR2(4000) PATH '$.value',
+                             field_number NUMBER PATH '$.value' NULL ON ERROR,
+                             field_date DATE PATH '$.value' NULL ON ERROR
+                         )
+                     ) {alias}
+                WHERE fx{index}.document_id = d.document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunk_sets fx_cs{index}
+                      WHERE fx_cs{index}.document_id = fx{index}.document_id
+                        AND fx_cs{index}.extraction_recipe_id = fx{index}.extraction_recipe_id
+                        AND fx_cs{index}.is_active = 1
+                        AND fx_cs{index}.status = 'INDEXED'
+                  )
+                  AND {alias}.field_name = :filter_field_{index}_name
+                  AND {column} {operator} :filter_field_{index}_value
+            )
+            """
+        )
+    return clauses, binds
 
 
 def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
@@ -12158,6 +12648,13 @@ def _json_bind(value: object | None) -> object | None:
     return decoded
 
 
+def _knowledge_base_extraction_fields(
+    row: Mapping[str, object] | None,
+) -> list[FieldDefinition] | None:
+    """`rag_knowledge_bases.extraction_fields` の値を読む(NULL と行なしは None。#548)。"""
+    return field_schema_from_json(row.get("extraction_fields") if row is not None else None)
+
+
 def _json_input_sizes(*names: str) -> dict[str, object]:
     oracledb = importlib.import_module("oracledb")
     return {name: oracledb.DB_TYPE_JSON for name in names}
@@ -12759,6 +13256,7 @@ CREATE TABLE {knowledge_base_table} (
     status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
     default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
     retrieval_config      JSON,
+    extraction_fields     JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     archived_at           TIMESTAMP WITH TIME ZONE,
@@ -13236,6 +13734,7 @@ CREATE TABLE rag_chunk_sets (
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     is_active       NUMBER(1) DEFAULT 0 NOT NULL,
     metrics_json    JSON,
+    first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_chunk_sets_document_fk
@@ -13298,6 +13797,7 @@ CREATE TABLE rag_artifact_layers (
     status              VARCHAR2(32) DEFAULT 'planned_only' NOT NULL,
     reason              VARCHAR2(2000),
     metrics_json        JSON,
+    input_fingerprint   JSON,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_artifact_layers_chunk_set_fk

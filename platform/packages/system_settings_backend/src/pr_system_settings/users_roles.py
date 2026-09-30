@@ -52,11 +52,28 @@ _SYMBOL_CHARACTERS = "!@#$%_-+="
 # ---- request ----
 
 
+def _require_role_ids(value: list[str]) -> list[str]:
+    """ユーザーのロールは 1 件以上（画面の「ロール」の必須と同じ。#540）。
+
+    ロールが無いユーザーはどの機能も使えないため、作成・更新とも空を受け付けない。
+    """
+    normalized = [role_id.strip() for role_id in value if role_id.strip()]
+    if not normalized:
+        raise ValueError("ロールを選択してください。")
+    return normalized
+
+
 class UserCreateRequest(BaseModel):
     login_user_id: str = Field(min_length=1, max_length=64)
     display_name: str = Field(min_length=1, max_length=256)
-    role_ids: list[str] = Field(default_factory=list)
+    # 省略時も既定値を検証して「ロールを選択してください。」を返す（validate_default）。
+    role_ids: list[str] = Field(default_factory=list, validate_default=True)
     temporary_password: str | None = Field(default=None, max_length=256)
+
+    @field_validator("role_ids")
+    @classmethod
+    def validate_role_ids(cls, value: list[str]) -> list[str]:
+        return _require_role_ids(value)
 
     @field_validator("login_user_id")
     @classmethod
@@ -74,7 +91,13 @@ class UserUpdateRequest(BaseModel):
     version: int = Field(ge=1)
     display_name: str = Field(min_length=1, max_length=256)
     status: str
-    role_ids: list[str] = Field(default_factory=list)
+    # 省略時も既定値を検証して「ロールを選択してください。」を返す（validate_default）。
+    role_ids: list[str] = Field(default_factory=list, validate_default=True)
+
+    @field_validator("role_ids")
+    @classmethod
+    def validate_role_ids(cls, value: list[str]) -> list[str]:
+        return _require_role_ids(value)
 
     @field_validator("status")
     @classmethod
@@ -98,7 +121,8 @@ class VersionRequest(BaseModel):
 class RoleCreateRequest(BaseModel):
     """ロール管理画面の新規作成。権限は含めない（製品の権限管理で付ける）。"""
 
-    role_code: str = Field(min_length=2, max_length=64)
+    # 長さは validator で日本語の文言にする（画面の検証と同じ規則・文言。#540）。
+    role_code: str = Field(max_length=64)
     display_name: str = Field(min_length=1, max_length=256)
     description: str = Field(default="", max_length=1000)
 
@@ -106,8 +130,14 @@ class RoleCreateRequest(BaseModel):
     @classmethod
     def normalize_role_code(cls, value: str) -> str:
         normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("ロールコードを入力してください。")
+        if len(normalized) < 2:
+            raise ValueError("ロールコードは 2 文字以上で入力してください。")
         if not _ROLE_CODE_RE.fullmatch(normalized):
-            raise ValueError("ロールコードは英大文字・数字・アンダースコアで指定してください。")
+            raise ValueError(
+                "ロールコードは英大文字で始め、英大文字・数字・アンダースコアで入力してください。"
+            )
         return normalized
 
 

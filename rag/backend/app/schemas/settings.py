@@ -70,6 +70,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -831,17 +832,19 @@ class PromptVersionsData(BaseModel):
 class PromptVersionCreate(BaseModel):
     """新しい prompt 版の作成 payload。"""
 
-    name: str = Field(min_length=1, max_length=120)
-    system_prompt: str = Field(min_length=1, max_length=20000)
+    # 空の検証は validator で画面と同じ文言にする（「版名を入力してください。」など。#541）。
+    name: str = Field(max_length=120)
+    system_prompt: str = Field(max_length=20000)
     note: str = Field(default="", max_length=2000)
     activate: bool = True
 
     @field_validator("name", "system_prompt")
     @classmethod
-    def _strip_non_empty(cls, value: str) -> str:
+    def _strip_non_empty(cls, value: str, info: ValidationInfo) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("name と system_prompt は空にできません。")
+            label = "版名" if info.field_name == "name" else "system prompt "
+            raise ValueError(f"{label}を入力してください。")
         return cleaned
 
 
@@ -872,6 +875,28 @@ class ExtractionFieldsSettingsUpdate(BaseModel):
     """field 抽出 schema 定義の更新 payload（文書解析の「解析後の処理」で編集する。#528）。"""
 
     fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
+
+
+class KnowledgeBaseExtractionFieldsData(BaseModel):
+    """ナレッジベースの項目抽出の定義(#548)。
+
+    `inherits_default` が真なら KB の定義は無く、`fields` は全体の既定(文書解析の設定)。
+    """
+
+    inherits_default: bool
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
+
+
+class KnowledgeBaseExtractionFieldsUpdate(BaseModel):
+    """ナレッジベースの項目抽出の定義の更新 payload。`fields` が null なら全体の既定に戻す。"""
+
+    fields: list[FieldDefinitionData] | None = Field(default=None, max_length=50)
+
+
+class SearchExtractionFieldsData(BaseModel):
+    """検索の絞り込みに使える項目(検索対象の KB の定義の和集合。#549)。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
 
 
 class PipelineSettingsData(BaseModel):
@@ -934,6 +959,8 @@ class GuardrailSettingsUpdate(BaseModel):
 
 
 VectorIndexProfileName = VectorIndexProfile
+# 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
+VectorIndexBuildStatus = Literal["match", "reprovision", "unknown"]
 
 
 class VectorIndexProfileStatusData(BaseModel):
@@ -947,6 +974,7 @@ class VectorIndexProfileStatusData(BaseModel):
     neighbors: int
     efconstruction: int
     distance: str
+    index_status: VectorIndexBuildStatus
 
 
 class VectorIndexSettingsData(BaseModel):
@@ -958,6 +986,10 @@ class VectorIndexSettingsData(BaseModel):
     efconstruction: int
     distance: str
     requires_reprovision: bool
+    index_status: VectorIndexBuildStatus
+    # 実際の索引の値。確認できないときは None。
+    actual_neighbors: int | None = None
+    actual_efconstruction: int | None = None
     profiles: list[VectorIndexProfileStatusData] = Field(default_factory=list)
     reindex_sql: str = ""
     config_source: Literal["runtime"]

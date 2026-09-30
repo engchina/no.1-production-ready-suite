@@ -50,7 +50,10 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.code": "ロールコード",
   "security.roles.codeConflict":
     "このロールコードは既に使用されています。別のコードを入力してください。",
+  "security.roles.codeInvalid":
+    "ロールコードは英大文字で始め、英大文字・数字・アンダースコアで入力してください。",
   "security.roles.codeRequired": "ロールコードを入力してください。",
+  "security.roles.codeTooShort": "ロールコードは 2 文字以上で入力してください。",
   "security.roles.codeReserved":
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。",
   "security.roles.column.role": "ロール",
@@ -134,7 +137,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.resetConfirm":
     "一時パスワードを再発行し、既存セッションを失効させます。続行しますか。",
   "security.users.resetPassword": "パスワードをリセット",
-  "security.users.roleRequired": "ロールを1つ選択してください。",
+  "security.users.roleRequired": "ロールを選択してください。",
   "security.users.roles": "割り当てるロール",
   "security.users.searchPlaceholder": "ログインユーザーID・表示名・ロールで絞り込み",
   "security.users.showUser": "{name} を表示",

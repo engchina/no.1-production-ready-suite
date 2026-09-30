@@ -11,6 +11,7 @@ import {
   LoaderCircle,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   SearchCheck,
@@ -26,6 +27,7 @@ import {
   canDeleteRecipe,
   recipeConfigLocked,
   recipeIsActive,
+  recipeLayerRebuildSummary,
   recipeLayerStatuses,
   resolveSelectedRecipe,
   type RecipeLayerStatusView,
@@ -49,6 +51,7 @@ import {
   api,
   type DocumentChunkSet,
   type DocumentProcessingConfigData,
+  type DocumentLayerRebuildInput,
   type DocumentLayerStatusName,
   type DocumentRecipeStep,
   type DocumentRecipeView,
@@ -222,6 +225,8 @@ export function DocumentRecipeManager({
   const processError = enqueue.error ?? approve.error;
   // 削除の失敗（処理中・最少 1 件など）も操作の近くに出す。以前は確認ダイアログを閉じた後に何も出なかった（#281）。
   const deleteError = deleteRecipe.error;
+  const layerStatuses = recipeLayerStatuses(selected, chunkSets);
+  const layerRebuild = recipeLayerRebuildSummary(layerStatuses);
   // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、
   // 削除は danger として「その他の操作」に入れ、確認ダイアログ（handleDelete）を通す。
   const recipeActions: EntityAction[] = [
@@ -311,7 +316,7 @@ export function DocumentRecipeManager({
                 </span>
               ) : null}
             </div>
-            <RecipeLayerStatusChips statuses={recipeLayerStatuses(selected, chunkSets)} />
+            <RecipeLayerStatusChips statuses={layerStatuses} />
             <p className="mt-1 text-xs text-fg-muted">
               {t("documents.recipes.updated", { time: formatDateTime(selected.updated_at) })}
             </p>
@@ -325,6 +330,20 @@ export function DocumentRecipeManager({
         </div>
 
         <RecipeSteps recipe={selected} />
+
+        {/* 作成後に項目の定義などが変わったレイヤー（#550）。自動では作り直さず、既存の「再処理」へ案内する。 */}
+        {layerRebuild.layers.length ? (
+          <div className="mt-3" data-testid="recipe-layer-rebuild">
+            <Banner severity="warning">
+              {t("documents.recipes.layerRebuildBanner", {
+                layers: layerRebuild.layers
+                  .map((layer) => t(LAYER_LABEL_KEYS[layer]))
+                  .join(t("documents.recipes.layerRebuildJoin")),
+                inputs: rebuildInputLabels(layerRebuild.inputs),
+              })}
+            </Banner>
+          </div>
+        ) : null}
 
         {/* 失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
             ここは「検索は旧出力で継続中」という状況提示のみ残す。 */}
@@ -559,20 +578,57 @@ function RecipeLayerStatusChips({ statuses }: { statuses: RecipeLayerStatusView[
       {statuses.map((entry) => (
         <span
           key={entry.layer}
-          title={entry.reason ?? undefined}
+          title={layerChipTitle(entry)}
           data-testid={`recipe-layer-${entry.layer}`}
+          data-rebuild-required={entry.rebuildRequired ? "true" : undefined}
           className={cn(
             "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-            LAYER_STATUS_TONES[entry.status]
+            entry.rebuildRequired
+              ? "bg-warning-subtle text-warning-fg"
+              : LAYER_STATUS_TONES[entry.status]
           )}
         >
+          {/* 作り直しの印は色だけに頼らず、アイコンと文言でも示す。 */}
+          {entry.rebuildRequired ? <RefreshCw size={14} aria-hidden /> : null}
           {t(LAYER_LABEL_KEYS[entry.layer])}
           <span aria-hidden>·</span>
           {t(LAYER_STATUS_LABEL_KEYS[entry.status])}
+          {entry.rebuildRequired ? (
+            <>
+              <span aria-hidden>·</span>
+              {t("documents.recipes.layerRebuild")}
+            </>
+          ) : null}
         </span>
       ))}
     </div>
   );
+}
+
+const REBUILD_INPUT_LABEL_KEYS: Record<DocumentLayerRebuildInput, I18nKey> = {
+  field_schema_hash: "documents.recipes.layerRebuildInput.field_schema_hash",
+  docrag_chunk_contract: "documents.recipes.layerRebuildInput.docrag_chunk_contract",
+  navigation_summary_max_nodes: "documents.recipes.layerRebuildInput.navigation_summary_max_nodes",
+};
+
+/** 変わった入力の表示名（知らない入力は「作成時の設定」にまとめる）。 */
+function rebuildInputLabels(inputs: string[]) {
+  const labels = inputs.map((input) =>
+    t(
+      REBUILD_INPUT_LABEL_KEYS[input as DocumentLayerRebuildInput] ??
+        "documents.recipes.layerRebuildInput.unknown"
+    )
+  );
+  return [...new Set(labels)].join(t("documents.recipes.layerRebuildJoin")) ||
+    t("documents.recipes.layerRebuildInput.unknown");
+}
+
+function layerChipTitle(entry: RecipeLayerStatusView) {
+  if (!entry.rebuildRequired) return entry.reason ?? undefined;
+  const rebuild = t("documents.recipes.layerRebuildTitle", {
+    inputs: rebuildInputLabels(entry.rebuildInputs),
+  });
+  return entry.reason ? `${entry.reason}\n${rebuild}` : rebuild;
 }
 
 function recipeStatus(recipe: DocumentRecipeView) {

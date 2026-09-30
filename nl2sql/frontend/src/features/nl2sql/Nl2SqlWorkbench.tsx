@@ -1082,16 +1082,12 @@ function ExecutableNl2SqlWorkbench() {
 
               <div className="grid gap-4">
                 <div className="grid gap-1">
-                  {/* 生成・実行は Profile の選択が前提（profileSelectionReady）なので必須として示す（#531）。 */}
-                  <FieldLabel
-                    htmlFor="nl2sql-profile-select"
-                    label={t("nl2sql.profile.label")}
-                    required
-                  />
+                  {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API（MCP を含む）で省略したときも
+                      backend が既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
+                  <FieldLabel htmlFor="nl2sql-profile-select" label={t("nl2sql.profile.label")} />
                   <div className="flex flex-wrap items-stretch gap-2">
                     <select
                       id="nl2sql-profile-select"
-                      aria-required="true"
                       value={profileId}
                       onChange={(event) => {
                         setProfileId(event.currentTarget.value);
