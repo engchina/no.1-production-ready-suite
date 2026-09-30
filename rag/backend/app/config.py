@@ -769,10 +769,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
     )
     rag_field_extraction_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "取込時に field schema 定義に従い OCI Enterprise AI structured output で named "
-            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 OFF）。"
+            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 ON。項目の定義が 0 件の"
+            "ときは何もしない。#537）。"
         ),
     )
     rag_context_compression_enabled: bool = Field(
@@ -1282,12 +1283,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_vision_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "文書解析の後に図・画像を OCI Enterprise AI の VLM で読み取り、図の要素の本文を"
             "説明文にする(全ての解析エンジン。Docling は解析サービスの中で読み取る)。"
             "全体の既定は backend/.env で決め(文書解析の画面の「解析後の処理」から"
-            "保存できる。#528)、文書のレシピで上書きする。画像 1 枚ごとに VLM を呼ぶ。"
+            "保存できる。#528)、文書のレシピで上書きする。既定 ON(#537)。"
+            "画像 1 枚ごとに VLM を呼ぶ。"
         ),
     )
     rag_parser_unstructured_enabled: bool = Field(
